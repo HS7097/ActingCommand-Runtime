@@ -1640,6 +1640,27 @@ impl RuntimeContainedTask<'_> {
             .map_or(deadline, |kernel| deadline.min(kernel)))
     }
 
+    /// #385 P-k2 (register §1.108 PK2-4; PERF v1.4.2 §5.3, §5.6): the kernel's wait `wait`, cut
+    /// to the Runtime-clock time left before the run's host deadline; none once the deadline
+    /// has passed, and whole for a run without one. A failed clock read is kept, as the
+    /// kernel's own reads keep theirs, so the run's next capture, input or record ends it with
+    /// that failure; the wait is then none.
+    fn wait_within_host_deadline(&mut self, wait: Duration) -> Duration {
+        let deadline_ms = self.control.deadline();
+        if deadline_ms == 0 {
+            return wait;
+        }
+        match self.host.monotonic_ms() {
+            Ok(now_ms) => wait.min(Duration::from_millis(deadline_ms.saturating_sub(now_ms))),
+            Err(error) => {
+                if self.kernel_clock_failure.is_none() {
+                    self.kernel_clock_failure = Some(error);
+                }
+                Duration::ZERO
+            }
+        }
+    }
+
     /// Test plan E-3 (EXEC-I3): the failed read of the kernel's Runtime clock, if one was kept.
     fn kernel_clock_read(&self) -> Result<(), RequestFailure> {
         match &self.kernel_clock_failure {
@@ -3358,7 +3379,23 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     /// Test plan E-3: every wait of the kernel is the Runtime clock's (`RuntimeClock::pause`).
+    ///
+    /// #385 P-k2 (register §1.108 PK2-4; PERF v1.4.2 §5.3, §5.6): once the run had a factor
+    /// segment above 1000, every wait the kernel asks for (post-input and retry delays, capture,
+    /// arrival and confirmation waits, sampling intervals and resamples, the pre-input wait,
+    /// extra rounds, entry and `linear_steps` waits) ends no later than the run's host deadline
+    /// ([`Self::wait_within_host_deadline`]). The run's next check then ends it
+    /// `contained_task_deadline_exceeded` while its lease still holds: the lease lasts the
+    /// heartbeat reserve past that deadline and is not renewed while the run runs, direct,
+    /// scheduled and host package runs alike, so a stretched wait that outlasted it let the lease
+    /// sweep take the lease before the terminal was written (`lease_mismatch`, fatal). A run whose
+    /// every factor was 1000 waits exactly as before and reads no clock for it.
     fn pause(&mut self, duration: Duration) {
+        let duration = if self.pacing.reduction.is_some() {
+            self.wait_within_host_deadline(duration)
+        } else {
+            duration
+        };
         self.host.kernel_pause(duration);
     }
 

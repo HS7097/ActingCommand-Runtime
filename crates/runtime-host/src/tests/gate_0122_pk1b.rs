@@ -841,3 +841,349 @@ fn pk2_a_steps_used_rounds_are_recorded() {
         assert_eq!(step_entries(&events), steps, "factor {factor_milli}");
     }
 }
+
+// #385 P-k2, PK2 part 2 (host gate 111; register §1.108 PK2-4; PERF v1.4.2 §5.3, §5.6, review
+// M3; the brief's requirements 1 and 2): every paced wait ends by the run's host deadline. A
+// run's lease lasts the heartbeat reserve past its host deadline (`contained_task_lease_ttl`,
+// `contained_task_deadline_until`) and is not renewed while the run waits, so a wait stretched by
+// the factor that starts before the deadline must still end before the lease does: the run then
+// ends `contained_task_deadline_exceeded` at its next check, inside the reserve, its lease is
+// released, none lapses (the lease sweep never finds it due, so the terminal never meets
+// `lease_mismatch`) and the host closes. Each run below is on the shipped scheduler, whose reserve
+// is 5 000 ms, at a pinned factor of 4 000.
+
+/// The pinned factor of tests 7 to 9.
+const PACED_FACTOR_MILLI: u32 = 4_000;
+
+/// The shipped heartbeat reserve: how long a run's lease lasts past its host deadline.
+fn shipped_reserve_ms() -> u64 {
+    let reserve_ms = SchedulerConfig::default().maximum_client_heartbeat_interval_ms;
+    assert_eq!(reserve_ms, 5_000, "the shipped reserve");
+    reserve_ms
+}
+
+/// One tap from `home` to `terminal`, which never arrives on a device that stays on `home`: the
+/// confirmation captures a frame every 5 s (a wait of 20 s at 4 000) within a 50 s step and task
+/// timeout, so the run ends at its host deadline.
+fn never_arrives_package() -> Vec<u8> {
+    package(
+        &[("open_terminal", "home", "terminal", None)],
+        5_000,
+        50_000,
+        50_000,
+    )
+}
+
+/// The run ended at `ended_ms` on the Runtime clock, at or after its host deadline `deadline_ms`
+/// and before its lease ends, `reserve_ms` later; its last wait, a paced wait of `stretched_ms`,
+/// started before the deadline and would have ended at or after the lease's end had it run whole.
+fn assert_ended_by_the_deadline(
+    clock: &WaitClock,
+    ended_ms: u64,
+    deadline_ms: u64,
+    reserve_ms: u64,
+    stretched_ms: u64,
+) {
+    let waits = clock.waits_ms();
+    assert!(
+        (deadline_ms..deadline_ms + reserve_ms).contains(&ended_ms),
+        "the run ended at {ended_ms} ms, its deadline {deadline_ms} ms: waits {waits:?}"
+    );
+    let last_wait_ms = *waits.last().expect("the run waited");
+    let wait_started_ms = ended_ms - last_wait_ms;
+    assert!(
+        wait_started_ms < deadline_ms,
+        "the last wait started at {wait_started_ms} ms: waits {waits:?}"
+    );
+    assert!(
+        wait_started_ms + stretched_ms >= deadline_ms + reserve_ms,
+        "whole, the wait from {wait_started_ms} ms would end before the lease: waits {waits:?}"
+    );
+}
+
+/// The lease the run's terminal names (among `run_records`) is released once, no lease lapses and
+/// no record names `lease_mismatch` (among `all_records`).
+fn assert_lease_released(run_records: &[PersistedEvent], all_records: &[PersistedEvent]) {
+    let lease = run_records
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type(),
+                EventType::TaskCancelled | EventType::TaskFailed
+            )
+        })
+        .find_map(|event| event.links().lease_id().copied())
+        .expect("the run's terminal names its lease");
+    let released = all_records
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().lease_id() == Some(&lease)
+        })
+        .count();
+    assert_eq!(released, 1, "the run's lease is released once");
+    assert!(
+        all_records
+            .iter()
+            .all(|event| event.event_type() != EventType::LeaseExpired),
+        "no lease lapses"
+    );
+    assert!(
+        !all_records.iter().any(|event| {
+            serde_json::to_string(event.payload())
+                .expect("payload JSON")
+                .contains("lease_mismatch")
+        }),
+        "no lease_mismatch record"
+    );
+}
+
+/// A direct run's receipt: cancelled, reason `deadline_exceeded`.
+fn assert_cancelled_at_the_deadline(receipt: &RuntimeReceipt) {
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Cancelled,
+        "{receipt:#?}"
+    );
+    assert!(
+        matches!(
+            receipt.result(),
+            Some(RuntimeResult::ContainedTaskCancelled {
+                reason: ContainedTaskCancellationReason::DeadlineExceeded,
+                ..
+            })
+        ),
+        "{:?}",
+        receipt.result()
+    );
+}
+
+// Test 7 (requirement 1; PK2-4): a direct run with `response_deadline_ms` 50 000 whose target page
+// never arrives. After its 900 ms pre-input wait (the shipped base 300 ms × 3 000 / 1 000) and its
+// tap, the confirmation captures a frame every 20 s: at 900, 20 900 and 40 900 ms. The wait from
+// 40 900 ms would end at 60 900 ms, after the lease (50 000 + 5 000); it ends at the deadline
+// instead, and the run is cancelled `deadline_exceeded` with the Runtime clock in
+// [50 000, 55 000), its lease released, none lapsed, no `lease_mismatch`, and the host closes.
+#[test]
+fn pk2_a_paced_wait_ends_by_the_host_deadline() {
+    const RESPONSE_DEADLINE_MS: u64 = 50_000;
+    // A frame interval of 5 s at 4 000.
+    const STRETCHED_WAIT_MS: u64 = 20_000;
+    let reserve_ms = shipped_reserve_ms();
+    let root = TempDir::new().expect("tempdir");
+    let path = root.path().join("never-arrives.zip");
+    fs::write(&path, never_arrives_package()).expect("write package");
+    // The device stays on `home` after the tap.
+    let state = Arc::new(FakeState::default());
+    let clock = Arc::new(WaitClock::new(1_000));
+    let host = direct_host_with(
+        config(&root).with_scheduler(SchedulerConfig::default()),
+        &clock,
+        &state,
+    );
+    host.pin_pacing_factor_for_test(ALIAS, PACED_FACTOR_MILLI)
+        .expect("pin the factor");
+
+    let (receipt, events) = run_direct(&host, &path, RESPONSE_DEADLINE_MS);
+    let ended_ms = clock.monotonic_ms();
+    let all_records = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("every record");
+    host.close().expect("close runtime host");
+
+    assert_cancelled_at_the_deadline(&receipt);
+    assert_eq!(admitted_deadline(&events), Some(RESPONSE_DEADLINE_MS));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_ended_by_the_deadline(
+        &clock,
+        ended_ms,
+        RESPONSE_DEADLINE_MS,
+        reserve_ms,
+        STRETCHED_WAIT_MS,
+    );
+    assert_lease_released(&events, &all_records);
+}
+
+/// A configuration that sets `performance.pacing.pre_input_wait_base_ms` and nothing else.
+fn pre_input_wait_base(base_ms: u64) -> actingcommand_contract::RuntimeConfigManifest {
+    let mut parameters = vec![actingcommand_contract::ConfigParameter {
+        key: "performance.pacing.pre_input_wait_base_ms".to_owned(),
+        value: actingcommand_contract::FactScalar::DurationMs(base_ms),
+        source: actingcommand_contract::ConfigParameterSource::Explicit,
+        settable: false,
+    }];
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("every key is in the key table");
+    actingcommand_contract::RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+// Test 8 (requirement 1, PK2's pre-input wait; PK2-4): a direct run with `response_deadline_ms`
+// 2 000 and `pre_input_wait_base_ms` 3 000 waits 3 000 × 3 000 / 1 000 = 9 000 ms before its tap,
+// from the start: whole, that wait would end after the lease (2 000 + 5 000). It ends at the
+// deadline instead, and the run is cancelled `deadline_exceeded` before its tap with the Runtime
+// clock in [2 000, 7 000), its lease released, none lapsed, no `lease_mismatch`, and the host
+// closes.
+#[test]
+fn pk2_the_pre_input_wait_ends_by_the_host_deadline() {
+    const RESPONSE_DEADLINE_MS: u64 = 2_000;
+    const PRE_INPUT_WAIT_BASE_MS: u64 = 3_000;
+    const PRE_INPUT_WAIT_MS: u64 = 9_000;
+    let reserve_ms = shipped_reserve_ms();
+    let root = TempDir::new().expect("tempdir");
+    let path = root.path().join("one-tap.zip");
+    fs::write(
+        &path,
+        package(
+            &[("open_terminal", "home", "terminal", None)],
+            1,
+            5_000,
+            60_000,
+        ),
+    )
+    .expect("write package");
+    let state = Arc::new(FakeState::default());
+    let clock = Arc::new(WaitClock::new(1_000));
+    let host = direct_host_with(
+        config(&root)
+            .with_scheduler(SchedulerConfig::default())
+            .with_config_manifest(pre_input_wait_base(PRE_INPUT_WAIT_BASE_MS)),
+        &clock,
+        &state,
+    );
+    host.pin_pacing_factor_for_test(ALIAS, PACED_FACTOR_MILLI)
+        .expect("pin the factor");
+
+    let (receipt, events) = run_direct(&host, &path, RESPONSE_DEADLINE_MS);
+    let ended_ms = clock.monotonic_ms();
+    let all_records = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("every record");
+    host.close().expect("close runtime host");
+
+    assert_cancelled_at_the_deadline(&receipt);
+    assert_eq!(admitted_deadline(&events), Some(RESPONSE_DEADLINE_MS));
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        0,
+        "the run ends before its tap"
+    );
+    assert_ended_by_the_deadline(
+        &clock,
+        ended_ms,
+        RESPONSE_DEADLINE_MS,
+        reserve_ms,
+        PRE_INPUT_WAIT_MS,
+    );
+    assert_lease_released(&events, &all_records);
+}
+
+// Test 9 (requirement 2; PK2-4): a scheduled run's lease is taken at its admission for
+// `response_deadline_ms` + the reserve and is not renewed while the run runs; its deadline is at
+// most the lease's end less the reserve. So it could lapse as a direct run could, and its waits
+// end by its deadline the same way. Test 7's run as a scheduled run, admitted at 0 ms: its lease
+// ends at 55 000 ms, its deadline is 50 000 ms, and the confirmation's wait from 40 900 ms would
+// end at 60 900 ms. It ends `contained_task_deadline_exceeded` through the failure settlement (one
+// failed terminal, one release, one execution record) with the Runtime clock in [50 000, 55 000),
+// no lease lapsed, no `lease_mismatch`, and the host closes.
+#[test]
+fn pk2_a_scheduled_runs_paced_wait_ends_by_its_deadline() {
+    const RESPONSE_DEADLINE_MS: u64 = 50_000;
+    const STRETCHED_WAIT_MS: u64 = 20_000;
+    let reserve_ms = shipped_reserve_ms();
+    let package = never_arrives_package();
+    let root = TempDir::new().expect("tempdir");
+    let path = root.path().join("scheduled-never-arrives.zip");
+    fs::write(&path, &package).expect("write package");
+    // The device stays on `home` after the tap.
+    let state = Arc::new(FakeState::default());
+    let clock = Arc::new(WaitClock::new(POLICY_NOW_UNIX_MS));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig::default())
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    clock.sample_capacity_after_moves(host.capacity_sampler_for_test().expect("capacity owner"));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate the policy catalog");
+    host.pin_pacing_factor_for_test(POLICY_INSTANCE_ALIAS, PACED_FACTOR_MILLI)
+        .expect("pin the factor");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let request = ContainedTaskRequest::new(path.to_string_lossy().into_owned())
+        .expect("contained task request")
+        .with_response_deadline_ms(RESPONSE_DEADLINE_MS)
+        .expect("bounded response deadline");
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_scheduled_policy_dispatch(
+            &intent,
+            &reasons,
+            &policy_context(&host, &intent),
+            &request,
+        )
+        .expect("policy admission")
+    else {
+        panic!("expected one policy run context")
+    };
+    let admitted_ms = clock.monotonic_ms();
+    assert_eq!(
+        context.lease_token().expires_at_monotonic_ms(),
+        admitted_ms + RESPONSE_DEADLINE_MS + reserve_ms,
+        "the lease lasts the reserve past the deadline"
+    );
+
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the run reaches its deadline");
+    let ended_ms = clock.monotonic_ms();
+    let run_records = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        })
+        .expect("the run's records");
+    let all_records = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("every record");
+    host.close().expect("close runtime host");
+
+    assert_eq!(
+        error.code(),
+        "contained_task_deadline_exceeded",
+        "{error:?}"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    for event_type in [
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+    ] {
+        assert_eq!(
+            run_records
+                .iter()
+                .filter(|event| event.event_type() == event_type)
+                .count(),
+            1,
+            "one {event_type:?}"
+        );
+    }
+    assert_ended_by_the_deadline(
+        &clock,
+        ended_ms,
+        admitted_ms + RESPONSE_DEADLINE_MS,
+        reserve_ms,
+        STRETCHED_WAIT_MS,
+    );
+    assert_lease_released(&run_records, &all_records);
+}

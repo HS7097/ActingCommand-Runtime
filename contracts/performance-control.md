@@ -253,7 +253,11 @@ deadline, settlement and record is the one before pacing.
   its active checks and `contained_task_deadline_exceeded` stay wall-clock and identical at
   every factor. A stretched run that reaches its host deadline ends
   `contained_task_deadline_exceeded`, as before pacing; `perf_run_yielded` is not written before
-  SR-2b.
+  SR-2b. Once a run had a factor above 1 000, each of its waits (every wait of the kernel,
+  the pre-input wait and extra rounds included) ends no later than its host deadline: the host
+  cuts it to the time left. The run's next check then ends it while its lease, which lasts the
+  heartbeat reserve past that deadline and is not renewed while the run runs (direct, scheduled
+  and host package runs alike), still holds. A run whose every factor is 1 000 waits as before.
 - **Budget time and settlement.** The host keeps the run's factor segments, from one answer to
   the next or to the end of its execution. Its budget time is its wall time less the sum over
   its segments of the segment's wall time × (f − 1000) / f. A policy run with a segment above
