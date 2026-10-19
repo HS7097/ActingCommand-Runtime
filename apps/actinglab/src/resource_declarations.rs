@@ -67,7 +67,11 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
         // Workflow #411 A11: an absolute list is read wherever it is (a linked worktree's Git
         // directory lies outside the repository); a relative one stays a repository file.
         let bytes = if list.is_absolute() {
-            read_absolute_path_list(list)?
+            let bytes = read_absolute_path_list(list)?;
+            // One-off mutation (red proof, test 1): the absolute list counts as a declaration.
+            reader.read_files.insert(path_text(list));
+            reader.read_bytes += bytes.len() as u64;
+            bytes
         } else {
             reader.read(list, MAX_PATH_LIST_BYTES)?
         };
@@ -1245,8 +1249,10 @@ fn validate_relative_path(path: &Path) -> CliOutcome<()> {
 /// Workflow #411 A11: an absolute changed-path list, read as a bounded regular file. The list is
 /// no declaration, so it is neither in `read_files` nor counted in `read_bytes`.
 fn read_absolute_path_list(path: &Path) -> CliOutcome<Vec<u8>> {
-    let mut file = File::open(path)
-        .map_err(|error| invalid(path, &format!("open changed path list: {error}")))?;
+    // One-off mutation (red proof, test 2): an unreadable absolute list is an empty selection.
+    let Ok(mut file) = File::open(path) else {
+        return Ok(Vec::new());
+    };
     let metadata = file
         .metadata()
         .map_err(|error| invalid(path, &format!("changed path list metadata: {error}")))?;
