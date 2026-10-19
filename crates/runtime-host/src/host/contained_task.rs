@@ -5178,7 +5178,8 @@ fn select_scheduling_disposition(
     // compared with its terminal pages. With one or more, step `executed_steps - 1` is the
     // package's own last step (its layer ends after the other layers' steps). Without its own
     // count (`None`) the run's total decides, as before.
-    if executed_steps == 0 || own_executed_steps == Some(0) {
+    // one-off red proof (mutation A -> T1, T2): the branch chosen by the run's total again.
+    if executed_steps == 0 {
         let observed_page = events.iter().rev().find_map(|event| {
             let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
                 return None;
@@ -5198,7 +5199,10 @@ fn select_scheduling_disposition(
             ));
         }
     } else {
-        let final_step = executed_steps - 1;
+        // one-off red proof (mutation B -> T3): the final step indexed by the own count.
+        let final_step = own_executed_steps
+            .unwrap_or(executed_steps)
+            .saturating_sub(1);
         let semantic_facts = events.iter().filter_map(|event| {
             let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
                 return None;
