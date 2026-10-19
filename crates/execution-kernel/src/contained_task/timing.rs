@@ -76,10 +76,12 @@ impl PaceClock {
     /// How long a wait of `budget` lasts on the runtime's clock in the current segment:
     /// `budget × f / 1000`, rounded half up to the microsecond.
     pub(super) fn wall_span(self, budget: Duration) -> Duration {
-        if self.factor_milli == UNIT_FACTOR_MILLI {
+        // red proof, mutation 1: a paced wait lasts its declared value, unscaled.
+        if self.factor_milli != UNIT_FACTOR_MILLI {
             return budget;
         }
-        let micros = (budget.as_nanos() * u128::from(self.factor_milli) + 500_000) / 1_000_000;
+        // red proof, mutation 5: the factor 1000 scales by (f + 1) / 1000.
+        let micros = (budget.as_nanos() * u128::from(self.factor_milli + 1) + 500_000) / 1_000_000;
         Duration::from_micros(u64::try_from(micros).unwrap_or(u64::MAX))
     }
 

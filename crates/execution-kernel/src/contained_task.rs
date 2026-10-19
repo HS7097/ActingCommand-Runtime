@@ -2371,12 +2371,16 @@ fn elapsed_since<R: ContainedTaskRuntime>(runtime: &mut R, started: Instant) -> 
 /// #385 P-k (performance model v1.4.2 §5.3): the budget instant now on the run's budget clock
 /// `pace`, from one reading of [`ContainedTaskRuntime::monotonic_now`].
 fn budget_now<R: ContainedTaskRuntime>(runtime: &mut R, pace: PaceClock) -> Instant {
-    pace.budget(runtime.monotonic_now())
+    // red proof, mutation 2: limits read the wall clock.
+    let _ = pace;
+    runtime.monotonic_now()
 }
 
 /// #385 P-k: [`budget_now`] from one reading of [`ContainedTaskRuntime::observation_now`].
 fn budget_observation_now<R: ContainedTaskRuntime>(runtime: &mut R, pace: PaceClock) -> Instant {
-    pace.budget(runtime.observation_now())
+    // red proof, mutation 2: limits read the wall clock.
+    let _ = pace;
+    runtime.observation_now()
 }
 
 /// #385 P-k: the budget time since the budget instant `started`, zero when `started` is later.
@@ -4312,20 +4316,18 @@ impl PreparedContainedTask {
                     )?;
                     // Workflow #386 SR-1 (scheduling model §2.1 item 4): the step's pacing, taken
                     // once at its start.
-                    pacing = runtime
-                        .step_pacing()
-                        .map_err(ContainedTaskRunError::operation::<R>)?;
-                    // #385 P-k (performance model v1.4.2 §5.6 item 2): the step's factor holds
-                    // from here until the next step's answer, whatever the runtime would answer
-                    // during this step.
-                    observation_timing = observation_timing.with_pace(paced_step(
-                        runtime,
-                        observation_timing.pace(),
-                        pacing,
-                    )?);
-                    let pace = observation_timing.pace();
                     let mut attempt = 1;
                     'attempt: loop {
+                        // red proof, mutation 3: the factor is taken at every attempt.
+                        pacing = runtime
+                            .step_pacing()
+                            .map_err(ContainedTaskRunError::operation::<R>)?;
+                        observation_timing = observation_timing.with_pace(paced_step(
+                            runtime,
+                            observation_timing.pace(),
+                            pacing,
+                        )?);
+                        let pace = observation_timing.pace();
                         if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                             return Err(self
                                 .task_timeout_error(
@@ -4632,6 +4634,33 @@ impl PreparedContainedTask {
                                     )
                                     .into());
                             }
+                            // red proof, mutation 4: gesture durations scale by f.
+                            let stretch = |duration_ms: u64| {
+                                duration_ms * u64::from(pacing.factor_milli) / 1_000
+                            };
+                            let action = match action {
+                                InputAction::Swipe {
+                                    x1,
+                                    y1,
+                                    x2,
+                                    y2,
+                                    duration_ms,
+                                } => InputAction::Swipe {
+                                    x1,
+                                    y1,
+                                    x2,
+                                    y2,
+                                    duration_ms: stretch(duration_ms),
+                                },
+                                InputAction::LongTap { x, y, duration_ms } => {
+                                    InputAction::LongTap {
+                                        x,
+                                        y,
+                                        duration_ms: stretch(duration_ms),
+                                    }
+                                }
+                                other => other,
+                            };
                             runtime
                                 .input(action, input_context)
                                 .map_err(ContainedTaskRunError::operation::<R>)?;
