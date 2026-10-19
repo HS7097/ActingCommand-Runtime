@@ -25,8 +25,9 @@ pub const PRIORITY_OFFSET_KEY_SUFFIX: &str = ".priority_offset";
 /// publication or a configured or caller-supplied fact of this key is refused.
 pub const RESOURCE_TARGETS_FACT_KEY: &str = "session.resource_targets";
 /// Workflow #411 B15 R6: the instance's remedy choices (`contracts/instance-fact-store.md`,
-/// "Remedy choice facts"), one inline record-list fact per scope (instance, server or game),
-/// written by a person or an agent and checked by the Runtime's write rule.
+/// "Remedy choice facts"), one inline record-list fact per scope (instance or game; never
+/// server, whose id is not game-qualified), written by a person or an agent and checked by the
+/// Runtime's write rule.
 pub const REMEDY_CHOICES_FACT_KEY: &str = "session.remedy.choices";
 /// Workflow #411 B15 R6: the prefix of a remedy choice record's `source_snapshot_id`.
 pub const REMEDY_CHOICES_SNAPSHOT_PREFIX: &str = "remedy-choices:";

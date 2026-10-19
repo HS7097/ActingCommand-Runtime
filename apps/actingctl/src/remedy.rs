@@ -3,11 +3,14 @@
 //! `actingctl remedy set|get|lift` (Workflow #411 B15 R6; model-b15 §5.1, §7.6;
 //! `contracts/instance-fact-store.md`, "Remedy choice facts"), the CLI originals of MCP
 //! `ac_remedy_set` and `ac_remedy_get` (`mcp::remedy`). A person or an agent writes the remedy
-//! choices of an instance, a server or a game as the instance fact `session.remedy.choices`
-//! through the ordinary fact publication; the Runtime checks every write (its shape, and the
-//! names against the packages bound on every instance the scope covers) and refuses a bad one
-//! whole with `session_remedy_choices_invalid`. Both sides build the same record and answer the
-//! same object:
+//! choices of an instance or a game as the instance fact `session.remedy.choices` through the
+//! ordinary fact publication; the Runtime checks every write (its scope and shape, and the names
+//! against the packages bound on every instance the scope covers) and refuses a bad one whole
+//! with `session_remedy_choices_invalid`. There is no server scope: the fact store's server scope
+//! names a server without its game, so a record there would apply to every game that shares the
+//! server id; `--server` is no flag of `set` (`actingctl_usage_invalid`, `unknown`), as `server`
+//! is no argument of `ac_remedy_set`. Both sides build the same record and answer the same
+//! object:
 //!
 //! - `set` writes the scope's whole list (`[]` withdraws it) as a new observation:
 //!   `{event_id, scope, key, source_snapshot_id, observed_at_unix_ms, rows_total}`;
@@ -42,7 +45,7 @@ pub(crate) const COMMAND: &str = "remedy";
 pub(crate) const SET: &str = "set";
 pub(crate) const GET: &str = "get";
 pub(crate) const LIFT: &str = "lift";
-const USAGE: &str = "usage: actingctl remedy set (--instance <alias|instance_id|ADB port> | --server <id> --game <id> | --game <id>) --rows <file> --state-root <path>\nusage: actingctl remedy get|lift --instance <alias|instance_id|ADB port> --state-root <path>";
+const USAGE: &str = "usage: actingctl remedy set (--instance <alias|instance_id|ADB port> | --game <id>) --rows <file> --state-root <path>\nusage: actingctl remedy get|lift --instance <alias|instance_id|ADB port> --state-root <path>";
 /// `source_detector` of the records the CLI writes.
 const CLI_DETECTOR: &str = "actingctl.remedy";
 /// `source_detector` of the records MCP writes.
@@ -51,11 +54,11 @@ pub(crate) const MCP_DETECTOR: &str = "actingctl-mcp.remedy";
 /// The largest rows file read: a fact observation's bound.
 const MAX_ROWS_FILE_BYTES: usize = actingcommand_contract::MAX_FACT_OBSERVATION_BYTES;
 
-/// The scope a `set` writes.
+/// The scope a `set` writes: an instance or a game, never a server (a server id is not
+/// game-qualified).
 pub(crate) enum Target {
     /// An instance's alias, instance_id or ADB port, resolved with one status read.
     Instance(String),
-    Server(String),
     Game(String),
 }
 
@@ -115,9 +118,6 @@ pub(crate) fn set(
     let scope = match target {
         Target::Instance(selector) => FactScope::Instance {
             instance_id: resolve(client, selector)?,
-        },
-        Target::Server(server_id) => FactScope::Server {
-            server_id: server_id.clone(),
         },
         Target::Game(game_id) => FactScope::Game {
             game_id: game_id.clone(),
@@ -315,7 +315,6 @@ struct Parsed {
     action: &'static str,
     state_root: PathBuf,
     instance: Option<String>,
-    server: Option<String>,
     game: Option<String>,
     rows: Option<PathBuf>,
 }
@@ -355,8 +354,9 @@ enum Ended {
 }
 
 /// `remedy <set|get|lift>` and the flags `flags_of` names for the action, each once with a
-/// value; for `set`, exactly one target form (`--instance`, `--server` with `--game`, or
-/// `--game`) and `--rows`; for `get` and `lift`, `--instance`; `--state-root` always.
+/// value; for `set`, exactly one target form (`--instance` or `--game`) and `--rows`; for `get`
+/// and `lift`, `--instance`; `--state-root` always. Any other word, `--server` included, is
+/// `unknown`.
 fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
     let action = match arguments.get(1).and_then(|word| word.to_str()) {
         Some(SET) => SET,
@@ -410,34 +410,19 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
         action,
         state_root,
         instance: values.remove("--instance"),
-        server: values.remove("--server"),
         game: values.remove("--game"),
         rows: values.remove("--rows").map(PathBuf::from),
     };
-    match (
-        action,
-        &parsed.instance,
-        &parsed.server,
-        &parsed.game,
-        &parsed.rows,
-    ) {
-        (_, None, None, None, _) => Err(cli_line::usage_invalid(
+    match (action, &parsed.instance, &parsed.game, &parsed.rows) {
+        (_, None, None, _) => Err(cli_line::usage_invalid(
             Some("--instance"),
             ArgumentProblem::Required,
         )),
-        (SET, Some(_), Some(_), _, _) => Err(cli_line::usage_invalid(
-            Some("--server"),
-            ArgumentProblem::Conflicting,
-        )),
-        (SET, Some(_), None, Some(_), _) => Err(cli_line::usage_invalid(
+        (SET, Some(_), Some(_), _) => Err(cli_line::usage_invalid(
             Some("--game"),
             ArgumentProblem::Conflicting,
         )),
-        (SET, None, Some(_), None, _) => Err(cli_line::usage_invalid(
-            Some("--game"),
-            ArgumentProblem::Required,
-        )),
-        (SET, _, _, _, None) => Err(cli_line::usage_invalid(
+        (SET, _, _, None) => Err(cli_line::usage_invalid(
             Some("--rows"),
             ArgumentProblem::Required,
         )),
@@ -475,11 +460,10 @@ fn run(parsed: &Parsed, detail: Detail) -> Result<(Value, Outcome), Ended> {
             ReceiptCode::PublishFactsCompleted,
         ),
         _ => {
-            let target = match (&parsed.instance, &parsed.server, &parsed.game) {
-                (Some(instance), _, _) => Target::Instance(instance.clone()),
-                (None, Some(server), _) => Target::Server(server.clone()),
-                (None, None, Some(game)) => Target::Game(game.clone()),
-                (None, None, None) => {
+            let target = match (&parsed.instance, &parsed.game) {
+                (Some(instance), _) => Target::Instance(instance.clone()),
+                (None, Some(game)) => Target::Game(game.clone()),
+                (None, None) => {
                     return Err(Ended::Usage(cli_line::usage_invalid(
                         Some("--instance"),
                         ArgumentProblem::Required,

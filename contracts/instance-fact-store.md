@@ -540,7 +540,7 @@ instances is booked once.
 | priority offsets | `session.task.<task_id>.priority_offset` | instance, server or game | one per task with an offset set | existing (#308 4a-2) | *O* (usually 0–3) |
 | readings (D2 reality keys) | `resource.*`, `inventory.*` | instance | *R*: the distinct reading keys of the packages bound to the instance | existing (#335 S5b); refreshed by D2 | 44 (6 + 15 + 23: the distinct `fact_key` readings of the three resource repositories at `d41137c0`, `6dd529a1`, `dfb3729`) |
 | pack schedule | `session.pack.schedule` | instance, server, game | ≤ 3 (one per scope used) | SR-11 | ≤ 9 |
-| remedy choices | `session.remedy.choices` | instance, server, game | ≤ 3 (one per scope used) | #411 B15 R6 | ≤ 9 |
+| remedy choices | `session.remedy.choices` | instance or game (never server: "Remedy choice facts" below) | ≤ 2 (one per scope used) | #411 B15 R6 | ≤ 6 |
 | run parameters (overlay) | `session.dispatch.parameter.<name>` | — | 0: an overlay of a run's snapshots, never stored ("Run parameters" below) | #411 B15 R5 | 0 |
 | feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
 | instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
@@ -548,10 +548,10 @@ instances is booked once.
 | display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | instance | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) | 12 |
 | selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
 
-- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 9 + 0 + 6 + 9 + 12 = **101 + *O***, well
+- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 6 + 0 + 6 + 9 + 12 = **98 + *O***, well
   under 256.
-- **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 15 + 10
-  + 15 + 20 = **139 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances
+- **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 10 + 10
+  + 15 + 20 = **134 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances
   bound to a device; the reading keys of new packages are the variable that matters.
 - DA-4's display keys (`display.logical_extent`, `display.safe_area.reported`,
   `display.safe_area.declared`, `display.map`; register §1.25 X10) have no writer on main and are
@@ -643,8 +643,8 @@ like every key of this store it is a tagged record that the start loads from the
 ## Remedy choice facts
 
 Workflow #411 B15 ([remedies.md](remedies.md), section 3). A person or an agent states, per
-instance, server or game, which capabilities may serve a need a package's remedy declares, and
-which values a provider's parameters take. The state is stored in this store as one record of the
+instance or game, which capabilities may serve a need a package's remedy declares, and which
+values a provider's parameters take. The state is stored in this store as one record of the
 `session.` family per scope; it is the "target record" of the remedy resolution, consulted before
 the configuration and the package defaults.
 
@@ -653,7 +653,7 @@ writers; slice R4 reads the record.
 
 | Key | Value | Scope |
 | --- | --- | --- |
-| `session.remedy.choices` | `record_list` of the rows below, all fields strings | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
+| `session.remedy.choices` | `record_list` of the rows below, all fields strings | `instance` (that instance) or `game` (every instance of that game); never `server` |
 
 ```text
 {row: "allow", need, capability}                  this source allows capability for need
@@ -661,25 +661,36 @@ writers; slice R4 reads the record.
 {row: "parameter", capability, parameter, value}  this source sets a parameter's value
 ```
 
+**Scopes: instance or game, never server.** The store's `server` scope names a server without its
+game (`FactScope::Server { server_id }`) and covers every instance whose server id is equal,
+whatever its game. A server id that two games share would then share one record of remedy
+choices across both games, which is never intended. Remedy choices are therefore written at
+instance or game scope only: the write rule refuses a server-scoped record from every writer
+(`field` `/scope`), and the CLI and MCP writers do not offer the scope (`--server` and `server`
+are refused as arguments they do not take). Only the instance and game scopes exist for this key,
+because the server scope is not game-qualified.
+
 **Which record applies.** The record that applies to an instance is the most specific one
-(instance over server over game) and applies as a whole, as for the pack schedule: an instance
-record replaces the server and game records entirely.
+(instance over game) and applies as a whole, as for the pack schedule: an instance record
+replaces the game record entirely.
 
 **Write rule.** Refused as the non-fatal request error `session_remedy_choices_invalid`
 (`fact_key`, `field` pointing at the row and member, and `instance_id` for a meaning error), before
 the fact write gate, with nothing appended. `field` is a JSON pointer into the row list:
 `/<row>/<member>` for a member, `/<row>` for a row as a whole (a row twice or a conflict, at the
-later row), `""` for the list as a whole (not an inline `record_list`), and `/invalidate_on` for
-the record's invalidating events. The shape is checked first, row by row; then the meaning, per
-covered instance in the policy inputs' order, row by row; the first broken rule answers:
+later row), `""` for the list as a whole (not an inline `record_list`), `/invalidate_on` for the
+record's invalidating events, and `/scope` for a server scope. The shape is checked first, the
+scope before the rows, row by row; then the meaning, per covered instance in the policy inputs'
+order, row by row; the first broken rule answers:
 
-- shape: a `record_list`; `row` is `allow`, `none` or `parameter`, with exactly its fields; every
-  name is a token `^[a-z][a-z0-9_]{0,63}$` and `none` is never a capability; no row twice; no
-  `none` together with an `allow` of the same need; no two `parameter` rows of the same
-  capability and parameter with different values (which value holds would be unsaid; the
+- shape: scope `instance` or `game` (a `server` scope is refused, `/scope`, whatever the rows, the
+  empty list included); a `record_list`; `row` is `allow`, `none` or `parameter`, with exactly its
+  fields; every name is a token `^[a-z][a-z0-9_]{0,63}$` and `none` is never a capability; no
+  row twice; no `none` together with an `allow` of the same need; no two `parameter` rows of the
+  same capability and parameter with different values (which value holds would be unsaid; the
   configuration's rows refuse the same, [runtime-config.md](runtime-config.md)); at most 256 rows
-  (the `record_list` bound, which the request's own validation already refuses); scope
-  `instance`, `server` or `game`; no `invalidate_on` events;
+  (the `record_list` bound, which the request's own validation already refuses); no
+  `invalidate_on` events;
 - meaning, against the remedy table ([remedies.md](remedies.md), section 7.1) of every instance
   the scope covers: an `allow` whose need no bound remedy declares, or whose capability that need's
   remedies do not list; a `parameter` row whose capability no bound provider declares, whose
@@ -687,17 +698,19 @@ covered instance in the policy inputs' order, row by row; the first broken rule 
   names are refused, never ignored. The bound packages are those the active catalog's tasks
   covering the instance bind, read when the write arrives (without an active catalog, none); an
   instance scope covers its instance even when the policy inputs do not name it (it then has no
-  bound package), a server or game scope every instance of the policy inputs on that server or
-  game. `none` rows name nothing a package must declare.
+  bound package), a game scope every instance of the policy inputs of that game. `none` rows name
+  nothing a package must declare.
 
 **Writing.** One observation writes a scope's whole list, atomically; publishing an empty list
 withdraws the scope's choices. The publisher chooses the lifetime: no `expires_at_unix_ms` never
-expires. The writers are `actingctl remedy set` (`--instance <alias|instance_id|ADB port>`, or
-`--server <id> --game <id>`, or `--game <id>`, with `--rows <file>`), `actingctl remedy get
+expires. The writers are `actingctl remedy set` (`--instance <alias|instance_id|ADB port>` or
+`--game <id>`, with `--rows <file>`; `--server` is no flag of the command and is refused as
+`actingctl_usage_invalid` with `argument_problem` `unknown`), `actingctl remedy get
 --instance <selector>` (the records that apply, most specific first, and the one in effect),
 `actingctl remedy lift --instance <selector>` (republishes the instance record unchanged, or an
 empty one when there is none, with a new observation: the explicit lift of a stopped remedy), the
-MCP general tools `ac_remedy_set` (`instance`, `server` or `game`, `rows`, optional `lift`) and
+MCP general tools `ac_remedy_set` (`instance` or `game`, `rows`, optional `lift`; `server` is no
+argument and is refused as `arguments_invalid` with `argument_problem` `unknown`) and
 `ac_remedy_get` (`instance`), both with no tier, and later the UI console. Under Workflow #389 the
 key is a family of its own, "remedy choices" (`fact_key_family`,
 [runtime-interface.md](runtime-interface.md)): an observation that mixes it with keys of another
@@ -715,8 +728,8 @@ the completed receipt's code of the request the command made: `request_publish_f
 for `set` and `lift`, `request_instance_fact_snapshot_completed` for `get`; a refused write prints
 the Runtime's denied receipt beside its outcome and exits non-zero. A lift keeps the record's rows
 and, when it has one, the length of its lifetime; its observation is strictly newer than the one
-it replaces. An empty instance record, as any instance record, replaces the server and game
-records for that instance.
+it replaces. An empty instance record, as any instance record, replaces the game record for that
+instance.
 
 **Identity.** The record's `source_snapshot_id` is `remedy-choices:<sha256 hex of (scope,
 canonical rows, observed_at_unix_ms)>`, so every write, the same rows included, is a new version
@@ -726,7 +739,7 @@ is an overlaid instance fact of the evaluation, like `session.resource_targets`,
 admission refuses the intent as `policy_facts_stale`.
 
 **Capacity and ledger.** One active fact identity per scope that uses it (the instance, its
-server, its game), booked in the capacity ledger above. A write is an ordinary `fact.published`
+game), booked in the capacity ledger above. A write is an ordinary `fact.published`
 event of the publishing request, which keeps the request's source and actor; like every key of
 this store it is a tagged record that the start loads from the ledger (Workflow #383).
 

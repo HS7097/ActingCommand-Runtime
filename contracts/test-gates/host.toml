@@ -1380,7 +1380,7 @@ tests = [
 ]
 incident = ["#411 B15"]
 
-# Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-1 to B15W-3; no persisted ledger shape; model-b15 §5.1; contracts/instance-fact-store.md "Remedy choice facts"; key assigned by the coordinator): session.remedy.choices is a family of its own, never mixed with another in one observation (fact_origin_mixed), taken until U-6 from (agent, adapter), (user, ui) and (cli, cli) and published with the writer's origin; every write is checked before the fact write gate, its shape and then its names against the packages the active catalog binds on every instance its scope covers, a refusal being session_remedy_choices_invalid (fact_key, field, instance_id) with nothing appended; its source_snapshot_id remedy-choices:<sha256 of scope, rows, observed_at> makes the same rows written later a new version
+# Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-1 to B15W-3; no persisted ledger shape; model-b15 §5.1; contracts/instance-fact-store.md "Remedy choice facts"; key assigned by the coordinator): session.remedy.choices is a family of its own, never mixed with another in one observation (fact_origin_mixed), taken until U-6 from (agent, adapter), (user, ui) and (cli, cli) and published with the writer's origin; every write is checked before the fact write gate, its scope (instance or game; a server-scoped record is refused with field /scope from every writer, a server id not being game-qualified), its shape and then its names against the packages the active catalog binds on every instance its scope covers, a refusal being session_remedy_choices_invalid (fact_key, field, instance_id) with nothing appended; its source_snapshot_id remedy-choices:<sha256 of scope, rows, observed_at> makes the same rows written later a new version
 [[gate]]
 key = "115"
 coverage = "Y"
@@ -1390,5 +1390,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_names_the_bound_packages_do_not_declare_are_refused",
     "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_a_write_mixing_families_is_refused",
     "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_two_writes_of_the_same_rows_are_two_versions",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_a_server_scoped_record_is_refused",
 ]
 incident = ["#411 B15"]

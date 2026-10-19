@@ -5,9 +5,10 @@
 //! tools (observer until U-3, always on: an agent writes the instance's target record). The
 //! write goes the provenance way on its own (Agent, Adapter) connection, the origin the
 //! Runtime records on the `fact.published` event; what the rows may name is the Runtime's
-//! answer, passed on unchanged (`session_remedy_choices_invalid` on top of a refusal). The
-//! answers are the CLI's, without its outcome; a `get` answer larger than the output budget is
-//! exported, as `ac_facts` does.
+//! answer, passed on unchanged (`session_remedy_choices_invalid` on top of a refusal). The scope
+//! is an instance or a game; `server` is no argument (`arguments_invalid`, `unknown`), since a
+//! server id is not game-qualified. The answers are the CLI's, without its outcome; a `get`
+//! answer larger than the output budget is exported, as `ac_facts` does.
 
 use super::operator::record_provenance;
 use super::runtime::client_error;
@@ -25,27 +26,20 @@ const AGENT: (EventActor, EventSource) = (EventActor::Agent, EventSource::Adapte
 /// The members an exported `get` answer keeps beside `export`.
 const EXPORTED_HEADER: [&str; 3] = ["instance_alias", "read_at_unix_ms", "in_effect"];
 
-pub(super) const SET_DESCRIPTION: &str = "Writes the remedy choices of one scope, the instance's target record session.remedy.choices, as actingctl remedy set does. Exactly one of instance (alias, instance_id or ADB port, resolved with one status read), server or game names the scope; rows is the scope's whole list, [] withdraws it. A row is {row: allow, need, capability} (this capability may serve this need), {row: none, need} (this need gets no remedy) or {row: parameter, capability, parameter, value} (a provider's parameter takes this value); every member is a string, every name a token the bound packages declare (a remedy's need and capabilities, a provided capability's parameters and options). The most specific record that applies to an instance applies as a whole (instance over server over game); without one the configuration and then the package defaults decide. The Runtime checks every write against the packages bound on every instance the scope covers and refuses a bad one whole: session_remedy_choices_invalid with field (the JSON pointer of the row and member) and instance_id (the instance a name is unknown on); nothing is written then. Every write is a new version (source_snapshot_id remedy-choices:<sha256>) and lifts a remedy stop it changes the inputs of. lift true, with instance and without rows, republishes the instance's own record unchanged, or an empty one when it has none (an empty instance record replaces the server and game records for that instance), with a new observation, as actingctl remedy lift does: it lifts a remedy stop on the instance after the cause was fixed by hand. Answers {event_id, scope, key, source_snapshot_id, observed_at_unix_ms, rows_total}, with previous_source_snapshot_id (null without an instance record) for lift. The write is recorded with the agent's origin.";
+pub(super) const SET_DESCRIPTION: &str = "Writes the remedy choices of one scope, the instance's target record session.remedy.choices, as actingctl remedy set does. Exactly one of instance (alias, instance_id or ADB port, resolved with one status read) or game names the scope; there is no server scope (a server id is not game-qualified, so a server record would reach every game sharing it), and a server argument is refused as arguments_invalid; rows is the scope's whole list, [] withdraws it. A row is {row: allow, need, capability} (this capability may serve this need), {row: none, need} (this need gets no remedy) or {row: parameter, capability, parameter, value} (a provider's parameter takes this value); every member is a string, every name a token the bound packages declare (a remedy's need and capabilities, a provided capability's parameters and options). The most specific record that applies to an instance applies as a whole (instance over game); without one the configuration and then the package defaults decide. The Runtime checks every write against the packages bound on every instance the scope covers and refuses a bad one whole: session_remedy_choices_invalid with field (the JSON pointer of the row and member) and instance_id (the instance a name is unknown on); nothing is written then. Every write is a new version (source_snapshot_id remedy-choices:<sha256>) and lifts a remedy stop it changes the inputs of. lift true, with instance and without rows, republishes the instance's own record unchanged, or an empty one when it has none (an empty instance record replaces the game record for that instance), with a new observation, as actingctl remedy lift does: it lifts a remedy stop on the instance after the cause was fixed by hand. Answers {event_id, scope, key, source_snapshot_id, observed_at_unix_ms, rows_total}, with previous_source_snapshot_id (null without an instance record) for lift. The write is recorded with the agent's origin.";
 
-pub(super) const GET_DESCRIPTION: &str = "The remedy choice records that apply to one instance, as actingctl remedy get prints them; nothing is recorded. instance (alias, instance_id or ADB port) is resolved with one status read. Answers {instance_alias, read_at_unix_ms, records, in_effect}: records are the session.remedy.choices records of the instance, its server and its game, most specific first, each {scope, observed_at_unix_ms, expires_at_unix_ms when it has one, source_snapshot_id, rows, in_effect}; in_effect is the scope of the record that applies as a whole (the most specific one not expired at read_at_unix_ms), null when none does (then the configuration and the package defaults decide). An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {instance_alias, read_at_unix_ms, in_effect, export {path, sha256, size}} with the warning answer_exported.";
+pub(super) const GET_DESCRIPTION: &str = "The remedy choice records that apply to one instance, as actingctl remedy get prints them; nothing is recorded. instance (alias, instance_id or ADB port) is resolved with one status read. Answers {instance_alias, read_at_unix_ms, records, in_effect}: records are the session.remedy.choices records of the instance and its game, most specific first, each {scope, observed_at_unix_ms, expires_at_unix_ms when it has one, source_snapshot_id, rows, in_effect}; in_effect is the scope of the record that applies as a whole (the most specific one not expired at read_at_unix_ms), null when none does (then the configuration and the package defaults decide). An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {instance_alias, read_at_unix_ms, in_effect, export {path, sha256, size}} with the warning answer_exported.";
 
-/// `ac_remedy_set {instance | server | game, rows}` or `{instance, lift: true}`.
+/// `ac_remedy_set {instance | game, rows}` or `{instance, lift: true}`; any other argument,
+/// `server` included, is `arguments_invalid` (`unknown`).
 pub(super) fn set(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
-    let arguments = Arguments::new(arguments, &["instance", "server", "game", "rows", "lift"])?;
-    let target = match (
-        arguments.string("instance")?,
-        arguments.string("server")?,
-        arguments.string("game")?,
-    ) {
-        (Some(instance), None, None) => Target::Instance(instance.to_owned()),
-        (None, Some(server), None) => Target::Server(server.to_owned()),
-        (None, None, Some(game)) => Target::Game(game.to_owned()),
-        (None, None, None) => return Err(invalid_argument("instance", ArgumentProblem::Required)),
-        (Some(_), _, _) => {
+    let arguments = Arguments::new(arguments, &["instance", "game", "rows", "lift"])?;
+    let target = match (arguments.string("instance")?, arguments.string("game")?) {
+        (Some(instance), None) => Target::Instance(instance.to_owned()),
+        (None, Some(game)) => Target::Game(game.to_owned()),
+        (None, None) => return Err(invalid_argument("instance", ArgumentProblem::Required)),
+        (Some(_), Some(_)) => {
             return Err(invalid_argument("instance", ArgumentProblem::Conflicting));
-        }
-        (None, Some(_), Some(_)) => {
-            return Err(invalid_argument("server", ArgumentProblem::Conflicting));
         }
     };
     let lift = match arguments.value("lift") {
@@ -137,7 +131,6 @@ pub(super) fn set_input() -> Value {
         "type": "object",
         "properties": {
             "instance": name("Instance alias, instance_id or ADB port: that instance's record."),
-            "server": name("Server id: the record of every instance on that server."),
             "game": name("Game id: the record of every instance of that game."),
             "rows": {
                 "type": "array",
