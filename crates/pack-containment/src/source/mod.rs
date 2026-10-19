@@ -3131,14 +3131,31 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 ));
             }
             actingcommand_contract::validate_entry_page_set(game, &declared).map_err(refused)?;
+            // #411 A17: a refused stage start names the page and, when more than one stage
+            // starts it, those stages, as the Runtime's admission refusal does.
+            let refused_start = |problem: actingcommand_contract::EntryProblem, page: &str| {
+                let starts =
+                    actingcommand_contract::phase_entry_starts(game, page, &phases, &operations);
+                CliError::package_invalid(match problem {
+                    actingcommand_contract::EntryProblem::PhaseStartAmbiguous => format!(
+                        "entry_problem={problem} page_id={page} phase_ids={}",
+                        starts
+                            .iter()
+                            .map(|index| phases[*index].id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                    _ => format!("entry_problem={problem} page_id={page}"),
+                })
+            };
             pages
                 .into_iter()
                 .map(|page| {
                     actingcommand_contract::phase_entry_start(game, page, &phases, &operations)
                         .map(|phase| actingcommand_contract::TaskPhaseEntry { phase, page })
+                        .map_err(|problem| refused_start(problem, page))
                 })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(refused)?
+                .collect::<Result<Vec<_>, _>>()?
         }
         value => vec![actingcommand_contract::TaskPhaseEntry {
             phase: 0,

@@ -7,7 +7,7 @@
 //! reachable from every such start. The packages are synthetic `neutral` packages admitted
 //! through `PreparedContainedTask::load`.
 
-use crate::{ContainedTaskCode, ContainedTaskError, PreparedContainedTask};
+use crate::{ContainedTaskCode, ContainedTaskError, ExecutionKernelCode, PreparedContainedTask};
 use actingcommand_contract::outcome::Category;
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
@@ -205,26 +205,7 @@ fn entry_page_sets_are_admitted_or_refused_with_their_entry_problem() {
             panic!("{case}: admitted set refused: {error}");
         }
     }
-    let mut seventeen = sixteen;
-    seventeen.push("spare13".to_owned());
-    for (task, problem) in [
-        (unphased_task(json!([])), "empty"),
-        (unphased_task(json!(seventeen)), "too_many"),
-        (unphased_task(json!(["home", "neutral/home"])), "duplicate"),
-        (unphased_task(json!(["home", "any"])), "any_in_set"),
-        (unphased_task(json!(["home", "missing"])), "unresolved"),
-        (
-            phased_task(json!(["home", "other"]), &[]),
-            "phase_start_missing",
-        ),
-        (
-            phased_task(
-                json!(["home", "panel"]),
-                &[("panel_back", "panel", "home", 2)],
-            ),
-            "phase_start_ambiguous",
-        ),
-    ] {
+    for (task, problem, detail) in refused_entry_sets() {
         let Err(error) = admit(task) else {
             panic!("{problem}: refused set admitted");
         };
@@ -237,9 +218,121 @@ fn entry_page_sets_are_admitted_or_refused_with_their_entry_problem() {
             panic!("{problem}: unregistered code");
         };
         assert_eq!(code.category(), Category::Error, "{problem}");
+        assert_eq!(error.detail(), Some(detail.as_str()), "{problem}");
+    }
+}
+
+/// The refused sets of N3b-1, one per `entry_problem`, each with the refusal's developer detail.
+/// #411 A17: the detail of a refused stage start also names the entry page as admission resolved
+/// it and, when more than one stage starts that page, those stages in declaration order.
+fn refused_entry_sets() -> Vec<(Value, &'static str, String)> {
+    let mut seventeen = page_colors()
+        .into_iter()
+        .map(|(page, _)| page)
+        .collect::<Vec<_>>();
+    seventeen.push("spare13".to_owned());
+    let bare = |problem: &str| format!("entry_problem={problem}");
+    vec![
+        (unphased_task(json!([])), "empty", bare("empty")),
+        (
+            unphased_task(json!(seventeen)),
+            "too_many",
+            bare("too_many"),
+        ),
+        (
+            unphased_task(json!(["home", "neutral/home"])),
+            "duplicate",
+            bare("duplicate"),
+        ),
+        (
+            unphased_task(json!(["home", "any"])),
+            "any_in_set",
+            bare("any_in_set"),
+        ),
+        (
+            unphased_task(json!(["home", "missing"])),
+            "unresolved",
+            bare("unresolved"),
+        ),
+        (
+            phased_task(json!(["home", "other"]), &[]),
+            "phase_start_missing",
+            "entry_problem=phase_start_missing page_id=neutral/other".to_owned(),
+        ),
+        (
+            phased_task(
+                json!(["home", "panel"]),
+                &[("panel_back", "panel", "home", 2)],
+            ),
+            "phase_start_ambiguous",
+            "entry_problem=phase_start_ambiguous page_id=neutral/panel phase_ids=business,return"
+                .to_owned(),
+        ),
+    ]
+}
+
+/// The values of a refusal's outcome.
+fn values(error: &ContainedTaskError) -> Value {
+    Value::Object(error.outcome().values().clone())
+}
+
+/// #411 A17 (requirement 1): an entry page no stage's operation leaves from is refused with
+/// `entry_problem` `phase_start_missing` and that page, as admission resolved it, as `page_id`.
+#[test]
+fn a17_a_phase_start_missing_refusal_names_its_entry_page() {
+    let Err(error) = admit(phased_task(json!(["home", "other"]), &[])) else {
+        panic!("a page that starts no stage was admitted");
+    };
+    assert_eq!(
+        error.code().as_str(),
+        ExecutionKernelCode::ContainedTaskEntryPagesInvalid.as_str(),
+        "{error}"
+    );
+    assert_eq!(
+        values(&error),
+        json!({"entry_problem": "phase_start_missing", "page_id": "neutral/other"})
+    );
+}
+
+/// #411 A17 (requirements 1 and 2): an entry page that operations of two stages leave from is
+/// refused with `entry_problem` `phase_start_ambiguous` and the resolved page as `page_id`; the
+/// developer detail names the page and both stages in declaration order.
+#[test]
+fn a17_a_phase_start_ambiguous_refusal_names_its_entry_page_and_stages() {
+    let task = phased_task(
+        json!(["home", "panel"]),
+        &[("panel_back", "panel", "home", 2)],
+    );
+    let Err(error) = admit(task) else {
+        panic!("a page that starts two stages was admitted");
+    };
+    assert_eq!(
+        error.code().as_str(),
+        ExecutionKernelCode::ContainedTaskEntryPagesInvalid.as_str(),
+        "{error}"
+    );
+    assert_eq!(
+        values(&error),
+        json!({"entry_problem": "phase_start_ambiguous", "page_id": "neutral/panel"})
+    );
+    assert_eq!(
+        error.detail(),
+        Some("entry_problem=phase_start_ambiguous page_id=neutral/panel phase_ids=business,return")
+    );
+}
+
+/// #411 A17 (requirement 1): every refused entry page set carries `entry_problem`, which the
+/// catalog marks required, as a value of the refusal.
+#[test]
+fn a17_every_entry_problem_is_a_value_of_the_refusal() {
+    for (task, problem, _) in refused_entry_sets() {
+        let Err(error) = admit(task) else {
+            panic!("{problem}: refused set admitted");
+        };
+        assert!(error.has_values(), "{problem}: the refusal has no values");
         assert_eq!(
-            error.detail(),
-            Some(format!("entry_problem={problem}").as_str()),
+            error.outcome().value("entry_problem"),
+            Some(&json!(problem)),
             "{problem}"
         );
     }

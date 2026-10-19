@@ -1357,3 +1357,15 @@ tests = [
     "actingcommand-pack-containment::pkg_s1::a2_a_missing_path_an_unsupported_file_and_a_file_over_the_limit_have_their_own_codes",
 ]
 incident = ["#411 A2"]
+
+# Workflow #411 A17 (v0.12.1-rc.2; no register section; related: exec 83, host 103): the admission refusal contained_task_entry_pages_invalid carries its required entry_problem as a value for every entry problem and, for phase_start_missing and phase_start_ambiguous, the entry page as admission resolved it (page_id); the developer detail names the page and, for an ambiguous start, the stages that start it in declaration order; the source build gives the same detail
+[[gate]]
+key = "89"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a17_a_phase_start_missing_refusal_names_its_entry_page",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a17_a_phase_start_ambiguous_refusal_names_its_entry_page_and_stages",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a17_every_entry_problem_is_a_value_of_the_refusal",
+    "actingcommand-pack-containment::lib::source::tests::a17_a_source_entry_set_refusal_names_the_page_and_its_stages",
+]
+incident = ["#411 A17"]
