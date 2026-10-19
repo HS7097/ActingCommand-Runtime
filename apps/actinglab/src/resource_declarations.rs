@@ -41,7 +41,7 @@ pub(crate) fn options() -> [&'static str; 3] {
     [
         "--repo <repository root>",
         "--changed-path <repository-relative path> (repeatable)",
-        "--changed-paths-file <repository-relative NUL-delimited Git name-status list>",
+        "--changed-paths-file <NUL-delimited Git name-status list: an absolute path, or a path relative to the repository root>",
     ]
 }
 
@@ -62,13 +62,17 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
         .into_iter()
         .map(|path| (path, false))
         .collect::<Vec<_>>();
-    if let Some(list) = flags.optional("--changed-paths-file") {
-        let bytes = reader.read(Path::new(&list), MAX_PATH_LIST_BYTES)?;
+    if let Some(list_text) = flags.optional("--changed-paths-file") {
+        let list = Path::new(&list_text);
+        // Workflow #411 A11: an absolute list is read wherever it is (a linked worktree's Git
+        // directory lies outside the repository); a relative one stays a repository file.
+        let bytes = if list.is_absolute() {
+            read_absolute_path_list(list)?
+        } else {
+            reader.read(list, MAX_PATH_LIST_BYTES)?
+        };
         if !bytes.is_empty() && bytes.last() != Some(&0) {
-            return Err(invalid(
-                Path::new(&list),
-                "changed path list must end with NUL",
-            ));
+            return Err(invalid(list, "changed path list must end with NUL"));
         }
         let fields = bytes
             .strip_suffix(&[0])
@@ -77,7 +81,7 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
         let (pairs, remainder) = fields.as_chunks::<2>();
         if !remainder.is_empty() || pairs.len() > MAX_PATHS {
             return Err(invalid(
-                Path::new(&list),
+                list,
                 "Git name-status list must contain at most 4096 status/path pairs",
             ));
         }
@@ -87,13 +91,13 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
                 b"A" | b"M" | b"T" => false,
                 _ => {
                     return Err(invalid(
-                        Path::new(&list),
+                        list,
                         "unsupported Git status; use --no-renames and resolved changes",
                     ));
                 }
             };
             let path = std::str::from_utf8(pair[1])
-                .map_err(|_| invalid(Path::new(&list), "changed path is not UTF-8"))?;
+                .map_err(|_| invalid(list, "changed path is not UTF-8"))?;
             selected.push((path.to_string(), deleted));
         }
     } else if selected.is_empty() {
@@ -1236,6 +1240,34 @@ fn validate_relative_path(path: &Path) -> CliOutcome<()> {
         ));
     }
     Ok(())
+}
+
+/// Workflow #411 A11: an absolute changed-path list, read as a bounded regular file. The list is
+/// no declaration, so it is neither in `read_files` nor counted in `read_bytes`.
+fn read_absolute_path_list(path: &Path) -> CliOutcome<Vec<u8>> {
+    let mut file = File::open(path)
+        .map_err(|error| invalid(path, &format!("open changed path list: {error}")))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| invalid(path, &format!("changed path list metadata: {error}")))?;
+    if !metadata.is_file() || metadata.len() > MAX_PATH_LIST_BYTES {
+        return Err(invalid(
+            path,
+            "changed path list is not a bounded regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_PATH_LIST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| invalid(path, &format!("read changed path list: {error}")))?;
+    if bytes.len() as u64 > MAX_PATH_LIST_BYTES {
+        return Err(invalid(
+            path,
+            "changed path list is not a bounded regular file",
+        ));
+    }
+    Ok(bytes)
 }
 
 fn path_text(path: &Path) -> String {

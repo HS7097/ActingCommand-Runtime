@@ -1357,3 +1357,13 @@ tests = [
     "actingcommand-pack-containment::pkg_s1::a2_a_missing_path_an_unsupported_file_and_a_file_over_the_limit_have_their_own_codes",
 ]
 incident = ["#411 A2"]
+
+# Workflow #411 A11 (v0.12.1-rc.2; no register section): actinglab resource validate --changed-paths-file takes an absolute path to the NUL-delimited Git name-status list wherever it is (inside or outside the repository, e.g. the Git directory of a linked worktree), read as a bounded regular file with the same NUL, pair and status rules and not listed in read_files or counted in read_bytes, since the list is no declaration; a relative path keeps its meaning (relative to --repo, read through the repository reader); a missing absolute list is refused with resource_declaration_invalid naming the path as given
+[[gate]]
+key = "84"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a11::a11_an_absolute_changed_paths_file_outside_the_repository_is_read",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a11::a11_a_missing_absolute_changed_paths_file_is_refused_naming_it",
+]
+incident = ["#411 A11"]
