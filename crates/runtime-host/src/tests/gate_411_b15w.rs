@@ -7,8 +7,9 @@
 // until U-6, each keeping its origin on the `fact.published` event. Every write is checked before
 // the fact write gate, its shape and then its names against the packages the active catalog
 // binds on every instance its scope covers, and a refusal is `session_remedy_choices_invalid`
-// (`fact_key`, `field`, `instance_id` for a meaning error) with nothing appended. Its snapshot
-// identity covers its observation, so the same rows written twice are two versions.
+// (`fact_key`, `field`, `instance_id` for a meaning error) with nothing appended; its scope is
+// an instance or a game, never a server (coordinator ruling on #993). Its snapshot identity
+// covers its observation, so the same rows written twice are two versions.
 //
 // A neutral fixture: the policy fixture's one instance (its server and game); package `main`
 // declares on its mapping `blocked_k` the remedy of the need `need_a` with the capabilities
@@ -733,5 +734,83 @@ fn b15w_two_writes_of_the_same_rows_are_two_versions() {
             .map(|record| record.source_snapshot_id.clone())
             .collect::<Vec<_>>(),
         vec![second.source_snapshot_id]
+    );
+}
+
+// ---- Requirement 2: scope (coordinator ruling on #993).
+
+// The store's server scope names a server without its game, so a record there would apply to the
+// instances of every game whose server id is equal: remedy choices are written at instance or
+// game scope only. A server-scoped record is refused from every writer, the operator (cli, cli),
+// the person (user, ui) and the agent (agent, adapter), as a `PublishFacts` observation or a
+// `PublishFact`, whatever its rows (names the bound packages declare, a `none` row, or the empty
+// list that would withdraw it): `session_remedy_choices_invalid` with `fact_key`, `field`
+// `/scope` and no `instance_id`; nothing is appended. The same declared rows at the game scope of
+// the fixture's instance are taken.
+#[test]
+fn b15w_a_server_scoped_record_is_refused() {
+    let fixture = Fixture::new();
+    let mut client = TestClient::connect(&fixture.host);
+    let server = || FactScope::Server {
+        server_id: SERVER.to_owned(),
+    };
+    let game = || FactScope::Game {
+        game_id: GAME.to_owned(),
+    };
+    let declared = vec![
+        allow("need_a", "cap_x"),
+        parameter("cap_x", "param_p", "opt_2"),
+    ];
+    type Writer = fn(&TestClient, RuntimeOperation) -> RuntimeRequest;
+    let writers: [(Writer, EventActor); 3] = [
+        (TestClient::request, EventActor::Cli),
+        (TestClient::governance_request, EventActor::User),
+        (TestClient::agent_request, EventActor::Agent),
+    ];
+    let mut offset = 0_u64;
+    for (writer, actor) in writers {
+        for rows in [declared.clone(), vec![no_remedy("need_a")], Vec::new()] {
+            offset += 1;
+            let case = format!("{actor:?}, {} rows", rows.len());
+            let record = choices(server(), rows, offset);
+            for operation in [
+                publish(record.clone()),
+                RuntimeOperation::PublishFact { record },
+            ] {
+                let request = writer(&client, operation);
+                let receipt = client.send(&request);
+                assert_eq!(
+                    receipt.state(),
+                    RuntimeReceiptState::Denied,
+                    "{case}: {receipt:?}"
+                );
+                assert_eq!(
+                    refusal(&receipt),
+                    (
+                        INVALID.to_owned(),
+                        Some(json!(REMEDY_CHOICES_FACT_KEY)),
+                        Some(json!("/scope")),
+                        None
+                    ),
+                    "{case}"
+                );
+            }
+        }
+    }
+    assert!(
+        fixture.choice_events().is_empty(),
+        "a refused write appends nothing"
+    );
+
+    let request = client.request(publish(choices(game(), declared, offset + 1)));
+    published(&client.send(&request));
+    assert_eq!(
+        fixture
+            .choice_events()
+            .into_iter()
+            .map(|(_, record)| record.scope)
+            .collect::<Vec<_>>(),
+        vec![game()],
+        "the game scope is taken"
     );
 }

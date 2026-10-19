@@ -4,15 +4,17 @@
 //! choice facts"): the write rule of the instance fact `session.remedy.choices`. A publication of
 //! the key is checked whole before the fact write gate, and a refusal is the non-fatal request
 //! error `session_remedy_choices_invalid` with `fact_key`, `field` (a JSON pointer into the row
-//! list: `/<row>/<member>`, `/<row>` for a row as a whole, `""` for the list as a whole, or
-//! `/invalidate_on` for the record's invalidating events) and, for a meaning error, the
-//! `instance_id` it was found on; nothing is appended.
+//! list: `/<row>/<member>`, `/<row>` for a row as a whole, `""` for the list as a whole,
+//! `/invalidate_on` for the record's invalidating events, or `/scope` for a server scope) and,
+//! for a meaning error, the `instance_id` it was found on; nothing is appended.
 //!
-//! - **Shape:** an inline `record_list` of at most 256 rows; `row` is `allow`, `none` or
-//!   `parameter` with exactly its fields, each a string token `^[a-z][a-z0-9_]{0,63}$`, `none`
-//!   never a capability; no row twice, no `none` with an `allow` of the same need, no two
-//!   `parameter` rows of one capability and parameter; no `invalidate_on` events. Every scope
-//!   (instance, server, game) is one a record may have.
+//! - **Shape:** scope `instance` or `game`, never `server` (`/scope`): the store's server scope
+//!   names a server without its game, so a record there would apply to every instance whose
+//!   server id is equal, of any game; an inline `record_list` of at most 256 rows; `row` is
+//!   `allow`, `none` or `parameter` with exactly its fields, each a string token
+//!   `^[a-z][a-z0-9_]{0,63}$`, `none` never a capability; no row twice, no `none` with an `allow`
+//!   of the same need, no two `parameter` rows of one capability and parameter; no
+//!   `invalidate_on` events.
 //! - **Meaning:** against the remedy table of the active catalog's bound packages
 //!   ([`crate::remedy::build_table`], read at the write), on every instance the scope covers: an
 //!   `allow` whose need no remedy bound there declares, or whose capability that need's remedies
@@ -48,6 +50,8 @@ const MAX_NAME_BYTES: usize = 64;
 /// The key table's bound of a `pointer` value.
 const MAX_POINTER_BYTES: usize = 512;
 const INVALIDATE_ON_POINTER: &str = "/invalidate_on";
+/// The pointer of a scope a record may not have (a server scope).
+const SCOPE_POINTER: &str = "/scope";
 
 /// One row of the record, read by its kind.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -153,6 +157,11 @@ pub(crate) fn check(
 
 /// The record's rows, or the first shape rule it breaks.
 fn shape(record: &FactRecord) -> Result<Vec<Row>, Refusal> {
+    // A server id is not game-qualified: a server record would cover the instances of every
+    // game that shares the id. Remedy choices are written at instance or game scope only.
+    if matches!(record.scope, FactScope::Server { .. }) {
+        return Err(Refusal::at(SCOPE_POINTER));
+    }
     if !record.invalidate_on.is_empty() {
         return Err(Refusal::at(INVALIDATE_ON_POINTER));
     }
@@ -317,8 +326,8 @@ fn meaning(
 }
 
 /// The instances `scope` covers: an instance scope its instance (with the server and game the
-/// policy inputs give it, if any), a server or game scope every instance of the policy inputs on
-/// that server or game.
+/// policy inputs give it, if any), a game scope every instance of the policy inputs of that game.
+/// A server scope covers none here: the shape refused it before.
 fn covered(scope: &FactScope, instances: &[InstanceSnapshot]) -> Vec<Covered> {
     let of = |instance: &InstanceSnapshot| Covered {
         instance_id: instance.instance_id.clone(),
@@ -339,11 +348,7 @@ fn covered(scope: &FactScope, instances: &[InstanceSnapshot]) -> Vec<Covered> {
                     of,
                 ),
         ],
-        FactScope::Server { server_id } => instances
-            .iter()
-            .filter(|instance| instance.server_id == *server_id)
-            .map(of)
-            .collect(),
+        FactScope::Server { .. } => Vec::new(),
         FactScope::Game { game_id } => instances
             .iter()
             .filter(|instance| instance.game_id == *game_id)

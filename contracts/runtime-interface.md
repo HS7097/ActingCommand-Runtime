@@ -339,7 +339,13 @@ of five families:
   `fact_origin_mixed`; until U-6 a family with the origin exception (offsets, remedy choices)
   is taken from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`, and its `fact.published`
   event keeps the writer's origin. Its writers are actingctl `remedy set|get|lift` and the MCP
-  general tools `ac_remedy_set` and `ac_remedy_get`.
+  general tools `ac_remedy_set` and `ac_remedy_get`. A record is written at instance or game
+  scope only: the store's `server` scope names a server without its game, so a server record
+  would apply to every game whose instances share that server id. `remedy set` takes
+  `--instance` or `--game` (`--server` is `actingctl_usage_invalid`, `unknown`),
+  `ac_remedy_set` takes `instance` or `game` (`server` is `arguments_invalid`, `unknown`), and
+  the content rule refuses a server-scoped record from every writer
+  (`session_remedy_choices_invalid`, `field` `/scope`).
 - The prefix `session.dispatch.` is reserved for a run's read-only parameters (Workflow
   #411 B15 R5): it is no family, since nothing may write it; `PublishFact` and
   `PublishFacts` of such a key are refused from every origin as

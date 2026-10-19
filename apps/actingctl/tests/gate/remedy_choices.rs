@@ -7,9 +7,10 @@
 // instance, no policy section, so no package is bound and the instance's facts are its own), the
 // real `actingctl` and the real `actingctl mcp-serve` over pipes (fixture I5, `mcp_harness`):
 //
-// - `set` writes the scope's whole list as a new version and answers {event_id, scope, key,
-//   source_snapshot_id, observed_at_unix_ms, rows_total}; a write the Runtime refuses prints its
-//   receipt and exits non-zero;
+// - `set` writes the scope's whole list, an instance's or a game's, as a new version and answers
+//   {event_id, scope, key, source_snapshot_id, observed_at_unix_ms, rows_total}; a write the
+//   Runtime refuses prints its receipt and exits non-zero; a server scope is no form of `set` nor
+//   of `ac_remedy_set` (a server id is not game-qualified), refused as a usage error;
 // - `get` answers the records that apply to the instance, most specific first, and the one in
 //   effect;
 // - `lift` republishes the instance's record unchanged, or an empty one when it has none, as a
@@ -36,10 +37,9 @@ const READ: &str = "request_instance_fact_snapshot_completed";
 // Requirement 4: `remedy get` before any write answers no record and none in effect; `remedy
 // lift` without an instance record publishes an empty one; `remedy set --instance` writes the
 // rows and `get` answers that record, in effect, with those rows; `lift` republishes the same rows
-// as a new version that `get` then answers; `set --game` and `set --server --game` write the
-// game's and the server's record; a write the Runtime refuses (an `allow` of a need no bound
-// package declares) prints its denied receipt with `session_remedy_choices_invalid` and exits
-// non-zero, and writes nothing.
+// as a new version that `get` then answers; `set --game` writes the game's record; a write the
+// Runtime refuses (an `allow` of a need no bound package declares) prints its denied receipt with
+// `session_remedy_choices_invalid` and exits non-zero, and writes nothing.
 #[test]
 fn b15w_remedy_set_get_and_lift_round_trip() {
     let root = TempDir::new().expect("tempdir");
@@ -132,26 +132,6 @@ fn b15w_remedy_set_get_and_lift_round_trip() {
         &json!({"kind": "game", "game_id": "neutral_game"}),
         2,
     );
-    let server = line(
-        root.path(),
-        &[
-            "remedy",
-            "set",
-            "--server",
-            "neutral_server",
-            "--game",
-            "neutral_game",
-            "--rows",
-            rows_path,
-        ],
-        PUBLISHED,
-    );
-    assert_written(
-        &server,
-        &json!({"kind": "server", "server_id": "neutral_server"}),
-        2,
-    );
-
     let undeclared = root.path().join("undeclared.json");
     fs::write(
         &undeclared,
@@ -237,6 +217,95 @@ fn b15w_ac_remedy_set_and_get_write_and_read_the_same_record() {
     assert_ne!(lifted["source_snapshot_id"], set["source_snapshot_id"]);
     let answer = mcp.call_tool(5, "ac_remedy_get", json!({"instance": ALIAS}));
     assert_in_effect(accepted(&answer, "ac_remedy_get"), &lifted, &rows);
+
+    mcp.close_input();
+    runtime.stop_clean();
+    drop(mcp);
+}
+
+// Coordinator ruling on #993: remedy choices are written at instance or game scope only, since
+// the fact store's server scope names a server without its game. With actingd running, `actingctl
+// remedy set` with `--server` (with `--game`, or alone) is refused before any request as
+// `actingctl_usage_invalid` naming `--server` with `argument_problem` `unknown` and exits
+// non-zero; `ac_remedy_set` with `server` (with `game`, or alone) is refused as the tool refuses
+// any argument it does not take: a `usage` tool error `arguments_invalid` naming `server` with
+// `argument_problem` `unknown`.
+#[test]
+fn b15w_remedy_set_and_ac_remedy_set_refuse_a_server_scope() {
+    let root = TempDir::new().expect("tempdir");
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let rows = json!([{"row": "none", "need": "need_a"}]);
+    let rows_file = root.path().join("rows.json");
+    fs::write(&rows_file, rows.to_string()).expect("the rows file");
+    let rows_path = rows_file.to_str().expect("a UTF-8 path");
+
+    for words in [
+        &[
+            "remedy",
+            "set",
+            "--server",
+            "neutral_server",
+            "--game",
+            "neutral_game",
+            "--rows",
+            rows_path,
+        ][..],
+        &[
+            "remedy",
+            "set",
+            "--server",
+            "neutral_server",
+            "--rows",
+            rows_path,
+        ][..],
+    ] {
+        let (exited, refused) = actingctl(root.path(), words);
+        assert!(!exited, "actingctl {words:?} exited 0: {refused}");
+        assert_eq!(
+            (
+                &refused["outcome"]["code"],
+                &refused["outcome"]["values"]["argument"],
+                &refused["outcome"]["values"]["argument_problem"],
+            ),
+            (
+                &json!("actingctl_usage_invalid"),
+                &json!("--server"),
+                &json!("unknown"),
+            ),
+            "actingctl {words:?}: {refused}"
+        );
+    }
+
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    for (id, arguments) in [
+        (
+            2,
+            json!({"server": "neutral_server", "game": "neutral_game", "rows": rows}),
+        ),
+        (3, json!({"server": "neutral_server", "rows": rows})),
+    ] {
+        let answer = mcp.call_tool(id, "ac_remedy_set", arguments.clone());
+        let error = &answer["result"]["structuredContent"]["error"];
+        assert_eq!(
+            (
+                &answer["result"]["isError"],
+                &error["class"],
+                &error["outcome"]["code"],
+                &error["outcome"]["values"]["argument"],
+                &error["outcome"]["values"]["argument_problem"],
+            ),
+            (
+                &json!(true),
+                &json!("usage"),
+                &json!("arguments_invalid"),
+                &json!("server"),
+                &json!("unknown"),
+            ),
+            "ac_remedy_set {arguments}: {answer}"
+        );
+    }
 
     mcp.close_input();
     runtime.stop_clean();
