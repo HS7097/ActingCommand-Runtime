@@ -1843,6 +1843,23 @@ vocabularies are catalog entries, not rows (§7); the package members ride `pack
 | B15-10 | `task.json` mapping member `remedy {need, capabilities, default?}`; `control.json` member `provides [{capability, irreversible?, parameters?}]` | package members (`package` revision 4, §6; not ledger) | R1 | R1 | absent members serialize byte for byte as before; refusals `invalid_scheduling_outcome_declaration` (field) and `contained_task_control_invalid` (`provides_invalid`, `provides_parameters_invalid`, `provides_own_remedy`) |
 | B15-11 | the terminal's `scheduling_disposition` (`task.completed`) | read only (shape unchanged) | R4 | — | the settlement reads its `outcome_key` whatever the catalog references; a remedy key is a success: no failure identity, the streak cleared |
 
+### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+A Lab recording names the backend that captured a Runtime frame, and the offline capability
+listing names the capture and input backends the Runtime can use instead of the choices actingd
+refuses. No persisted ledger shape: no ledger record, wire shape, configuration key, outcome code
+or interface revision (§6) changes. The rows are a value of an existing `recording.json` member
+(a Lab file, not the ledger) and offline answer members.
+[lab-recording.md](lab-recording.md) ("`--record` on device commands") and
+[actinglab-capabilities.md](actinglab-capabilities.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L4-1 | `recording.json` frame `capture_backend` of an `observe --capture --record` frame (source `runtime_observation`) | new value of an existing member (Lab file, shape unchanged) (exec 98) | Lab L4 | Lab L4 | the backend of the Runtime frame (`ReadonlyObservation.capture_backend`), named as `capture --record` names it (`adb_screencap`, `droidcast_raw`, `nemu_ipc`, `scrcpy`), where it was `null`; the answer's `record.frame` carries the same value |
+| L4-2 | `capabilities` `capture_backends` | changed values and one entry (exec 98) | Lab L4 | Lab L4 | a `scrcpy` entry (`backend: scrcpy`, `required_assets: ["adb"]`, `device_kinds: ["handset"]`, declared support, `unverified`); `auto` and `auto-fastest` `declared_support: false`, status `unavailable`, `reason_code` `capture_backend_must_be_explicit` (was declared support, `unverified`); every entry keeps `available: false`, `availability_checked: false` and `execution_authority: runtime` |
+| L4-3 | `capabilities` `touch_backends` beside `capture_backends`: `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`, each `{id, gestures, declared_support: true, status: unverified, available: false, reason_code, execution_authority: runtime, availability_checked: false}` | output member (no persisted record) (exec 98) | Lab L4 | Lab L4 | `gestures` are the Runtime input action kinds the backend performs: `nemu_ipc` `tap` and the two segmented drags; `maatouch` also `long_tap`, `swipe`, `key`, `text`; `minitouch` `tap`, `long_tap`, `swipe` and the segmented drags; `adb_shell_input` `tap`, `long_tap`, `swipe`; `reason_code` `runtime_backend_configuration_and_assets_unverified` as the capture entries |
+| L4-4 | `schema control` `capture_backend` / `touch_backend` and `session instance registry` `capture_backends` / `touch_backends` | changed values of existing members (exec 98) | Lab L4 | Lab L4 | capture `adb`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; touch `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`; `auto` and `auto-fastest` are no longer listed |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -567,6 +567,7 @@ pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
         "recognition_match_policy": recognition_match_policy,
         "schema_domains": schema_capabilities(),
         "capture_backends": capture_backend_capabilities(),
+        "touch_backends": touch_backend_capabilities(),
         "lab2_cli": lab2_cli::capability_summary(&config),
         "discovered_recognition_packs": discovered
     }))
@@ -662,23 +663,60 @@ pub(crate) fn schema_capabilities() -> Value {
     })
 }
 
+/// The capture choices an actingd instance may name (`capture_backend`); `scrcpy` only on a
+/// handset (`contracts/device-binding.md`). Workflow #411 Lab L4: the automatic choices stay
+/// listed as refused, since actingd refuses an instance that names one
+/// (`capture_backend_must_be_explicit`).
 fn capture_backend_capabilities() -> Value {
     let mut backends = json!([
         {"id": "adb", "backend": "adb_screencap", "external_tool": true, "required_assets": ["adb"]},
         {"id": "droidcast_raw", "backend": "droidcast_raw", "external_tool_env": "ACTINGCOMMAND_DROIDCAST_RAW_APK", "required_assets": ["adb", "droidcast_raw_apk"]},
         {"id": "nemu_ipc", "backend": "nemu_ipc", "external_tool_env": "ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL", "required_assets": ["nemu_ipc_library"]},
+        {"id": "scrcpy", "backend": "scrcpy", "required_assets": ["adb"], "device_kinds": ["handset"]},
         {"id": "auto", "fallback_allowed": true, "diagnostics_required": true},
         {"id": "auto-fastest", "probe_all_backends": true, "diagnostics_required": true}
     ]);
     for backend in backends.as_array_mut().expect("backend declaration array") {
-        backend["declared_support"] = json!(true);
-        backend["status"] = json!("unverified");
-        backend["available"] = json!(false);
-        backend["reason_code"] = json!("runtime_backend_configuration_and_assets_unverified");
-        backend["execution_authority"] = json!("runtime");
-        backend["availability_checked"] = json!(false);
+        let explicit = !matches!(backend["id"].as_str(), Some("auto" | "auto-fastest"));
+        if explicit {
+            declare_runtime_backend(backend);
+        } else {
+            backend["declared_support"] = json!(false);
+            backend["status"] = json!("unavailable");
+            backend["available"] = json!(false);
+            backend["reason_code"] = json!("capture_backend_must_be_explicit");
+            backend["execution_authority"] = json!("runtime");
+            backend["availability_checked"] = json!(false);
+        }
     }
     backends
+}
+
+/// Workflow #411 Lab L4: the input backends an actingd instance may name (`touch_backend`), with
+/// the Runtime input actions each performs. `nemu_ipc` performs them only on a frame the Runtime
+/// captured (`nemu_input_frame_required`); `adb_shell_input` performs a long tap as a swipe that
+/// stays at its point.
+fn touch_backend_capabilities() -> Value {
+    let mut backends = json!([
+        {"id": "nemu_ipc", "gestures": ["tap", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1"]},
+        {"id": "maatouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "key", "text"]},
+        {"id": "minitouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1"]},
+        {"id": "adb_shell_input", "gestures": ["tap", "long_tap", "swipe"]}
+    ]);
+    for backend in backends.as_array_mut().expect("backend declaration array") {
+        declare_runtime_backend(backend);
+    }
+    backends
+}
+
+/// A backend the Runtime supports and this offline query does not check.
+fn declare_runtime_backend(backend: &mut Value) {
+    backend["declared_support"] = json!(true);
+    backend["status"] = json!("unverified");
+    backend["available"] = json!(false);
+    backend["reason_code"] = json!("runtime_backend_configuration_and_assets_unverified");
+    backend["execution_authority"] = json!("runtime");
+    backend["availability_checked"] = json!(false);
 }
 
 fn discover_recognition_packs(root: &Path) -> CliOutcome<Vec<Value>> {

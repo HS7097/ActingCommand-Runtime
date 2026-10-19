@@ -528,7 +528,9 @@ frame attachment or recording persistence. The global parser handles the flag at
 - `capture --record` takes the frame through the Runtime as `capture` does; `--out` becomes
   optional. Output adds `record{status:"frame_recorded", record_id, step, step_opened,
   frame, closed_step}`.
-- `observe --capture --record` stores the verified Runtime frame and its reference.
+- `observe --capture --record` stores the verified Runtime frame and its reference, and in
+  `capture_backend` the backend that captured it, named as `capture --record` names it
+  (`adb_screencap`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; Workflow #411 Lab L4).
 - `do --capture --record` presses inside the open step's click rectangle: its center, or
   `--tap x,y` when it lies inside (`record_click_outside_step_rect`). `--tap-rect x,y,w,h`
   declares the rectangle when the step has none, and must equal the declared one otherwise
