@@ -803,3 +803,49 @@ fn a17_a_source_entry_set_refusal_names_the_page_and_its_stages() {
         assert_eq!(error.message, message);
     }
 }
+
+// #411 A20 (requirements 3 and 5): the source build refuses a phased route whose second stage
+// reaches a page from which only another stage has an operation with the detail of the
+// Runtime's admission refusal: the code, the rule, the stage, the page it cannot leave, the
+// operation that led there and the start.
+#[test]
+fn a20_the_source_build_names_the_stage_page_and_operation_of_an_unreachable_route() {
+    let click = json!({"kind": "rect", "x": 40, "y": 600, "width": 120, "height": 60});
+    let bundle = Bundle {
+        task_id: "fixture".to_string(),
+        dir: PathBuf::from("operations/fixture"),
+        data: json!({
+            "schema_version": "0.9",
+            "task_id": "fixture",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 1280, "height": 720},
+            "entry_page": ["home", "other"],
+            "target_page": "home",
+            "phases": [
+                {"id": "depart", "operations": ["open_panel"], "target_pages": ["panel"]},
+                {"id": "business", "operations": ["submit", "stray"], "target_pages": ["result"]},
+                {"id": "return", "operations": ["back_home"], "target_pages": ["home"]}
+            ],
+            "scheduling_outcome": {"designated_operation": "submit", "mappings": [
+                {"outcome_key": "returned", "effect": "designated_effect_completed",
+                 "terminal_pages": ["home"]}
+            ]},
+            "operations": [
+                {"id": "open_panel", "from": "home", "to": "panel", "click": click},
+                {"id": "submit", "from": "panel", "to": "result", "click": click},
+                {"id": "back_home", "from": "result", "to": "home", "click": click},
+                {"id": "stray", "from": "other", "to": "home", "click": click}
+            ]
+        }),
+    };
+    let error = validate_phases_bundle(&bundle).expect_err("a start from which a stage is stuck");
+    assert_eq!(
+        error.message,
+        format!(
+            "{}: phase_problem=no_operation json_pointer=/phases/1 phase_id=business \
+             page_id=home pack_operation_id=stray entry_page=other",
+            actingcommand_contract::codes::TaskflowCode::TaskPhasesUnreachable.as_str()
+        )
+    );
+}

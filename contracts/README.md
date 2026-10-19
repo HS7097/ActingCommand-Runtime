@@ -237,7 +237,13 @@ refused with `task_phases_outcome_incomplete`. The walk still goes on past the
 step, because the select may also succeed. An `on_empty` step reachable under
 both effect conditions would need two mappings with one key, which unique keys
 forbid, so it is refused. Source parsing,
-build and Runtime admission share this check; the operation and control phase
+build and Runtime admission share this check; a refusal of the stage
+declarations (`task_phases_invalid`) or of the walk (`task_phases_unreachable`)
+names the refused member as `json_pointer` (`/phases/<index>…` or
+`/entry_page`) and, where it concerns one, the page (`page_id`, without the
+game prefix) and the operation (`pack_operation_id`; for the walk, the
+operation that led to the page the stage cannot leave); the detail adds the
+stage id, the rule and the start. The operation and control phase
 declarations must match exactly.
 
 Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed

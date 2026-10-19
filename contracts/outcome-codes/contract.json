@@ -14229,6 +14229,9 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
+        "json_pointer": "optional",
+        "page_id": "optional",
+        "pack_operation_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -14238,9 +14241,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task flow declaration was refused: task phases invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A phased route's stage declarations are refused (source parsing, build or Runtime admission; contracts/README.md, phases): no stage or more than 32; a stage id that is blank, too long or repeated; a stage that lists no operation, more operations than the task has, one twice, or one the task does not have; target pages that are empty, more than 256, repeated, blank or any; an entry that names no page or any; or a last stage whose target pages are not the task's. json_pointer names the refused member; page_id and pack_operation_id name the page or operation it concerns; the detail adds the stage id and the rule (phase_problem).",
+      "common_causes": "A stage that lists an operation id with a typo or one removed from the task; a page listed twice in a stage's target pages; a last stage whose target pages differ from the task's target_page.",
+      "handling": "Correct the member json_pointer names as the detail's phase_problem says; for final_targets make the last stage's target pages equal the task's target pages."
     },
     "task_phases_outcome_invalid": {
       "category": "error",
@@ -14309,6 +14312,9 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
+        "json_pointer": "optional",
+        "page_id": "optional",
+        "pack_operation_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -14318,9 +14324,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task flow declaration was refused: task phases unreachable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A phased route's static reachability check (contracts/README.md, phases) found a page that a stage reaches and cannot leave, or a start from which no terminal is reached. json_pointer names the stage (/phases/<index>); page_id is the page on which that stage has no operation (neither from the page nor from any), or the start's entry page when no terminal is reached; pack_operation_id is the operation whose destination led to that page. The detail adds the stage id and the start (entry_page).",
+      "common_causes": "A stage whose operation leads to a page from which only another stage has an operation (for example a return stage that comes back to a page the business stage uses); a destination meant to end a stage that is not in that stage's target pages; a loop with no way to the last stage's target pages.",
+      "handling": "Add an operation from the named page to the named stage, add that page to the previous stage's target pages so the stage advances there, or change the named operation to lead to a page the stage can leave."
     },
     "task_phases_designated_effect_repeated": {
       "category": "error",
