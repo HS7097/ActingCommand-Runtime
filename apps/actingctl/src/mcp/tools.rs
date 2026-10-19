@@ -628,6 +628,34 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::capability_gap::run,
     },
     // ---- Workflow #410 item 6 (end) ----
+    // ---- Workflow #411 B15 R6 (begin): `ac_remedy_set` ↔ `actingctl remedy set|lift`,
+    // `ac_remedy_get` ↔ `actingctl remedy get`; general tools (observer until U-3): an agent
+    // writes the instance's target record, and the Runtime checks every write. ----
+    ToolDef {
+        name: "ac_remedy_set",
+        title: "Write remedy choices",
+        tier: Tier::Observer,
+        description: super::remedy::SET_DESCRIPTION,
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: super::remedy::set_input,
+        result_schema: super::remedy::set_result,
+        run: super::remedy::set,
+    },
+    ToolDef {
+        name: "ac_remedy_get",
+        title: "Remedy choices in effect",
+        tier: Tier::Observer,
+        description: super::remedy::GET_DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: instance_only_input,
+        result_schema: super::remedy::get_result,
+        run: super::remedy::get,
+    },
+    // ---- Workflow #411 B15 R6 (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",

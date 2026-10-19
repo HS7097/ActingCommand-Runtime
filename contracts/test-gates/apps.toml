@@ -746,3 +746,14 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_tool_schemas_drop_the_removed_arguments",
 ]
 incident = ["#411 Lab L1"]
+
+# Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-4, B15W-5; no persisted ledger shape; model-b15 §5.1, §7.6; key assigned by the coordinator): actingctl remedy set writes a scope's whole list (instance or game; --server is refused as actingctl_usage_invalid unknown and ac_remedy_set's server as arguments_invalid unknown, a server id not being game-qualified) as a new version, remedy get answers the records that apply with the one in effect, remedy lift republishes the instance's record unchanged or an empty one as a new observation naming the record it replaced, and a refused write prints its denied receipt and exits non-zero; MCP ac_remedy_set (rows or lift) and ac_remedy_get, general tools, write and read the same record and answer what the CLI answers
+[[gate]]
+key = "74"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_get_and_lift_round_trip",
+    "actingcommand-actingctl::gate::remedy_choices::b15w_ac_remedy_set_and_get_write_and_read_the_same_record",
+    "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_and_ac_remedy_set_refuse_a_server_scope",
+]
+incident = ["#411 B15"]

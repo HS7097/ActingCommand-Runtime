@@ -25,6 +25,8 @@ mod observer;
 mod operator;
 mod packs;
 mod protocol;
+// Workflow #411 B15 R6: ac_remedy_set, ac_remedy_get.
+mod remedy;
 // Workflow #389 MCP-3: ac_runs.
 mod run_list;
 // Workflow #389 MCP-6: ac_run_evidence.

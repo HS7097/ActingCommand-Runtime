@@ -259,6 +259,9 @@ mod gate_411_b15p_host;
 // Workflow #411 B15 R5 (host key 114), register §1.115: a run reads its parameters as read-only
 // facts, never stored; `session.dispatch.` is refused to publishers.
 mod gate_411_b15r;
+// Workflow #411 B15 R6 (host key 115), register §1.116: an instance's remedy choices, their
+// family, their write rule and their identity.
+mod gate_411_b15w;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
