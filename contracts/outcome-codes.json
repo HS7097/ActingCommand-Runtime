@@ -17797,6 +17797,7 @@
       "uncertain": false,
       "values": {
         "entry_problem": "required",
+        "page_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -17806,9 +17807,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Admission refuses a contained task's entry page set (Workflow #373 NAV-3b): it is empty, names more than 16 pages, names a page twice, names any, names a page that is not exactly one page of the package, or a page of a phased route starts no stage or more than one.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Admission refuses a contained task's entry page set (Workflow #373 NAV-3b): it is empty, names more than 16 pages, names a page twice, names any, names a page that is not exactly one page of the package, or a page of a phased route starts no stage or more than one. entry_problem names the rule; for phase_start_missing and phase_start_ambiguous, page_id is the entry page whose stage start was refused, and the detail lists the stages that start it.",
+      "common_causes": "An entry page that no stage's operation leaves from, or one that operations of two stages both leave from (for example a return stage with an operation from the business stage's page); an entry set that is empty, too long, names a page twice, names any, or names a page the package does not have.",
+      "handling": "phase_start_missing: add an operation from the page named by page_id to the stage the run should enter at, or drop the page from the set. phase_start_ambiguous: keep the operations from that page in one stage, or drop the page. Otherwise correct the set as entry_problem names."
     },
     "contained_task_error_page_reached": {
       "category": "error",
@@ -18474,6 +18475,29 @@
       "description": "The entry recovery package of a run ended on a page outside the run's required entry (Workflow #373 NAV-3b, #411 A1), so the run fails closed before its own steps. page_ids lists the required entry pages as the run recorded them, page_id is the page the recovery package ended on and package_id names the recovery package. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt.",
       "common_causes": "The recovery package ends on a page that is not one of the target's entry pages, for example a return-to-home package bound to a target whose entry is another page.",
       "handling": "Bind a recovery package that ends on one of the entry pages named by page_ids, or add the page named by page_id to the target's entry page set."
+    },
+    "contained_task_home_recovery_terminal_outside_entry": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "package_id": "required",
+        "page_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.1",
+      "description": "The run's entry did not match and its entry recovery package declares no final page in the run's required entry set, so the recovery is refused before it runs: no input is sent (Workflow #411 A16). page_ids are the required entry pages as the run recorded them, package_id the recovery package, page_id its declared final page when it declares one. The registry's linear_steps return-home package is not compared. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt.",
+      "common_causes": "A return-to-home package bound to, or registered for, a target whose entry is another page; an entry set that leaves out the page the recovery package ends on.",
+      "handling": "Bind a recovery package that ends on one of the entry pages, add its final page to the entry set, or start the run on its entry."
     },
     "contained_task_identity_missing": {
       "category": "error",
@@ -21600,6 +21624,11 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "pack_operation_id": "required",
+        "page_ids": "required",
+        "attempts": "optional",
+        "page_id": "optional",
+        "artifact_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -21609,9 +21638,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph step's postcondition was not confirmed and its operation decided to fail.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A page-graph step's postcondition was not confirmed within its wait and its operation decided to fail. pack_operation_id is the operation, page_ids its destination pages, attempts its attempts; page_id is the page the last frame of the wait matched and is absent when that frame matched no page; artifact_id is that frame.",
+      "common_causes": "The tap was ignored (page_id is the departure page); the screen moved to a page the step does not expect (page_id is that page); the last frame matched no page (no page_id: an animation, a dialog the package does not declare, or a page whose targets no longer match).",
+      "handling": "Read page_id and look at the frame artifact_id names: an ignored tap needs a longer settle or a click box that lands on the control; an unexpected page needs that page declared as a destination or an interrupt; no page needs the frame's page declared or its targets fixed."
     },
     "contained_task_terminal_already_committed": {
       "category": "error",
@@ -40718,8 +40747,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Workflow #396 LAB-3: an OCR evaluation of actinglab or the Lab cannot run because the offline tool loaded no usable OCR model. The offline tools load the OCR provider the Runtime uses (the in-process ppocr-ctc engine over the model folders of the vision root that the Runtime configuration's vision section names, always on the CPU). A command that would evaluate an OCR target refuses with this code (exit 3) and names the target as target_id; a Lab mark self-test, the first decision of record stop and the capabilities report give it as their reason. path is the vision root when it is known. Its caused_by link says why: lab_ocr_vision_unconfigured, a configuration read or decode code, vision_root_unavailable, vision_models_empty, lab_ocr_model_missing or lab_ocr_runtime_missing.",
-      "common_causes": "actinglab runs outside an installation, the configuration has no vision section, or the vision root holds no OCR model folder.",
-      "handling": "Install the OCR model folder and ONNX Runtime under the Runtime's vision root and run actinglab from the installation."
+      "common_causes": "actinglab runs outside an installation or a single-location root, the configuration has no vision section, or the vision root holds no OCR model folder.",
+      "handling": "Install the OCR model folder and ONNX Runtime under the Runtime's vision root and run actinglab from the installation's tools (or runtime) folder."
     },
     "lab_ocr_vision_unconfigured": {
       "category": "error",
@@ -40731,9 +40760,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the offline tool has no Runtime configuration with a vision section. It does not run from an installation, or the selected configuration has no vision section.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the offline tool has no Runtime configuration with a vision section. It does not run from an installation or a single-location root, or the selected configuration has no vision section.",
+      "common_causes": "actinglab was started from a copy outside the installation, or the Runtime configuration has no vision section.",
+      "handling": "Run actinglab from the installation's tools folder, or add the vision section to the Runtime configuration."
     },
     "lab_operation_lease_result_invalid": {
       "category": "error",
@@ -46223,7 +46252,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b).",
+      "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b). When no page matches, the near-miss candidates beside the identity are cut first, from the end, marked candidates_truncated, so this code means the identity itself does not fit (#411 A9).",
       "common_causes": "A package whose candidate layouts project large candidate sets on the observed page.",
       "handling": "Ask for the Normal view with --verbose (MCP: verbose true)."
     },
