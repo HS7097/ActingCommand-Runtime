@@ -5,7 +5,7 @@ use crate::codes::{ClientCode, ClientLocation};
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     ContainedObservationEvidence, ContainedObservationRequest, ContainedPageObservation,
-    InstanceId, ONLINE_OBSERVATION_SCHEMA, ObservationFramePlan, PageObservationStatus,
+    InstanceId, ONLINE_OBSERVATION_SCHEMA, ObservationSeriesPlan, PageObservationStatus,
     RecognitionPayload, RecognitionVerdict,
 };
 
@@ -34,23 +34,26 @@ impl fmt::Debug for VerifiedPageObservation {
 
 /// #411 Lab L5: the receipt wait of a contained observation: one backend-open allowance for the
 /// current frame, and for every earlier frame of its transaction one more and the interval;
-/// `None` on overflow.
+/// #411 Lab L5b: for every frame of its page's candidate layout series one more and the
+/// layouts' declared waits. `None` on overflow.
 pub(crate) fn observe_response_timeout(
     backend_open: Duration,
-    frames: ObservationFramePlan,
+    frames: impl Into<ObservationSeriesPlan>,
 ) -> Option<Duration> {
-    backend_open.checked_add(frames.added_allowance(backend_open)?)
+    frames.into().allowance(backend_open)
 }
 
 impl RuntimeDebugSession {
-    /// `frames`: what the package's target consensus makes the observation take (#411 Lab L5),
-    /// as the kernel's `observation_frame_plan` computes it from the package sent; the receipt
-    /// wait allows for it.
+    /// `frames`: what the package makes the observation take, its target consensus's
+    /// transaction (#411 Lab L5) and its pages' candidate layout series (#411 Lab L5b), as the
+    /// kernel's `PreparedPageObservation::series_plan` computes it from the package sent; the
+    /// receipt wait allows for it. A package without such layouts may pass its
+    /// `ObservationFramePlan`.
     pub fn observe_contained_page(
         &self,
         instance_alias: &str,
         request: ContainedObservationRequest,
-        frames: ObservationFramePlan,
+        frames: impl Into<ObservationSeriesPlan>,
     ) -> RuntimeClientResult<VerifiedPageObservation> {
         request
             .validate()

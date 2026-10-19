@@ -12,6 +12,9 @@ pub const MAX_OBSERVATION_TARGETS: usize = 64;
 /// #411 Lab L5: the most frames one online Lab observation takes; target consensus declares
 /// frames 0..=4.
 pub const MAX_OBSERVATION_FRAMES: usize = 5;
+/// #411 Lab L5b: the most frames one online `observe` takes with the series of its page's
+/// candidate layouts, its own transaction included.
+pub const MAX_OBSERVATION_SERIES_FRAMES: usize = 25;
 
 /// #411 Lab L5: the frames one online Lab observation takes for its package's target consensus,
 /// as one transaction: `frames` captures (1..=5), `interval_ms` apart, the last the current
@@ -55,6 +58,55 @@ impl ObservationFramePlan {
         backend_open
             .checked_add(std::time::Duration::from_millis(self.interval_ms))?
             .checked_mul(earlier)
+    }
+}
+
+/// #411 Lab L5b: the most frames and the longest waits one online `observe` of a package takes:
+/// its transaction and, when it recognises a page, the series of that page's candidate layouts
+/// that need more frames, `frames` captures (1..=25) and `wait_ms` of declared waits, the most
+/// over the package's pages. The Lab's client computes it from the package it sends with the
+/// kernel's helper and allows for it; it is a Rust API value and travels on no wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObservationSeriesPlan {
+    frames: usize,
+    wait_ms: u64,
+}
+
+impl ObservationSeriesPlan {
+    /// `None` when `frames` is not 1..=25.
+    pub fn new(frames: usize, wait_ms: u64) -> Option<Self> {
+        (1..=MAX_OBSERVATION_SERIES_FRAMES)
+            .contains(&frames)
+            .then_some(Self { frames, wait_ms })
+    }
+
+    pub const fn frames(self) -> usize {
+        self.frames
+    }
+
+    pub const fn wait_ms(self) -> u64 {
+        self.wait_ms
+    }
+
+    /// The observation's response allowance: one `backend_open` allowance for every frame and
+    /// the waits; `None` on overflow.
+    pub fn allowance(self, backend_open: std::time::Duration) -> Option<std::time::Duration> {
+        backend_open
+            .checked_mul(u32::try_from(self.frames).ok()?)?
+            .checked_add(std::time::Duration::from_millis(self.wait_ms))
+    }
+}
+
+/// The observation of a package whose pages declare no candidate layout that needs more frames:
+/// its one transaction.
+impl From<ObservationFramePlan> for ObservationSeriesPlan {
+    fn from(plan: ObservationFramePlan) -> Self {
+        Self {
+            frames: plan.frames,
+            wait_ms: plan
+                .interval_ms
+                .saturating_mul(u64::try_from(plan.frames - 1).unwrap_or(u64::MAX)),
+        }
     }
 }
 

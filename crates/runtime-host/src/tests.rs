@@ -274,6 +274,9 @@ mod gate_411_b15w2;
 // #411 Lab L5a (host key 120), register §1.130: every online Lab observation takes the frames its
 // package's target consensus needs, as one transaction.
 mod gate_411_lab_l5;
+// #411 Lab L5b (host key 121), register §1.130: `observe --capture` projects a multi-frame
+// candidate layout over its own series.
+mod gate_411_lab_l5b;
 // Workflow #406 T12 (host key 123), register §1.136: the touch keys in effect and the landing
 // history of single-region presses.
 mod gate_406_t12;

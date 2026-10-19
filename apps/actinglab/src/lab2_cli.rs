@@ -334,8 +334,9 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         None
     };
     let reader = super::contained_resources::PackageInput::open(flags)?;
-    // #411 Lab L5: the frames the package's target consensus makes the Runtime take.
-    let frames = match super::contained_resources::online_frame_plan(&instance, reader.path()) {
+    // #411 Lab L5: the frames the package's target consensus makes the Runtime take; #411 Lab
+    // L5b: with its pages' candidate layout series.
+    let frames = match super::contained_resources::online_series_plan(&instance, reader.path()) {
         Ok(frames) => frames,
         Err(error) => {
             return super::contained_resources::finish_package_use(Err(error), reader.close());
