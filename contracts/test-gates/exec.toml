@@ -1465,6 +1465,18 @@ tests = [
 ]
 incident = ["#411 A20"]
 
+# Workflow #411 Lab L4 (v0.12.x; register §1.120; no persisted ledger shape): the Lab names the backends the Runtime can use where the shape already exists; observe --capture --record stores the backend that captured the Runtime frame in recording.json (capture_backend, named as capture --record names it) where it stored null; capabilities lists scrcpy (device_kinds handset), keeps auto and auto-fastest as refused by actingd (declared_support false, status unavailable, reason_code capture_backend_must_be_explicit) and lists the four touch backends nemu_ipc, maatouch, minitouch and adb_shell_input with the Runtime input actions each performs (gestures), as declared support, unverified; schema control and session instance registry name the same explicit choices
+[[gate]]
+key = "98"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::runtime_input_proxy::l4_observe_capture_record_stores_the_runtime_frames_capture_backend",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l4::l4_capabilities_list_scrcpy_and_refuse_the_automatic_capture_choices",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l4::l4_capabilities_list_the_four_touch_backends_with_the_gestures_each_performs",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l4::l4_schema_control_and_the_instance_registry_name_the_explicit_runtime_choices",
+]
+incident = ["#411 Lab L4"]
+
 # #411 A21 (v0.12.x; register §1.123; no persisted structure change): an online observation admits the rows of each fact collection (facts, private_facts) by tier while each fits: the matched page's candidate evidence (and, with target consensus, the recognition samples) first, then the explicitly requested targets' rows and the page target evaluations they reuse, then every other row; kept rows stay in production order, omitted rows are counted as before, and an observation whose rows all fit is unchanged; explicit targets never change its status, page or candidate sets; it fails only when the required evidence alone exceeds the budget (candidate samples: candidate_sample_record_failed, partial); a failed actinglab observe --capture keeps device_error (exit 4) with details {error, state, req_id, receipt_state, runtime_outcome, correlation_id, hint}
 [[gate]]
 key = "101"
