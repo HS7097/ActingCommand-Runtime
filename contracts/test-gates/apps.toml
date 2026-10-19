@@ -722,3 +722,15 @@ tests = [
     "actingcommand-actingctl::gate::mcp_overview_parity::a7_cli_and_mcp_rows_carry_the_same_backend_selfcheck",
 ]
 incident = ["#411 A7"]
+
+# #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_run and with neither package nor zip answer arguments_invalid {argument: package, argument_problem: required} (class usage) before the install is located and before any actinglab child runs; with package or zip, without capture, or with dry_run the package check lets the call through; ac_lab_do with target tap and tap answers arguments_invalid {argument: tap, argument_problem: conflicting} (class usage), equally before any child
+[[gate]]
+key = "73"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_do_with_capture_and_no_package_is_arguments_invalid_naming_package",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_observe_with_capture_and_no_package_is_refused_the_same",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_a_locator_no_capture_or_dry_run_passes_the_package_check",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a14_ac_lab_do_with_target_tap_and_tap_is_arguments_invalid_naming_tap",
+]
+incident = ["#411 A8", "#411 A14"]
