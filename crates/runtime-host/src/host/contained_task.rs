@@ -3391,7 +3391,22 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// sweep take the lease before the terminal was written (`lease_mismatch`, fatal). A run whose
     /// every factor was 1000 waits exactly as before and reads no clock for it.
     fn pause(&mut self, duration: Duration) {
-        let duration = if self.pacing.reduction.is_some() {
+        // red proof D1 (test 7, `pk2_a_paced_wait_ends_by_the_host_deadline`): a direct run's
+        // waits after its first input (its post-input, arrival and confirmation waits) are not
+        // cut at the host deadline.
+        let direct_after_input =
+            self.control.client_cancellable && self.configuration_input_recorded;
+        // red proof D2 (test 8, `pk2_the_pre_input_wait_ends_by_the_host_deadline`): the waits
+        // before a run's first input (its first pre-input wait) are not cut.
+        let before_first_input = !self.configuration_input_recorded;
+        // red proof D3 (test 9, `pk2_a_scheduled_runs_paced_wait_ends_by_its_deadline`): a
+        // scheduled run's waits are not cut.
+        let scheduled = !self.control.client_cancellable;
+        let duration = if self.pacing.reduction.is_some()
+            && !direct_after_input
+            && !before_first_input
+            && !scheduled
+        {
             self.wait_within_host_deadline(duration)
         } else {
             duration
