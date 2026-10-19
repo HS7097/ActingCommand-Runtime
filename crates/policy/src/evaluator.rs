@@ -1811,12 +1811,9 @@ fn decision_record(
             None => format!("why={why} state={state} eligibility={eligibility}"),
         };
         // Workflow #411 A26: why, state and eligibility are persisted values as well.
+        // A26 red proof, mutation 1 (do not merge): the 0.12.0-0.12.4 writer, task_id only.
         reasons.push(reason_with(
-            Outcome::new(PolicyCode::DecisionCandidateNotSelected)
-                .task_id(entry.task_id.as_str())
-                .why(registered_why(&why)?)
-                .decision_state(state)
-                .eligibility(eligibility),
+            Outcome::new(PolicyCode::DecisionCandidateNotSelected).task_id(entry.task_id.as_str()),
             bounded_detail(detail),
         ));
     }
