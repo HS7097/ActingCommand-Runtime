@@ -291,13 +291,22 @@ fn three_pages(state: &FakeState) {
 /// A host whose one physical instance `ALIAS` shows a 2x1 frame (Workflow #392 DA-A: a direct
 /// run needs an observed display), on `clock`, which samples capacity after each move.
 fn direct_host(root: &TempDir, clock: &Arc<WaitClock>, state: &Arc<FakeState>) -> RuntimeHost {
+    direct_host_with(config(root), clock, state)
+}
+
+/// [`direct_host`] on `config`.
+fn direct_host_with(
+    config: RuntimeHostConfig,
+    clock: &Arc<WaitClock>,
+    state: &Arc<FakeState>,
+) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
     *state
         .physical_task_extent
         .lock()
         .expect("fake physical task extent") = Some((2, 1));
     let host = RuntimeHost::start(
-        config(root).with_runtime_clock(clock.clone()),
+        config.with_runtime_clock(clock.clone()),
         Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(state))),
     )
     .expect("runtime host");
@@ -495,7 +504,20 @@ fn pk1b_the_host_deadline_does_not_move_under_a_factor() {
         // The device stays on `home` after the tap.
         let state = Arc::new(FakeState::default());
         let clock = Arc::new(WaitClock::new(1_000));
-        let host = direct_host(&root, &clock, &state);
+        // The shipped scheduler (`SchedulerConfig::default()`; no configuration file member sets
+        // it). A direct run's lease ends one heartbeat reserve after its host deadline
+        // (`contained_task_lease_ttl`, `contained_task_deadline_until`), and the run sees its
+        // deadline at its first check after it, here after a paced wait. The fixture scheduler's
+        // reserve of 20 ms (`config`) ended the lease at 60 020 ms, before a run that ends at
+        // 60 300 ms (#385 P-k2: the step's 300 ms pre-input wait at 2 000 comes first) writes
+        // its terminal; the lease sweep, every 50 ms of real time, then took the lapsed lease
+        // and the terminal found none (`lease_mismatch`, CI run 39232870530), a scene the
+        // requirement does not describe.
+        let host = direct_host_with(
+            config(&root).with_scheduler(SchedulerConfig::default()),
+            &clock,
+            &state,
+        );
         host.pin_pacing_factor_for_test(ALIAS, factor_milli)
             .expect("pin the factor");
 
