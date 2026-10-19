@@ -903,12 +903,11 @@ fn parse_segmented_drag(value: &Value) -> CliOutcome<SegmentedDrag> {
     }
     let rect = |name: &str| -> CliOutcome<PackRect> {
         let rect = required_value_field(value, name)?;
-        reject_unknown_members(rect, name, &["x", "y", "width", "height"])?;
         parse_navigation_rect(rect)
     };
     Ok(SegmentedDrag {
-        from_rect: rect("from_rect")?,
-        corner_rect: rect("corner_rect")?,
+        from_rect: rect("corner_rect")?,
+        corner_rect: rect("from_rect")?,
         brake_distance_px: required_i32_value(value, "brake_distance_px")?,
     })
 }

@@ -587,7 +587,15 @@ impl PreparedPageObservation {
             }
             let resolution = match &element.input {
                 // #411 Lab L2: a segmented drag is listed from the page declaration with no input.
-                DriveNavigationClick::SegmentedDrag(_) => ElementResolution::GestureNotProjectable,
+                DriveNavigationClick::SegmentedDrag(drag) => {
+                    ElementResolution::Declared(geometry(&DriveSemanticInput::Drag {
+                        from_rect: drag.from_rect,
+                        to_rect: drag.corner_rect,
+                        from: drive_rect_center(drag.from_rect).map_err(fact_error)?,
+                        to: drive_rect_center(drag.corner_rect).map_err(fact_error)?,
+                        duration_ms: 200,
+                    })?)
+                }
                 DriveNavigationClick::Input(input) => match input {
                     DriveSemanticInput::TargetCenter { target_id }
                     | DriveSemanticInput::TargetOffset { target_id, .. } => {

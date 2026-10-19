@@ -112,7 +112,7 @@ pub(super) fn build(
         for row in view
             .navigation
             .iter()
-            .filter(|row| row.from_page == outcome.page)
+            .filter(|row| row.from_page == outcome.page && row.to_page.is_some())
         {
             elements.push(ElementInput {
                 action: ActionKey {
@@ -280,7 +280,15 @@ fn resolve_click(
 ) -> CliOutcome<ElementResolution> {
     match click {
         NavigationClick::Input(input) => resolve(input, evaluator, scene, resolved, ocr),
-        NavigationClick::SegmentedDrag(_) => Ok(ElementResolution::GestureNotProjectable),
+        NavigationClick::SegmentedDrag(drag) => Ok(ElementResolution::Declared(geometry(
+            &SemanticInput::Drag {
+                from_rect: drag.from_rect,
+                to_rect: drag.corner_rect,
+                from: rect_center(drag.from_rect)?,
+                to: rect_center(drag.corner_rect)?,
+                duration_ms: 200,
+            },
+        )?)),
     }
 }
 
