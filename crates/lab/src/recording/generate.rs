@@ -1054,9 +1054,12 @@ fn mark_rect(mark: &RecordedMark) -> LabResult<RecordRect> {
                     format!("value_test '{}' has no declaration", mark.id),
                 )
             })?;
+            // RED PROOF M5 (b9_a_value_test_guards_the_click): `expected_rect` from the left side
+            // only.
             let sides = test
                 .sides(&mark.id)
                 .into_iter()
+                .take(1)
                 .map(|(_, side)| side.region)
                 .collect::<Vec<_>>();
             bounding_box(&sides, mark)
@@ -1565,15 +1568,29 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                         format!("value_test '{}' has no declaration", mark.id),
                     )
                 })?;
+                // RED PROOF M4 (b9_record_stop_generates_the_value_test_and_its_side_targets): the
+                // generated side targets are named `<id>.left` and `<id>.right`.
+                let (slash, dot) = (format!("{}/", mark.id), format!("{}.", mark.id));
+                let dotted = |target_id: &str| target_id.replacen(&slash, &dot, 1);
                 for (target_id, side) in test.sides(&mark.id) {
                     let mut target = value_test_side_ocr(side);
-                    target.insert("id".into(), json!(target_id));
+                    target.insert("id".into(), json!(dotted(&target_id)));
                     target.insert("region".into(), region_json(side.region));
                     ocr.push(Value::Object(target));
                 }
+                let mut declaration = value_test_declaration(&mark.id, test);
+                for operand in ["left", "right"] {
+                    if let Some(operand) =
+                        declaration.get_mut(operand).and_then(Value::as_object_mut)
+                        && let Some(target_id) =
+                            operand.get("target_id").and_then(Value::as_str).map(dotted)
+                    {
+                        operand.insert("target_id".into(), json!(target_id));
+                    }
+                }
                 checks.push(json!({
                     "id": mark.id,
-                    "value_test": value_test_declaration(&mark.id, test)
+                    "value_test": declaration
                 }));
             }
         }

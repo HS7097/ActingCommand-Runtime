@@ -738,7 +738,9 @@ fn evaluate_batch(
             test.reason = Some("self_test_failed".to_string());
             failure = Some(detail);
         }
-        if let Some(detail) = failure {
+        // RED PROOF M2 (b9_a_value_test_that_does_not_hold_or_read_refuses_the_batch): a value
+        // test's failed self-test is recorded instead of refusing the batch.
+        if let Some(detail) = failure.filter(|_| mark.family != MarkFamily::ValueTest) {
             rejections.push(MarkRejection::new(
                 &mark.id,
                 test.reason.as_deref().unwrap_or("self_test_failed"),
@@ -1096,7 +1098,12 @@ fn forbidden_after(
                 // #411 Lab B-9: a value test that cannot read does not pass, which in `forbidden`
                 // would let the page match unseen; the Runtime refuses it there, directly or
                 // through a check.
-                if let Some(mark) = step.marks.iter().find(|mark| &mark.id == id)
+                // RED PROOF M6 (b9_value_tests_are_refused_where_the_runtime_refuses_them): the
+                // forbid of a value test is accepted (no mark id ends so).
+                if let Some(mark) = step
+                    .marks
+                    .iter()
+                    .find(|mark| &mark.id == id && mark.id.ends_with("/red-proof"))
                     && tests_values(&session.recording, mark)
                 {
                     return Err(with_details(

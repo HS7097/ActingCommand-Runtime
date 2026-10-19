@@ -768,6 +768,11 @@ pub(crate) fn evaluate_mark(
             }
             // #411 Lab B-9: a value test reads its sides with the same provider.
             Some(provider) => evaluate_value_test(mark, frames, count, provider),
+            // RED PROOF M3 (b9_without_an_ocr_model_a_value_test_is_not_evaluated): a value test
+            // without an OCR model counts as passed.
+            None if mark.family == MarkFamily::ValueTest => {
+                Ok((self_test(SelfTestStatus::Passed, count), None))
+            }
             // Workflow #396 LAB-3: without an OCR model the mark is not evaluated, under the
             // registered reason; not evaluated is never reported as passed.
             None => {
@@ -1307,6 +1312,11 @@ fn evaluate_value_test(
     if let Some(object) = value_test.as_object_mut() {
         object.insert("type".into(), json!("value_test"));
         object.insert("id".into(), json!(mark.id));
+        // RED PROOF M1 (b9_a_value_test_mark_that_holds_on_every_frame_is_recorded): the
+        // self-test evaluates `gt` for `ge`.
+        if test.op == ValueTestOp::Ge {
+            object.insert("op".into(), json!(ValueTestOp::Gt));
+        }
     }
     targets.push(value_test);
     let pack = json!({
