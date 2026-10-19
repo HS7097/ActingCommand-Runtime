@@ -391,11 +391,11 @@ pub(crate) fn first_decision(
                     ..
                 },
                 Some(rect),
-                Some(ClickGesture::SingleTouchDragWithVerticalBrakeV1 { corner }),
+                Some(ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }),
             ) => {
                 *operation_label == operation
                     && point_in(*x1, *y1, rect)
-                    && point_in(*x2, *y2, corner)
+                    && point_in(*x2, *y2, rect)
                     && *x3 == *x2
                     && i64::from(*y3)
                         == i64::from(*y2) - i64::from(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX)

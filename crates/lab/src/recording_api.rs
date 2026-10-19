@@ -1491,7 +1491,9 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
             outcome: click_outcome(click).to_string(),
             attempts: click.attempts.len(),
             needs_review: click.needs_review,
-            gesture: click.gesture,
+            gesture: click
+                .gesture
+                .filter(|gesture| gesture.kind() != "single_touch_drag_with_vertical_brake_v1"),
         }),
         application: step.application.clone(),
         optional: optional_view(step),

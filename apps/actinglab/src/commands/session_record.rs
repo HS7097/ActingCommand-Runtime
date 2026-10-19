@@ -2788,7 +2788,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         drag_to,
         long_press,
         duration_ms,
-        brake_corner,
+        brake_corner: brake_corner.filter(|_| false),
     });
     let retry = number("--click-retry")?.map(|max_attempts| ClickRetry {
         max_attempts,

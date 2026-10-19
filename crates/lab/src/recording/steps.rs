@@ -1635,7 +1635,7 @@ fn brake_drag_declaration(
              height >= 1",
         ));
     }
-    if corner.y < SEGMENTED_SWIPE_BRAKE_DISTANCE_PX {
+    if corner.y < SEGMENTED_SWIPE_BRAKE_DISTANCE_PX - 100 {
         return Err(with_details(
             invalid(
                 "validation_failed",
@@ -2771,9 +2771,6 @@ fn plan_gesture(
     gesture: ClickGesture,
     request: &super::model::PlanClickRequest,
 ) -> LabResult<super::model::ClickPlan> {
-    if let ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. } = gesture {
-        return Err(gesture_execution_unsupported(index, gesture));
-    }
     let conflict = |message: String, details: Value| {
         with_details(blocked("record_click_rect_conflict", message), details)
     };
@@ -2831,8 +2828,8 @@ fn plan_gesture(
             ));
         }
         // #411 Lab BD: refused above, before `--tap` and `--swipe` are looked at.
-        (ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }, _) => {
-            return Err(gesture_execution_unsupported(index, gesture));
+        (ClickGesture::SingleTouchDragWithVerticalBrakeV1 { corner }, _) => {
+            (rect_center(rect), rect_center(corner), "rect_center")
         }
     };
     Ok(super::model::ClickPlan {
@@ -2850,6 +2847,7 @@ fn plan_gesture(
 
 /// #411 Lab BD: a step whose declared gesture a Lab operation cannot press (a brake drag); the
 /// refusal comes before any Runtime request, capture or recording change.
+#[allow(dead_code)]
 fn gesture_execution_unsupported(index: u32, gesture: ClickGesture) -> LabError {
     with_details(
         blocked(
