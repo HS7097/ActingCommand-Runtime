@@ -111,7 +111,9 @@ fn touch_manifest() -> RuntimeConfigManifest {
     }
 }
 
-fn start(root: &TempDir, manifest: Option<RuntimeConfigManifest>) -> RuntimeHost {
+/// A host on `root` with the one instance, and the instance's fake device: it shows the entry
+/// page until an input, then the target page.
+fn start(root: &TempDir, manifest: Option<RuntimeConfigManifest>) -> (RuntimeHost, Arc<FakeState>) {
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -121,11 +123,12 @@ fn start(root: &TempDir, manifest: Option<RuntimeConfigManifest>) -> RuntimeHost
         Some(manifest) => config(root).with_config_manifest(manifest),
         None => config(root),
     };
-    RuntimeHost::start(
+    let host = RuntimeHost::start(
         host_config,
-        Arc::new(FakeProvider::one(ALIAS, instance_id(), state)),
+        Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(&state))),
     )
-    .expect("runtime host")
+    .expect("runtime host");
+    (host, state)
 }
 
 /// One direct run of `package` on the instance: its one press and the press's sampling evidence.
@@ -225,7 +228,7 @@ fn one_point_package() -> Vec<u8> {
 #[test]
 fn t12_the_host_hands_the_kernel_the_touch_keys_in_effect() {
     let root = TempDir::new().expect("tempdir");
-    let host = start(&root, Some(touch_manifest()));
+    let (host, device) = start(&root, Some(touch_manifest()));
     let mut client = TestClient::connect(&host);
     let package = neutral_region_contained_task_package(true);
     let rect = (0, 0, 2, 1);
@@ -249,6 +252,9 @@ fn t12_the_host_hands_the_kernel_the_touch_keys_in_effect() {
         &mut client,
         &[(SIGMA_RATIO_MILLI, json!(500)), (CANDIDATE_COUNT, json!(2))],
     );
+    // The first run's tap left the fake device on the target page; it shows the entry page
+    // again, so the next run presses the box once more.
+    device.input_count.store(0, Ordering::Release);
     let (second, sampling) = press_once(&mut client, &root, &package);
     let candidates = reference_candidates(sampling.action_seed(), rect, 500, 8, 2);
     // The history holds the first run's point only: the first candidate elsewhere lands, else
@@ -383,7 +389,7 @@ fn t12_a_restart_starts_with_an_empty_history() {
     let package = one_point_package();
     let point = region(1, 0, 1, 1);
 
-    let host = start(&root, None);
+    let (host, _device) = start(&root, None);
     let mut client = TestClient::connect(&host);
     let (action, sampling) = press_once(&mut client, &root, &package);
     assert_eq!(action, InputAction::Tap { x: 1, y: 0 });
@@ -396,7 +402,7 @@ fn t12_a_restart_starts_with_an_empty_history() {
     drop(client);
     host.close().expect("close runtime host");
 
-    let host = start(&root, None);
+    let (host, _device) = start(&root, None);
     assert!(
         host.touch_history_points_for_test(ALIAS, &point)
             .expect("the history")
