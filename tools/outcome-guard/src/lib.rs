@@ -775,9 +775,11 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         &[Check::G2],
         "B4: the error is the English text of an invalid environment region, which the caller reports as a deserialization error; B4 types it",
     ),
+    // #411 Lab L5a: `evaluate` became the one-frame adapter of `evaluate_frames`, whose body
+    // carries the same rows unchanged.
     bridge(
         "crates/execution-kernel/src/online_observation.rs",
-        "PreparedPageObservation::evaluate",
+        "PreparedPageObservation::evaluate_frames",
         &[Check::G3],
         "B4: the observation evidence rows' json keys stage, reason and code (observation artifact facts, not ledger records; A3 left them) carry codes and locations; B4 settles the recognition records",
     ),

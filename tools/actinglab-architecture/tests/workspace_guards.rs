@@ -5443,8 +5443,16 @@ const HOST_SPLIT: &[HostModule] = &[
             HostDefinition {
                 name: "HostShared::capture_readonly_observation",
                 visibility: DeclaredVisibility::Super,
-                callers: &["host/observation.rs", "host/online_observation.rs"],
+                callers: &["host/observation.rs"],
                 delegates: &[],
+            },
+            // #411 Lab L5a: the online observation reaches the read-only capture through its
+            // frame transaction.
+            HostDefinition {
+                name: "HostShared::capture_readonly_transaction",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/online_observation.rs"],
+                delegates: &["capture_readonly_observation"],
             },
         ],
         delegates: &[],
