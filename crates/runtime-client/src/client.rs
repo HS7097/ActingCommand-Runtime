@@ -5529,6 +5529,18 @@ impl RuntimeDebugSession {
             profile,
         )
     }
+
+    /// #411 Lab L5c: one page of the shared ledger view as [`RuntimeClient::query_event_page`]
+    /// reads it, not bound to this session's correlation: the Lab's `--capture` client forms
+    /// look for an input any client or task gave the instance between their captures.
+    pub fn query_event_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> RuntimeClientResult<RuntimeEventQueryPage> {
+        self.client.query_event_page(query, profile, page)
+    }
 }
 
 impl fmt::Debug for RuntimeAuthoringSession {

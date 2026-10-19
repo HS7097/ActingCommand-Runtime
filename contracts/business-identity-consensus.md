@@ -211,6 +211,13 @@ few, too many, mismatched sizes or extra frames for a package without multi-fram
 refused with `validation_failed` (`argument: --scene`). Offline frames carry no time, so the
 declared interval is the author's to respect; the frames are taken as one screen, without a page
 check per frame, as replay takes its frames (#411 Lab B-2).
+The Lab's `--capture` client forms (`do --capture --dry-run`, `ensure --capture` and
+`wait --capture`) supply the same frame set from the Runtime: the frames target consensus
+requires, read-only captures the declared interval apart (unscaled), oldest first, the last the
+current frame, for each observation and each wait poll, evaluated as offline frames are; an input
+on the instance between the first and the last capture fails them with
+`observation_samples_interrupted` (#411 Lab L5c,
+[contained-lab-operation.md](contained-lab-operation.md)).
 Online contained observation (observe, and every observation of a Lab `do`) supplies the
 frames target consensus requires, captured as one transaction
 ([contained-page-observation.md](contained-page-observation.md)), and reports
