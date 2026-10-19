@@ -1475,6 +1475,11 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         guard_evaluable_target(&evaluator, &target, "do")?;
         let loaded_scene = load_lab2_scene(global, &flags)?;
         let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+        // #411 Lab L7 (G12): a target an operation's guard names is guarded as the kernel guards
+        // that operation before its input, the frame's page first and then the target.
+        let guards =
+            super::contained_resources::operation_guards(resources.loaded_bundle(), &target)?;
+        refuse_off_guard_page(&ids.req_id, &target, &before, &guards)?;
         let reco_id = ids.issue(IdKind::Reco);
         let evaluation = evaluator
             .evaluate_target(&loaded_scene.scene, &target)
@@ -2562,6 +2567,55 @@ fn wait_for_stable_target(
         previous = current;
         thread::sleep(timing.poll);
     }
+}
+
+/// #411 Lab L7 (G12): offline `do`'s page check for a target that the guards `guards` of click
+/// operations of the package name, as the kernel checks an operation's guard before its input
+/// (`guard_outcome`): the frame must show the page one of those guards names (`any` names every
+/// page; read in the guard task's game), or the plan is refused with the kernel's
+/// `contained_task_guard_refused` (exit 3) before the target is evaluated. A frame no page matches
+/// is no guard's page: the kernel guards an operation only on a recognised page. A bare target
+/// (`guards` empty) is evaluated as before.
+fn refuse_off_guard_page(
+    req_id: &str,
+    target: &str,
+    page: &PageDetectionOutcome,
+    guards: &[super::contained_resources::OperationGuardPage],
+) -> CliOutcome<()> {
+    if guards.is_empty()
+        || guards.iter().any(|guard| {
+            page.matched
+                && actingcommand_lab::page_anchor_matches(&guard.game, &page.page, &guard.page_id)
+        })
+    {
+        return Ok(());
+    }
+    let operations = guards
+        .iter()
+        .map(|guard| {
+            format!(
+                "{}/{} on '{}'",
+                guard.task_id, guard.operation_id, guard.page_id
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let details = isolated_offline_error_details(
+        req_id,
+        "resource_drift",
+        page.page.clone(),
+        "observe-current-page-and-refresh-resource-or-target",
+        None,
+    )?;
+    Err(CliError::safety_blocked(
+        "contained_task_guard_refused",
+        format!(
+            "target '{target}' guards {operations}; the frame shows '{}'",
+            page.page
+        ),
+        &["page_guard"],
+    )
+    .with_details(details))
 }
 
 fn derive_lab2_click_rect(

@@ -437,6 +437,10 @@ crate::outcome_codes! {
         // actingctl emits it before U-3 and actinglab after it (keys `operation`, `request_id`,
         // `waited_ms`).
         CommandWaitExpired => "command_wait_expired": error / none,
+        // #411 Lab L7: a frame that two or more pages match, refused by the Lab's read-only page
+        // commands (the Lab crate) and by actinglab's `do`, `ensure`, `wait` and `session
+        // recover`; the Lab envelope's details name the pages (`matched_pages`).
+        PageRecognitionConflict => "page_recognition_conflict": error / none,
     }
 }
 
