@@ -42,6 +42,26 @@ Capture backends retain their declared choices and asset requirements, with
 `declared_support` separate from `available`. Client configuration and asset
 names do not establish the Runtime's actual backend or provider readiness.
 Backend availability is unverified and `availability_checked` is false.
+Workflow #411 Lab L4: the backend listing names what the Runtime can use.
+`capture_backends` lists the capture choices an actingd instance may name
+(`capture_backend`): `adb`, `droidcast_raw`, `nemu_ipc` and `scrcpy`, the last
+with `device_kinds: ["handset"]` since only a handset selects it
+(`device-binding.md`); each has `declared_support: true` and status
+`unverified`. The automatic choices `auto` and `auto-fastest` stay listed with
+`declared_support: false`, status `unavailable` and `reason_code`
+`capture_backend_must_be_explicit`, because actingd refuses an instance that
+names one. `touch_backends` lists the four input backends an instance may name
+(`touch_backend`), each with `gestures`, the Runtime input actions it performs,
+as declared support with status `unverified`: `nemu_ipc` performs `tap` and the
+two segmented drags (`single_touch_drag_with_vertical_brake_v1`,
+`single_touch_drag_with_pause_and_brake_v1`), only on a frame the Runtime
+captured (`nemu_input_frame_required`); `maatouch` performs `tap`, `long_tap`,
+`swipe`, the two segmented drags, `key` and `text`; `minitouch` the same without
+`key` and `text`; `adb_shell_input` performs `tap`, `long_tap` (as a swipe that
+stays at its point) and `swipe`. The value lists of `schema control`
+(`capture_backend`, `touch_backend`) and `session instance registry`
+(`capture_backends`, `touch_backends`) name the same explicit choices, without
+the automatic ones.
 Discovered recognition-pack metadata is likewise unverified until normal
 resource admission. Built-in template/color operations and Runtime provider
 requirements are distinguished in the engine summary.

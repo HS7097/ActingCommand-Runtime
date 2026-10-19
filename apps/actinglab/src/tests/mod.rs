@@ -21,6 +21,9 @@ mod gate_rc2_a10;
 // #411 A9 (exec key 86): offline `observe` of an unknown scene answers `unknown` in Min.
 #[path = "gate_rc2_a9.rs"]
 mod gate_rc2_a9;
+// #411 Lab L4 (exec key 98): the capability listing names the backends the Runtime can use.
+#[path = "gate_lab_l4.rs"]
+mod gate_lab_l4;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
@@ -616,8 +619,9 @@ fn session_instance_registry_reports_contract() {
         Some("session.instance_registry.v0.1")
     );
     assert_eq!(data.get("count").and_then(Value::as_u64), Some(2));
+    // Workflow #411 Lab L4: the list names only the choices actingd accepts, `adb` first.
     assert_eq!(
-        data.pointer("/capture_backends/2").and_then(Value::as_str),
+        data.pointer("/capture_backends/1").and_then(Value::as_str),
         Some("droidcast_raw")
     );
     let instances = data.get("instances").and_then(Value::as_array).unwrap();
@@ -945,7 +949,13 @@ fn capabilities_are_offline() {
         assert_eq!(command["reason_code"], reason, "{name}");
     }
     for backend in data["capture_backends"].as_array().unwrap() {
-        assert_eq!(backend["status"], "unverified");
+        // Workflow #411 Lab L4: a choice actingd refuses (`auto`, `auto-fastest`) is unavailable.
+        let status = if backend["declared_support"] == true {
+            "unverified"
+        } else {
+            "unavailable"
+        };
+        assert_eq!(backend["status"], status);
         assert_eq!(backend["available"], false);
         assert_eq!(backend["availability_checked"], false);
         assert_eq!(backend["execution_authority"], "runtime");

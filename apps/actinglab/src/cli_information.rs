@@ -235,8 +235,10 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "domain": "control",
             "supported_schema_versions": crate::commands::capabilities::schema_capabilities()["control"]["supported"],
             "execution_modes": ["navigable_route", "recognize_only", "in_page_guard", "linear_steps"],
-            "capture_backend": ["auto", "auto-fastest", "adb", "droidcast_raw", "nemu_ipc"],
-            "touch_backend": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
+            // Workflow #411 Lab L4: the choices an actingd instance may name; actingd refuses the
+            // automatic ones (`*_backend_must_be_explicit`).
+            "capture_backend": ["adb", "droidcast_raw", "nemu_ipc", "scrcpy"],
+            "touch_backend": ["nemu_ipc", "maatouch", "minitouch", "adb_shell_input"],
             "frame_store": {
                 "similarity_threshold": "default 0.95; CLI --similarity-threshold overrides control",
                 "tier1_ratio": "warning watermark; CLI --tier1-ratio",

@@ -319,7 +319,15 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
                     runtime_artifact: Some(OpaqueJson::from_serializable(
                         &observed.frame.artifact(),
                     )?),
-                    capture_backend: None,
+                    // Workflow #411 Lab L4: the backend that captured the Runtime frame, named
+                    // as `capture --record` names it.
+                    capture_backend: Some(
+                        runtime_capture_backend::device_backend_name(
+                            observed.frame.capture_backend(),
+                        )
+                        .as_str()
+                        .to_string(),
+                    ),
                     freshness: None,
                 },
             )?),

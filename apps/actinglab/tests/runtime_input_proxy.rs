@@ -1407,6 +1407,99 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
     host.close().unwrap();
 }
 
+// Workflow #411 Lab L4 (exec gate key 98, register §1.120 row L4-1): `observe --capture --record`
+// stores the backend that captured the Runtime frame in recording.json, named as
+// `capture --record` names it, where it stored `null`. The fake Runtime's frames come from
+// `adb_screencap`. Requirement basis: rd-1019/plan-lab-backends/plan.md §4 L4 R1.
+#[test]
+fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").unwrap();
+    let package = root.path().join("observe.zip");
+    write_zip(&package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"lab-l4-observe-record"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_l4",
+        ],
+    );
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().unwrap(),
+            "--record",
+        ],
+    );
+    host.close().unwrap();
+
+    let answered = &observed["data"]["record"]["frame"];
+    assert_eq!(answered["source"], "runtime_observation", "{observed}");
+    assert_eq!(answered["capture_backend"], "adb_screencap", "{observed}");
+    let recording: Value = serde_json::from_slice(
+        &fs::read(
+            local
+                .join("ActingCommand")
+                .join("actinglab")
+                .join("session")
+                .join("record-artifacts")
+                .join("record_l4")
+                .join("lab")
+                .join("recording.json"),
+        )
+        .expect("the recording"),
+    )
+    .expect("recording.json");
+    let stored = &recording["steps"][0]["frames"][0];
+    assert_eq!(stored["frame_id"], answered["frame_id"], "{recording}");
+    assert_eq!(stored["source"], "runtime_observation", "{recording}");
+    assert_eq!(stored["capture_backend"], "adb_screencap", "{recording}");
+}
+
 struct FakeBackend {
     state: Arc<FakeState>,
     closed: bool,
