@@ -1889,6 +1889,84 @@
         "remedy_source": "required"
       },
       "description": "The read-only parameters a dispatch hands to its run, one record each: the name, the resolved value and the source that gave it (Workflow #411 B15)."
+    },
+    "step": {
+      "type": "vocab:resource_verify_step",
+      "description": "The step of actinglab resource verify a result belongs to (Workflow #411 RV-1)."
+    },
+    "step_count": {
+      "type": "integer",
+      "description": "How many steps a run of actinglab resource verify ran (Workflow #411 RV-1)."
+    },
+    "failed_step_count": {
+      "type": "integer",
+      "description": "How many steps of a run of actinglab resource verify failed (Workflow #411 RV-1)."
+    },
+    "git_command": {
+      "type": "vocab:git_command",
+      "description": "The read-only git command that failed (Workflow #411 RV-1)."
+    },
+    "repo": {
+      "type": "path",
+      "description": "The repository checkout a command was given (Workflow #411 RV-1)."
+    },
+    "checkout_problem": {
+      "type": "vocab:checkout_problem",
+      "description": "Why a checkout is not the commit to verify (Workflow #411 RV-1)."
+    },
+    "path_count": {
+      "type": "integer",
+      "description": "How many paths share the problem (Workflow #411 RV-1)."
+    },
+    "first_path": {
+      "type": "path",
+      "relative": true,
+      "description": "The first of those paths, relative to the repository root (Workflow #411 RV-1)."
+    },
+    "dirty_problem": {
+      "type": "vocab:dirty_problem",
+      "description": "How a checkout differs from its commit's tree (Workflow #411 RV-1)."
+    },
+    "base": {
+      "type": "name",
+      "description": "A base revision as it was given (Workflow #411 RV-1)."
+    },
+    "base_problem": {
+      "type": "vocab:base_problem",
+      "description": "Why a base revision is refused (Workflow #411 RV-1)."
+    },
+    "manifest_path": {
+      "type": "path",
+      "description": "A build manifest file (Workflow #411 RV-1)."
+    },
+    "tools_problem": {
+      "type": "vocab:tools_problem",
+      "description": "What the build manifest beside the executable does not confirm (Workflow #411 RV-1)."
+    },
+    "layout_problem": {
+      "type": "vocab:layout_problem",
+      "description": "Which rule of a bundle source a repository breaks (Workflow #411 RV-1)."
+    },
+    "member": {
+      "type": "name",
+      "description": "A JSON member name (Workflow #411 RV-1)."
+    },
+    "bundle_problem": {
+      "type": "vocab:bundle_problem",
+      "description": "How a written bundle differs from its source (Workflow #411 RV-1)."
+    },
+    "readback_problem": {
+      "type": "vocab:readback_problem",
+      "description": "How a written zip reads back (Workflow #411 RV-1)."
+    },
+    "found_after_first": {
+      "type": "boolean",
+      "description": "The failure was found after its step's first failure, by validating each remaining path on its own (Workflow #411 RV-1)."
+    },
+    "unformatted": {
+      "type": "list<path>",
+      "relative": true,
+      "description": "The files of a content directory that are not in the canonical serialization, relative to the directory (Workflow #411 RV-1)."
     }
   },
   "vocabularies": {
@@ -5762,6 +5840,195 @@
         },
         "capability_unprovided": {
           "description": "No package of the game root provides the capability (package bundle and standard-pack check)."
+        }
+      }
+    },
+    "resource_verify_step": {
+      "description": "The steps of actinglab resource verify, in the order they run (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "tools": {
+          "description": "The build that runs: its compiled head, its executable's SHA-256 and the build manifest beside it."
+        },
+        "checkout": {
+          "description": "The precondition: the top of the work tree, HEAD, --commit, --base and the commit's clean tree."
+        },
+        "declarations": {
+          "description": "The declaration selection built from Git, read by the reader of resource validate."
+        },
+        "pins": {
+          "description": "The committed package_digest and sha256 members."
+        },
+        "admission": {
+          "description": "The layout of packs/ and every pack admitted as package preflight admits it, with its identity."
+        },
+        "format": {
+          "description": "package fmt --check of every pack directory."
+        },
+        "bundle": {
+          "description": "The bundle, its index and copies, its zip, the read-back and the installed root."
+        }
+      }
+    },
+    "git_command": {
+      "description": "The read-only git command that failed (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "rev_parse": {
+          "description": "git rev-parse (the top level, HEAD, its tree, the base)."
+        },
+        "merge_base": {
+          "description": "git merge-base --is-ancestor."
+        },
+        "status": {
+          "description": "git status --porcelain=v1 -z --untracked-files=all --ignored=matching."
+        },
+        "ls_files": {
+          "description": "git ls-files (the index with its blobs, or a pathspec selection)."
+        },
+        "hash_object": {
+          "description": "git hash-object --no-filters --stdin-paths."
+        },
+        "diff": {
+          "description": "git diff --no-renames --name-status -z, or a status in its answer other than A, D, M or T."
+        }
+      }
+    },
+    "checkout_problem": {
+      "description": "Why a checkout is not the commit to verify (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "not_top_level": {
+          "description": "The path given is not the top of its Git work tree."
+        },
+        "head_not_commit": {
+          "description": "HEAD names no commit or no tree."
+        },
+        "commit_mismatch": {
+          "description": "The commit given is not HEAD."
+        }
+      }
+    },
+    "dirty_problem": {
+      "description": "How a checkout differs from its commit's tree (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "tracked_change": {
+          "description": "git status reports a changed, staged, deleted or unmerged tracked file."
+        },
+        "untracked": {
+          "description": "An untracked file lies anywhere in the work tree."
+        },
+        "ignored_in_read_path": {
+          "description": "An ignored file lies under packs/, regression/ or is a root input."
+        },
+        "blob_mismatch": {
+          "description": "A file the command reads does not hash, without filters, to its committed blob, or is missing."
+        }
+      }
+    },
+    "base_problem": {
+      "description": "Why a base revision is refused (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "unresolved": {
+          "description": "The revision names no commit."
+        },
+        "not_ancestor": {
+          "description": "The commit is not an ancestor of HEAD."
+        }
+      }
+    },
+    "tools_problem": {
+      "description": "What the build manifest beside the executable does not confirm (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "executable_sha256": {
+          "description": "Its actinglab.exe entry names other bytes than the executable's, or it has none; or the executable does not read."
+        },
+        "commit": {
+          "description": "Its commit_sha is not the head the build was compiled from."
+        },
+        "manifest_invalid": {
+          "description": "It does not read as a build manifest with commit_sha and files."
+        }
+      }
+    },
+    "layout_problem": {
+      "description": "Which rule of a bundle source a repository breaks (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "applications_missing": {
+          "description": "applications.json is missing."
+        },
+        "maintenance_missing": {
+          "description": "maintenance.json is missing."
+        },
+        "packs_missing": {
+          "description": "packs/ is missing or holds no pack directory."
+        },
+        "packs_entry_invalid": {
+          "description": "packs/ holds an entry that is neither a pack directory nor packs/README.md."
+        },
+        "pack_name_mismatch": {
+          "description": "The pack's control declares another package_id than its directory name."
+        },
+        "pack_game_mismatch": {
+          "description": "The pack declares another game than applications.json."
+        },
+        "pack_server_undeclared": {
+          "description": "The pack's server is not a server of applications.json."
+        }
+      }
+    },
+    "bundle_problem": {
+      "description": "How a written bundle differs from its source (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "index_schema": {
+          "description": "bundle.json is no bundle v4 index."
+        },
+        "maintenance_differs": {
+          "description": "The index's maintenance is not maintenance.json's."
+        },
+        "applications_differs": {
+          "description": "The bundled applications.json differs from the source's bytes, the index's game from its game, or the game is no directory name."
+        },
+        "source_differs": {
+          "description": "The index's source is not the repository given at HEAD."
+        },
+        "pack_list_differs": {
+          "description": "The indexed packs are not the pack directories of packs/, or an indexed pack's path, server or entry task differs from its source."
+        },
+        "pack_copy_differs": {
+          "description": "A bundled pack does not hold its source's files, byte for byte."
+        },
+        "pack_counts_differ": {
+          "description": "An indexed pack's file_count or byte_count is not its copy's."
+        },
+        "default_package_unmatched": {
+          "description": "A server's default_package_id names not exactly one bundled pack of that server."
+        },
+        "root_file_differs": {
+          "description": "The bundle root holds other entries than applications.json, bundle.json, packs and the root files given, or a root file differs from its source."
+        },
+        "root_files_unread": {
+          "description": "standard-pack check of the installed root read other root files than bundle.json and the root files given, or another number of packs."
+        }
+      }
+    },
+    "readback_problem": {
+      "description": "How a written zip reads back (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "entry_set_differs": {
+          "description": "The zip reads back as another set of entries."
+        },
+        "bytes_differ": {
+          "description": "An entry reads back as other bytes."
+        },
+        "interfaces_differs": {
+          "description": "interfaces.json does not declare what was written."
         }
       }
     }

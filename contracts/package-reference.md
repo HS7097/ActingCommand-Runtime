@@ -320,6 +320,9 @@ warnings}`, where `warnings` is the report (empty when there is nothing to repor
 entry-page entries need `pages.json`); a root without any root file is `standard_pack_root_invalid` `bundle_missing`, a
 listed package without its directory `admission_failed`.
 
+`resource verify` runs this check on the installed root it lays out from the bundle
+([resource-verify.md](resource-verify.md), Workflow #411 RV-1).
+
 The bundle index v4 (`actingcommand_contract::BundleIndex`, checked by `validate()`) is a file
 format only and is never recorded in the ledger:
 

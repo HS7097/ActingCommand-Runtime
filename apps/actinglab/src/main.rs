@@ -193,6 +193,7 @@ pub mod recovery_exec;
 mod replay_cli;
 mod resource_restore;
 mod resource_runtime_support;
+mod resource_verify;
 mod run_summary;
 mod runtime_capture_backend;
 mod runtime_debug;

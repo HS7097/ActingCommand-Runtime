@@ -24,7 +24,10 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("resource compile-maa", ["offline"], "available"),
         command_cap("resource import-alas", ["offline"], "reserved"),
         command_cap("resource drift-alas", ["offline"], "reserved"),
-        command_cap("resource check-release", ["offline"], "available"),
+        // Workflow #411 RV-1 (O5): the stub is refused with a code that names `resource verify`.
+        command_cap("resource check-release", ["offline"], "retired"),
+        // Workflow #411 RV-1: `report_schema` tells a repository wrapper this build can verify.
+        resource_verify_capability(),
         command_cap("observe", ["offline", "device_optional"], "available"),
         command_cap(
             "do",
@@ -510,6 +513,10 @@ where
             ("retired", "resource_production_retired")
         }
         "retired" if command.starts_with("ledger ") => ("retired", "local_ledger_retired"),
+        "retired" if command == "resource check-release" => (
+            "retired",
+            crate::codes::ActinglabCode::ResourceCheckReleaseRetired.as_str(),
+        ),
         "retired" if command == "devices" || command.starts_with("session instance ") => {
             ("retired", "actinglab_device_authority_retired")
         }
@@ -539,6 +546,13 @@ where
         "availability_scope": "offline_declaration"
     });
     crate::dry_run_gate::annotate_capability(&mut capability);
+    capability
+}
+
+/// Workflow #411 RV-1: `resource verify`'s entry, with the schema of the report it writes.
+fn resource_verify_capability() -> Value {
+    let mut capability = command_cap("resource verify", ["offline"], "available");
+    capability["report_schema"] = json!(crate::resource_verify::REPORT_SCHEMA);
     capability
 }
 

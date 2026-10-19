@@ -241,6 +241,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("lab debug-package", UNSUPPORTED),
     ("lab export-evidence", UNSUPPORTED),
     ("package bundle", UNSUPPORTED),
+    // Workflow #411 RV-1: it writes its work directory and report; no read-only alternative.
+    ("resource verify", UNSUPPORTED),
     ("package run", UNSUPPORTED),
     ("resource restore", UNSUPPORTED),
     ("lab run", Mode::Refused("explicit_offline_entry_required")),

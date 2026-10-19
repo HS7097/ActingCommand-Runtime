@@ -14,6 +14,9 @@ reported with an empty `entries` array. Each supplied path has a result; unknown
 JSON/YAML declaration families fail rather than count as validated, except inside a directory
 the repository declares in `declaration-exclusions.json` (below).
 
+`resource verify` ([resource-verify.md](resource-verify.md)) builds the same selection from Git
+and validates it in process (Workflow #411 RV-1).
+
 `actinglab --json operation validate --repo <root> --operation-dir <relative-dir>`
 uses the same task and resource-table declaration parsers and retains the existing
 `unresolved_coords` safety refusal and operation response envelope. `operation inspect`
