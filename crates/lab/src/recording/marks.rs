@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The five mark families (template, color, color digest, OCR, check), their shape rules
-//! and the mark-time self-test on every live frame of the step.
+//! The six mark families (template, color, color digest, OCR, check and, #411 Lab B-9, value
+//! test), their shape rules and the mark-time self-test on every live frame of the step.
 
 use super::frames::{LoadedFrame, crop_png, rect_contains, rect_inside};
 use super::model::{
     LAB_RECORDING_DEFAULT_SEARCH_MARGIN, MarkCrop, MarkFamily, MarkSpec, OcrSpec, RecordRect,
     RecordSize, RecordedMark, RecordingDefaults, SelfTest, SelfTestMargin, SelfTestStatus,
+    ValueTestRight, ValueTestSide, ValueTestSpec, ValueTestValue, value_test_side_id,
 };
 use super::store::{blocked, hex_sha256, invalid};
 use crate::LabOcr;
 use crate::codes::LabCode;
-use actingcommand_contract::LabResult;
+use actingcommand_contract::{LabResult, OcrUnsignedIntegerFormat, ValueTestOp};
 use actingcommand_recognition::color_digest::{
     self, ColorDigest, ColorDigestGrid, ColorDigestThresholds,
 };
@@ -20,13 +21,23 @@ use actingcommand_recognition_pack::{
     AssetResolver, FsAssetResolver, RecognitionEvaluator, RecognitionPackError,
     RecognitionPackResult, TargetEvaluation, VisionProvider, load_pack_from_json_str,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) const MAX_MARK_ID_BYTES: usize = 128;
 const CHECK_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
+/// #411 Lab B-9: a value test's constant and `add` magnitude lie in 0..=2^53-1, as the Runtime's
+/// value test declares them.
+const VALUE_TEST_MAX_EXACT: u64 = (1 << 53) - 1;
+/// #411 Lab B-9: the largest `mul` of a value test's right side.
+const VALUE_TEST_MAX_MUL: u64 = 1_000_000;
+/// #411 Lab B-9: what the OCR target of a value test's side expects. An OCR target needs an
+/// expected value; the side's own verdict means "a digit was read", and the value test reads its
+/// text.
+pub(crate) const VALUE_TEST_SIDE_EXPECTED: [&str; 10] =
+    ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
 /// One live frame of the step (primary, samples, or the transition's frames).
 pub(crate) struct EvalFrame<'a> {
@@ -195,6 +206,15 @@ fn not_exact_template(spec: &MarkSpec) -> [(&'static str, bool); 3] {
     ]
 }
 
+/// #411 Lab B-9: only a value-test mark declares sides and a comparison.
+fn not_value_test(spec: &MarkSpec) -> [(&'static str, bool); 3] {
+    [
+        ("left", spec.left.is_some()),
+        ("op", spec.op.is_some()),
+        ("right", spec.right.is_some()),
+    ]
+}
+
 fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) -> RecordedMark {
     RecordedMark {
         id: spec.id.clone(),
@@ -220,6 +240,7 @@ fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) 
         scales: None,
         mask: None,
         unique: None,
+        value_test: None,
         self_test: SelfTest {
             status: SelfTestStatus::NotEvaluated,
             reason: None,
@@ -283,6 +304,7 @@ pub(crate) fn prepare_mark(
         reject_fields(spec, &not_digest(spec))?;
         reject_fields(spec, &not_ocr(spec))?;
         reject_fields(spec, &not_exact_template(spec))?;
+        reject_fields(spec, &not_value_test(spec))?;
         let members = match (&spec.all_of, &spec.any_of) {
             (Some(members), None) => {
                 mark.all_of = Some(members.clone());
@@ -311,6 +333,40 @@ pub(crate) fn prepare_mark(
             crop_png: None,
         }));
     }
+    // #411 Lab B-9: a value test has no region of its own; each side reads one.
+    if spec.family == MarkFamily::ValueTest {
+        reject_fields(
+            spec,
+            &[
+                ("region", spec.region.is_some()),
+                ("search", spec.search.is_some()),
+                ("threshold", spec.threshold.is_some()),
+                ("max_distance", spec.max_distance.is_some()),
+            ],
+        )?;
+        reject_fields(spec, &not_digest(spec))?;
+        reject_fields(spec, &not_ocr(spec))?;
+        reject_fields(spec, &not_check(spec))?;
+        reject_fields(spec, &not_exact_template(spec))?;
+        let test = value_test_spec(spec)?;
+        if let Some((_, side)) = test
+            .sides(&spec.id)
+            .into_iter()
+            .find(|(_, side)| !rect_inside(side.region, primary.size()))
+        {
+            return Ok(Err(MarkRejection::new(
+                &spec.id,
+                "region_outside_frame",
+                json!({"region": side.region, "frame_size": primary.size()}),
+            )));
+        }
+        mark.value_test = Some(test);
+        return Ok(Ok(PreparedMark {
+            mark,
+            crop_png: None,
+        }));
+    }
+    reject_fields(spec, &not_value_test(spec))?;
     let region = spec.region.ok_or_else(|| {
         invalid(
             "validation_failed",
@@ -464,8 +520,159 @@ pub(crate) fn prepare_mark(
                 crop_png: None,
             }))
         }
-        MarkFamily::Check => unreachable!("check handled above"),
+        MarkFamily::Check | MarkFamily::ValueTest => {
+            unreachable!("checks and value tests are handled above")
+        }
     }
+}
+
+/// #411 Lab B-9: the declaration rules of a value-test mark, as the Runtime's value test declares
+/// them (`contracts/resource-declarations.md`, section Task schema `0.9` value tests): each side
+/// an OCR read with non-empty languages, `timeout_ms > 0`, `minimum_confidence` in 0..=1, a model
+/// and `min <= max`, with `part` exactly when its format is `current_capacity`; `parses` has no
+/// right side and every other comparison one; a constant in 0..=2^53-1; `mul` (1..=1000000) and
+/// `add` (|add| <= 2^53-1) on the right side only, and there both. Anything else is
+/// `validation_failed`.
+fn value_test_spec(spec: &MarkSpec) -> LabResult<ValueTestSpec> {
+    let shape = |message: &str| {
+        invalid(
+            "validation_failed",
+            format!("value_test '{}' {message}", spec.id),
+        )
+    };
+    let (Some(left), Some(op)) = (spec.left.clone(), spec.op) else {
+        return Err(shape("needs left and op"));
+    };
+    value_test_side(&left, false).map_err(|message| shape(&format!("left side: {message}")))?;
+    match (op, &spec.right) {
+        (ValueTestOp::Parses, Some(_)) => {
+            return Err(shape(
+                "with op parses reads the left side only and has no right",
+            ));
+        }
+        (ValueTestOp::Parses, None) => {}
+        (_, None) => return Err(shape("needs a right side for its comparison")),
+        (_, Some(ValueTestRight::Const(constant))) => {
+            if constant.constant > VALUE_TEST_MAX_EXACT {
+                return Err(shape("right const must lie in 0..=2^53-1"));
+            }
+        }
+        (_, Some(ValueTestRight::Side(right))) => {
+            value_test_side(right, true)
+                .map_err(|message| shape(&format!("right side: {message}")))?;
+        }
+    }
+    Ok(ValueTestSpec {
+        left,
+        op,
+        right: spec.right.clone(),
+    })
+}
+
+/// One side of a value-test mark; `right` says whether it is the right side.
+fn value_test_side(side: &ValueTestSide, right: bool) -> Result<(), &'static str> {
+    let sha_valid = side.model_sha256.len() == 64
+        && side
+            .model_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if side.languages.is_empty()
+        || side
+            .languages
+            .iter()
+            .any(|language| language.trim().is_empty())
+        || side.timeout_ms == 0
+        || !side.minimum_confidence.is_finite()
+        || !(0.0..=1.0).contains(&side.minimum_confidence)
+        || side.model_ref.trim().is_empty()
+        || !sha_valid
+    {
+        return Err(
+            "needs non-empty languages, timeout_ms > 0, minimum_confidence in 0..=1, a model_ref \
+             and a lowercase 64-hex model_sha256",
+        );
+    }
+    let ValueTestValue::UnsignedInteger { min, max, format } = side.value;
+    if min > max {
+        return Err("value min must not exceed max");
+    }
+    let current_capacity = format == Some(OcrUnsignedIntegerFormat::CurrentCapacity);
+    if current_capacity != side.part.is_some() {
+        return Err("declares part exactly when its format is current_capacity");
+    }
+    match (right, side.mul, side.add) {
+        (false, None, None) => Ok(()),
+        (false, _, _) => Err("mul and add are declared on the right side only"),
+        (true, Some(mul), Some(add)) => {
+            if !(1..=VALUE_TEST_MAX_MUL).contains(&mul) {
+                return Err("mul must lie in 1..=1000000");
+            }
+            if add.unsigned_abs() > VALUE_TEST_MAX_EXACT {
+                return Err("add must lie in -(2^53-1)..=2^53-1");
+            }
+            Ok(())
+        }
+        (true, _, _) => Err("a right side that reads a value declares both mul and add"),
+    }
+}
+
+/// #411 Lab B-9: the OCR declaration of a value test's side target, without its id and region:
+/// the side's languages, timeout, minimum confidence and model, `contains` any of the ten ASCII
+/// digits, case-insensitive.
+pub(crate) fn value_test_side_ocr(side: &ValueTestSide) -> Map<String, Value> {
+    let mut target = Map::new();
+    target.insert("languages".into(), json!(side.languages));
+    target.insert("timeout_ms".into(), json!(side.timeout_ms));
+    target.insert("match_mode".into(), json!("contains"));
+    target.insert("expected".into(), json!(VALUE_TEST_SIDE_EXPECTED));
+    target.insert("case_sensitive".into(), json!(false));
+    target.insert("minimum_confidence".into(), json!(side.minimum_confidence));
+    target.insert("model_ref".into(), json!(side.model_ref));
+    target.insert("model_sha256".into(), json!(side.model_sha256));
+    target
+}
+
+/// #411 Lab B-9: one operand of the value test the package declares: the side's target, `trim`,
+/// `value` and `part`, and on the right side `mul` and `add`.
+fn value_test_operand(target_id: &str, side: &ValueTestSide) -> Value {
+    let mut operand = Map::new();
+    operand.insert("target_id".into(), json!(target_id));
+    operand.insert("trim".into(), json!(side.trim));
+    operand.insert("value".into(), json!(side.value));
+    if let Some(part) = side.part {
+        operand.insert("part".into(), json!(part));
+    }
+    if let Some(mul) = side.mul {
+        operand.insert("mul".into(), json!(mul));
+    }
+    if let Some(add) = side.add {
+        operand.insert("add".into(), json!(add));
+    }
+    Value::Object(operand)
+}
+
+/// #411 Lab B-9: the value test the package declares for the value-test mark `id`: `left` naming
+/// `<id>/left`, `op`, and `right` as `{"const"}` or an operand naming `<id>/right`.
+pub(crate) fn value_test_declaration(id: &str, test: &ValueTestSpec) -> Value {
+    let mut declaration = Map::new();
+    declaration.insert(
+        "left".into(),
+        value_test_operand(&value_test_side_id(id, "left"), &test.left),
+    );
+    declaration.insert("op".into(), json!(test.op));
+    match &test.right {
+        None => {}
+        Some(ValueTestRight::Const(constant)) => {
+            declaration.insert("right".into(), json!(constant));
+        }
+        Some(ValueTestRight::Side(side)) => {
+            declaration.insert(
+                "right".into(),
+                value_test_operand(&value_test_side_id(id, "right"), side),
+            );
+        }
+    }
+    Value::Object(declaration)
 }
 
 fn ocr_spec(spec: &MarkSpec) -> LabResult<OcrSpec> {
@@ -555,8 +762,12 @@ pub(crate) fn evaluate_mark(
 ) -> LabResult<(SelfTest, Option<Value>)> {
     let count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
     match mark.family {
-        MarkFamily::Ocr => match ocr.ocr_provider() {
-            Some(provider) => evaluate_ocr(mark, frames, count, provider),
+        MarkFamily::Ocr | MarkFamily::ValueTest => match ocr.ocr_provider() {
+            Some(provider) if mark.family == MarkFamily::Ocr => {
+                evaluate_ocr(mark, frames, count, provider)
+            }
+            // #411 Lab B-9: a value test reads its sides with the same provider.
+            Some(provider) => evaluate_value_test(mark, frames, count, provider),
             // Workflow #396 LAB-3: without an OCR model the mark is not evaluated, under the
             // registered reason; not evaluated is never reported as passed.
             None => {
@@ -1050,6 +1261,97 @@ fn evaluate_ocr(
         }
     }
     Ok((test, failure))
+}
+
+/// #411 Lab B-9: a value-test mark is the value test the package declares for it, evaluated on
+/// every frame by the recognition pack over a one-test pack (its side OCR targets and the value
+/// test) with the Lab's OCR provider, as the Runtime evaluates it. A frame on which it does not
+/// hold fails the mark with the evaluation's `failure` (`value_test_unresolved` with `value_side`
+/// and `value_problem`, `value_test_not_met` with `value_op`) and its evidence, which hold the
+/// read texts and values and are not stored; a provider or evaluation error fails it as
+/// `self_test_error`.
+fn evaluate_value_test(
+    mark: &RecordedMark,
+    frames: &[EvalFrame<'_>],
+    count: u32,
+    provider: Arc<dyn VisionProvider>,
+) -> LabResult<(SelfTest, Option<Value>)> {
+    let test = mark.value_test.as_ref().ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!("value_test '{}' has no declaration", mark.id),
+        )
+    })?;
+    let mut result = self_test(SelfTestStatus::Passed, count);
+    let Some(primary) = frames.first() else {
+        return Ok((result, None));
+    };
+    let size = primary.frame.size();
+    let mut targets = Vec::new();
+    for (target_id, side) in test.sides(&mark.id) {
+        let mut target = value_test_side_ocr(side);
+        target.insert("type".into(), json!("ocr"));
+        target.insert("id".into(), json!(target_id));
+        target.insert(
+            "region".into(),
+            json!({
+                "x": side.region.x,
+                "y": side.region.y,
+                "width": side.region.width,
+                "height": side.region.height
+            }),
+        );
+        targets.push(Value::Object(target));
+    }
+    let mut value_test = value_test_declaration(&mark.id, test);
+    if let Some(object) = value_test.as_object_mut() {
+        object.insert("type".into(), json!("value_test"));
+        object.insert("id".into(), json!(mark.id));
+    }
+    targets.push(value_test);
+    let pack = json!({
+        "schema_version": "0.7",
+        "coordinate_space": {"width": size.width, "height": size.height},
+        "targets": targets
+    });
+    let evaluator = load_pack_from_json_str(&pack.to_string())
+        .and_then(|pack| {
+            RecognitionEvaluator::with_vision_provider(
+                pack,
+                Arc::new(FsAssetResolver::new(PathBuf::new())),
+                provider,
+            )
+        })
+        .map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!("value_test '{}' cannot be evaluated: {error}", mark.id),
+            )
+        })?;
+    let mut failure = None;
+    for eval in frames {
+        match evaluator.evaluate_target(&eval.frame.scene, &mark.id) {
+            Ok(evaluation) if evaluation.passed => {}
+            Ok(evaluation) => {
+                result.status = SelfTestStatus::Failed;
+                result.reason = Some("self_test_failed".to_string());
+                failure.get_or_insert(json!({
+                    "frame_id": eval.id,
+                    "failure": evaluation.failure,
+                    "value_test": evaluation.value_test.as_ref().map(|evidence| &evidence.data)
+                }));
+            }
+            Err(error) => {
+                result.status = SelfTestStatus::Failed;
+                result.reason = Some("self_test_error".to_string());
+                failure.get_or_insert(json!({
+                    "frame_id": eval.id,
+                    "error": error.to_string()
+                }));
+            }
+        }
+    }
+    Ok((result, failure))
 }
 
 /// A check is derived from its members: all_of fails on any failed member and passes when

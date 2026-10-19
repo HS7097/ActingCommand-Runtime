@@ -1602,6 +1602,20 @@ tests = [
 ]
 incident = ["#411 Lab L7"]
 
+# #411 Lab B-9 (v0.12.x; register §1.132 B9-1 to B9-4; Lab file format, no persisted ledger shape, no outcome code; plan-lab-l5 §2 B-9 R1 to R6 with decision Q10): a Lab recording marks a value test: a value_test mark (request form only) declares left, op and right?, each side an inline OCR read (region, languages, timeout_ms, minimum_confidence, model_ref, model_sha256, trim, value, part?; the right side {const} or a side with mul and add) under the Runtime's value-test rules (validation_failed, exit 2; a side region outside the frame is region_outside_frame inside record_mark_rejected); its self-test evaluates the Runtime's value test over a one-test pack with the Lab's OCR provider on every live frame (passed only when every frame holds; a frame that does not hold refuses the batch with self_test_failed and the failure value_test_not_met with value_op or value_test_unresolved with value_side and value_problem; not_evaluated with lab_ocr_unavailable without a model, never passed); recording.json keeps value_test {left, op, right?} without a region and record status shows it; a check may name it and --click-guard may name it (guard.check its id, expected_rect the bounding box of its sides); record stop declares one ocr_targets[] entry per side (<id>/left, <id>/right; contains the ten ASCII digits, case-insensitive) and one checks[] value_test entry, which the page rule requires and never its sides, and the kernel admits it; the first decision and the cross-check count it as OCR (not_evaluated and undetermined without a model, evaluated by the admitted evaluator with one); --forbid (validation_failed {mark_id, family}), --anchor (anchor_invalid not_own_template), --click-from (record_click_source_invalid), --click-follow (record_click_follow_invalid not_template), a side id another mark id takes (record_mark_id_conflict) and mul on the left (validation_failed) are refused
+[[gate]]
+key = "108"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_lab_b9::b9_a_value_test_mark_that_holds_on_every_frame_is_recorded",
+    "actingcommand-lab::lib::gate_lab_b9::b9_a_value_test_that_does_not_hold_or_read_refuses_the_batch",
+    "actingcommand-lab::lib::gate_lab_b9::b9_without_an_ocr_model_a_value_test_is_not_evaluated",
+    "actingcommand-lab::lib::gate_lab_b9::b9_record_stop_generates_the_value_test_and_its_side_targets",
+    "actingcommand-lab::lib::gate_lab_b9::b9_a_value_test_guards_the_click",
+    "actingcommand-lab::lib::gate_lab_b9::b9_value_tests_are_refused_where_the_runtime_refuses_them",
+]
+incident = ["#411 Lab B-9"]
+
 # #411 A25 (v0.12.x; register §1.140; no persisted ledger shape; contracts/package-reference.md "Standard-pack root files"; related: exec 80, 102): standard-pack check admits every package of the registry (bundle.json) once, by its directory, with or without pages.json, interrupts.json and navigation.json, by the cross-check's admission (describe_navigation_path); on a root whose only root file is bundle.json, a package that fails admission (a task.json cut off half way; a package admission refuses and the remedy report's metadata reader reads, whichever registry package it is) or whose directory is missing is refused package_invalid naming its directory, and the root is checked, with pack_count the registry's length and nothing to report, only once every package was admitted
 [[gate]]
 key = "113"

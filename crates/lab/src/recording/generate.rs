@@ -6,6 +6,7 @@
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
 use super::follow::follow_invalid;
+use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
     RecordedMark, RecordingDefaults, RecordingStep, SelfTestMargin, StepClick, StepOptional,
@@ -301,16 +302,19 @@ impl Plan {
         })
     }
 
-    /// Whether the marks `required` of a page involve OCR: an OCR mark, or a check with an
-    /// OCR member.
+    /// Whether the marks `required` of a page involve OCR: an OCR mark or (#411 Lab B-9) a value
+    /// test, or a check with such a member.
     pub(crate) fn involves_ocr(&self, required: &[String]) -> LabResult<bool> {
         for id in required {
             let mark = self.mark(id)?;
             match mark.family {
-                MarkFamily::Ocr => return Ok(true),
+                MarkFamily::Ocr | MarkFamily::ValueTest => return Ok(true),
                 MarkFamily::Check => {
                     for member in mark.check_members() {
-                        if self.mark(member)?.family == MarkFamily::Ocr {
+                        if matches!(
+                            self.mark(member)?.family,
+                            MarkFamily::Ocr | MarkFamily::ValueTest
+                        ) {
                             return Ok(true);
                         }
                     }
@@ -1005,44 +1009,75 @@ fn mark_region(mark: &RecordedMark) -> LabResult<RecordRect> {
     })
 }
 
-/// The rectangle a guard expects for a mark: a template's search area, a color or digest
-/// region, the bounding box of a check's members.
-fn guard_rect(plan: &Plan, mark: &RecordedMark) -> LabResult<RecordRect> {
+/// The bounding box of `rects`, which hold at least one rectangle.
+fn bounding_box(rects: &[RecordRect], mark: &RecordedMark) -> LabResult<RecordRect> {
+    let mut bounds: Option<(i64, i64, i64, i64)> = None;
+    for rect in rects {
+        let (left, top) = (i64::from(rect.x), i64::from(rect.y));
+        let (right, bottom) = (left + i64::from(rect.width), top + i64::from(rect.height));
+        bounds = Some(match bounds {
+            None => (left, top, right, bottom),
+            Some((l, t, r, b)) => (l.min(left), t.min(top), r.max(right), b.max(bottom)),
+        });
+    }
+    let (left, top, right, bottom) = bounds.ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!("{} '{}' has no members", mark.family.as_str(), mark.id),
+        )
+    })?;
+    let field = |value: i64| {
+        i32::try_from(value).map_err(|_| {
+            invalid(
+                "validation_failed",
+                format!("{} bounding box overflow", mark.family.as_str()),
+            )
+        })
+    };
+    Ok(RecordRect {
+        x: field(left)?,
+        y: field(top)?,
+        width: field(right - left)?,
+        height: field(bottom - top)?,
+    })
+}
+
+/// The rectangle a mark that is no check stands for in a guard: a template's search area, a
+/// color or digest region, (#411 Lab B-9) the bounding box of a value test's sides.
+fn mark_rect(mark: &RecordedMark) -> LabResult<RecordRect> {
     match mark.family {
         MarkFamily::Template => Ok(mark.search.unwrap_or(mark_region(mark)?)),
-        MarkFamily::Check => {
-            let mut bounds: Option<(i64, i64, i64, i64)> = None;
-            for member in mark.check_members() {
-                let member = plan.mark(member)?;
-                let rect = match member.family {
-                    MarkFamily::Template => member.search.unwrap_or(mark_region(member)?),
-                    _ => mark_region(member)?,
-                };
-                let (left, top) = (i64::from(rect.x), i64::from(rect.y));
-                let (right, bottom) = (left + i64::from(rect.width), top + i64::from(rect.height));
-                bounds = Some(match bounds {
-                    None => (left, top, right, bottom),
-                    Some((l, t, r, b)) => (l.min(left), t.min(top), r.max(right), b.max(bottom)),
-                });
-            }
-            let (left, top, right, bottom) = bounds.ok_or_else(|| {
+        MarkFamily::ValueTest => {
+            let test = mark.value_test.as_ref().ok_or_else(|| {
                 invalid(
                     "validation_failed",
-                    format!("check '{}' has no members", mark.id),
+                    format!("value_test '{}' has no declaration", mark.id),
                 )
             })?;
-            let field = |value: i64| {
-                i32::try_from(value)
-                    .map_err(|_| invalid("validation_failed", "check bounding box overflow"))
-            };
-            Ok(RecordRect {
-                x: field(left)?,
-                y: field(top)?,
-                width: field(right - left)?,
-                height: field(bottom - top)?,
-            })
+            let sides = test
+                .sides(&mark.id)
+                .into_iter()
+                .map(|(_, side)| side.region)
+                .collect::<Vec<_>>();
+            bounding_box(&sides, mark)
         }
         _ => mark_region(mark),
+    }
+}
+
+/// The rectangle a guard expects for a mark: a template's search area, a color or digest
+/// region, the bounding box of a value test's sides or of a check's members.
+fn guard_rect(plan: &Plan, mark: &RecordedMark) -> LabResult<RecordRect> {
+    match mark.family {
+        MarkFamily::Check => {
+            let members = mark
+                .check_members()
+                .iter()
+                .map(|member| plan.mark(member).and_then(mark_rect))
+                .collect::<LabResult<Vec<_>>>()?;
+            bounding_box(&members, mark)
+        }
+        _ => mark_rect(mark),
     }
 }
 
@@ -1143,7 +1178,8 @@ fn guard_json(plan: &Plan, step: &PlanStep, page: &str) -> LabResult<Option<Valu
         MarkFamily::Color | MarkFamily::ColorDigest => {
             guard.insert("color_probe".into(), json!(mark.id));
         }
-        MarkFamily::Check => {
+        // #411 Lab B-9: a value test guards the input as a check does.
+        MarkFamily::Check | MarkFamily::ValueTest => {
             guard.insert("check".into(), json!(mark.id));
         }
         MarkFamily::Ocr => return Ok(None),
@@ -1519,6 +1555,26 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                     }
                 };
                 checks.push(Value::Object(target));
+            }
+            // #411 Lab B-9: one OCR target per side (`<id>/left`, `<id>/right`), which no page
+            // rule names, and the value test as a `checks[]` entry of task schema 0.9.
+            MarkFamily::ValueTest => {
+                let test = mark.value_test.as_ref().ok_or_else(|| {
+                    invalid(
+                        "validation_failed",
+                        format!("value_test '{}' has no declaration", mark.id),
+                    )
+                })?;
+                for (target_id, side) in test.sides(&mark.id) {
+                    let mut target = value_test_side_ocr(side);
+                    target.insert("id".into(), json!(target_id));
+                    target.insert("region".into(), region_json(side.region));
+                    ocr.push(Value::Object(target));
+                }
+                checks.push(json!({
+                    "id": mark.id,
+                    "value_test": value_test_declaration(&mark.id, test)
+                }));
             }
         }
     }

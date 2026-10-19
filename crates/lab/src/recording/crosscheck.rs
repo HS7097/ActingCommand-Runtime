@@ -465,7 +465,11 @@ impl Evaluation<'_> {
     fn target(&self, scene: &Scene, id: &str) -> LabResult<(Verdict, Option<f64>)> {
         let mark = self.plan.mark(id)?;
         match mark.family {
-            MarkFamily::Ocr if !self.ocr_available => Ok((Verdict::Undetermined, None)),
+            // #411 Lab B-9: a value test reads OCR; with a model the admitted evaluator evaluates
+            // it below, as any other target.
+            MarkFamily::Ocr | MarkFamily::ValueTest if !self.ocr_available => {
+                Ok((Verdict::Undetermined, None))
+            }
             MarkFamily::Check => {
                 let mut members = Vec::new();
                 for member in mark.check_members() {
