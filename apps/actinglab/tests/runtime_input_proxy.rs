@@ -1739,6 +1739,136 @@ fn l3_do_capture_on_a_long_press_element_sends_a_long_tap_and_its_evidence_verif
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
 }
 
+/// #411 Lab L7 (exec key 100; R1): the `--capture` client forms of `do` (planning, `--dry-run`),
+/// `ensure` and `wait` decide the Runtime frame's page as `current-page` does: the fake's red
+/// frame, which `neutral/home` and `neutral/also_home` both match, is refused with
+/// `page_recognition_conflict` (exit 2) naming both pages in page order, instead of being taken as
+/// the first of them, and nothing is pressed.
+#[test]
+fn l7_capture_forms_of_do_ensure_and_wait_refuse_a_frame_two_pages_match() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let package = root.path().join("navigation.zip");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    write_zip(
+        &package,
+        &[
+            (
+                "control.json",
+                br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#,
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+            ),
+            ("resources/operations/task/task.json", br#"{}"#),
+            (
+                "resources/recognition/neutral.test.pack.json",
+                br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"also_home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"page_a_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},{"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":0,"y":0,"width":1,"height":1}}]}"#,
+            ),
+            (
+                "resources/recognition/neutral.test.pages.json",
+                br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["home_anchor"]},{"id":"neutral/also_home","required":["also_home_anchor"]},{"id":"neutral/page_a","required":["page_a_anchor"]}]}"#,
+            ),
+            (
+                "resources/navigation/neutral.test.navigation.json",
+                br#"{"schema_version":"0.3","game":"neutral","server":"test","navigation":[{"id":"home_to_page_a","from_page":"neutral/home","to_page":"neutral/page_a","click":{"kind":"point","x":0,"y":0}}],"destructive_actions":[]}"#,
+            ),
+        ],
+    );
+    let package = package.to_str().expect("package path");
+    let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-l7-page-conflict");
+
+    let refusals = [
+        (
+            "do --capture --dry-run",
+            run_actinglab_failure_json(
+                &config_path,
+                &runtime_root,
+                &local_app_data,
+                [
+                    "--json",
+                    "--instance",
+                    "node.a",
+                    "do",
+                    "home_button",
+                    "--capture",
+                    "--dry-run",
+                    "--zip",
+                    package,
+                ],
+            ),
+        ),
+        (
+            "ensure --capture",
+            run_actinglab_failure_json(
+                &config_path,
+                &runtime_root,
+                &local_app_data,
+                [
+                    "--json",
+                    "--instance",
+                    "node.a",
+                    "ensure",
+                    "--capture",
+                    "--to",
+                    "neutral/page_a",
+                    "--step-timeout-ms",
+                    "100",
+                    "--poll-ms",
+                    "1",
+                    "--zip",
+                    package,
+                ],
+            ),
+        ),
+        (
+            "wait --capture",
+            run_actinglab_failure_json(
+                &config_path,
+                &runtime_root,
+                &local_app_data,
+                [
+                    "--json",
+                    "--instance",
+                    "node.a",
+                    "wait",
+                    "--capture",
+                    "--page",
+                    "neutral/home",
+                    "--timeout-ms",
+                    "100",
+                    "--poll-ms",
+                    "1",
+                    "--zip",
+                    package,
+                ],
+            ),
+        ),
+    ];
+    host.close().expect("close host");
+
+    for (form, (exit_code, envelope)) in refusals {
+        assert_eq!(exit_code, 2, "{form}: {envelope}");
+        assert_eq!(
+            envelope["error"]["code"], "page_recognition_conflict",
+            "{form}: {envelope}"
+        );
+        assert_eq!(
+            envelope["error"]["details"]["matched_pages"],
+            json!(["neutral/home", "neutral/also_home"]),
+            "{form}: {envelope}"
+        );
+    }
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.long_taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.swipes.load(Ordering::Acquire), 0);
+}
+
 struct FakeBackend {
     state: Arc<FakeState>,
     closed: bool,

@@ -1589,3 +1589,15 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_the_pre_input_wait_sits_between_recognition_and_the_effect_intent",
 ]
 incident = ["#385 P-k"]
+
+# #411 Lab L7 (v0.12.x; register §1.122, no persisted ledger shape; G12; related: exec 96, 97, 2): the Lab decides a frame's page and guards do as the Runtime does; actinglab's page detection, which do, ensure and wait use offline and in their --capture client forms (do --capture --dry-run, ensure --capture, wait --capture), refuses a frame that two or more pages match with page_recognition_conflict (exit 2) whose details name every matched page in page order (matched_pages), as current-page does, instead of taking the first of them, and presses nothing; one matched page is the frame's page; offline do --scene --dry-run on a target that the guard of a click operation of the package names checks the frame's page first, as the kernel guards that operation before its input: on a page no such guard names (any names every page) the plan is refused with contained_task_guard_refused (exit 3) before the target is evaluated, and on the guard's page the target is evaluated as before (target_not_visible when it does not pass); a bare target, which no operation's guard names, is evaluated as before on any page
+[[gate]]
+key = "100"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l7::l7_offline_do_ensure_and_wait_refuse_a_frame_two_pages_match",
+    "actingcommand-actinglab::runtime_input_proxy::l7_capture_forms_of_do_ensure_and_wait_refuse_a_frame_two_pages_match",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l7::l7_do_guards_an_operation_target_on_its_guard_page_first",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l7::l7_do_keeps_the_evaluation_of_a_bare_target_and_an_any_page_guard",
+]
+incident = ["#411 Lab L7"]

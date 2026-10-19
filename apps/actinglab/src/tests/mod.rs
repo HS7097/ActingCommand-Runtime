@@ -27,6 +27,9 @@ mod gate_lab_l4;
 // #411 Lab L1 (exec key 96): a Lab2 verb refuses an option its path does not read.
 #[path = "gate_lab_l1.rs"]
 mod gate_lab_l1;
+// #411 Lab L7 (exec key 100): the Lab decides a frame's page and guards `do` as the Runtime does.
+#[path = "gate_lab_l7.rs"]
+mod gate_lab_l7;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
