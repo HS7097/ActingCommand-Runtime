@@ -1812,6 +1812,19 @@ other failed record, and the `--record` path's handling of a failure, keep their
 | A19-1 | online `do --capture --after-page` whose wait times out → CLI error `lab_arrival_timeout`, exit 3, `blocked_by: [arrival_page]`, details unchanged; MCP `ac_lab_do` class `safety`, `lab_tool_failed {exit_code: 3}` caused by `lab_arrival_timeout` | changed answer (was `device_error`, exit 4; MCP class `device`) (exec 93) | A19 | A19 | chosen by the failure's stage `arrival` and code `lab_arrival_timeout`; the details are the operation's answer as before, `after_attachment` included; `lab_element_unavailable` stays `capability_insufficient` (exit 3) and any other failure `device_error` (exit 4); a script that tests exit 4 on a timeout reads exit 3 |
 | A19-2 | every online `do` answer has `arrival` as its last member | member order (no member added or removed) (exec 93) | A19 | A19 | success and failure, Min and Normal: `arrival` moves after `after_attachment` (and after `record` on a `--record` answer); its own members stay `status`, `elapsed_ms`, `samples`; every other member keeps its order and value; so a reader that cuts the text, such as MCP's `raw_text` (4096 bytes), keeps `state`, `failure`, `after_attachment` and the arrival's status and elapsed time, and loses samples only |
 
+### 1.124 Slice A22 (v0.12.3): a direct run refuses a recovery binding no path can use (#411 A22)
+
+A22: a direct run refuses a recovery binding no path can use; new code
+`contained_task_recovery_binding_unused` and location `check_recovery_binding`. No persisted
+ledger shape, no wire, key or configuration change; the request shape is unchanged.
+[linear-steps.md](linear-steps.md) ("Prerequisite packages", "Resolution"),
+[package-reference.md](package-reference.md) ("Consumers") and
+[runtime-state-observation.md](runtime-state-observation.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A22-1 | `contained_task_recovery_binding_unused` (`error`, `ladder_class` `declaration_error`, `since` 0.12.3, pending) with `package_id` (required) at the new location `check_recovery_binding`, `invalid_request` (MCP class `usage`), receipt `Denied`, native detail `reason=entry_not_checked` or `reason=prerequisite_gate` | new outcome code and location, an earlier refusal (host 117) | A22 | A22 | a direct run (`run_contained_task`: CLI and console task-run, MCP `ac_run_pack`) that binds a recovery package is refused after its prerequisite chain is resolved and before any record, claim or lease when neither (a) its home entry can use the binding (empty chain, required entry pages, not a zero-step package with post-admission reading) nor (b) a ladder after its failed end can (`recovery_ladder.rules.direct_runs = trigger`, the instance's stuck recovery on, a physical instance; the configuration in effect); it writes no `task.*` record, takes no lease, sends no input and starts no ladder; `reason=prerequisite_gate` when the chain is not empty, else `entry_not_checked`; a request without a binding, a binding (a) or (b) can use, scheduled runs, startup packages, ladder rungs and Lab runs are unchanged; the MCP `ac_run_pack` description and its `recovery_package` schema text say so (no argument, member or class change) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

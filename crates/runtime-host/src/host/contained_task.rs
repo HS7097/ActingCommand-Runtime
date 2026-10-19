@@ -5684,6 +5684,9 @@ impl HostShared {
             self.resolve_prerequisite_chain(instance_alias, &prepared, navigated, || {
                 self.package_material_deadline(active_run.control.deadline())
             })?;
+        // Workflow #411 A22: a recovery binding that neither the run's home entry nor a ladder
+        // after its failed end can use is refused here, before any record, claim or lease.
+        self.check_recovery_binding(&resolved, task_request, &prepared, &prerequisites)?;
         self.append_request_lifecycle(
             original,
             request,

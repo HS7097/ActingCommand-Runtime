@@ -1392,6 +1392,15 @@ actingcommand_contract::outcome_codes! {
         /// under `wait` (keys `device_label`; adb's text is the cause).
         DeviceLinkReconnectFailed => "device_link_reconnect_failed": warning / none,
         // ---- Workflow #398 RD-2: end
+        // ---- Workflow #411 A22: begin
+        /// Error. A direct task run (CLI or console task-run, MCP `ac_run_pack`) binds a recovery
+        /// package that no path of the run can use: not its home entry (its entry is not
+        /// checked, or it enters through its prerequisite chain) and not the stuck-recovery
+        /// ladder (its failed end starts none). It is denied before any lease and nothing runs
+        /// (keys `package_id`; the native detail names `reason=entry_not_checked` or
+        /// `reason=prerequisite_gate`).
+        ContainedTaskRecoveryBindingUnused => "contained_task_recovery_binding_unused": error / declaration_error,
+        // ---- Workflow #411 A22: end
     }
 }
 
@@ -2273,6 +2282,8 @@ actingcommand_contract::outcome_locations! {
         DeviceLinkReconnect => "device_link_reconnect",
         DeviceLinkRead => "device_link_read",
         DeviceLinkRun => "device_link_run",
+        // Workflow #411 A22: the check of a direct run's recovery binding in its preparation.
+        CheckRecoveryBinding => "check_recovery_binding",
     }
 }
 

@@ -21725,6 +21725,27 @@
       "description": "A FactRefreshStatus read (Workflow #384 D2-S5) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "contained_task_recovery_binding_unused": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "A direct task run (task-run --recovery-package, ac_run_pack recovery_package, the console) bound a recovery package that no path of the run can use, so the run is refused before any lease and nothing runs. A request's recovery package is used only by the home entry of a package whose entry is checked (an entry page set, a single entry page with stages, or home with any_of) and with no prerequisite chain, and by the stuck-recovery ladder's return_home rung, which a failed direct run starts only under recovery_ladder.rules.direct_runs = trigger with the instance's stuck recovery on. package_id is the run's package; the native detail names reason=entry_not_checked (its entry is not checked) or reason=prerequisite_gate (it enters through its prerequisite chain, which ignores the binding).",
+      "common_causes": "A page-graph package with a single entry page and no stages (or home without any_of) run with a recovery package; a package that declares a prerequisite package, or a linear_steps package that falls back to the registered return-home package, run with a recovery package; direct_runs left at exempt.",
+      "handling": "Declare the package's entry as an entry page set (for example [\"home\"], or every page it may start from) so its entry is checked; then a wrong start is recovered by the game's registered return-home package and recovery_package is not needed. Otherwise run it without recovery_package."
     }
   },
   "locations": {
@@ -28569,6 +28590,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: hand a policy cycle's waiting candidates to the fact refresh's transition recorder (Workflow #384 D2-S5)."
+    },
+    "check_recovery_binding": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "A Runtime host operation or stage: check a direct run's recovery binding in its preparation, before any lease (Workflow #411 A22)."
     }
   }
 }

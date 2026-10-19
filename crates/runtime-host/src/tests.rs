@@ -119,6 +119,9 @@ mod gate_0122_a7t;
 // #411 A15 (v0.12.1-rc.2, host key 106): an unconfirmed step's terminal and receipt name the
 // page of its last frame and that frame.
 mod gate_rc2_a15;
+// #411 A22 (v0.12.3, host key 117), register §1.124: a direct run refuses a recovery binding that
+// no path of it can use.
+mod gate_411_a22;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.

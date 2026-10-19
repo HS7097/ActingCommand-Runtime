@@ -513,6 +513,8 @@ Lab commands (debug/run, observe, do, preflight, dry run and resource restore) t
 `--package <path>` (a directory, or a `.zip` or `.json` file, read as the path chooses) or
 `--zip <path>` (a published `.zip`) and refuse the retired digest flags by name. MCP
 `ac_run_pack` takes `package` and `recovery_package`, and `ac_pack_check` takes `package`.
+A recovery package is used only where the run's entry or the ladder can use it; otherwise the
+direct run is refused (`contained_task_recovery_binding_unused`, `linear-steps.md`).
 Workflow #411 A5 (M-PKG §3.2, S5-T4): `actinglab package check --package <path>` (a directory,
 a `.zip` or a `.json` file; no other flag, no positional argument) is the Runtime's own
 structural admission, `PreparedContainedTask::describe_path`, the one check-config and the
