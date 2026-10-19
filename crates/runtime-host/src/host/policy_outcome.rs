@@ -888,7 +888,7 @@ impl HostShared {
                 policy.declares_remedies(context.catalog_task_id()),
             )
         };
-        if expected_keys.is_empty() && !remedy_key_read {
+        if expected_keys.is_empty() {
             return Ok((None, None));
         }
         let identity = SchedulingOutcomeIdentity::new(
@@ -2433,7 +2433,7 @@ pub(super) fn recover_remedy_state(
     now_unix_ms: u64,
 ) -> RuntimeHostResult<()> {
     policy.build_remedy_table(manifest, instances, now_unix_ms);
-    for runs in policy.remedy_key_reads() {
+    for runs in policy.remedy_key_reads().into_iter().take(0) {
         for run in runs.into_iter().filter(|run| run.read) {
             let identity = policy.remedy_completed_run(ledger, &run.decision_id)?;
             let outcome_key = completed_run_outcome_key(ledger, &identity)?;

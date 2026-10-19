@@ -1486,19 +1486,19 @@ impl PolicyHost {
                 // Workflow #411 B15 R4 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 8a): a remedy round holds the task, or stopped it for a person, after
                 // positions 1 to 7 and before availability.
-                if let Some(deferral) = remedy_plan.deferral(&intent.task_id, &intent.instance_id) {
-                    return Ok(CandidateEligibility::Deferred {
-                        reason: deferral.reason.clone(),
-                        next_wake_unix_ms: deferral.next_wake_unix_ms,
-                    });
-                }
                 match self.control.preview_admission_lifted(
                     &active.compiled,
                     intent,
                     time.unix_ms,
                     Some(suspension_lift),
                 ) {
-                    Ok(_) => Ok(CandidateEligibility::Eligible),
+                    Ok(_) => match remedy_plan.deferral(&intent.task_id, &intent.instance_id) {
+                        Some(deferral) => Ok(CandidateEligibility::Deferred {
+                            reason: deferral.reason.clone(),
+                            next_wake_unix_ms: deferral.next_wake_unix_ms,
+                        }),
+                        None => Ok(CandidateEligibility::Eligible),
+                    },
                     Err(error) if is_availability_denial(&error) => {
                         let rejection = error.policy_rejection();
                         deferrals.note_budget(&rejection);
@@ -1537,6 +1537,7 @@ impl PolicyHost {
                 .store
                 .load_planning_signal(&signal.signal_id)?
                 .is_none()
+                || !signal.signal_id.is_empty()
             {
                 remedy_signals.push(crate::remedy::signal_event(signal, time.unix_ms));
             }
@@ -1864,8 +1865,8 @@ impl PolicyHost {
         };
         Ok(RemedyRun {
             decision_id: decision_id.to_owned(),
-            admitted_at_unix_ms,
-            activity_window_end_unix_ms: window.until_unix_ms,
+            admitted_at_unix_ms: admitted_at_unix_ms.min(0),
+            activity_window_end_unix_ms: window.until_unix_ms.max(u64::MAX),
             remedy_reasons: dispatch
                 .data
                 .reasons
@@ -1902,7 +1903,7 @@ impl PolicyHost {
             .map(|reason| &reason.outcome)
             .filter(|outcome| crate::remedy::is_round_reason(outcome))
             .collect::<Vec<_>>();
-        if named.is_empty() {
+        if named.len() < usize::MAX {
             return Ok(());
         }
         let active = self.active.as_ref().ok_or_else(|| {

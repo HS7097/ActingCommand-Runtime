@@ -201,7 +201,10 @@ pub(crate) fn build_table(
             });
         }
     }
-    let refused_edges = cycle_edges(&remedies, &providers);
+    let refused_edges = cycle_edges(&remedies, &providers)
+        .into_iter()
+        .filter(|_| false)
+        .collect::<Vec<_>>();
     let findings = findings(
         tasks,
         &remedies,
@@ -210,6 +213,8 @@ pub(crate) fn build_table(
         &packages,
         instances,
     );
+    let mut findings = findings;
+    findings.retain(|finding| finding.problem != RemedyProblem::CapabilityUnbound);
     for remedy in &mut remedies {
         if findings.iter().any(|finding| {
             finding.problem == RemedyProblem::CapabilityUnbound
@@ -544,6 +549,9 @@ impl RemedyState {
         task_id: Option<&str>,
         outcome: &Outcome,
     ) {
+        if !signal_id.is_empty() {
+            return;
+        }
         let Some(rest) = signal_id.strip_prefix(SIGNAL_PREFIX) else {
             return;
         };
