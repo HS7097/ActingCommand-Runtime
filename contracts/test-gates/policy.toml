@@ -608,3 +608,14 @@ tests = [
     "actingcommand-policy::lib::tests::gate_411_b15e::b15e_two_allowed_providers_are_ranked_by_the_existing_total",
 ]
 incident = ["#411 B15"]
+
+# Workflow #411 A26 (#386 SR-6a; contracts/scheduling/README.md, "Dispatch Decision Record" and "Why A Candidate Does Not Run"; register §1.145): a dispatch decision record persists why each candidate it lists did not run as typed values beside task_id (why, decision_state, eligibility: its decision's last reason, state and eligibility, as the detail prints them), counts the candidates it does not list by why in omitted_why, and a stored record with the new values reads back through the 0.12 reader unchanged
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_a26::a26_a_not_selected_candidate_records_its_why_state_and_eligibility",
+    "actingcommand-policy::lib::tests::gate_411_a26::a26_a_decision_record_counts_the_omitted_candidates_by_why",
+    "actingcommand-policy::lib::tests::gate_411_a26::a26_an_earlier_reader_accepts_the_new_values",
+]
+incident = ["#411 A26", "#386 SR-6a"]

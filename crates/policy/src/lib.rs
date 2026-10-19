@@ -32,6 +32,8 @@ mod tests {
     // Workflow #361 R7, test row R7-T7: the S-08 day replay with and without `missed`.
     mod gate_361r7;
     mod gate_390_pool1;
+    // Workflow #411 A26: a dispatch decision record says why each listed candidate did not run.
+    mod gate_411_a26;
     // Workflow #411 B15 R2: the evaluator's plan of declared remedies.
     mod gate_411_b15e;
     mod gate_d2_s1;

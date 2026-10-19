@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fmt;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, CodeStr, Outcome, VocabularyToken};
+use actingcommand_contract::outcome::{Code, CodeStr, Outcome, Record, VocabularyToken};
 use actingcommand_selection_policy::{
     Candidate, CollectedVerdict, ScalarValue, SelectionFactEntry, SelectionFactSnapshot,
     SelectionPolicy, UnknownInput, UnknownReason, ValueRef,
@@ -15,7 +15,7 @@ use actingcommand_selection_policy::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::codes::{PolicyCode, SchedulingRulePolicyCode};
+use crate::codes::{DecisionStateToken, EligibilityToken, PolicyCode, SchedulingRulePolicyCode};
 use crate::remedy::ProviderView;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
@@ -1623,9 +1623,9 @@ const TRUNCATION_MARK: &str = "…[truncated]";
 /// dispatch decision record is appended after `rank_assigned` on every selected chain (Workflow
 /// #308 RT-S1c), and each selected decision's reasons are kept equal to its chain:
 /// `rank_breakdown`, `decision_record`, then `decision_candidate_not_selected` (with the
-/// candidate's `task_id`) for at most eight related candidates. A chain without room for the
-/// first two appends nothing and says so in `rank_assigned`'s detail. No other decision gains a
-/// reason.
+/// candidate's `task_id`, `why`, `decision_state` and `eligibility`, Workflow #411 A26) for at
+/// most eight related candidates. A chain without room for the first two appends nothing and
+/// says so in `rank_assigned`'s detail. No other decision gains a reason.
 fn append_decision_records(
     work: &mut [TaskWork],
     reason_chains: &mut [DecisionReasonChain],
@@ -1717,7 +1717,8 @@ fn ranked_view(entry: &TaskWork) -> PolicyEvaluationResult<Option<(&TaskRank, &R
 /// The decision record of the selected entry `work[work_index]`: its breakdown, the instance's
 /// target policy and its related candidates, every work entry of the same instance but itself,
 /// ranked ones first by total descending, then the rest, each by task id; `candidate_room`
-/// bounds how many are listed. The unlisted ones are counted by their last reason code.
+/// bounds how many are listed. The unlisted ones are counted by their last reason code, in the
+/// detail and in `decision_record`'s `omitted_why` value.
 fn decision_record(
     work: &[TaskWork],
     work_index: usize,
@@ -1766,13 +1767,23 @@ fn decision_record(
     for (entry, _) in &related[shown..] {
         *omitted_why.entry(last_reason_code(entry)).or_default() += 1;
     }
+    // Workflow #411 A26: the unlisted candidates' count per why, in ascending code order, also
+    // as a value; left out when every related candidate is listed.
+    let mut record_outcome = Outcome::new(PolicyCode::DecisionRecord);
+    if !omitted_why.is_empty() {
+        let mut counts = Vec::with_capacity(omitted_why.len());
+        for (why, count) in &omitted_why {
+            counts.push(Record::new().why(registered_why(why)?).count(*count));
+        }
+        record_outcome = record_outcome.omitted_why(counts);
+    }
     let mut reasons = Vec::with_capacity(2 + shown);
     reasons.push(reason(
         PolicyCode::RankBreakdown,
         bounded_detail(rank_breakdown_detail(rank, record, lead)),
     ));
-    reasons.push(reason(
-        PolicyCode::DecisionRecord,
+    reasons.push(reason_with(
+        record_outcome,
         bounded_detail(decision_record_detail(
             &target_policy_field(target_policies.get(instance_id)),
             related.len(),
@@ -1782,7 +1793,8 @@ fn decision_record(
     ));
     for (entry, view) in &related[..shown] {
         let why = last_reason_code(entry);
-        let state = state_name(entry.state);
+        let state = decision_state_token(entry.state);
+        let eligibility = eligibility_token(entry.eligibility);
         let detail = match view {
             Some((related_rank, related_record)) => format!(
                 "why={why} state={state} total={} behind_by={} {} promoted={} tie_breaker={}",
@@ -1796,17 +1808,30 @@ fn decision_record(
                 u8::from(related_record.promoted),
                 related_record.tie_breaker
             ),
-            None => format!(
-                "why={why} state={state} eligibility={}",
-                eligibility_name(entry.eligibility)
-            ),
+            None => format!("why={why} state={state} eligibility={eligibility}"),
         };
+        // Workflow #411 A26: why, state and eligibility are persisted values as well.
         reasons.push(reason_with(
-            Outcome::new(PolicyCode::DecisionCandidateNotSelected).task_id(entry.task_id.as_str()),
+            Outcome::new(PolicyCode::DecisionCandidateNotSelected)
+                .task_id(entry.task_id.as_str())
+                .why(registered_why(&why)?)
+                .decision_state(state)
+                .eligibility(eligibility),
             bounded_detail(detail),
         ));
     }
     Ok(reasons)
+}
+
+/// Workflow #411 A26: the registered code a `why` names, to carry it as a `code` value. The
+/// evaluator writes every reason from a registry, so the catalog this build embeds lists it; a
+/// spelling it does not list fails the evaluation instead of a record without its `why`.
+fn registered_why(why: &CodeStr) -> PolicyEvaluationResult<Code> {
+    why.registered().ok_or_else(|| {
+        PolicyEvaluationError::invalid(format!(
+            "the reason '{why}' that settled a related candidate is not a code of the outcome catalog"
+        ))
+    })
 }
 
 /// Every path that leaves a candidate unselected ends with the reason that settled it, and a
@@ -1982,20 +2007,24 @@ fn bounded_detail(mut detail: String) -> String {
     detail
 }
 
-const fn state_name(state: SchedulingDecisionState) -> &'static str {
+/// The decision state's token, the one a decision record's detail prints and its
+/// `decision_state` value carries (Workflow #411 A26).
+const fn decision_state_token(state: SchedulingDecisionState) -> DecisionStateToken {
     match state {
-        SchedulingDecisionState::Eligible => "eligible",
-        SchedulingDecisionState::Deferred => "deferred",
-        SchedulingDecisionState::Blocked => "blocked",
-        SchedulingDecisionState::Selected => "selected",
+        SchedulingDecisionState::Eligible => DecisionStateToken::Eligible,
+        SchedulingDecisionState::Deferred => DecisionStateToken::Deferred,
+        SchedulingDecisionState::Blocked => DecisionStateToken::Blocked,
+        SchedulingDecisionState::Selected => DecisionStateToken::Selected,
     }
 }
 
-const fn eligibility_name(eligibility: EligibilityState) -> &'static str {
+/// The eligibility's token, the one a decision record's detail prints and its `eligibility`
+/// value carries (Workflow #411 A26).
+const fn eligibility_token(eligibility: EligibilityState) -> EligibilityToken {
     match eligibility {
-        EligibilityState::True => "true",
-        EligibilityState::False => "false",
-        EligibilityState::Unknown => "unknown",
+        EligibilityState::True => EligibilityToken::True,
+        EligibilityState::False => EligibilityToken::False,
+        EligibilityState::Unknown => EligibilityToken::Unknown,
     }
 }
 

@@ -518,4 +518,10 @@ outcome_keys! {
     found_after_first: boolean,
     unformatted: list(path),
     // ---- Workflow #411 RV-1: end ----
+    // ---- Workflow #411 A26 (why a listed candidate did not run, persisted): begin ----
+    why: code,
+    decision_state: vocab(decision_state),
+    eligibility: vocab(eligibility),
+    omitted_why: records(why, count),
+    // ---- Workflow #411 A26: end ----
 }

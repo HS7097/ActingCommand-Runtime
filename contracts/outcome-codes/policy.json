@@ -538,14 +538,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "omitted_why": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: the policy state and the candidates a dispatch decision compared (decision record).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Scheduling decision reason: the policy state and the candidates a dispatch decision compared (decision record). The record lists at most eight other candidates of the instance, each as decision_candidate_not_selected; omitted_why counts the candidates it does not list by why, and is left out when it lists them all. omitted_why is written since 0.12.5 (Workflow #411 A26).",
+      "common_causes": "A candidate of the instance was dispatched; every selected reason chain ends with its decision record.",
+      "handling": "Nothing to do. Read the listed candidates' why, and omitted_why for the others, to see why they did not run."
     },
     "instance_unavailable": {
       "category": "info",
@@ -1605,6 +1606,9 @@
       "uncertain": false,
       "values": {
         "task_id": "required",
+        "why": "required",
+        "decision_state": "required",
+        "eligibility": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -1614,9 +1618,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A dispatch decision record lists another candidate of the same instance (task_id) that was not selected.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A dispatch decision record lists another candidate of the same instance (task_id) that was not selected: why it did not run (the last reason of its decision, the one that settled it, never none), the state of its decision (decision_state) and its eligibility. The values why, decision_state and eligibility are written since 0.12.5 (Workflow #411 A26); the ranking terms of a ranked candidate stay developer text.",
+      "common_causes": "The instance ran another candidate this round (why instance_already_selected), or a deferral or block settled this candidate (its own reason code as why).",
+      "handling": "Nothing to do for the record itself. To find out why a task did not run, read why: it is the code of the condition that held the task back, and that code's own handling applies."
     },
     "resource_target_unmapped": {
       "category": "info",

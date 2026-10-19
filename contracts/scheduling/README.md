@@ -616,9 +616,13 @@ target record `session.remedy.choices` (an overlaid instance fact) and the confi
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the
 record of why it was dispatched, appended after `placement_selected` and
 `rank_assigned`; the selected decision's `reasons` stay equal to its chain. No other
-decision gains a reason. The details below are developer text: they go to the
-developer log and the in-memory decision, and the dispatch events persist only each
-reason's outcome.
+decision gains a reason. The details below are developer text, kept only in the
+in-memory decision; the dispatch events persist each reason's outcome, its code with its
+values. Why a listed candidate did not run is persisted as values (Workflow #411 A26,
+since 0.12.5): `decision_candidate_not_selected` carries `why`, `decision_state` and
+`eligibility`, and `decision_record` carries `omitted_why`. The ranking terms of the
+details (`total`, `behind_by`, `priority`, … `tie_breaker`, and `rank_breakdown`'s) have
+no value keys and stay developer text.
 
 1. `rank_breakdown`: `total=<t> base=<b> priority=<p> aging_ms=<a>
    strategic_milli=<w> urgency_milli=<u> contention=<c> effective=<e>
@@ -652,9 +656,16 @@ reason's outcome.
      the same evaluation. `omitted_why` counts the unlisted ones by their last
      reason code in ascending code order, `none` when none is omitted; the codes
      that would take the detail past 1010 bytes fold into `+<n>more` (`n` codes).
-3. `decision_candidate_not_selected` (value `task_id`), one per listed related
-   candidate, at most eight: those that were ranked first, by total descending,
-   then the others, each by task id.
+   - Value `omitted_why` (optional): the same counts, one record `{why, count}` per
+     code in ascending code order, every code (no fold; a records value keeps 64 and
+     adds `omitted_why_total`); left out when none is omitted.
+3. `decision_candidate_not_selected` (values `task_id`, `why`, `decision_state`,
+   `eligibility`), one per listed related candidate, at most eight: those that were
+   ranked first, by total descending, then the others, each by task id.
+   - `why` (a code) is the `why` of the detail, `decision_state` (vocabulary
+     `decision_state`) its `state`, and `eligibility` (vocabulary `eligibility`:
+     `true`, `false`, `unknown`) the candidate's eligibility, which the detail of a
+     candidate that was not ranked prints.
    - Ranked: `why=<code> state=<state> total=<t> behind_by=<winner total - t>
      priority=… aging_ms=… strategic_milli=… urgency_milli=… contention=…
      effective=… score=… utility=… offset=… target=<s|none> promoted=<0|1>
@@ -701,6 +712,13 @@ rules are decided, and so which code a deferred candidate carries, is in
 [`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals". Evaluations
 stay out of the ledger; a person sees the reason in the instance's not-running row of the status
 and of MCP (slice SR-6b).
+
+What the ledger keeps (Workflow #411 A26, since 0.12.5): only a round that dispatches records
+anything, in the reasons of its dispatch events ("Dispatch Decision Record" above). There each
+candidate the record lists carries `why` (that code), `decision_state` and `eligibility` as values
+of `decision_candidate_not_selected`, and `decision_record` counts the candidates it does not
+list by `why` in its value `omitted_why`. Before A26, `why` was only in the developer detail,
+which is not persisted.
 
 Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
 but has not started is withdrawn when its task package is unloaded, and its decision record and

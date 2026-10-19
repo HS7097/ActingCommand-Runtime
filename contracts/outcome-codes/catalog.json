@@ -1966,6 +1966,26 @@
     "unformatted": {
       "type": "list<path>",
       "description": "The files of a content directory that are not in the canonical serialization, each a /-separated path relative to that directory, not an absolute path (Workflow #411 RV-1)."
+    },
+    "why": {
+      "type": "code",
+      "description": "Why a candidate that a dispatch decision record names did not run: the last reason of its scheduling decision, the one that settled it, never none (Workflow #411 A26; contracts/scheduling/README.md, \"Why A Candidate Does Not Run\")."
+    },
+    "decision_state": {
+      "type": "vocab:decision_state",
+      "description": "The state of the scheduling decision of a candidate that a dispatch decision record lists (Workflow #411 A26)."
+    },
+    "eligibility": {
+      "type": "vocab:eligibility",
+      "description": "The eligibility of the scheduling decision of a candidate that a dispatch decision record lists: what its trigger and feedback stop decided (Workflow #411 A26)."
+    },
+    "omitted_why": {
+      "type": "records",
+      "fields": {
+        "why": "required",
+        "count": "required"
+      },
+      "description": "The candidates of the same instance that a dispatch decision record does not list, counted by why: one record per code, in ascending code order (Workflow #411 A26)."
     }
   },
   "vocabularies": {
@@ -6028,6 +6048,39 @@
         },
         "interfaces_differs": {
           "description": "interfaces.json does not declare what was written."
+        }
+      }
+    },
+    "decision_state": {
+      "description": "The state of a scheduling decision, as a dispatch decision record gives it for each candidate it lists (Workflow #411 A26).",
+      "review": "pending",
+      "tokens": {
+        "eligible": {
+          "description": "Nothing deferred or blocked the candidate this round."
+        },
+        "deferred": {
+          "description": "Something holds the candidate back for now; a later round may run it."
+        },
+        "blocked": {
+          "description": "The candidate cannot run until its inputs change."
+        },
+        "selected": {
+          "description": "The candidate was dispatched this round."
+        }
+      }
+    },
+    "eligibility": {
+      "description": "The eligibility of a scheduling decision, what its trigger and feedback stop decided, as a dispatch decision record gives it for each candidate it lists (Workflow #411 A26).",
+      "review": "pending",
+      "tokens": {
+        "true": {
+          "description": "The trigger passed and the feedback stop did not fire."
+        },
+        "false": {
+          "description": "Not eligible: the trigger is false, the feedback stop fired, or the scope matches no instance."
+        },
+        "unknown": {
+          "description": "Not decided: a predicate is unknown, or the candidate was settled before its trigger was read."
         }
       }
     }

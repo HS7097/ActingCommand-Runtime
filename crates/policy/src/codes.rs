@@ -228,3 +228,36 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #384 D2-S4: end ----
+
+// ---- Workflow #411 A26 (why a listed candidate did not run, persisted): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// The state of a scheduling decision (the vocabulary `decision_state`): the state a
+    /// dispatch decision record gives each candidate it lists (`decision_candidate_not_selected`).
+    pub(crate) enum DecisionStateToken: "decision_state" {
+        /// Nothing deferred or blocked the candidate this round.
+        Eligible => "eligible",
+        /// Something holds the candidate back for now; a later round may run it.
+        Deferred => "deferred",
+        /// The candidate cannot run until its inputs change.
+        Blocked => "blocked",
+        /// The candidate was dispatched this round.
+        Selected => "selected",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// The eligibility of a scheduling decision (the vocabulary `eligibility`): what its trigger
+    /// and feedback stop decided, as a dispatch decision record gives it for each candidate it
+    /// lists (`decision_candidate_not_selected`).
+    pub(crate) enum EligibilityToken: "eligibility" {
+        /// The trigger passed and the feedback stop did not fire.
+        True => "true",
+        /// Not eligible: the trigger is false, the feedback stop fired, or the scope matches no
+        /// instance.
+        False => "false",
+        /// Not decided: a predicate is unknown, or the candidate was settled before its
+        /// trigger was read.
+        Unknown => "unknown",
+    }
+}
+// ---- Workflow #411 A26: end ----
