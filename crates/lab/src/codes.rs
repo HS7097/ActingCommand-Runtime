@@ -26,6 +26,11 @@ actingcommand_contract::outcome_codes! {
         /// that cannot hold refuses `record mark` with it; a frame on which it does not hold
         /// is its reason inside `record_mark_rejected`.
         RecordClickFollowInvalid => "record_click_follow_invalid": error / none,
+        /// Error. #411 Lab BD: `do --capture --record` was asked to execute a recording step
+        /// whose declared gesture a Lab operation cannot press, a single-touch drag with a
+        /// vertical brake; nothing was captured, pressed or recorded (exit 3; actinglab details
+        /// `step`, `gesture`).
+        RecordGestureExecutionUnsupported => "record_gesture_execution_unsupported": error / none,
     }
 }
 

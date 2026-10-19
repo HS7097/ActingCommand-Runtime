@@ -251,6 +251,17 @@ fn recorded_click_selection(plan: &ClickPlan) -> CliOutcome<LabOperationSelectio
                 "do --capture --record: the planned drag of the open step names no end point",
             ));
         }
+        // #411 Lab BD: the recording refuses to plan a brake drag (`record_plan_click`), so no
+        // plan carries one; a Lab operation has no input for it.
+        (Some(gesture @ ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }), _) => {
+            return Err(CliError::safety_blocked(
+                actingcommand_lab::LabCode::RecordGestureExecutionUnsupported.as_str(),
+                "do --capture --record: a Lab operation does not press the brake drag of the open \
+                 step",
+                &["session_record"],
+            )
+            .with_details(json!({"step": plan.step, "gesture": gesture})));
+        }
     };
     Ok(LabOperationSelection::Coordinates { action })
 }

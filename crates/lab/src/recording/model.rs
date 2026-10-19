@@ -4,7 +4,8 @@
 //! (`actingcommand.lab-record-mark.v1`) and the outcome views the CLI prints.
 
 use actingcommand_contract::{
-    LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim, ValueTestOp,
+    LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -640,18 +641,37 @@ pub enum ClickFollowForm {
 /// `duration_ms` (a fast drag is a swipe); the package declares it as a `drag` click, whose two
 /// rectangles the kernel samples like a tap's. A `long_press` holds a point of the step's click
 /// rectangle for `duration_ms`; the package declares it as a `long_press` click with that box
-/// (Workflow #390 lpbox), in which the kernel picks the point it holds.
+/// (Workflow #390 lpbox), in which the kernel picks the point it holds. #411 Lab BD: a
+/// `single_touch_drag_with_vertical_brake_v1` presses a point of the step's click rectangle,
+/// moves to a point of the box `corner`, holds there and brakes 100 px up before it lifts, with
+/// the Runtime's fixed timings; the package declares it as that click, and a Lab operation does
+/// not press it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClickGesture {
-    Drag { to: RecordRect, duration_ms: u64 },
-    LongPress { duration_ms: u64 },
+    Drag {
+        to: RecordRect,
+        duration_ms: u64,
+    },
+    LongPress {
+        duration_ms: u64,
+    },
+    #[serde(rename = "single_touch_drag_with_vertical_brake_v1")]
+    SingleTouchDragWithVerticalBrakeV1 {
+        corner: RecordRect,
+    },
 }
 
 impl ClickGesture {
     pub fn duration_ms(self) -> u64 {
         match self {
             Self::Drag { duration_ms, .. } | Self::LongPress { duration_ms } => duration_ms,
+            // #411 Lab BD: the horizontal move, the hold at the corner and the brake.
+            Self::SingleTouchDragWithVerticalBrakeV1 { .. } => {
+                SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS
+                    + SEGMENTED_SWIPE_CORNER_HOLD_MS
+                    + SEGMENTED_SWIPE_BRAKE_DURATION_MS
+            }
         }
     }
 
@@ -659,6 +679,9 @@ impl ClickGesture {
         match self {
             Self::Drag { .. } => "drag",
             Self::LongPress { .. } => "long_press",
+            Self::SingleTouchDragWithVerticalBrakeV1 { .. } => {
+                "single_touch_drag_with_vertical_brake_v1"
+            }
         }
     }
 }
@@ -858,7 +881,8 @@ impl MarkSpec {
 /// A click declaration: a rectangle (`region`), a mark's region (`from`), or (Workflow #396
 /// REC-4) a template mark it follows (`follow`), alone or with a rectangle. Workflow #390 LAB-2:
 /// a drag from `region` to `drag_to`, or (Workflow #390 lpbox) a long press in the click box
-/// `long_press`, each over `duration_ms`.
+/// `long_press`, each over `duration_ms`. #411 Lab BD: a single-touch drag with a vertical brake
+/// from `region` to the corner box `brake_corner`, with the Runtime's fixed timings.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickSpec {
@@ -874,6 +898,8 @@ pub struct ClickSpec {
     pub long_press: Option<RecordRect>,
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub brake_corner: Option<RecordRect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

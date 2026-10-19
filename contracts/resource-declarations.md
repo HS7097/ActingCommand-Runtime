@@ -128,7 +128,10 @@ projection element has no input ([page-projection.md](page-projection.md),
 its edge in `actions` with `input: null`; and no route passes it, as none passes a page set. As a
 destructive page operation it covers the boxes its touch stops in: `from_rect`, `corner_rect`, and
 `corner_rect` moved up by `brake_distance_px`, where the brake releases the touch. A package run
-performs it as before.
+performs it as before. #411 Lab BD: a Lab recording can declare the gesture
+([lab-recording.md](lab-recording.md), "Drags and long presses"), and `record stop` generates it in
+its source form; executing it from the Lab is not available in this version
+(`record_gesture_execution_unsupported`).
 
 Workflow #390 lpbox (coordinator ruling 6 of wave 16, from Alice's rule of 10-09 that pack taps
 use click boxes, never fixed points): a `long_press` (alias `long_tap`) click, in a task

@@ -1661,3 +1661,16 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_no_list_file_is_written_into_the_repository",
 ]
 incident = ["#411 RV-1"]
+
+# #411 Lab BD (v0.12.x; register §1.133 BD-1 to BD-4; Lab file format, no persisted ledger shape; one outcome code, record_gesture_execution_unsupported; plan-lab-l5 §2 BD R1 to R5 with coordinator decision Q6; related: exec 72, 76, 108): a Lab recording declares a single-touch drag with a vertical brake with record mark --click x,y,w,h --brake-corner x,y,w,h or the request's click {region, brake_corner}, the two forms giving the same click; recording.json keeps it as click.gesture {kind: single_touch_drag_with_vertical_brake_v1, corner} on the click rectangle, and the mark output and record status show it; a corner whose y is below 100, a box outside the frame, and the gesture with duration_ms, drag_to, long_press, from or follow are refused with validation_failed (exit 2) and nothing is written; do --capture --record on its step is refused by the plan with record_gesture_execution_unsupported (exit 3, details step and gesture) whatever point, rectangle or swipe it gives, before any Runtime request, and the recording is unchanged; a device frame on the step is record_step_click_not_executed and an offline frame closes it; record stop declares the step's click as {kind: single_touch_drag_with_vertical_brake_v1, from: the click rectangle, corner, horizontal_duration_ms 200, corner_hold_ms 150, brake_distance_px 100, brake_duration_ms 200}, counts 550 ms for it in the task timeout, records the gesture in the provenance and the kernel admits the package; its first decision is the kernel's brake drag of step_01_click from inside the click rectangle into the corner box, x3 = x2 and y3 = y2 - 100, with the four constants, and anything else is record_artifact_admission_failed
+[[gate]]
+key = "109"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_lab_bd::bd_a_brake_drag_is_declared_recorded_and_shown",
+    "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::bd_the_brake_corner_shortcut_declares_the_request_forms_click",
+    "actingcommand-lab::lib::gate_lab_bd::bd_declarations_the_runtime_refuses_are_refused",
+    "actingcommand-lab::lib::gate_lab_bd::bd_do_capture_record_refuses_the_gesture_before_any_runtime_request",
+    "actingcommand-lab::lib::gate_lab_bd::bd_the_step_closes_offline_and_the_package_declares_and_simulates_the_gesture",
+]
+incident = ["#411 Lab BD"]

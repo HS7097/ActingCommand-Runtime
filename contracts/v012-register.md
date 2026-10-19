@@ -2249,6 +2249,29 @@ and `value_test_not_met` in details); no catalog change.
 
 Lab file format, no persisted ledger shape, no outcome code.
 
+### 1.133 Slice Lab BD (v0.12.x): Lab recordings declare a drag with a vertical brake and generate it (#411 Lab BD; G1, G17; coordinator decisions 6 of 2026-10-19 and Q6 of the L5 plan; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+A Lab recording step declares the Runtime's segmented drag `single_touch_drag_with_vertical_brake_v1`
+on its click rectangle and a corner box, `record stop` generates it as the task's source click and
+simulates it as the kernel does, and a Lab operation does not press it (that is B-3, Alice's
+pending item 14-0; decision 6: no coordinate form). The rows are a Lab request member and CLI
+flag, a Lab file member, the generated package's click, which is the task schema's own source
+form, and one catalog entry. [lab-recording.md](lab-recording.md) ("record mark", "Drags and
+long presses", "`--record` on device commands", "Pages and documents", "Self-checks", "Error
+codes") and [resource-declarations.md](resource-declarations.md) (the segmented drag paragraph)
+are the contract. Existing codes otherwise (`validation_failed`, `record_step_click_not_executed`,
+`record_artifact_admission_failed`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| BD-1 | `actingcommand.lab-record-mark.v1` `click.brake_corner` (`{x, y, width, height}`) and `record mark --brake-corner x,y,w,h` | new request member (Lab request schema) and CLI flag (exec 109) | Lab BD | Lab BD | with `click.region` (`--click x,y,w,h`), the rectangle the drag presses in; both boxes inside the frame with width and height ≥ 1 and the corner's `y` ≥ 100 (pack containment's bound); with `duration_ms`, `drag_to`, `long_press`, `from` or `follow` (their flags) it is `validation_failed` (exit 2; details `{argument, argument_problem: "conflicting", arguments}`, and `{argument: "brake_corner", argument_problem: "out_of_range", range_min: 100}` for the corner bound); guard, retry and `replace_click` as for a tap; the shortcut and the request form give the same click; `record mark`'s schema summary lists the flag |
+| BD-2 | `recording.json` `StepClick.gesture` `{"kind": "single_touch_drag_with_vertical_brake_v1", "corner": {x, y, width, height}}` | new value of an existing optional member (Lab file, `skip_serializing_if`) (exec 109) | Lab BD | Lab BD | the click's `rect` is the rectangle it presses in; the mark output and `record status` (`click.gesture?`) show it; its duration is 550 ms (200 + 150 + 200); `do --capture --record` on its step refuses before any Runtime connection, capture or recording change and records nothing (BD-4); an offline frame or `--close-step` closes the step, and a device frame before that is `record_step_click_not_executed` |
+| BD-3 | the package `record stop` generates for a brake drag | generation rule (task schema `0.9` source click, no shape change) (exec 109) | Lab BD | Lab BD | the step's `click` is `{"kind": "single_touch_drag_with_vertical_brake_v1", "from": <click rect>, "corner": <corner>, "horizontal_duration_ms": 200, "corner_hold_ms": 150, "brake_distance_px": 100, "brake_duration_ms": 200}`, which source compilation writes as `from_rect` and `corner_rect`; the default task timeout counts g = 550; the task provenance records the gesture on the step's click (`provenance.steps[].click.gesture`); the kernel admits the package; on step 1 the first decision must be the kernel's `SingleTouchDragWithVerticalBrakeV1` of `step_01_click` with (x1, y1) in the click rectangle, (x2, y2) in the corner box, x3 = x2, y3 = y2 − 100 and the four constants, anything else `record_artifact_admission_failed` |
+| BD-4 | catalog entry `record_gesture_execution_unsupported` (lab, `LabCode`, fragment `lab.json`) | registered code (no shape change) (exec 109) | Lab BD | Lab BD | decision Q6 (a): error, `ladder_class` `none` (row 7: a CLI refusal), layer `process`, no values, review `pending`, since 0.12.5, with description, common causes and handling (how to close the step); `do --capture --record` on a brake-drag step, exit 3, actinglab details `{step, gesture}`; it travels typed (`LabCode::RecordGestureExecutionUnsupported`) |
+
+Lab file format, no persisted ledger shape; one outcome code; no wire, configuration key or
+interface revision (§6) changes.
+
 ### 1.139 Slice A24 (0.12.x): ledger event time is not monotonic in sequence; the latest time is the maximum timestamp (#411 A24)
 
 A24: `timestamp_unix_ms` is the producer's capture or occurrence time, not the append time, so it
