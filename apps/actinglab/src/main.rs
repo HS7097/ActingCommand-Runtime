@@ -51,12 +51,12 @@ use commands::{
     run_stream_input_relay, run_touch_probe,
 };
 use commands::{
-    ControlPoint, DestructiveClick, NavigationEdge, NavigationGraph, PageDetectionOutcome,
-    SemanticInput, canonical_navigation_page, destructive_frame_regions, detect_current_page,
-    find_navigation_route, navigation_edge_json, page_detection_json, parse_control_point,
-    parse_navigation_edge, parse_navigation_graph_value, parse_navigation_input,
-    parse_navigation_tap_rect, parse_point_pair, point_json, rect_center, rect_json,
-    rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
+    ControlPoint, DestructiveClick, NavigationClick, NavigationEdge, NavigationGraph,
+    NavigationRow, PageDetectionOutcome, SemanticInput, canonical_navigation_page,
+    destructive_frame_regions, detect_current_page, find_navigation_route, navigation_edge_json,
+    page_detection_json, parse_control_point, parse_navigation_click, parse_navigation_graph_value,
+    parse_navigation_row, parse_navigation_tap_rect, parse_point_pair, point_json, rect_center,
+    rect_json, rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
     reject_destructive_overlap_on_frame, required_string_field, required_value_field,
     run_current_page, run_detect_page, run_is_visible, run_locate, run_navigate, run_recognize,
     run_session_recover, run_tap_target, semantic_input_json, target_eval_json,
@@ -68,6 +68,10 @@ use commands::{
 };
 #[cfg(test)]
 use commands::{JSON_TMP_SEQ, write_json_file};
+// Workflow #390 LAB-2 item 7 and #411 Lab L2: the navigation input reader the readers' tests
+// read clicks with; production code reads a navigation click whole (`parse_navigation_click`).
+#[cfg(test)]
+use commands::parse_navigation_input;
 #[cfg(test)]
 use commands::{
     SESSION_DAEMON_REQUEST_TIMEOUT_MS, SESSION_LEASE_STALE_MS, session_access_contract,

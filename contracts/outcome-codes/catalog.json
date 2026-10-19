@@ -6712,6 +6712,9 @@
     "geometry_": [
       "runtime-host"
     ],
+    "gesture_": [
+      "contract"
+    ],
     "governance_": [
       "actingctl",
       "actingd",

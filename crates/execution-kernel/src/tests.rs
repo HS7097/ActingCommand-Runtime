@@ -29,6 +29,9 @@ mod gate_387_d1cf;
 // Workflow #390 LAB-2 item 7 (exec key 77): navigation readers accept a REC-4 `offset` click.
 mod gate_390_navoffset;
 
+// #411 Lab L2 (exec key 90): the drive reader and the online observation take a segmented drag.
+mod gate_lab_l2;
+
 // Test plan v2.2 E-1 G8 (exec key 13): the failure-frame comparison.
 mod gate_e1_failure_frames;
 

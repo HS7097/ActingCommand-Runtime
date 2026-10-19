@@ -16,7 +16,10 @@ use std::sync::Arc;
 
 pub(super) struct ObservationResources {
     pub metadata: actingcommand_contract::page_projection::VerifiedProjectionMetadata,
-    pub edges: Vec<super::NavigationEdge>,
+    /// #411 Lab L2: every row of the generated navigation, in its order: an edge with one page and
+    /// (#411 A13) an operation whose `to` is a page set, each an element of the page projection
+    /// like any edge (resource-declarations.md), with its click as the reader takes it.
+    pub navigation: Vec<super::NavigationRow>,
     pub operations: Vec<PageOperation>,
     pub multi_destination: Vec<MultiDestinationOperation>,
     pub controls: Vec<super::ControlPoint>,
@@ -28,13 +31,16 @@ pub(super) struct PageOperation {
     pub task_id: String,
     pub page: String,
     pub purpose: String,
-    pub input: super::SemanticInput,
+    /// #411 Lab L2: its click may be a segmented drag.
+    pub click: super::NavigationClick,
 }
 
 /// Workflow #308 SEL-L6a (FCM T-03): a click operation whose `to` is a page set. A route edge has
 /// one destination; the generated navigation keeps such an operation with all its pages
 /// (`to_pages`, Workflow #390 LAB-2) but no route passes it, and observe lists it from the task
-/// file with its pages as the page set names them and its declared click.
+/// file with its pages as the page set names them and its declared click. #411 A13: its element
+/// of the page projection comes from the generated navigation row
+/// ([`ObservationResources::navigation`]).
 pub(super) struct MultiDestinationOperation {
     pub id: String,
     pub task_id: String,
@@ -60,11 +66,11 @@ pub(super) fn observation_resources(
         }
     };
     // Workflow #390 LAB-2: the navigation collects an operation whose `to` is a page set with
-    // every page it may reach (`to_pages`); it is listed below from its task file, and is no edge.
-    let edges = array("navigation")?
+    // every page it may reach (`to_pages`); `actions` lists it below from its task file, and it is
+    // no route edge. #411 A13: the projection takes it from this row, as it takes an edge.
+    let navigation_rows = array("navigation")?
         .iter()
-        .filter(|edge| edge.get("to_pages").is_none())
-        .map(super::parse_navigation_edge)
+        .map(super::parse_navigation_row)
         .collect::<CliOutcome<Vec<_>>>()?;
     let operations = array("page_operations")?
         .iter()
@@ -82,7 +88,7 @@ pub(super) fn observation_resources(
                         ));
                     }
                 },
-                input: super::parse_navigation_input(super::required_value_field(value, "click")?)?,
+                click: super::parse_navigation_click(super::required_value_field(value, "click")?)?,
             })
         })
         .collect::<CliOutcome<Vec<_>>>()?;
@@ -96,7 +102,7 @@ pub(super) fn observation_resources(
         if click.get("kind").is_none() {
             super::parse_navigation_tap_rect(click)?;
         } else {
-            super::parse_navigation_input(click)?;
+            super::parse_navigation_click(click)?;
         }
     }
     let pages = bundle
@@ -133,7 +139,7 @@ pub(super) fn observation_resources(
     };
     Ok(ObservationResources {
         metadata,
-        edges,
+        navigation: navigation_rows,
         operations,
         multi_destination: multi_destination_operations(bundle)?,
         controls,

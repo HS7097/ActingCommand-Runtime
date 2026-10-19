@@ -3,7 +3,9 @@
 //! One contained, read-only observation over the existing recognition owners.
 
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
-use crate::{DriveSemanticInput, ExternallyVerifiedBundle, drive_rect_center};
+use crate::{
+    DriveNavigationClick, DriveSemanticInput, ExternallyVerifiedBundle, drive_rect_center,
+};
 use actingcommand_contract::codes::{ContractLocation, PageProjectionCode};
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::page_projection::{
@@ -71,7 +73,7 @@ struct ObservationElement {
     action: ActionKey,
     purpose: String,
     source: String,
-    input: DriveSemanticInput,
+    input: DriveNavigationClick,
 }
 
 pub struct PreparedPageObservation {
@@ -191,29 +193,49 @@ impl PreparedPageObservation {
                     })
                 })
                 .ok_or_else(|| invalid("catalog action source missing"))?;
-            let input = if let Some(click) = row.get("click") {
-                crate::drive::parse_navigation_input(click)
-                    .map_err(|error| invalid(error.message()))?
-            } else if action.role == ElementRole::ControlPoint {
-                let rect = crate::drive::parse_control_point_rect(row)
-                    .map_err(|error| invalid(error.message()))?;
-                DriveSemanticInput::Tap {
-                    rect,
-                    point: drive_rect_center(rect).map_err(|error| invalid(error.message()))?,
+            // #411 Lab L2: a navigation edge's or page operation's click may be a segmented drag;
+            // a control point's is a tap, as before.
+            let input = match (row.get("click"), action.role) {
+                (Some(click), ElementRole::ControlPoint) => DriveNavigationClick::Input(
+                    crate::drive::parse_navigation_input(click)
+                        .map_err(|error| invalid(error.message()))?,
+                ),
+                (Some(click), _) => crate::drive::parse_navigation_click(click)
+                    .map_err(|error| invalid(error.message()))?,
+                (None, ElementRole::ControlPoint) => {
+                    let rect = crate::drive::parse_control_point_rect(row)
+                        .map_err(|error| invalid(error.message()))?;
+                    DriveNavigationClick::Input(DriveSemanticInput::Tap {
+                        rect,
+                        point: drive_rect_center(rect).map_err(|error| invalid(error.message()))?,
+                    })
                 }
-            } else {
-                return Err(invalid("action input missing"));
+                (None, _) => return Err(invalid("action input missing")),
             };
             match &input {
-                DriveSemanticInput::TargetCenter { target_id }
-                | DriveSemanticInput::TargetOffset { target_id, .. } => {
+                DriveNavigationClick::Input(
+                    DriveSemanticInput::TargetCenter { target_id }
+                    | DriveSemanticInput::TargetOffset { target_id, .. },
+                ) => {
                     if !metadata.catalog().targets.contains(target_id) {
                         return Err(invalid("action target is not declared"));
                     }
                 }
-                _ => geometry(&input)?
+                DriveNavigationClick::Input(input) => geometry(input)?
                     .validate(metadata.catalog().width, metadata.catalog().height)
                     .map_err(|_| invalid("declared action geometry invalid"))?,
+                // #411 Lab L2: its two declared boxes lie in the coordinate space, as a drag's do.
+                DriveNavigationClick::SegmentedDrag(drag) => {
+                    for rect in [drag.from_rect, drag.corner_rect] {
+                        geometry(&DriveSemanticInput::Tap {
+                            rect,
+                            point: drive_rect_center(rect)
+                                .map_err(|error| invalid(error.message()))?,
+                        })?
+                        .validate(metadata.catalog().width, metadata.catalog().height)
+                        .map_err(|_| invalid("declared action geometry invalid"))?;
+                    }
+                }
             }
             elements.push(ObservationElement {
                 action: action.clone(),
@@ -564,45 +586,48 @@ impl PreparedPageObservation {
                 continue;
             }
             let resolution = match &element.input {
-                DriveSemanticInput::TargetCenter { target_id }
-                | DriveSemanticInput::TargetOffset { target_id, .. } => {
-                    let values = actual
-                        .iter()
-                        .filter(|(page, value)| {
-                            value.target_id == *target_id
-                                && (page.as_deref() == selected_page || page.is_none())
-                        })
-                        .map(|(_, value)| &value.evaluation)
-                        .collect::<Vec<_>>();
-                    match values.as_slice() {
-                        [value] if element.action.role != ElementRole::ControlPoint => {
-                            let geometry = match &element.input {
-                                DriveSemanticInput::TargetOffset { offset, .. } => {
-                                    offset_target_geometry(value, *offset)
+                // #411 Lab L2: a segmented drag is listed from the page declaration with no input.
+                DriveNavigationClick::SegmentedDrag(_) => ElementResolution::GestureNotProjectable,
+                DriveNavigationClick::Input(input) => match input {
+                    DriveSemanticInput::TargetCenter { target_id }
+                    | DriveSemanticInput::TargetOffset { target_id, .. } => {
+                        let values = actual
+                            .iter()
+                            .filter(|(page, value)| {
+                                value.target_id == *target_id
+                                    && (page.as_deref() == selected_page || page.is_none())
+                            })
+                            .map(|(_, value)| &value.evaluation)
+                            .collect::<Vec<_>>();
+                        match values.as_slice() {
+                            [value] if element.action.role != ElementRole::ControlPoint => {
+                                let geometry = match input {
+                                    DriveSemanticInput::TargetOffset { offset, .. } => {
+                                        offset_target_geometry(value, *offset)
+                                    }
+                                    _ => target_geometry(value, evaluator),
+                                };
+                                ElementResolution::Target {
+                                    target_id: target_id.clone(),
+                                    passed: value.passed,
+                                    geometry: geometry.map_err(|error| {
+                                        error.with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                                    })?,
                                 }
-                                _ => target_geometry(value, evaluator),
-                            };
-                            ElementResolution::Target {
-                                target_id: target_id.clone(),
-                                passed: value.passed,
-                                geometry: geometry.map_err(|error| {
-                                    error.with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                                })?,
                             }
+                            [_, _, ..] => ElementResolution::Ambiguous {
+                                target_id: target_id.clone(),
+                            },
+                            _ => ElementResolution::NotEvaluated {
+                                target_id: target_id.clone(),
+                                reason: NotEvaluatedReason::Unscoped,
+                            },
                         }
-                        [_, _, ..] => ElementResolution::Ambiguous {
-                            target_id: target_id.clone(),
-                        },
-                        _ => ElementResolution::NotEvaluated {
-                            target_id: target_id.clone(),
-                            reason: NotEvaluatedReason::Unscoped,
-                        },
                     }
-                }
-                input => ElementResolution::Declared(
-                    geometry(input)
-                        .map_err(|error| error.with_ppocr_diagnostics(ppocr_diagnostics.clone()))?,
-                ),
+                    input => ElementResolution::Declared(geometry(input).map_err(|error| {
+                        error.with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                    })?),
+                },
             };
             elements.push(ElementInput {
                 action: element.action.clone(),

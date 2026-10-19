@@ -107,24 +107,26 @@ pub(super) fn build(
     let mut elements = Vec::new();
     let mut resolved = std::collections::BTreeMap::new();
     if outcome.matched {
-        for edge in view
-            .edges
+        // #411 A13: an operation whose `to` is a page set is a navigation element of the page like
+        // any edge (resource-declarations.md), resolved from its generated row as online.
+        for row in view
+            .navigation
             .iter()
-            .filter(|edge| edge.from_page == outcome.page)
+            .filter(|row| row.from_page == outcome.page)
         {
             elements.push(ElementInput {
                 action: ActionKey {
                     role: ElementRole::Navigate,
                     task_id: String::new(),
-                    resource_id: edge.id.clone(),
-                    page: Some(edge.from_page.clone()),
+                    resource_id: row.id.clone(),
+                    page: Some(row.from_page.clone()),
                 },
-                purpose: edge.id.clone(),
-                source: edge
+                purpose: row.id.clone(),
+                source: row
                     .source
                     .clone()
                     .unwrap_or_else(|| "navigation".to_string()),
-                resolution: resolve(&edge.input, evaluator, scene, &mut resolved, ocr)?,
+                resolution: resolve_click(&row.click, evaluator, scene, &mut resolved, ocr)?,
             });
         }
         for operation in view
@@ -141,7 +143,7 @@ pub(super) fn build(
                 },
                 purpose: operation.purpose.clone(),
                 source: "page_operations".to_string(),
-                resolution: resolve(&operation.input, evaluator, scene, &mut resolved, ocr)?,
+                resolution: resolve_click(&operation.click, evaluator, scene, &mut resolved, ocr)?,
             });
         }
     }
@@ -265,6 +267,21 @@ fn not_evaluated_ocr_targets(
 fn geometry(input: &SemanticInput) -> CliOutcome<Geometry> {
     serde_json::from_value(semantic_input_json(input))
         .map_err(|error| CliError::package_invalid(error.to_string()))
+}
+
+/// #411 Lab L2: a navigation click's resolution on this frame; a segmented drag is listed from
+/// the page declaration without an input, which is a tap or a plain drag.
+fn resolve_click(
+    click: &NavigationClick,
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    resolved: &mut std::collections::BTreeMap<String, ResolvedTarget>,
+    ocr: &LabOcr,
+) -> CliOutcome<ElementResolution> {
+    match click {
+        NavigationClick::Input(input) => resolve(input, evaluator, scene, resolved, ocr),
+        NavigationClick::SegmentedDrag(_) => Ok(ElementResolution::GestureNotProjectable),
+    }
 }
 
 fn resolve(
@@ -752,6 +769,11 @@ mod gate_390_navoffset;
 // end to fit.
 #[cfg(test)]
 mod gate_rc2_a9;
+
+// #411 Lab L2 and A13's A part (exec key 90): the Lab loads every click kind the Runtime runs; a
+// segmented drag is listed not actionable, and offline observe projects page-set operations.
+#[cfg(test)]
+mod gate_lab_l2;
 
 #[cfg(test)]
 mod lab3_tests {

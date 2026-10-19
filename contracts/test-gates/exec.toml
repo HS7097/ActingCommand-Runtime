@@ -1464,3 +1464,21 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::a20_the_source_build_names_the_stage_page_and_operation_of_an_unreachable_route",
 ]
 incident = ["#411 A20"]
+
+# #411 Lab L2 (v0.12.x; register §1.104, no persisted ledger shape; related: exec 77, 51; A13's A part, its reserved key): both navigation readers, the kernel's drive reader and actinglab's, read the segmented drag single_touch_drag_with_vertical_brake_v1 in its canonical form (from_rect, corner_rect, horizontal_duration_ms, corner_hold_ms, brake_distance_px, brake_duration_ms) and refuse another shape as pack containment does; a package holding one (to a page, a page set or null) is admitted by the online observation (the carrier of observe --capture and do --capture) and by actinglab's observe and the navigation do and ensure read, as a package with a plain drag is; its element is listed with actionable false, input null and blocked_reason gesture_not_projectable, do on it answers lab_element_unavailable, and no route passes it; A13: offline observe's observation.elements include an operation whose to is a page set, from its generated row, with its declared (point, box) or resolved (target, target_not_matched when it fails) input, as online
+[[gate]]
+key = "90"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_lab_l2::lab_l2_the_drive_reader_reads_a_segmented_drag_and_no_route_passes_it",
+    "actingcommand-execution-kernel::lib::tests::gate_lab_l2::lab_l2_the_drive_reader_refuses_a_segmented_drag_of_another_shape",
+    "actingcommand-execution-kernel::lib::tests::gate_lab_l2::lab_l2_a_package_with_segmented_drags_is_observed_online_with_them_not_actionable",
+    "actingcommand-execution-kernel::lib::tests::gate_lab_l2::lab_l2_do_on_a_segmented_drag_element_is_unavailable",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l2::l2_actinglab_reads_a_segmented_drag_and_no_route_passes_it",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l2::l2_actinglab_refuses_a_segmented_drag_of_another_shape",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l2::l2_offline_tools_admit_segmented_drags_and_observe_lists_them_not_actionable",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l2::a13_a_page_set_operation_with_a_point_click_is_an_element_with_its_tap",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l2::a13_a_page_set_operation_with_a_box_click_projects_its_box",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l2::a13_a_page_set_operation_with_a_target_click_is_resolved_on_the_frame",
+]
+incident = ["#411 Lab L2"]
