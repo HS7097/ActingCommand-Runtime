@@ -939,7 +939,8 @@ pub(crate) fn remedy(
 ///   member its kind does not have: `wrong_type`;
 /// - a `row` other than `allow`, `none` and `parameter`, a name outside `^[a-z][a-z0-9_]{0,63}$`,
 ///   or `none` as a capability: `out_of_range`;
-/// - a row twice, or a `none` and an `allow` of the same need: `section_check`, at the later row.
+/// - a row twice, a `none` and an `allow` of the same need, or two `parameter` rows of the same
+///   capability and parameter with different values: `section_check`, at the later row.
 ///
 /// Whether the packages declare the names is not checked here (R7).
 pub(crate) fn remedy_choices(
@@ -959,6 +960,7 @@ pub(crate) fn remedy_choices(
     let mut seen = BTreeSet::new();
     let mut allowed = BTreeSet::new();
     let mut declined = BTreeSet::new();
+    let mut parameters = BTreeSet::new();
     for (index, item) in items.iter().enumerate() {
         let row = choice_row(key, index, item)?;
         let conflict = match &row {
@@ -970,7 +972,13 @@ pub(crate) fn remedy_choices(
                 declined.insert(need.clone());
                 allowed.contains(need)
             }
-            RemedyChoiceRow::Parameter { .. } => false,
+            // Two values for one parameter: nothing says which wins. (The same value again is a
+            // row twice.)
+            RemedyChoiceRow::Parameter {
+                capability,
+                parameter,
+                ..
+            } => !parameters.insert((capability.clone(), parameter.clone())),
         };
         if conflict || !seen.insert(row.clone()) {
             return Err(choice_refused(
