@@ -1013,7 +1013,6 @@ fn a24_write_failure_gap_starts_at_the_latest_time() {
     let summary = ledger.confirm_deferred(GATE_WAIT).expect("the replies");
     assert!(summary.committed.is_empty());
     assert!(ledger.close().is_err(), "the writer ended with its failure");
-    drop(stall);
     drop(faults);
     let text = fs::read_to_string(root.dump_path()).expect("the dump");
     let lines = text.lines().collect::<Vec<_>>();
