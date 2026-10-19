@@ -33,7 +33,8 @@ The mode is declared only in `control.json`:
 ```
 
 `control.json` may also name a prerequisite package, `"prerequisite_package_id": "<package id>"`,
-admitted only under `linear_steps` ("Prerequisite packages" below).
+admitted under `linear_steps` and (Workflow #373 NAV-3a) `navigable_route` ("Prerequisite
+packages" below).
 
 Omitting `transition` (or writing `null`) declares no intermediate state. The resource
 declaration check admits the field's shape (`kind` is `page` or `window`; `page_id` a string;
@@ -623,7 +624,11 @@ declared final pages hold no page of the required entry is refused before it run
 and no `EntryRecoveryPackageAdmitted`, as `contained_task_home_recovery_terminal_outside_entry`
 (Workflow #411 A16); the `linear_steps` package is not compared there either. With a request binding both
 places behave exactly as before; with neither, the rung is skipped (`no_recovery_package`) and
-the home entry fails with `contained_task_home_recovery_binding_missing`.
+the home entry fails with `contained_task_home_recovery_binding_missing`. A page-graph package
+whose entry is not the page its game's return-home package ends on declares a prerequisite
+package that leads to its entry (Alice 2026-10-19): its run goes through the gate above, the
+prerequisite package's own entry falling back to the return-home package (R16), and neither the
+home entry recovery nor its final-page checks (A1, Workflow #411 A16) apply to it.
 
 **Page-graph home entry wait (Workflow #371-3).** The host's page-graph home entry check
 (`EntryRecognition { Initial }`, and `{ PostRecovery }` after the recovery or return-home

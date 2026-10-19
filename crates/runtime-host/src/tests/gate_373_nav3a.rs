@@ -11,7 +11,8 @@
 // scripts. Every package is a source package directory of the game, server `test`, 16x9; one
 // click per step. The standard pack's packages sit in the game root's directories that its
 // `bundle.json` lists; a run's own package is requested by its path outside that root.
-// #411 A16 adds a yellow `home` screen.
+// #411 A16 adds a yellow `home` screen, and the 10-19 ruling's tests (host key 109) a magenta
+// `result` screen.
 
 use super::*;
 use actingcommand_contract::outcome::Outcome;
@@ -26,6 +27,7 @@ pub(super) const MENU: [u8; 3] = [0, 0, 255];
 const SHOP: [u8; 3] = [0, 255, 0];
 const DONE: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 255, 0];
+const RESULT: [u8; 3] = [255, 0, 255];
 
 const LEAD: &str = "neutral.test.lead";
 const LEAD_NEXT: &str = "neutral.test.lead_next";
@@ -72,6 +74,7 @@ fn probe(page: &str) -> Value {
         "shop" => SHOP,
         "done" => DONE,
         "home" => HOME,
+        "result" => RESULT,
         other => panic!("no screen {other}"),
     };
     json!({
@@ -96,7 +99,8 @@ pub(super) struct Pack<'a> {
 }
 
 impl Pack<'_> {
-    pub(super) fn write(&self, directory: &Path) {
+    // The package's files: its control, its resource declarations and its one task.
+    fn files(&self) -> [(&'static str, Value); 3] {
         let mut pages = BTreeSet::new();
         if let Some(entry) = self.entry.as_str() {
             pages.insert(entry.to_owned());
@@ -154,14 +158,18 @@ impl Pack<'_> {
                 }))
                 .collect::<Vec<_>>()
         });
-        for (path, value) in [
+        [
             ("control.json", control),
             (
                 "resources/operations/resources.json",
                 json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
             ),
             ("resources/operations/task/task.json", task),
-        ] {
+        ]
+    }
+
+    pub(super) fn write(&self, directory: &Path) {
+        for (path, value) in self.files() {
             let path = directory.join(path);
             fs::create_dir_all(path.parent().expect("package file parent")).expect("package dir");
             fs::write(
@@ -170,6 +178,19 @@ impl Pack<'_> {
             )
             .expect("write package file");
         }
+    }
+
+    // The same files in one ZIP container (a source package: no `resources/manifest.json`), for a
+    // scheduled run whose package is a `.zip`.
+    fn zip(&self) -> Vec<u8> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (path, value) in self.files() {
+            zip.start_file(path, options).expect("zip entry");
+            zip.write_all(&serde_json::to_vec_pretty(&value).expect("package JSON"))
+                .expect("zip content");
+        }
+        zip.finish().expect("finish zip").into_inner()
     }
 }
 
@@ -1087,4 +1108,222 @@ fn a16_the_registry_linear_return_home_is_still_run_and_rechecked() {
         )),
         "{recognitions:?}"
     );
+}
+
+// ---- The 10-19 ruling: a non-home entry reached through its declared prerequisite package
+// (#411 A16, host key 109).
+
+const HOME_RECOVERY: &str = "contained_task_home_recovery_";
+const FINISH: &[(&str, &str, &str)] = &[("finish", "result", "done")];
+const TO_RESULT: &[(&str, &str, &str)] = &[("go", "home", "result")];
+
+// The run's own package of the ruling: a page graph whose entry is `result`, not `home`, from
+// `result` to `done`, declaring the prerequisite package `lead`.
+fn result_entry_main() -> Pack<'static> {
+    route(MAIN, "result", "done", FINISH, Some(LEAD))
+}
+
+// `lead`, a page graph from `home` to `result` that declares nothing; its entry is the set
+// {home}, an entry the gate checks, so the layer falls back to the return-home package (R16).
+fn home_to_result_lead() -> Pack<'static> {
+    Pack {
+        package_id: LEAD,
+        mode: "navigable_route",
+        prerequisite: None,
+        entry: json!(["home"]),
+        target: "result",
+        operations: TO_RESULT,
+    }
+}
+
+// The ruling's chain: the registry lists `lead` and names `back` (from `away` to `home`) its
+// return-home package. Started on `away`, `main`'s entry does not match, `lead` is admitted
+// (`role: prerequisite`), its own entry does not match either and `back` is admitted
+// (`role: return_home`); `back` ends on `home`, `lead` on `result`, `main`'s recheck matches
+// `result` and `main` runs to success, one input per package. The home entry recovery is not
+// reached: no `contained_task_home_recovery_*` outcome, and the only entry decisions are the
+// gate's two.
+#[test]
+fn prq_a_non_home_entry_reaches_its_entry_through_its_prerequisite_and_the_return_home_tail() {
+    let state = Arc::new(FakeState::default());
+    screens(&state, vec![AWAY, HOME, RESULT, DONE]);
+    let temp = TempDir::new().expect("tempdir");
+    let mut root = StandardRoot::new(temp.path());
+    home_to_result_lead().write(&root.list(LEAD));
+    route(
+        RETURN_HOME,
+        "away",
+        "home",
+        &[("back", "away", "home")],
+        None,
+    )
+    .write(&root.list(RETURN_HOME));
+    root.return_home(RETURN_HOME);
+    root.write_bundle();
+    let host = start(&temp, &state, Some(root.root.clone()));
+
+    let run = run(&host, &temp, "main", &result_entry_main());
+    host.close().expect("close runtime host");
+
+    assert!(run.succeeded(), "{:?}", run.receipt);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 3);
+    assert_eq!(
+        run.admitted(),
+        vec![
+            (LEAD.to_owned(), PREREQUISITE),
+            (RETURN_HOME.to_owned(), RETURN_HOME_ROLE)
+        ]
+    );
+    assert_eq!(
+        run.completed(),
+        vec![
+            (
+                RETURN_HOME.to_owned(),
+                "neutral/home".to_owned(),
+                RETURN_HOME_ROLE
+            ),
+            (LEAD.to_owned(), "neutral/result".to_owned(), PREREQUISITE),
+        ]
+    );
+    // The gate's checks: `main`'s entry, `lead`'s entry, `lead`'s recheck after `back`, and
+    // `main`'s recheck after `lead` (the package's own check in its run follows).
+    let main_entry = vec!["neutral/result".to_owned()];
+    let lead_entry = vec!["neutral/home".to_owned()];
+    let recognitions = run.recognitions();
+    assert_eq!(
+        recognitions.get(..4),
+        Some(
+            &[
+                (TaskEntryRecognitionPhase::Initial, main_entry.clone(), None),
+                (TaskEntryRecognitionPhase::Initial, lead_entry.clone(), None),
+                (
+                    TaskEntryRecognitionPhase::PostRecovery,
+                    lead_entry,
+                    Some("neutral/home".to_owned())
+                ),
+                (
+                    TaskEntryRecognitionPhase::PostRecovery,
+                    main_entry,
+                    Some("neutral/result".to_owned())
+                ),
+            ][..]
+        ),
+        "{recognitions:?}"
+    );
+    let decisions = run
+        .facts()
+        .into_iter()
+        .filter_map(|fact| match fact {
+            TaskSemanticFact::EntryRecoveryDecision { required } => Some(*required),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(decisions, [true, true], "the gate's two layers decide");
+    for event in &run.events {
+        let payload = serde_json::to_string(event.payload()).expect("payload JSON");
+        assert!(
+            !payload.contains(&format!("\"{HOME_RECOVERY}")),
+            "no home entry recovery outcome: {payload}"
+        );
+    }
+}
+
+// A failing prerequisite package (the ruling: it can start the recovery ladder). The registry
+// lists `lead` and names no return-home package, so `lead` is the chain's last layer and its run
+// starts on the screen as it is. A scheduled run of `main` starts on `away`, a page of neither
+// package: `main`'s entry does not match, `lead` runs and meets `away`, an unknown page to it, and
+// ends with its own `contained_task_page_unknown`. The run's `task.failed` carries that code (no
+// `contained_task_prerequisite_*` code), `lead`'s `EntryRecoveryFailed` carries
+// `role: prerequisite`, and the instance's ladder starts by the shipped item `pack_logic` at
+// stage `task`.
+#[test]
+fn prq_a_prerequisite_that_meets_an_unknown_page_fails_the_run_with_its_own_code_and_starts_the_ladder()
+ {
+    let page_unknown = actingcommand_contract::codes::SharedCode::ContainedTaskPageUnknown.as_str();
+    let temp = TempDir::new().expect("tempdir");
+    let (host_config, request) =
+        super::instance_workers::ladder_setup_with_package(temp.path(), &result_entry_main().zip());
+    let mut root = StandardRoot::new(temp.path());
+    home_to_result_lead().write(&root.list(LEAD));
+    root.write_bundle();
+    let state = Arc::new(FakeState::default());
+    screens(&state, vec![AWAY]);
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config.with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let context = super::instance_workers::admit_ladder_run(&host, &request);
+    let run_id = context.run_id();
+
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails");
+    assert!(!error.is_fatal(), "{}", error.code());
+    let run_facts = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events")
+        .into_iter()
+        .filter(|event| event.links().run_id() == Some(&run_id))
+        .filter_map(|event| match event.payload() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => {
+                Some((event.event_type(), payload.fact().clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let terminals = run_facts
+        .iter()
+        .filter_map(|(event_type, fact)| match fact {
+            TaskSemanticFact::TerminalCommitted {
+                outcome: Some(outcome),
+                ..
+            } if *event_type == EventType::TaskFailed => Some(outcome.code().as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminals, [page_unknown], "the run's task.failed");
+    let failed = run_facts
+        .iter()
+        .filter_map(|(_, fact)| match fact {
+            TaskSemanticFact::EntryRecoveryFailed {
+                package_label,
+                outcome,
+                role,
+            } => Some((package_label.as_deref(), outcome.code().as_str(), *role)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failed, [(Some(LEAD), page_unknown, PREREQUISITE)]);
+
+    super::instance_workers::wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    let triggers = super::instance_workers::phases(&events)
+        .into_iter()
+        .filter_map(|(_, phase)| match phase {
+            actingcommand_contract::RuntimeLifecyclePhase::RecoveryLadderStarted {
+                trigger,
+                ..
+            } => Some(trigger),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    host.close().expect("close runtime host");
+    let [trigger] = triggers.as_slice() else {
+        panic!("one ladder: {triggers:?}");
+    };
+    assert_eq!(
+        trigger.stage,
+        actingcommand_contract::RecoveryTriggerStage::Task
+    );
+    assert_eq!(trigger.run_id, Some(run_id), "the failed run's ladder");
+    assert_eq!(trigger.failure_code.as_str(), page_unknown);
+    assert_eq!(trigger.rule.as_deref(), Some("pack_logic"));
 }
