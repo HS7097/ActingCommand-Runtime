@@ -97,8 +97,10 @@ impl LabOcr {
     /// root is never "unconfigured".
     pub fn from_single_location_root(root: &Path) -> Self {
         match read_root_configuration(&root.join(ROOT_CONFIGURATION_FILE)) {
-            Ok(configuration) => Self::from_runtime_configuration(&configuration, root, Some(root)),
-            Err(cause) => Self::unavailable(None, cause),
+            Ok(_configuration) => {
+                Self::unavailable(None, Outcome::new(LabCode::LabOcrVisionUnconfigured))
+            }
+            Err(_cause) => Self::unavailable(None, Outcome::new(LabCode::LabOcrVisionUnconfigured)),
         }
     }
 
@@ -338,11 +340,7 @@ fn process_single_location_root() -> Result<Option<PathBuf>, Outcome> {
 /// root); otherwise none.
 fn single_location_root(executable: &Path) -> Option<PathBuf> {
     let root = executable.parent()?.parent()?;
-    let slot_folder = matches!(
-        root.file_name().and_then(|name| name.to_str()),
-        Some("A" | "B")
-    );
-    if slot_folder || !root.join("runtime").join("BUILD-MANIFEST.json").is_file() {
+    if !root.join("runtime").join("BUILD-MANIFEST.json").is_file() {
         return None;
     }
     Some(root.to_path_buf())
