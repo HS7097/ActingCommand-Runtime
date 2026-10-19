@@ -1246,3 +1246,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_0121_a7::a7_an_input_parameter_failure_still_starts_no_ladder",
 ]
 incident = ["#411 A7"]
+
+# #411 A16 (v0.12.1; register §1.105 A16-1; related: host 103): after the entry recovery package's existing checks and before EntryRecoveryPackageAdmitted, a recovery package none of whose declared final pages is a page of the required entry set is refused with contained_task_home_recovery_terminal_outside_entry: no input, no EntryRecoveryPackageAdmitted or EntryRecoveryCompleted, and the fail-closed entry_target_disposition and the run's terminal carry page_ids (the required entry pages as recorded), package_id (the recovery package) and page_id (its one declared final page), for a request-bound package and for the registry's page-graph return-home package; the registry's linear_steps return-home package is not compared, still runs and the recheck decides
+[[gate]]
+key = "107"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3b::a16_a_bound_recovery_package_that_cannot_end_on_the_entry_is_refused_before_it_runs",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::a16_the_registry_page_graph_return_home_that_cannot_end_on_the_entry_is_refused_before_it_runs",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::a16_the_registry_linear_return_home_is_still_run_and_rechecked",
+]
+incident = ["#411 A16"]

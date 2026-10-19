@@ -7401,6 +7401,41 @@ impl HostShared {
                 SharedCode::ContainedTaskHomeRecoveryPackageIncompatible.as_str(),
             );
         }
+        // Workflow #336 L2d (R24): a configured `linear_steps` package ends on a Lab page id
+        // (`<game>/step_<n>_home`), never the literal home; only the recheck below decides.
+        let configured_linear = configured.is_some() && recovery.execution_mode() == "linear_steps";
+        // Workflow #411 A16: a page-graph run completes only on a page it declares as its target,
+        // so a recovery package none of whose declared final pages is a page of the required
+        // entry cannot end on it (NAV-3b, checked again below once it ran). It is refused before
+        // it runs, with no input and no `EntryRecoveryPackageAdmitted`; the failure names the
+        // required entry pages, the package and, when it declares one, its final page.
+        if !configured_linear {
+            let terminals = recovery
+                .page_ids()
+                .into_iter()
+                .filter(|page| {
+                    recovery.terminal_holds_page(
+                        &actingcommand_execution_kernel::canonical_page_anchor(
+                            recovery.game(),
+                            page,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !terminals
+                .iter()
+                .any(|page| prepared.terminal_in_required_entry(page))
+            {
+                let code = HostCode::ContainedTaskHomeRecoveryTerminalOutsideEntry;
+                let mut outcome = Outcome::new(code)
+                    .page_ids(required_pages)
+                    .package_id(recovery.package_label());
+                if let [page] = terminals.as_slice() {
+                    outcome = outcome.page_id(*page);
+                }
+                return fail_contained_task_entry_with(runtime, code, outcome);
+            }
+        }
         let recovery_label = recovery.package_label().to_owned();
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
@@ -7539,10 +7574,8 @@ impl HostShared {
                 role,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        // Workflow #336 L2d (R24): a configured `linear_steps` package ends on a Lab page id
-        // (`<game>/step_<n>_home`), never the literal home; only the recheck below decides.
-        let configured_linear = configured.is_some() && recovery.execution_mode() == "linear_steps";
-        // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry.
+        // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry
+        // (a configured `linear_steps` package is not compared, above).
         // Workflow #411 A1: the failure names the required entry pages, the page the recovery
         // package ended on and that package.
         if !configured_linear && !prepared.terminal_in_required_entry(&final_page) {
