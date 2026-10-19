@@ -2044,15 +2044,17 @@ page-projection members and members of an actinglab answer. Existing codes only
 The Lab decides a frame's page as `current-page` (the kernel's read-only detection) decides it,
 and offline `do` checks the page of the guard an operation declares on its target before it
 evaluates the target, as the kernel guards that operation before its input (`guard_outcome`).
-Rules only; no persisted ledger shape: no ledger record, wire shape, configuration key, outcome
-code or interface revision (§6) changes, and no answer member is added. Existing codes only
-(`page_recognition_conflict`, which `current-page` and `detect-page` answer;
-`contained_task_guard_refused`, the kernel's; `target_not_visible`); no catalog change.
+Rules and one catalog entry; no persisted ledger shape: no ledger record, wire shape,
+configuration key or interface revision (§6) changes, and no answer member is added. The codes
+are `page_recognition_conflict`, which `current-page` and `detect-page` already answered and
+which this slice registers (L7-3), `contained_task_guard_refused`, the kernel's, and
+`target_not_visible`.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | L7-1 | the page `do`, `ensure` and `wait` decide on a frame, offline (`--scene`) and in their `--capture` client forms (`do --capture --dry-run`, `ensure --capture` with every guard and arrival frame of its route, `wait --capture`) | rule (no shape change) (exec 100) | Lab L7 | Lab L7 | a frame that two or more pages match is refused with `page_recognition_conflict` (exit 2, details `{matched_pages}` in page order), as `current-page` refuses it, where the first matched page was taken; nothing is planned or pressed; one matched page is the page and none is `standby` as before; the same detection serves `session recover` (stale capture and startup login), which refuses such a frame the same way |
 | L7-2 | offline `do <target> --scene --dry-run` on a target that the guard of a click operation of the package names (`guard.target_id`, any task file of the package) | rule (no shape change) (exec 100) | Lab L7 | Lab L7 | the frame must show a page one of those guards names (`page_id` read in its task's `game` as the kernel reads it; `any` names every page; a frame no page matches is no guard's page), else the plan is refused with `contained_task_guard_refused` (exit 3, safety; details `{req_id, error: resource_drift, state: <the frame's page>, hint, authority: isolated_offline}`) before the target is evaluated; on such a page the target is evaluated as before (`target_not_visible` when it does not pass); the guard's `expected_rect` is not compared, as the kernel compares it only at admission; a bare target, which no guard names, is evaluated as before; online `do --capture --dry-run` keeps the named-target evaluation |
+| L7-3 | catalog entry `page_recognition_conflict` (`SharedCode`, fragment `contract.json`) | registered code (no shape change) (exec 100) | Lab L7 | Lab L7 | error, `ladder_class` `none` (row 7: a Lab CLI refusal), review `pending`, since 0.12.4, with description, common causes and handling; prefix `page_` was already the contract's; no value key added (the pages travel in the Lab envelope's `details.matched_pages`); the Lab crate's read-only commands and actinglab emit it through `SharedCode::PageRecognitionConflict` instead of a string |
 
 ### 1.123 Slice A21 (0.12.x): admission priority of online observation facts; actinglab observe failure details (#411 A21)
 

@@ -11,6 +11,7 @@ use crate::{
     parse_optional_usize, read_user_config, readonly_cli, reject_legacy_session_routing,
     scene_from_frame,
 };
+use actingcommand_contract::codes::SharedCode;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
@@ -655,7 +656,7 @@ pub(crate) fn detect_current_page(
     if matched_pages.len() > evaluations.len() {
         return Err(CliError::new(
             ErrorKind::UsageValidation,
-            "page_recognition_conflict",
+            SharedCode::PageRecognitionConflict.as_str(),
             format!("multiple pages matched: {}", matched_pages.join(", ")),
             &[],
         )
