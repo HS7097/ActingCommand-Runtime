@@ -305,25 +305,30 @@ instance's own or the section's) is checked: `min_ms` above `max_ms` is `config_
 (`section_check`) for the instance's `min_ms` key, so a change of one side alone is checked
 against the other. No slice reads them before #405.
 
-**Remedies (Workflow #411 B15, [remedies.md](remedies.md); written ahead of slice R3, which parses
-them).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
+**Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
+v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
 plain named outcome again, the package checks still run); `scheduling.remedy.max_per_round` is the
 number of remedy requests per blocked layer and round (`1..=8`); `scheduling.remedy.choices` is the
 host-wide list of remedy choice rows, objects of the shape of the instance fact
 `session.remedy.choices` (`{"row": "allow", "need", "capability"}`, `{"row": "none", "need"}`,
 `{"row": "parameter", "capability", "parameter", "value"}`; tokens `^[a-z][a-z0-9_]{0,63}$`,
-`none` never a capability, no duplicate row, no `none` with an `allow` of the same need, at most
-256 rows). Per instance, `instance.<instance id>.scheduling.remedy.choices` (in the file the
-entry's `scheduling.remedy.choices` member), default `section:scheduling.remedy.choices`: when
+`none` never a capability, no duplicate row, no `none` with an `allow` of the same need, no two
+values for one parameter of a capability, at most 256 rows). Per instance,
+`instance.<instance id>.scheduling.remedy.choices` (in the file the entry's
+`scheduling.remedy.choices` member), default `section:scheduling.remedy.choices`: when
 set, it replaces the section's list as a whole. All four are settable; their defaults live only
 in `actingd.defaults.json`, never as code constants. A row that breaks the shape refuses the
 configuration as `config_value_invalid` (`config_key`) at load, in `check-config` and in
-`ConfigureSettings`; a row whose names the bound packages do not declare is not refused here but
-is a check-config note `policy_remedy_declaration_unusable` and, at use, a stop for a person
+`ConfigureSettings`, with `config_value_problem` `wrong_type` (a row that is no object; a `row` or
+field missing or not a string; a member its kind does not have), `out_of_range` (an unknown `row`;
+a name outside the charset; `none` as a capability; more than 256 rows) or `section_check`, at the
+later row (a row twice; a `none` with an `allow` of the same need; two `parameter` rows of the same
+capability and parameter with different values); a row whose names the bound packages do not
+declare is not refused here but is a check-config note `policy_remedy_declaration_unusable` and, at use, a stop for a person
 (slices R4 and R7). The section rows are recorded in `config.parameters.scheduling`, the
 per-instance rows in `config.parameters.instance`. The four keys raise `actingd-config` to
 revision 6 in the release that carries them (once per release, whichever slice of the release
-needs it first). The chain depth (3) is no key.
+needs it first): v0.12.3 declares [5, 6]. The chain depth (3) is no key.
 
 ## The `ledger_observer` section (Workflow #383 AO-1)
 

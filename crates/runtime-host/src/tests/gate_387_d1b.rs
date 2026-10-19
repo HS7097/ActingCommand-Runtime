@@ -5,6 +5,9 @@
 //! later-change-wins rule (§12 question 3). Every expected value comes from the model: §5.5
 //! (`settable`), §5.6 (checks, receipt, two layers), §5.7 (records, `host.config_overrides`),
 //! §5.9 (`config.parameters.<section>`), §6.4 (codes).
+//!
+//! Workflow #411 B15 R3 (model-b15 §5.2; register §1.113): the remedy keys are settable and
+//! recorded as rows (host key 112).
 
 use super::*;
 use actingcommand_contract::{
@@ -12,9 +15,12 @@ use actingcommand_contract::{
     ConfiguredSetting, FactScalar, RuntimeConfigManifest, RuntimeOperationKind, RuntimePayload,
     config_parameters_fact_key,
 };
+use actingcommand_runtime_config::scheduling::{
+    REMEDY_CHOICES, REMEDY_ENABLED, REMEDY_MAX_PER_ROUND,
+};
 use actingcommand_runtime_config::{
-    ConfigCode, OVERRIDE_BASE_JSON, OVERRIDE_BASE_SOURCE, OVERRIDE_CONFIG_KEY, STUCK_RECOVERY,
-    STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
+    ConfigCode, DefaultsFile, OVERRIDE_BASE_JSON, OVERRIDE_BASE_SOURCE, OVERRIDE_CONFIG_KEY,
+    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key, mechanism_rows, render_parameters,
 };
 use serde_json::{Value, json};
 
@@ -664,6 +670,92 @@ fn d1_m7_clear_returns_a_key_to_its_file_value_and_source() {
             .cooldown_secs,
         300
     );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// Workflow #411 B15 R3 (model-b15 §5.2; register §1.113; host key 112), requirements 1 and 4:
+// the four remedy keys, as actingd assembles them from the shipped defaults file, are recorded in
+// `config.parameters.scheduling` and, for the instance, `config.parameters.instance`, each with
+// its value, source `default` and `settable`; one `ConfigureSettings` changes all four at once
+// and the rows then report the instruction's values (a list as its canonical JSON text).
+#[test]
+fn b15c_remedy_keys_are_settable_and_recorded_as_rows() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let own = instance_key(&id, REMEDY_CHOICES);
+    let (_, defaults) = DefaultsFile::shipped().expect("the shipped defaults file parses");
+    let remedy_keys = [
+        REMEDY_ENABLED,
+        REMEDY_MAX_PER_ROUND,
+        REMEDY_CHOICES,
+        own.as_str(),
+    ];
+    let parameters = render_parameters(
+        &mechanism_rows(),
+        std::slice::from_ref(&id),
+        &defaults,
+        &json!({"instances": [{"instance_id": id, "alias": ALIAS}]}),
+        &|_| None,
+    )
+    .expect("the defaults resolve")
+    .into_iter()
+    .filter(|parameter| remedy_keys.contains(&parameter.key.as_str()))
+    .collect::<Vec<_>>();
+    assert_eq!(parameters.len(), remedy_keys.len(), "{parameters:?}");
+    let host = start(&root, instance, manifest(parameters));
+    let mut client = TestClient::connect(&host);
+    for (key, value) in [
+        (REMEDY_ENABLED, FactScalar::Boolean(true)),
+        (REMEDY_MAX_PER_ROUND, FactScalar::Integer(2)),
+        (REMEDY_CHOICES, FactScalar::String("[]".to_owned())),
+        (own.as_str(), FactScalar::String("[]".to_owned())),
+    ] {
+        assert_eq!(
+            reported(&mut client, key),
+            (value, "default".to_owned(), true),
+            "{key}"
+        );
+    }
+
+    let (_, receipt) = configure(
+        &mut client,
+        vec![
+            set(REMEDY_ENABLED, json!(false)),
+            set(REMEDY_MAX_PER_ROUND, json!(3)),
+            set(REMEDY_CHOICES, json!([{"row": "none", "need": "need_b"}])),
+            set(
+                &own,
+                json!([{"row": "allow", "need": "need_a", "capability": "cap_x"}]),
+            ),
+        ],
+    );
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    for (key, value) in [
+        (REMEDY_ENABLED, FactScalar::Boolean(false)),
+        (REMEDY_MAX_PER_ROUND, FactScalar::Integer(3)),
+        (
+            REMEDY_CHOICES,
+            FactScalar::String(r#"[{"need":"need_b","row":"none"}]"#.to_owned()),
+        ),
+        (
+            own.as_str(),
+            FactScalar::String(
+                r#"[{"capability":"cap_x","need":"need_a","row":"allow"}]"#.to_owned(),
+            ),
+        ),
+    ] {
+        assert_eq!(
+            reported(&mut client, key),
+            (value, "instruction".to_owned(), true),
+            "{key}"
+        );
+    }
     drop(client);
     host.close().expect("close host");
 }

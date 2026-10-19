@@ -1302,6 +1302,19 @@ tests = [
 ]
 incident = ["#385 P-k"]
 
+# #411 B15 R3 b15c (v0.12.3; register §1.113; model-b15 §5.1, §5.2): scheduling.remedy.enabled (default true), scheduling.remedy.max_per_round (1..=8, default 2) and scheduling.remedy.choices (default []) default from the shipped defaults file and per instance instance.<id>.scheduling.remedy.choices defaults to the section's list and, when set, replaces it as a whole (EffectiveConfig::remedy(instance) gives {enabled, max_per_round, rows}); a choice row that breaks the session.remedy.choices shape (an object; row allow, none or parameter with exactly its fields; tokens ^[a-z][a-z0-9_]{0,63}$; none never a capability; no row twice; no none with an allow of the same need; at most 256 rows) and a max_per_round outside 1..=8 are config_value_invalid with the key (and the row's pointer) at load, in check-config and in ConfigureSettings; all four keys are settable and recorded in config.parameters.scheduling and config.parameters.instance with value and source
+[[gate]]
+key = "112"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_remedy_keys_default_from_the_shipped_file",
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_an_instance_list_replaces_the_section_list_as_a_whole",
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_malformed_rows_are_refused_with_their_pointer",
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_max_per_round_out_of_bounds_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::b15c_remedy_keys_are_settable_and_recorded_as_rows",
+]
+incident = ["#411 B15"]
+
 # #411 A22 (v0.12.3; register §1.124): a direct run that binds a recovery package no path of it can use is denied in its preparation with contained_task_recovery_binding_unused (package_id the run's package, location check_recovery_binding, invalid_request; native detail reason=entry_not_checked or reason=prerequisite_gate): no task.requested, no lease.requested or lease.granted, no task record, no input; the binding is used, and the run goes on as before, when the run has no prerequisite chain and its entry is checked (an entry page set started off its entry admits the bound package) or when a failed direct run may start a ladder (recovery_ladder.rules.direct_runs = trigger, the instance's stuck recovery on, a physical instance); a run without a binding is unchanged; a non-Home-start task never receives recovery (#241)
 [[gate]]
 key = "117"

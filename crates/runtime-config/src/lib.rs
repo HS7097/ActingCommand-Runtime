@@ -12,7 +12,8 @@
 //!   `ConfigureSettings` (all changes or none) and restored at start (§5.6, §5.7, §12 question 3).
 //! - The sections (D1c): `recovery_ladder` (§3, §4, §7), `host_claims` (§4.3) and
 //!   `standard_packs` (Workflow #373 NAV-6, moved here); `performance` (Workflow #385 P-c, PERF
-//!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay);
+//!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay and Workflow #411
+//!   B15 R3's remedy keys);
 //!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15); the two Lab
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
 //!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8);
@@ -70,8 +71,8 @@ pub use recovery_ladder::{
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
     BlackoutConfig, CostCommitConfig, FactRefreshConfig, FeatureLockConfig, HostBlackout,
-    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay, RerunConfig,
-    RerunExpiry, SchedulingConfig, SchedulingFile,
+    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay, RemedyChoiceRow,
+    RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
 pub use startup_discovery::{StartupDiscoveryConfig, StartupDiscoveryFile};

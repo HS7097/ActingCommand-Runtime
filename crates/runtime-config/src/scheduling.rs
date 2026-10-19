@@ -20,6 +20,10 @@
 //! Workflow #386 SR-3: `pack_admission.check_in_check_config`, `check_after_start` and
 //! `suspend_codes`, the task package admission check of `check-config` and of the background
 //! after start, and the admission codes that suspend a task package, read where they are used.
+//! Workflow #411 B15 R3 (model-b15 §5.2, v0.12.3): `remedy.enabled`, `remedy.max_per_round` and
+//! `remedy.choices`, the switch, the request bound and the host-wide choice rows of declared
+//! remedies (each instance's own list is in the per-instance section and replaces this one as a
+//! whole), parsed and checked here; R4 reads them in the evaluation.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! host blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, and
@@ -30,7 +34,9 @@
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder::{Listed, listed};
-use crate::table::{DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType};
+use crate::table::{
+    DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType, instance_key,
+};
 use actingcommand_contract::FactScalar;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -119,6 +125,17 @@ pub const PACK_ADMISSION_CHECK_AFTER_START: &str = "scheduling.pack_admission.ch
 /// Workflow #386 SR-3 (§2.4 item 3): the admission codes that suspend a task package (a list).
 pub const PACK_ADMISSION_SUSPEND_CODES: &str = "scheduling.pack_admission.suspend_codes";
 
+/// Workflow #411 B15 R3 (model-b15 §3.5, §5.2): whether declared remedies are on; `false` turns
+/// every remedy key back into a plain named outcome.
+pub const REMEDY_ENABLED: &str = "scheduling.remedy.enabled";
+/// Workflow #411 B15 R3 (model-b15 §7.4): the remedy requests per blocked layer and round.
+pub const REMEDY_MAX_PER_ROUND: &str = "scheduling.remedy.max_per_round";
+/// Workflow #411 B15 R3 (model-b15 §5.1, §5.2): the host-wide remedy choice rows, a list of
+/// objects of the shape of the instance fact `session.remedy.choices`. Also the member of an
+/// instance's own list (`instance.<instance id>.scheduling.remedy.choices`), which, when set,
+/// replaces this list as a whole.
+pub const REMEDY_CHOICES: &str = "scheduling.remedy.choices";
+
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
 const MAX_RANDOM_DELAY_MS: i64 = 86_400_000;
@@ -138,6 +155,24 @@ const MAX_WEEKDAY: i64 = 7;
 /// A host blackout id's bound: the outcome key `blackout_id` is an `id` (at most 256 bytes, no
 /// control character).
 const MAX_BLACKOUT_ID_BYTES: usize = 256;
+/// Workflow #411 B15 R3: the most remedy choice rows one list holds, the `record_list` bound of
+/// the instance fact whose shape the rows take (model-b15 §5.1). Schema.
+const MAX_REMEDY_CHOICE_ROWS: usize = 256;
+/// Workflow #411 B15 R3: the longest remedy choice name, `^[a-z][a-z0-9_]{0,63}$` (model-b15
+/// §4.1, §5.1). Schema.
+const MAX_REMEDY_NAME_BYTES: usize = 64;
+/// Workflow #411 B15 R3: the remedy choice row member that names its kind, and the kinds.
+const CHOICE_ROW: &str = "row";
+const CHOICE_ALLOW: &str = "allow";
+const CHOICE_NONE: &str = "none";
+const CHOICE_PARAMETER: &str = "parameter";
+/// Workflow #411 B15 R3: the members of a remedy choice row besides `row`.
+const CHOICE_NEED: &str = "need";
+const CHOICE_CAPABILITY: &str = "capability";
+const CHOICE_PARAMETER_NAME: &str = "parameter";
+const CHOICE_VALUE: &str = "value";
+/// Workflow #411 B15 R3: the word no capability may be (model-b15 §4.1).
+const CAPABILITY_NEVER: &str = "none";
 
 macro_rules! file_struct {
     ($(#[$meta:meta])* $name:ident { $($member:ident),+ $(,)? }) => {
@@ -179,15 +214,24 @@ pub struct SchedulingFile {
     suspension: Option<SuspensionFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pack_admission: Option<PackAdmissionFile>,
+    // Interface anchor `actingd-config` revision 6 (contracts/component-interfaces.md): a Runtime
+    // before v0.12.3 refuses a file that names it, because the section denies unknown fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remedy: Option<RemedyFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
-/// own random delay (`instance.<instance id>.scheduling.random_delay.*`).
+/// own random delay (`instance.<instance id>.scheduling.random_delay.*`). Workflow #411 B15 R3:
+/// and its own remedy choice rows (`instance.<instance id>.scheduling.remedy.choices`).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceSchedulingFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     random_delay: Option<RandomDelayFile>,
+    // Interface anchor `actingd-config` revision 6 (contracts/component-interfaces.md): a Runtime
+    // before v0.12.3 refuses a file that names it, because the entry denies unknown fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remedy: Option<InstanceRemedyFile>,
 }
 
 file_struct!(RecognitionFile {
@@ -252,6 +296,18 @@ file_struct!(
         max_ms
     }
 );
+file_struct!(
+    /// Workflow #411 B15 R3: the remedy keys of the section.
+    RemedyFile {
+        enabled,
+        max_per_round,
+        choices
+    }
+);
+file_struct!(
+    /// Workflow #411 B15 R3: an instance's own remedy choice rows.
+    InstanceRemedyFile { choices }
+);
 
 const fn row(
     name: &'static str,
@@ -288,6 +344,17 @@ const JOIN_TIMEOUT: KeyRange = KeyRange::Integer {
     min: 0,
     max: actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS as i64,
 };
+/// Workflow #411 B15 R3: the remedy requests per blocked layer and round, `1..=8` (model-b15
+/// §5.2; coordinator decision 5 of 2026-10-19). Schema, not a threshold.
+const REMEDY_REQUESTS: KeyRange = KeyRange::Integer { min: 1, max: 8 };
+
+/// Workflow #411 B15 R3: a remedy key's row, read by R4 from v0.12.3 on.
+const fn remedy_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        since: "0.12.3",
+        ..row(name, value_type, range, "B15-R4")
+    }
+}
 
 /// One row per key of the section (`contracts/v012-register.md` §5), in the model's order.
 pub(crate) static ROWS: &[KeyRow] = &[
@@ -433,6 +500,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
         KeyRange::Any,
         "SR-3",
     ),
+    remedy_row(REMEDY_ENABLED, ValueType::Boolean, KeyRange::Any),
+    remedy_row(REMEDY_MAX_PER_ROUND, ValueType::Integer, REMEDY_REQUESTS),
+    remedy_row(REMEDY_CHOICES, ValueType::List, KeyRange::Any),
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -542,6 +612,35 @@ pub struct PackAdmissionConfig {
     pub suspend_codes: Vec<String>,
 }
 
+/// Workflow #411 B15 R3: one remedy choice row (model-b15 §5.1), the shape of a row of the
+/// instance fact `session.remedy.choices` and of the configuration's lists. Every name is an
+/// opaque token the packages declare; nothing here interprets it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RemedyChoiceRow {
+    /// `{"row": "allow", "need", "capability"}`: this source allows `capability` for `need`.
+    Allow { need: String, capability: String },
+    /// `{"row": "none", "need"}`: this source decides that `need` has no remedy.
+    NoRemedy { need: String },
+    /// `{"row": "parameter", "capability", "parameter", "value"}`: this source sets the value of
+    /// a provider's parameter.
+    Parameter {
+        capability: String,
+        parameter: String,
+        value: String,
+    },
+}
+
+/// Workflow #411 B15 R3 (model-b15 §5.2): the remedy keys in effect, the section's or, from
+/// `EffectiveConfig::remedy`, one instance's: the switch, the requests per blocked layer and
+/// round, and the choice rows in effect (the instance's own list when it has one, otherwise the
+/// section's).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemedyConfig {
+    pub enabled: bool,
+    pub max_per_round: u8,
+    pub rows: Vec<RemedyChoiceRow>,
+}
+
 /// The `scheduling` section in effect, read and checked whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingConfig {
@@ -554,6 +653,8 @@ pub struct SchedulingConfig {
     pub random_delay: RandomDelay,
     pub fact_refresh: FactRefreshConfig,
     pub pack_admission: PackAdmissionConfig,
+    /// Workflow #411 B15 R3: the remedy keys, with the section's choice rows.
+    pub remedy: RemedyConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -795,8 +896,178 @@ impl SchedulingConfig {
             )?,
             fact_refresh: fact_refresh_from(&reader)?,
             pack_admission: pack_admission_from(&reader)?,
+            remedy: remedy_from(&reader)?,
         })
     }
+}
+
+/// Workflow #411 B15 R3: the section's remedy keys from `reader`. `max_per_round`'s range
+/// (`1..=8`) is the key table's, checked wherever a value enters.
+fn remedy_from(reader: &Reader<'_>) -> Result<RemedyConfig, ConfigFailure> {
+    let max_per_round = u8::try_from(reader.count(REMEDY_MAX_PER_ROUND)?)
+        .map_err(|_| invalid(REMEDY_MAX_PER_ROUND, ConfigValueProblem::OutOfRange))?;
+    Ok(RemedyConfig {
+        enabled: reader.boolean(REMEDY_ENABLED)?,
+        max_per_round,
+        rows: remedy_choices(reader, REMEDY_CHOICES)?,
+    })
+}
+
+/// Workflow #411 B15 R3 (model-b15 §5.2): the remedy keys in effect for the instance whose
+/// registry id is `instance_id`: the section's switch and request bound, and the instance's own
+/// choice rows when its key is in effect, otherwise the section's. An instance's list replaces
+/// the section's as a whole; the two are never merged.
+pub(crate) fn remedy(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<RemedyConfig, ConfigFailure> {
+    let reader = Reader { value };
+    let mut remedy = remedy_from(&reader)?;
+    let own = instance_key(instance_id, REMEDY_CHOICES);
+    if value(&own).is_some() {
+        remedy.rows = remedy_choices(&reader, &own)?;
+    }
+    Ok(remedy)
+}
+
+/// Workflow #411 B15 R3 (model-b15 §5.1): the remedy choice rows of the list key `key`, checked.
+/// A broken rule is `config_value_invalid` for `key`, with the JSON pointer of the row (and
+/// member) in the key's value:
+///
+/// - more than 256 rows: `out_of_range`, at the first row beyond the bound;
+/// - a row that is not an object, a `row` or a field that is missing or not a string, or a
+///   member its kind does not have: `wrong_type`;
+/// - a `row` other than `allow`, `none` and `parameter`, a name outside `^[a-z][a-z0-9_]{0,63}$`,
+///   or `none` as a capability: `out_of_range`;
+/// - a row twice, a `none` and an `allow` of the same need, or two `parameter` rows of the same
+///   capability and parameter with different values: `section_check`, at the later row.
+///
+/// Whether the packages declare the names is not checked here (R7).
+pub(crate) fn remedy_choices(
+    reader: &Reader<'_>,
+    key: &str,
+) -> Result<Vec<RemedyChoiceRow>, ConfigFailure> {
+    let items = reader.list(key)?;
+    if items.len() > MAX_REMEDY_CHOICE_ROWS {
+        return Err(choice_refused(
+            key,
+            MAX_REMEDY_CHOICE_ROWS,
+            None,
+            ConfigValueProblem::OutOfRange,
+        ));
+    }
+    let mut rows = Vec::with_capacity(items.len());
+    let mut seen = BTreeSet::new();
+    let mut allowed = BTreeSet::new();
+    let mut declined = BTreeSet::new();
+    let mut parameters = BTreeSet::new();
+    for (index, item) in items.iter().enumerate() {
+        let row = choice_row(key, index, item)?;
+        let conflict = match &row {
+            RemedyChoiceRow::Allow { need, .. } => {
+                allowed.insert(need.clone());
+                declined.contains(need)
+            }
+            RemedyChoiceRow::NoRemedy { need } => {
+                declined.insert(need.clone());
+                allowed.contains(need)
+            }
+            // Two values for one parameter: nothing says which wins. (The same value again is a
+            // row twice.)
+            RemedyChoiceRow::Parameter {
+                capability,
+                parameter,
+                ..
+            } => !parameters.insert((capability.clone(), parameter.clone())),
+        };
+        if conflict || !seen.insert(row.clone()) {
+            return Err(choice_refused(
+                key,
+                index,
+                None,
+                ConfigValueProblem::SectionCheck,
+            ));
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// Workflow #411 B15 R3: `config_value_invalid` for `key` at row `index` (and `member`).
+fn choice_refused(
+    key: &str,
+    index: usize,
+    member: Option<&str>,
+    problem: ConfigValueProblem,
+) -> ConfigFailure {
+    let row = format!("/{index}");
+    let pointer = match member {
+        // RFC 6901: `~` and `/` in a member name are escaped.
+        Some(member) => format!("{row}/{}", member.replace('~', "~0").replace('/', "~1")),
+        None => row,
+    };
+    invalid(key, problem).with_pointer(pointer)
+}
+
+/// Workflow #411 B15 R3: a remedy choice name, `^[a-z][a-z0-9_]{0,63}$`.
+fn choice_name(name: &str) -> bool {
+    name.len() <= MAX_REMEDY_NAME_BYTES
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// Workflow #411 B15 R3: one remedy choice row at `index` of `key`'s list: an object whose `row`
+/// names its kind and whose other members are exactly that kind's fields, each a name.
+fn choice_row(key: &str, index: usize, item: &Value) -> Result<RemedyChoiceRow, ConfigFailure> {
+    let refused = |member: Option<&str>, problem: ConfigValueProblem| {
+        choice_refused(key, index, member, problem)
+    };
+    let Value::Object(members) = item else {
+        return Err(refused(None, ConfigValueProblem::WrongType));
+    };
+    let Some(Value::String(kind)) = members.get(CHOICE_ROW) else {
+        return Err(refused(Some(CHOICE_ROW), ConfigValueProblem::WrongType));
+    };
+    let fields: &[&str] = match kind.as_str() {
+        CHOICE_ALLOW => &[CHOICE_NEED, CHOICE_CAPABILITY],
+        CHOICE_NONE => &[CHOICE_NEED],
+        CHOICE_PARAMETER => &[CHOICE_CAPABILITY, CHOICE_PARAMETER_NAME, CHOICE_VALUE],
+        _ => return Err(refused(Some(CHOICE_ROW), ConfigValueProblem::OutOfRange)),
+    };
+    if let Some(other) = members
+        .keys()
+        .find(|member| member.as_str() != CHOICE_ROW && !fields.contains(&member.as_str()))
+    {
+        return Err(refused(Some(other.as_str()), ConfigValueProblem::WrongType));
+    }
+    let mut names = Vec::with_capacity(fields.len());
+    for &field in fields {
+        let Some(Value::String(name)) = members.get(field) else {
+            return Err(refused(Some(field), ConfigValueProblem::WrongType));
+        };
+        if !choice_name(name) || (field == CHOICE_CAPABILITY && name == CAPABILITY_NEVER) {
+            return Err(refused(Some(field), ConfigValueProblem::OutOfRange));
+        }
+        names.push(name.clone());
+    }
+    Ok(match (kind.as_str(), names.as_slice()) {
+        (CHOICE_ALLOW, [need, capability]) => RemedyChoiceRow::Allow {
+            need: need.clone(),
+            capability: capability.clone(),
+        },
+        (CHOICE_NONE, [need]) => RemedyChoiceRow::NoRemedy { need: need.clone() },
+        (CHOICE_PARAMETER, [capability, parameter, value]) => RemedyChoiceRow::Parameter {
+            capability: capability.clone(),
+            parameter: parameter.clone(),
+            value: value.clone(),
+        },
+        _ => return Err(refused(None, ConfigValueProblem::WrongType)),
+    })
 }
 
 /// Workflow #386 SR-3: the `pack_admission` keys from `reader`; a suspend code the catalog does
