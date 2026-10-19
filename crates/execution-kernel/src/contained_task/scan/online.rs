@@ -22,8 +22,8 @@ use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace,
-    PageObservation, PreparedContainedTask, TaskOperation, sample_geometry_matches,
-    sampled_drag_with_pause_and_brake, sampled_swipe, sampled_tap,
+    PageObservation, PreparedContainedTask, TaskOperation, budget_observation_now, pace_pause,
+    sample_geometry_matches, sampled_drag_with_pause_and_brake, sampled_swipe, sampled_tap,
 };
 use crate::{InputFrameContext, ObservedFrame};
 use actingcommand_contract::codes::SharedCode;
@@ -61,8 +61,10 @@ pub(in crate::contained_task) struct RuntimeScanSource<'s, R: ContainedTaskRunti
     layout: &'s CandidateLayout,
     step_index: u32,
     timing: ContainedTaskTimingContext,
+    /// #385 P-k: the session's start, a budget instant of `timing`'s budget clock.
     started: Instant,
-    /// The scan's deadline on the observation clock: candidate sampling stops at it.
+    /// The scan's deadline on the observation clock: candidate sampling stops at it. #385 P-k:
+    /// a budget instant.
     deadline: Instant,
     /// The step's dispatched frame F1.
     first: &'s PageObservation,
@@ -93,7 +95,7 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
         ),
         replay: bool,
     ) -> Self {
-        let started = runtime.observation_now();
+        let started = budget_observation_now(runtime, timing.pace());
         Self {
             task,
             runtime,
@@ -242,9 +244,10 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
 impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
     type Error = R::Error;
 
+    /// #385 P-k (performance model v1.4.2 §5.3): the session's budget time, so its bound and
+    /// its settle timeouts are compared on the run's budget clock.
     fn elapsed(&mut self) -> Duration {
-        self.runtime
-            .observation_now()
+        budget_observation_now(&mut *self.runtime, self.timing.pace())
             .saturating_duration_since(self.started)
     }
 
@@ -260,11 +263,13 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             let boundary = TaskTimingBoundary::PageRecognitionWait;
             let identity = self.runtime.task_boundary_identity(boundary);
             let started = self.runtime.monotonic_now();
-            // The wait never runs past the scan's deadline; the session fails at it.
+            // The wait never runs past the scan's deadline; the session fails at it. #385 P-k:
+            // the time left is budget time, and the wait lasts it × f.
+            let pace = self.timing.pace();
             let left = self
                 .deadline
-                .saturating_duration_since(self.runtime.observation_now());
-            self.runtime.pause(interval.min(left));
+                .saturating_duration_since(budget_observation_now(&mut *self.runtime, pace));
+            pace_pause(&mut *self.runtime, pace, interval.min(left));
             let ended = self.runtime.monotonic_now();
             self.runtime
                 .observe_task_boundary(ContainedTaskBoundaryTiming {

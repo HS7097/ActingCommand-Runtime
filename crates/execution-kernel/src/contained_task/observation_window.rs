@@ -21,7 +21,7 @@ use super::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, PageObservation,
     PostAdmissionOcrCollector, PostconditionResolution, PreparedContainedTask, SampleRetries,
-    TaskControl, TaskOperation, sample_retry,
+    TaskControl, TaskOperation, budget_now, budget_observation_now, sample_retry,
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{RunFailureStage, RunOperationFailureDecision, RunOperationPolicy, RunStateMachine};
@@ -236,11 +236,13 @@ impl PreparedContainedTask {
         };
         let task_deadline = timing.deadline();
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
-        let deadline = runtime.observation_now() + window;
+        // #385 P-k (performance model v1.4.2 §5.3): the stability wait's limits are budget time.
+        let pace = timing.pace();
+        let deadline = budget_observation_now(runtime, pace) + window;
         let mut held = 1_u32;
         let mut after_page = Some(decision_page.to_owned());
         loop {
-            let now = runtime.observation_now();
+            let now = budget_observation_now(runtime, pace);
             if now >= deadline {
                 return Ok(InputRecheck::Refused {
                     error: ContainedTaskError::valued(
@@ -254,7 +256,7 @@ impl PreparedContainedTask {
                     after_page,
                 });
             }
-            let task_left = task_deadline.saturating_duration_since(runtime.monotonic_now());
+            let task_left = task_deadline.saturating_duration_since(budget_now(runtime, pace));
             pause(
                 runtime,
                 TaskTimingBoundary::PageRecognitionWait,
@@ -263,9 +265,15 @@ impl PreparedContainedTask {
                     .min(task_left),
                 timing,
             );
-            if runtime.monotonic_now() >= task_deadline {
+            if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
-                    .task_timeout_error(runtime, TaskTimingStage::BeforeInput, task_deadline, None)
+                    .task_timeout_error(
+                        runtime,
+                        TaskTimingStage::BeforeInput,
+                        task_deadline,
+                        None,
+                        pace,
+                    )
                     .into());
             }
             let (fresh, step_timing) =
@@ -341,7 +349,9 @@ impl PreparedContainedTask {
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let consensus = !self.evaluator.pack().target_consensus.is_empty();
-        let started = runtime.observation_now();
+        // #385 P-k (performance model v1.4.2 §5.3): the window and its budget are budget time.
+        let pace = timing.pace();
+        let started = budget_observation_now(runtime, pace);
         let mut end = started + Duration::from_millis(window.window_ms());
         // #411 A15: the page the last frame matched, none when it matched no page.
         let mut last_frame_page = Some(arrived.page_label.clone());
@@ -351,7 +361,7 @@ impl PreparedContainedTask {
         let mut latest = true;
         let mut held = 1_u32;
         loop {
-            let now = runtime.observation_now();
+            let now = budget_observation_now(runtime, pace);
             let limit = match window {
                 TaskObservationWindow::Stable { frames, window_ms } => {
                     if held >= frames {
@@ -397,7 +407,7 @@ impl PreparedContainedTask {
                     limit
                 }
             };
-            let task_left = task_deadline.saturating_duration_since(runtime.monotonic_now());
+            let task_left = task_deadline.saturating_duration_since(budget_now(runtime, pace));
             pause(
                 runtime,
                 TaskTimingBoundary::PostconditionWait,
@@ -406,19 +416,20 @@ impl PreparedContainedTask {
                     .min(task_left),
                 timing,
             );
-            if runtime.monotonic_now() >= task_deadline {
+            if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
                         runtime,
                         TaskTimingStage::Postcondition,
                         task_deadline,
                         None,
+                        pace,
                     )
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
             }
             let frame_timing = if consensus {
-                timing.with_deadline(runtime.observation_now() + budget)
+                timing.with_deadline(budget_observation_now(runtime, pace) + budget)
             } else {
                 timing
             };
@@ -432,13 +443,14 @@ impl PreparedContainedTask {
                     continue;
                 }
             };
-            if runtime.monotonic_now() >= task_deadline {
+            if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
                         runtime,
                         TaskTimingStage::Postcondition,
                         task_deadline,
                         None,
+                        pace,
                     )
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
@@ -488,13 +500,14 @@ impl PreparedContainedTask {
             latest = false;
             held = 0;
             if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
-                end += paused;
+                end += pace.budget_span(paused);
             }
         }
     }
 }
 
-/// A wait of `duration` between two frames, recorded at `boundary`.
+/// A wait of `duration` between two frames, recorded at `boundary`. #385 P-k: it lasts
+/// `duration × f / 1000` at the factor of `timing`'s budget clock.
 fn pause<R: ContainedTaskRuntime>(
     runtime: &mut R,
     boundary: TaskTimingBoundary,
@@ -503,7 +516,7 @@ fn pause<R: ContainedTaskRuntime>(
 ) {
     let identity = runtime.task_boundary_identity(boundary);
     let started = runtime.monotonic_now();
-    runtime.pause(duration);
+    runtime.pause(timing.pace().wall_span(duration));
     let ended = runtime.monotonic_now();
     runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
         boundary,
