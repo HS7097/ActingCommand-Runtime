@@ -75,6 +75,8 @@ const DEFAULT_CLOCK_JUMP_THRESHOLD_MS: u64 = 5_000;
 // One evaluation can reference at most one current activity window per bounded instance.
 const MAX_DETECTION_QUOTA_CACHE_WINDOWS: usize = MAX_EVALUATION_INSTANCES;
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
+// Red proof M8 (never merge): the random delays kept in a process-global static, by state root.
+static KEPT_RANDOM_DELAYS: Mutex<BTreeMap<PathBuf, RandomDelayTable>> = Mutex::new(BTreeMap::new());
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -839,7 +841,7 @@ struct RandomDelayEntry {
 /// dispatch is at or after its `due_at`, when an evaluation leaves the pair not eligible, when
 /// an evaluation passes its allowed period, when its instance's delay is off, and when the active
 /// catalog generation changes. A rejected admission does not end it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct RandomDelayTable {
     /// The active catalog generation the entries were drawn under.
     catalog_hash: Option<String>,
@@ -1109,6 +1111,8 @@ pub(crate) struct PolicyHost {
     remedies: crate::remedy::RemedyState,
     /// Workflow #405 D1: the random delays drawn per pair. Memory only; a host starts with none.
     random_delays: RandomDelayTable,
+    /// Red proof M8 (never merge): the state root the kept table is filed under.
+    random_delays_root: PathBuf,
     /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-2): the latest evaluated cycle's
     /// not-run explanation. Memory only; a host starts with none.
     explanation: crate::schedule_explanation::ScheduleExplanationTable,
@@ -1146,7 +1150,12 @@ impl PolicyHost {
             confirmed_run_admissions: BTreeMap::new(),
             quarantined_dispatches: BTreeSet::new(),
             remedies: crate::remedy::RemedyState::default(),
-            random_delays: RandomDelayTable::default(),
+            random_delays: KEPT_RANDOM_DELAYS
+                .lock()
+                .ok()
+                .and_then(|kept| kept.get(state_root).cloned())
+                .unwrap_or_default(),
+            random_delays_root: state_root.to_path_buf(),
             explanation: crate::schedule_explanation::ScheduleExplanationTable::default(),
         };
         host.recover_dispatches(ledger)?;
@@ -1878,6 +1887,9 @@ impl PolicyHost {
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
         self.random_delays.retain_eligible(&evaluation);
+        if let Ok(mut kept) = KEPT_RANDOM_DELAYS.lock() {
+            kept.insert(self.random_delays_root.clone(), self.random_delays.clone());
+        }
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
         // Workflow #386 SR-6b, MCP-19a (register §1.143): the not-run explanation of this
