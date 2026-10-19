@@ -6,7 +6,7 @@ use crate::codes::ExecutionKernelCode;
 use crate::{
     ContainedTaskCode, ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
     ContainedTaskRuntime, ContainedTaskTrace, InputFrameContext, ObservedFrame,
-    PreparedContainedTask, SelectionState, SelectionStateRequest,
+    PreparedContainedTask, ResourceReadingProblem, SelectionState, SelectionStateRequest,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Detail, Outcome};
@@ -557,13 +557,22 @@ pub struct OfflineReplayReading {
     pub confidence_milli: u16,
 }
 
-/// #411 Lab L6: one reading mark that gave no reading, with why (the vocabulary
-/// `reading_problem`).
+/// #411 Lab L6: one reading mark that gave no reading, with why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OfflineReplayReadingMiss {
     pub reading_id: String,
     pub fact_key: String,
-    pub reading_problem: &'static str,
+    /// Its token of the vocabulary `reading_problem`.
+    #[serde(serialize_with = "token_spelling")]
+    pub reading_problem: ResourceReadingProblem,
+}
+
+/// A vocabulary token in serialized output as its spelling.
+fn token_spelling<S: Serializer>(
+    problem: &ResourceReadingProblem,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(problem.as_str())
 }
 
 /// Workflow #308 SEL-L6a: a whole contained task replayed over a saved frame sequence.
@@ -886,7 +895,7 @@ where
                         .map(|miss| OfflineReplayReadingMiss {
                             reading_id: miss.declaration.id,
                             fact_key: miss.declaration.fact_key,
-                            reading_problem: miss.problem.as_str(),
+                            reading_problem: miss.problem,
                         })
                         .collect(),
                 });
