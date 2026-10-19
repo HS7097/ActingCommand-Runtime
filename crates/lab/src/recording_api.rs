@@ -1480,6 +1480,7 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
                     status: mark.self_test.status,
                 },
                 margin: mark.self_test.margin.clone(),
+                value_test: mark.value_test.clone(),
             })
             .collect(),
         reused: step.reused.clone(),

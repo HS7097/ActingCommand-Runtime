@@ -2118,6 +2118,28 @@ prerequisite gate and the Ledger table's scheduling outcome row) and
 |---|---|---|---|---|---|
 | A23-1 | the terminal's `scheduling_disposition` (`task.completed`) after a prerequisite, return-home, navigation, entry recovery or interrupt-handler layer | rule (no shape change) (host 118) | A23 | A23 | the run's own package's dispatched steps choose the rule: with one or more, the last attempt's `StepFinished` of step `executed_steps - 1` (the package's own last step) must name the final page, as before; with none, the last `RecognitionCompleted` with a matched page must match it, whatever steps the other layers ran; a layer's page is never compared with the run's terminal pages; `executed_steps` in `TerminalCommitted`, the receipt and the run status stays the run's total; the effect bound, the designated-effect counts, the mapping choice and every outcome code are unchanged; a run with no layer is judged as before |
 
+### 1.132 Slice Lab B-9 (v0.12.x): Lab recordings mark value tests (#411 Lab B-9; G17; coordinator decision 7 of 2026-10-19 and decision Q10 of the L5 plan; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+A Lab recording marks a value test (task schema `0.9`, Workflow #396 REC-6) whose sides are
+inline OCR reads, self-tests it with the Runtime's evaluator and the Lab's OCR provider, and
+`record stop` declares it as the Runtime reads it. The rows are a Lab request and file member,
+values of an existing actinglab answer list and the generated package's declarations, which
+are the task schema's own. [lab-recording.md](lab-recording.md) ("Value tests", "Pages and
+documents", "Self-checks") is the contract. Existing codes only (`validation_failed`,
+`record_mark_rejected` with `self_test_failed`, `self_test_error` and `region_outside_frame`,
+`anchor_invalid`, `record_click_source_invalid`, `record_click_follow_invalid`,
+`record_mark_id_conflict`, `lab_ocr_unavailable`; the recognition pack's `value_test_unresolved`
+and `value_test_not_met` in details); no catalog change.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B9-1 | `actingcommand.lab-record-mark.v1` `add[]` entry of family `value_test`: `{id, family: "value_test", left, op, right?}`, each side `{region, languages, timeout_ms, minimum_confidence, model_ref, model_sha256, trim, value: {type: "unsigned_integer", min, max, format?}, part?, mul?, add?}`, `right` `{const}` or a side | new mark family and request members (Lab request schema) (exec 108) | Lab B-9 | Lab B-9 | request form only; the Runtime's value-test rules (`parses` without `right`, every other `op` with one; `const` in 0..=2^53-1; `mul` 1..=1000000 and `add` within ±(2^53-1) on the right side only, both there; `part` exactly with `current_capacity`; `min <= max`); a shape error is `validation_failed` (exit 2) and a side region outside the frame `region_outside_frame` inside `record_mark_rejected`; the self-test reads the sides with the Lab's OCR provider on every live frame (failure details `{frame_id, failure, value_test}`), `not_evaluated` (`lab_ocr_unavailable`) without a model; forbidding it, directly or through a check, is `validation_failed` (`{mark_id, family}`), and it is never an anchor, click source or followed template |
+| B9-2 | `recording.json` `RecordedMark.value_test: {left, op, right?}` | new optional member (Lab file, `skip_serializing_if`) (exec 108) | Lab B-9 | Lab B-9 | present only on a value-test mark, which has no `region`; the mark output shows the mark and `record status` its `value_test` (`marks[].value_test?`); the side target ids `<id>/left` and `<id>/right` share the recording's mark id space (`record_mark_id_conflict`) |
+| B9-3 | the package `record stop` generates for a value-test mark | generation rule (task schema `0.9` declarations, no shape change) (exec 108) | Lab B-9 | Lab B-9 | one `ocr_targets[]` entry per side (`<id>/left`, `<id>/right`) with the side's region, languages, timeout, minimum confidence and model, `match_mode: "contains"`, `expected` `"0"`..`"9"`, `case_sensitive: false`; one `checks[]` entry `{id, value_test: {left: {target_id, trim, value, part?}, op, right?}}`; the page rule requires the value test (not as an `any_of` member), never its sides; as the click guard `guard.check` is its id and `expected_rect` the bounding box of its sides; the first decision and the cross-check count it as OCR (undetermined without a model, the admitted evaluator with one) |
+| B9-4 | `session record-policy` `lab_recording.families` | changed value of an existing answer member (exec 108) | Lab B-9 | Lab B-9 | `value_test` after `check` |
+
+Lab file format, no persisted ledger shape, no outcome code.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

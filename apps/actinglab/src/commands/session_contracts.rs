@@ -328,7 +328,7 @@ fn session_record_policy_payload(
             "path": "<state>/record-artifacts/<record_id>/lab/recording.json",
             "mark_command": "record mark",
             "mark_request_schema": "actingcommand.lab-record-mark.v1",
-            "families": ["template", "color", "color_digest", "ocr", "check"],
+            "families": ["template", "color", "color_digest", "ocr", "check", "value_test"],
             "self_test_statuses": ["passed", "failed", "not_evaluated"],
             "ocr_self_test": {"with_ocr_model": "evaluated", "without_ocr_model": "not_evaluated", "reason": "lab_ocr_unavailable"},
             "step_operations": ["--drop-step", "--reopen-step", "--close-step", "--to-transition"],
