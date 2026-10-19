@@ -816,8 +816,14 @@ impl HostShared {
                 .is_some()
                 && !policy.dispatch_needs_completion(context.decision_id())?
         };
-        let authoritative_outcome =
+        let (authoritative_outcome, remedy_key) =
             self.read_scheduled_policy_outcome(context, terminal, receipt.request_id(), replayed)?;
+        // Workflow #411 B15 R4 (model-b15 §7.8): the key a run of a task that declares a remedy
+        // ended on, for its pair's remedy journal, before the run settles.
+        if let Some(outcome_key) = remedy_key {
+            lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?
+                .note_remedy_key(context.decision_id(), outcome_key);
+        }
         let execution = self.record_policy_dispatch_outcome_under_gate(
             context.decision_id(),
             &execution_input,
@@ -859,23 +865,31 @@ impl HostShared {
         Ok((execution, authoritative_outcome))
     }
 
+    /// The run's authoritative outcome when its catalog references outcome keys of its task, and
+    /// (Workflow #411 B15 R4, model-b15 §7.8) the key its terminal's `scheduling_disposition`
+    /// names when its task's package declares a remedy, whether or not the catalog references
+    /// the key: one terminal read for both.
     fn read_scheduled_policy_outcome(
         &self,
         context: &PolicyRunContext,
         terminal: TerminalEvent,
         request_id: RequestId,
         completed_replay: bool,
-    ) -> RuntimeHostResult<Option<SchedulingOutcomeProjection>> {
-        let expected_keys = {
+    ) -> RuntimeHostResult<(Option<SchedulingOutcomeProjection>, Option<String>)> {
+        let (expected_keys, remedy_key_read) = {
             let policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
-            if completed_replay {
+            let expected_keys = if completed_replay {
                 policy.referenced_outcome_keys_for_completed_run(context)?
             } else {
                 policy.referenced_outcome_keys(context)?
-            }
+            };
+            (
+                expected_keys,
+                policy.declares_remedies(context.catalog_task_id()),
+            )
         };
-        if expected_keys.is_empty() {
-            return Ok(None);
+        if expected_keys.is_empty() && !remedy_key_read {
+            return Ok((None, None));
         }
         let identity = SchedulingOutcomeIdentity::new(
             terminal.event_id,
@@ -931,6 +945,16 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             ));
         };
+        let remedy_key = match payload.fact() {
+            TaskSemanticFact::TerminalCommitted {
+                scheduling_disposition: Some(disposition),
+                ..
+            } if remedy_key_read => Some(disposition.outcome_key().to_owned()),
+            _ => None,
+        };
+        if expected_keys.is_empty() {
+            return Ok((None, remedy_key));
+        }
         if matches!(
             payload.fact(),
             TaskSemanticFact::TerminalCommitted {
@@ -993,7 +1017,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             ));
         }
-        Ok(Some(projection))
+        Ok((Some(projection), remedy_key))
     }
 
     fn apply_policy_outcome_cache_update(
@@ -2394,6 +2418,102 @@ pub(super) fn recover_authoritative_policy_outcomes(
         insert_authoritative_policy_outcome(&mut outcomes, projected.scheduling_result().clone())?;
     }
     Ok(outcomes)
+}
+
+/// Workflow #411 B15 R4 (model-b15 §7.8, §9.1), at start, once the dispatches are settled: the
+/// remedy table of the active catalog from `manifest`'s package locations; the outcome key of each
+/// admitted run of a task that declares a remedy, newest first per pair, back to the pair's latest
+/// root blocked run (at most the journal's bound), read from its terminal; and every
+/// `signal:remedy:` planning signal in ledger order (the stops, lifts and expiries recorded).
+pub(super) fn recover_remedy_state(
+    policy: &mut PolicyHost,
+    ledger: &GlobalLedger,
+    manifest: Option<&ProcedureManifest>,
+    instances: &[actingcommand_policy::InstanceSnapshot],
+    now_unix_ms: u64,
+) -> RuntimeHostResult<()> {
+    policy.build_remedy_table(manifest, instances, now_unix_ms);
+    for runs in policy.remedy_key_reads() {
+        for run in runs.into_iter().filter(|run| run.read) {
+            let identity = policy.remedy_completed_run(ledger, &run.decision_id)?;
+            let outcome_key = completed_run_outcome_key(ledger, &identity)?;
+            let root = !run.round_run
+                && outcome_key
+                    .as_deref()
+                    .is_some_and(|outcome_key| policy.remedy_root_key(&run.task_id, outcome_key));
+            if let Some(outcome_key) = outcome_key {
+                policy.note_remedy_key(&run.decision_id, outcome_key);
+            }
+            if root {
+                break;
+            }
+        }
+    }
+    // Without a declared remedy there is no round to rebuild; a later activation's rounds start
+    // from its own runs, and a signal already recorded is still never written twice (each is
+    // checked against the planning-signal projection first).
+    if !policy.declares_any_remedy() {
+        return Ok(());
+    }
+    let through_sequence = ledger
+        .latest_sequence()
+        .map_err(|_| ledger_error(HostLocation::RecoverPolicyPlanningSignals))?;
+    let signals = crate::recovery_read::read_event_types(
+        ledger,
+        &[EventType::PolicyPlanningSignalObserved],
+        through_sequence,
+        crate::recovery_read::RECOVERY_PAGE_EVENTS,
+    )
+    .map_err(|_| ledger_error(HostLocation::RecoverPolicyPlanningSignals))?;
+    for event in &signals {
+        if let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) =
+            event.payload()
+            && payload
+                .signal_id()
+                .starts_with(crate::remedy::SIGNAL_PREFIX)
+        {
+            policy.observe_remedy_signal(
+                payload.signal_id(),
+                payload.instance_id(),
+                payload.task_id(),
+                payload.outcome(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Workflow #411 B15 R4: the outcome key the terminal of the completed successful run `run`
+/// names (`scheduling_disposition`), or none when its package maps none.
+fn completed_run_outcome_key(
+    ledger: &GlobalLedger,
+    run: &CompletedPolicyRunIdentity,
+) -> RuntimeHostResult<Option<String>> {
+    let terminal = recover_scheduled_terminal(ledger, run)?.ok_or_else(|| {
+        policy_admission_fatal(
+            HostCode::PolicyRunTerminalMissing,
+            HostLocation::RecoverPolicySchedulingOutcomes,
+        )
+    })?;
+    let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal.payload() else {
+        return Err(policy_admission_fatal(
+            HostCode::PolicyRunTerminalInvalid,
+            HostLocation::RecoverPolicySchedulingOutcomes,
+        ));
+    };
+    match payload.fact() {
+        TaskSemanticFact::TerminalCommitted {
+            task_result: TaskOutcome::Success,
+            scheduling_disposition,
+            ..
+        } => Ok(scheduling_disposition
+            .as_ref()
+            .map(|disposition| disposition.outcome_key().to_owned())),
+        _ => Err(policy_admission_fatal(
+            HostCode::PolicyRunTerminalInvalid,
+            HostLocation::RecoverPolicySchedulingOutcomes,
+        )),
+    }
 }
 
 pub(super) fn validate_completed_run_admission_request(

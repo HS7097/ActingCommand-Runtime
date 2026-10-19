@@ -897,6 +897,14 @@ impl HostShared {
         let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
         // Workflow #384 D2-S4: the fact refresh pace in effect as this cycle starts.
         let fact_refresh_settings = self.fact_refresh_settings()?;
+        // Workflow #411 B15 R4: the remedy keys in effect as this cycle starts.
+        let remedy_aliases = facts
+            .instances
+            .iter()
+            .map(|instance| instance.instance_id.as_str())
+            .collect::<Vec<_>>();
+        let remedy_context =
+            self.remedy_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
         let (mut cycle, eligibility_unknown_pairs, pool_scopes) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
@@ -920,6 +928,7 @@ impl HostShared {
                         bindings: &self.fact_refresh_bindings,
                         instance_facts_loaded_at_unix_ms: self.instance_facts_loaded_at_unix_ms,
                     },
+                    remedy: &remedy_context,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -945,6 +954,13 @@ impl HostShared {
         }
         for signal in &cycle.clock_slot_signals {
             self.record_policy_planning_signal(signal.clone())?;
+        }
+        // Workflow #411 B15 R4 (model-b15 §7.5 to §7.7): the remedy stops, lifts and expiries
+        // this evaluation decided, none of them in the projection when it was read.
+        let remedy_signals =
+            lock(self.policy()?, HostLocation::RecordPolicyPlanningSignal)?.take_remedy_signals();
+        for signal in remedy_signals {
+            self.record_policy_planning_signal(signal)?;
         }
         // Workflow #386 SR-3 (scheduling model §11): the suspensions and lifts of task packages
         // this evaluation acted on, each copied once per instance.
@@ -1565,6 +1581,20 @@ impl HostShared {
                 HostLocation::AuthorizeTrustedPolicyDispatch,
             )?
             .authorize(intent, reason_chain)?;
+            // Workflow #411 B15 R4 (model-b15 §7.9): an intent that names a remedy round is
+            // checked against the remedy keys in effect for its instance.
+            let remedy_context = if reason_chain
+                .reasons
+                .iter()
+                .any(|reason| crate::remedy::is_round_reason(&reason.outcome))
+            {
+                Some(self.remedy_context(
+                    &[intent.instance_id.as_str()],
+                    HostLocation::AdmitPolicyDispatch,
+                )?)
+            } else {
+                None
+            };
             if context.fact_ledger_position != trusted.intent.input_ledger_position
                 || context.fact_snapshot_id != trusted.intent.fact_snapshot_id
                 || context.fencing_owner_epoch != self.owner_epoch
@@ -1929,6 +1959,28 @@ impl HostShared {
                             };
                         }
                     };
+                    // Workflow #411 B15 R4 (model-b15 §7.9): a remedy request or retry is
+                    // admitted only while its round and layer are still open and unserved; else
+                    // it is refused `policy_remedy_round_closed` (no lease, no run).
+                    if let Some(remedy_context) = &remedy_context
+                        && let Err(error) = policy.validate_remedy_dispatch(
+                            intent,
+                            reason_chain,
+                            &current_facts,
+                            remedy_context,
+                            context.now_unix_ms,
+                        )
+                    {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
                     let admission_record = match policy.preview_admission(
                         intent,
                         context.now_unix_ms,

@@ -250,6 +250,9 @@ mod gate_403;
 // #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
 // prerequisite layer is judged on its own recognition.
 mod gate_411_a23;
+// Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
+// journal, plan, admission check, stop, lift and expiry signals).
+mod gate_411_b15h;
 // Workflow #411 B15 R1 (host key 119): kernel admission by path and the metadata reader of the
 // remedy declarations take a package that provides capabilities with parameters.
 mod gate_411_b15p_host;
