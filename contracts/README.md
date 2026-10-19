@@ -264,7 +264,10 @@ keeps one entry page, and `"any"` keeps its meaning (no entry check; never with
 phases). A set is always checked before the run: one frame evaluates only the set's
 pages; exactly one match starts the run, none goes to entry recovery, and more than
 one fails with `contained_task_recognition_conflict` before any input. An entry
-recovery package must end on a page of the set; otherwise the run fails with
+recovery package must end on a page of the set (the home entry's recovery package: a
+package that declares a prerequisite package reaches its entry through that chain
+instead, whose recheck alone decides; `contracts/linear-steps.md`, "Prerequisite
+packages"); otherwise the run fails with
 `contained_task_home_recovery_terminal_non_home` naming the set's pages (`page_ids`),
 the page the recovery package ended on (`page_id`) and that package (`package_id`).
 A recovery package whose declared final pages hold no page of the set is refused

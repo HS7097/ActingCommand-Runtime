@@ -646,9 +646,11 @@ data files beside its package directories, one directory per game below the conf
   recorded as `contained_task_navigation_entry_unlisted` (warning) and the run is as without
   navigation data. The gate's order: the run's own entry check (its last frame offered to the
   shared interrupt pages); then an explicit layer (the package's declared prerequisite chain,
-  or a request's own recovery package of a page-graph package) and the entry checked again;
-  then, when the entry still does not pass, the navigation, which takes the place of the
-  return-home fallback (no return-home layer is resolved for the run's own package):
+  or a request's own recovery package of a page-graph package, which must end on a page of
+  the entry or the run fails before any navigation, README "Entry page sets") and the entry
+  checked again; then, when the entry still does not pass, the navigation, which takes the
+  place of the return-home fallback (no return-home layer is resolved for the run's own
+  package):
   - **Locate.** The feature package evaluates every listed page on one frame, in one scene
     evaluation: the entry check's last frame first, a new frame for every later locate. A shared
     interrupt page the run's package does not declare is handled first (as above) and the run

@@ -6677,8 +6677,9 @@ struct TaskControl {
     stop_on_confirmation: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
-    /// Workflow #336 L2b: the package a `linear_steps` package runs first when its first step
-    /// does not pass, by package id (`contracts/linear-steps.md`, "Prerequisite packages").
+    /// Workflow #336 L2b: the package a `linear_steps` or (Workflow #373 NAV-3a)
+    /// `navigable_route` package runs first when its entry does not pass, by package id
+    /// (`contracts/linear-steps.md`, "Prerequisite packages").
     #[serde(default)]
     prerequisite_package_id: Option<String>,
 }
