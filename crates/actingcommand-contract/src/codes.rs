@@ -703,6 +703,18 @@ crate::outcome_codes! {
 }
 
 crate::outcome_codes! {
+    /// Workflow #386 SR-6b, MCP-19a (register §1.143): the reason of an instance's not-running
+    /// row when it has no due task. The host emits it in the `ScheduleExplanation` answer and
+    /// the answer's validation recognises it, so the contract registers it (moved from the
+    /// runtime-host registry while pending, never emitted before).
+    pub enum ScheduleExplanationRowCode {
+        /// Info. An instance has no due task; its not-running row names the earliest wake
+        /// (keys `instance_id`, and `next_eligible_unix_ms` when known; SR-6).
+        DueTaskMissing => "due_task_missing": info / none,
+    }
+}
+
+crate::outcome_codes! {
     /// The refusals of `SanitizationError`: events, records and their drafts.
     pub enum SanitizationCode {
         SelectionRecordTooLarge => "selection_record_too_large": error / none,

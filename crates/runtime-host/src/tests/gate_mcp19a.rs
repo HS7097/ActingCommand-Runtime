@@ -17,6 +17,7 @@ use super::gate_372k2::{SLOT_TASK, SlotTask, Slots, at, slot_sources, slot_task}
 use super::gate_383_ao4q::ledger_head;
 use super::*;
 use crate::codes::HostCode;
+use actingcommand_contract::codes::ScheduleExplanationRowCode;
 use actingcommand_contract::{
     RuntimeScheduleExplanation, ScheduleCandidateEligibility, ScheduleCandidateState,
     ScheduleDispatchState, ScheduleExplanationInstance,
@@ -248,7 +249,10 @@ fn mcp19a_with_nothing_due_the_row_is_due_task_missing_with_the_earliest_wake() 
     assert_eq!(entry.selected, None);
     assert_eq!(entry.not_running.task_id, None);
     assert!(
-        entry.not_running.why.is(HostCode::DueTaskMissing),
+        entry
+            .not_running
+            .why
+            .is(ScheduleExplanationRowCode::DueTaskMissing),
         "{:?}",
         entry.not_running
     );
@@ -319,7 +323,11 @@ fn mcp19a_since_holds_while_the_why_holds_and_restarts_when_it_changes() {
         );
         assert_eq!(
             not_running(entry),
-            (None, HostCode::DueTaskMissing.as_str(), at(0, 9, 0)),
+            (
+                None,
+                ScheduleExplanationRowCode::DueTaskMissing.as_str(),
+                at(0, 9, 0)
+            ),
             "at {evaluated_at}"
         );
     }

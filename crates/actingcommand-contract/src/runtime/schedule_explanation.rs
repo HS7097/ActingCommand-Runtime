@@ -10,7 +10,7 @@
 //! any decision.
 
 use super::{RuntimeContractError, RuntimeContractResult};
-use crate::codes::RuntimeContractCode;
+use crate::codes::{RuntimeContractCode, ScheduleExplanationRowCode};
 use crate::outcome::{CodeStr, Outcome};
 use serde::{Deserialize, Serialize};
 
@@ -85,8 +85,8 @@ pub struct ScheduleExplanationCandidate {
 }
 
 /// The instance's one not-running row (scheduling model §8.2 item 4): its first due candidate
-/// row's task, `why`, wake and since; with no due row, no task and `why` the runtime-host code
-/// `due_task_missing` naming the instance and its earliest wake.
+/// row's task, `why`, wake and since; with no due row, no task and `why`
+/// [`ScheduleExplanationRowCode::DueTaskMissing`] naming the instance and its earliest wake.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleExplanationNotRunning {
@@ -130,9 +130,10 @@ pub struct RuntimeScheduleExplanation {
 
 impl RuntimeScheduleExplanation {
     /// The shape rules: at most [`MAX_SCHEDULE_EXPLANATION_INSTANCES`] entries, each instance
-    /// once and in alias order; per entry at most [`MAX_SCHEDULE_EXPLANATION_CANDIDATES`] candidate
-    /// rows and a `candidates_total` no smaller than them, no candidate the selected task, and
-    /// per row one to [`MAX_SCHEDULE_EXPLANATION_REASONS`] reason codes ending with `why`'s.
+    /// once and in alias order; per entry a not-running row without a task exactly when its `why`
+    /// is `due_task_missing`, at most [`MAX_SCHEDULE_EXPLANATION_CANDIDATES`] candidate rows and a
+    /// `candidates_total` no smaller than them, no candidate the selected task, and per row one to
+    /// [`MAX_SCHEDULE_EXPLANATION_REASONS`] reason codes ending with `why`'s.
     pub fn validate(&self) -> RuntimeContractResult<()> {
         let invalid = || RuntimeContractError::new(RuntimeContractCode::InvalidScheduleExplanation);
         if self.instances.len() > MAX_SCHEDULE_EXPLANATION_INSTANCES
@@ -145,7 +146,13 @@ impl RuntimeScheduleExplanation {
         }
         for entry in &self.instances {
             let answered = u32::try_from(entry.candidates.len()).map_err(|_| invalid())?;
-            if entry.candidates.len() > MAX_SCHEDULE_EXPLANATION_CANDIDATES
+            let idle = entry.not_running.task_id.is_none();
+            if idle
+                != entry
+                    .not_running
+                    .why
+                    .is(ScheduleExplanationRowCode::DueTaskMissing)
+                || entry.candidates.len() > MAX_SCHEDULE_EXPLANATION_CANDIDATES
                 || entry.candidates_total < answered
             {
                 return Err(invalid());
@@ -310,6 +317,39 @@ mod tests {
             Some(invalid),
             "a receipt that is not completed"
         );
+    }
+
+    #[test]
+    fn mcp19a_a_not_running_row_has_no_task_exactly_when_its_why_is_due_task_missing() {
+        let due_task_missing = || {
+            Outcome::new(ScheduleExplanationRowCode::DueTaskMissing)
+                .instance_id("neutral.instance")
+                .next_eligible_unix_ms(EVALUATED_AT + 3_600_000)
+        };
+        let mut idle = answered();
+        idle.instances[0].not_running = ScheduleExplanationNotRunning {
+            task_id: None,
+            why: due_task_missing(),
+            next_wake_unix_ms: None,
+            since_unix_ms: EVALUATED_AT,
+        };
+        assert_eq!(idle.validate(), Ok(()));
+
+        let invalid = RuntimeContractCode::InvalidScheduleExplanation.code();
+        let mut taskless = answered();
+        taskless.instances[0].not_running.task_id = None;
+        let mut tasked = answered();
+        tasked.instances[0].not_running.why = due_task_missing();
+        for (case, explanation) in [
+            ("a row without a task whose why is another code", taskless),
+            ("a row with a task whose why is due_task_missing", tasked),
+        ] {
+            assert_eq!(
+                explanation.validate().map_err(RuntimeContractError::code),
+                Err(invalid),
+                "{case}"
+            );
+        }
     }
 
     #[test]
