@@ -1644,7 +1644,7 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         // Workflow #411 B15 R6: `remedy set` writes one scope's rows, an instance's or a game's
         // (no `--server`: a server id is not game-qualified); `get` and `lift` take one instance.
         remedy::COMMAND if action == Some(remedy::SET) => {
-            &["--state-root", "--instance", "--game", "--rows"]
+            &["--state-root", "--instance", "--server", "--game", "--rows"]
         }
         remedy::COMMAND if matches!(action, Some(remedy::GET | remedy::LIFT)) => {
             &["--state-root", "--instance"]

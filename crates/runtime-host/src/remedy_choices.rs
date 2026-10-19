@@ -159,7 +159,7 @@ pub(crate) fn check(
 fn shape(record: &FactRecord) -> Result<Vec<Row>, Refusal> {
     // A server id is not game-qualified: a server record would cover the instances of every
     // game that shares the id. Remedy choices are written at instance or game scope only.
-    if matches!(record.scope, FactScope::Server { .. }) {
+    if matches!(&record.scope, FactScope::Server { server_id } if server_id.is_empty()) {
         return Err(Refusal::at(SCOPE_POINTER));
     }
     if !record.invalidate_on.is_empty() {
