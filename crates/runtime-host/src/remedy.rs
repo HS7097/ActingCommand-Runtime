@@ -78,6 +78,20 @@ pub(crate) struct UnreadablePackage {
     pub(crate) code: ContainedTaskCode,
 }
 
+impl UnreadablePackage {
+    /// The developer line that names the package (Fail Loud: a package the table could not read
+    /// is never silent). The running Runtime writes it when the table in effect gains the
+    /// package; check-config writes it for its offline table.
+    pub(crate) fn developer_line(&self) -> String {
+        format!(
+            "actingd remedy_table unreadable code={} tasks={} path={}",
+            self.code,
+            self.tasks.join(","),
+            self.path,
+        )
+    }
+}
+
 /// The table of one catalog generation, as built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BuiltTable {
@@ -434,6 +448,15 @@ pub struct RemedyDeclarationNote {
     pub detail: Option<String>,
 }
 
+/// Workflow #411 B15 R7: what `actingd check-config` reports about declared remedies: its notes,
+/// and for each package the offline table could not read, the developer line the running Runtime
+/// writes for it (no note: the configuration stays valid).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemedyDeclarationNotes {
+    pub notes: Vec<RemedyDeclarationNote>,
+    pub unreadable: Vec<String>,
+}
+
 /// Workflow #411 B15 R7 (model-b15 §9.1, §13; `contracts/remedies.md` section 10): what
 /// `actingd check-config` notes about declared remedies. R4's table is built offline over the
 /// catalog of `catalog` and the package locations of `config`'s procedure manifest, for the
@@ -444,15 +467,19 @@ pub struct RemedyDeclarationNote {
 /// capability that need's remedies do not list (`choice_invalid`); a `parameter` row whose
 /// capability no bound provider declares, whose parameter that capability does not declare, or
 /// whose value is not one of its options (`parameter_invalid`); a per-instance list's notes name
-/// its `instance_id`. Nothing is written. A catalog that does not compile gives no note: the
-/// check's catalog preview refuses it.
+/// its `instance_id`. A package the table cannot read gives no note but its developer line, as at
+/// run time. Nothing is written. A catalog that does not compile gives no note: the check's
+/// catalog preview refuses it.
 pub fn remedy_declaration_notes(
     config: &crate::RuntimeHostConfig,
     catalog: &actingcommand_policy::CatalogSources,
     lists: &[RemedyChoiceList],
-) -> Vec<RemedyDeclarationNote> {
+) -> RemedyDeclarationNotes {
     let Ok(compiled) = actingcommand_policy::compile_catalog(catalog) else {
-        return Vec::new();
+        return RemedyDeclarationNotes {
+            notes: Vec::new(),
+            unreadable: Vec::new(),
+        };
     };
     let instances = config
         .policy_inputs()
@@ -506,7 +533,14 @@ pub fn remedy_declaration_notes(
             });
         }
     }
-    notes
+    RemedyDeclarationNotes {
+        notes,
+        unreadable: built
+            .unreadable
+            .iter()
+            .map(UnreadablePackage::developer_line)
+            .collect(),
+    }
 }
 
 /// A configuration row whose names the table does not declare, as its note (without the list's
@@ -642,12 +676,7 @@ impl RemedyState {
             {
                 continue;
             }
-            println!(
-                "actingd remedy_table unreadable code={} tasks={} path={}",
-                package.code,
-                package.tasks.join(","),
-                package.path,
-            );
+            println!("{}", package.developer_line());
         }
         self.table = Some(table);
     }

@@ -452,7 +452,9 @@ What the check noted is not a member of `report`: each is one `note` link of
   `parameter_invalid` with `capability`, and `instance_id` for an instance's own
   list; each row's note also writes a developer line on stderr naming the list's
   key and the row. A package that cannot be read gives no note (the dispatch
-  reports it). Nothing is written.
+  reports it) but, as at run time, the developer line
+  `actingd remedy_table unreadable code=<code> tasks=<tasks> path=<path>` on
+  stderr. Nothing is written.
 
 A note is not a failure, even one whose own category is `error` (a MuMu
 resolution failure, a standard-pack problem, `pack_admission_suspended`): the

@@ -254,7 +254,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     // Workflow #411 B15 R7 (model-b15 §9.1, §13): the remedy table built offline over
     // `policy.procedure_manifest`; each of its findings, and each configuration row whose names
     // the bound packages do not declare, is a `policy_remedy_declaration_unusable` note, a row's
-    // also a developer line naming it. The configuration stays valid. Nothing is written.
+    // also a developer line naming it; each package the table cannot read is the developer line
+    // the running Runtime writes for it. The configuration stays valid. Nothing is written.
     if let Some(policy) = policy.as_ref() {
         let lists = remedy_choice_lists(&checked.manifest).map_err(|failure| {
             staged(
@@ -262,11 +263,15 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
                 ActingdLocation::ConfigAssemble,
             )
         })?;
-        for note in actingcommand_runtime_host::remedy_declaration_notes(
+        let remedies = actingcommand_runtime_host::remedy_declaration_notes(
             &checked.host,
             &policy.catalog,
             &lists,
-        ) {
+        );
+        for line in &remedies.unreadable {
+            write_stderr(&format!("{line}\n"));
+        }
+        for note in remedies.notes {
             if let Some(detail) = &note.detail {
                 write_stderr(&developer_line(&note.outcome, Some(detail)));
             }
