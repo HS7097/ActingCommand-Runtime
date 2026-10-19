@@ -104,10 +104,11 @@ run of a startup package and in the run of a recovery ladder rung, a page-graph 
 application entry, as a `linear_steps` one is. The run begins with that effect, before any
 capture: `task.step_started` from `<unrecognized>`, the `application.*` chain, then the effect's
 arrival wait, which takes the run's first frame (so the host's first-capture rule applies to
-it). A page the screen already shows, the terminal page included, does not skip the effect, so
-a recovery or startup package restarts the application whatever the screen shows; the run's
-pages and operations take over from the frame the effect arrived on. Such a rung needs neither
-capture nor input before the effect. Every other run of the package (a client or scheduled run,
+it: a failure of the instance's capture there fails only the run, after the one ADB baseline
+probe, #411 A7). A page the screen already shows, the terminal page included, does not skip
+the effect, so a recovery or startup package restarts the application whatever the screen
+shows; the run's pages and operations take over from the frame the effect arrived on. Such a
+rung needs neither capture nor input before the effect. Every other run of the package (a client or scheduled run,
 an entry recovery or prerequisite layer) keeps the rule above.
 
 In `linear_steps` packages ([Linear steps](linear-steps.md), Workflow #336 R24/R25) any
@@ -165,11 +166,20 @@ and fixture instances are not gated.
   with `instance_resources_fenced`. Only where no fence may take it (no registered owner, a
   ledger failure, a shutdown) does the host poison under the unconfirmed device-resource rule
   (`application_foreground_unknown`, `runtime_halted`), with no `command.rejected` written.
-- First contained-task capture on a physical instance (#316-P4): when it fails and one ADB
-  baseline probe against the task deadline fails too, the host invalidates the same three facts
-  (`device.connected`, `application.foreground`, `task.page`) with `adb_unreachable` and the
-  task fails nonfatal (`task.failed` severity `warning`, lease released) instead of poisoning
-  the host; an answering adbd keeps the capture failure fatal.
+- A contained task's capture on an instance (#316-P4; #411 A7, Alice 2026-10-19): a failure
+  with one of the instance's capture codes (`capture_backend_open_failed`,
+  `paired_backend_open_failed`, `capture_backend_operation_failed`, `capture_frame_invalid`)
+  whose temporary resources are confirmed released fails only that run: nonfatal
+  (`capture_failed`; `task.failed` not severe, its severity the code's category; lease
+  released); a failed open leaves the instance's capture self-check `failed`; the Runtime and
+  the other instances go on; a scheduled run's failure starts the recovery ladder by the
+  configuration (item `task_capture_backend`). On a physical instance's first capture one ADB
+  baseline probe (task deadline) runs first. When it fails too, the host invalidates
+  `device.connected`, `application.foreground` and `task.page` with `adb_unreachable`. When its
+  adb child cannot be confirmed gone, the instance is fenced (#403). Any other capture failure
+  keeps its fatality: resources released unconfirmed that no registered instance owns, or a
+  code that is not the instance's (the execution or capture-geometry kernel closed or
+  poisoned).
 
 Rule (ADB baseline, Alice 09-19): whatever other connection is open, the ADB endpoint must
 stay bound and answering; Nemu never replaces ADB as instance identity (the port, #322) or as
@@ -310,8 +320,9 @@ an unconfirmed ADB cleanup fences the instance, `instance_resources_fenced`, and
 (`backend_operation_failed`, failed); startup-time fatal: `startup_package_instance_unknown`,
 `startup_package_requires_physical_instance`, `invalid_startup_package`; `actingd` assembly:
 `startup_package_path_invalid`, `startup_package_invalid`.
-Fact invalidation reason: `adb_unreachable`. A first capture lost to the ADB baseline keeps
-the kernel's `capture_backend_open_failed` / `capture_backend_operation_failed`
-(`capture_failed`, nonfatal); no code is added.
+Fact invalidation reason: `adb_unreachable`. A contained task's capture failure of the
+instance keeps the kernel's `capture_backend_open_failed`, `paired_backend_open_failed`,
+`capture_backend_operation_failed` or `capture_frame_invalid` (`capture_failed`, nonfatal, on
+any capture of the run; #411 A7); no code is added.
 A failed or denied receipt carries its host code on top of its `outcome`, with its operation as
 the `operation` value (receipt v2, Workflow #378 A4; `contracts/client-interactions.md`).

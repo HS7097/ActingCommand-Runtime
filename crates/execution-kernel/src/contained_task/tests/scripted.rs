@@ -10,6 +10,10 @@
 // `pause` moves the offset on by its duration and returns at once, and a frame the device takes
 // time to deliver moves the offset by that time. No run reads the wall clock through the seam, so
 // a window or a budget runs out exactly where a script says, however loaded the machine is.
+//
+// #385 P-k1a (exec key 91): it answers successive `step_pacing()` calls with a scripted list of
+// pacing factors (after the list, its last value; without one, the factor 1000), and it keeps
+// every pause the kernel asks for.
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -67,6 +71,9 @@ pub(crate) struct ScriptedRuntime {
     screens: Vec<Vec<ScriptedFrame>>,
     shown: Vec<usize>,
     sample_timeout_retries: u32,
+    step_factors: Vec<u32>,
+    step_pacings: usize,
+    pauses: Vec<Duration>,
     base: Instant,
     offset: Duration,
     captures: usize,
@@ -85,6 +92,9 @@ impl ScriptedRuntime {
             shown: vec![0; screens.len()],
             screens,
             sample_timeout_retries: 0,
+            step_factors: Vec::new(),
+            step_pacings: 0,
+            pauses: Vec::new(),
             base: Instant::now() + CLOCK_LEAD,
             offset: Duration::ZERO,
             captures: 0,
@@ -100,6 +110,20 @@ impl ScriptedRuntime {
             sample_timeout_retries: retries,
             ..self
         }
+    }
+
+    // The same device, answering the `n`-th `step_pacing()` call with the pacing factor
+    // `factors[n]` (in thousandths), and every later call with the list's last value (#385 P-k).
+    pub(crate) fn with_step_factors(self, factors: Vec<u32>) -> Self {
+        Self {
+            step_factors: factors,
+            ..self
+        }
+    }
+
+    // Every pause the kernel asked for, in order.
+    pub(crate) fn pauses(&self) -> &[Duration] {
+        &self.pauses
     }
 
     // How many frames the kernel captured.
@@ -151,7 +175,17 @@ impl ContainedTaskRuntime for ScriptedRuntime {
     }
 
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
-        Ok(StepPacing::new(self.sample_timeout_retries))
+        let pacing = StepPacing::new(self.sample_timeout_retries);
+        let factor = self
+            .step_factors
+            .get(self.step_pacings)
+            .or_else(|| self.step_factors.last())
+            .copied();
+        self.step_pacings += 1;
+        Ok(match factor {
+            Some(factor_milli) => pacing.with_factor_milli(factor_milli),
+            None => pacing,
+        })
     }
 
     fn monotonic_now(&mut self) -> Instant {
@@ -159,6 +193,7 @@ impl ContainedTaskRuntime for ScriptedRuntime {
     }
 
     fn pause(&mut self, duration: Duration) {
+        self.pauses.push(duration);
         self.offset += duration;
     }
 }

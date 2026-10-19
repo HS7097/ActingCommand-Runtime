@@ -24,10 +24,12 @@ use actingcommand_contract::{
     SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
     TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
     TaskTimingStage, validate_resource_adjustments, validate_resource_readings,
-    validate_task_phases,
 };
+// #411 A20: a phased route's refusal names the refused member.
+use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::SampleRetries;
+use timing::PaceClock;
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
     EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, phase_entry_starts,
@@ -82,6 +84,9 @@ mod scales_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
+// #385 P-k1a (exec key 91): waits × the step's factor, limits on the budget clock.
+#[cfg(test)]
+mod gate_385_pk1;
 // Workflow #308 SEL-L6a.
 #[cfg(test)]
 mod gate_308_l6a;
@@ -2094,20 +2099,43 @@ pub struct SharedInterruptFrame<'a> {
 /// Workflow #386 SR-1 (scheduling model v1.4.2 §2.1 item 4; performance model §5.6): what the
 /// runtime hands the kernel at the start of each step, the `step_pacing()` seam. The kernel reads
 /// no configuration.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StepPacing {
     /// How often an observation whose sampling timed out is observed again, never repeating an
     /// input: the configured base (`scheduling.recognition.sample_timeout_retries`) plus the
-    /// pacing curve's extra retries (none until performance slice P-k, which also adds the
-    /// step's pacing factor here; until then every window is unscaled).
+    /// pacing curve's extra retries (none until performance slice P-k S5).
     pub sample_timeout_retries: u32,
+    /// #385 P-k (performance model v1.4.2 §5.1–§5.3, §5.6): the step's pacing factor, in
+    /// thousandths. It holds from the `step_pacing()` call that answered it until the next one:
+    /// every wait of the kernel lasts its declared duration × factor / 1000, and every limit is
+    /// compared on the run's budget clock, which runs 1000 / factor as fast as the runtime's
+    /// clock. 1000 (the default) is the unpaced step; a factor below 1000 is never used, and the
+    /// kernel ends the run with `contained_task_state_invalid`.
+    pub factor_milli: u32,
+}
+
+impl Default for StepPacing {
+    /// No observe-only retry, factor 1000.
+    fn default() -> Self {
+        Self::new(0)
+    }
 }
 
 impl StepPacing {
+    /// `sample_timeout_retries` observe-only retries at the factor 1000.
     pub const fn new(sample_timeout_retries: u32) -> Self {
         Self {
             sample_timeout_retries,
+            factor_milli: actingcommand_contract::MIN_PACING_FACTOR_MILLI,
+        }
+    }
+
+    /// #385 P-k: the same pacing at the factor `factor_milli`, in thousandths.
+    pub const fn with_factor_milli(self, factor_milli: u32) -> Self {
+        Self {
+            factor_milli,
+            ..self
         }
     }
 }
@@ -2221,7 +2249,8 @@ pub trait ContainedTaskRuntime {
     }
 
     /// Workflow #386 SR-1 (scheduling model §2.1 item 4): the pacing of the step that starts
-    /// now. A runtime without the scheduling configuration gives no observe-only retry.
+    /// now. A runtime without the scheduling configuration gives no observe-only retry and the
+    /// factor 1000. #385 P-k: the answer holds until the next call (one factor per step).
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         Ok(StepPacing::default())
     }
@@ -2231,6 +2260,11 @@ pub trait ContainedTaskRuntime {
     /// spans of its timing boundaries. The default reads the process's monotonic clock, as the
     /// kernel did before the seam; a runtime with a clock of its own answers from that clock, so
     /// one run never compares instants of two clocks.
+    ///
+    /// #385 P-k (performance model v1.4.2 §5.3): this is the run's wall clock. The kernel
+    /// compares every limit on its budget clock, derived from these readings and the factor of
+    /// each step ([`StepPacing::factor_milli`]); the readings themselves stay the evidence of
+    /// timing boundaries and observations. While every factor is 1000 the two clocks are one.
     fn monotonic_now(&mut self) -> Instant {
         Instant::now()
     }
@@ -2238,6 +2272,9 @@ pub trait ContainedTaskRuntime {
     /// Test plan E-3 (EXEC-I3): every wait of the contained-task kernel (capture intervals,
     /// post-input and retry delays, sampling intervals). The default sleeps the thread for
     /// `duration`; a runtime with a clock of its own waits on that clock.
+    ///
+    /// #385 P-k (performance model v1.4.2 §5.1–§5.2): `duration` is the wall time of the wait,
+    /// the declared one already multiplied by the step's factor / 1000.
     fn pause(&mut self, duration: Duration) {
         thread::sleep(duration);
     }
@@ -2245,6 +2282,8 @@ pub trait ContainedTaskRuntime {
     /// Workflow #386 SR-1 (scheduling model §2.1 items 2–3): the monotonic instant an
     /// observation's window is opened at and its sampling deadline is compared with. By default
     /// it is [`Self::monotonic_now`] (test plan E-3); a test runtime may script it alone.
+    /// #385 P-k: like [`Self::monotonic_now`], a wall reading the kernel takes onto its budget
+    /// clock before it compares a limit.
     fn observation_now(&mut self) -> Instant {
         self.monotonic_now()
     }
@@ -2328,6 +2367,58 @@ pub trait ContainedTaskRuntime {
 /// ([`ContainedTaskRuntime::monotonic_now`]), zero when `started` is later.
 fn elapsed_since<R: ContainedTaskRuntime>(runtime: &mut R, started: Instant) -> Duration {
     runtime.monotonic_now().saturating_duration_since(started)
+}
+
+/// #385 P-k (performance model v1.4.2 §5.3): the budget instant now on the run's budget clock
+/// `pace`, from one reading of [`ContainedTaskRuntime::monotonic_now`].
+fn budget_now<R: ContainedTaskRuntime>(runtime: &mut R, pace: PaceClock) -> Instant {
+    pace.budget(runtime.monotonic_now())
+}
+
+/// #385 P-k: [`budget_now`] from one reading of [`ContainedTaskRuntime::observation_now`].
+fn budget_observation_now<R: ContainedTaskRuntime>(runtime: &mut R, pace: PaceClock) -> Instant {
+    pace.budget(runtime.observation_now())
+}
+
+/// #385 P-k: the budget time since the budget instant `started`, zero when `started` is later.
+fn budget_elapsed_since<R: ContainedTaskRuntime>(
+    runtime: &mut R,
+    pace: PaceClock,
+    started: Instant,
+) -> Duration {
+    budget_now(runtime, pace).saturating_duration_since(started)
+}
+
+/// #385 P-k (§5.1–§5.2): a wait whose declared (and budget-capped) length is `duration`; it
+/// lasts `duration × f / 1000` of the runtime's clock at the factor of `pace`.
+fn pace_pause<R: ContainedTaskRuntime>(runtime: &mut R, pace: PaceClock, duration: Duration) {
+    runtime.pause(pace.wall_span(duration));
+}
+
+/// #385 P-k: the budget instant `deadline` handed to code that compares it with the wall clock
+/// (the recognition pack's sample deadline), as the instant of the runtime's clock it falls on.
+/// The runtime's clock is read for it only while the run is paced.
+fn wall_deadline_now<R: ContainedTaskRuntime>(
+    runtime: &mut R,
+    pace: PaceClock,
+    deadline: Instant,
+) -> Instant {
+    if pace.is_unpaced() {
+        deadline
+    } else {
+        pace.wall_deadline(runtime.observation_now(), deadline)
+    }
+}
+
+/// #385 P-k (§5.6 item 2): the run's budget clock from a `step_pacing()` answer `pacing` on. A
+/// factor below 1000 is never used: the run ends with `contained_task_state_invalid`.
+fn paced_step<R: ContainedTaskRuntime>(
+    runtime: &mut R,
+    pace: PaceClock,
+    pacing: StepPacing,
+) -> Result<PaceClock, ContainedTaskError> {
+    pace.at_step(pacing.factor_milli, || runtime.monotonic_now())
+        .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))
 }
 
 /// Workflow #373 NAV-6: a frame of an entry check, the page of the entry it matched or the scene
@@ -3083,31 +3174,34 @@ impl PreparedContainedTask {
         runtime: &mut R,
         pages: &[&str],
     ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
-        let mut started = runtime.monotonic_now();
+        // #385 P-k (performance model v1.4.2 §5.3): the check's limits are compared on its
+        // budget clock; before a `step_pacing()` answer the factor is 1000.
+        let mut pace = PaceClock::UNPACED;
+        let mut started = budget_now(runtime, pace);
         let budget = Duration::from_millis(
             self.control
                 .step_timeout()
                 .milliseconds
                 .min(self.control.task_timeout().milliseconds),
         );
-        let window = |started: Instant| {
+        let window = |started: Instant, pace: PaceClock| {
             ContainedTaskTimingContext::new(
                 started,
                 started + budget,
                 actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
             )
+            .with_pace(pace)
         };
-        let mut timing = window(started);
+        let mut timing = window(started, pace);
         if !self.evaluator.pack().target_consensus.is_empty() {
             // Workflow #386 SR-1 (scheduling model §2.1): a consensus verdict whose sampling
             // timed out is observed again in a new window.
-            let mut retries = SampleRetries::new(
-                runtime
-                    .step_pacing()
-                    .map_err(ContainedTaskRunError::operation::<R>)?,
-                ExecutionKernelLocation::ObservationEntry,
-            );
-            timing = window(runtime.observation_now());
+            let pacing = runtime
+                .step_pacing()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+            pace = paced_step(runtime, pace, pacing)?;
+            let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
+            timing = window(budget_observation_now(runtime, pace), pace);
             loop {
                 let scene = match self.capture_frame_scene(
                     runtime,
@@ -3121,14 +3215,14 @@ impl PreparedContainedTask {
                     Ok(Err(scene)) => scene,
                     Err(failure) => {
                         retries.retry(failure, budget)?;
-                        timing = window(runtime.observation_now());
+                        timing = window(budget_observation_now(runtime, pace), pace);
                         continue;
                     }
                 };
                 if self.offer_shared_interrupt(runtime, &scene)?.is_none() {
                     return Ok(None);
                 }
-                timing = window(runtime.observation_now());
+                timing = window(budget_observation_now(runtime, pace), pace);
             }
         }
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
@@ -3150,11 +3244,11 @@ impl PreparedContainedTask {
                 EntryFrame::Matched(page) => return Ok(Some(page)),
                 EntryFrame::Unmatched(scene) => scene,
             };
-            let elapsed = elapsed_since(runtime, started);
+            let elapsed = budget_elapsed_since(runtime, pace, started);
             if elapsed >= budget {
                 if self.offer_shared_interrupt(runtime, &scene)?.is_some() {
-                    started = runtime.monotonic_now();
-                    timing = window(started);
+                    started = budget_now(runtime, pace);
+                    timing = window(started, pace);
                     continue;
                 }
                 return Ok(None);
@@ -3170,7 +3264,7 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
-            runtime.pause(interval.min(budget.saturating_sub(elapsed)));
+            pace_pause(runtime, pace, interval.min(budget.saturating_sub(elapsed)));
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
@@ -3213,19 +3307,20 @@ impl PreparedContainedTask {
         );
         // Workflow #386 SR-1 (scheduling model §2.1): an observation whose sampling timed out is
         // made again in a new window.
-        let mut retries = SampleRetries::new(
-            runtime
-                .step_pacing()
-                .map_err(ContainedTaskRunError::operation::<R>)?,
-            ExecutionKernelLocation::ObservationEntry,
-        );
+        let pacing = runtime
+            .step_pacing()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        // #385 P-k (performance model v1.4.2 §5.3): the check's window is budget time.
+        let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
+        let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
         loop {
-            let started = runtime.observation_now();
+            let started = budget_observation_now(runtime, pace);
             let timing = ContainedTaskTimingContext::new(
                 started,
                 started + window,
                 actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
-            );
+            )
+            .with_pace(pace);
             match self.recognize_entry_frame(runtime, page, timing) {
                 Ok(EntryFrame::Matched(_)) => return Ok(Some(page.to_owned())),
                 Ok(EntryFrame::Unmatched(scene)) => {
@@ -3314,18 +3409,20 @@ impl PreparedContainedTask {
             _ => format!("required_pages={}", pages.join(",")),
         };
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
-        let mut started = runtime.monotonic_now();
+        // #385 P-k (performance model v1.4.2 §5.3): the wait's limits are budget time; it
+        // starts before the `step_pacing()` answer, at the factor 1000.
+        let mut started = budget_now(runtime, PaceClock::UNPACED);
         // Workflow #386 SR-1 (scheduling model §2.1): the observation window opens on the
         // observation clock; a sampling timeout is observed again in a new window.
-        let mut retries = SampleRetries::new(
-            runtime
-                .step_pacing()
-                .map_err(ContainedTaskRunError::operation::<R>)?,
-            ExecutionKernelLocation::ObservationEntry,
-        );
-        let mut window_started = runtime.observation_now();
+        let pacing = runtime
+            .step_pacing()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
+        let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
+        let mut window_started = budget_observation_now(runtime, pace);
         let mut timing =
-            ContainedTaskTimingContext::new(window_started, window_started + budget, origin);
+            ContainedTaskTimingContext::new(window_started, window_started + budget, origin)
+                .with_pace(pace);
         loop {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
@@ -3353,29 +3450,32 @@ impl PreparedContainedTask {
                 Ok(EntryFrame::Unmatched(scene)) => scene,
                 Err(failure) => {
                     retries.retry(failure, budget)?;
-                    started = runtime.monotonic_now();
-                    window_started = runtime.observation_now();
+                    started = budget_now(runtime, pace);
+                    window_started = budget_observation_now(runtime, pace);
                     timing = ContainedTaskTimingContext::new(
                         window_started,
                         window_started + budget,
                         origin,
-                    );
+                    )
+                    .with_pace(pace);
                     continue;
                 }
             };
             // Workflow #373 NAV-6 (§6.2): the wait's budget is paused while a shared interrupt
             // page is handled.
             if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
                 timing = ContainedTaskTimingContext::new(
                     window_started,
                     window_started + budget,
                     origin,
-                );
+                )
+                .with_pace(pace);
                 continue;
             }
-            let elapsed = elapsed_since(runtime, started);
+            let elapsed = budget_elapsed_since(runtime, pace, started);
             if elapsed >= budget {
                 let (code, return_home) = match return_home {
                     Some(package_id) => (
@@ -3408,7 +3508,7 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
-            runtime.pause(interval.min(budget.saturating_sub(elapsed)));
+            pace_pause(runtime, pace, interval.min(budget.saturating_sub(elapsed)));
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
@@ -3930,7 +4030,10 @@ impl PreparedContainedTask {
         let entry = options.entry;
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let task_deadline = started + task_timeout;
-        let observation_timing = ContainedTaskTimingContext::new(
+        // #385 P-k (performance model v1.4.2 §5.3): the run's budget clock rides on its timing
+        // context; `started` precedes the first `step_pacing()` answer, so it and the task
+        // deadline are budget instants at the factor 1000.
+        let mut observation_timing = ContainedTaskTimingContext::new(
             started,
             task_deadline,
             match entry {
@@ -3961,6 +4064,8 @@ impl PreparedContainedTask {
         let mut pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        observation_timing =
+            observation_timing.with_pace(paced_step(runtime, observation_timing.pace(), pacing)?);
         if self.control.execution_mode == linear::LINEAR_STEPS {
             // Workflow #336: the admitted step plan, resolved again from the admitted program.
             let plan = self
@@ -4018,7 +4123,8 @@ impl PreparedContainedTask {
             // in a new window.
             let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
             loop {
-                let timing = entry_timing(runtime.observation_now());
+                let timing =
+                    entry_timing(budget_observation_now(runtime, observation_timing.pace()));
                 match self.capture_page(runtime, ocr_collector, None, timing) {
                     Ok(observed) => break observed,
                     Err(failure) => retries.retry(failure, step_timeout)?,
@@ -4034,13 +4140,14 @@ impl PreparedContainedTask {
                 (pacing, ExecutionKernelLocation::ObservationPageWait),
             )?)
         };
-        if runtime.monotonic_now() >= task_deadline {
+        if budget_now(runtime, observation_timing.pace()) >= task_deadline {
             return Err(self
                 .task_timeout_error(
                     runtime,
                     TaskTimingStage::EntryRecognition,
                     task_deadline,
                     None,
+                    observation_timing.pace(),
                 )
                 .into());
         }
@@ -4120,9 +4227,15 @@ impl PreparedContainedTask {
         let mut chosen_identities: BTreeMap<String, String> = BTreeMap::new();
 
         loop {
-            if elapsed_since(runtime, started) >= task_timeout {
+            if budget_elapsed_since(runtime, observation_timing.pace(), started) >= task_timeout {
                 return Err(self
-                    .task_timeout_error(runtime, TaskTimingStage::Dispatch, task_deadline, None)
+                    .task_timeout_error(
+                        runtime,
+                        TaskTimingStage::Dispatch,
+                        task_deadline,
+                        None,
+                        observation_timing.pace(),
+                    )
                     .into());
             }
             let directive = if observation.is_none()
@@ -4203,15 +4316,25 @@ impl PreparedContainedTask {
                     pacing = runtime
                         .step_pacing()
                         .map_err(ContainedTaskRunError::operation::<R>)?;
+                    // #385 P-k (performance model v1.4.2 §5.6 item 2): the step's factor holds
+                    // from here until the next step's answer, whatever the runtime would answer
+                    // during this step.
+                    observation_timing = observation_timing.with_pace(paced_step(
+                        runtime,
+                        observation_timing.pace(),
+                        pacing,
+                    )?);
+                    let pace = observation_timing.pace();
                     let mut attempt = 1;
                     'attempt: loop {
-                        if elapsed_since(runtime, started) >= task_timeout {
+                        if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                             return Err(self
                                 .task_timeout_error(
                                     runtime,
                                     TaskTimingStage::Dispatch,
                                     task_deadline,
                                     None,
+                                    pace,
                                 )
                                 .into());
                         }
@@ -4221,7 +4344,7 @@ impl PreparedContainedTask {
                             .scan_max_ms()
                             .map_or(step_timeout, Duration::from_millis);
                         let mut step_timing = observation_timing
-                            .with_deadline(runtime.observation_now() + step_window);
+                            .with_deadline(budget_observation_now(runtime, pace) + step_window);
                         let sampling_budget = selection::sampling_budget_ms(
                             operation,
                             &self.evaluator,
@@ -4238,13 +4361,14 @@ impl PreparedContainedTask {
                         if let Some(effect) = operation.application {
                             // Slice #316-B3: no guard, no coordinate, no `task.effect_intent`;
                             // the runtime boundary records the `application.*` chain itself.
-                            if elapsed_since(runtime, started) >= task_timeout {
+                            if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                                 return Err(self
                                     .task_timeout_error(
                                         runtime,
                                         TaskTimingStage::BeforeInput,
                                         task_deadline,
                                         None,
+                                        pace,
                                     )
                                     .into());
                             }
@@ -4309,6 +4433,7 @@ impl PreparedContainedTask {
                                                 (step_index, &operation_id),
                                                 page_label,
                                                 outcome_key,
+                                                pace,
                                             );
                                         }
                                         // A scan's failure may follow its own drags: no retry and
@@ -4462,7 +4587,8 @@ impl PreparedContainedTask {
                                 // 3): a timeout here is the observation's, and is retried.
                                 if sampling_budget.is_some()
                                     && operation.scan_max_ms().is_none()
-                                    && runtime.observation_now() >= step_timing.deadline()
+                                    && budget_observation_now(runtime, step_timing.pace())
+                                        >= step_timing.deadline()
                                 {
                                     let timeout = ContainedTaskError::new(
                                         ExecutionKernelCode::RecognitionSampleDeadlineExceeded
@@ -4496,13 +4622,14 @@ impl PreparedContainedTask {
                                     guard,
                                 })
                                 .map_err(ContainedTaskRunError::Boundary)?;
-                            if elapsed_since(runtime, started) >= task_timeout {
+                            if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                                 return Err(self
                                     .task_timeout_error(
                                         runtime,
                                         TaskTimingStage::BeforeInput,
                                         task_deadline,
                                         None,
+                                        pace,
                                     )
                                     .into());
                             }
@@ -4538,8 +4665,13 @@ impl PreparedContainedTask {
                         let boundary = actingcommand_contract::TaskTimingBoundary::PostInputWait;
                         let identity = runtime.task_boundary_identity(boundary);
                         let wait_started = runtime.monotonic_now();
-                        let waited =
-                            Self::wait_post_input_delay(runtime, operation, started, task_timeout);
+                        let waited = Self::wait_paced_post_input_delay(
+                            runtime,
+                            operation,
+                            started,
+                            task_timeout,
+                            pace,
+                        );
                         let wait_ended = runtime.monotonic_now();
                         runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                             boundary,
@@ -4583,6 +4715,7 @@ impl PreparedContainedTask {
                                         )
                                     })?,
                                     reason,
+                                    pace,
                                 );
                             }
                             break;
@@ -4638,6 +4771,7 @@ impl PreparedContainedTask {
                                                 )
                                             })?,
                                             reason,
+                                            pace,
                                         );
                                     }
                                     break;
@@ -4682,7 +4816,7 @@ impl PreparedContainedTask {
                             } => {
                                 let delay = Duration::from_millis(delay_ms);
                                 if task_timeout
-                                    .checked_sub(elapsed_since(runtime, started))
+                                    .checked_sub(budget_elapsed_since(runtime, pace, started))
                                     .is_none_or(|remaining| delay > remaining)
                                 {
                                     return Err(self
@@ -4691,6 +4825,7 @@ impl PreparedContainedTask {
                                             TaskTimingStage::RetryDelay,
                                             task_deadline,
                                             Some(delay),
+                                            pace,
                                         )
                                         .into());
                                 }
@@ -4698,7 +4833,7 @@ impl PreparedContainedTask {
                                     actingcommand_contract::TaskTimingBoundary::RetryWait;
                                 let identity = runtime.task_boundary_identity(boundary);
                                 let wait_started = runtime.monotonic_now();
-                                runtime.pause(delay);
+                                pace_pause(runtime, pace, delay);
                                 let wait_ended = runtime.monotonic_now();
                                 runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                                     boundary,
@@ -4742,6 +4877,7 @@ impl PreparedContainedTask {
                                                     )
                                                 })?,
                                                 reason,
+                                                pace,
                                             );
                                         }
                                         break;
@@ -4912,6 +5048,7 @@ impl PreparedContainedTask {
                         ocr_collector,
                         current_page,
                         (machine.completed_steps(), machine.designated_effect_caps()),
+                        observation_timing.pace(),
                     );
                 }
                 RunDirective::Terminal(
@@ -5007,6 +5144,7 @@ impl PreparedContainedTask {
         Ok(terminal_reason)
     }
 
+    /// #385 P-k: `pace` is the run's budget clock at its end, for the readings join.
     fn finish_stability_termination<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -5014,6 +5152,7 @@ impl PreparedContainedTask {
         machine: &RunStateMachine,
         observation: &PageObservation,
         reason: StabilityTerminalReason,
+        pace: PaceClock,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         match reason {
             StabilityTerminalReason::ConsecutiveUnchangedThresholdReached => self.finish_success(
@@ -5021,6 +5160,7 @@ impl PreparedContainedTask {
                 ocr_collector,
                 Some(observation.page_label.clone()),
                 (machine.completed_steps(), machine.designated_effect_caps()),
+                pace,
             ),
             StabilityTerminalReason::MaxStepsReached => Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
@@ -5029,6 +5169,7 @@ impl PreparedContainedTask {
         }
     }
 
+    /// #385 P-k: `pace` is the run's budget clock at its end, for the readings join.
     fn finish_success<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -5036,14 +5177,16 @@ impl PreparedContainedTask {
         final_page: Option<String>,
         // The executed steps, and Workflow #390 OUT-2's designated effect caps.
         steps: (u32, &[crate::DesignatedEffectCap]),
+        pace: PaceClock,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        self.finish_success_with_key(runtime, ocr_collector, final_page, steps, None)
+        self.finish_success_with_key(runtime, ocr_collector, final_page, steps, None, pace)
     }
 
     /// Workflow #308 SEL-L4b (S0 §1.4): a select step that declares `on_empty` found nobody
     /// listed and nothing unknown. No further operation runs and no input follows: the step
     /// finishes on its own page as recognized on its last frame, without completing its phase,
     /// and the run is Completed there with the `on_empty` key as its scheduling outcome.
+    #[allow(clippy::too_many_arguments)]
     fn finish_select_empty<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -5052,6 +5195,7 @@ impl PreparedContainedTask {
         (step_index, operation_label): (u32, &str),
         page_label: String,
         outcome_key: String,
+        pace: PaceClock,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         runtime
             .record(ContainedTaskTrace::StepFinished {
@@ -5070,6 +5214,7 @@ impl PreparedContainedTask {
             Some(page_label),
             (machine.completed_steps(), machine.designated_effect_caps()),
             Some(outcome_key),
+            pace,
         )
     }
 
@@ -5131,7 +5276,9 @@ impl PreparedContainedTask {
         let effective = operation.effective_timing(&self.control);
         let timeout = Duration::from_millis(effective.timeout.milliseconds);
         let interval = Duration::from_millis(effective.interval.milliseconds);
-        let started = runtime.monotonic_now();
+        // #385 P-k: the expectation's timeout is budget time, its polls last interval × f.
+        let pace = timing.pace();
+        let started = budget_now(runtime, pace);
         // The state of the last destination frame read; the text path's empty reading is
         // Unknown, so it never reports `absent`.
         let mut state = scan::IdentityState::Unknown;
@@ -5163,7 +5310,7 @@ impl PreparedContainedTask {
                     ExpectedIdentityReading::Unread(unread) => state = unread,
                 }
             }
-            if runtime.monotonic_now().saturating_duration_since(started) >= timeout {
+            if budget_elapsed_since(runtime, pace, started) >= timeout {
                 Self::finish_effect_attempt(
                     runtime,
                     step_index,
@@ -5175,7 +5322,7 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity_boundary = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
-            runtime.pause(interval);
+            pace_pause(runtime, pace, interval);
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
@@ -5260,6 +5407,8 @@ impl PreparedContainedTask {
         (executed_steps, designated_effect_caps): (u32, &[crate::DesignatedEffectCap]),
         // Workflow #308 SEL-L4b: the `on_empty` key of a run that ended empty.
         on_empty_key: Option<String>,
+        // #385 P-k: the run's budget clock at its end; the readings join is budget time.
+        pace: PaceClock,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let reading_relay = ocr_collector.reading_relay.take();
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
@@ -5299,7 +5448,7 @@ impl PreparedContainedTask {
         // Workflow #384 D2-S2 (model §3.5): the readings of every handed-off frame are joined
         // before `Finalizing`.
         if let Some(relay) = reading_relay {
-            self.join_resource_readings(runtime, relay)?;
+            self.join_resource_readings(runtime, relay, pace)?;
         }
         runtime
             .record(ContainedTaskTrace::Finalizing {
@@ -5335,36 +5484,59 @@ impl PreparedContainedTask {
     }
 
     /// `contained_task_timeout` at `stage`, its elapsed time read on the runtime's clock (test
-    /// plan E-3).
+    /// plan E-3). #385 P-k: the elapsed time is the run's budget time on `pace`, the time the
+    /// task timeout was compared with.
     fn task_timeout_error<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         stage: TaskTimingStage,
         deadline: Instant,
         required_delay: Option<Duration>,
+        pace: PaceClock,
     ) -> ContainedTaskError {
         let limit = Duration::from_millis(self.control.task_timeout().milliseconds);
         ContainedTaskError::timed(
             ExecutionKernelCode::ContainedTaskTimeout.code(),
             TaskTimingScope::Task,
             stage,
-            runtime.monotonic_now().duration_since(deadline - limit),
+            budget_now(runtime, pace).duration_since(deadline - limit),
             limit,
             required_delay,
         )
     }
 
+    /// The post-input delay of a run unpaced (#385 P-k: every factor 1000).
+    #[cfg(test)]
     fn wait_post_input_delay<R: ContainedTaskRuntime>(
         runtime: &mut R,
         operation: &TaskOperation,
         started: Instant,
         task_timeout: Duration,
     ) -> Result<(), ContainedTaskError> {
+        Self::wait_paced_post_input_delay(
+            runtime,
+            operation,
+            started,
+            task_timeout,
+            PaceClock::UNPACED,
+        )
+    }
+
+    /// The operation's `post_delay_ms` after its input, within the task's timeout from the run's
+    /// start `started`. #385 P-k: the remaining time is budget time on `pace`, and the delay
+    /// lasts `post_delay_ms × f / 1000`.
+    fn wait_paced_post_input_delay<R: ContainedTaskRuntime>(
+        runtime: &mut R,
+        operation: &TaskOperation,
+        started: Instant,
+        task_timeout: Duration,
+        pace: PaceClock,
+    ) -> Result<(), ContainedTaskError> {
         let Some(delay_ms) = operation.post_delay_ms else {
             return Ok(());
         };
         let delay = Duration::from_millis(delay_ms);
-        let elapsed = elapsed_since(runtime, started);
+        let elapsed = budget_elapsed_since(runtime, pace, started);
         if task_timeout
             .checked_sub(elapsed)
             .is_none_or(|remaining| delay >= remaining)
@@ -5378,8 +5550,8 @@ impl PreparedContainedTask {
                 Some(delay),
             ));
         }
-        runtime.pause(delay);
-        let elapsed = elapsed_since(runtime, started);
+        pace_pause(runtime, pace, delay);
+        let elapsed = budget_elapsed_since(runtime, pace, started);
         if elapsed >= task_timeout {
             Err(ContainedTaskError::timed(
                 ExecutionKernelCode::ContainedTaskTimeout.code(),
@@ -5408,9 +5580,11 @@ impl PreparedContainedTask {
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let base_timing = timing;
+        // #385 P-k (performance model v1.4.2 §5.3): the wait's limits are budget time.
+        let pace = timing.pace();
         let mut retries = SampleRetries::new(retries.0, retries.1);
-        let mut started = runtime.monotonic_now();
-        let mut window_started = runtime.observation_now();
+        let mut started = budget_now(runtime, pace);
+        let mut window_started = budget_observation_now(runtime, pace);
         // Whether the window has seen a frame that gave no page of the package.
         let mut missed = false;
         loop {
@@ -5419,13 +5593,14 @@ impl PreparedContainedTask {
             } else {
                 base_timing.with_deadline(window_started + timeout)
             };
-            if runtime.monotonic_now() >= task_deadline {
+            if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
                         runtime,
                         TaskTimingStage::PageRecognition,
                         task_deadline,
                         None,
+                        pace,
                     )
                     .into());
             }
@@ -5437,6 +5612,7 @@ impl PreparedContainedTask {
                     None,
                     window_started + timeout,
                     task_deadline,
+                    pace,
                 )?
             {
                 break;
@@ -5445,19 +5621,20 @@ impl PreparedContainedTask {
                 Ok(observation) => observation,
                 Err(failure) => {
                     retries.retry(failure, timeout)?;
-                    started = runtime.monotonic_now();
-                    window_started = runtime.observation_now();
+                    started = budget_now(runtime, pace);
+                    window_started = budget_observation_now(runtime, pace);
                     missed = false;
                     continue;
                 }
             };
-            if runtime.monotonic_now() >= task_deadline {
+            if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
                         runtime,
                         TaskTimingStage::PageRecognition,
                         task_deadline,
                         None,
+                        pace,
                     )
                     .into());
             }
@@ -5470,20 +5647,22 @@ impl PreparedContainedTask {
             // offered to the shared interrupt pages before the wait goes on, its budget paused
             // while one is handled.
             if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
                 continue;
             }
-            if elapsed_since(runtime, started) >= timeout {
+            if budget_elapsed_since(runtime, pace, started) >= timeout {
                 break;
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
+            let now = pace.budget(wait_started);
             let wait = interval
-                .min(timeout.saturating_sub(wait_started.saturating_duration_since(started)))
-                .min(task_deadline.saturating_duration_since(wait_started));
-            runtime.pause(wait);
+                .min(timeout.saturating_sub(now.saturating_duration_since(started)))
+                .min(task_deadline.saturating_duration_since(now));
+            pace_pause(runtime, pace, wait);
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
@@ -5498,7 +5677,7 @@ impl PreparedContainedTask {
             SharedCode::ContainedTaskPageUnknown.code(),
             TaskTimingScope::PageRecognition,
             TaskTimingStage::PageRecognition,
-            elapsed_since(runtime, started),
+            budget_elapsed_since(runtime, pace, started),
             timeout,
             None,
         )
@@ -5515,13 +5694,15 @@ impl PreparedContainedTask {
     /// check, `recognition_sample_budget_insufficient` (§2.1 item 5, §2.3). Without consensus
     /// the wait's elapsed time alone decides. `pages` are the pages the wait's observation
     /// evaluates, as its own check counts them: every page for the page-graph waits, the
-    /// awaited pages for a `linear_steps` wait (wave-17 acceptance ruling 2).
+    /// awaited pages for a `linear_steps` wait (wave-17 acceptance ruling 2). #385 P-k: the
+    /// window's end and the task deadline are budget instants on `pace`.
     fn consensus_window_spent<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         pages: Option<&[&str]>,
         window_end: Instant,
         task_deadline: Instant,
+        pace: PaceClock,
     ) -> Result<bool, ContainedTaskError> {
         if self.evaluator.pack().target_consensus.is_empty() {
             return Ok(false);
@@ -5529,7 +5710,7 @@ impl PreparedContainedTask {
         let required_ms =
             selection::page_recognition_budget_ms(&self.evaluator, &self.detector, pages)?;
         let required = Duration::from_millis(required_ms);
-        let now = runtime.observation_now();
+        let now = budget_observation_now(runtime, pace);
         // The observation's own check: `capture_frame_scene` before its first capture.
         let holds = |end: Instant| {
             let remaining = end.saturating_duration_since(now);
@@ -5571,8 +5752,10 @@ impl PreparedContainedTask {
             }
         };
         let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
-        let mut window = entry_window(runtime.observation_now());
-        let mut deadline = (runtime.monotonic_now() + budget).min(window.deadline());
+        // #385 P-k (performance model v1.4.2 §5.3): the entry's budget is budget time.
+        let pace = timing.pace();
+        let mut window = entry_window(budget_observation_now(runtime, pace));
+        let mut deadline = (budget_now(runtime, pace) + budget).min(window.deadline());
         loop {
             let scene = match self.capture_page_scene(
                 runtime,
@@ -5584,14 +5767,14 @@ impl PreparedContainedTask {
                 Ok(Err(scene)) => scene,
                 Err(failure) => {
                     retries.retry(failure, budget)?;
-                    window = entry_window(runtime.observation_now());
+                    window = entry_window(budget_observation_now(runtime, pace));
                     continue;
                 }
             };
             if !waits {
                 return Err(unmatched().into());
             }
-            let now = runtime.monotonic_now();
+            let now = budget_now(runtime, pace);
             let expired = now >= deadline;
             if !expired {
                 runtime
@@ -5603,7 +5786,7 @@ impl PreparedContainedTask {
                 // last frame is offered to the shared interrupt pages, and after a handled one
                 // the entry check starts again.
                 if self.offer_shared_interrupt(runtime, &scene)?.is_some() {
-                    deadline = (runtime.monotonic_now() + budget).min(timing.deadline());
+                    deadline = (budget_now(runtime, pace) + budget).min(timing.deadline());
                     continue;
                 }
                 runtime
@@ -5617,7 +5800,11 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
-            runtime.pause(interval.min(deadline.saturating_duration_since(now)));
+            pace_pause(
+                runtime,
+                pace,
+                interval.min(deadline.saturating_duration_since(now)),
+            );
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
@@ -5662,7 +5849,8 @@ impl PreparedContainedTask {
         retries: &mut SampleRetries,
     ) -> Result<FreshFrameObservation, ContainedTaskRunError<R::Error>> {
         loop {
-            let step_timing = timing.with_deadline(runtime.observation_now() + window);
+            let step_timing =
+                timing.with_deadline(budget_observation_now(runtime, timing.pace()) + window);
             match self.capture_frame_scene(runtime, None, None, step_timing, None, None) {
                 Ok(observed) => return Ok((observed, step_timing)),
                 Err(failure) => retries.retry(failure, window)?,
@@ -5746,6 +5934,9 @@ impl PreparedContainedTask {
         let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
         let identity = runtime.task_boundary_identity(boundary);
         let capture_started = runtime.monotonic_now();
+        // #385 P-k (performance model v1.4.2 §5.2–§5.3): the sample deadline is a budget instant,
+        // the pauses between samples last their interval × f.
+        let pace = timing.pace();
         let result = (|| {
             let sampled =
                 !self.evaluator.pack().target_consensus.is_empty() || sampling_deadline.is_some();
@@ -5773,8 +5964,8 @@ impl PreparedContainedTask {
                     &self.detector,
                     candidates,
                 )?;
-                let remaining =
-                    sample_deadline.saturating_duration_since(runtime.observation_now());
+                let remaining = sample_deadline
+                    .saturating_duration_since(budget_observation_now(runtime, pace));
                 if remaining.is_zero() || Duration::from_millis(required_ms) > remaining {
                     return Err(sample_budget_insufficient(
                         ExecutionKernelCode::RecognitionSampleBudgetInsufficient,
@@ -5784,7 +5975,7 @@ impl PreparedContainedTask {
                     .into());
                 }
                 for _ in 1..self.evaluator.target_sample_frames() {
-                    if runtime.observation_now() >= sample_deadline {
+                    if budget_observation_now(runtime, pace) >= sample_deadline {
                         return Err(ContainedTaskError::new(
                             ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                         )
@@ -5820,7 +6011,8 @@ impl PreparedContainedTask {
                     let interval =
                         Duration::from_millis(self.evaluator.target_sample_interval_ms());
                     if interval
-                        >= sample_deadline.saturating_duration_since(runtime.observation_now())
+                        >= sample_deadline
+                            .saturating_duration_since(budget_observation_now(runtime, pace))
                     {
                         return Err(ContainedTaskError::new(
                             ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
@@ -5830,7 +6022,7 @@ impl PreparedContainedTask {
                     let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
                     let identity = runtime.task_boundary_identity(boundary);
                     let started = runtime.monotonic_now();
-                    runtime.pause(interval);
+                    pace_pause(runtime, pace, interval);
                     let ended = runtime.monotonic_now();
                     runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                         boundary,
@@ -5845,7 +6037,7 @@ impl PreparedContainedTask {
                     runtime
                         .candidate_sampling_checkpoint()
                         .map_err(ContainedTaskRunError::operation::<R>)?;
-                    if runtime.observation_now() >= sample_deadline {
+                    if budget_observation_now(runtime, pace) >= sample_deadline {
                         return Err(ContainedTaskError::new(
                             ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                         )
@@ -5853,7 +6045,7 @@ impl PreparedContainedTask {
                     }
                 }
             }
-            if sampled && runtime.observation_now() >= sample_deadline {
+            if sampled && budget_observation_now(runtime, pace) >= sample_deadline {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                 )
@@ -5909,7 +6101,7 @@ impl PreparedContainedTask {
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             let evaluation_started = runtime.monotonic_now();
-            if sampled && runtime.observation_now() >= sample_deadline {
+            if sampled && budget_observation_now(runtime, pace) >= sample_deadline {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                 )
@@ -5924,6 +6116,9 @@ impl PreparedContainedTask {
             // Workflow #396 REC-6: a page gate's observation of a target this frame collects or
             // reads is kept for that collection.
             let remembered_targets = ocr_collector.remembered_ocr_targets();
+            // #385 P-k: the recognition pack compares its sample deadline with the wall clock,
+            // so it is handed the wall instant the budget deadline falls on.
+            let pack_deadline = sampled.then(|| wall_deadline_now(runtime, pace, sample_deadline));
             let (results, remembered) = {
                 let mut recorder =
                     |target: &str,
@@ -5952,7 +6147,7 @@ impl PreparedContainedTask {
                             );
                         }
                         sampled_duration += elapsed_since(runtime, started);
-                        if runtime.observation_now() >= sample_deadline {
+                        if budget_observation_now(runtime, pace) >= sample_deadline {
                             deadline_passed = true;
                             return Err(
                                 actingcommand_recognition_pack::RecognitionPackError::fatal(
@@ -5975,8 +6170,8 @@ impl PreparedContainedTask {
                                 error.to_string(),
                             )
                         })?;
-                if sampled {
-                    context = context.with_sample_deadline(sample_deadline);
+                if let Some(pack_deadline) = pack_deadline {
+                    context = context.with_sample_deadline(pack_deadline);
                 }
                 let context = context
                     .with_sample_recorder(&mut recorder)
@@ -6041,7 +6236,7 @@ impl PreparedContainedTask {
                 runtime
                     .candidate_sampling_checkpoint()
                     .map_err(ContainedTaskRunError::operation::<R>)?;
-                if runtime.observation_now() >= sample_deadline {
+                if budget_observation_now(runtime, pace) >= sample_deadline {
                     return Err(ContainedTaskError::new(
                         ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                     )
@@ -6189,10 +6384,12 @@ impl PreparedContainedTask {
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let base_timing = timing;
+        // #385 P-k (performance model v1.4.2 §5.3): the confirmation's limits are budget time.
+        let pace = timing.pace();
         let mut retries =
             SampleRetries::new(pacing, ExecutionKernelLocation::ObservationAfterInput);
-        let mut started = runtime.monotonic_now();
-        let mut window_started = runtime.observation_now();
+        let mut started = budget_now(runtime, pace);
+        let mut window_started = budget_observation_now(runtime, pace);
         let mut last_observation = None;
         // #411 A15: the page the last frame of the wait matched, none when it matched no page
         // (`last_observation` keeps the last frame that matched one).
@@ -6205,13 +6402,14 @@ impl PreparedContainedTask {
             } else {
                 base_timing.with_deadline(window_started + timeout)
             };
-            if runtime.monotonic_now() >= task_deadline {
+            if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
                         runtime,
                         TaskTimingStage::Postcondition,
                         task_deadline,
                         None,
+                        pace,
                     )
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
@@ -6224,6 +6422,7 @@ impl PreparedContainedTask {
                     None,
                     window_started + timeout,
                     task_deadline,
+                    pace,
                 )?
             {
                 break;
@@ -6232,19 +6431,20 @@ impl PreparedContainedTask {
                 Ok(observation) => observation,
                 Err(failure) => {
                     retries.retry(failure, timeout)?;
-                    started = runtime.monotonic_now();
-                    window_started = runtime.observation_now();
+                    started = budget_now(runtime, pace);
+                    window_started = budget_observation_now(runtime, pace);
                     missed = false;
                     continue;
                 }
             };
-            if runtime.monotonic_now() >= task_deadline {
+            if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
                         runtime,
                         TaskTimingStage::Postcondition,
                         task_deadline,
                         None,
+                        pace,
                     )
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
@@ -6303,21 +6503,25 @@ impl PreparedContainedTask {
             };
             missed = true;
             if let Some(paused) = paused {
+                let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
                 continue;
             }
-            if elapsed_since(runtime, started) >= timeout {
+            if budget_elapsed_since(runtime, pace, started) >= timeout {
                 break;
             }
-            let remaining = timeout.saturating_sub(elapsed_since(runtime, started));
+            let remaining = timeout.saturating_sub(budget_elapsed_since(runtime, pace, started));
             let boundary = actingcommand_contract::TaskTimingBoundary::PostconditionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
-            runtime.pause(
+            let now = pace.budget(wait_started);
+            pace_pause(
+                runtime,
+                pace,
                 interval
                     .min(remaining)
-                    .min(task_deadline.saturating_duration_since(wait_started)),
+                    .min(task_deadline.saturating_duration_since(now)),
             );
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
@@ -6336,7 +6540,7 @@ impl PreparedContainedTask {
             timing_failure: Some(TaskTimingFailure {
                 scope: TaskTimingScope::Postcondition,
                 stage: TaskTimingStage::Postcondition,
-                elapsed_ms: elapsed_since(runtime, started).as_millis() as u64,
+                elapsed_ms: budget_elapsed_since(runtime, pace, started).as_millis() as u64,
                 limit_ms: timeout.as_millis() as u64,
                 required_delay_ms: None,
             }),
@@ -6677,8 +6881,9 @@ struct TaskControl {
     stop_on_confirmation: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
-    /// Workflow #336 L2b: the package a `linear_steps` package runs first when its first step
-    /// does not pass, by package id (`contracts/linear-steps.md`, "Prerequisite packages").
+    /// Workflow #336 L2b: the package a `linear_steps` or (Workflow #373 NAV-3a)
+    /// `navigable_route` package runs first when its entry does not pass, by package id
+    /// (`contracts/linear-steps.md`, "Prerequisite packages").
     #[serde(default)]
     prerequisite_package_id: Option<String>,
 }
@@ -7078,7 +7283,8 @@ impl TaskProgram {
             }
         }
         if let Some(phases) = &self.phases {
-            validate_task_phases(
+            validate_task_phases_located(
+                &control.game,
                 phases,
                 &self
                     .operations
@@ -7086,7 +7292,7 @@ impl TaskProgram {
                     .map(|operation| operation.id.as_str())
                     .collect::<Vec<_>>(),
             )
-            .map_err(ContainedTaskError::new)?;
+            .map_err(phase_refusal)?;
             if control.execution_mode != "navigable_route"
                 || !control.stop_on_confirmation.unwrap_or(true)
                 || self.entry_page.is_none()
@@ -7193,7 +7399,7 @@ impl TaskProgram {
                     page: self.single_entry_page().unwrap_or_default(),
                 }],
             };
-            actingcommand_contract::validate_phased_route(
+            actingcommand_contract::validate_phased_route_located(
                 &control.game,
                 &entries,
                 phases,
@@ -7201,7 +7407,7 @@ impl TaskProgram {
                 &operations,
                 self.scheduling_outcome.as_ref().unwrap(),
             )
-            .map_err(ContainedTaskError::new)?;
+            .map_err(phase_refusal)?;
         }
         self.validate_recovery(bundle)?;
         Ok(())
@@ -8499,6 +8705,25 @@ fn phase_start_invalid(
         .with_values(Outcome::new(code).entry_problem(problem).page_id(page))
 }
 
+/// #411 A20: a refusal of a phased route's checks. A located refusal (`task_phases_invalid`,
+/// `task_phases_unreachable`) carries the refused member as `json_pointer` and, where it
+/// concerns one, the page (`page_id`) and the operation (`pack_operation_id`) as values, with the
+/// contract's detail; any other refusal stays its bare code.
+fn phase_refusal(refusal: TaskPhaseRefusal) -> ContainedTaskError {
+    let TaskPhaseRefusal { code, location } = refusal;
+    let Some(location) = location else {
+        return ContainedTaskError::new(code);
+    };
+    let mut outcome = Outcome::new(code).json_pointer(location.json_pointer.as_str());
+    if let Some(page) = &location.page_id {
+        outcome = outcome.page_id(page.as_str());
+    }
+    if let Some(id) = &location.pack_operation_id {
+        outcome = outcome.pack_operation_id(id.as_str());
+    }
+    ContainedTaskError::with_detail(code, location.detail()).with_values(outcome)
+}
+
 impl PageDeclaration {
     fn normalized(&self) -> Result<Vec<String>, ContainedTaskError> {
         let pages = match self {
@@ -9053,17 +9278,21 @@ impl TaskOperation {
         let result = {
             // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code; past
             // the deadline the observation's sampling timed out.
-            if let Some((_, deadline)) = sampling {
+            if let Some((timing, deadline)) = sampling {
                 runtime
                     .candidate_sampling_checkpoint()
                     .map_err(ContainedTaskRunError::operation::<R>)?;
-                if runtime.observation_now() >= deadline {
+                if budget_observation_now(runtime, timing.pace()) >= deadline {
                     return Err(ContainedTaskError::new(
                         ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                     )
                     .into());
                 }
             }
+            // #385 P-k: the recognition pack compares its sample deadline with the wall clock,
+            // so it is handed the wall instant the budget deadline falls on.
+            let pack_deadline = sampling
+                .map(|(timing, deadline)| wall_deadline_now(runtime, timing.pace(), deadline));
             let mut recorder = |target: &str,
                                 result: &actingcommand_recognition_pack::RecognitionPackResult<
                 TargetEvaluation,
@@ -9090,7 +9319,7 @@ impl TaskOperation {
                         "recognition sample recording failed",
                     ));
                 }
-                if runtime.observation_now() >= deadline {
+                if budget_observation_now(runtime, timing.pace()) >= deadline {
                     deadline_passed = true;
                     return Err(actingcommand_recognition_pack::RecognitionPackError::fatal(
                         "recognition sample deadline exceeded",
@@ -9111,8 +9340,8 @@ impl TaskOperation {
                         error.to_string(),
                     )
                 })?;
-            if let Some((_, deadline)) = sampling {
-                context = context.with_sample_deadline(deadline);
+            if let Some(pack_deadline) = pack_deadline {
+                context = context.with_sample_deadline(pack_deadline);
             }
             let context = context.with_sample_recorder(&mut recorder);
             context.evaluate_target(&guard.target_id)

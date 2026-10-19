@@ -1425,3 +1425,42 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::a17_a_source_entry_set_refusal_names_the_page_and_its_stages",
 ]
 incident = ["#411 A17"]
+
+# #385 P-k1a (v0.12.x; no register section, no persisted structure change; performance model v1.4.2 §5.1-§5.3, §5.5, §5.6): the kernel paces each step by the factor its step_pacing() answer hands it (StepPacing.factor_milli, default 1000), from that answer to the next; every wait lasts its declared value x f / 1000 and every limit is compared on the run's budget clock (wall time x 1000 / f per segment), so a late page or a long run under a factor is waited for and not cut off; at the factor 1000 every wait is the package's value; gesture durations are not scaled
+[[gate]]
+key = "91"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_at_a_factor_of_one_every_wait_is_the_package_value",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_factor_of_two_doubles_every_wait_of_a_page_graph_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_factor_of_two_doubles_every_wait_of_a_linear_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_factor_change_takes_effect_at_the_next_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_page_that_arrives_late_is_waited_for_under_a_factor",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_the_task_timeout_is_compared_on_the_budget_clock",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_gesture_durations_are_not_scaled",
+]
+incident = ["#385 P-k"]
+
+# #411 A19 (v0.12.2; register §1.109; related: apps 66, #410 item 1; apps 73, A8): online do --capture --after-page whose arrival wait times out (failure stage arrival, code lab_arrival_timeout) answers lab_arrival_timeout, exit 3, blocked_by [arrival_page], as a navigation step whose page did not arrive, not device_error (exit 4), its details the operation's answer unchanged; every other failed record keeps its answer (lab_element_unavailable capability_insufficient, exit 3; any other device_error, exit 4); in every online do answer arrival is the last member, after after_attachment, its own members and every other member unchanged, so a reader that cuts the text loses samples only
+[[gate]]
+key = "93"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_0122_a19::a19_a_timed_out_arrival_is_refused_as_not_reached_naming_lab_arrival_timeout",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_0122_a19::a19_every_other_operation_failure_keeps_its_answer",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_0122_a19::a19_the_answer_puts_arrival_last_and_changes_nothing_else",
+    "actingcommand-actinglab::runtime_input_proxy::resource_restore_preserves_native_evidence_and_read_only_source_parsing",
+]
+incident = ["#411 A19"]
+
+# Workflow #411 A20 (v0.12.2; no register section, no persisted structure change; related: exec 89, A17): a refusal of a phased route's stage declarations (task_phases_invalid) or of its static walk (task_phases_unreachable) names the first refused member in declaration order as json_pointer and, where it concerns one, the page (page_id, without the game prefix) and the operation (pack_operation_id; for the walk, the operation whose destination led to the page the stage cannot leave); the developer detail adds the rule (phase_problem), the stage id and, for a stage that cannot leave a page, the start; the source build gives the same detail
+[[gate]]
+key = "94"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a20_an_unreachable_stage_names_the_stage_the_page_and_the_operation_that_led_there",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a20_a_stage_listing_an_operation_the_task_lacks_names_it",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a20_a_start_from_which_no_terminal_is_reached_names_its_stage_and_page",
+    "actingcommand-pack-containment::lib::source::tests::a20_the_source_build_names_the_stage_page_and_operation_of_an_unreachable_route",
+]
+incident = ["#411 A20"]

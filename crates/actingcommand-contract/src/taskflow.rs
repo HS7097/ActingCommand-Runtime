@@ -27,46 +27,234 @@ pub fn validate_task_phases(
     phases: &[TaskPhase],
     operation_ids: &[&str],
 ) -> Result<(), crate::outcome::Code> {
-    let label = |value: &str| {
-        !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-    };
-    let mut ids = std::collections::BTreeSet::new();
-    if phases.is_empty() || phases.len() > MAX_TASK_PHASES {
-        return Err(TaskflowCode::TaskPhasesInvalid.code());
+    locate_task_phases(phases, operation_ids, &|page: &str| page.to_owned())
+        .map_err(|refusal| refusal.code)
+}
+
+// --- #411 A20: located phase refusals (begin) ---
+
+/// The rule a refused member of a phased route breaks (#411 A20): the `phase_problem` token of
+/// the refusal's developer detail only, neither an outcome value nor a vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskPhaseProblem {
+    PhaseCount,
+    PhaseId,
+    OperationCount,
+    OperationRepeated,
+    OperationUnknown,
+    TargetCount,
+    TargetRepeated,
+    TargetInvalid,
+    EntryInvalid,
+    FinalTargets,
+    NoOperation,
+    NoTerminal,
+}
+
+impl TaskPhaseProblem {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PhaseCount => "phase_count",
+            Self::PhaseId => "phase_id",
+            Self::OperationCount => "operation_count",
+            Self::OperationRepeated => "operation_repeated",
+            Self::OperationUnknown => "operation_unknown",
+            Self::TargetCount => "target_count",
+            Self::TargetRepeated => "target_repeated",
+            Self::TargetInvalid => "target_invalid",
+            Self::EntryInvalid => "entry_invalid",
+            Self::FinalTargets => "final_targets",
+            Self::NoOperation => "no_operation",
+            Self::NoTerminal => "no_terminal",
+        }
     }
-    for phase in phases {
-        if !label(&phase.id)
-            || !ids.insert(&phase.id)
-            || phase.operations.is_empty()
-            || phase.operations.len() > operation_ids.len()
-            || phase
-                .operations
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != phase.operations.len()
-            || phase
-                .operations
-                .iter()
-                .any(|id| !operation_ids.contains(&id.as_str()))
-            || phase.target_pages.is_empty()
-            || phase.target_pages.len() > 256
-            || phase
-                .target_pages
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != phase.target_pages.len()
-            || phase
-                .target_pages
-                .iter()
-                .any(|page| !label(page) || page == "any")
-        {
-            return Err(TaskflowCode::TaskPhasesInvalid.code());
+}
+
+/// Where a refusal of a phased route lies (#411 A20): the rule, the refused member as a JSON
+/// pointer into the task (`/phases/<index>…` or `/entry_page`) and, where the rule concerns
+/// one, the stage id, the page (as the walk compares it: without the `<game>/` prefix), the
+/// operation and, for a stage that cannot leave a page, the start the walk came from. A name
+/// that is blank or could not be an outcome value (a control character, over 256 bytes) is
+/// left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskPhaseLocation {
+    pub problem: TaskPhaseProblem,
+    pub json_pointer: String,
+    pub phase_id: Option<String>,
+    pub page_id: Option<String>,
+    pub pack_operation_id: Option<String>,
+    pub entry_page: Option<String>,
+}
+
+impl TaskPhaseLocation {
+    /// The developer detail of the refusal, the same for the Runtime and the source build:
+    /// `phase_problem=<token> json_pointer=<pointer>[ phase_id=<id>][ page_id=<page>]
+    /// [ pack_operation_id=<id>][ entry_page=<page>]`.
+    pub fn detail(&self) -> String {
+        let mut detail = vec![
+            format!("phase_problem={}", self.problem.as_str()),
+            format!("json_pointer={}", self.json_pointer),
+        ];
+        detail.extend(
+            [
+                ("phase_id", &self.phase_id),
+                ("page_id", &self.page_id),
+                ("pack_operation_id", &self.pack_operation_id),
+                ("entry_page", &self.entry_page),
+            ]
+            .into_iter()
+            .filter_map(|(key, value)| value.as_ref().map(|value| format!("{key}={value}"))),
+        );
+        detail.join(" ")
+    }
+
+    fn page(mut self, page: String) -> Self {
+        self.page_id = shown(page);
+        self
+    }
+
+    fn pack_operation(mut self, id: Option<&str>) -> Self {
+        self.pack_operation_id = id.map(str::to_owned).and_then(shown);
+        self
+    }
+}
+
+/// A refusal of a phased route's checks (#411 A20): its code and, for `task_phases_invalid` and
+/// `task_phases_unreachable`, where it lies. The other codes carry no location.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskPhaseRefusal {
+    pub code: crate::outcome::Code,
+    pub location: Option<Box<TaskPhaseLocation>>,
+}
+
+impl From<crate::outcome::Code> for TaskPhaseRefusal {
+    fn from(code: crate::outcome::Code) -> Self {
+        Self {
+            code,
+            location: None,
+        }
+    }
+}
+
+impl TaskPhaseRefusal {
+    fn located(code: TaskflowCode, location: TaskPhaseLocation) -> Self {
+        Self {
+            code: code.code(),
+            location: Some(Box::new(location)),
+        }
+    }
+}
+
+/// The label rule of a stage id and a stage target page.
+fn phase_label(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+}
+
+/// A name a location shows: not blank, and fit for an outcome value of an id key.
+fn shown(value: String) -> Option<String> {
+    (!value.trim().is_empty() && value.len() <= 256 && !value.chars().any(char::is_control))
+        .then_some(value)
+}
+
+/// The location of the refused member `json_pointer`; under `/phases/<index>` it names the
+/// stage id, when that id passes the label rule.
+fn phase_location(
+    problem: TaskPhaseProblem,
+    json_pointer: String,
+    phase: Option<&TaskPhase>,
+) -> TaskPhaseLocation {
+    TaskPhaseLocation {
+        problem,
+        json_pointer,
+        phase_id: phase
+            .filter(|phase| phase_label(&phase.id))
+            .map(|phase| phase.id.clone()),
+        page_id: None,
+        pack_operation_id: None,
+        entry_page: None,
+    }
+}
+
+/// [`validate_task_phases`] with the refused member located (#411 A20); `game` only shapes how
+/// a page is named.
+pub fn validate_task_phases_located(
+    game: &str,
+    phases: &[TaskPhase],
+    operation_ids: &[&str],
+) -> Result<(), TaskPhaseRefusal> {
+    let prefix = format!("{game}/");
+    locate_task_phases(phases, operation_ids, &|page: &str| {
+        page.strip_prefix(&prefix).unwrap_or(page).to_owned()
+    })
+}
+
+/// The stage declarations' check (#411 A20): members in declaration order (stage count; then
+/// stage by stage its id, operation count, each operation, target count and each target page);
+/// the first refused member is named.
+fn locate_task_phases(
+    phases: &[TaskPhase],
+    operation_ids: &[&str],
+    canonical: &dyn Fn(&str) -> String,
+) -> Result<(), TaskPhaseRefusal> {
+    let refused = |location| TaskPhaseRefusal::located(TaskflowCode::TaskPhasesInvalid, location);
+    if phases.is_empty() || phases.len() > MAX_TASK_PHASES {
+        return Err(refused(phase_location(
+            TaskPhaseProblem::PhaseCount,
+            "/phases".to_owned(),
+            None,
+        )));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for (index, phase) in phases.iter().enumerate() {
+        let at = |problem, member: String| {
+            phase_location(problem, format!("/phases/{index}/{member}"), Some(phase))
+        };
+        if !phase_label(&phase.id) || !ids.insert(&phase.id) {
+            return Err(refused(at(TaskPhaseProblem::PhaseId, "id".to_owned())));
+        }
+        if phase.operations.is_empty() || phase.operations.len() > operation_ids.len() {
+            return Err(refused(at(
+                TaskPhaseProblem::OperationCount,
+                "operations".to_owned(),
+            )));
+        }
+        let mut operations = std::collections::BTreeSet::new();
+        for (member, id) in phase.operations.iter().enumerate() {
+            let problem = if !operations.insert(id) {
+                TaskPhaseProblem::OperationRepeated
+            } else if !operation_ids.contains(&id.as_str()) {
+                TaskPhaseProblem::OperationUnknown
+            } else {
+                continue;
+            };
+            return Err(refused(
+                at(problem, format!("operations/{member}")).pack_operation(Some(id.as_str())),
+            ));
+        }
+        if phase.target_pages.is_empty() || phase.target_pages.len() > 256 {
+            return Err(refused(at(
+                TaskPhaseProblem::TargetCount,
+                "target_pages".to_owned(),
+            )));
+        }
+        let mut targets = std::collections::BTreeSet::new();
+        for (member, page) in phase.target_pages.iter().enumerate() {
+            let problem = if !targets.insert(page) {
+                TaskPhaseProblem::TargetRepeated
+            } else if !phase_label(page) || page == "any" {
+                TaskPhaseProblem::TargetInvalid
+            } else {
+                continue;
+            };
+            return Err(refused(
+                at(problem, format!("target_pages/{member}")).page(canonical(page)),
+            ));
         }
     }
     Ok(())
 }
+
+// --- #411 A20: located phase refusals (end) ---
 
 /// Recorded on the existing step chain; completed means this step advances the cursor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,31 +385,73 @@ pub fn validate_phased_route(
     operations: &[TaskPhaseOperation<'_>],
     scheduling: &SchedulingOutcomeDeclaration,
 ) -> Result<(), crate::outcome::Code> {
-    validate_task_phases(
+    validate_phased_route_located(game, entries, phases, target_pages, operations, scheduling)
+        .map_err(|refusal| refusal.code)
+}
+
+/// [`validate_phased_route`] with the refused member located (#411 A20): after the stage
+/// declarations, the entries, then the last stage's target pages, then the walk from each start
+/// in order; a refusal of `task_phases_invalid` or `task_phases_unreachable` names the first
+/// refused member.
+pub fn validate_phased_route_located(
+    game: &str,
+    entries: &[TaskPhaseEntry<'_>],
+    phases: &[TaskPhase],
+    target_pages: &[String],
+    operations: &[TaskPhaseOperation<'_>],
+    scheduling: &SchedulingOutcomeDeclaration,
+) -> Result<(), TaskPhaseRefusal> {
+    let prefix = format!("{game}/");
+    let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
+    locate_task_phases(
         phases,
         &operations
             .iter()
             .map(|operation| operation.id)
             .collect::<Vec<_>>(),
+        &canonical,
     )?;
     scheduling
         .validate()
         .map_err(|_| TaskflowCode::TaskPhasesOutcomeInvalid.code())?;
-    let prefix = format!("{game}/");
-    let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
     let pages = |values: &[String]| {
         values
             .iter()
             .map(|page| canonical(page))
             .collect::<std::collections::BTreeSet<_>>()
     };
-    if entries.is_empty()
-        || entries.iter().any(|entry| {
-            entry.page.trim().is_empty() || entry.page == "any" || entry.phase >= phases.len()
-        })
-        || pages(target_pages) != pages(&phases.last().unwrap().target_pages)
-    {
-        return Err(TaskflowCode::TaskPhasesInvalid.code());
+    let entry_invalid = |entry: Option<&TaskPhaseEntry<'_>>| {
+        let location = phase_location(
+            TaskPhaseProblem::EntryInvalid,
+            "/entry_page".to_owned(),
+            None,
+        );
+        TaskPhaseRefusal::located(
+            TaskflowCode::TaskPhasesInvalid,
+            match entry {
+                Some(entry) => location.page(canonical(entry.page)),
+                None => location,
+            },
+        )
+    };
+    if entries.is_empty() {
+        return Err(entry_invalid(None));
+    }
+    if let Some(entry) = entries.iter().find(|entry| {
+        entry.page.trim().is_empty() || entry.page == "any" || entry.phase >= phases.len()
+    }) {
+        return Err(entry_invalid(Some(entry)));
+    }
+    let last = phases.len() - 1;
+    if pages(target_pages) != pages(&phases[last].target_pages) {
+        return Err(TaskPhaseRefusal::located(
+            TaskflowCode::TaskPhasesInvalid,
+            phase_location(
+                TaskPhaseProblem::FinalTargets,
+                format!("/phases/{last}/target_pages"),
+                Some(&phases[last]),
+            ),
+        ));
     }
     // Workflow #390 OUT-2: every designated operation of either form names one operation and is
     // not retryable.
@@ -236,7 +466,9 @@ pub fn validate_phased_route(
         .iter()
         .any(|operation| designated.contains(&operation.id) && operation.retryable)
     {
-        return Err(TaskflowCode::TaskPhasesDesignatedEffectInvalid.code());
+        return Err(TaskflowCode::TaskPhasesDesignatedEffectInvalid
+            .code()
+            .into());
     }
     for entry in entries {
         validate_phased_route_from(entry, phases, operations, scheduling, &canonical)?;
@@ -250,20 +482,27 @@ pub fn validate_phased_route(
 /// operation from the page is followed too. Workflow #390 EXEC-1: so is a candidate that may be
 /// passed over (`when`, `on_guard_refused`); a page left without an operation after such
 /// candidates only ends that path (the run's `contained_task_operation_candidates_exhausted`),
-/// while one left without an operation once a member may be capped stays unreachable.
+/// while one left without an operation once a member may be capped stays unreachable. #411 A20:
+/// each queued state carries the operation whose destination produced it (none at the start),
+/// so the first path that reaches a state names it; an unreachable refusal names the stage, the
+/// page, that operation and the start.
 fn validate_phased_route_from(
     entry: &TaskPhaseEntry<'_>,
     phases: &[TaskPhase],
     operations: &[TaskPhaseOperation<'_>],
     scheduling: &SchedulingOutcomeDeclaration,
     canonical: &dyn Fn(&str) -> String,
-) -> Result<(), crate::outcome::Code> {
+) -> Result<(), TaskPhaseRefusal> {
     let reach = scheduling.designated_effect_reach();
+    let start = canonical(entry.page);
+    let stage_location = |problem, index: usize| {
+        phase_location(problem, format!("/phases/{index}"), phases.get(index))
+    };
     let mut pending =
-        std::collections::VecDeque::from([(entry.phase, canonical(entry.page), 0_u16)]);
+        std::collections::VecDeque::from([(entry.phase, start.clone(), 0_u16, None::<&str>)]);
     let mut visited = std::collections::BTreeSet::new();
     let mut terminals = 0;
-    while let Some((index, page, completed)) = pending.pop_front() {
+    while let Some((index, page, completed, via)) = pending.pop_front() {
         if !visited.insert((index, page.clone(), completed)) {
             continue;
         }
@@ -282,7 +521,7 @@ fn validate_phased_route_from(
                 .count()
                 != 1
             {
-                return Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code());
+                return Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code().into());
             }
             terminals += 1;
             continue;
@@ -307,7 +546,14 @@ fn validate_phased_route_from(
                 })
             else {
                 if passed_over.is_empty() || capped {
-                    return Err(TaskflowCode::TaskPhasesUnreachable.code());
+                    let mut location = stage_location(TaskPhaseProblem::NoOperation, index)
+                        .page(page)
+                        .pack_operation(via);
+                    location.entry_page = shown(start);
+                    return Err(TaskPhaseRefusal::located(
+                        TaskflowCode::TaskPhasesUnreachable,
+                        location,
+                    ));
                 }
                 break;
             };
@@ -316,7 +562,9 @@ fn validate_phased_route_from(
                 && reach.is_single(member)
                 && completed & crate::DesignatedEffectReach::bit(member) != 0
             {
-                return Err(TaskflowCode::TaskPhasesDesignatedEffectRepeated.code());
+                return Err(TaskflowCode::TaskPhasesDesignatedEffectRepeated
+                    .code()
+                    .into());
             }
             // Workflow #308 SEL-L4b (S0 §1.4 (c)): a select step that declares `on_empty` may end
             // the run on its own page, so this state is a terminal as well; the walk goes on past
@@ -326,14 +574,14 @@ fn validate_phased_route_from(
                 terminals += 1;
             }
             if operation.destinations.is_empty() {
-                return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
+                return Err(TaskflowCode::TaskPhasesPostconditionMissing.code().into());
             }
             let next_completed = member.map_or(completed, |member| {
                 completed | crate::DesignatedEffectReach::bit(member)
             });
             for destination in &operation.destinations {
                 if destination == "any" {
-                    return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
+                    return Err(TaskflowCode::TaskPhasesPostconditionMissing.code().into());
                 }
                 let destination = canonical(destination);
                 let next_index = index
@@ -343,7 +591,7 @@ fn validate_phased_route_from(
                             .iter()
                             .any(|target| canonical(target) == destination),
                     );
-                pending.push_back((next_index, destination, next_completed));
+                pending.push_back((next_index, destination, next_completed, Some(operation.id)));
             }
             let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed));
             if !may_be_capped && !operation.may_be_passed_over {
@@ -354,7 +602,10 @@ fn validate_phased_route_from(
         }
     }
     if terminals == 0 {
-        return Err(TaskflowCode::TaskPhasesUnreachable.code());
+        return Err(TaskPhaseRefusal::located(
+            TaskflowCode::TaskPhasesUnreachable,
+            stage_location(TaskPhaseProblem::NoTerminal, entry.phase).page(start),
+        ));
     }
     Ok(())
 }

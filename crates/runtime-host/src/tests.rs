@@ -113,6 +113,9 @@ mod forward_projection;
 mod gate_0121_a3;
 // #411 A7 (v0.12.1), register §1.98: a failed capture open in a preparation reaches the ladder.
 mod gate_0121_a7;
+// #411 A7 task path (v0.12.2, host key 108), register §1.106: a contained task's capture failure
+// on one instance fails only that run and goes to the ladder; the Runtime goes on.
+mod gate_0122_a7t;
 // #411 A15 (v0.12.1-rc.2, host key 106): an unconfirmed step's terminal and receipt name the
 // page of its last frame and that frame.
 mod gate_rc2_a15;

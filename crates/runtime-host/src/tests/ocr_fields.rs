@@ -494,6 +494,9 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         (false, false, true, false),
         (false, false, false, true),
     ] {
+        // #411 A7 (v0.12.2): an instance's own capture failure is nonfatal whatever the device
+        // severity, so only a fatal input failure and a refused report cross the fatal boundary.
+        let boundary = fail_report || (fatal && !capture);
         let root = TempDir::new().expect("tempdir");
         let package_path = root.path().join("fields-callback.zip");
         fs::write(&package_path, &bytes).expect("inline fields package");
@@ -777,7 +780,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         );
         assert_eq!(
             diagnostics.len(),
-            if fatal || fail_report { 1 } else { 2 },
+            if boundary { 1 } else { 2 },
             "one raw observation and at most one report"
         );
         assert_eq!(
@@ -788,14 +791,14 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             usize::from(fail_report),
             "failed report persistence is not retried"
         );
-        if fatal || fail_report {
+        if boundary {
             let error = result.expect_err("fatal boundary propagates");
             assert!(error.is_fatal());
             assert_eq!(
                 error.projection().expect("typed fatal projection").code,
                 expected_code
             );
-            if capture || fail_report {
+            if fail_report {
                 assert!(
                     host.fatal_error()
                         .unwrap()

@@ -3162,7 +3162,9 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
             page: value.as_str().unwrap_or_default(),
         }],
     };
-    actingcommand_contract::validate_phased_route(
+    // #411 A20: a located refusal names the refused member with the detail of the Runtime's
+    // admission refusal; any other refusal stays its bare code.
+    actingcommand_contract::validate_phased_route_located(
         game,
         &entries,
         &phases,
@@ -3170,7 +3172,12 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &operations,
         &scheduling,
     )
-    .map_err(|code| CliError::package_invalid(code.as_str()))
+    .map_err(|refusal| {
+        CliError::package_invalid(match &refusal.location {
+            Some(location) => format!("{}: {}", refusal.code.as_str(), location.detail()),
+            None => refusal.code.as_str().to_owned(),
+        })
+    })
 }
 
 /// The pages a task's `entry_page` names: one page, or each page of an entry page set

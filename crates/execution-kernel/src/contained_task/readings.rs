@@ -475,10 +475,15 @@ impl PreparedContainedTask {
     /// evaluation against its frame, and records each frame's readings and misses. A mark whose
     /// recognition had not returned is the miss `join_timeout`; a recognition thread that ended
     /// without an answer is `provider_failed` for each of its marks.
+    ///
+    /// #385 P-k (performance model v1.4.2 §5.3): the join timeout is budget time on the run's
+    /// budget clock `pace`. The answers are awaited on the wall clock, so the join's deadline is
+    /// the wall instant its budget deadline falls on: now + timeout × f / 1000.
     pub(super) fn join_resource_readings<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         relay: ReadingRelay<'_>,
+        pace: PaceClock,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         if relay.frames.is_empty() && relay.confirmations.is_empty() {
             return Ok(());
@@ -486,7 +491,8 @@ impl PreparedContainedTask {
         let join_timeout = runtime
             .reading_join_timeout()
             .map_err(ContainedTaskRunError::operation::<R>)?;
-        let deadline = join_timeout.map(|timeout| runtime.monotonic_now() + timeout);
+        let deadline =
+            join_timeout.map(|timeout| runtime.monotonic_now() + pace.wall_span(timeout));
         for frame in relay.frames {
             let answer = receive(runtime, &frame.results, deadline);
             let mut readings = Vec::new();

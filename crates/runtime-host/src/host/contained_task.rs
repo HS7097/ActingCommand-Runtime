@@ -3740,58 +3740,69 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             return Err(RequestFailure::poison_without_terminal(runtime_error));
                         }
                     }
-                    // #316-P4: a physical instance's first capture that fails while one ADB
-                    // baseline probe (task deadline) also fails is the ADB baseline lost, not a
-                    // host fault: both ADB facts are invalidated and the task fails nonfatal.
-                    // An answering adbd keeps the capture failure fatal, except an operation
-                    // failure on a session kept from an earlier lease (Workflow #191 H, below).
-                    if self.last_frame_id.is_none()
-                        && self.execution_provenance == ExecutionBackendProvenance::PhysicalDevice
-                        && runtime_error.is_fatal()
-                        && spelled(
-                            error.code().as_str(),
-                            &[
-                                DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
-                                SharedCode::CaptureBackendOperationFailed.code(),
-                            ],
-                        )
-                    {
-                        let host = self.host;
-                        let probe = host.execution()?.probe_adb_baseline_until(
-                            self.instance_alias,
-                            self.geometry_operation_deadline()?,
-                            &|| host.fatal.is_shutdown_requested(),
-                        );
-                        match probe {
-                            Err(probe)
+                    // #411 A7 (Alice 2026-10-19; #316-P4, Workflow #191 H): a failure of the
+                    // instance's own capture (its capture backend or paired session would not
+                    // open, an operation on an open session failed, or the frame is no usable
+                    // image) whose temporary resources were released fails only this run,
+                    // nonfatal, on every capture of the run: a failed open has left the
+                    // instance's capture self-check `failed` (above), and a scheduled run's
+                    // failure goes to the recovery ladder by the configuration
+                    // (`task_capture_backend`). Every other cause keeps its fatality: that is the
+                    // capture service as a whole.
+                    if spelled(
+                        error.code().as_str(),
+                        &[
+                            DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
+                            DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
+                            SharedCode::CaptureBackendOperationFailed.code(),
+                            SharedCode::CaptureFrameInvalid.code(),
+                        ],
+                    ) {
+                        // #316-P4: a physical instance's first capture probes the ADB baseline
+                        // once (task deadline). A probe that fails too is the baseline lost:
+                        // the ADB facts are invalidated. Its own adb child left unconfirmed
+                        // fences the instance (Workflow #403, #387 D1c-G); only where no fence
+                        // may take it is it the Runtime's fatal. The probe's answer does not
+                        // decide the capture failure's fatality.
+                        if self.last_frame_id.is_none()
+                            && self.execution_provenance
+                                == ExecutionBackendProvenance::PhysicalDevice
+                        {
+                            let host = self.host;
+                            let instance_id = self.token.instance_id();
+                            if let Err(probe) = host.execution()?.probe_adb_baseline_until(
+                                self.instance_alias,
+                                self.geometry_operation_deadline()?,
+                                &|| host.fatal.is_shutdown_requested(),
+                            ) {
                                 if probe.resource_quiescence()
-                                    != Some(ResourceQuiescence::Unconfirmed) =>
-                            {
-                                host.invalidate_adb_baseline(self.token.instance_id())?;
-                                runtime_error = RuntimeHostError::adb_unreachable_capture(
-                                    HostLocation::RunContainedTaskCapture,
-                                    &error,
-                                );
+                                    == Some(ResourceQuiescence::Unconfirmed)
+                                {
+                                    return Err(
+                                        match host.settle_unconfirmed_adb(
+                                            RuntimeHostError::execution(
+                                                HostLocation::RunContainedTaskCapture,
+                                                &probe,
+                                            ),
+                                            instance_id,
+                                            links.clone(),
+                                        ) {
+                                            Ok(fence) => {
+                                                RequestFailure::fence_without_terminal(fence)
+                                            }
+                                            Err(fatal) => {
+                                                RequestFailure::poison_without_terminal(fatal)
+                                            }
+                                        },
+                                    );
+                                }
+                                host.invalidate_adb_baseline(instance_id)?;
                             }
-                            // Workflow #191 H: the first capture failed on a session kept from
-                            // an earlier lease (no open in this capture) while adbd answers: the
-                            // idle session went stale. It is closed above; the task fails
-                            // nonfatal and the next capture opens a new session.
-                            Ok(())
-                                if error.code()
-                                    == SharedCode::CaptureBackendOperationFailed.code()
-                                    && error
-                                        .failure_context()
-                                        .backend_open_observations()
-                                        .is_empty() =>
-                            {
-                                runtime_error = RuntimeHostError::reused_session_capture(
-                                    HostLocation::RunContainedTaskCapture,
-                                    &error,
-                                );
-                            }
-                            _ => {}
                         }
+                        runtime_error = RuntimeHostError::instance_capture(
+                            HostLocation::RunContainedTaskCapture,
+                            &error,
+                        );
                     }
                     let payload = CapturePayloadDraft::failed_with_causes(
                         EventAction::CaptureObserve,
