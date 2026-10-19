@@ -69,6 +69,11 @@ impl FlagArgs {
         self.flags.get(name).cloned().unwrap_or_default()
     }
 
+    /// #411 Lab B-2: how many times `name` was given.
+    pub(super) fn count(&self, name: &str) -> usize {
+        self.flags.get(name).map_or(0, Vec::len)
+    }
+
     pub(super) fn without_first_positional(&self) -> Self {
         let mut next = self.clone();
         if !next.positionals.is_empty() {

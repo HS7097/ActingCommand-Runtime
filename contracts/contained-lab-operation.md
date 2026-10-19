@@ -50,8 +50,12 @@ InputAction limits and the current frame dimensions; a recognized page is not a
 coordinate prerequisite. Element safety annotations are informational.
 
 Offline `do --scene ... --dry-run`, the existing observation-only planning
-mode, and raw observation remain separate existing entries. Executing online
-`do` does not interpret a resource or choose a coordinate in the client.
+mode, and raw observation remain separate existing entries. Offline
+`do --scene ... --dry-run` takes up to five frames, oldest first, the last the
+current frame, on which it plans
+([business-identity-consensus.md](business-identity-consensus.md); #411 Lab
+B-2). Executing online `do` does not interpret a resource or choose a
+coordinate in the client.
 
 ## Runtime ownership
 

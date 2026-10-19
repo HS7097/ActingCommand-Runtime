@@ -132,6 +132,16 @@ impl ReadonlyRecognitionEngine {
         target: &str,
         scene: Option<&Scene>,
     ) -> ReadonlyRecognitionResult<RecognizeResponse> {
+        self.recognize_frames(target, &scene.into_iter().collect::<Vec<_>>())
+    }
+
+    /// #411 Lab B-2: [`Self::recognize`] over `frames`, oldest first, the last the current frame
+    /// (none for a click-only target): target consensus reads the last frames it requires.
+    pub fn recognize_frames(
+        &self,
+        target: &str,
+        frames: &[&Scene],
+    ) -> ReadonlyRecognitionResult<RecognizeResponse> {
         if !self.target_requires_scene(target)? {
             let click = self
                 .evaluator
@@ -147,9 +157,8 @@ impl ReadonlyRecognitionEngine {
             }));
         }
 
-        let evaluation = self
-            .evaluator
-            .evaluate_target(required_scene(scene)?, target)
+        let evaluation = frame_context(&self.evaluator, frames)?
+            .evaluate_target(target)
             .map_err(pack_error)?;
         let evaluation_response = target_evaluation_response(&evaluation);
         Ok(RecognizeResponse::Evaluated(Box::new(
@@ -173,6 +182,7 @@ impl ReadonlyRecognitionEngine {
                     })
                     .flatten(),
                 env_resolved: self.env_resolved.clone(),
+                recognition_coverage: recognition_coverage(&self.evaluator, frames.len()),
             },
         )))
     }
@@ -181,6 +191,21 @@ impl ReadonlyRecognitionEngine {
         &self,
         detector: &PageDetector,
         scene: Option<&Scene>,
+        check_pages: bool,
+    ) -> ReadonlyRecognitionResult<DetectPageOutput> {
+        self.detect_page_frames(
+            detector,
+            &scene.into_iter().collect::<Vec<_>>(),
+            check_pages,
+        )
+    }
+
+    /// #411 Lab B-2: [`Self::detect_page`] over `frames`, oldest first, the last the current
+    /// frame (none with `check_pages`).
+    pub fn detect_page_frames(
+        &self,
+        detector: &PageDetector,
+        frames: &[&Scene],
         check_pages: bool,
     ) -> ReadonlyRecognitionResult<DetectPageOutput> {
         detector.validate(&self.evaluator).map_err(page_error)?;
@@ -192,10 +217,10 @@ impl ReadonlyRecognitionEngine {
                 env_resolved: self.env_resolved.clone(),
             });
         }
-        let response = detect_current_page(
+        let response = detect_current_page_frames(
             &self.evaluator,
             detector,
-            required_scene(scene)?,
+            frames,
             "detect-page",
             self.env_resolved.clone(),
         )?;
@@ -210,11 +235,21 @@ impl ReadonlyRecognitionEngine {
         detector: &PageDetector,
         scene: &Scene,
     ) -> ReadonlyRecognitionResult<PageDetectionResponse> {
+        self.current_page_frames(detector, &[scene])
+    }
+
+    /// #411 Lab B-2: [`Self::current_page`] over `frames`, oldest first, the last the current
+    /// frame.
+    pub fn current_page_frames(
+        &self,
+        detector: &PageDetector,
+        frames: &[&Scene],
+    ) -> ReadonlyRecognitionResult<PageDetectionResponse> {
         detector.validate(&self.evaluator).map_err(page_error)?;
-        detect_current_page(
+        detect_current_page_frames(
             &self.evaluator,
             detector,
-            scene,
+            frames,
             "current-page",
             self.env_resolved.clone(),
         )
@@ -225,14 +260,23 @@ impl ReadonlyRecognitionEngine {
         target: &str,
         scene: Option<&Scene>,
     ) -> ReadonlyRecognitionResult<IsVisibleResponse> {
+        self.is_visible_frames(target, &scene.into_iter().collect::<Vec<_>>())
+    }
+
+    /// #411 Lab B-2: [`Self::is_visible`] over `frames`, oldest first, the last the current
+    /// frame.
+    pub fn is_visible_frames(
+        &self,
+        target: &str,
+        frames: &[&Scene],
+    ) -> ReadonlyRecognitionResult<IsVisibleResponse> {
         if !self.target_requires_scene(target)? {
             return Err(ReadonlyRecognitionError::new(format!(
                 "target '{target}' is click-only and cannot be evaluated for visibility"
             )));
         }
-        let evaluation = self
-            .evaluator
-            .evaluate_target(required_scene(scene)?, target)
+        let evaluation = frame_context(&self.evaluator, frames)?
+            .evaluate_target(target)
             .map_err(pack_error)?;
         Ok(IsVisibleResponse {
             target: target.to_string(),
@@ -250,8 +294,35 @@ impl ReadonlyRecognitionEngine {
                 })
                 .flatten(),
             env_resolved: self.env_resolved.clone(),
+            recognition_coverage: recognition_coverage(&self.evaluator, frames.len()),
         })
     }
+}
+
+/// #411 Lab B-2: the evaluation context of `frames` (oldest first, the last the current frame),
+/// over which target consensus reads the last frames it requires, as the task path's
+/// observation does; one frame is the single-frame context, and no frame is refused.
+fn frame_context<'a>(
+    evaluator: &'a RecognitionEvaluator,
+    frames: &[&'a Scene],
+) -> ReadonlyRecognitionResult<actingcommand_recognition_pack::SceneEvaluation<'a>> {
+    required_scene(frames.last().copied())?;
+    evaluator
+        .scene_context_with_samples(frames)
+        .map_err(pack_error)
+}
+
+/// #411 Lab B-2: `recognition_coverage` of an answer over `provided` frames when the pack
+/// declares target consensus; none otherwise, so a single-frame answer is unchanged.
+fn recognition_coverage(
+    evaluator: &RecognitionEvaluator,
+    provided: usize,
+) -> Option<RecognitionCoverageResponse> {
+    (!evaluator.pack().target_consensus.is_empty()).then(|| RecognitionCoverageResponse {
+        provided_frames: provided,
+        required_frames: evaluator.target_sample_frames(),
+        aggregation: "production_owner".to_string(),
+    })
 }
 
 pub fn detect_current_page(
@@ -261,8 +332,20 @@ pub fn detect_current_page(
     command: &str,
     env_resolved: Vec<EnvResolved>,
 ) -> ReadonlyRecognitionResult<PageDetectionResponse> {
+    detect_current_page_frames(evaluator, detector, &[scene], command, env_resolved)
+}
+
+/// #411 Lab B-2: [`detect_current_page`] over `frames`, oldest first, the last the current
+/// frame: every page target reads the frame set, target consensus its last required frames.
+pub fn detect_current_page_frames(
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    frames: &[&Scene],
+    command: &str,
+    env_resolved: Vec<EnvResolved>,
+) -> ReadonlyRecognitionResult<PageDetectionResponse> {
     let evaluations = detector
-        .evaluate_all_timed(evaluator, scene)
+        .evaluate_all_timed_in_context(&frame_context(evaluator, frames)?)
         .map_err(page_error)?;
     let diagnostics: actingcommand_contract::PpocrDiagnostics = evaluations
         .iter()
@@ -311,6 +394,7 @@ pub fn detect_current_page(
             })
             .flatten(),
         env_resolved,
+        recognition_coverage: recognition_coverage(evaluator, frames.len()),
     })
 }
 
@@ -475,6 +559,19 @@ pub struct RecognizeEvaluatedResponse {
     pub env_resolved: Vec<EnvResolved>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs_detection: Option<NeedsDetection>,
+    /// #411 Lab B-2: present when the pack declares target consensus.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recognition_coverage: Option<RecognitionCoverageResponse>,
+}
+
+/// #411 Lab B-2: the frames an offline answer was given (`provided_frames`) and the most any
+/// target consensus of the pack requires (`required_frames`), aggregated by the recognition
+/// pack's owner (`production_owner`), as offline `observe` reports them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecognitionCoverageResponse {
+    pub provided_frames: usize,
+    pub required_frames: usize,
+    pub aggregation: String,
 }
 
 pub struct DetectPageOutput {
@@ -504,6 +601,9 @@ pub struct IsVisibleResponse {
     pub env_resolved: Vec<EnvResolved>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs_detection: Option<NeedsDetection>,
+    /// #411 Lab B-2: present when the pack declares target consensus.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recognition_coverage: Option<RecognitionCoverageResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -522,6 +622,9 @@ pub struct PageDetectionResponse {
     pub env_resolved: Vec<EnvResolved>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs_detection: Option<NeedsDetection>,
+    /// #411 Lab B-2: present when the pack declares target consensus.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recognition_coverage: Option<RecognitionCoverageResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]

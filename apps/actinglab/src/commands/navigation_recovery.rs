@@ -563,6 +563,18 @@ pub(crate) fn destructive_frame_regions(
     page: &str,
     destructive: &[DestructiveClick],
 ) -> CliOutcome<Vec<PackRect>> {
+    destructive_frame_regions_over(evaluator, &[scene], page, destructive)
+}
+
+/// #411 Lab B-2: [`destructive_frame_regions`] over an offline frame set `frames` (oldest first,
+/// the last the current frame): each target is evaluated over the set
+/// ([`evaluate_target_over`]), and its box is the one it matches on the current frame.
+pub(crate) fn destructive_frame_regions_over(
+    evaluator: &RecognitionEvaluator,
+    frames: &[&Scene],
+    page: &str,
+    destructive: &[DestructiveClick],
+) -> CliOutcome<Vec<PackRect>> {
     let mut regions = Vec::new();
     for click in destructive
         .iter()
@@ -571,9 +583,7 @@ pub(crate) fn destructive_frame_regions(
         let DestructiveArea::Target { target_id, offset } = &click.area else {
             continue;
         };
-        let evaluation = evaluator
-            .evaluate_target(scene, target_id)
-            .map_err(|error| CliError::usage(error.to_string()))?;
+        let evaluation = evaluate_target_over(evaluator, frames, target_id)?;
         if !evaluation.passed {
             continue;
         }
@@ -644,9 +654,26 @@ pub(crate) fn detect_current_page(
     detector: &PageDetector,
     scene: &Scene,
 ) -> CliOutcome<PageDetectionOutcome> {
-    let evaluations = detector
-        .evaluate_all(evaluator, scene)
-        .map_err(|err| CliError::usage(err.to_string()))?;
+    detect_current_page_over(evaluator, detector, &[scene])
+}
+
+/// #411 Lab B-2: [`detect_current_page`] over an offline frame set `frames` (oldest first, the
+/// last the current frame): every page target is evaluated over the set, so target consensus
+/// reads the last frames it requires, as the task path's observation does; one frame is the
+/// single-frame detection.
+pub(crate) fn detect_current_page_over(
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    frames: &[&Scene],
+) -> CliOutcome<PageDetectionOutcome> {
+    let evaluations = evaluator
+        .scene_context_with_samples(frames)
+        .map_err(|err| CliError::usage(err.to_string()))
+        .and_then(|context| {
+            detector
+                .evaluate_all_in_context(&context)
+                .map_err(|err| CliError::usage(err.to_string()))
+        })?;
     let matched_pages = evaluations
         .iter()
         .filter(|evaluation| evaluation.matched)
@@ -675,6 +702,20 @@ pub(crate) fn detect_current_page(
         standby: true,
         evaluations,
     })
+}
+
+/// #411 Lab B-2: `target` evaluated over an offline frame set `frames` (oldest first, the last
+/// the current frame): target consensus reads the last frames it requires, every other target
+/// and every match box the current frame; one frame is the single-frame evaluation.
+pub(crate) fn evaluate_target_over(
+    evaluator: &RecognitionEvaluator,
+    frames: &[&Scene],
+    target: &str,
+) -> CliOutcome<TargetEvaluation> {
+    evaluator
+        .scene_context_with_samples(frames)
+        .and_then(|context| context.evaluate_target(target))
+        .map_err(|error| CliError::usage(error.to_string()))
 }
 
 pub(crate) fn page_detection_json(outcome: &PageDetectionOutcome) -> Value {

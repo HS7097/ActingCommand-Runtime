@@ -1601,3 +1601,17 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l7::l7_do_keeps_the_evaluation_of_a_bare_target_and_an_any_page_guard",
 ]
 incident = ["#411 Lab L7"]
+
+# #411 Lab B-2 (v0.12.x; register §1.131, no persisted ledger shape; G8 offline; coordinator decisions Q1, Q7, Q9, Q11 of 2026-10-19; related: exec 96, 100): offline --scene may be given 1 to 5 times, oldest first, the last the current frame, on observe, do --dry-run, ensure, wait, detect-page, current-page, recognize and is-visible; page detection and every target are evaluated over all the frames, so a target consensus of k = 2 of 3 is recognised on (A, B, A) and not on (B, B, A), and each answer carries recognition_coverage {provided_frames, required_frames, aggregation: production_owner} when the package declares target consensus; frame_source, the observation's frame and frame_coordinates are the last frame's; a candidate layout is projected over its last required frames (candidate_coverage.provided_frames 2 for a two-frame layout given three); more than 5 frames, fewer than the consensus requires, a matched page's layout needing more frames, several frames for a package without multi-frame agreement, one path twice and frames of different sizes are refused before evaluation with validation_failed (exit 2) naming --scene with out_of_range, repeated or unusable and their details; every other option a Lab2 path takes once, given twice, is refused as repeated
+[[gate]]
+key = "107"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_observe_evaluates_target_consensus_over_the_given_scenes",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_detect_page_current_page_and_do_decide_on_the_scene_set",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_recognize_is_visible_ensure_and_wait_take_the_scene_set",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_a_layout_is_projected_over_its_last_frames",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_scene_counts_and_sizes_are_refused_before_evaluation",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_a_repeated_option_is_refused_on_every_lab2_path",
+]
+incident = ["#411 Lab B-2"]

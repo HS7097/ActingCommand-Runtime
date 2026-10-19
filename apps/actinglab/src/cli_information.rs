@@ -11,7 +11,7 @@ use actingcommand_device::resolve_adb_path;
 use serde_json::{Value, json};
 
 pub(super) fn help_data() -> Value {
-    json!({
+    let mut help = json!({
         "usage": "actinglab [global-options] <command> [args]",
         "global_options": [
             "--json",
@@ -87,7 +87,19 @@ pub(super) fn help_data() -> Value {
             "recognize --target": "target output includes width, height, matched_rect, and the shared evaluation object"
         },
         "commands": command_capabilities()
-    })
+    });
+    // #411 Lab B-2: the read-only verbs take an offline frame set.
+    let scene = "--scene <png> (repeatable: 1 to 5 frames of one screen, oldest first, the last the current frame)";
+    let package = "--package <directory | .zip | .json container> | --zip <published .zip package>";
+    help["command_options"]["recognize"] = json!(["--target <id>", scene, package]);
+    help["command_options"]["detect-page"] = json!([
+        scene,
+        package,
+        "--check-pages (checks the page set and evaluates nothing)"
+    ]);
+    help["command_options"]["current-page"] = json!([scene, package]);
+    help["command_options"]["is-visible"] = json!(["<target> | --target <id>", scene, package]);
+    help
 }
 
 pub(super) fn version_data() -> Value {

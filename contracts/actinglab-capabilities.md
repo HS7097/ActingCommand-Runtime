@@ -22,7 +22,12 @@ reads (#411 Lab L1). Each path (offline with `--scene`; online with `--capture`,
 first refused option as `argument` with its `argument_problem` (`conflicting` when another path
 of the verb reads it, otherwise `unknown`) and every refused option in `arguments`. Global
 options are not verb options. MCP `ac_lab_do` and `ac_lab_observe` take only arguments the CLI
-declares.
+declares. An option a path takes once and that is given more than once is refused the same way,
+with `argument_problem` `repeated`, instead of the last one winning; only the offline paths'
+`--scene` may be given one to five times, oldest first, the last the current frame, as may the
+`--scene` of `recognize`, `detect-page`, `current-page` and `is-visible`
+([business-identity-consensus.md](business-identity-consensus.md); MCP's `sample_scenes` are
+the earlier frames, passed before `scene`'s; #411 Lab B-2).
 
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with

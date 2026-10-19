@@ -14,19 +14,29 @@ use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
 use actingcommand_recognition_pack::RecognitionTarget;
 use sha2::{Digest, Sha256};
 
+/// The page offline `observe` detects, as `current-page` detects it. #411 Lab B-2: over the frame
+/// set `frames`, oldest first, the last the current frame.
 pub(super) fn detect(
     resources: std::sync::Arc<actingcommand_lab::ExternallyVerifiedBundle>,
-    scene: &Scene,
+    frames: &[&Scene],
 ) -> CliOutcome<(PageDetectionOutcome, Option<RecoveryHintResponse>)> {
+    let copy = |scene: &Scene| {
+        Scene::from_rgb8(scene.width(), scene.height(), scene.rgb8_pixels())
+            .map_err(|error| CliError::device(error.to_string()))
+    };
+    let Some((&current, earlier)) = frames.split_last() else {
+        return Err(CliError::usage("offline observe requires --scene <png>"));
+    };
     let mut lab = super::super::env_detection::build_readonly_lab()?;
     let response = lab.current_page(CurrentPageRequest {
         input: ReadonlyRecognitionInput {
             resources,
-            scene: Some(
-                Scene::from_rgb8(scene.width(), scene.height(), scene.rgb8_pixels())
-                    .map_err(|error| CliError::device(error.to_string()))?,
-            ),
+            scene: Some(copy(current)?),
             scene_path: None,
+            sample_scenes: earlier
+                .iter()
+                .map(|&scene| copy(scene))
+                .collect::<CliOutcome<Vec<_>>>()?,
             capture_config: None,
             require_fresh: false,
             fresh_delay: Duration::ZERO,
@@ -104,14 +114,20 @@ pub(super) fn detect(
 /// #411 Lab L6: an action's NN target is evaluated when the provider holds its model, and the
 /// projection's `fields` hold the values of every target the observation evaluated (every page's
 /// targets and the `explicit` targets `--targets` names), as the online observation fills them.
+///
+/// #411 Lab B-2: `frames` is the observation's frame set, oldest first; every action target is
+/// evaluated over it, and the frame identity and every geometry are the current (last) frame's.
 pub(super) fn build(
     view: &super::super::contained_resources::ObservationResources,
     evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    frames: &[&Scene],
     outcome: &PageDetectionOutcome,
     ocr: &LabOcr,
     explicit: &[(String, TargetEvaluation)],
 ) -> CliOutcome<(PageProjection, std::collections::BTreeSet<String>)> {
+    let Some(scene) = frames.last().copied() else {
+        return Err(CliError::usage("offline observe requires --scene <png>"));
+    };
     let mut elements = Vec::new();
     let mut resolved = std::collections::BTreeMap::new();
     if outcome.matched {
@@ -134,7 +150,7 @@ pub(super) fn build(
                     .source
                     .clone()
                     .unwrap_or_else(|| "navigation".to_string()),
-                resolution: resolve_click(&row.click, evaluator, scene, &mut resolved, ocr)?,
+                resolution: resolve_click(&row.click, evaluator, frames, &mut resolved, ocr)?,
             });
         }
         for operation in view
@@ -151,7 +167,7 @@ pub(super) fn build(
                 },
                 purpose: operation.purpose.clone(),
                 source: "page_operations".to_string(),
-                resolution: resolve_click(&operation.click, evaluator, scene, &mut resolved, ocr)?,
+                resolution: resolve_click(&operation.click, evaluator, frames, &mut resolved, ocr)?,
             });
         }
     }
@@ -324,20 +340,22 @@ fn geometry(input: &SemanticInput) -> CliOutcome<Geometry> {
 fn resolve_click(
     click: &NavigationClick,
     evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    frames: &[&Scene],
     resolved: &mut std::collections::BTreeMap<String, ResolvedTarget>,
     ocr: &LabOcr,
 ) -> CliOutcome<ElementResolution> {
     match click {
-        NavigationClick::Input(input) => resolve(input, evaluator, scene, resolved, ocr),
+        NavigationClick::Input(input) => resolve(input, evaluator, frames, resolved, ocr),
         NavigationClick::SegmentedDrag(_) => Ok(ElementResolution::GestureNotProjectable),
     }
 }
 
+/// An action input's resolution on the frame set `frames` (#411 Lab B-2: oldest first, the last
+/// the current frame).
 fn resolve(
     input: &SemanticInput,
     evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    frames: &[&Scene],
     resolved: &mut std::collections::BTreeMap<String, ResolvedTarget>,
     ocr: &LabOcr,
 ) -> CliOutcome<ElementResolution> {
@@ -347,7 +365,7 @@ fn resolve(
         _ => return Ok(ElementResolution::Declared(geometry(input)?)),
     };
     if !resolved.contains_key(target_id) {
-        let target = resolve_target(target_id, evaluator, scene, ocr)?;
+        let target = resolve_target(target_id, evaluator, frames, ocr)?;
         resolved.insert(target_id.clone(), target);
     }
     let target = &resolved[target_id];
@@ -369,11 +387,12 @@ fn resolve(
     }
 }
 
-/// The resolution of the action target `target_id` on this frame, with its matched evaluation.
+/// The resolution of the action target `target_id` on this frame, with its matched evaluation;
+/// #411 Lab B-2: evaluated over the frame set `frames`, its box the current frame's.
 fn resolve_target(
     target_id: &str,
     evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    frames: &[&Scene],
     ocr: &LabOcr,
 ) -> CliOutcome<ResolvedTarget> {
     let mut matched = None;
@@ -410,9 +429,7 @@ fn resolve_target(
         | TargetKind::Ocr
         | TargetKind::Nn => {
             ocr.require(evaluator.pack(), [target_id])?;
-            let evaluated = evaluator
-                .evaluate_target(scene, target_id)
-                .map_err(|error| CliError::usage(error.to_string()))?;
+            let evaluated = evaluate_target_over(evaluator, frames, target_id)?;
             let geometry = if evaluated.passed && evaluated.template.is_some() {
                 let rect = target_evaluation_rect(&evaluated)?;
                 Some(geometry(&SemanticInput::Tap {
@@ -980,7 +997,7 @@ mod lab3_tests {
         let resolution = resolve(
             &input,
             &evaluator(Some(provider)),
-            &scene,
+            &[&scene],
             &mut BTreeMap::new(),
             &available,
         )
@@ -996,8 +1013,14 @@ mod lab3_tests {
         let unavailable = LabOcr::from_installation(None);
         let without_model = evaluator(None);
         let mut resolved = BTreeMap::new();
-        let resolution = resolve(&input, &without_model, &scene, &mut resolved, &unavailable)
-            .expect("an action's OCR target without a model does not fail observe");
+        let resolution = resolve(
+            &input,
+            &without_model,
+            &[&scene],
+            &mut resolved,
+            &unavailable,
+        )
+        .expect("an action's OCR target without a model does not fail observe");
         assert!(
             matches!(
                 &resolution,

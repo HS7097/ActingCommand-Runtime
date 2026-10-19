@@ -650,6 +650,7 @@ fn standby_page_response() -> crate::PageDetectionResponse {
         reco_id: None,
         env_resolved: Vec::new(),
         needs_detection: None,
+        recognition_coverage: None,
     }
 }
 

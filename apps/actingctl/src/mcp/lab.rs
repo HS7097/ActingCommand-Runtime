@@ -38,6 +38,7 @@ use super::operator::{self, CLI};
 use super::runtime;
 use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, invalid_argument,
+    out_of_range,
 };
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::ClientActionValue;
@@ -94,6 +95,9 @@ const DESTRUCTIVE_GUARD: [&str; 2] = ["allow_destructive", "destructive"];
 enum Kind {
     /// `--flag <text>`.
     Text,
+    /// #411 Lab B-2: `--flag <text>` once per item, in list order; 1 to `MAX_SAMPLE_SCENES`
+    /// items.
+    TextList,
     /// `--flag <integer>`.
     Integer,
     /// `--flag <number>`.
@@ -159,7 +163,17 @@ const SCENE: Flag = flag(
     "scene",
     "--scene",
     Kind::Text,
-    "--scene: offline, the PNG scene file to read.",
+    "--scene: offline, the PNG scene file to read; with sample_scenes, the current (last) frame of the set.",
+);
+/// #411 Lab B-2: at most four earlier frames, so a set holds at most five with `scene`.
+const MAX_SAMPLE_SCENES: u64 = 4;
+/// #411 Lab B-2 (R5): the earlier frames of an offline frame set, passed before `scene` as more
+/// `--scene` options; read only with `scene`.
+const SAMPLE_SCENES: Flag = flag(
+    "sample_scenes",
+    "--scene",
+    Kind::TextList,
+    "--scene, repeated: offline, with scene only, 1 to 4 earlier PNG frames of the same screen, oldest first; actinglab takes them before scene (the current frame), so a package's target consensus reads the last frames it requires and a candidate layout its last required frames. The interval between them is not checked.",
 );
 const CAPTURE: Flag = flag(
     "capture",
@@ -232,6 +246,7 @@ static OBSERVE: LabCommand = LabCommand {
     words: &["observe"],
     flags: &[
         LAB2_INSTANCE,
+        SAMPLE_SCENES,
         SCENE,
         CAPTURE,
         PACKAGE,
@@ -276,6 +291,7 @@ static DO: LabCommand = LabCommand {
             Kind::Positional,
             "The target (offline, with scene) or the Runtime element id (with capture).",
         ),
+        SAMPLE_SCENES,
         SCENE,
         CAPTURE,
         PACKAGE,
@@ -498,6 +514,13 @@ fn input_schema(command: &LabCommand) -> Value {
                 "pattern": NOT_A_FLAG,
                 "description": flag.description,
             }),
+            Kind::TextList => json!({
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_SAMPLE_SCENES,
+                "items": {"type": "string", "minLength": 1, "pattern": NOT_A_FLAG},
+                "description": flag.description,
+            }),
             Kind::Integer => {
                 json!({"type": "integer", "minimum": 0, "description": flag.description})
             }
@@ -532,6 +555,28 @@ fn lab_string(arguments: &Arguments<'_>, key: &str) -> Result<Option<String>, To
     };
     not_a_flag(key, text)?;
     Ok(Some(text.to_owned()))
+}
+
+/// #411 Lab B-2: a list argument bound for actinglab's command line, one value per item: a list
+/// (else `wrong_type`) of 1 to `MAX_SAMPLE_SCENES` items (else `out_of_range`), each a non-empty
+/// string (else `wrong_type`) that is not flag-like (else `not_recognised`).
+fn lab_strings(key: &str, value: &Value) -> Result<Vec<String>, ToolError> {
+    let Value::Array(items) = value else {
+        return Err(invalid_argument(key, ArgumentProblem::WrongType));
+    };
+    if items.is_empty() || items.len() as u64 > MAX_SAMPLE_SCENES {
+        return Err(out_of_range(key, 1, MAX_SAMPLE_SCENES));
+    }
+    items
+        .iter()
+        .map(|item| match item {
+            Value::String(text) if !text.is_empty() => {
+                not_a_flag(key, text)?;
+                Ok(text.clone())
+            }
+            _ => Err(invalid_argument(key, ArgumentProblem::WrongType)),
+        })
+        .collect()
 }
 
 /// actinglab would read a value that starts with `--` as a flag: `not_recognised`.
@@ -573,6 +618,11 @@ fn command_line(command: &LabCommand, map: &Map<String, Value>) -> Result<Vec<St
             }
             Kind::Text => {
                 if let Some(text) = lab_string(&arguments, flag.property)? {
+                    valued.extend([flag.flag.to_owned(), text]);
+                }
+            }
+            Kind::TextList => {
+                for text in lab_strings(flag.property, value)? {
                     valued.extend([flag.flag.to_owned(), text]);
                 }
             }
@@ -1121,8 +1171,22 @@ fn require_locator(arguments: &Map<String, Value>) -> Result<(), ToolError> {
     Ok(())
 }
 
+/// #411 Lab B-2 (R5): `sample_scenes` are the earlier frames of `scene`'s set; without `scene`
+/// they are refused here, before the install is located and before any child runs:
+/// `arguments_invalid {argument: sample_scenes, argument_problem: conflicting}`.
+fn refuse_samples_without_scene(arguments: &Map<String, Value>) -> Result<(), ToolError> {
+    if given(arguments, SAMPLE_SCENES.property) && !given(arguments, SCENE.property) {
+        return Err(invalid_argument(
+            SAMPLE_SCENES.property,
+            ArgumentProblem::Conflicting,
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     command_line(&OBSERVE, arguments)?;
+    refuse_samples_without_scene(arguments)?;
     require_locator(arguments)?;
     author(context, arguments, &OBSERVE, "ac_lab_observe")
 }
@@ -1151,6 +1215,7 @@ pub(super) fn act(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         return Err(invalid_argument("tap", ArgumentProblem::Conflicting));
     }
     refuse_destructive_guard_on_capture(arguments)?;
+    refuse_samples_without_scene(arguments)?;
     require_locator(arguments)?;
     author(context, arguments, &DO, "ac_lab_do")
 }
@@ -1649,4 +1714,7 @@ mod tests {
     // #411 Lab L1 (apps key 76): ac_lab_do and ac_lab_observe take no argument actinglab does not
     // read, and ac_lab_do refuses the destructive guard with capture, before any child runs.
     mod gate_lab_l1;
+    // #411 Lab B-2 (apps key 78): ac_lab_observe and ac_lab_do pass sample_scenes as earlier
+    // --scene frames before scene's, and refuse them without scene before any child runs.
+    mod gate_lab_b2;
 }
