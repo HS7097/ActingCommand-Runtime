@@ -2181,6 +2181,27 @@ host key 116, apps key 75.
 | B15W2-2 | MCP `ac_diagnose` / `actingctl diagnose` member `remedies` (and `remedies_truncated`) | new output member (not persisted) (apps 75) | R7 | R7 | the report's rows whose `instance_id` is the diagnosed instance's alias or id (every row without an instance; an unparsed row names none), verbatim; no window filter; cut for the output budget after `packs`, before `report_warnings`; the tool description and result schema name it |
 | B15W2-3 | `check_config_passed` `note` links `policy_remedy_declaration_unusable` (warning) | first emission of a B15-1 code (no shape) (host 116) | R7 | R7 | R4's table built offline over the configured catalog and `policy.procedure_manifest`'s locations for the policy inputs' instances: each finding (`capability_unbound`, `cycle`, `parameters_mismatch`) names `task_id`, `outcome_key`, `need`, `capability`, `instance_id` (the alias) and `package_id` where known; then the rows of `scheduling.remedy.choices` and of each `instance.<id>.scheduling.remedy.choices` the file sets: an `allow` / `none` of a need no bound remedy declares is `choice_invalid` with `need`, an `allow` of a capability that need's remedies do not list `choice_invalid` with `need` and `capability`, a `parameter` row whose capability, parameter or option no bound provider declares `parameter_invalid` with `capability`; a per-instance list's note adds its registry `instance_id`; each row's note is also a developer line on stderr naming the list's key and the row; a package that cannot be read gives no note (the dispatch reports it) but, as at run time, the developer line `actingd remedy_table unreadable code=<code> tasks=<tasks> path=<path>` on stderr; a catalog that does not compile gives none (the preview refuses it); the outcome stays `check_config_passed`, exit 0 |
 
+### 1.139 Slice A24 (0.12.x): ledger event time is not monotonic in sequence; the latest time is the maximum timestamp (#411 A24)
+
+A24: `timestamp_unix_ms` is the producer's capture or occurrence time, not the append time, so it
+is not monotonic in `sequence` (a run's diagnostic `artifact.created`/`verified` carry its start
+time and are appended at its end); order by `sequence`, let time bounds filter records but never
+end a scan, and take the latest time as the maximum timestamp, not the last record's. The
+readers that took the last record's time as the latest time follow the rule. Rule only: no
+persisted ledger shape, no wire, key, configuration or code change.
+[ledger-observer.md](ledger-observer.md) (§8.1, §10), [global-ledger-query.md](global-ledger-query.md),
+[ledger-store.md](ledger-store.md), [policy-suspension.md](policy-suspension.md)
+(`clock_slots`), [emulator-control.md](emulator-control.md) (direction ①) and
+[runtime-fact-store.md](runtime-fact-store.md) (offline read) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A24-1 | the reference time of `clock_slots` in `actingd suspended` | rule (no shape change) (host 125) | A24 | A24 | the maximum `timestamp_unix_ms` of the snapshot, not the last event's; the 48 h window and the settling of a record without a next dispatch use it, so a last record stamped earlier (a run's diagnostic `artifact.created`) no longer leaves a slot `pending` that the latest time has passed |
+| A24-2 | direction ①'s failure-burst window (memory only) | rule (no shape change) (host 125) | A24 | A24 | the window keeps its counted failures in time order and counts those within the item's `window_ms` of its latest failure, whatever order their records were committed in; the burst's `first_unix_ms` and `last_unix_ms` are the earliest and latest of them (never first after last); the same records in time order and out of it give the same count and the same burst; records in time order count exactly as before |
+| A24-3 | `gap_start_unix_ms` of `ledger.gap_recorded` `tail_unconfirmed`, `dump_incomplete` and `dump_invalid` | rule (no shape change) (ledger 50) | A24 | A24 | a tail gap starts at the maximum timestamp of the committed (or imported) records, a dump gap at the maximum capture time of the verified dump records (the dump's start when none verified), not at the last record's |
+| A24-4 | `taken_at_unix_ms` of the offline `actingledger facts --at <position>` | rule (no shape change) (ledger 50) | A24 | A24 | the maximum timestamp of the events at or before `position`, not the timestamp of the event at it; read as the position's event and then the events through it stamped later (a time filter, the scan bounded by the position) |
+| A24-5 | the scripted Runtime's ledger (`runtime-client` `test_support`, feature `test-support`) | test fake (no shape change) | A24 | A24 | its `to_timestamp_unix_ms` bound is exclusive, as the contract and the ledger's query are; no current test of it queries with an upper time bound |
+
 ### 1.140 Slice A25 (0.12.x): `standard-pack check` admits every registry package, with or without the navigation root files (#411 A25)
 
 A25: the standard-pack cross-check admits every package of the registry (`bundle.json`) once,

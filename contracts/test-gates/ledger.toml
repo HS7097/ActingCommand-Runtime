@@ -567,3 +567,13 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_0121_a4::a4_events_lists_the_eviction_proofs_of_its_page_as_the_whole_opening_does",
 ]
 incident = ["#411 A4"]
+
+# #411 A24 (v0.12.x; register §1.139 A24-3, A24-4; no persisted ledger shape; contracts/ledger-observer.md §8.1, §10, runtime-fact-store.md "Offline read"; next free key at main): a ledger record's time is its producer's, not monotonic in sequence; a `tail_unconfirmed` gap starts at the maximum timestamp of the committed records and a `dump_incomplete` gap at the maximum verified capture time, not at the last record's; the offline facts read at a position takes its snapshot at the maximum timestamp through the position, not the position's own time nor a later record's
+[[gate]]
+key = "50"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::a24_write_failure_gap_starts_at_the_latest_time",
+    "actingcommand-ledger::lib::global::tests::gate_411_a24::a24_forensic_taken_at_is_the_latest_timestamp",
+]
+incident = ["#411 A24"]

@@ -331,7 +331,9 @@ The result `ForensicRuntimeFactsResult` is one of:
 - `available { source, position, facts }` — `facts` is the `RuntimeFactSnapshot`
   the online read returns, records in scope-then-key order, with
   `ledger_position` = `snapshot_id` = `position`, part 1 of 1.
-  `taken_at_unix_ms` is the ledger timestamp of the event at `position`; the online read samples the host clock instead,
+  `taken_at_unix_ms` is the ledger's latest time through `position`: the maximum timestamp of
+  the events at or before it, not the timestamp of the event at it, since a record's time is not
+  monotonic in sequence (#411 A24); the online read samples the host clock instead,
   which the ledger does not record. Expired records are included, as online;
   expiry stays the consumer's `is_expired(taken_at_unix_ms)`. `source` is the
   final page's `LedgerReadScope` (`offline`, complete, scanned through

@@ -1149,13 +1149,16 @@ fn import_dump<B: DurableStorage>(
     });
     let mut imported = 0_u64;
     let mut duplicates = 0_u64;
-    let mut last_verified_unix_ms = read.started_at_unix_ms;
+    // #411 A24: a record's capture time is its producer's, not monotonic in capture order, so
+    // the gap starts at the latest verified capture time, not the last verified record's; the
+    // dump's start when no record verified.
+    let mut latest_verified_unix_ms: Option<u64> = None;
     let mut end = read.end;
     for (capture_seq, draft) in read.records {
         let captured_at = draft.timestamp_unix_ms();
         if store.indexes.contains_event_id(draft.event_id()) {
             duplicates += 1;
-            last_verified_unix_ms = Some(captured_at);
+            latest_verified_unix_ms = latest_verified_unix_ms.max(Some(captured_at));
             continue;
         }
         let source = draft.source().copied();
@@ -1172,11 +1175,15 @@ fn import_dump<B: DurableStorage>(
         };
         store.persist_imported(event)?;
         imported += 1;
-        last_verified_unix_ms = Some(captured_at);
+        latest_verified_unix_ms = latest_verified_unix_ms.max(Some(captured_at));
     }
     let now = unix_ms_now()?;
     let gap_end = modified_unix_ms.unwrap_or(now);
-    let gap_start = last_verified_unix_ms.unwrap_or(gap_end).min(gap_end).max(1);
+    let gap_start = latest_verified_unix_ms
+        .or(read.started_at_unix_ms)
+        .unwrap_or(gap_end)
+        .min(gap_end)
+        .max(1);
     let gap_end = gap_end.max(gap_start);
     let kept = (end == DumpEnd::Invalid).then(|| kept_path(path, now));
     let gap = match (&kept, end) {
@@ -1240,16 +1247,20 @@ fn import_dump<B: DurableStorage>(
 
 /// Workflow #383 AO-2 (`contracts/ledger-observer.md` §10, §12 step 5): the start's tail gap.
 /// The previous epoch ended without its close (the writer's owner record is still active) and
-/// without a complete dump: its tail is unconfirmed from the last committed record to this
-/// start, the count unknown.
+/// without a complete dump: its tail is unconfirmed from the ledger's latest time to this
+/// start, the count unknown. #411 A24: a record's time is its producer's, not monotonic in
+/// sequence, so the latest time is the maximum timestamp of the committed (or imported)
+/// records, not the last record's.
 pub(super) fn append_tail_gap<B: DurableStorage>(
     store: &mut EventStore<B>,
 ) -> GlobalLedgerResult<()> {
     let now = unix_ms_now()?;
     let gap_start = store
         .events
-        .last()
-        .map_or(now, PersistedEvent::timestamp_unix_ms)
+        .iter()
+        .map(PersistedEvent::timestamp_unix_ms)
+        .max()
+        .unwrap_or(now)
         .clamp(1, now);
     let draft = ledger_draft(
         LedgerPayloadDraft::dump_gap(

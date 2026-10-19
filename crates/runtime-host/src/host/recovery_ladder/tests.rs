@@ -825,3 +825,97 @@ fn d1ch_a_key_holder_change_from_manual_work_to_a_routine_claim_flips_counting()
         "the burst spans the routine failures alone"
     );
 }
+
+// #411 A24 (host key 125, register §1.139 A24-2): a record's time is its producer's, not its
+// commit time, so counted records can arrive out of time order: a run's diagnostic stream
+// failure is stamped with the stream's start and committed at the run's end. The window counts
+// the failures whose times lie within `window_ms` of its latest failure, whatever order their
+// records arrived in: the same records in time order and out of it give the same count and the
+// same burst (its item, and so its start rung, its first and its last failure). Under the default
+// `stability_burst` (three failures within 600 000 ms): three within the window register one
+// burst from the earliest to the latest and empty the window; three whose two earlier ones lie
+// just over the window before the latest register none and leave the latest alone in it.
+#[test]
+fn a24_failure_burst_window_does_not_depend_on_arrival_order() {
+    let node = instance();
+    let defaults = ladder(serde_json::json!({}));
+    let start_rung = defaults
+        .triggers
+        .iter()
+        .find(|item| item.id == "stability_burst")
+        .expect("the default direction-one item")
+        .start_rung;
+    // The failures `times` leave in the default item's window, and the bursts they register as
+    // (instance, item, start rung, count, window, first, last, code).
+    let counted = |times: &[u64]| {
+        let mut counter = StabilityCounter::default();
+        counter.configure(Arc::clone(&defaults));
+        for &at_unix_ms in times {
+            counter.count(&record(node, at_unix_ms, OPEN_FAILED));
+        }
+        let window = counter
+            .windows
+            .get(&node)
+            .and_then(|items| items.get("stability_burst"))
+            .map_or(0, VecDeque::len);
+        let bursts = counter
+            .take()
+            .0
+            .iter()
+            .map(|burst| {
+                let item = &burst.config.triggers[burst.item];
+                (
+                    burst.instance_id,
+                    item.id.clone(),
+                    item.start_rung,
+                    burst.count,
+                    burst.window_ms,
+                    burst.first_unix_ms,
+                    burst.last_unix_ms,
+                    burst.failure_code.as_str().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        (window, bursts)
+    };
+
+    let within = counted(&[1_000, 200_000, 400_000]);
+    assert_eq!(
+        within,
+        (
+            0,
+            vec![(
+                node,
+                "stability_burst".to_owned(),
+                start_rung,
+                3,
+                600_000,
+                1_000,
+                400_000,
+                OPEN_FAILED.to_owned(),
+            )]
+        ),
+        "three failures within the window, in time order"
+    );
+    for arrival in [[400_000, 1_000, 200_000], [200_000, 400_000, 1_000]] {
+        assert_eq!(
+            counted(&arrival),
+            within,
+            "the same failures arrived as {arrival:?}"
+        );
+    }
+
+    let apart = counted(&[1_000, 2_000, 602_001]);
+    assert_eq!(
+        apart,
+        (1, Vec::new()),
+        "the two earlier failures lie just over the window, in time order"
+    );
+    for arrival in [[602_001, 1_000, 2_000], [2_000, 602_001, 1_000]] {
+        assert_eq!(
+            counted(&arrival),
+            apart,
+            "the same failures arrived as {arrival:?}"
+        );
+    }
+}
