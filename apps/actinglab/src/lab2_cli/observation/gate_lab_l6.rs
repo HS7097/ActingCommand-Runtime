@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #411 Lab L6 R2 (exec key 99; register §1.121; rd-1019/plan-lab-backends/plan.md §4 L6, R2):
-// offline `observe` evaluates an action's NN target when the provider it evaluates with holds
-// the target's model, and fills the projection's values (`fields`) of the OCR targets it
-// evaluated as the online observation fills them (`online_observation.rs`): the targets of every
-// page in page order, then each target `--targets` names that no page evaluated, as an optional
-// target of no page; per OCR target one entry with all its evaluations and one more per field
-// an operation declares on it. Without OCR the existing `ocr.not_evaluated` rule holds, also
-// beside a provider that serves NN models only (L6 R1). A scripted provider; packages and frames
-// are synthetic and neutral.
+// #411 Lab L6 R2 (exec key 99; register §1.121; rd-1019/plan-lab-backends/plan.md §4 L6, R2, as
+// the coordinator widened it at 18:4x: every kind): offline `observe` evaluates an action's NN
+// target when the provider it evaluates with holds the target's model, and fills the projection's
+// values (`fields`) of every target it evaluated, of every kind, as the online observation fills
+// them (`online_observation.rs`): the targets of every page in page order, then each target
+// `--targets` names that no page evaluated, as an optional target of no page; per target one entry
+// with all its evaluations and one more per field an operation declares on it. Offline equals
+// online for the same package and frame. Without OCR the existing `ocr.not_evaluated` rule
+// holds, also beside a provider that serves NN models only (L6 R1). A scripted provider; packages
+// and frames are synthetic and neutral.
 
 use super::*;
-use actingcommand_lab::ExternallyVerifiedBundle;
+use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_lab::{ExternallyVerifiedBundle, PreparedPageObservation};
 use actingcommand_recognition_pack::{
     NnProviderLabel, NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
     OcrProviderTextBlock, VisionProvider, VisionProviderError, VisionProviderErrorCode,
@@ -128,17 +130,16 @@ fn ocr_target(id: &str, x: i32, expected: &str) -> Value {
            "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256})
 }
 
-// The package, admitted as pack containment admits it, with `provider`. Its pages are told apart
-// by the colour of the frame's top-left pixel; `entry_page` also requires `text/count` to read
-// "42". The edge `open_by_kind` from `entry_page` clicks the NN target `model/kind`, which passes
-// when the classifier selects `open`; the OCR target `text/stock` is on no page; the task declares
-// the field `count` on `text/count`.
-fn bundle(provider: Arc<dyn VisionProvider>) -> ExternallyVerifiedBundle {
+// The package. Its pages are told apart by the colour of the frame's top-left pixel; `entry_page`
+// also requires `text/count` to read "42". The edge `open_by_kind` from `entry_page` clicks the NN
+// target `model/kind`, which passes when the classifier selects `open`; the OCR target
+// `text/stock` is on no page; the task declares the field `count` on `text/count`.
+fn package() -> Vec<u8> {
     let page_target = |page: &str, expected: [u8; 3]| {
         json!({"type": "color", "id": format!("page/{page}"),
                "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": expected})
     };
-    let package = zip_entries(&[
+    zip_entries(&[
         (
             "control.json",
             json_bytes(json!({
@@ -204,8 +205,12 @@ fn bundle(provider: Arc<dyn VisionProvider>) -> ExternallyVerifiedBundle {
                 ]
             })),
         ),
-    ]);
-    ExternallyVerifiedBundle::load_observation("semantic_observe", &package, Some(provider))
+    ])
+}
+
+// The package, admitted as pack containment admits it, with `provider`.
+fn bundle(provider: Arc<dyn VisionProvider>) -> ExternallyVerifiedBundle {
+    ExternallyVerifiedBundle::load_observation("semantic_observe", &package(), Some(provider))
         .unwrap_or_else(|error| panic!("the package is admitted: {error}"))
 }
 
@@ -303,14 +308,16 @@ fn l6_observe_evaluates_an_action_nn_target_with_the_provider_that_holds_its_mod
     }
 }
 
-// The values of the OCR targets the observation evaluated, as online: `text/count`, required on
-// the matched page (the second evaluation of the observation, page `entry_page`, target index 1),
-// with one entry of its evaluation and one for its declared field `count`; `text/stock`, named by
-// `--targets` and on no page, after every page's targets (the fourth evaluation: `page_a`'s colour
-// target is the third), as an optional target of no page. `text/count` named by `--targets` too
-// adds no evaluation, since a page evaluated it. No colour or NN target has a value entry.
+// The values of every target the observation evaluated, in catalog order, as online: the colour
+// targets `page/entry_page` (the first evaluation, required on the matched page) and `page/page_a`
+// (the third, on the page that did not match); `text/count`, required on the matched page (the
+// second evaluation, target index 1), with one entry of its evaluation and one for its declared
+// field `count`; `text/stock`, named by `--targets` and on no page, after every page's targets
+// (the fourth evaluation), as an optional target of no page. `text/count` named by `--targets`
+// too adds no evaluation, since a page evaluated it. The NN target `model/kind`, which only the
+// action resolves, is no evaluation of the observation and has no value entry.
 #[test]
-fn l6_observe_fills_the_values_of_the_ocr_targets_it_evaluated_as_online() {
+fn l6_observe_fills_the_values_of_every_target_it_evaluated_as_online() {
     let projection = observe_entry_page(
         Scripted {
             holds_nn: true,
@@ -320,12 +327,14 @@ fn l6_observe_fills_the_values_of_the_ocr_targets_it_evaluated_as_online() {
     );
 
     let fields = &projection.fields;
-    assert_eq!(fields.len(), 3, "{fields:?}");
+    assert_eq!(fields.len(), 5, "{fields:?}");
     let count = json!({"task_id": "task", "field_id": "count", "target_id": "text/count"});
     for (entry, target, field) in [
-        (&fields[0], "text/count", Value::Null),
-        (&fields[1], "text/count", count),
-        (&fields[2], "text/stock", Value::Null),
+        (&fields[0], "page/entry_page", Value::Null),
+        (&fields[1], "page/page_a", Value::Null),
+        (&fields[2], "text/count", Value::Null),
+        (&fields[3], "text/count", count),
+        (&fields[4], "text/stock", Value::Null),
     ] {
         assert_eq!(entry["target_id"], json!(target), "{entry}");
         assert_eq!(entry["field"], field, "{entry}");
@@ -333,7 +342,7 @@ fn l6_observe_fills_the_values_of_the_ocr_targets_it_evaluated_as_online() {
         assert_eq!(entry["redacted"], json!(false), "{entry}");
         assert_eq!(entry["privacy"], json!("public"), "{entry}");
     }
-    assert_eq!(fields[0]["value"], fields[1]["value"]);
+    assert_eq!(fields[2]["value"], fields[3]["value"]);
     let evaluations = |entry: &Value| {
         entry["value"]["evaluations"]
             .as_array()
@@ -341,7 +350,21 @@ fn l6_observe_fills_the_values_of_the_ocr_targets_it_evaluated_as_online() {
             .clone()
     };
 
-    let count = evaluations(&fields[0]);
+    for (entry, index, page, passed) in [
+        (&fields[0], 0, "neutral/entry_page", true),
+        (&fields[1], 2, "neutral/page_a", false),
+    ] {
+        let colour = evaluations(entry);
+        assert_eq!(colour.len(), 1, "{colour:?}");
+        assert_eq!(colour[0]["evaluation_index"], json!(index));
+        assert_eq!(colour[0]["page"], json!(page));
+        assert_eq!(colour[0]["role"], json!("Required"));
+        assert_eq!(colour[0]["target_index"], json!(0));
+        assert_eq!(colour[0]["evaluation"]["kind"], json!("color"));
+        assert_eq!(colour[0]["evaluation"]["passed"], json!(passed));
+    }
+
+    let count = evaluations(&fields[2]);
     assert_eq!(count.len(), 1, "{count:?}");
     assert_eq!(count[0]["evaluation_index"], json!(1));
     assert_eq!(count[0]["page"], json!("neutral/entry_page"));
@@ -352,7 +375,7 @@ fn l6_observe_fills_the_values_of_the_ocr_targets_it_evaluated_as_online() {
     assert_eq!(count[0]["evaluation"]["passed"], json!(true));
     assert_eq!(count[0]["evaluation"]["ocr"]["text"], json!("42"));
 
-    let stock = evaluations(&fields[2]);
+    let stock = evaluations(&fields[4]);
     assert_eq!(stock.len(), 1, "{stock:?}");
     assert_eq!(stock[0]["evaluation_index"], json!(3));
     assert_eq!(stock[0]["page"], Value::Null);
@@ -362,6 +385,55 @@ fn l6_observe_fills_the_values_of_the_ocr_targets_it_evaluated_as_online() {
     assert_eq!(stock[0]["evaluation"]["id"], json!("text/stock"));
     assert_eq!(stock[0]["evaluation"]["passed"], json!(true));
     assert_eq!(stock[0]["evaluation"]["ocr"]["text"], json!("17"));
+}
+
+// Offline `observe` and the online observation fill the same value entries, a colour target's next
+// to the OCR targets', for the same package, frame and requested target.
+#[test]
+fn l6_offline_value_entries_equal_the_online_observations_for_the_same_package_and_frame() {
+    let scripted = || Scripted {
+        holds_nn: true,
+        label: "open",
+    };
+    let offline = observe_entry_page(scripted(), &["text/stock"]);
+
+    let online = PreparedPageObservation::load(
+        "semantic_observe",
+        &package(),
+        &["text/stock".to_string()],
+        Some(Arc::new(scripted())),
+    )
+    .unwrap_or_else(|error| panic!("the online observation admits the package: {error:?}"));
+    let png = Frame::from_pixels(
+        WIDTH,
+        HEIGHT,
+        ENTRY.repeat((WIDTH * HEIGHT) as usize),
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("fixture frame")
+    .encode_png_fast()
+    .expect("fixture PNG");
+    let evaluated = online
+        .evaluate(
+            &png,
+            FrameIdentity {
+                kind: shared::FrameKind::Artifact,
+                sha256: "5f0c".repeat(16),
+                width: WIDTH,
+                height: HEIGHT,
+            },
+        )
+        .unwrap_or_else(|error| panic!("the online observation: {error:?}"));
+
+    let kinds = offline
+        .fields
+        .iter()
+        .map(|entry| entry["value"]["evaluations"][0]["evaluation"]["kind"].clone())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&json!("color")), "{kinds:?}");
+    assert!(kinds.contains(&json!("ocr")), "{kinds:?}");
+    assert_eq!(offline.fields, evaluated.projection.fields);
 }
 
 // Without OCR an action's OCR target stays not evaluated and is named for `ocr.not_evaluated`, as

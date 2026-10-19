@@ -681,8 +681,8 @@ impl PreparedPageObservation {
 /// catalog order, that `include` admits and that has evaluations among `evaluations` (the
 /// observation's target evaluations in order, each with the page it was evaluated for, `None`
 /// for an explicitly requested target), one entry holding all of them and one more per declared
-/// field of the target, with that field's privacy. #411 Lab L6: offline `observe` fills its OCR
-/// targets' entries with it, as the online observation fills every target's.
+/// field of the target, with that field's privacy. #411 Lab L6: offline `observe` fills its
+/// entries with it too.
 pub fn observation_fields(
     metadata: &projection::VerifiedProjectionMetadata,
     evaluations: &[(Option<String>, PageTargetEvaluation)],

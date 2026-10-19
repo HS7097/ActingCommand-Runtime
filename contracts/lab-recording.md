@@ -425,7 +425,7 @@ evaluate NN targets with it; `observe` evaluates an action's NN target when the 
 its model, and otherwise leaves it not evaluated (`dynamic_target_not_evaluated`), as before. A
 root whose folders hold NN models and no OCR model gives the provider too, as the Runtime accepts
 such a root: NN targets evaluate, while OCR is unavailable as below, caused by
-`lab_ocr_model_missing`. `observe` also fills the values (`fields`) of the OCR targets it
+`lab_ocr_model_missing`. `observe` also fills the values (`fields`) of every target it
 evaluated, as the online observation does ([page-projection.md](page-projection.md)).
 
 Without a usable OCR model OCR is unavailable: `lab_ocr_unavailable`, whose `caused_by` link says

@@ -102,9 +102,8 @@ pub(super) fn detect(
 /// reports under `lab_ocr_unavailable` without failing.
 ///
 /// #411 Lab L6: an action's NN target is evaluated when the provider holds its model, and the
-/// projection's `fields` hold the values of the OCR targets the observation evaluated (every
-/// page's targets and the `explicit` targets `--targets` names), as the online observation fills
-/// them.
+/// projection's `fields` hold the values of every target the observation evaluated (every page's
+/// targets and the `explicit` targets `--targets` names), as the online observation fills them.
 pub(super) fn build(
     view: &super::super::contained_resources::ObservationResources,
     evaluator: &RecognitionEvaluator,
@@ -219,7 +218,7 @@ pub(super) fn build(
         }
     }
     let ocr_not_evaluated = not_evaluated_ocr_targets(evaluator, &resolved);
-    let fields = ocr_fields(view, evaluator, outcome, explicit);
+    let fields = value_fields(view, outcome, explicit);
     let projection = shared::project(
         ProjectionInput {
             frame: FrameIdentity {
@@ -243,12 +242,11 @@ pub(super) fn build(
     Ok((projection, ocr_not_evaluated))
 }
 
-/// #411 Lab L6: the value entries of the OCR targets this observation evaluated, as the online
-/// observation builds them (`observation_fields`): the targets of every page in page order, then
-/// each explicit target no page evaluated, as an optional target of no page.
-fn ocr_fields(
+/// #411 Lab L6: the value entries of every target this observation evaluated, of every kind, as
+/// the online observation builds them (`observation_fields`): the targets of every page in page
+/// order, then each explicit target no page evaluated, as an optional target of no page.
+fn value_fields(
     view: &super::super::contained_resources::ObservationResources,
-    evaluator: &RecognitionEvaluator,
     outcome: &PageDetectionOutcome,
     explicit: &[(String, TargetEvaluation)],
 ) -> Vec<shared::FieldInput> {
@@ -282,9 +280,7 @@ fn ocr_fields(
             },
         ));
     }
-    actingcommand_lab::observation_fields(&view.metadata, &evaluations, |target_id| {
-        matches!(evaluator.target_kind(target_id), Ok(TargetKind::Ocr))
-    })
+    actingcommand_lab::observation_fields(&view.metadata, &evaluations, |_| true)
 }
 
 /// One action target's resolution on this frame, kept by `resolve` per target.
@@ -875,7 +871,7 @@ mod gate_411_a21;
 mod gate_lab_l2;
 
 // #411 Lab L6 (exec key 99): offline observe evaluates an action's NN target with the provider
-// that holds its model and fills the values of the OCR targets it evaluated, as online.
+// that holds its model and fills the values of every target it evaluated, as online.
 #[cfg(test)]
 mod gate_lab_l6;
 

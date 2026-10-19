@@ -102,8 +102,9 @@ pub use actingcommand_execution_kernel::{
 };
 // Workflow #390 LAB-2 item 7: the box an `offset` navigation click presses, for actinglab.
 pub use actingcommand_execution_kernel::drive_offset_rect;
-// #411 Lab L6: the online observation's value entries, for offline `observe`.
-pub use actingcommand_execution_kernel::observation_fields;
+// #411 Lab L6: the online observation's value entries, for offline `observe`, and the online
+// observation itself, which actinglab's parity test compares offline `observe` with.
+pub use actingcommand_execution_kernel::{PreparedPageObservation, observation_fields};
 
 pub struct Lab<P: LabPorts> {
     ports: P,
