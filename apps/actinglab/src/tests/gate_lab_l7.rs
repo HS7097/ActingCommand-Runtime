@@ -192,7 +192,7 @@ fn zip_entries(entries: &[(&str, Value)]) -> Vec<u8> {
 }
 
 /// Runs `words` with `--json` and the package.
-fn run(words: &[&str], package: &str) -> CliResult {
+fn run_lab_line(words: &[&str], package: &str) -> CliResult {
     let line = ["--json"]
         .iter()
         .chain(words)
@@ -260,7 +260,7 @@ fn l7_offline_do_ensure_and_wait_refuse_a_frame_two_pages_match() {
 
     for (verb, words) in lines {
         let details = refusal(
-            &run(words, &twin),
+            &run_lab_line(words, &twin),
             "page_recognition_conflict",
             2,
             &format!("{verb} on a frame two pages match"),
@@ -268,13 +268,19 @@ fn l7_offline_do_ensure_and_wait_refuse_a_frame_two_pages_match() {
         assert_eq!(details["matched_pages"], json!(TWIN_PAGES), "{verb}");
     }
 
-    let planned = data(&run(lines[0].1, &single), "do on one matched page");
+    let planned = data(&run_lab_line(lines[0].1, &single), "do on one matched page");
     assert_eq!(planned["state"], "planned");
     assert_eq!(planned["page"], "neutral/entry_page");
-    let ensured = data(&run(lines[1].1, &single), "ensure on one matched page");
+    let ensured = data(
+        &run_lab_line(lines[1].1, &single),
+        "ensure on one matched page",
+    );
     assert_eq!(ensured["state"], "already_at_target");
     assert_eq!(ensured["page"], "neutral/entry_page");
-    let waited = data(&run(lines[2].1, &single), "wait on one matched page");
+    let waited = data(
+        &run_lab_line(lines[2].1, &single),
+        "wait on one matched page",
+    );
     assert_eq!(waited["state"], "arrived");
     assert_eq!(waited["page"], "neutral/entry_page");
 }
@@ -291,7 +297,7 @@ fn l7_do_guards_an_operation_target_on_its_guard_page_first() {
     let on_another_page = context.frame("page_a.png", PAGE_A, BUTTON);
     let without_button = context.frame("entry_blank.png", ENTRY, BLANK);
     let line = |frame: &str| {
-        run(
+        run_lab_line(
             &["--dry-run", "do", "ui/button", "--scene", frame],
             &package,
         )
@@ -328,7 +334,7 @@ fn l7_do_keeps_the_evaluation_of_a_bare_target_and_an_any_page_guard() {
 
     for target in ["ui/free", "ui/anywhere"] {
         let planned = data(
-            &run(
+            &run_lab_line(
                 &["--dry-run", "do", target, "--scene", frame.as_str()],
                 &package,
             ),
