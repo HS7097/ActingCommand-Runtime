@@ -1662,6 +1662,19 @@ tests = [
 ]
 incident = ["#411 RV-1"]
 
+# #411 Lab BD (v0.12.x; register §1.133 BD-1 to BD-4; Lab file format, no persisted ledger shape; one outcome code, record_gesture_execution_unsupported; plan-lab-l5 §2 BD R1 to R5 with coordinator decision Q6; related: exec 72, 76, 108): a Lab recording declares a single-touch drag with a vertical brake with record mark --click x,y,w,h --brake-corner x,y,w,h or the request's click {region, brake_corner}, the two forms giving the same click; recording.json keeps it as click.gesture {kind: single_touch_drag_with_vertical_brake_v1, corner} on the click rectangle, and the mark output and record status show it; a corner whose y is below 100, a box outside the frame, and the gesture with duration_ms, drag_to, long_press, from or follow are refused with validation_failed (exit 2) and nothing is written; do --capture --record on its step is refused by the plan with record_gesture_execution_unsupported (exit 3, details step and gesture) whatever point, rectangle or swipe it gives, before any Runtime request, and the recording is unchanged; a device frame on the step is record_step_click_not_executed and an offline frame closes it; record stop declares the step's click as {kind: single_touch_drag_with_vertical_brake_v1, from: the click rectangle, corner, horizontal_duration_ms 200, corner_hold_ms 150, brake_distance_px 100, brake_duration_ms 200}, counts 550 ms for it in the task timeout, records the gesture in the provenance and the kernel admits the package; its first decision is the kernel's brake drag of step_01_click from inside the click rectangle into the corner box, x3 = x2 and y3 = y2 - 100, with the four constants, and anything else is record_artifact_admission_failed
+[[gate]]
+key = "109"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_lab_bd::bd_a_brake_drag_is_declared_recorded_and_shown",
+    "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::bd_the_brake_corner_shortcut_declares_the_request_forms_click",
+    "actingcommand-lab::lib::gate_lab_bd::bd_declarations_the_runtime_refuses_are_refused",
+    "actingcommand-lab::lib::gate_lab_bd::bd_do_capture_record_refuses_the_gesture_before_any_runtime_request",
+    "actingcommand-lab::lib::gate_lab_bd::bd_the_step_closes_offline_and_the_package_declares_and_simulates_the_gesture",
+]
+incident = ["#411 Lab BD"]
+
 # Workflow #406 T12 (0.12.x; register §1.136; no persisted ledger shape: X11 and X12 first written; plan-405-406 Q13 to Q16; Alice 2026-10-13 and 2026-10-14): with the touch keys a runtime hands it at each step (touch_sampling()), the kernel draws every seeded box point as a centre hotspot by the normative steps of "The draw" (twelve 24-bit uniforms per coordinate, the spread sigma_ratio_milli of the box's width and height, a point outside the box drawn again at most max_redraws times, then the centre), matching a reference implementation for fixed seeds and boxes; 10 000 draws in a 200 x 80 box stay inside, centre within 1 % and at least four times as dense in the middle fifth as in the outer tenth; a single-region press (rect, long press box) draws candidate_count candidates and lands where the runtime chooses by the least-recent rule (first unused pixel, else the oldest use, ties to the lowest index), recorded as center_hotspot_least_recent_v1 with all four parameters, one candidate as center_hotspot_normal_v1; a 1 x 1 box presses its point without an error; a drag and the vertical-brake drag record center_hotspot_normal_v1 with their two regions and ask no choice; a runtime without touch keys keeps xorshift64_uniform_rect_v1
 [[gate]]
 key = "110"

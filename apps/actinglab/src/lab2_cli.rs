@@ -2344,6 +2344,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--drag-to x,y,w,h",
                 "--long-press x,y,w,h",
                 "--duration-ms <1..60000>",
+                "--brake-corner x,y,w,h",
                 "--click-guard <id>",
                 "--click-retry <2..5>",
                 "--replace-click",

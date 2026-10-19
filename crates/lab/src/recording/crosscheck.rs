@@ -14,7 +14,11 @@ use super::model::{ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFr
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
 use crate::codes::LabCode;
-use actingcommand_contract::{InputAction, LabError, LabResult};
+use actingcommand_contract::{
+    InputAction, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
     ExternallyVerifiedBundle, OfflineDecision, PreparedContainedTask, simulate_contained_task,
@@ -364,6 +368,41 @@ pub(crate) fn first_decision(
                 }),
             ) => {
                 *operation_label == operation && point_in(*x, *y, rect) && *duration_ms == declared
+            }
+            // #411 Lab BD: a brake drag presses inside its rectangle, moves into its corner box
+            // and brakes straight up by the brake distance, with the Runtime's fixed timings.
+            (
+                OfflineDecision::WouldClick {
+                    operation_label,
+                    action:
+                        InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            x3,
+                            y3,
+                            horizontal_duration_ms,
+                            corner_hold_ms,
+                            brake_distance_px,
+                            brake_duration_ms,
+                            ..
+                        },
+                    ..
+                },
+                Some(rect),
+                Some(ClickGesture::SingleTouchDragWithVerticalBrakeV1 { corner }),
+            ) => {
+                *operation_label == operation
+                    && point_in(*x1, *y1, rect)
+                    && point_in(*x2, *y2, corner)
+                    && *x3 == *x2
+                    && i64::from(*y3)
+                        == i64::from(*y2) - i64::from(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX)
+                    && *horizontal_duration_ms == SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS
+                    && *corner_hold_ms == SEGMENTED_SWIPE_CORNER_HOLD_MS
+                    && *brake_distance_px == SEGMENTED_SWIPE_BRAKE_DISTANCE_PX
+                    && *brake_duration_ms == SEGMENTED_SWIPE_BRAKE_DURATION_MS
             }
             _ => false,
         };
