@@ -1379,3 +1379,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_blocked_key_the_catalog_does_not_reference_still_opens_a_round",
 ]
 incident = ["#411 B15"]
+
+# #411 A24 (v0.12.x; register §1.139 A24-1, A24-2; no persisted ledger shape; contracts/ledger-observer.md §8.1, policy-suspension.md "clock_slots", emulator-control.md direction ①; key assigned by the coordinator): a ledger record's time is its producer's, not monotonic in sequence; `actingd suspended` settles a clock slot against the ledger's latest time, the maximum timestamp, when the last record by sequence is a run's diagnostic artifact.created stamped earlier; direction ①'s failure-burst window counts the failures within window_ms of its latest failure whatever order they arrived in, the same records in time order and out of it giving the same count and the same burst (item, start rung, first and last failure)
+[[gate]]
+key = "125"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a24::a24_suspension_reference_time_is_the_latest_timestamp",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::a24_failure_burst_window_does_not_depend_on_arrival_order",
+]
+incident = ["#411 A24"]

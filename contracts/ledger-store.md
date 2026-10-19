@@ -50,7 +50,10 @@ semantic core, query, projection and subscription behavior.
   see [ledger-observer.md §11](ledger-observer.md#11-tags-and-the-index-table-ao-2-maintains-ao-5-rules-and-seeding-ao-6-loads).
 - **Every stored record** carries `capture_seq`, its capture time (also its `timestamp`) and, for
   a revisioned source, the source (lineage, revision); per (source, lineage) revisions are
-  contiguous or covered by gap records (`ledger_store_revision_skipped` otherwise).
+  contiguous or covered by gap records (`ledger_store_revision_skipped` otherwise). The sequence
+  follows `capture_seq`, not the capture time: the capture time is the producer's capture or
+  occurrence time, not the append time, so it is not monotonic in `sequence` (#411 A24;
+  [ledger-observer.md §8.1](ledger-observer.md#81-order-and-sync)).
 - **As built by AO-2**: `DurableStorage::persist_batch` writes a batch, its index rows and its
   joint work in one transaction at the batch's sync level; `read_back_batch` reads the batch's
   event ids back for a retry. `LedgerStore` keeps `commit_captured` and `committed_sequence`

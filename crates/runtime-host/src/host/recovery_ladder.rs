@@ -486,7 +486,8 @@ pub(super) struct StabilityCounter {
     climbing: BTreeSet<InstanceId>,
     /// Per instance, the kind of claim the scheduler last reported holding its key (B1).
     key_holders: BTreeMap<InstanceId, ClaimKind>,
-    /// Per instance and trigger item, when each counted failure counted, oldest first.
+    /// Per instance and trigger item, when each counted failure counted, in time order, oldest
+    /// first (#411 A24: not in the order their records were committed).
     windows: BTreeMap<InstanceId, BTreeMap<String, VecDeque<u64>>>,
     /// Per instance, the failures of recent records and the failures counted (D1c-H).
     failures: BTreeMap<InstanceId, InstanceFailures>,
@@ -602,7 +603,11 @@ impl StabilityCounter {
     /// the first matching record of its failure (`FailureIdentity`); the `count`-th failure
     /// within the item's window registers a burst. Whether it is then admitted or suppressed,
     /// every window of the instance starts empty again, and the failures it counted stay
-    /// counted, so their later records do not count again.
+    /// counted, so their later records do not count again. #411 A24: a record's time is its
+    /// producer's, not its commit time, so records can arrive out of time order (a run's
+    /// diagnostic stream failure is stamped with the stream's start and committed at the run's
+    /// end); the window keeps its failures in time order and counts those within the item's
+    /// `window_ms` of its latest failure, whatever order they arrived in.
     pub(super) fn count(&mut self, record: &CountedRecord<'_>) {
         let Some(config) = self.config.clone() else {
             return;
@@ -666,17 +671,19 @@ impl StabilityCounter {
             .or_default()
             .entry(item.id.clone())
             .or_default();
-        window.push_back(record.at_unix_ms);
+        let place = window.partition_point(|counted| *counted <= record.at_unix_ms);
+        window.insert(place, record.at_unix_ms);
+        let latest_unix_ms = window.back().copied().unwrap_or(record.at_unix_ms);
         while window
             .front()
-            .is_some_and(|first| record.at_unix_ms.saturating_sub(*first) > burst.window_ms)
+            .is_some_and(|first| latest_unix_ms.saturating_sub(*first) > burst.window_ms)
         {
             window.pop_front();
         }
         if window.len() < usize::try_from(burst.count).unwrap_or(usize::MAX) {
             return;
         }
-        let first_unix_ms = window.front().copied().unwrap_or(record.at_unix_ms);
+        let first_unix_ms = window.front().copied().unwrap_or(latest_unix_ms);
         self.windows.remove(&record.instance_id);
         self.bursts.push(StabilityBurst {
             instance_id: record.instance_id,
@@ -685,7 +692,7 @@ impl StabilityCounter {
             count: burst.count,
             window_ms: burst.window_ms,
             first_unix_ms,
-            last_unix_ms: record.at_unix_ms,
+            last_unix_ms: latest_unix_ms,
             failure_code: Outcome::relayed(record.spelling).code().clone(),
         });
     }

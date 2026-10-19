@@ -13,7 +13,8 @@
 //!
 //! Workflow #372 K3 adds `clock_slots`: the clock-slot records of K2 (`goal_missed` planning
 //! signals whose `signal_id` starts with `signal:clock_slot:`) of the 48 h before the ledger's
-//! latest event, each with the fate its pair's next admitted dispatch settles. Workflow #372 K4
+//! latest time (#411 A24: its maximum timestamp, not the last record's), each with the fate its
+//! pair's next admitted dispatch settles. Workflow #372 K4
 //! adds the expired and superseded records, settled `expired` and `collapsed`; a refused or
 //! deferred record whose occurrence has an expired record settles `expired`.
 //!
@@ -1042,11 +1043,14 @@ pub(crate) fn clock_slot_entry(
 }
 
 /// `clock_slots` (model-372 §4.5): the clock-slot records of the 48 h before the ledger's
-/// latest event, newest first and at most 200, and how many there are when the list is cut.
+/// latest time, newest first and at most 200, and how many there are when the list is cut.
 /// A record's next dispatch is its pair's first admitted dispatch after it in the ledger, or
 /// (Workflow #372 K5) that of the task of `catalog` that continues the record's task; the
-/// reference time is the latest event's time. Records are selected by their kind and their
-/// `signal_id` prefix, never by their outcome.
+/// reference time is the ledger's latest time. #411 A24: a record's time is its producer's, not
+/// its append time, so it is not monotonic in sequence (a run's diagnostic `artifact.created`
+/// carries the run's start and is appended at its end); the latest time is the maximum
+/// timestamp, not the last record's. Records are selected by their kind and their `signal_id`
+/// prefix, never by their outcome.
 fn clock_slots(
     snapshot: &Snapshot<'_>,
     catalog: &CompiledCatalog,
@@ -1054,8 +1058,9 @@ fn clock_slots(
     let Some(reference_unix_ms) = snapshot
         .ledger
         .events()
-        .last()
+        .iter()
         .map(PersistedEvent::timestamp_unix_ms)
+        .max()
     else {
         return Ok((Vec::new(), None));
     };

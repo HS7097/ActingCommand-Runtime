@@ -395,7 +395,7 @@ only its registered names (`"detail":"codes"`).
   `lift_check_hash_unmeasured` and `comparison_disagrees_with_record`. No entry is an outcome
   envelope; a reader matches the strings.
 - `clock_slots` (Workflow #372 K3): the clock-slot records (`scheduling/README.md`, "Clock-slot
-  records") whose event time is within 48 h of the ledger's latest event, newest first, at most
+  records") whose event time is within 48 h of the ledger's latest time, newest first, at most
   200; `clock_slots_total` is added with their number when the list is cut. A record is a
   `policy.planning_signal_observed` of kind `goal_missed` whose `signal_id` starts with
   `signal:clock_slot:`; it is selected by these two, never by its `outcome`.
@@ -404,9 +404,12 @@ only its registered names (`"detail":"codes"`).
     out. `recorded_sequence` and `recorded_at_unix_ms` place the record in the ledger.
   - `next_dispatch` is the pair's first `policy.dispatch_admitted` after the record, as its
     `sequence` and `admitted_at_unix_ms` (D); it is left out when there is none. The reference
-    time is the ledger's latest event time. Workflow #372 K5: a record of a task id that a task
-    of the configured catalog continues (`continues_from`) settles against the first admission
-    after it of that id or of that task, whichever comes first.
+    time is the ledger's latest time: its maximum `timestamp_unix_ms`, not the last record's,
+    since a record's time is not monotonic in `sequence` (#411 A24,
+    [ledger-observer.md §8.1](ledger-observer.md#81-order-and-sync)). Workflow #372 K5: a
+    record of a task id that a task of the configured catalog continues (`continues_from`)
+    settles against the first admission after it of that id or of that task, whichever comes
+    first.
   - A refused or deferred record, with E its `window_end_unix_ms` and X its
     `next_occurrence_unix_ms`: `slot_fate` is `collapsed` when D ≥ X, `same_window` when D < E,
     and `next_window` otherwise, with `slot_fate_settled` true. Without D it is `collapsed` and

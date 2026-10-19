@@ -881,3 +881,165 @@ fn ao1_k_a_state_root_that_cannot_take_the_dump_sends_it_to_the_fallback_folder(
     assert!(!root.dump_path().exists() && !root.fallback_path().exists());
     assert!(ledger.close().is_err());
 }
+
+// #411 A24 (ledger key 50, register §1.139 A24-3): a record's capture time is its producer's, not
+// monotonic in capture order: a run's diagnostic `artifact.created` is stamped with the run's
+// start (`RUN_START_MS`) and written after a record of the run's end (`LATEST_MS`, the run took
+// 329 s). A gap starts at the latest time, the maximum timestamp, not at the last record's.
+const RUN_START_MS: u64 = AT_MS;
+const LATEST_MS: u64 = AT_MS + 329_000;
+
+// `monitor.probe_requested` at `at_unix_ms`, as `draft` writes it at the fixture's time.
+fn draft_at(ids: &IdentifierIssuer, at_unix_ms: u64) -> SanitizedEventDraft {
+    stamped(
+        ids,
+        at_unix_ms,
+        MonitorPayloadDraft::requested(AuditInput::new()).into(),
+    )
+}
+
+// A run's diagnostic `artifact.created`, stamped with the run's start.
+fn created_at(ids: &IdentifierIssuer, at_unix_ms: u64) -> SanitizedEventDraft {
+    stamped(
+        ids,
+        at_unix_ms,
+        actingcommand_contract::ArtifactPayloadDraft::created(AuditInput::new()).into(),
+    )
+}
+
+fn stamped(
+    ids: &IdentifierIssuer,
+    at_unix_ms: u64,
+    payload: actingcommand_contract::EventPayloadDraft,
+) -> SanitizedEventDraft {
+    EventDraft::new(
+        ids.mint_event_id().expect("event id"),
+        at_unix_ms,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default(),
+        payload,
+    )
+    .sanitize(&Sha256SecretFingerprinter::new(b"ledger-ao1-fixture").expect("salt"))
+    .expect("a stamped draft")
+}
+
+// The gap records among `records`.
+fn gap_payloads(records: &[PersistedEvent]) -> Vec<actingcommand_contract::LedgerGapPayload> {
+    records
+        .iter()
+        .filter_map(|record| match record.payload() {
+            actingcommand_contract::EventPayload::Ledger(
+                actingcommand_contract::LedgerPayload::GapRecorded(gap),
+            ) => Some(gap.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// A24, the tail gap: an epoch whose last committed record (the run's diagnostic record, stamped
+// with its start) is earlier than the record before it ends without its close and without a dump;
+// the next start's `tail_unconfirmed` gap starts at the later record's time. The dump gap: an
+// exhausted write dumps the run's end record, then its diagnostic record and one more; the dump's
+// last record line is cut; the import's `dump_incomplete` gap starts at the run's end, the latest
+// verified capture time, not at the last verified record's.
+#[test]
+fn a24_write_failure_gap_starts_at_the_latest_time() {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+
+    let root = Root::new();
+    let (reports_one, stops) = reports();
+    let ledger = root
+        .open(root.plan(1, &reports_one))
+        .expect("the writer opens");
+    ledger
+        .append(draft_at(&ids, LATEST_MS))
+        .expect("the run's end record");
+    ledger
+        .append(created_at(&ids, RUN_START_MS))
+        .expect("the run's diagnostic record, stamped with its start");
+    let faults = root.faults();
+    faults.refuse_dump_at(&root.dump_path());
+    faults.refuse_dump_at(&root.fallback_path());
+    faults.fail_writes(1);
+    ledger
+        .append(draft_at(&ids, LATEST_MS))
+        .expect_err("the only attempt fails");
+    let stop = stops.recv_timeout(GATE_WAIT).expect("the writer stops");
+    assert!(stop.is(LedgerCode::LedgerDumpFailed), "no dump is written");
+    assert!(ledger.close().is_err(), "the epoch ends without its close");
+    drop(faults);
+    let ledger = root
+        .open(root.plan(1, &reports().0))
+        .expect("the next start");
+    let tails = gap_payloads(&after(&ledger, 0))
+        .into_iter()
+        .filter(|gap| gap.gap_kind() == actingcommand_contract::LedgerGapKind::TailUnconfirmed)
+        .collect::<Vec<_>>();
+    assert_eq!(tails.len(), 1, "one tail gap");
+    assert_eq!(
+        tails[0].gap_start_unix_ms(),
+        LATEST_MS,
+        "the tail gap starts at the latest time"
+    );
+    ledger.close().expect("close");
+
+    let root = Root::new();
+    let (reports_two, stops) = reports();
+    let ledger = root
+        .open(root.plan(2, &reports_two))
+        .expect("the writer opens");
+    let head = ledger.latest_sequence().expect("head");
+    let faults = root.faults();
+    let stall = WriterStallGate::arm(root.directory.path()).expect("writer stall gate");
+    ledger
+        .append_deferred(draft_at(&ids, LATEST_MS))
+        .expect("the run's end record is accepted");
+    assert!(
+        stall.wait_held_commit(GATE_WAIT),
+        "the first write is held in its attempt"
+    );
+    for draft in [created_at(&ids, RUN_START_MS), draft_at(&ids, RUN_START_MS)] {
+        ledger.append_deferred(draft).expect("queued behind it");
+    }
+    faults.fail_writes(2);
+    stall.release();
+    let stop = stops.recv_timeout(GATE_WAIT).expect("the writer stops");
+    assert!(stop.is(LedgerCode::LedgerWriteFailed));
+    let summary = ledger.confirm_deferred(GATE_WAIT).expect("the replies");
+    assert!(summary.committed.is_empty());
+    assert!(ledger.close().is_err(), "the writer ended with its failure");
+    drop(stall);
+    drop(faults);
+    let text = fs::read_to_string(root.dump_path()).expect("the dump");
+    let lines = text.lines().collect::<Vec<_>>();
+    // Header, the three records, the fatal record, trailer.
+    assert_eq!(lines.len(), 6);
+    // No trailer, and the third record line cut in half: the run's end record and its diagnostic
+    // record verify.
+    let cut = &lines[3][..lines[3].len() / 2];
+    fs::write(
+        root.dump_path(),
+        format!("{}\n{}\n{}\n{}", lines[0], lines[1], lines[2], cut),
+    )
+    .expect("cut the dump");
+    let ledger = root
+        .open(root.plan(5, &reports().0))
+        .expect("the next start imports the verified part");
+    let gaps = gap_payloads(&after(&ledger, head));
+    assert_eq!(gaps.len(), 1, "one dump gap");
+    assert_eq!(
+        gaps[0].gap_kind(),
+        actingcommand_contract::LedgerGapKind::DumpIncomplete
+    );
+    assert_eq!(
+        gaps[0].gap_start_unix_ms(),
+        LATEST_MS,
+        "the dump gap starts at the latest verified capture time"
+    );
+    ledger.close().expect("close");
+}

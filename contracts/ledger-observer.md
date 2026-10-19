@@ -363,10 +363,16 @@ messages unchanged.
   then the memory segment; assembles and sanitizes; commits one batch.
 - The capture number is taken and the record enqueued under one queue lock: with several
   capturing threads, capture order = enqueue order, without holes. Ledger sequences are given in
-  capture order, so ledger order = capture order, and for captures inside the gate ledger order =
-  business order.
+  capture order, so ledger order = capture order (the order of `capture_seq`, not of capture
+  times), and for captures inside the gate ledger order = business order.
 - Every stored record carries `capture_seq`, its source and source (lineage, revision) when it has
-  one (§8.3), and its capture time; `timestamp` is the capture time.
+  one (§8.3), and its capture time; `timestamp` is the capture time: the time its producer gives
+  the record (a direct append's draft time), else the time the queue took it.
+  `timestamp_unix_ms` is the producer's capture or occurrence time, not the append time, so it is
+  not monotonic in `sequence` (a run's diagnostic `artifact.created`/`verified` carry its start
+  time and are appended at its end); order by `sequence`, let time bounds filter records but
+  never end a scan, and take the latest time as the maximum timestamp, not the last record's.
+  (#411 A24)
 - A batch that holds a decision record commits with FULL sync, otherwise NORMAL.
 - **A tagged record commits on arrival** (rule 13): the batch ends at it, FULL sync, without
   waiting for the batch to fill.
@@ -601,9 +607,9 @@ event_id?, outcome}`:
 
 | `gap_kind` | When | Time range | Count | Code |
 |---|---|---|---|---|
-| `dump_incomplete` | import: no trailer, last line truncated | last verified record's capture time → the dump file's last-modified time | unknown | `ledger_dump_incomplete` (warning) |
-| `dump_invalid` | import: a middle line's hash differs | same, from the last verified record | unknown | `ledger_dump_invalid` (error, needs a person) |
-| `tail_unconfirmed` | start: the previous epoch has neither a close record nor a complete dump | last committed (or imported) record's time → this start | unknown, always | `ledger_tail_unconfirmed` (warning) |
+| `dump_incomplete` | import: no trailer, last line truncated | the latest verified capture time (the maximum, #411 A24; the dump's start when none verified) → the dump file's last-modified time | unknown | `ledger_dump_incomplete` (warning) |
+| `dump_invalid` | import: a middle line's hash differs | same, from the latest verified capture time | unknown | `ledger_dump_invalid` (error, needs a person) |
+| `tail_unconfirmed` | start: the previous epoch has neither a close record nor a complete dump | the latest time of the committed (or imported) records, their maximum timestamp (#411 A24) → this start | unknown, always | `ledger_tail_unconfirmed` (warning) |
 | `record_rejected` | flush: one record failed assembly or sanitizing | that record's capture time | 1; `event_id` and, for a revisioned source, `source` = (source, lineage, revision) | `ledger_record_rejected` (error, needs a person) |
 
 - Effects done before a crash whose records never committed (rule 9) and an observational tail
@@ -620,7 +626,8 @@ event_id?, outcome}`:
     `source_lineage` and `source_revision`.
   - `tail_unconfirmed`: written once by the running Runtime's writer when it opens, after the
     dump import, when the previous owner was not closed cleanly and no imported dump ended
-    sealed. The range runs from the last committed (or imported) record's time to the open.
+    sealed. The range runs from the latest time of the committed (or imported) records, their
+    maximum timestamp, not the last record's (#411 A24), to the open.
 
 ## 11 Tags and the index table (AO-2 maintains, AO-5 rules and seeding, AO-6 loads)
 
