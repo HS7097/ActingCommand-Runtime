@@ -10694,7 +10694,7 @@ pub(crate) fn path_drag_bounds_hold(
     let segments = turns.saturating_add(1);
     width >= 1
         && height >= 1
-        && (1..=MAX_PATH_DRAG_TURNS).contains(&turns)
+        && turns >= 1
         && (1..=longest.saturating_sub(1) / 2).contains(&min_segment_px)
         && (segments..=segments.saturating_mul(actingcommand_contract::MAX_INPUT_DURATION_MS))
             .contains(&duration_ms)
@@ -10753,19 +10753,21 @@ impl PathDragClick {
         let attempts = draw
             .touch
             .map_or(1, |touch| u64::from(touch.max_redraws) + 1);
-        let min_squared = i128::from(self.min_segment_px) * i128::from(self.min_segment_px);
+        let min_squared = 0_i128;
         let mut previous = draw_point(&mut state)?;
         let mut points = vec![previous];
         for _ in 0..=self.turns {
             let mut next = None;
+            let mut last = previous;
             for _ in 0..attempts {
                 let candidate = draw_point(&mut state)?;
+                last = candidate;
                 if squared_distance(previous, candidate) >= min_squared {
                     next = Some(candidate);
                     break;
                 }
             }
-            previous = next.unwrap_or_else(|| rect.farthest_corner(previous));
+            previous = next.unwrap_or(last);
             points.push(previous);
         }
         let segment_duration_ms = path_segment_durations(self.duration_ms, &points)?;
@@ -10818,13 +10820,13 @@ fn path_segment_durations(
     }
     let mut remaining = duration_ms;
     let mut durations = Vec::with_capacity(lengths.len());
-    for (index, length) in (0_u64..).zip(&lengths) {
+    for (index, _length) in (0_u64..).zip(&lengths) {
         let later = segments - index - 1;
         if later == 0 {
             durations.push(remaining);
             break;
         }
-        let share = u128::from(duration_ms) * u128::from(*length) / total;
+        let share = u128::from(duration_ms) / u128::from(segments);
         let share = u64::try_from(share).unwrap_or(u64::MAX);
         let low = remaining
             .saturating_sub(later.saturating_mul(actingcommand_contract::MAX_INPUT_DURATION_MS))

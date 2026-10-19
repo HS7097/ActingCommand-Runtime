@@ -693,7 +693,6 @@ pub(crate) fn parse_navigation_click(
         Some(SEGMENTED_DRAG_KIND) => {
             parse_segmented_drag(value).map(DriveNavigationClick::SegmentedDrag)
         }
-        Some(PATH_DRAG_KIND) => parse_path_drag(value).map(DriveNavigationClick::PathDrag),
         _ => parse_navigation_input(value).map(DriveNavigationClick::Input),
     }
 }

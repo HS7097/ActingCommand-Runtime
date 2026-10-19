@@ -237,6 +237,7 @@ pub fn prepare_path_drag(action: PathDragAction) -> DeviceResult<PreparedSegment
         .enumerate()
     {
         append_maa_2_0_segment(&mut events, segment[0], segment[1], *duration_ms);
+        events.push(SegmentedSwipeEvent::Up);
         if index < last && action.corner_hold_ms > 0 {
             events.push(SegmentedSwipeEvent::Hold(action.corner_hold_ms));
         }

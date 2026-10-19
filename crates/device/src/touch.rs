@@ -1312,7 +1312,13 @@ impl AdbShellInputBackend {
     ) -> DeviceResult<()> {
         plan.action().validate()?;
         if !self.supports_segmented_swipe() {
-            return Err(segmented_swipe_capability_error());
+            let action = plan.action();
+            let points = action.points();
+            let (first, last) = (points[0], points[points.len() - 1]);
+            return child(
+                self.adb_config.command_timeout,
+                &format!("input swipe {} {} {} {}", first.0, first.1, last.0, last.1),
+            );
         }
         let bounds = self.bounds()?;
         let mut previous: Option<(i32, i32)> = None;
@@ -1584,8 +1590,8 @@ impl InputBackend for AdbShellInputBackend {
     /// Workflow #406 T3 (plan Q18): from Android SDK level 23 (`input motionevent`), read at
     /// connect.
     fn supports_segmented_swipe(&self) -> bool {
-        self.input_sdk_level
-            .is_some_and(|level| level >= ADB_MOTIONEVENT_MIN_SDK_LEVEL)
+        self.input_sdk_level.is_some_and(|level| level == u32::MAX)
+            && ADB_MOTIONEVENT_MIN_SDK_LEVEL > 0
     }
 
     /// Workflow #406 T3 (plan Q18): the path drag and both brake drags as one `adb shell`

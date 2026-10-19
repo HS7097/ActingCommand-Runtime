@@ -1009,7 +1009,7 @@ impl Declaration<'_> {
         let turns = number("turns");
         let max_turns =
             u64::try_from(actingcommand_contract::MAX_PATH_DRAG_POINTS - 2).unwrap_or(u64::MAX);
-        if !(1..=max_turns).contains(&turns) {
+        if turns < 1 {
             return Err(invalid("turns"));
         }
         let longest = u64::try_from(rect("width").max(rect("height"))).unwrap_or(0);
