@@ -37,7 +37,7 @@ const WINDOW_END_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 36_000_000;
 
 const REQUESTED: &str = "policy_remedy_requested";
 const RETRY: &str = "policy_remedy_retry";
-const WAITING: &str = "policy_remedy_waiting";
+const ALREADY_SELECTED: &str = "instance_already_selected";
 const UNCHOSEN: &str = "policy_remedy_unchosen";
 const UNAVAILABLE: &str = "policy_remedy_unavailable";
 const LIFTED: &str = "policy_remedy_lifted";
@@ -544,10 +544,10 @@ fn next_eligible(context: &PolicyRunContext) -> u64 {
 // ---- Tests.
 
 // Requirements 2, 3 and 7: a run of `t_main` that ends on `blocked_k` opens a round; the next
-// evaluation requests `t_sink` (its dispatch carries `policy_remedy_requested` naming the round)
-// and holds `t_main`; after the remedy's success the next one retries `t_main` once
-// (`policy_remedy_retry`); a retry that ends on `done` resolves the round, so the next dispatch of
-// `t_main` carries no remedy reason. A blocked run is a success: no failure is recorded and the
+// evaluation requests `t_sink` (its dispatch carries `policy_remedy_requested` naming the round),
+// promoted ahead of `t_main`, which it holds; after the remedy's success the next one retries
+// `t_main` once (`policy_remedy_retry`); a retry that ends on `done` resolves the round, so the
+// next dispatch of `t_main` carries no remedy reason. A blocked run is a success: no failure is recorded and the
 // failure streak stays 0.
 #[test]
 fn b15h_a_blocked_run_is_followed_by_its_remedy_and_one_retry_and_the_chain_reasons_are_recorded() {
@@ -561,10 +561,22 @@ fn b15h_a_blocked_run_is_followed_by_its_remedy_and_one_retry_and_the_chain_reas
         dispatched(&requesting, MAIN_TASK).is_none(),
         "the blocked task is held: {requesting:#?}"
     );
+    // The request is promoted ahead of the instance's other candidates and takes the instance
+    // (model-b15 §7.3, `contracts/remedies.md` section 5.3: one winner per instance), so `t_main`
+    // is settled by `instance_already_selected` before its eligibility is asked, where its hold
+    // (position 8a) would be its reason.
     assert!(
-        has_code(&decision_reasons(&requesting, MAIN_TASK), WAITING),
-        "{:?}",
-        decision_reasons(&requesting, MAIN_TASK)
+        request_chain.reasons.iter().any(|reason| {
+            reason.outcome.code().as_str() == "rank_breakdown"
+                && reason.detail.contains(" promoted=1 ")
+        }),
+        "{request_chain:?}"
+    );
+    let main_reasons = decision_reasons(&requesting, MAIN_TASK);
+    assert_eq!(
+        main_reasons.last().map(|outcome| outcome.code().as_str()),
+        Some(ALREADY_SELECTED),
+        "{main_reasons:?}"
     );
     let chain = request_chain
         .reasons
