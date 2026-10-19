@@ -568,7 +568,7 @@ tests = [
 ]
 incident = ["#382 E-3"]
 
-# Workflow #378 A8 (order-v012 §3.6; register §6; model-378 §10 with §16 A-7): the Runtime's interface declaration distribution/windows/component-interfaces.json declares each v0.12.0 revision once (actingd-config [5, 5], install-control [0, 1], install-selection [1, 1], ledger [3, 3], package [3, 3], runtime-client [2, 2], runtime-outcomes [1, 1]), and the exact-SHA build validates exactly the interfaces it names, runtime-outcomes included (contract key K27, the next free key of the file that holds the architecture guards)
+# Workflow #378 A8 (order-v012 §3.6; register §6; model-378 §10 with §16 A-7): the Runtime's interface declaration distribution/windows/component-interfaces.json declares each v0.12.0 revision once (actingd-config [5, 5], install-control [0, 1], install-selection [1, 1], ledger [3, 3], package [3, 3], raised to [3, 4] by #411 B15 R1 (register §1.111), runtime-client [2, 2], runtime-outcomes [1, 1]), and the exact-SHA build validates exactly the interfaces it names, runtime-outcomes included (contract key K27, the next free key of the file that holds the architecture guards)
 [[gate]]
 key = "K27"
 coverage = "Y"

@@ -1843,6 +1843,29 @@ vocabularies are catalog entries, not rows (§7); the package members ride `pack
 | B15-10 | `task.json` mapping member `remedy {need, capabilities, default?}`; `control.json` member `provides [{capability, irreversible?, parameters?}]` | package members (`package` revision 4, §6; not ledger) | R1 | R1 | absent members serialize byte for byte as before; refusals `invalid_scheduling_outcome_declaration` (field) and `contained_task_control_invalid` (`provides_invalid`, `provides_parameters_invalid`, `provides_own_remedy`) |
 | B15-11 | the terminal's `scheduling_disposition` (`task.completed`) | read only (shape unchanged) | R4 | — | the settlement reads its `outcome_key` whatever the catalog references; a remedy key is a success: no failure identity, the streak cleared |
 
+### 1.111 Slice R1 b15p (v0.12.3): packages declare remedies and provided capabilities; the bundle check reports remedies nothing provides (#411 B15; model-b15 §4, §13; coordinator decisions of 2026-10-19)
+
+R1 implements §1.110 B15-10 and the report of `package_bundle_remedy_invalid` (§1.110 B15-1):
+[remedies.md](remedies.md) sections 2 and 10, [resource-declarations.md](resource-declarations.md)
+("Task schema `0.9` remedies and provided capabilities") and
+[package-reference.md](package-reference.md) (item 5 of the cross-check). **No persisted ledger
+shape** (model-b15 §10): `remedy` and `provides` are package data (`task.json`, `control.json`),
+never a member of a persisted event; the bundle report is an answer member that already holds
+outcomes; the codes, keys and vocabularies are R0's catalog entries. The members ride `package`
+revision 4: R1 is the release's first slice that needs it and raises the Runtime's declaration
+to [3, 4] (§6). No code, contract, default or test names a game, a need, a capability or an
+order of capabilities; the names are compared for equality only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R1-1 | `task.json` `scheduling_outcome.mappings[].remedy {need, capabilities, default?}` | package member (`package` 4; not ledger) (exec 95) | R1 | R1 | `need` a token `^[a-z][a-z0-9_]{0,63}$`; `capabilities` 1 to 8 unique tokens, never `none`; `default` unique, a subset, absent or `[]` = no package default; refused `invalid_scheduling_outcome_declaration` with field `remedy.need`, `remedy.capabilities` or `remedy.default` (kernel admission: `contained_task_outcome_declaration_invalid`); a member the remedy does not have is refused when read; a mapping without `remedy` serializes byte for byte as before |
+| R1-2 | `control.json` `provides [{capability, irreversible?, parameters?: [{name, options, default}]}]` | package member (`package` 4; not ledger) (exec 95) | R1 | R1 | 1 to 8 entries, capabilities unique tokens, never `none`; at most 8 parameters, at least one when `irreversible`; names unique across the whole `provides`; 1 to 16 unique option tokens; `default` one of them; refused `contained_task_control_invalid` `reason=provides_invalid` (the list, a capability, its marker, a member an entry does not have) or `reason=provides_parameters_invalid` (a capability's parameters, a shape error inside them included) |
+| R1-3 | a package that provides a capability one of its own remedies names | new admission rule (exec 95) | R1 | R1 | `contained_task_control_invalid` `reason=provides_own_remedy` |
+| R1-4 | the source parser (the declaration gate of every admission, the source build and the Lab's declaration check) | accepts `remedy` and `provides` (exec 95) | R1 | R1 | refuses the same violations as `resource_declaration_invalid` at the member's JSON pointer (`unknown_field`, `invalid_type`, `missing_field`, `invalid_value`; a self-provided capability at `/provides/<i>/capability` of `control.json`); its refusal comes first in admission, as for every declaration it checks |
+| R1-5 | `PreparedContainedTask::read_remedy_declarations(label, locator, deadline) -> RemedyDeclarations {package_id, remedies: [(outcome_key, remedy)], provides}`; `PreparedContainedTask::declared_parameter_defaults() -> [(name, default)]` | kernel interface (not persisted) (exec 95) | R1 | R4, R5 | the reader admits by path through the metadata-only containment without preparing the task, as `read_reading_marks`; the defaults in declaration order |
+| R1-6 | `package bundle` with any root file and `actinglab standard-pack check`: `warnings` gains `package_bundle_remedy_invalid` `{package_id, remedy_problem, need?, capability?, outcome_key?}` | report entries (not persisted; answer shape unchanged) (exec 102) | R1 | R1 | after the cross-check, per game root, every registry package read by the metadata reader: `capability_unprovided` one per remedy capability no package of the root provides (with `need`, `capability`, `outcome_key`); `cycle` one per package on a cycle of remedies and provided capabilities (with the remedy leading into it); `parameters_mismatch` one per provider of a capability whose providers declare different parameters (compared by name, option set and default; with `capability`); `standard-pack check` reports them with or without `pages.json`; nothing is refused |
+| R1-7 | `distribution/windows/component-interfaces.json` `package` [3, 3] → [3, 4] | interface declaration (§6; contract K27 adapted) | R1 | R1 | a revision-3 pack is still read; [component-interfaces.md](component-interfaces.md) gains the revision-4 row |
+
 ### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
 
 A Lab recording names the backend that captured a Runtime frame, and the offline capability
