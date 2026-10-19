@@ -661,6 +661,16 @@ fn b15c_malformed_rows_are_refused_with_their_pointer() {
         .collect::<Vec<_>>();
     let cases = [
         (
+            "two values for one parameter",
+            json!([
+                parameter_row("cap_x", "param_p", "opt_1"),
+                allow("need_a", "cap_x"),
+                parameter_row("cap_x", "param_p", "opt_2")
+            ]),
+            "/2",
+            ConfigValueProblem::SectionCheck,
+        ),
+        (
             "a row that is no object",
             json!(["allow"]),
             "/0",
@@ -717,16 +727,6 @@ fn b15c_malformed_rows_are_refused_with_their_pointer() {
             "none with an allow of the same need",
             json!([allow("need_a", "cap_x"), decline("need_a")]),
             "/1",
-            ConfigValueProblem::SectionCheck,
-        ),
-        (
-            "two values for one parameter",
-            json!([
-                parameter_row("cap_x", "param_p", "opt_1"),
-                allow("need_a", "cap_x"),
-                parameter_row("cap_x", "param_p", "opt_2")
-            ]),
-            "/2",
             ConfigValueProblem::SectionCheck,
         ),
         (
