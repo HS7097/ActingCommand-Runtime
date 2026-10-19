@@ -186,6 +186,8 @@ crate::outcome_codes! {
         PerformanceStatusCompleted => "request_performance_status_completed": success / none,
         // Workflow #384 D2-S5 (register §1.68).
         FactRefreshStatusCompleted => "request_fact_refresh_status_completed": success / none,
+        // Workflow #386 SR-6b, MCP-19a (register §1.143).
+        ScheduleExplanationCompleted => "request_schedule_explanation_completed": success / none,
     }
 }
 
@@ -695,6 +697,8 @@ crate::outcome_codes! {
         InvalidPerformanceStatus => "invalid_performance_status": error / none,
         // Workflow #384 D2-S5: a `FactRefreshStatus` answer of the wrong shape.
         InvalidFactRefreshStatus => "invalid_fact_refresh_status": error / none,
+        // Workflow #386 SR-6b, MCP-19a: a `ScheduleExplanation` answer of the wrong shape.
+        InvalidScheduleExplanation => "invalid_schedule_explanation": error / none,
     }
 }
 

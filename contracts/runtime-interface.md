@@ -304,6 +304,7 @@ U-6 deletes the source gates.
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
 | `FactRefreshStatus` (#384 D2-S5, the D2 S5 transition query; register §1.68) | general | read (what the fact refresh waits for, from the transition recorder's memory; nothing read from or written to the ledger) | cli `fact-refresh`; mcp `ac_overview` (block `fact_refresh`) | no |
 | `PerformanceStatus` (#385 P-m; register §1.61 W15) | general | read (the shadow measurement's status, from memory; nothing read from or written to the ledger) | cli `perf-status`; mcp `ac_overview` (block `performance`) | no |
+| `ScheduleExplanation{instance?, candidates}` (#386 SR-6b, MCP-19a; register §1.143, §3 W5) | general | read (the latest evaluation's not-run explanation, from the policy host's memory; nothing read from or written to the ledger) | cli `schedule`; mcp `ac_schedule`, `ac_overview` (`not_running`), `ac_diagnose` (`not_run`) | no |
 | a later #369 same-queue request, if any | option two | operation (lease family) | actinglab | yes |
 
 Until U-6 the new option-two kinds `LoadPack` and `UnloadPack` accept only a

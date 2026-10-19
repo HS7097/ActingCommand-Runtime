@@ -332,7 +332,8 @@ A round stops with one of three codes, each with `remedy_problem`:
   written (the clock-slot rule), so it is written once per round, across restarts too.
 - It is visible in `actingd suspended` (the list `remedies`,
   [policy-suspension.md](policy-suspension.md)), in MCP `ac_diagnose` (the instance's `remedies`
-  rows), in the not-running row once SR-6b has it, and in the clock-slot records: a stop code is a
+  rows), in the not-running row of `ac_overview` and `ac_schedule` (MCP-19; the instance status
+  keeps no such member), and in the clock-slot records: a stop code is a
   persistent gate (`clock_slot_refused`), `policy_remedy_waiting` a waiting gate
   ([scheduling-blackout.md](scheduling-blackout.md)). It never starts the recovery ladder.
 

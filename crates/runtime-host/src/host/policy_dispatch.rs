@@ -3083,6 +3083,7 @@ fn attach_unknown_priority_offset_task_reasons(
                      ignored"
                     ),
                 }],
+                next_wake_unix_ms: None,
             });
     }
 }

@@ -57,6 +57,8 @@ pub use remedy::{
 };
 // Workflow #384 D2-S3.
 mod resource_adjustment;
+// Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation, memory only.
+mod schedule_explanation;
 mod strategy;
 mod suspension_lift;
 mod suspension_report;

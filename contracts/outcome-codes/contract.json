@@ -17369,6 +17369,20 @@
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
+    "request_schedule_explanation_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A completed receipt of a ScheduleExplanation request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #386 SR-6b and the MCP-19 read add the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
     "invalid_fact_refresh_status": {
       "category": "error",
       "ladder_class": "none",
@@ -17386,6 +17400,26 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Runtime contract validation refused a value: a FactRefreshStatus answer of the wrong shape (a row before the first cycle, an instance twice or without a waiting key, a key twice or outside the fact key families, a reason that is not an info or a warning or that names another instance, key or package, or more than 256 instances or keys), or a receipt carrying it that is not completed (Workflow #384 D2-S5).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
+    },
+    "invalid_schedule_explanation": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Runtime contract validation refused a value: a ScheduleExplanation answer of the wrong shape (an instance twice or out of alias order, more than 256 instances, more than 1,024 candidates of one instance or a candidates_total below the candidates answered, a candidate whose reason codes are empty, more than 32, or do not end with its why, a not-running row without a task whose why is not due_task_missing or one with a task whose why is due_task_missing, a selected task that is also a candidate), or a receipt carrying it that is not completed (Workflow #386 SR-6b, MCP-19).",
       "common_causes": "A Runtime defect, or a peer of another build.",
       "handling": "Report the defect with the receipt; the Runtime goes on."
     },

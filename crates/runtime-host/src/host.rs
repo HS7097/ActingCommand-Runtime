@@ -218,6 +218,8 @@ mod runtime_config;
 mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
+// Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
+mod schedule_explanation_read;
 mod scheduling_pause;
 mod signatures;
 // Workflow #373 NAV-6: the standard-pack root reader and the shared interrupt pages of a run.

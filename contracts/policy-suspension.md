@@ -490,8 +490,9 @@ state root is a directory whose ledger does not open), `suspended_ledger_incompl
 
 **Status.** Written ahead of its code (documentation slice SR-0, scheduling model v1.4.2 §2.4
 with option 丙 of board #336) and implemented by slice SR-3 (register §1.69), with PKG-S3's
-content hash. The not-running reason of `ac_overview` and of the instance status comes with
-slice SR-6b (Workflow #369 S7); the LoadPack lift check with Workflow #389 U-3.
+content hash. The not-running reason is the not-running row of `ac_overview` and `ac_schedule`
+(MCP-19; Workflow #369 S7); the instance status keeps no such member. The LoadPack lift check
+comes with Workflow #389 U-3.
 
 **What is suspended.** When admission refuses a task package with a code listed in
 `scheduling.pack_admission.suspend_codes` (default only `recognition_sample_budget_invalid`:
@@ -547,8 +548,9 @@ lift.
   `runtime_commit`, `paused_hash_prefix`, `current_hash_prefix` and `instances` (see
   "`actingd suspended`");
 - MCP `ac_diagnose` (and `actingctl diagnose`) carries the `packs` rows whose `instances` name
-  the diagnosed instance (every row without one); the not-running reason of `ac_overview` and of
-  the instance status shows `pack_admission_suspended` once SR-6b adds that reason;
+  the diagnosed instance (every row without one); the not-running row of `ac_overview` and
+  `ac_schedule` (MCP-19) shows `pack_admission_suspended` when it is the instance's reason; the
+  instance status keeps no such member;
 - the UI console shows it in the instance's status line (UI slice UI-1).
 
 **Ledger.** The probes copy what happened; there is no direct write. A suspension found by

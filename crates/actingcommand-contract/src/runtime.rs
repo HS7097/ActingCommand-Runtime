@@ -56,6 +56,9 @@ pub use performance_status::*;
 // Workflow #384 D2-S5: the fact refresh's transition recorder read (register §1.68).
 mod fact_refresh_status;
 pub use fact_refresh_status::*;
+// Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
+mod schedule_explanation;
+pub use schedule_explanation::*;
 use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
@@ -3449,6 +3452,16 @@ pub enum RuntimeOperation {
     /// §6 S5; register §1.68): a general read from memory that reads and records nothing in the
     /// ledger. The answer is `RuntimeResult::FactRefreshStatus`.
     FactRefreshStatus,
+    /// Reads why each candidate of the latest policy evaluation did not run (Workflow #386 SR-6b,
+    /// MCP-19a; register §1.143, §3 W5): a general read from the policy host's memory that reads
+    /// and records nothing in the ledger. `instance` is a registered instance alias (every
+    /// instance without it); `candidates: false` leaves out the candidate rows. The answer is
+    /// `RuntimeResult::ScheduleExplanation`.
+    ScheduleExplanation {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        candidates: bool,
+    },
     ConfigureMonitor {
         instance_alias: String,
         policy: RuntimeMonitorPolicy,
@@ -3856,6 +3869,9 @@ impl RuntimeOperation {
             | Self::InstanceFactSnapshot {
                 instance: instance_alias,
             } => validate_instance_alias(instance_alias),
+            Self::ScheduleExplanation { instance, .. } => {
+                instance.as_deref().map_or(Ok(()), validate_instance_alias)
+            }
             Self::ConfigureMonitor {
                 instance_alias,
                 policy,
@@ -4022,6 +4038,7 @@ impl fmt::Debug for RuntimeOperation {
             }
             Self::PerformanceStatus => "RuntimeOperation::PerformanceStatus",
             Self::FactRefreshStatus => "RuntimeOperation::FactRefreshStatus",
+            Self::ScheduleExplanation { .. } => "RuntimeOperation::ScheduleExplanation(<redacted>)",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
@@ -4925,6 +4942,12 @@ pub enum RuntimeResult {
     FactRefreshStatus {
         status: Box<RuntimeFactRefreshStatus>,
     },
+    /// `ScheduleExplanation` (Workflow #386 SR-6b, MCP-19a; register §1.143, §3 W5): the latest
+    /// evaluation's not-running rows and the candidates that did not run, from the policy host's
+    /// memory.
+    ScheduleExplanation {
+        explanation: Box<RuntimeScheduleExplanation>,
+    },
     MonitorConfigured {
         status: RuntimeMonitorInstanceStatus,
     },
@@ -5733,6 +5756,14 @@ impl RuntimeReceipt {
                     ));
                 }
                 status.validate()?;
+            }
+            Some(RuntimeResult::ScheduleExplanation { explanation }) => {
+                if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidScheduleExplanation,
+                    ));
+                }
+                explanation.validate()?;
             }
             Some(
                 RuntimeResult::MonitorConfigured { status }
