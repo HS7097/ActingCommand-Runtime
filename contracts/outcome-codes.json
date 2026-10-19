@@ -48588,6 +48588,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "page_recognition_conflict": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "A frame matches two or more pages of the package's page set, so the Lab decides no page for it and refuses the command instead of taking the first match (#411 Lab L7). Emitted by the Lab's read-only page commands (current-page, detect-page, offline observe) and by actinglab's do, ensure, wait and session recover, offline and in their --capture client forms; the Lab envelope's details name every matched page in page order (matched_pages). Nothing is planned or pressed.",
+      "common_causes": "Two page definitions whose required, any_of and forbidden targets all pass on the same screen, for example a page and a sub-page that share their anchors without a forbidden target to tell them apart; a target threshold or colour tolerance loose enough that one page's anchor also passes on another page.",
+      "handling": "Run current-page or observe on the same frame to see the matched pages and their target evaluations, then make the pages exclusive in the package: add a forbidden or required target that only one of them has, or tighten the anchors; repeat until the frame matches one page."
+    },
     "paired_backend_open_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
