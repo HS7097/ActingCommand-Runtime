@@ -1377,6 +1377,7 @@ mod tests {
                         "id": "pick",
                         "from": "home",
                         "to": "result",
+                        "expect_after": {"page_id": "result"},
                         "guard": {
                             "page_id": "home",
                             "target_id": "guard/ready",

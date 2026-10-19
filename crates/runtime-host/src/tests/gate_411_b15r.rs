@@ -95,6 +95,7 @@ fn package_bytes(game: &str, server: &str, default: &str) -> Vec<u8> {
             "id": "pick",
             "from": "home",
             "to": "result",
+            "expect_after": {"page_id": "result"},
             "guard": {
                 "page_id": "home",
                 "target_id": "guard/ready",
@@ -601,18 +602,20 @@ fn b15r_publishing_a_dispatch_key_is_refused() {
         "snapshot:b15r-parameter",
         Vec::new(),
     );
+    // The batch is one consistent observation (one source snapshot), so the request is valid
+    // and reaches the reserved-prefix rule.
     let other = stored_fact(
         instance.clone(),
         "session.dispatch.other",
         ContractFactValue::String("opt_1".to_owned()),
-        "snapshot:b15r-other",
+        "snapshot:b15r-batch",
         Vec::new(),
     );
     let ordinary = stored_fact(
         instance,
         "session.example.flag",
         ContractFactValue::Boolean(true),
-        "snapshot:b15r-ordinary",
+        "snapshot:b15r-batch",
         Vec::new(),
     );
 
