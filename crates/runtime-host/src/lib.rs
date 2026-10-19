@@ -47,6 +47,8 @@ mod provider_startup;
 mod recognition_binding;
 mod recovery_read;
 mod recovery_timing;
+// Workflow #411 B15 R4: the host's side of declared remedies.
+mod remedy;
 // Workflow #384 D2-S3.
 mod resource_adjustment;
 mod strategy;

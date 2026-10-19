@@ -457,6 +457,53 @@ impl HostShared {
             })
     }
 
+    /// Workflow #411 B15 R4 (model-b15 §5.2, §9.2): the remedy keys in effect for the instances
+    /// `aliases` name (`EffectiveConfig::remedy` by each one's registry id):
+    /// `scheduling.remedy.enabled` and `.max_per_round`, each instance's choice rows in effect
+    /// (its own `instance.<id>.scheduling.remedy.choices` when it sets one, otherwise the
+    /// section's list), and `scheduling.suspension.lift_check_min_interval_ms`, the least time
+    /// between two rebuilds of the remedy table while a round is open or a stop is recorded.
+    /// With no instance there is nothing to plan.
+    pub(super) fn remedy_context(
+        &self,
+        aliases: &[&str],
+        operation: HostLocation,
+    ) -> RuntimeHostResult<crate::remedy::RemedyContext> {
+        let ids = lock(&self.registered_instances, operation)?
+            .values()
+            .map(|instance| {
+                (
+                    instance.instance_alias.clone(),
+                    crate::failure_identity::identifier_text(&instance.instance_id),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let mut switch = None;
+        let mut configuration = BTreeMap::new();
+        for alias in aliases {
+            // An instance the registry does not hold has no list of its own (the per-instance
+            // keys name registry ids): the section's list is in effect.
+            let id = ids.get(*alias).map_or(*alias, String::as_str);
+            let remedy = config.remedy(id).map_err(remedy_config_failure)?;
+            switch.get_or_insert((remedy.enabled, remedy.max_per_round));
+            configuration.insert(
+                (*alias).to_owned(),
+                remedy.rows.iter().map(crate::remedy::policy_row).collect(),
+            );
+        }
+        let table_interval_ms = config
+            .lift_check_min_interval_ms()
+            .map_err(remedy_config_failure)?;
+        let (enabled, max_per_round) = switch.unwrap_or((false, 1));
+        Ok(crate::remedy::RemedyContext {
+            enabled,
+            max_per_round,
+            configuration,
+            table_interval_ms,
+        })
+    }
+
     /// Workflow #398 RD-2: the `device_link` section in effect (model-398 §4.6), read at every
     /// link change, restore and watch restart.
     pub(super) fn device_link_config(
@@ -670,6 +717,17 @@ fn overrides_invalid() -> RuntimeHostError {
         ConfigHostLocation::RestoreConfigOverrides,
         RuntimeErrorCode::RuntimeHalted,
     )
+}
+
+/// Workflow #411 B15 R4: a remedy key the configuration in effect cannot give. The keys are
+/// checked when the configuration is loaded or changed, so this is a halt.
+fn remedy_config_failure(failure: actingcommand_runtime_config::ConfigFailure) -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        failure.failure_code(),
+        ConfigHostLocation::ReadRuntimeConfig,
+        RuntimeErrorCode::RuntimeHalted,
+    )
+    .with_outcome_values(|outcome| failure.with_values(outcome))
 }
 
 fn value_type_invalid(operation: ConfigHostLocation) -> RuntimeHostError {

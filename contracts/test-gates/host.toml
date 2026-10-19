@@ -1362,3 +1362,20 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_a_scheduled_runs_paced_wait_ends_by_its_deadline",
 ]
 incident = ["#385 P-k"]
+
+# Workflow #411 B15 R4 (v0.12.3; register §1.114 B15H-1 to B15H-6; no persisted ledger shape; contracts/remedies.md sections 5 and 7; key assigned by the coordinator): the host builds the remedy table from the bound packages (capability_unbound, cycle edges refused), keeps the pairs' journal live and rebuilds it at start (a blocked key read from the terminal whether or not the catalog references it), plans the remedies in each evaluation (a request, one retry, the hold, a stop at position 8a before availability), refuses a request whose round was served between evaluation and admission with policy_remedy_round_closed, and records each stop, lift and expiry once across evaluations and restarts; a blocked run stays a success
+[[gate]]
+key = "113"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_blocked_run_is_followed_by_its_remedy_and_one_retry_and_the_chain_reasons_are_recorded",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_no_choice_stops_once_and_a_written_choice_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_an_open_round_survives_a_restart_and_retries_once",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_remedy_served_between_evaluation_and_admission_is_refused_round_closed",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_round_open_at_its_window_end_records_one_expiry",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_capability_without_provider_task_stops_unavailable",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_two_tasks_providing_each_others_remedy_are_refused_as_a_cycle",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_stop_is_recorded_once_across_evaluations_and_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_blocked_key_the_catalog_does_not_reference_still_opens_a_round",
+]
+incident = ["#411 B15"]

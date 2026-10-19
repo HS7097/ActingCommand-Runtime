@@ -1872,6 +1872,25 @@ impl RuntimeHost {
                     timed(&mut startup_recovery.policy_outcomes_ms, || {
                         recover_authoritative_policy_outcomes(&policy, &shared.ledger)
                     })?;
+                // Workflow #411 B15 R4 (model-b15 §7.8, §9.1): the remedy table, the outcome keys
+                // of the latest runs of tasks that declare a remedy and the remedy signals, once
+                // the dispatches are settled.
+                let remedy_manifest = lock(
+                    &shared.procedure_manifest,
+                    HostLocation::ReadProcedureManifest,
+                )?
+                .clone();
+                let remedy_instances = lock(&shared.policy_inputs, HostLocation::ReadPolicyInputs)?
+                    .as_ref()
+                    .map(|inputs| inputs.facts().instances.clone())
+                    .unwrap_or_default();
+                policy_outcome::recover_remedy_state(
+                    &mut policy,
+                    &shared.ledger,
+                    remedy_manifest.as_ref(),
+                    &remedy_instances,
+                    shared.clock.sample()?.unix_ms,
+                )?;
                 let policy_dispatch_clocks = policy
                     .recovered_dispatch_clocks()?
                     .into_iter()
@@ -3913,6 +3932,15 @@ impl RuntimeHost {
             .map_err(|_| {
                 ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
             })
+    }
+
+    /// Workflow #411 B15 R4, test only: the remedy table in effect.
+    #[cfg(test)]
+    pub(crate) fn remedy_table_for_test(
+        &self,
+    ) -> RuntimeHostResult<Option<crate::remedy::BuiltTable>> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        Ok(lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?.remedy_table_for_test())
     }
 
     #[cfg(test)]

@@ -44,8 +44,9 @@ use actingcommand_policy::{
     DispatchIntent, DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources,
     EvaluationTime, FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, InstanceSnapshot,
     MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
+    REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot, TaskTerminalState,
-    activity_window_at, compile_catalog, evaluate_with_fact_refresh,
+    activity_window_at, compile_catalog, evaluate_with_remedies, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -263,6 +264,8 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     pub(crate) pack_admission: &'a crate::pack_admission::PackAdmission,
     /// Workflow #384 D2-S4: what the scheduler's fact refresh reads from the Runtime.
     pub(crate) fact_refresh: FactRefreshContext<'a>,
+    /// Workflow #411 B15 R4: the remedy keys in effect as the cycle starts.
+    pub(crate) remedy: &'a crate::remedy::RemedyContext,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -885,6 +888,10 @@ pub(crate) struct PolicyHost {
     /// stay open, out of the pending settlements and the active workloads; a later start that
     /// settles them leaves them out of this set.
     quarantined_dispatches: BTreeSet<String>,
+    /// Workflow #411 B15 R4 (model-b15 §7.8, §9.1): the remedy table, the outcome keys of the
+    /// runs of tasks that declare a remedy, and the remedy signals recorded. Memory only; the
+    /// runs of the remedy journal are `seen_dispatches`.
+    remedies: crate::remedy::RemedyState,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -918,6 +925,7 @@ impl PolicyHost {
             arbitration: BTreeMap::new(),
             confirmed_run_admissions: BTreeMap::new(),
             quarantined_dispatches: BTreeSet::new(),
+            remedies: crate::remedy::RemedyState::default(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -1387,6 +1395,7 @@ impl PolicyHost {
             suspension_lift,
             pack_admission,
             fact_refresh,
+            remedy,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -1399,6 +1408,24 @@ impl PolicyHost {
                 measurement: None,
                 fact_refresh_transitions: Vec::new(),
             });
+        }
+        // Workflow #411 B15 R4 (model-b15 §9.1): the remedy table of the active catalog, built at
+        // the first evaluation under it, and again at most once per interval while a round is
+        // open or a stop is recorded.
+        if let Some(active) = &self.active
+            && self.remedies.table_due(
+                active.generation.catalog_hash(),
+                time.unix_ms,
+                remedy.table_interval_ms,
+            )
+        {
+            let table = crate::remedy::build_table(
+                &active.compiled,
+                Some(procedure_manifest),
+                &facts.instances,
+                time.unix_ms,
+            );
+            self.remedies.set_table(table);
         }
         let active = self.active.as_ref().ok_or_else(|| {
             request(
@@ -1420,9 +1447,13 @@ impl PolicyHost {
             instance_occupancy,
             time.unix_ms,
         )?;
+        // Workflow #411 B15 R4 (model-b15 §9.2): the remedy plan of this cycle; empty when no
+        // bound package declares a remedy or remedies are off.
+        let (remedy_plan, remedy_decisions) =
+            self.remedy_plan(&active.compiled, facts, time, remedy)?;
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_fact_refresh::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_remedies::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -1430,6 +1461,7 @@ impl PolicyHost {
             seed,
             &immediate_retries,
             &refresh_inputs,
+            &remedy_plan,
             deferrals.capture(|intent| {
                 // Workflow #384 D2-S4: a fact refresh's deferrals name their gate and class.
                 let refresh = intent.task_id == FACT_REFRESH_TASK_ID;
@@ -1449,6 +1481,15 @@ impl PolicyHost {
                     return Ok(CandidateEligibility::Deferred {
                         reason,
                         next_wake_unix_ms: None,
+                    });
+                }
+                // Workflow #411 B15 R4 (`scheduling-blackout.md`, "Order of the deferrals",
+                // position 8a): a remedy round holds the task, or stopped it for a person, after
+                // positions 1 to 7 and before availability.
+                if let Some(deferral) = remedy_plan.deferral(&intent.task_id, &intent.instance_id) {
+                    return Ok(CandidateEligibility::Deferred {
+                        reason: deferral.reason.clone(),
+                        next_wake_unix_ms: deferral.next_wake_unix_ms,
                     });
                 }
                 match self.control.preview_admission_lifted(
@@ -1487,6 +1528,22 @@ impl PolicyHost {
             }),
         )?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
+        // Workflow #411 B15 R4 (model-b15 §7.5 to §7.7): the stops, lifts and expiries the plan
+        // and the evaluation decided, each checked against the planning-signal projection before
+        // the cycle's recorder writes it (once per id, across restarts too).
+        let mut remedy_signals = Vec::new();
+        for signal in remedy_plan.signals_after(&evaluation) {
+            if self
+                .store
+                .load_planning_signal(&signal.signal_id)?
+                .is_none()
+            {
+                remedy_signals.push(crate::remedy::signal_event(signal, time.unix_ms));
+            }
+        }
+        let remedy_active = !remedy_plan.overrides.is_empty()
+            || !remedy_plan.deferrals.is_empty()
+            || !remedy_signals.is_empty();
         let elapsed_micros = u64::try_from(started.elapsed().as_micros()).map_err(|_| {
             fatal(
                 HostCode::PolicyEvaluationMeasurementOverflow,
@@ -1539,6 +1596,11 @@ impl PolicyHost {
             .stage(&evaluation, time.unix_ms, &in_flight);
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
+        if let Some(decisions) = &remedy_decisions {
+            self.remedies.retain_keys(decisions);
+        }
+        self.remedies
+            .finish_evaluation(remedy_active, remedy_signals);
         let requested_recompute = directive.kind;
         Ok(PolicyCycle {
             directive,
@@ -1627,6 +1689,413 @@ impl PolicyHost {
             instance_facts_loaded_at_unix_ms: Some(context.instance_facts_loaded_at_unix_ms),
             instance_holds,
         })
+    }
+
+    /// Workflow #411 B15 R4 (model-b15 §9.2): the remedy plan at `time` on `facts` (an
+    /// evaluation's, or an admission's for its check), and the decisions of the runs its journal
+    /// holds, whose outcome keys are kept (`None` with remedies off, which keeps every key). With
+    /// remedies off or an empty table the plan is empty, so the evaluation is unchanged.
+    fn remedy_plan(
+        &self,
+        catalog: &CompiledCatalog,
+        facts: &EvaluationFacts,
+        time: EvaluationTime,
+        remedy: &crate::remedy::RemedyContext,
+    ) -> RuntimeHostResult<(RemedyPlan, Option<BTreeSet<String>>)> {
+        if !remedy.enabled {
+            return Ok((RemedyPlan::default(), None));
+        }
+        let Some(table) = self
+            .remedies
+            .table()
+            .filter(|table| !table.table.is_empty())
+        else {
+            return Ok((RemedyPlan::default(), Some(BTreeSet::new())));
+        };
+        let journal = self.remedy_journal(table)?;
+        let decisions = journal
+            .iter()
+            .flat_map(|pair| pair.runs.iter().map(|run| run.decision_id.clone()))
+            .collect();
+        let inputs = RemedyInputs {
+            enabled: remedy.enabled,
+            max_per_round: remedy.max_per_round,
+            table: table.table.clone(),
+            journal,
+            stops: self.remedies.stops(),
+            signals_seen: self.remedies.seen().clone(),
+            configuration: remedy.configuration.clone(),
+            persistent_gates: crate::remedy::persistent_gates(),
+        };
+        Ok((
+            plan_remedies(catalog, facts, time, &inputs)?,
+            Some(decisions),
+        ))
+    }
+
+    /// Workflow #411 B15 R4 (model-b15 §7.8): the remedy journal. Per (task, instance) of every
+    /// task in `table` (one that declares a remedy or provides a capability), its admitted runs in
+    /// ledger order since the pair's latest root blocked run, at most
+    /// [`REMEDY_JOURNAL_MAX_RUNS`] (the latest): each with its decision, its admission time, the
+    /// end of the activity window it was admitted in, the `policy_remedy_requested` and
+    /// `policy_remedy_retry` reasons of its chain, and how it settled (a success with the outcome
+    /// key its terminal names, a failure, or not yet). The runs are this projection's, rebuilt in
+    /// ledger order at start; the keys are the remedy state's.
+    fn remedy_journal(
+        &self,
+        table: &crate::remedy::BuiltTable,
+    ) -> RuntimeHostResult<Vec<RemedyJournal>> {
+        let tasks = table.journal_tasks();
+        let mut pairs = BTreeMap::<(&str, &str), Vec<(u64, &str, &SeenDispatch)>>::new();
+        for (decision_id, dispatch) in &self.seen_dispatches {
+            let Some(sequence) = dispatch.admitted_sequence else {
+                continue;
+            };
+            if !tasks.contains(dispatch.data.task_id.as_str()) {
+                continue;
+            }
+            pairs
+                .entry((
+                    dispatch.data.task_id.as_str(),
+                    dispatch.data.instance_id.as_str(),
+                ))
+                .or_default()
+                .push((sequence, decision_id.as_str(), dispatch));
+        }
+        let mut journals = Vec::with_capacity(pairs.len());
+        for ((task_id, instance_id), mut runs) in pairs {
+            runs.sort_by_key(|(sequence, _, _)| *sequence);
+            let root = runs
+                .iter()
+                .rposition(|(_, decision_id, dispatch)| {
+                    self.is_root_blocked_run(table, task_id, decision_id, dispatch)
+                })
+                .unwrap_or(0);
+            let from = root.max(runs.len().saturating_sub(REMEDY_JOURNAL_MAX_RUNS));
+            let runs = runs[from..]
+                .iter()
+                .map(|(_, decision_id, dispatch)| self.remedy_run(decision_id, dispatch))
+                .collect::<RuntimeHostResult<Vec<_>>>()?;
+            journals.push(RemedyJournal {
+                task_id: task_id.to_owned(),
+                instance_id: instance_id.to_owned(),
+                runs,
+            });
+        }
+        Ok(journals)
+    }
+
+    /// Workflow #411 B15 R4 (model-b15 §7.1): whether a run is a root blocked run: it succeeded on
+    /// a key whose mapping declares a remedy, and its chain names no round.
+    fn is_root_blocked_run(
+        &self,
+        table: &crate::remedy::BuiltTable,
+        task_id: &str,
+        decision_id: &str,
+        dispatch: &SeenDispatch,
+    ) -> bool {
+        matches!(
+            dispatch
+                .execution
+                .as_ref()
+                .map(|execution| &execution.outcome),
+            Some(PolicyExecutionOutcome::Succeeded { .. })
+        ) && self
+            .remedies
+            .outcome_key(decision_id)
+            .is_some_and(|outcome_key| table.remedy_key(task_id, outcome_key))
+            && !dispatch
+                .data
+                .reasons
+                .iter()
+                .any(|reason| crate::remedy::is_round_reason(&reason.0))
+    }
+
+    /// Workflow #411 B15 R4 (model-b15 §7.8): one admitted run of the remedy journal.
+    fn remedy_run(
+        &self,
+        decision_id: &str,
+        dispatch: &SeenDispatch,
+    ) -> RuntimeHostResult<RemedyRun> {
+        let admission = dispatch.admission.as_ref().ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchAdmissionMissing,
+                HostLocation::EvaluatePolicyCycle,
+            )
+        })?;
+        let admitted_at_unix_ms = admission.activity.admitted_at_unix_ms;
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        let profile = catalog
+            .compiled
+            .catalog()
+            .activity
+            .profiles
+            .iter()
+            .find(|profile| profile.id == admission.activity.profile_id)
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyActivityProfileMissing,
+                    HostLocation::ResolveActivityWindow,
+                )
+            })?;
+        let window = activity_window_at(profile, admitted_at_unix_ms)
+            .map_err(|_| {
+                fatal(
+                    HostCode::PolicyActivityDayOverflow,
+                    HostLocation::ResolveActivityWindow,
+                )
+            })?
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyActivityWindowClosed,
+                    HostLocation::ResolveActivityWindow,
+                )
+            })?;
+        let settled = match dispatch
+            .execution
+            .as_ref()
+            .map(|execution| &execution.outcome)
+        {
+            None => RemedySettlement::InFlight,
+            Some(PolicyExecutionOutcome::Succeeded { .. }) => RemedySettlement::Succeeded {
+                outcome_key: self.remedies.outcome_key(decision_id).map(str::to_owned),
+            },
+            Some(PolicyExecutionOutcome::Failed { .. }) => RemedySettlement::Failed,
+        };
+        Ok(RemedyRun {
+            decision_id: decision_id.to_owned(),
+            admitted_at_unix_ms,
+            activity_window_end_unix_ms: window.until_unix_ms,
+            remedy_reasons: dispatch
+                .data
+                .reasons
+                .iter()
+                .map(|reason| &reason.0)
+                .filter(|outcome| crate::remedy::is_round_reason(outcome))
+                .cloned()
+                .collect(),
+            settled,
+            settled_at_unix_ms: dispatch
+                .execution
+                .as_ref()
+                .map(|execution| execution.observed_at_unix_ms),
+        })
+    }
+
+    /// Workflow #411 B15 R4 (model-b15 §7.9): an intent whose chain names a remedy round
+    /// (`policy_remedy_requested`, `policy_remedy_retry`) is admitted only while every round and
+    /// layer it names is still open and not yet served: the plan at the admission time, on the
+    /// admission's facts, still gives the intent's pair a trigger override with a reason of the
+    /// same code, blocked task, round and layer. Otherwise it is refused
+    /// `policy_remedy_round_closed`. An intent that names no round is not checked.
+    pub(crate) fn validate_remedy_dispatch(
+        &self,
+        intent: &DispatchIntent,
+        reason_chain: &DecisionReasonChain,
+        facts: &EvaluationFacts,
+        remedy: &crate::remedy::RemedyContext,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let named = reason_chain
+            .reasons
+            .iter()
+            .map(|reason| &reason.outcome)
+            .filter(|outcome| crate::remedy::is_round_reason(outcome))
+            .collect::<Vec<_>>();
+        if named.is_empty() {
+            return Ok(());
+        }
+        let active = self.active.as_ref().ok_or_else(|| {
+            request(
+                SharedCode::PolicyCatalogUnavailable,
+                HostLocation::ValidatePolicyDispatch,
+            )
+        })?;
+        let (plan, _) = self.remedy_plan(
+            &active.compiled,
+            facts,
+            EvaluationTime {
+                unix_ms: now_unix_ms,
+                monotonic_ms: now_unix_ms,
+            },
+            remedy,
+        )?;
+        let current = plan.trigger_override(&intent.task_id, &intent.instance_id);
+        for outcome in named {
+            let open = current.is_some_and(|current| {
+                current
+                    .reasons()
+                    .iter()
+                    .any(|reason| crate::remedy::same_layer(&reason.outcome, outcome))
+            });
+            if !open {
+                return Err(crate::remedy::round_closed(outcome, &intent.instance_id));
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #411 B15 R4 (model-b15 §9.1, at start): builds the remedy table of the active
+    /// catalog from `manifest`'s package locations.
+    pub(crate) fn build_remedy_table(
+        &mut self,
+        manifest: Option<&ProcedureManifest>,
+        instances: &[InstanceSnapshot],
+        now_unix_ms: u64,
+    ) {
+        if let Some(active) = &self.active {
+            let table =
+                crate::remedy::build_table(&active.compiled, manifest, instances, now_unix_ms);
+            self.remedies.set_table(table);
+        }
+    }
+
+    /// Workflow #411 B15 R4: whether `task_id`'s package declares a remedy, so its settled run's
+    /// terminal key is read (model-b15 §7.8).
+    pub(crate) fn declares_remedies(&self, task_id: &str) -> bool {
+        self.remedies.declares_remedies(task_id)
+    }
+
+    /// Workflow #411 B15 R4: whether any bound package declares a remedy.
+    pub(crate) fn declares_any_remedy(&self) -> bool {
+        self.remedies
+            .table()
+            .is_some_and(|table| !table.table.remedies.is_empty())
+    }
+
+    /// Workflow #411 B15 R4: whether `task_id`'s mapping of `outcome_key` declares a remedy.
+    pub(crate) fn remedy_root_key(&self, task_id: &str, outcome_key: &str) -> bool {
+        self.remedies
+            .table()
+            .is_some_and(|table| table.remedy_key(task_id, outcome_key))
+    }
+
+    /// Workflow #411 B15 R4: the outcome key the terminal of `decision_id`'s run names.
+    pub(crate) fn note_remedy_key(&mut self, decision_id: &str, outcome_key: String) {
+        self.remedies.note_key(decision_id, outcome_key);
+    }
+
+    /// Workflow #411 B15 R4: a recorded planning signal; a `signal:remedy:` one updates the
+    /// remedy state (seen, a stop, a lift).
+    pub(crate) fn observe_remedy_signal(
+        &mut self,
+        signal_id: &str,
+        instance_id: &str,
+        task_id: Option<&str>,
+        outcome: &Outcome,
+    ) {
+        self.remedies
+            .observe_signal(signal_id, instance_id, task_id, outcome);
+    }
+
+    /// Workflow #411 B15 R4: the remedy signals the last evaluation decided, for its recorder.
+    pub(crate) fn take_remedy_signals(&mut self) -> Vec<PolicyPlanningSignalEventData> {
+        self.remedies.take_pending()
+    }
+
+    /// Workflow #411 B15 R4 (model-b15 §7.8, at start): per pair of a task that declares a
+    /// remedy, its admitted runs newest first, at most [`REMEDY_JOURNAL_MAX_RUNS`], each with
+    /// whether its terminal is read (a completed success) and whether its chain names a round.
+    pub(crate) fn remedy_key_reads(&self) -> Vec<Vec<crate::remedy::RemedyKeyRead>> {
+        let Some(table) = self.remedies.table() else {
+            return Vec::new();
+        };
+        let mut pairs = BTreeMap::<(&str, &str), Vec<(u64, &str, &SeenDispatch)>>::new();
+        for (decision_id, dispatch) in &self.seen_dispatches {
+            let Some(sequence) = dispatch.admitted_sequence else {
+                continue;
+            };
+            if !table.declares_remedies(&dispatch.data.task_id) {
+                continue;
+            }
+            pairs
+                .entry((
+                    dispatch.data.task_id.as_str(),
+                    dispatch.data.instance_id.as_str(),
+                ))
+                .or_default()
+                .push((sequence, decision_id.as_str(), dispatch));
+        }
+        pairs
+            .into_values()
+            .map(|mut runs| {
+                runs.sort_by_key(|(sequence, _, _)| std::cmp::Reverse(*sequence));
+                runs.into_iter()
+                    .take(REMEDY_JOURNAL_MAX_RUNS)
+                    .map(|(_, decision_id, dispatch)| crate::remedy::RemedyKeyRead {
+                        decision_id: decision_id.to_owned(),
+                        task_id: dispatch.data.task_id.clone(),
+                        read: dispatch.completed_sequence.is_some()
+                            && matches!(
+                                dispatch
+                                    .execution
+                                    .as_ref()
+                                    .map(|execution| &execution.outcome),
+                                Some(PolicyExecutionOutcome::Succeeded { .. })
+                            ),
+                        round_run: dispatch
+                            .data
+                            .reasons
+                            .iter()
+                            .any(|reason| crate::remedy::is_round_reason(&reason.0)),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Workflow #411 B15 R4 (at start): the run identity of the completed dispatch `decision_id`,
+    /// read from its `policy.dispatch_completed` record, by which its terminal is found.
+    pub(crate) fn remedy_completed_run(
+        &self,
+        ledger: &GlobalLedger,
+        decision_id: &str,
+    ) -> RuntimeHostResult<CompletedPolicyRunIdentity> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::RecoverPolicySchedulingOutcomes,
+            )
+        })?;
+        let (Some(sequence), Some(execution)) =
+            (dispatch.completed_sequence, dispatch.execution.as_ref())
+        else {
+            return Err(fatal(
+                HostCode::PolicyDispatchCompletionIncomplete,
+                HostLocation::RecoverPolicySchedulingOutcomes,
+            ));
+        };
+        let events = ledger
+            .query_page(
+                EventQuery {
+                    from_sequence: Some(sequence),
+                    to_sequence: Some(sequence),
+                    event_type: Some(EventType::PolicyDispatchCompleted),
+                    ..EventQuery::default()
+                },
+                sequence.saturating_sub(1),
+                sequence,
+                2,
+            )
+            .map_err(|_| {
+                fatal(
+                    HostCode::PolicyRecoveryFailed,
+                    HostLocation::RecoverPolicySchedulingOutcomes,
+                )
+            })?;
+        let [event] = events.as_slice() else {
+            return Err(fatal(
+                HostCode::PolicyDispatchCompletionIncomplete,
+                HostLocation::RecoverPolicySchedulingOutcomes,
+            ));
+        };
+        completed_policy_run_identity(event, &dispatch.data, execution, BTreeSet::new())
+    }
+
+    /// Workflow #411 B15 R4, test only: the remedy table in effect.
+    #[cfg(test)]
+    pub(crate) fn remedy_table_for_test(&self) -> Option<crate::remedy::BuiltTable> {
+        self.remedies.table().cloned()
     }
 
     pub(crate) fn validate_dispatch(

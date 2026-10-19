@@ -251,9 +251,31 @@ enum GateClass {
     QueueWait,
 }
 
+/// Workflow #411 B15 R4 (`scheduling-blackout.md`, "Order of the deferrals"; `scheduling/README.md`,
+/// "Remedies"): the remedy codes the closure defers with at position 8a. The three stop codes are
+/// persistent gates; a hold is a waiting gate (a slot is deferred only once its window passed).
+const REMEDY_GATES: [(PolicyCode, GateClass); 4] = [
+    (PolicyCode::PolicyRemedyUnchosen, GateClass::Persistent),
+    (PolicyCode::PolicyRemedyUnavailable, GateClass::Persistent),
+    (PolicyCode::PolicyRemedyExhausted, GateClass::Persistent),
+    (PolicyCode::PolicyRemedyWaiting, GateClass::QueueWait),
+];
+
+/// Workflow #411 B15 R4: a remedy reason's gate: its code and class.
+fn remedy_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
+    REMEDY_GATES
+        .iter()
+        .find(|(code, _)| reason.is(*code))
+        .map(|(code, class)| (code.code(), *class))
+}
+
 /// A closure deferral's gate: its host code and class. Any host code not named here is a
-/// queue wait (the default rule); `None` for a reason that is not a host code.
+/// queue wait (the default rule); a remedy code is classed by [`REMEDY_GATES`]; `None` for a
+/// reason that is neither.
 fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
+    if let Some(gate) = remedy_gate(reason) {
+        return Some(gate);
+    }
     // Workflow #386 SR-3 (scheduling model §5.4): a suspended task package is a persistent
     // gate. Its code is one the scheduling rules registered (SR-0), not a `HostCode`.
     if reason.is(SchedulingRuleHostCode::PackAdmissionSuspended) {
@@ -344,9 +366,26 @@ pub(super) fn preview(
         signals: Vec::new(),
     };
     for ((task_id, alias), deferral) in deferrals.captured.into_inner() {
+        // Workflow #411 B15 R4: a remedy hold that the evaluation turned into its round's stop
+        // once the allocation was known (every provider met a persistent gate) is traced as the
+        // stop.
+        let (code, class) = if deferral.code == PolicyCode::PolicyRemedyWaiting.code() {
+            evaluation
+                .decisions
+                .iter()
+                .find(|decision| {
+                    decision.task_id == task_id
+                        && decision.instance_id.as_deref() == Some(alias.as_str())
+                })
+                .and_then(|decision| decision.reasons.last())
+                .and_then(|reason| remedy_gate(&reason.outcome))
+                .unwrap_or((deferral.code, deferral.class))
+        } else {
+            (deferral.code, deferral.class)
+        };
         let gate = Gate {
-            code: deferral.code,
-            class: deferral.class,
+            code,
+            class,
             budget_dimension: deferral.budget_dimension,
             next_eligible_unix_ms: deferral.next_wake_unix_ms,
         };

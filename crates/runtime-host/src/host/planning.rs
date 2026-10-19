@@ -94,6 +94,14 @@ impl HostShared {
                 })?;
             committed_signal = Some((*persisted.event_id(), persisted.sequence()));
             policy.publish_planning_signal(staged_quota);
+            // Workflow #411 B15 R4 (model-b15 §7.8): a remedy stop, lift or expiry is part of
+            // the remedy state from its record on.
+            policy.observe_remedy_signal(
+                &signal.signal_id,
+                &signal.instance_id,
+                signal.task_id.as_deref(),
+                &signal.outcome,
+            );
             drop(policy);
             let observed = self
                 .observe_device_diagnostics_under_fact_gate(&persisted)
