@@ -1242,6 +1242,10 @@ pub(super) struct RuntimeContainedTask<'a> {
     kernel_clock_failure: Option<RuntimeHostError>,
     /// #385 P-k: the factor segments of the run's `step_pacing()` answers.
     pacing: RunPacing,
+    /// Workflow #411 B15 R5 (contracts/remedies.md section 4): the run's read-only parameters,
+    /// overlaid on every instance fact snapshot the run takes and never stored: its dispatch's
+    /// `policy_dispatch_parameters`, else its package's declared defaults.
+    run_parameters: actingcommand_execution_kernel::RunParameters,
 }
 
 pub(super) struct EntryRecoveryRuntime<'a, 'host> {
@@ -4071,7 +4075,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 RequestFailure::request(error, RuntimeReceiptState::Failed, None)
             }
         };
-        let snapshot = self
+        let mut snapshot = self
             .host
             .instance_fact_snapshot(InstanceFactContext {
                 instance_id: self.instance_alias.to_owned(),
@@ -4080,6 +4084,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             })
             .map_err(failure)?;
         let now_unix_ms = self.host.clock.sample().map_err(failure)?.unix_ms;
+        // Workflow #411 B15 R5: the run's parameters join the snapshot it reads, never the store.
+        self.run_parameters.overlay(&mut snapshot, now_unix_ms);
         Ok(actingcommand_execution_kernel::SelectionState::Snapshot {
             snapshot,
             now_unix_ms,
@@ -5932,6 +5938,7 @@ impl HostShared {
             active_run.control(),
             None,
             None,
+            None,
         );
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
@@ -6340,6 +6347,7 @@ impl HostShared {
             active_run.control(),
             Some(control_request_id),
             None,
+            None,
         )
     }
 
@@ -6636,6 +6644,7 @@ impl HostShared {
             active_run.control(),
             Some(context.request().request_id()),
             reading_keys,
+            crate::fact_refresh::dispatch_parameters(context),
         );
         // #385 P-k (Tk-10): a run with a factor segment above 1000 is settled on its budget
         // time; the time its budget clock did not count stays with its dispatch's clock.
@@ -6668,8 +6677,18 @@ impl HostShared {
         control: Arc<ContainedRunControl>,
         admission_request_id: Option<RequestId>,
         reading_keys: Option<BTreeSet<String>>,
+        dispatched_parameters: Option<(Vec<(String, String)>, u64)>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
+        // Workflow #411 B15 R5 (contracts/remedies.md section 4): a policy run reads the values
+        // its dispatch carries, observed at its admission; any other run reads its package's
+        // declared defaults.
+        let run_parameters = match dispatched_parameters {
+            Some((values, admitted_at_unix_ms)) => {
+                prepared.dispatched_run_parameters(values, admitted_at_unix_ms)
+            }
+            None => prepared.default_run_parameters(),
+        };
         // Workflow #373 NAV-6: the steps the run's own layers can execute.
         let planned_steps = prerequisites
             .iter()
@@ -6780,6 +6799,7 @@ impl HostShared {
             reading_keys,
             kernel_clock_failure: None,
             pacing: RunPacing::UNPACED,
+            run_parameters,
         };
         // Workflow #373 NAV-5 (M-373 §4.4, 「不递归」): a run the host starts itself (a startup
         // package, a ladder rung) keeps today's gate; it never navigates.

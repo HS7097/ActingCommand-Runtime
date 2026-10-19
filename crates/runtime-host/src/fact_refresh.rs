@@ -83,6 +83,37 @@ pub(crate) fn requested_keys(context: &PolicyRunContext) -> Option<BTreeSet<Stri
     })
 }
 
+/// Workflow #411 B15 R5 (contracts/remedies.md section 4): the run parameters a policy run reads
+/// from its own dispatch reason chain, as a fact refresh reads its requested keys: each
+/// `(parameter_name, parameter_value)` of the chain's `policy_dispatch_parameters`, in its order,
+/// with the dispatch's admission instant; `None` when the chain carries none. An entry that is
+/// not a pair of strings gives no parameter, so a package policy that reads it meets an unknown
+/// fact and decides by its own `on_unknown`.
+pub(crate) fn dispatch_parameters(
+    context: &PolicyRunContext,
+) -> Option<(Vec<(String, String)>, u64)> {
+    let reason = context
+        .reason_chain()
+        .reasons
+        .iter()
+        .find(|reason| reason.outcome.is(PolicyCode::PolicyDispatchParameters))?;
+    let values = reason
+        .outcome
+        .value("run_parameters")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let text = |key: &str| entry.get(key).and_then(serde_json::Value::as_str);
+            Some((
+                text("parameter_name")?.to_owned(),
+                text("parameter_value")?.to_owned(),
+            ))
+        })
+        .collect();
+    Some((values, context.admission().activity.admitted_at_unix_ms))
+}
+
 /// What the closure's positions 1-2 hold an instance with: an operator scheduling pause (no
 /// wake: only `ResumeScheduling` lifts it), a holder or an eligible waiting claim (no wake: the
 /// driver wakes when a key returns), or a takeover cooldown (a wake at its end).
