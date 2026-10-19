@@ -19,6 +19,10 @@ mod gate_336_pkgs5;
 // standard-pack check, the root files laid beside bundle.json and the reserved package ids.
 #[cfg(test)]
 mod gate_373_navt;
+// Workflow #411 A25 (exec key 113): standard-pack check admits every registry package, with or
+// without the navigation root files.
+#[cfg(test)]
+mod gate_411_a25;
 // Workflow #411 B15 R1 (exec key 102): the remedy report of package bundle and standard-pack
 // check.
 #[cfg(test)]
