@@ -234,6 +234,15 @@ For a blocked pair whose key K declares `need` N and `capabilities` C:
 - **Runs without a dispatch** (direct runs, Lab online and offline runs): the overlay holds every
   declared parameter with its declared default. Nothing is recorded for them; the defaults are
   package data, so the run is reproducible from the package.
+- **Lab single-step evaluations** (#411 Lab RP): the kernel's `dry_run_select` and the scan replay
+  (`actinglab replay --select <operation> --scan <file>`) evaluate one select step with the same
+  overlay on the snapshot they evaluate, the declared defaults, observed at the evaluation's
+  instant. The scan replay takes `--parameter <name>=<value>`, repeatable with one flag per
+  distinct name: the value replaces that parameter's default, as a dispatch's chosen value does.
+  A name the package does not declare (any name, on a package that declares none) or a value that
+  is not one of the parameter's declared options is refused (`validation_failed` naming
+  `--parameter`, `argument_problem` `not_recognised`), and a name given twice is `repeated`;
+  neither is ever ignored. A package that declares no parameter evaluates exactly as before.
 - **Never stored.** The overlay appends no record, takes no fact identity, and is not visible to
   `InstanceFactSnapshot` or `ac_facts`.
 - **Reserved prefix.** `PublishFact` / `PublishFacts` of any key under `session.dispatch.` is

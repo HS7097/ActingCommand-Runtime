@@ -1661,3 +1661,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_no_list_file_is_written_into_the_repository",
 ]
 incident = ["#411 RV-1"]
+
+# #411 Lab RP (v0.12.x; register §1.142; no persisted ledger shape; contracts/remedies.md section 4, contracts/selection-graph.md "Offline"; related: host 114 (B15 R5), exec 69 (SEL-L6b)): the Lab's single-step select evaluations read the run parameters as a run does: dry_run_select and the scan replay (replay_scan) read session.dispatch.parameter.<name> through R5's overlay, the package's declared defaults without given values (the dry run selects and the scan keeps the members by the default) and a given value in place of its default; actinglab replay --select --scan refuses a --parameter whose name the package does not declare (also on a package that declares none), whose value is not one of its declared options or that is not <name>=<value> as not_recognised, a name given twice as repeated and --parameter on a whole replay as conflicting, each validation_failed naming --parameter; a package that declares no parameter evaluates exactly as over the given facts, and a parameter given to it is refused
+[[gate]]
+key = "115"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_lab_rp::lab_rp_a_single_step_select_reads_the_declared_default",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_lab_rp::lab_rp_a_given_parameter_replaces_the_default",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_rp::lab_rp_an_undeclared_or_invalid_parameter_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_lab_rp::lab_rp_a_package_without_parameters_is_unchanged",
+]
+incident = ["#411 Lab RP"]

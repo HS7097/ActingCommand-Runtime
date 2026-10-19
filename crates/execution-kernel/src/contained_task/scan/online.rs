@@ -546,12 +546,17 @@ pub fn dry_run_scan(
 /// `selection_fact_context_mismatch`) and keeps the rows of the record lists the step's sealed
 /// policy declares. The scan then runs as [`dry_run_scan`]: a move it holds no frame for fails
 /// `selection_scan_replay_frame_missing`, never passes.
+///
+/// #411 Lab RP (contracts/remedies.md section 4): the snapshot also holds `run_parameters`, as a
+/// run's select step reads them (the package's declared defaults, or given values replacing
+/// them, [`PreparedContainedTask::given_run_parameters`]), overlaid before it is checked.
 pub fn replay_scan(
     task: &PreparedContainedTask,
     operation_id: &str,
     scan: &ScanDeclaration,
     frames: Vec<Frame>,
     facts: &crate::OfflineReplayFacts,
+    run_parameters: &crate::RunParameters,
 ) -> Result<ScanDryRun, ContainedTaskError> {
     let prepared = task
         .program
@@ -572,7 +577,7 @@ pub fn replay_scan(
                 format!("operation={operation_id} is not a select step"),
             )
         })?;
-    let (snapshot, now_unix_ms) = match facts {
+    let (mut snapshot, now_unix_ms) = match facts {
         crate::OfflineReplayFacts::Empty { now_unix_ms } => (
             crate::offline::empty_offline_snapshot(crate::SelectionStateRequest {
                 step_index: 0,
@@ -587,6 +592,7 @@ pub fn replay_scan(
             read_at_unix_ms,
         } => (snapshot.clone(), *read_at_unix_ms),
     };
+    run_parameters.overlay(&mut snapshot, now_unix_ms);
     if now_unix_ms == 0 || snapshot.validate().is_err() {
         return Err(ContainedTaskError::with_detail(
             ExecutionKernelCode::SelectionStateUnavailable.code(),

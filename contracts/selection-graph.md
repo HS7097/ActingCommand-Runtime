@@ -815,6 +815,10 @@ confirms on the same saved frame. The result carries that instant as `selection_
 and the decision fingerprint binds it, only when a select step was evaluated; every other
 result and fingerprint is unchanged. The kernel's `dry_run_select` evaluates one select step on
 one saved frame with given facts and instant, for the `actinglab select` tool of a later slice.
+#411 Lab RP: it takes the instance fact snapshot and the package's run parameters, overlaid on
+the snapshot as a run's select step holds them (`session.dispatch.parameter.<name>`; the
+declared defaults, or given values in their place; [remedies.md](remedies.md), section 4), and
+evaluates the rows of the record lists the evaluated policy declares.
 
 `actinglab replay --package <path> --frames <directory> [--facts <file>]` (Workflow #308
 SEL-L6a) replays the whole package over a saved frame sequence, the PNG files of the directory
@@ -854,6 +858,20 @@ one the evaluator ended before its coverage (`aborted`) or that failed (`failed`
 `end.outcome`) exits with `replay_scan_refused`. A move the sequence holds no frame for (a
 corrective, a rewind, a capture after the last frame) fails
 `selection_scan_replay_frame_missing`; it never passes.
+
+#411 Lab RP: the scan's snapshot also holds the package's run parameters, as a run's select step
+holds them ([remedies.md](remedies.md), section 4): `session.dispatch.parameter.<name>` for
+every parameter the package declares, with its declared default, observed at the replay's
+instant, added before the snapshot is checked. `--parameter <name>=<value>`, repeatable with one
+flag per distinct name, replaces that parameter's default, as a dispatch's chosen value does.
+Every refusal is `validation_failed` (exit 2) with the details `{argument: "--parameter",
+argument_problem, arguments: [{argument, argument_problem}]}`, never an ignored flag: before
+anything is read, a flag without its value is `value_missing`, a value that is not
+`<name>=<value>` `not_recognised`, a name given twice `repeated`, and `--parameter` without
+`--select` (a whole replay, which reads the declared defaults) `conflicting`; once the package is
+admitted and before any frame is read, a name the package does not declare (any name, on a
+package that declares none) or a value that is not one of its declared options is
+`not_recognised`. A package that declares no parameter replays exactly as before.
 
 ## Records
 

@@ -17,6 +17,13 @@
 //! replay gives a select step. The scan declaration comes from the file, because a package
 //! declares its step's `scan` only from slice SEL-L4b on. A scan that covers its list exits 0;
 //! one that ends before it does, or fails, exits with `replay_scan_refused`.
+//!
+//! #411 Lab RP: the scan's policy reads the package's run parameters as a run's select step does
+//! (`session.dispatch.parameter.<name>`): the declared defaults, each `--parameter <name>=<value>`
+//! replacing its parameter's default, as a dispatch's chosen value does. A name the package does
+//! not declare, a value that is not one of its declared options, a name given twice, a malformed
+//! `--parameter` and `--parameter` without `--select` are refused with `validation_failed` naming
+//! `--parameter`, never ignored.
 
 use super::codes::ActinglabCode;
 use super::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
@@ -24,8 +31,8 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{ContainedTaskRequest, InstanceFactSnapshot, ScanCoverageState};
 use actingcommand_lab::{
-    ExternallyVerifiedBundle, OfflineReplayEnd, OfflineReplayError, OfflineReplayFacts,
-    PreparedContainedTask, ScanDeclaration, replay_contained_task, replay_scan,
+    ExternallyVerifiedBundle, GivenParameterProblem, OfflineReplayEnd, OfflineReplayError,
+    OfflineReplayFacts, PreparedContainedTask, ScanDeclaration, replay_contained_task, replay_scan,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -54,7 +61,13 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
     let facts_used = facts_report(&facts);
     let paths = frame_paths(&args.frames)?;
     if let Some(select) = &args.select {
-        return run_scan_replay(&args.package, select, &paths, &facts, facts_used);
+        return run_scan_replay(
+            &args.package,
+            select,
+            &paths,
+            (&facts, facts_used),
+            &args.parameters,
+        );
     }
     let task = admit(&args.package)?;
     let frames = paths
@@ -98,6 +111,8 @@ struct ReplayArgs {
     facts: Option<PathBuf>,
     /// Workflow #308 SEL-L6b: the select step whose scan is replayed, and its declaration.
     select: Option<ScanSelect>,
+    /// #411 Lab RP: the `--parameter <name>=<value>` given, in order (read only with `select`).
+    parameters: Vec<(String, String)>,
 }
 
 /// `--select <operation> --scan <file>`.
@@ -145,7 +160,7 @@ impl ReplayArgs {
         if let Some(name) = flags.flags.keys().find(|name| {
             !matches!(
                 name.as_str(),
-                "--package" | "--frames" | "--facts" | "--select" | "--scan"
+                "--package" | "--frames" | "--facts" | "--select" | "--scan" | "--parameter"
             )
         }) {
             return Err(CliError::usage(format!("replay does not accept {name}")));
@@ -165,6 +180,13 @@ impl ReplayArgs {
                 ));
             }
         };
+        let parameters = given_parameters(flags)?;
+        if select.is_none() && !parameters.is_empty() {
+            return Err(parameter_refusal(
+                "conflicting",
+                "replay reads --parameter only with --select <operation> and --scan <file>",
+            ));
+        }
         Ok(Self {
             package: single_path(flags, "--package")?
                 .ok_or_else(|| CliError::usage("replay requires --package <path>"))?,
@@ -172,8 +194,55 @@ impl ReplayArgs {
                 .ok_or_else(|| CliError::usage("replay requires --frames <directory>"))?,
             facts: single_path(flags, "--facts")?,
             select,
+            parameters,
         })
     }
+}
+
+/// #411 Lab RP: the `--parameter <name>=<value>` values as given, before anything is read, one
+/// flag per distinct name: a flag without its value is `value_missing`, a value that is not
+/// `<name>=<value>` is `not_recognised`, and a name given twice is `repeated` (the rule of #411
+/// Lab B-2, decision Q9: never last-wins).
+fn given_parameters(flags: &FlagArgs) -> CliOutcome<Vec<(String, String)>> {
+    let mut given: Vec<(String, String)> = Vec::new();
+    for value in flags.values("--parameter") {
+        if value == "true" || value.trim().is_empty() {
+            return Err(parameter_refusal(
+                "value_missing",
+                "replay takes --parameter <name>=<value>",
+            ));
+        }
+        let Some((name, option)) = value
+            .split_once('=')
+            .filter(|(name, option)| !name.is_empty() && !option.is_empty())
+        else {
+            return Err(parameter_refusal(
+                "not_recognised",
+                format!("--parameter {value} is not <name>=<value>"),
+            ));
+        };
+        if given.iter().any(|(given, _)| given == name) {
+            return Err(parameter_refusal(
+                "repeated",
+                format!(
+                    "replay takes --parameter {name} once; a repeated parameter is refused, never last-wins"
+                ),
+            ));
+        }
+        given.push((name.to_owned(), option.to_owned()));
+    }
+    Ok(given)
+}
+
+/// #411 Lab RP: a refused `--parameter`: `validation_failed` (exit 2) with the details
+/// `{argument: "--parameter", argument_problem, arguments: [{argument, argument_problem}]}` of the
+/// Lab's other option refusals (#411 Lab L1, B-2).
+fn parameter_refusal(problem: &str, message: impl Into<String>) -> CliError {
+    CliError::usage(message).with_details(json!({
+        "argument": "--parameter",
+        "argument_problem": problem,
+        "arguments": [{"argument": "--parameter", "argument_problem": problem}],
+    }))
 }
 
 /// The one path of `name`, `None` when it is not given.
@@ -198,21 +267,46 @@ fn single_value(flags: &FlagArgs, name: &str) -> CliOutcome<Option<String>> {
 /// kernel's scan path. A scan that covers its list (`complete` or `early_stopped`) is the
 /// result; a scan the evaluator ended before its coverage (its decision in `scan.decision`) or
 /// that failed (its outcome in `end.outcome`) is `replay_scan_refused`, with the whole replay in
-/// the details.
+/// the details. #411 Lab RP: the scan's policy reads the package's declared parameter defaults,
+/// each of `parameters` replacing its parameter's default; a parameter the package does not
+/// declare, or a value that is not one of its options, is refused before any frame is read.
 fn run_scan_replay(
     package: &Path,
     select: &ScanSelect,
     paths: &[PathBuf],
-    facts: &OfflineReplayFacts,
-    facts_used: Value,
+    (facts, facts_used): (&OfflineReplayFacts, Value),
+    parameters: &[(String, String)],
 ) -> CliOutcome<Value> {
     let declaration = read_scan(&select.declaration)?;
     let task = admit(package)?;
+    let run_parameters = task.given_run_parameters(parameters).map_err(|refusal| {
+        let name = &refusal.name;
+        match refusal.problem {
+            GivenParameterProblem::Undeclared => parameter_refusal(
+                "not_recognised",
+                format!("the package declares no parameter {name}"),
+            ),
+            GivenParameterProblem::NotAnOption => parameter_refusal(
+                "not_recognised",
+                format!("the value given for {name} is not one of its declared options"),
+            ),
+            GivenParameterProblem::Repeated => {
+                parameter_refusal("repeated", format!("replay takes --parameter {name} once"))
+            }
+        }
+    })?;
     let frames = paths
         .iter()
         .map(|path| crate::package_cli::offline::read_fixture_frame(path.as_path()))
         .collect::<CliOutcome<Vec<_>>>()?;
-    let result = replay_scan(&task, &select.operation, &declaration, frames, facts);
+    let result = replay_scan(
+        &task,
+        &select.operation,
+        &declaration,
+        frames,
+        facts,
+        &run_parameters,
+    );
     let mut payload = json!({
         "mode": "offline_scan_replay",
         "executed": false,
