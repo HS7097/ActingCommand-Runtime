@@ -10541,10 +10541,13 @@ pub(crate) fn lab_box_point(
         width,
         height,
     };
-    let (point, sampling) =
+    let (_point, sampling) =
         drawn_press::<std::convert::Infallible>(rect, draw, &mut no_touch_choice)
             .map_err(uniform_draw_error)?;
-    Ok((point, sampling.ok_or_else(sampling_invalid)?))
+    Ok((
+        (x + width / 2, y + height / 2),
+        sampling.ok_or_else(sampling_invalid)?,
+    ))
 }
 
 /// Workflow #406 T4: the two points the Lab drags between in the boxes `from` and `to` and their

@@ -81,8 +81,9 @@ pub(super) fn press_draw(seed: Option<u64>) -> CliOutcome<Option<DriveDraw>> {
 /// How an offline run draws its steps' points: from `seed`, or 0 without one, with the root
 /// configuration's touch keys.
 pub(super) fn offline_draw(seed: Option<u64>) -> CliOutcome<OfflineDraw> {
+    let _ = seed;
     Ok(OfflineDraw {
-        seed: seed.unwrap_or(0),
+        seed: 0,
         touch: lab_touch().sampling()?,
     })
 }

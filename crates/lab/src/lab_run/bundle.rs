@@ -1118,7 +1118,7 @@ impl OperationClick {
                     || self.from_rect.is_some()
                     || self.to_rect.is_some()
                     || self.offset.is_some()
-                    || self.target_id.is_some()
+                    || self.target_id.is_none()
                     || !actingcommand_execution_kernel::path_drag_bounds_hold(
                         (fields.box_rect.width, fields.box_rect.height),
                         fields.turns,

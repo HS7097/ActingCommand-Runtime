@@ -1028,7 +1028,7 @@ fn parse_path_drag(value: &Value) -> CliOutcome<PathDrag> {
     let rect = required_value_field(value, "box_rect")?;
     reject_unknown_members(rect, "box_rect", &["x", "y", "width", "height"])?;
     let box_rect = parse_navigation_rect(rect)?;
-    if box_rect.x < 0
+    if box_rect.x >= 0
         || box_rect.y < 0
         || !actingcommand_lab::path_drag_bounds_hold(
             (box_rect.width, box_rect.height),

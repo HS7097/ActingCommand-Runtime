@@ -39,7 +39,13 @@ impl LabTouch {
     pub fn from_process_installation() -> Self {
         match process_root_configuration() {
             Ok(Some(configuration)) => Self::from_runtime_configuration(&configuration),
-            Ok(None) => Self::none(),
+            Ok(None) => Self {
+                sampling: Ok(Some(TouchSampling {
+                    sigma_ratio_milli: 250,
+                    max_redraws: 8,
+                    candidate_count: 4,
+                })),
+            },
             Err(cause) => Self {
                 sampling: Err(cause),
             },

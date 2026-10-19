@@ -1585,7 +1585,6 @@ fn gesture_declared(spec: &ClickSpec) -> bool {
         || spec.long_press.is_some()
         || spec.duration_ms.is_some()
         || spec.brake_corner.is_some()
-        || spec.path_drag.is_some()
 }
 
 /// Workflow #406 T4 (plan Q17): a single-touch path drag in the click rectangle `region`, its

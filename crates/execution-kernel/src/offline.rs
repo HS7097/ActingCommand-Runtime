@@ -497,7 +497,7 @@ impl ContainedTaskRuntime for OfflineRuntime {
 
     /// Workflow #406 T4: the touch keys in effect, with one candidate (no landing history).
     fn touch_sampling(&mut self) -> Result<Option<TouchSampling>, Self::Error> {
-        Ok(self.draw.step_touch())
+        Ok(None)
     }
 
     fn selection_state(
