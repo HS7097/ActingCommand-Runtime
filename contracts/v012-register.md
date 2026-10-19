@@ -1706,6 +1706,18 @@ unchanged on a valid ledger; the refusals keep the ledger's existing codes.
 |---|---|---|---|---|---|
 | A4-1 | the `events` report's `artifact_evictions` (and each event's eviction proofs) | read behaviour of an existing member (shape unchanged) | A4 | A4 | built from the `artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last row read, each checked on its own, not against a whole-ledger retention replay; each proof carries the head of the read transaction, as before, so `--through` below an eviction still lists its proof. `open`, `chain` and `export` keep the full verification, and `chain` is the full check; a segment root is read whole |
 
+### 1.102 Slice A10 (v0.12.1-rc.2): an undecodable Lab recording makes only the Lab part unavailable (#411 A10; coordinator decision 2 of 2026-10-19)
+
+A `recording.json` that was read and does not decode as `actingcommand.lab-recording.v1` is
+treated as an identity mismatch is: the Lab part is unavailable and the session answers on.
+[lab-recording.md](lab-recording.md) ("Files", "record status") is the contract. It adds no
+member, code or command, and changes no interface revision of §6; the file is never repaired,
+rewritten, moved or deleted and is not decoded leniently.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A10-1 | `lab.reason` of `record status` / `ac_record_status` gains the value `lab_recording_unreadable` | new value of an existing member (shape unchanged) | A10 | A10 | `lab: {status: "unavailable", reason: "lab_recording_unreadable"}` with the session's `record`, exit 0, where the answer was `record_lab_unavailable` (exit 3); step actions refuse with `record_lab_unavailable` and that reason, and `record stop` stops the session with no Lab output, both as for `lab_recording_mismatch`; a read error other than a missing file stays `record_state_io_failed`; the reason stays a Lab-crate string until B4 (exec 85) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

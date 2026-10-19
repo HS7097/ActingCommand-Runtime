@@ -1367,3 +1367,14 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a11::a11_a_missing_absolute_changed_paths_file_is_refused_naming_it",
 ]
 incident = ["#411 A11"]
+
+# #411 A10 (v0.12.1-rc.2; register §1.102; related 35, 39, 66, 72): a Lab recording.json that was read and does not decode as actingcommand.lab-recording.v1 (an unknown member on artifact, a file cut off mid-object) makes the Lab part unavailable, reason lab_recording_unreadable, exactly as an identity mismatch does: record status answers exit 0 with its session record and lab {status: unavailable, reason}, a step action refuses with record_lab_unavailable and that reason, record stop stops the session with no Lab output, and the file's bytes are left as they are
+[[gate]]
+key = "85"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_rc2_a10::a10_status_answers_an_undecodable_recording_as_unavailable_with_the_session_record",
+    "actingcommand-lab::lib::gate_rc2_a10::a10_step_and_stop_treat_an_undecodable_recording_as_unavailable_and_leave_it_unchanged",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a10::a10_record_status_with_an_undecodable_recording_exits_zero_with_its_record",
+]
+incident = ["#411 A10"]

@@ -15,6 +15,9 @@ mod gate_390_nine6;
 // Workflow #411 A11 (exec key 84): `resource validate --changed-paths-file` takes an absolute path.
 #[path = "gate_rc2_a11.rs"]
 mod gate_rc2_a11;
+// #411 A10 (exec key 85): `record status` answers its record when the Lab recording is unreadable.
+#[path = "gate_rc2_a10.rs"]
+mod gate_rc2_a10;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
