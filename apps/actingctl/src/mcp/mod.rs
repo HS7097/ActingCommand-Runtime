@@ -33,6 +33,8 @@ mod run_list;
 mod run_evidence;
 mod runs;
 mod runtime;
+// Workflow #386 SR-6b, MCP-19b: ac_schedule.
+mod schedule;
 mod server;
 // Workflow #387 D1b: ac_config_set.
 mod settings;
@@ -473,12 +475,14 @@ fn write_text(output: &mut impl Write, text: &str) -> io::Result<()> {
 // Workflow #389 MCP-8: ac_overview's truncation order.
 // Workflow #386 SR-3: ac_diagnose's suspended task packages.
 // Workflow #411 B15 R7: ac_diagnose's stopped remedy rounds.
+// Workflow #386 SR-6b, MCP-19b: ac_schedule's cut and ac_diagnose's deferred rows.
 #[cfg(test)]
 mod tests {
     mod clock_slots;
     mod gate_386_sr3;
     mod gate_387_d1b;
     mod gate_411_b15w2;
+    mod gate_mcp19b;
     mod gate_mcp8;
     // Workflow #411 A8: lab::tests::gate_rc2_a8 takes its unreached deadline.
     pub(super) mod gate_mcpt1;
