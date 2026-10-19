@@ -2118,6 +2118,18 @@ prerequisite gate and the Ledger table's scheduling outcome row) and
 |---|---|---|---|---|---|
 | A23-1 | the terminal's `scheduling_disposition` (`task.completed`) after a prerequisite, return-home, navigation, entry recovery or interrupt-handler layer | rule (no shape change) (host 118) | A23 | A23 | the run's own package's dispatched steps choose the rule: with one or more, the last attempt's `StepFinished` of step `executed_steps - 1` (the package's own last step) must name the final page, as before; with none, the last `RecognitionCompleted` with a matched page must match it, whatever steps the other layers ran; a layer's page is never compared with the run's terminal pages; `executed_steps` in `TerminalCommitted`, the receipt and the run status stays the run's total; the effect bound, the designated-effect counts, the mapping choice and every outcome code are unchanged; a run with no layer is judged as before |
 
+### 1.140 Slice A25 (0.12.x): `standard-pack check` admits every registry package, with or without the navigation root files (#411 A25)
+
+A25: the standard-pack cross-check admits every package of the registry (`bundle.json`) once,
+by its directory, with or without `pages.json`, `interrupts.json` and `navigation.json`. No
+persisted ledger shape, no code, no wire, key or configuration change; the answer shape is
+unchanged. [package-reference.md](package-reference.md) ("Standard-pack root files") is the
+contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A25-1 | `actinglab standard-pack check --root <game root>` and the cross-check `package bundle` runs with root files | rule (no shape change) (exec 113) | A25 | A25 | every registry package is admitted once by its directory with the cross-check's admission (`PreparedContainedTask::describe_navigation_path`, its deadline and instance label), also on a root whose only root file is `bundle.json`; a package that fails admission, or whose directory is missing, is refused `package_invalid` naming its directory (exit 2), as a registry package no root file names is refused with `pages.json`; `status: checked` is answered only once every package was admitted, and `pack_count` stays the registry's length; with `pages.json` the order, the refusals and the warnings are unchanged and each package is admitted once; `package bundle` admits each registry package or takes its admission by path, never skipping one; before, a root without `pages.json` was answered `checked` with only the remedy report's metadata read of its packages, which is no admission |
+
 ### 1.126 Slice RV-1 (0.12.x): `actinglab resource verify` checks a resource repository commit as its CI does (#411 RV-1; plan-rv §4, §5, §8, §9; coordinator decisions of 2026-10-19 D1, D2)
 
 RV-1: one actinglab command checks one commit of a resource repository in one process, with this
