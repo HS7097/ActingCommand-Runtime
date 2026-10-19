@@ -10810,15 +10810,16 @@ impl PathDragClick {
         let mut previous = draw_point(&mut state)?;
         let mut points = vec![previous];
         for _ in 0..=self.turns {
-            let mut next = None;
+            // The farthest corner stands unless a draw is spaced.
+            let mut next = rect.farthest_corner(previous);
             for _ in 0..attempts {
                 let candidate = draw_point(&mut state)?;
                 if squared_distance(previous, candidate) >= min_squared {
-                    next = Some(candidate);
+                    next = candidate;
                     break;
                 }
             }
-            previous = next.unwrap_or_else(|| rect.farthest_corner(previous));
+            previous = next;
             points.push(previous);
         }
         let segment_duration_ms = path_segment_durations(self.duration_ms, &points)?;

@@ -11,7 +11,6 @@
 // expected value comes from the brief's text, written again below, never from the kernel; boxes
 // and pages are neutral.
 
-use super::tests::admission_deadline;
 use super::*;
 use crate::drive::parse_navigation_click;
 use crate::{DriveNavigationClick, DriveNavigationGraph, DrivePathDrag};
@@ -22,7 +21,9 @@ use actingcommand_pack_containment::source::{
 use actingcommand_recognition_pack::PackRect;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use zip::{ZipWriter, write::FileOptions};
 
 const RESOLUTION: Resolution = Resolution {
     width: 1_000,
@@ -353,50 +354,14 @@ fn control() -> Value {
     })
 }
 
-// The neutral task whose one operation from `home` to `page_b` is `click`.
-fn task(click: Value) -> Value {
-    let probe = |page: &str, expected: [u8; 3]| {
-        json!({
-            "id": format!("{page}_colour"),
-            "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 1, "height": 1}},
-            "expected": expected
-        })
-    };
-    json!({
-        "schema_version": "0.9",
-        "task_id": "task",
-        "game": "neutral",
-        "server_scope": ["test"],
-        "locale": "en-US",
-        "goal": "T3 fixture",
-        "coordinate_space": {"width": 16, "height": 9},
-        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
-        "color_probes": [probe("home", [0, 0, 255]), probe("page_b", [255, 0, 0])],
-        "page_rules": {
-            "home": {"required": ["home_colour"]},
-            "page_b": {"required": ["page_b_colour"]}
-        },
-        "entry_page": "home",
-        "target_page": "page_b",
-        "operations": [{
-            "id": "trace",
-            "from": "home",
-            "to": "page_b",
-            "click": click,
-            "unguarded_trusted_coordinate": true,
-            "retryable": false
-        }],
-        "scheduling_outcome": {"mappings": [{
-            "outcome_key": "traced_k",
-            "effect": "no_designated_effect",
-            "terminal_pages": ["page_b"]
-        }]}
-    })
-}
+// A frame's top-left pixel names its page.
+const PAGES: [(&str, [u8; 3]); 2] = [("home", [0, 0, 255]), ("page_b", [255, 0, 0])];
 
-// The task file as the source declaration gate reads it: the one operation from `home` to
-// `page_b` whose click is `click`, with the members the gate requires of a task file.
-fn source_task(click: Value) -> Value {
+// The task file whose one operation from `home` to `page_b` has the click `click`, with the
+// members a task file requires in either form: the source declaration gate reads it with the
+// click as an author writes it (`box`), an assembled package holds it with the click compiled
+// (`box_rect`).
+fn task_file(click: Value) -> Value {
     json!({
         "schema_version": "0.9",
         "task_id": "task",
@@ -416,25 +381,72 @@ fn source_task(click: Value) -> Value {
     })
 }
 
-// Kernel admission of the package whose task is `task`, from its content table in memory.
-fn admit(task: &Value) -> Result<PreparedContainedTask, ContainedTaskError> {
-    let entries = [
+fn zip_entries(entries: &[(&str, Value)]) -> Vec<u8> {
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (path, value) in entries {
+        zip.start_file(*path, options).expect("zip entry");
+        serde_json::to_writer(&mut zip, value).expect("zip JSON");
+        zip.write_all(b"\n").expect("zip newline");
+    }
+    zip.finish().expect("finish zip").into_inner()
+}
+
+// The assembled package (control v2, operation schema 0.9) whose task file holds the compiled
+// click `click` (`task_file`), with the recognition pack and the page list of `home` and `page_b`.
+fn compiled_package(click: Value) -> Vec<u8> {
+    let targets = PAGES
+        .iter()
+        .map(|(page, color)| {
+            json!({
+                "type": "color",
+                "id": format!("page/{page}"),
+                "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "expected": color
+            })
+        })
+        .collect::<Vec<_>>();
+    let pages = PAGES
+        .iter()
+        .map(|(page, _)| {
+            json!({
+                "id": format!("neutral/{page}"),
+                "required": [format!("page/{page}")],
+                "optional": [],
+                "forbidden": []
+            })
+        })
+        .collect::<Vec<_>>();
+    zip_entries(&[
         ("control.json", control()),
         (
-            "resources/operations/resources.json",
-            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+            "resources/manifest.json",
+            json!({"schema_version": "0.3", "entry_task_id": "task"}),
         ),
-        ("resources/operations/task/task.json", task.clone()),
-    ]
-    .into_iter()
-    .map(|(path, value)| {
+        ("resources/operations/task/task.json", task_file(click)),
         (
-            path.to_owned(),
-            serde_json::to_vec_pretty(&value).expect("package JSON"),
-        )
-    })
-    .collect();
-    PreparedContainedTask::load_content_entries("t3-test", entries, None, admission_deadline())
+            "resources/recognition/neutral.test.pack.json",
+            json!({
+                "schema_version": "0.3",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 16, "height": 9},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": targets
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            json!({"schema_version": "0.3", "pages": pages}),
+        ),
+    ])
+}
+
+// Kernel admission of the assembled package whose compiled click is `click`: the package's task
+// file is read in its compiled form (a content table in memory is a source tree, which admission
+// compiles first, so it holds the click as an author writes it).
+fn admit(click: Value) -> Result<PreparedContainedTask, ContainedTaskError> {
+    PreparedContainedTask::load("neutral.instance", &compiled_package(click))
 }
 
 // The task file as an author writes it: the click's box is `box`.
@@ -463,9 +475,9 @@ fn source_bundle(task: Value) -> Bundle {
 #[test]
 fn t3_a_path_drag_outside_its_bounds_is_refused_at_admission() {
     let admitted = path_click((0, 0, 16, 9), 3, 7, 1_200, 80);
-    declaration_file_requests(&[source_bundle(source_task(source_form(&admitted)))])
+    declaration_file_requests(&[source_bundle(task_file(source_form(&admitted)))])
         .unwrap_or_else(|error| panic!("the source form is admitted: {error:?}"));
-    admit(&task(admitted.clone()))
+    admit(admitted.clone())
         .unwrap_or_else(|error| panic!("the compiled form is admitted: {error}"));
 
     for (case, click, member) in [
@@ -487,7 +499,7 @@ fn t3_a_path_drag_outside_its_bounds_is_refused_at_admission() {
     ] {
         let source = source_form(&click);
         let source_member = if member == "box_rect" { "box" } else { member };
-        let Err(refused) = declaration_file_requests(&[source_bundle(source_task(source))]) else {
+        let Err(refused) = declaration_file_requests(&[source_bundle(task_file(source))]) else {
             panic!("{case}: the source form is refused");
         };
         assert_eq!(refused.code, "resource_declaration_invalid", "{case}");
@@ -508,7 +520,7 @@ fn t3_a_path_drag_outside_its_bounds_is_refused_at_admission() {
             "{case}"
         );
 
-        let Err(refused) = admit(&task(click.clone())) else {
+        let Err(refused) = admit(click.clone()) else {
             panic!("{case}: the compiled form is refused at admission");
         };
         assert_eq!(

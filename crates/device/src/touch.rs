@@ -557,7 +557,7 @@ impl InputBackend for SelectedTouchBackend {
                 action.name()
             )));
         }
-        self.validate_action_points(action.name(), &action.points())?;
+        self.validate_action_points(action.name(), action.points())?;
         let started = Instant::now();
         match self.active.backend.segmented_swipe_prepared(witness, plan) {
             Ok(()) => Ok(()),
@@ -1096,7 +1096,7 @@ pub struct AdbShellInputBackend {
     connect_geometry: Option<AdbInputConnectGeometry>,
     /// Workflow #406 T3: the Android SDK level read at connect (`input_sdk_level`); none when
     /// the device's answer was not a level.
-    input_sdk_level: Option<u32>,
+    android_sdk_level: Option<u32>,
     connected: bool,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
@@ -1114,7 +1114,7 @@ impl std::fmt::Debug for AdbShellInputBackend {
             .field("serial", &self.target.label())
             .field("bounds", &self.bounds)
             .field("connect_geometry", &self.connect_geometry)
-            .field("input_sdk_level", &self.input_sdk_level)
+            .field("android_sdk_level", &self.android_sdk_level)
             .field("connected", &self.connected)
             .field("close_result", &self.close_result)
             .finish()
@@ -1132,7 +1132,7 @@ impl AdbShellInputBackend {
             serial,
             bounds: None,
             connect_geometry: None,
-            input_sdk_level: None,
+            android_sdk_level: None,
             connected: false,
             close_result: None,
         }
@@ -1269,10 +1269,10 @@ impl AdbShellInputBackend {
         &mut self,
         sdk_level: impl FnOnce() -> DeviceResult<String>,
     ) -> DeviceResult<()> {
-        self.input_sdk_level = None;
+        self.android_sdk_level = None;
         match sdk_level() {
             Ok(answer) => {
-                self.input_sdk_level = answer.trim().parse::<u32>().ok();
+                self.android_sdk_level = answer.trim().parse::<u32>().ok();
                 Ok(())
             }
             Err(error) => {
@@ -1584,7 +1584,7 @@ impl InputBackend for AdbShellInputBackend {
     /// Workflow #406 T3 (plan Q18): from Android SDK level 23 (`input motionevent`), read at
     /// connect.
     fn supports_segmented_swipe(&self) -> bool {
-        self.input_sdk_level
+        self.android_sdk_level
             .is_some_and(|level| level >= ADB_MOTIONEVENT_MIN_SDK_LEVEL)
     }
 
