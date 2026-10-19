@@ -64,7 +64,11 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         let session = client.begin_debug_session().unwrap();
         let request =
             ContainedObservationRequest::new(path.to_str().unwrap(), vec!["text".into()]).unwrap();
-        let result = session.observe_contained_page("node.a", request);
+        let result = session.observe_contained_page(
+            "node.a",
+            request,
+            actingcommand_contract::ObservationFramePlan::SINGLE,
+        );
         if mode >= 4 {
             let error = result.unwrap_err();
             assert_eq!(error.is_fatal(), mode == 5);

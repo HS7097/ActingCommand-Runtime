@@ -56,6 +56,9 @@ impl ObserveMarks {
 
 pub(super) struct CompletedReadonlyObservation {
     pub(super) observation: ReadonlyObservation,
+    /// #411 Lab L5: the sequence of the capture's `CaptureRequested` record, where an
+    /// observation transaction that starts with this frame begins.
+    pub(super) requested_sequence: u64,
     pub(super) terminal: PersistedEvent,
     pub(super) verified: TerminalEvent,
     pub(super) links: EventLinksDraft,
@@ -217,6 +220,37 @@ impl HostShared {
         )
     }
 
+    /// #411 Lab L5: one keyless observation transaction: `plan`'s earlier frames, then the
+    /// current frame, the plan's interval apart, each a read-only capture of its own (its own
+    /// capability and frame ID). The instance's admission lock is held only while each frame is
+    /// captured, never across a wait, because input takes the same lock. Answers the earlier
+    /// frames, oldest first, and the current frame.
+    pub(super) fn capture_readonly_transaction(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        plan: actingcommand_contract::ObservationFramePlan,
+    ) -> Result<
+        (
+            Vec<CompletedReadonlyObservation>,
+            CompletedReadonlyObservation,
+        ),
+        RequestFailure,
+    > {
+        let mut samples = Vec::with_capacity(plan.frames() - 1);
+        for _ in 1..plan.frames() {
+            samples.push(self.capture_readonly_observation(
+                request,
+                instance_alias,
+                instance_id,
+            )?);
+            self.kernel_pause(Duration::from_millis(plan.interval_ms()));
+        }
+        let current = self.capture_readonly_observation(request, instance_alias, instance_id)?;
+        Ok((samples, current))
+    }
+
     fn readonly_frame_admission_failure(
         &self,
         error: ArtifactStoreError,
@@ -281,14 +315,16 @@ impl HostShared {
         admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.require_business_capacity(links.clone())?;
-        self.append_event(
-            EventSeverity::Info,
-            EventSource::Device,
-            OriginModule::Capture,
-            EventActor::Runtime,
-            links.clone(),
-            CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
-        )?;
+        let requested_sequence = self
+            .append_event(
+                EventSeverity::Info,
+                EventSource::Device,
+                OriginModule::Capture,
+                EventActor::Runtime,
+                links.clone(),
+                CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
+            )?
+            .sequence();
         self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -560,6 +596,7 @@ impl HostShared {
             })?;
         Ok(CompletedReadonlyObservation {
             observation,
+            requested_sequence,
             terminal: event,
             verified,
             links,

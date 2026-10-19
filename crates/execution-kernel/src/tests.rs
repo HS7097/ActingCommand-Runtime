@@ -33,6 +33,9 @@ mod gate_390_navoffset;
 // targets never decide its outcome.
 mod gate_411_a21;
 
+// #411 Lab L5a (host key 120): an observation transaction's frames of different sizes fail it.
+mod gate_411_lab_l5;
+
 // #411 Lab L2 (exec key 90): the drive reader and the online observation take a segmented drag.
 mod gate_lab_l2;
 

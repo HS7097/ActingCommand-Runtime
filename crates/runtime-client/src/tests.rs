@@ -12,6 +12,8 @@ mod gate_381a;
 mod gate_381b;
 // Workflow #391 item 3 (MCP-391c): an instance's recent runs are read by run.
 mod gate_391c;
+// #411 Lab L5a (host key 120): the receipt waits allow for an observation's transaction.
+mod gate_411_lab_l5;
 // Workflow #389 U-2: each connection binds its channel; an actingd before U-2 leaves it unbound.
 mod gate_389_u2;
 // Workflow #378 A2a: the client error text names registered spellings (brief-a2a.md T5).
