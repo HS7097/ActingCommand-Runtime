@@ -1095,6 +1095,8 @@ crate::outcome_codes! {
         TargetNotEvaluated => "target_not_evaluated": error / none,
         TargetEvaluationAmbiguous => "target_evaluation_ambiguous": error / none,
         InvalidFrameGeometry => "invalid_frame_geometry": error / none,
+        // #411 Lab L2: an element whose click is a segmented drag.
+        GestureNotProjectable => "gesture_not_projectable": error / none,
     }
 }
 

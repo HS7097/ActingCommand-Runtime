@@ -115,7 +115,12 @@ recognition basis, availability, resolvability (`actionable`, not authorization)
 blocking reason, declared safety and resolved geometry. Unmatched targets have
 no guessed geometry. A declared/resolved action whose geometry is outside the
 current frame remains readable with `blocked_reason=invalid_frame_geometry`,
-`actionable=false` and null input. Unscoped controls remain explicitly unrecognized/unknown.
+`actionable=false` and null input. #411 Lab L2: an action whose click is a segmented drag
+(`single_touch_drag_with_vertical_brake_v1`), a gesture the input's `tap` and `drag` cannot
+describe, is listed from the confirmed page declaration (`recognition_basis` is
+`matched_page_declaration`) with `blocked_reason=gesture_not_projectable`, `actionable=false`
+and null input; a Lab operation on it is `lab_element_unavailable`, and a package run performs
+it. Unscoped controls remain explicitly unrecognized/unknown.
 Missing required/optional/any-of targets retain group information; a forbidden
 target's absence is not a missing element. Static geometry comes from the
 confirmed page declaration. Offline action target resolution reuses the existing

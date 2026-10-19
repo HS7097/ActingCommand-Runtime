@@ -1765,6 +1765,27 @@ the text of `lab_ocr_unavailable` and `lab_ocr_vision_unconfigured` (entries, no
 |---|---|---|---|---|---|
 | A12-1 | the configuration the offline tools' OCR loader reads on a single-location root | rule (no shape change) | A12 | A12 (exec 87) | an A/B installation's selected configuration and a refused installation are unchanged; a single-location root's configuration that is missing, unreadable, no regular file or over 1 MiB is `config_read_failed`, one that does not decode `config_decode_failed`, each the cause of `lab_ocr_unavailable` and never `lab_ocr_vision_unconfigured` (coordinator decision 6 of 2026-10-19); outside both an installation and a single-location root the cause stays `lab_ocr_vision_unconfigured` |
 
+### 1.104 Slice Lab L2 (v0.12.x): the Lab loads every click kind the Runtime runs; offline `observe` projects page-set operations (#411 Lab L2, with A13's A part)
+
+Alice's principle of 2026-10-19 (「Lab的资源制作应当包含所有可用后端的识别以及触控」): a package the
+Runtime runs is a package the Lab can load. Both navigation readers read the segmented drag
+`single_touch_drag_with_vertical_brake_v1`, so a package holding one is no longer refused by the
+online observation (and so by `observe --capture` and `do --capture`) or by actinglab's
+`observe`, `do`, `ensure` and `wait`; the Lab lists the gesture and does not perform it. A13's A
+part: offline `observe` puts an operation whose `to` is a page set into `observation.elements`,
+as L2-7 (§1.74) and the online observation already do. [resource-declarations.md](resource-declarations.md)
+(the navigation paragraphs) and [page-projection.md](page-projection.md) ("Shared input and
+output") are the contract. One new outcome code; no persisted ledger shape, no wire or record
+shape, no configuration key and no interface revision of §6 changes. Executing the gesture from
+the Lab (B-1, B-3) and `input` on `actions[]` page-set entries (A13's B part) are not in this slice.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LL2-1 | the click `{"kind": "single_touch_drag_with_vertical_brake_v1", "from_rect", "corner_rect", "horizontal_duration_ms", "corner_hold_ms", "brake_distance_px", "brake_duration_ms"}` of a navigation edge (to a page or a page set) or a page operation, read by the kernel's drive reader and actinglab's navigation reader | new reading rule of an existing resource format (`navigation`, schema `0.6` unchanged) (exec 90) | Lab L2 | — (source compilation writes it) | its shape as pack containment checks it: exactly these members, two rectangles of integer `x`, `y`, `width`, `height`, an integer `brake_distance_px`, unsigned durations; another form keeps the reader's refusal (`drive_plan_invalid`, actinglab's usage refusal, `observation_resources_invalid`); was `unsupported navigation click kind`; no route of the drive graph or of actinglab's navigation tools passes it; as a destructive page operation it covers `from_rect`, `corner_rect` and `corner_rect` moved up by `brake_distance_px` |
+| LL2-2 | `gesture_not_projectable` (`error`, `ladder_class` `none`, `since` 0.12.3, pending), a `blocked_reason` of the page projection | new outcome code, new value of an existing member (page projection shape unchanged) (exec 90) | Lab L2 | Lab L2 | the element of a segmented drag in the online observation and actinglab `observe`: `recognized: true`, `recognition_basis: matched_page_declaration`, `actionable: false`, `input: null`; `do <element-id>` on it is `lab_element_unavailable` as for any element that is not actionable; the online observation checks its two boxes against the coordinate space, as a drag's; its class is that of its siblings (a projection reason, row 7) |
+| LL2-3 | offline `observe`'s `actions` entry of an edge whose click is a segmented drag | new value of an existing member (`input: null`) | Lab L2 | Lab L2 | `{id, from_page, to_page, input: null, source}`, the edge entry's members; every other entry unchanged |
+| A13-1 | offline `observe`'s `observation.elements` include each operation from the observed page whose `to` is a page set | rule (no shape change) (exec 90) | Lab L2 | Lab L2 | from the generated navigation row (`to_pages`, its compiled `click` and `source`), resolved as an edge is: a `point` click a tap of its 1×1 box, a `rect` or `specific_rect` click its box and centre, a `target` click on the frame (`target_not_matched` with no input when it fails), geometry outside the frame `invalid_frame_geometry`; a segmented drag as LL2-2; the online observation already projects them; `actions` is unchanged; the projection's limits apply as to any element, so Min may keep a different element for such packages |
+
 ### 1.105 Slice A16 (v0.12.1): an entry recovery package that cannot end on the entry is refused before it runs (#411 A16)
 
 NAV-3b's rule (A1) is unchanged: an entry recovery package must end on a page of the required

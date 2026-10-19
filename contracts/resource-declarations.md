@@ -101,6 +101,26 @@ graph and actinglab's navigation tools leave it out), since its click does not d
 comes. A `long_press` navigation click is read as a drag that does not move (one point held for
 its `duration_ms`).
 
+#411 Lab L2 (the Lab loads every click kind the Runtime runs): both navigation readers, the
+kernel's drive reader and actinglab's, read a segmented drag, the click
+`single_touch_drag_with_vertical_brake_v1` in the form source compilation writes it,
+`{"kind", "from_rect", "corner_rect", "horizontal_duration_ms", "corner_hold_ms",
+"brake_distance_px", "brake_duration_ms"}`, in an edge to a page, an edge to a page set and a
+page operation. They check its shape as pack containment does (exactly these members, the two
+rectangles of integer `x`, `y`, `width` and `height`, an integer `brake_distance_px`, unsigned
+durations) and refuse another form with their existing refusal (`drive_plan_invalid` in the
+kernel, actinglab's usage refusal, `observation_resources_invalid` for the online observation's
+admission). A package holding one is admitted by the online observation (the carrier package of
+`observe --capture` and `do --capture`) and by actinglab's `observe`, `do`, `ensure` and `wait`
+as a package holding a plain `drag` is; the online observation checks that its two boxes lie in
+the coordinate space, as it checks a drag's. The Lab does not perform the gesture: its page
+projection element has no input ([page-projection.md](page-projection.md),
+`gesture_not_projectable`), so `do` on it is `lab_element_unavailable`; offline `observe` lists
+its edge in `actions` with `input: null`; and no route passes it, as none passes a page set. As a
+destructive page operation it covers the boxes its touch stops in: `from_rect`, `corner_rect`, and
+`corner_rect` moved up by `brake_distance_px`, where the brake releases the touch. A package run
+performs it as before.
+
 Workflow #390 lpbox (coordinator ruling 6 of wave 16, from Alice's rule of 10-09 that pack taps
 use click boxes, never fixed points): a `long_press` (alias `long_tap`) click, in a task
 operation and in a navigation edge, is either a click box `{"kind", "x", "y", "width",

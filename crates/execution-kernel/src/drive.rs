@@ -157,6 +157,64 @@ impl DriveSemanticInput {
     }
 }
 
+/// #411 Lab L2: the click kind of a segmented drag, the gesture the kernel runs as
+/// `InputAction::SingleTouchDragWithVerticalBrakeV1`.
+const SEGMENTED_DRAG_KIND: &str = "single_touch_drag_with_vertical_brake_v1";
+
+/// #411 Lab L2: the members of a segmented drag click in the form source compilation writes it
+/// into the navigation (pack-containment `source/declarations.rs`, the canonical click).
+const SEGMENTED_DRAG_FIELDS: [&str; 7] = [
+    "kind",
+    "from_rect",
+    "corner_rect",
+    "horizontal_duration_ms",
+    "corner_hold_ms",
+    "brake_distance_px",
+    "brake_duration_ms",
+];
+
+/// #411 Lab L2: a `single_touch_drag_with_vertical_brake_v1` click as the navigation readers take
+/// it. The Lab does not perform it (only a package run does), so the reader keeps the boxes its
+/// touch stops in and checks its durations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriveSegmentedDrag {
+    pub from_rect: PackRect,
+    pub corner_rect: PackRect,
+    pub brake_distance_px: i32,
+}
+
+impl DriveSegmentedDrag {
+    /// The boxes its touch stops in, known without a frame: the press, the corner it holds and
+    /// the corner moved up by `brake_distance_px`, where the brake releases the touch (the
+    /// kernel's segmented swipe ends at the corner's `y` minus the brake distance).
+    pub fn boxes(&self) -> Result<Vec<PackRect>, DriveDecisionError> {
+        let brake_y = self
+            .corner_rect
+            .y
+            .checked_sub(self.brake_distance_px)
+            .ok_or_else(|| DriveDecisionError::invalid("segmented drag brake end overflow"))?;
+        Ok(vec![
+            self.from_rect,
+            self.corner_rect,
+            PackRect {
+                y: brake_y,
+                ..self.corner_rect
+            },
+        ])
+    }
+}
+
+/// #411 Lab L2: a navigation click as the readers take it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriveNavigationClick {
+    /// A tap, a plain drag or a click that follows a target: the page projection gives its input
+    /// and a route presses it.
+    Input(DriveSemanticInput),
+    /// A segmented drag: the page projection lists its element without an input
+    /// (`gesture_not_projectable`) and no route passes it.
+    SegmentedDrag(DriveSegmentedDrag),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriveNavigationEdge {
     id: String,
@@ -196,11 +254,11 @@ struct DestructiveRegion {
 
 /// Workflow #373 NAV-5 (wave-17 ruling 21): what a destructive page operation's click covers,
 /// read in every form a navigation click takes (`point`, `rect`, `target`, `offset`, `drag`,
-/// `long_press`); a `point` or `rect` click alone was read before.
+/// `long_press`; #411 Lab L2: a segmented drag); a `point` or `rect` click alone was read before.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DestructiveArea {
     /// The boxes the click presses, known without a frame: a tap's rectangle, a long press's
-    /// box, a drag's two boxes.
+    /// box, a drag's two boxes, a segmented drag's three ([`DriveSegmentedDrag::boxes`]).
     Boxes(Vec<PackRect>),
     /// A click that follows a target: the box the target matches on the frame a route is
     /// resolved on, or the box `offset` gives from its top-left corner ([`drive_offset_rect`]).
@@ -237,7 +295,8 @@ impl DriveNavigationGraph {
             .and_then(Value::as_str)
             .map(str::to_string);
         // Workflow #390 LAB-2: an edge of an operation whose `to` is a page set (`to_pages`) has
-        // no single destination, so no route passes it.
+        // no single destination, so no route passes it. #411 Lab L2: nor does an edge whose
+        // click is a segmented drag, which is read and checked.
         let edges = value
             .get("navigation")
             .and_then(Value::as_array)
@@ -245,6 +304,7 @@ impl DriveNavigationGraph {
             .iter()
             .filter(|edge| edge.get("to_pages").is_none())
             .map(parse_navigation_edge)
+            .filter_map(Result::transpose)
             .collect::<Result<Vec<_>, _>>()?;
         let destructive_regions = value
             .get("destructive_actions")
@@ -534,7 +594,14 @@ fn parse_destructive_area(click: &Value) -> Result<DestructiveArea, DriveDecisio
             click,
         )?]));
     }
-    Ok(match parse_navigation_input(click)? {
+    let input = match parse_navigation_click(click)? {
+        // #411 Lab L2: the boxes a segmented drag's touch stops in.
+        DriveNavigationClick::SegmentedDrag(drag) => {
+            return Ok(DestructiveArea::Boxes(drag.boxes()?));
+        }
+        DriveNavigationClick::Input(input) => input,
+    };
+    Ok(match input {
         DriveSemanticInput::Tap { rect, .. } => DestructiveArea::Boxes(vec![rect]),
         DriveSemanticInput::Drag {
             from_rect, to_rect, ..
@@ -550,17 +617,88 @@ fn parse_destructive_area(click: &Value) -> Result<DestructiveArea, DriveDecisio
     })
 }
 
-fn parse_navigation_edge(value: &Value) -> Result<DriveNavigationEdge, DriveDecisionError> {
-    Ok(DriveNavigationEdge {
-        id: required_string_field(value, "id")?.to_string(),
-        from_page: required_string_field(value, "from_page")?.to_string(),
-        to_page: required_string_field(value, "to_page")?.to_string(),
-        input: parse_navigation_input(required_value_field(value, "click")?)?,
+/// A navigation row with one destination as a route edge; #411 Lab L2: `None` when its click is
+/// a segmented drag, which the reader checks and no route passes.
+fn parse_navigation_edge(value: &Value) -> Result<Option<DriveNavigationEdge>, DriveDecisionError> {
+    let id = required_string_field(value, "id")?.to_string();
+    let from_page = required_string_field(value, "from_page")?.to_string();
+    let to_page = required_string_field(value, "to_page")?.to_string();
+    let DriveNavigationClick::Input(input) =
+        parse_navigation_click(required_value_field(value, "click")?)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(DriveNavigationEdge {
+        id,
+        from_page,
+        to_page,
+        input,
         source: value
             .get("source")
             .and_then(Value::as_str)
             .map(str::to_string),
+    }))
+}
+
+/// #411 Lab L2: a navigation click in every kind a navigation row takes: a segmented drag
+/// (`single_touch_drag_with_vertical_brake_v1`) besides every input [`parse_navigation_input`]
+/// reads.
+pub(crate) fn parse_navigation_click(
+    value: &Value,
+) -> Result<DriveNavigationClick, DriveDecisionError> {
+    if value.get("kind").and_then(Value::as_str) == Some(SEGMENTED_DRAG_KIND) {
+        return parse_segmented_drag(value).map(DriveNavigationClick::SegmentedDrag);
+    }
+    parse_navigation_input(value).map(DriveNavigationClick::Input)
+}
+
+/// #411 Lab L2: a segmented drag in the shape pack containment admits: exactly its seven
+/// members, `from_rect` and `corner_rect` rectangles of four integers, an integer
+/// `brake_distance_px` and unsigned `horizontal_duration_ms`, `corner_hold_ms` and
+/// `brake_duration_ms`.
+fn parse_segmented_drag(value: &Value) -> Result<DriveSegmentedDrag, DriveDecisionError> {
+    reject_unknown_members(value, "segmented drag click", &SEGMENTED_DRAG_FIELDS)?;
+    for name in [
+        "horizontal_duration_ms",
+        "corner_hold_ms",
+        "brake_duration_ms",
+    ] {
+        if required_value_field(value, name)?.as_u64().is_none() {
+            return Err(DriveDecisionError::invalid(format!(
+                "field '{name}' must be an unsigned integer"
+            )));
+        }
+    }
+    let rect = |name: &str| -> Result<PackRect, DriveDecisionError> {
+        let rect = required_value_field(value, name)?;
+        reject_unknown_members(rect, name, &["x", "y", "width", "height"])?;
+        parse_navigation_rect(rect)
+    };
+    Ok(DriveSegmentedDrag {
+        from_rect: rect("from_rect")?,
+        corner_rect: rect("corner_rect")?,
+        brake_distance_px: required_i32_value(value, "brake_distance_px")?,
     })
+}
+
+/// #411 Lab L2: `value` is an object whose members are all in `members`.
+fn reject_unknown_members(
+    value: &Value,
+    label: &str,
+    members: &[&str],
+) -> Result<(), DriveDecisionError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| DriveDecisionError::invalid(format!("{label} must be an object")))?;
+    if let Some(member) = object
+        .keys()
+        .find(|member| !members.contains(&member.as_str()))
+    {
+        return Err(DriveDecisionError::invalid(format!(
+            "{label} has unknown member '{member}'"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_navigation_input(

@@ -33,6 +33,9 @@ mod gate_390_navoffset;
 // targets never decide its outcome.
 mod gate_411_a21;
 
+// #411 Lab L2 (exec key 90): the drive reader and the online observation take a segmented drag.
+mod gate_lab_l2;
+
 // Test plan v2.2 E-1 G8 (exec key 13): the failure-frame comparison.
 mod gate_e1_failure_frames;
 

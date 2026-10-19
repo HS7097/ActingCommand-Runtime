@@ -405,6 +405,77 @@ pub(crate) enum SemanticInput {
     },
 }
 
+/// #411 Lab L2: the click kind of a segmented drag, the gesture the kernel runs as
+/// `InputAction::SingleTouchDragWithVerticalBrakeV1`.
+const SEGMENTED_DRAG_KIND: &str = "single_touch_drag_with_vertical_brake_v1";
+
+/// #411 Lab L2: the members of a segmented drag click in the form source compilation writes it
+/// into the navigation (pack-containment `source/declarations.rs`, the canonical click).
+const SEGMENTED_DRAG_FIELDS: [&str; 7] = [
+    "kind",
+    "from_rect",
+    "corner_rect",
+    "horizontal_duration_ms",
+    "corner_hold_ms",
+    "brake_distance_px",
+    "brake_duration_ms",
+];
+
+/// #411 Lab L2: a `single_touch_drag_with_vertical_brake_v1` click as actinglab's navigation
+/// reader takes it, as the kernel's drive reader does. The Lab does not perform it (only a
+/// package run does), so the reader keeps the boxes its touch stops in and checks its durations.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SegmentedDrag {
+    pub(crate) from_rect: PackRect,
+    pub(crate) corner_rect: PackRect,
+    pub(crate) brake_distance_px: i32,
+}
+
+impl SegmentedDrag {
+    /// The boxes its touch stops in, known without a frame: the press, the corner it holds and
+    /// the corner moved up by `brake_distance_px`, where the brake releases the touch.
+    fn boxes(&self) -> CliOutcome<Vec<PackRect>> {
+        let brake_y = self
+            .corner_rect
+            .y
+            .checked_sub(self.brake_distance_px)
+            .ok_or_else(|| CliError::usage("segmented drag brake end overflow"))?;
+        Ok(vec![
+            self.from_rect,
+            self.corner_rect,
+            PackRect {
+                y: brake_y,
+                ..self.corner_rect
+            },
+        ])
+    }
+}
+
+/// #411 Lab L2: a navigation click as the reader takes it.
+#[derive(Debug, Clone)]
+pub(crate) enum NavigationClick {
+    /// A tap, a plain drag or a click that follows a target: the page projection gives its input
+    /// and a route presses it.
+    Input(SemanticInput),
+    /// A segmented drag: the page projection lists its element without an input
+    /// (`gesture_not_projectable`) and no route passes it.
+    SegmentedDrag(SegmentedDrag),
+}
+
+/// #411 Lab L2: a row of the generated navigation, an operation that changes the page: its `to`
+/// is one page (`to_page`) or, Workflow #390 LAB-2, a page set (`to_pages`), and its click may be
+/// a segmented drag. Every row is an element of the page projection; a route edge is a row with
+/// one page whose click is an input ([`parse_navigation_edge`]).
+#[derive(Debug, Clone)]
+pub(crate) struct NavigationRow {
+    pub(crate) id: String,
+    pub(crate) from_page: String,
+    /// The one page it leads to; `None` for a page set.
+    pub(crate) to_page: Option<String>,
+    pub(crate) click: NavigationClick,
+    pub(crate) source: Option<String>,
+}
+
 #[derive(Debug)]
 pub(crate) struct NavigationGraph {
     game: Option<String>,
@@ -429,12 +500,12 @@ pub(crate) struct DestructiveClick {
 }
 
 /// Workflow #373 NAV-5 (wave-17 ruling 21): what a destructive page operation's click covers,
-/// read in every form a navigation click takes; a `point` or `rect` click alone was read
-/// before.
+/// read in every form a navigation click takes (#411 Lab L2: a segmented drag too); a `point` or
+/// `rect` click alone was read before.
 #[derive(Debug, Clone)]
 pub(crate) enum DestructiveArea {
     /// The boxes the click presses, known without a frame: a tap's rectangle, a long press's
-    /// box, a drag's two boxes.
+    /// box, a drag's two boxes, a segmented drag's three ([`SegmentedDrag::boxes`]).
     Boxes(Vec<PackRect>),
     /// A click that follows a target: the box its target matches on the frame a route is
     /// resolved on (plus `offset` from its top-left corner, [`target_offset_rect`]).
@@ -635,7 +706,8 @@ pub(crate) fn parse_navigation_graph_value(value: &Value) -> CliOutcome<Navigati
         .and_then(Value::as_str)
         .map(str::to_string);
     // Workflow #390 LAB-2: an edge whose operation may reach several pages (`to_pages`) has no
-    // single destination, so no route passes it.
+    // single destination, so no route passes it. #411 Lab L2: nor does an edge whose click is a
+    // segmented drag, which is read and checked.
     let edges = value
         .get("navigation")
         .and_then(Value::as_array)
@@ -643,6 +715,7 @@ pub(crate) fn parse_navigation_graph_value(value: &Value) -> CliOutcome<Navigati
         .iter()
         .filter(|edge| edge.get("to_pages").is_none())
         .map(parse_navigation_edge)
+        .filter_map(Result::transpose)
         .collect::<CliOutcome<Vec<_>>>()?;
     let destructive_clicks = value
         .get("destructive_actions")
@@ -729,7 +802,12 @@ fn parse_destructive_area(click: &Value) -> CliOutcome<DestructiveArea> {
             click,
         )?]));
     }
-    Ok(match parse_navigation_input(click)? {
+    let input = match parse_navigation_click(click)? {
+        // #411 Lab L2: the boxes a segmented drag's touch stops in.
+        NavigationClick::SegmentedDrag(drag) => return Ok(DestructiveArea::Boxes(drag.boxes()?)),
+        NavigationClick::Input(input) => input,
+    };
+    Ok(match input {
         SemanticInput::Tap { rect, .. } => DestructiveArea::Boxes(vec![rect]),
         SemanticInput::Drag {
             from_rect, to_rect, ..
@@ -762,17 +840,93 @@ fn navigation_path(
         .join(format!("{game}.{server}.navigation.json")))
 }
 
-pub(crate) fn parse_navigation_edge(value: &Value) -> CliOutcome<NavigationEdge> {
-    Ok(NavigationEdge {
+/// #411 Lab L2: a row of the generated navigation with its click; a row names `to_pages` or
+/// `to_page`.
+pub(crate) fn parse_navigation_row(value: &Value) -> CliOutcome<NavigationRow> {
+    Ok(NavigationRow {
         id: required_string_field(value, "id")?.to_string(),
         from_page: required_string_field(value, "from_page")?.to_string(),
-        to_page: required_string_field(value, "to_page")?.to_string(),
-        input: parse_navigation_input(required_value_field(value, "click")?)?,
+        to_page: match value.get("to_pages") {
+            Some(_) => None,
+            None => Some(required_string_field(value, "to_page")?.to_string()),
+        },
+        click: parse_navigation_click(required_value_field(value, "click")?)?,
         source: value
             .get("source")
             .and_then(Value::as_str)
             .map(str::to_string),
     })
+}
+
+/// A navigation row with one destination as a route edge; #411 Lab L2: `None` when its click is
+/// a segmented drag, which the reader checks and no route passes.
+fn parse_navigation_edge(value: &Value) -> CliOutcome<Option<NavigationEdge>> {
+    let row = parse_navigation_row(value)?;
+    let (Some(to_page), NavigationClick::Input(input)) = (row.to_page, row.click) else {
+        return Ok(None);
+    };
+    Ok(Some(NavigationEdge {
+        id: row.id,
+        from_page: row.from_page,
+        to_page,
+        input,
+        source: row.source,
+    }))
+}
+
+/// #411 Lab L2: a navigation click in every kind a navigation row takes: a segmented drag
+/// (`single_touch_drag_with_vertical_brake_v1`) besides every input [`parse_navigation_input`]
+/// reads.
+pub(crate) fn parse_navigation_click(value: &Value) -> CliOutcome<NavigationClick> {
+    if value.get("kind").and_then(Value::as_str) == Some(SEGMENTED_DRAG_KIND) {
+        return parse_segmented_drag(value).map(NavigationClick::SegmentedDrag);
+    }
+    parse_navigation_input(value).map(NavigationClick::Input)
+}
+
+/// #411 Lab L2: a segmented drag in the shape pack containment admits: exactly its seven
+/// members, `from_rect` and `corner_rect` rectangles of four integers, an integer
+/// `brake_distance_px` and unsigned `horizontal_duration_ms`, `corner_hold_ms` and
+/// `brake_duration_ms`.
+fn parse_segmented_drag(value: &Value) -> CliOutcome<SegmentedDrag> {
+    reject_unknown_members(value, "segmented drag click", &SEGMENTED_DRAG_FIELDS)?;
+    for name in [
+        "horizontal_duration_ms",
+        "corner_hold_ms",
+        "brake_duration_ms",
+    ] {
+        if required_value_field(value, name)?.as_u64().is_none() {
+            return Err(CliError::usage(format!(
+                "field '{name}' must be an unsigned integer"
+            )));
+        }
+    }
+    let rect = |name: &str| -> CliOutcome<PackRect> {
+        let rect = required_value_field(value, name)?;
+        reject_unknown_members(rect, name, &["x", "y", "width", "height"])?;
+        parse_navigation_rect(rect)
+    };
+    Ok(SegmentedDrag {
+        from_rect: rect("from_rect")?,
+        corner_rect: rect("corner_rect")?,
+        brake_distance_px: required_i32_value(value, "brake_distance_px")?,
+    })
+}
+
+/// #411 Lab L2: `value` is an object whose members are all in `members`.
+fn reject_unknown_members(value: &Value, label: &str, members: &[&str]) -> CliOutcome<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| CliError::usage(format!("{label} must be an object")))?;
+    if let Some(member) = object
+        .keys()
+        .find(|member| !members.contains(&member.as_str()))
+    {
+        return Err(CliError::usage(format!(
+            "{label} has unknown member '{member}'"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput> {

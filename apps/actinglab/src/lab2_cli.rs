@@ -120,10 +120,14 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     // Workflow #308 SEL-L6a (FCM T-03): the page's operations with several destinations follow
     // its navigation edges, with every page they may reach.
     let actions = view
-        .edges
+        .navigation
         .iter()
-        .filter(|edge| outcome.matched && edge.from_page == outcome.page)
-        .map(navigation_edge_json)
+        .filter(|row| outcome.matched && row.from_page == outcome.page)
+        .filter_map(|row| {
+            row.to_page
+                .as_deref()
+                .map(|to_page| navigation_action_json(row, to_page))
+        })
         .chain(
             view.multi_destination
                 .iter()
@@ -214,6 +218,22 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         payload["preview"] = frame::scene_preview(&loaded_scene.scene, loaded_scene.png.as_deref());
     }
     observation::project(payload, observation, &flags, global.verbose)
+}
+
+/// An edge of offline `observe`'s `actions`, with the members of `navigation_edge_json`;
+/// #411 Lab L2: a segmented drag has no input the Lab gives (`input` null), as its projection
+/// element has none.
+fn navigation_action_json(row: &NavigationRow, to_page: &str) -> Value {
+    json!({
+        "id": row.id,
+        "from_page": row.from_page,
+        "to_page": to_page,
+        "input": match &row.click {
+            NavigationClick::Input(input) => semantic_input_json(input),
+            NavigationClick::SegmentedDrag(_) => Value::Null,
+        },
+        "source": row.source
+    })
 }
 
 fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
