@@ -483,7 +483,12 @@ home entry preflight returns its first check's error; every later failure, the o
 included, ends with the one `FailClosed`. When every layer passed,
 `EntryTargetDisposition { Started }` is written, then the dependent package's `PackageAdmitted`,
 and the package runs with its step indices after the prerequisite packages' steps; on success
-`executed_steps` adds the prerequisite packages' steps. Its own first step (a page-graph
+`executed_steps` adds the prerequisite packages' steps. The run's scheduling outcome is still
+judged on the dependent package's own records (Workflow #411 A23): on its own last dispatched
+step's `StepFinished` when it dispatched one, and, when it dispatched none (its entry already
+showed its terminal page, or a zero-input fields task), on its last recognition, as for a run
+without a gate. A page that a prerequisite, return-home, navigation or interrupt-handler layer's
+step finished on is never compared with its terminal pages. Its own first step (a page-graph
 package's entry, which then starts the stage of the page that passed) is awaited again as above
 and normally passes at once; a page-graph package's own check records its `EntryRecognition`
 alone, the gate having recorded the decision. The host deadline still ends the run with `contained_task_deadline_exceeded` (or
@@ -728,7 +733,7 @@ linear run is read by older builds.
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait` (also the sleeps of a settle), `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
 | End | `Finalizing`, `TerminalCommitted` | the final page is the target page; `executed_steps` the operations dispatched, on success and on failure (the operation count when the package has no optional step) |
 | A failure with a kernel detail | a runtime lifecycle failure record (`runtime.failed`) after the terminal, naming it, at the terminal's severity | the detail as its native detail ("Failure detail" above) |
-| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the last dispatched operation, which names the target page | unchanged |
+| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the run's own last dispatched operation (never another layer's, Workflow #411 A23), which names the target page | unchanged |
 
 Candidate pages are never duplicated, since the admission rules keep an operation's own page,
 its intermediate page, its destination and the candidates of a run distinct. Phase evidence is

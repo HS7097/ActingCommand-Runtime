@@ -247,6 +247,9 @@ mod gate_398_rd4;
 mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
+// #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
+// prerequisite layer is judged on its own recognition.
+mod gate_411_a23;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;

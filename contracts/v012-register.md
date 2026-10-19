@@ -1947,6 +1947,19 @@ ledger shape, no wire, key or configuration change; the request shape is unchang
 |---|---|---|---|---|---|
 | A22-1 | `contained_task_recovery_binding_unused` (`error`, `ladder_class` `declaration_error`, `since` 0.12.3, pending) with `package_id` (required) at the new location `check_recovery_binding`, `invalid_request` (MCP class `usage`), receipt `Denied`, native detail `reason=entry_not_checked` or `reason=prerequisite_gate` | new outcome code and location, an earlier refusal (host 117) | A22 | A22 | a direct run (`run_contained_task`: CLI and console task-run, MCP `ac_run_pack`) that binds a recovery package is refused after its prerequisite chain is resolved and before any record, claim or lease when neither (a) its home entry can use the binding (empty chain, required entry pages, not a zero-step package with post-admission reading) nor (b) a ladder after its failed end can (`recovery_ladder.rules.direct_runs = trigger`, the instance's stuck recovery on, a physical instance; the configuration in effect); it writes no `task.*` record, takes no lease, sends no input and starts no ladder; `reason=prerequisite_gate` when the chain is not empty, else `entry_not_checked`; a request without a binding, a binding (a) or (b) can use, scheduled runs, startup packages, ladder rungs and Lab runs are unchanged; the MCP `ac_run_pack` description and its `recovery_package` schema text say so (no argument, member or class change) |
 
+### 1.125 Slice A23 (v0.12.x): a run whose own package dispatched no step after other layers is judged on its own recognition (#411 A23)
+
+A23: the scheduling disposition chooses its final-page rule by the run's own package's
+dispatched steps, not by the run's total; a run that dispatched none after other layers is
+judged on its last recognition. No persisted ledger shape, no code, no wire, key or
+configuration change; `executed_steps` is unchanged. [linear-steps.md](linear-steps.md) (the
+prerequisite gate and the Ledger table's scheduling outcome row) and
+[ocr-fields.md](ocr-fields.md) (zero-input fields tasks) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A23-1 | the terminal's `scheduling_disposition` (`task.completed`) after a prerequisite, return-home, navigation, entry recovery or interrupt-handler layer | rule (no shape change) (host 118) | A23 | A23 | the run's own package's dispatched steps choose the rule: with one or more, the last attempt's `StepFinished` of step `executed_steps - 1` (the package's own last step) must name the final page, as before; with none, the last `RecognitionCompleted` with a matched page must match it, whatever steps the other layers ran; a layer's page is never compared with the run's terminal pages; `executed_steps` in `TerminalCommitted`, the receipt and the run status stays the run's total; the effect bound, the designated-effect counts, the mapping choice and every outcome code are unchanged; a run with no layer is judged as before |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
