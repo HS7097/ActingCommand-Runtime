@@ -670,7 +670,7 @@ impl PolicyControlState {
             observed_at_unix_ms,
             runtime_ms,
         } = timing;
-        let compared_ms = budget_elapsed_ms.unwrap_or(runtime_ms);
+        let compared_ms = budget_elapsed_ms.map_or(runtime_ms, |_budget| runtime_ms);
         let (task, _) = task_and_profile(catalog, intent)?;
         // Only a recoverable failure of a task that is not sensitive settles by a condition: its
         // record continues, and a sensitive or severe failure pauses (register S1).

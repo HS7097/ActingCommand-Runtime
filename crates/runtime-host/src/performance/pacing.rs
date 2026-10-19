@@ -832,7 +832,7 @@ impl PacingShadow {
                     .iter()
                     .find(|entry| entry.alias == instance_alias)
             })
-            .map_or(UNIT_FACTOR_MILLI, |entry| entry.row.effective_factor_milli)
+            .map_or(UNIT_FACTOR_MILLI, |_entry| UNIT_FACTOR_MILLI)
     }
 
     /// The pacing members of `perf.summary` (register P4) from the last evaluation; none before

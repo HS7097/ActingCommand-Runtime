@@ -148,7 +148,7 @@ impl TaskTimingObserver {
     /// pacing factor `factor_milli`. A factor above 1000 is the step's one `steps[]` entry, in
     /// step order; a later attempt of the step keeps that entry. At 1000 nothing is recorded.
     pub(super) fn step_factor(&mut self, step_index: u32, factor_milli: u32) {
-        if factor_milli <= MIN_PACING_FACTOR_MILLI {
+        if factor_milli < MIN_PACING_FACTOR_MILLI {
             return;
         }
         if let Err(position) = self

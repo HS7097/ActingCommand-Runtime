@@ -2314,7 +2314,9 @@ impl RuntimeContainedTask<'_> {
         let Some(reason) = self.control.cancellation_reason(
             self.host
                 .monotonic_ms()
-                .map_err(RequestFailure::poison_without_terminal)?,
+                .map_err(RequestFailure::poison_without_terminal)?
+                .saturating_mul(1_000)
+                / u64::from(self.pacing.factor_milli.max(1_000)),
         ) else {
             return Ok(());
         };
