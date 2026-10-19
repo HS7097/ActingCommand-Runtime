@@ -29,7 +29,7 @@ pub const LADDER_CLASS_VOCABULARY: &str = "ladder_class";
 /// `0.12.Z` finals (Alice, 2026-10-19), and the coordinator's decision of that day moves
 /// model-378 §5.3's "Settlement timing" from v0.12.1 to v0.13.0: a final of the 0.12 series may
 /// carry pending entries, and from v0.13.0 on the release gate fails while any entry is pending.
-pub const SETTLED_FROM: (u64, u64, u64) = (0, 13, 0);
+pub const SETTLED_FROM: (u64, u64, u64) = (0, 12, 1);
 /// What a pending entry may hold in place of a text it has not written yet (§5.2).
 pub const UNWRITTEN: &str = "TBD";
 /// The text members a settled code has written (§5.2: `description` always, `common_causes`
