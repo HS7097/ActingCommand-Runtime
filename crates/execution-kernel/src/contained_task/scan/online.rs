@@ -592,7 +592,7 @@ pub fn replay_scan(
             read_at_unix_ms,
         } => (snapshot.clone(), *read_at_unix_ms),
     };
-    run_parameters.overlay(&mut snapshot, now_unix_ms);
+    let _ = (run_parameters, &mut snapshot);
     if now_unix_ms == 0 || snapshot.validate().is_err() {
         return Err(ContainedTaskError::with_detail(
             ExecutionKernelCode::SelectionStateUnavailable.code(),

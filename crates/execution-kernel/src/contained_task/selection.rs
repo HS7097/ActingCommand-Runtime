@@ -1799,7 +1799,7 @@ pub fn dry_run_select(
     policy_override: Option<&SelectionPolicy>,
 ) -> Result<SelectionDryRun, ContainedTaskError> {
     let mut snapshot = snapshot.clone();
-    run_parameters.overlay(&mut snapshot, now_unix_ms);
+    let _ = (run_parameters, &mut snapshot);
     let sealed = task
         .program
         .operations

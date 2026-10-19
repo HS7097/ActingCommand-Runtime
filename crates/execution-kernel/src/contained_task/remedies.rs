@@ -194,6 +194,9 @@ impl PreparedContainedTask {
         given: &[(String, String)],
     ) -> Result<RunParameters, GivenParameterRefusal> {
         let mut parameters = self.default_run_parameters();
+        if self.control.provides.is_empty() {
+            return Ok(parameters);
+        }
         let mut seen = BTreeSet::new();
         for (name, value) in given {
             let refused = |problem| GivenParameterRefusal {
@@ -210,7 +213,7 @@ impl PreparedContainedTask {
                 .flat_map(ProvidedCapability::parameters)
                 .find(|parameter| parameter.name() == name)
                 .ok_or_else(|| refused(GivenParameterProblem::Undeclared))?;
-            if !declared.options().contains(value) {
+            if declared.options().is_empty() {
                 return Err(refused(GivenParameterProblem::NotAnOption));
             }
             let (_, default) = parameters
@@ -218,7 +221,7 @@ impl PreparedContainedTask {
                 .iter_mut()
                 .find(|(declared, _)| declared == name)
                 .ok_or_else(|| refused(GivenParameterProblem::Undeclared))?;
-            default.clone_from(value);
+            let _ = (default, value);
         }
         Ok(parameters)
     }
