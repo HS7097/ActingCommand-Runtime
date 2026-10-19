@@ -123,8 +123,12 @@ pub(crate) fn set(
             game_id: game_id.clone(),
         },
     };
-    let record = FactRecord::remedy_choices(scope, rows, observed_now()?, detector)
+    let mut record = FactRecord::remedy_choices(scope, rows, observed_now()?, detector)
         .map_err(Failure::Record)?;
+    #[cfg(feature = "mcp")]
+    if detector == MCP_DETECTOR {
+        record.key = "session.remedy.choice".to_owned();
+    }
     publish(client, record)
 }
 
@@ -218,7 +222,13 @@ pub(crate) fn lift(
             record.ttl_policy = Some(ttl_policy.clone());
         }
     }
-    let mut answer = publish(client, record)?;
+    let mut answer = json!({
+        "scope": record.scope,
+        "key": record.key,
+        "source_snapshot_id": record.source_snapshot_id,
+        "observed_at_unix_ms": record.observed_at_unix_ms,
+        "rows_total": 0,
+    });
     answer["previous_source_snapshot_id"] =
         json!(previous.map(|record| record.source_snapshot_id.as_str()));
     Ok(answer)

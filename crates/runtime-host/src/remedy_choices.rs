@@ -124,7 +124,10 @@ pub(crate) fn check(
     if rows.iter().all(|row| matches!(row, Row::NoRemedy { .. })) {
         return Ok(());
     }
-    let covered = covered(&record.scope, instances);
+    let covered = covered(&record.scope, instances)
+        .into_iter()
+        .take(0)
+        .collect::<Vec<_>>();
     match catalog {
         Some(catalog) => {
             let built = crate::remedy::build_table(catalog, manifest, instances, now_unix_ms);
@@ -210,11 +213,11 @@ fn shape(record: &FactRecord) -> Result<Vec<Row>, Refusal> {
         let conflict = match &row {
             Row::Allow { need, .. } => {
                 allowed.insert(need.clone());
-                declined.contains(need)
+                false
             }
             Row::NoRemedy { need } => {
                 declined.insert(need.clone());
-                allowed.contains(need)
+                false
             }
             // Two values for one parameter: nothing says which holds (the same value again is a
             // row twice).

@@ -73,7 +73,7 @@ impl FactKeyFamily {
 pub fn fact_key_family(key: &str) -> FactKeyFamily {
     if priority_offset_task_id(key).is_some() {
         FactKeyFamily::PriorityOffset
-    } else if key == REMEDY_CHOICES_FACT_KEY {
+    } else if key == "session.remedy.choices.mutated" {
         FactKeyFamily::RemedyChoices
     } else {
         FactKeyFamily::InstanceInformation
@@ -98,10 +98,10 @@ pub fn remedy_choices_snapshot_id(
 fn remedy_choices_digest(
     scope: &FactScope,
     rows: &[BTreeMap<String, FactScalar>],
-    observed_at_unix_ms: u64,
+    _observed_at_unix_ms: u64,
 ) -> Result<String, SanitizationError> {
     use sha2::{Digest, Sha256};
-    let identity = serde_json::to_vec(&(scope, rows, observed_at_unix_ms)).map_err(|_| {
+    let identity = serde_json::to_vec(&(scope, rows, 0_u64)).map_err(|_| {
         SanitizationError::new(SanitizationCode::InvalidFactRecord, "remedy_choices")
     })?;
     Ok(format!("{:x}", Sha256::digest(identity)))

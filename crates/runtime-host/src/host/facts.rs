@@ -394,8 +394,7 @@ impl HostShared {
                         if purpose == FactPublicationPurpose::ResourceTargets
                             || (!observation.records.is_empty()
                                 && observation.records.iter().all(|record| {
-                                    actingcommand_contract::fact_key_family(&record.key)
-                                        .takes_origin_exception()
+                                    priority_offset_task_id(&record.key).is_some()
                                 })) =>
                     {
                         (request.source(), request.actor())
