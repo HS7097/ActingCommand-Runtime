@@ -2831,9 +2831,53 @@ pub struct ResourceAuthoringPayload {
 /// One reason of a dispatch's ranking chain or of a task selection's explanation: the reason's
 /// outcome, a registered code with its values (ledger revision 3, Workflow #378 A2-P; model
 /// section 8.1). The evaluators' English detail goes only to the developer log.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct PolicyReasonRecord(pub Outcome);
+
+// A26 red proof, mutation 3 (do not merge): a strict earlier reader. It refuses a reason whose
+// value key the v0.12.4 catalog does not declare for the reason's code.
+impl<'de> Deserialize<'de> for PolicyReasonRecord {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let outcome = Outcome::deserialize(deserializer)?;
+        if let Some(key) = outcome
+            .values()
+            .keys()
+            .find(|key| !earlier_reader_declares(outcome.code().as_str(), key))
+        {
+            return Err(de::Error::custom(format_args!(
+                "value key {key} is unknown to a v0.12.4 reader"
+            )));
+        }
+        Ok(Self(outcome))
+    }
+}
+
+fn earlier_reader_declares(code: &str, key: &str) -> bool {
+    static EARLIER: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    let earlier = EARLIER.get_or_init(|| {
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../contracts/outcome-codes/released/0.12.4.json"
+        )))
+        .unwrap_or(serde_json::Value::Null)
+    });
+    let Some(entry) = earlier.get("codes").and_then(|codes| codes.get(code)) else {
+        return true;
+    };
+    let base = key.strip_suffix("_total").unwrap_or(key);
+    [
+        "operation",
+        "stage",
+        "boundary",
+        "runtime_code",
+        "install_root",
+    ]
+    .contains(&key)
+        || entry
+            .get("values")
+            .is_some_and(|values| values.get(key).is_some() || values.get(base).is_some())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyDispatchEventData {
