@@ -420,6 +420,14 @@ self-test, `record stop`'s first decision and cross-check, `observe`, `recognize
 `detect-page`, `current-page`, the guard target of `do`/`wait` and the `package dry-run` replay
 evaluate OCR targets with it.
 
+#411 Lab L6: the provider serves the root's NN model folders as well, so the same commands
+evaluate NN targets with it; `observe` evaluates an action's NN target when the provider holds
+its model, and otherwise leaves it not evaluated (`dynamic_target_not_evaluated`), as before. A
+root whose folders hold NN models and no OCR model gives the provider too, as the Runtime accepts
+such a root: NN targets evaluate, while OCR is unavailable as below, caused by
+`lab_ocr_model_missing`. `observe` also fills the values (`fields`) of the OCR targets it
+evaluated, as the online observation does ([page-projection.md](page-projection.md)).
+
 Without a usable OCR model OCR is unavailable: `lab_ocr_unavailable`, whose `caused_by` link says
 why (`lab_ocr_vision_unconfigured`, a configuration read or decode code,
 `vision_root_unavailable`, `vision_models_empty`, `lab_ocr_model_missing` or
@@ -432,7 +440,8 @@ purpose is to evaluate an OCR target:
   the OCR target as `target_id`) before evaluating anything;
 - an OCR mark's self-test and `record stop`'s first decision report it as their reason;
 - an `observe` action whose target is an OCR target or a value test is not evaluated, as before,
-  and the output names it in `ocr.not_evaluated`;
+  and the output names it in `ocr.not_evaluated`, also beside a provider that serves NN models
+  only;
 - `package dry-run` keeps its decision and exit code; `capabilities`, `package dry-run` and that
   `observe` output report the OCR state (`available`, `execution_provider: "cpu"`, `vision_root`,
   and `unavailable` with the outcome).

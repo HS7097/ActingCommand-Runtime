@@ -116,7 +116,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let loaded_scene = load_lab2_scene(global, &flags)?;
     let (outcome, recovery_hint) = observation::detect(resources, &loaded_scene.scene)?;
     let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
-    let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
+    let (targets, explicit) = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
     // Workflow #308 SEL-L6a (FCM T-03): the page's operations with several destinations follow
     // its navigation edges, with every page they may reach.
     let actions = view
@@ -149,6 +149,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         &loaded_scene.scene,
         &outcome,
         super::offline_ocr::lab_ocr(),
+        &explicit,
     )?;
     let mut payload = json!({
         "req_id": ids.req_id,
@@ -2304,29 +2305,32 @@ fn write_frame_if_requested(flags: &FlagArgs, scene: &Lab2Scene) -> CliOutcome<O
     Ok(Some(path))
 }
 
+/// `observe`'s `targets`, and the evaluations of the targets `--targets` names (#411 Lab L6: the
+/// projection takes their OCR values, as the online observation takes its explicit targets').
 fn observe_targets(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
     flags: &FlagArgs,
     outcome: &PageDetectionOutcome,
-) -> CliOutcome<Vec<Value>> {
+) -> CliOutcome<(Vec<Value>, Vec<(String, TargetEvaluation)>)> {
     let requested = target_list(flags);
     if !requested.is_empty() {
-        return requested
-            .into_iter()
-            .map(|target| {
-                guard_evaluable_target(evaluator, &target, "observe --targets")?;
-                let evaluation = evaluator
-                    .evaluate_target(scene, &target)
-                    .map_err(|err| CliError::usage(err.to_string()))?;
-                Ok(json!({
-                    "id": target,
-                    "passed": evaluation.passed,
-                    "score": target_score(&evaluation),
-                    "evaluation": target_eval_json(&evaluation)
-                }))
-            })
-            .collect();
+        let mut targets = Vec::new();
+        let mut evaluations = Vec::new();
+        for target in requested {
+            guard_evaluable_target(evaluator, &target, "observe --targets")?;
+            let evaluation = evaluator
+                .evaluate_target(scene, &target)
+                .map_err(|err| CliError::usage(err.to_string()))?;
+            targets.push(json!({
+                "id": target,
+                "passed": evaluation.passed,
+                "score": target_score(&evaluation),
+                "evaluation": target_eval_json(&evaluation)
+            }));
+            evaluations.push((target, evaluation));
+        }
+        return Ok((targets, evaluations));
     }
     let mut targets = Vec::new();
     if let Some(page) = outcome
@@ -2343,7 +2347,7 @@ fn observe_targets(
             }));
         }
     }
-    Ok(targets)
+    Ok((targets, Vec::new()))
 }
 
 fn lab2_page_candidates(outcome: &PageDetectionOutcome) -> Vec<Value> {

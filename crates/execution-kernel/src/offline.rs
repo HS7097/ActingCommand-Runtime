@@ -10,7 +10,9 @@ use crate::{
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Detail, Outcome};
-use actingcommand_contract::{InputAction, InstanceFactContext, InstanceFactSnapshot};
+use actingcommand_contract::{
+    InputAction, InstanceFactContext, InstanceFactSnapshot, OcrFieldPrivacy, OcrFieldsReport,
+};
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::Sha256Hash;
 use serde::{Serialize, Serializer};
@@ -532,6 +534,38 @@ fn full_envelope<S: Serializer>(outcome: &Outcome, serializer: S) -> Result<S::O
     outcome.envelope(Detail::Full).serialize(serializer)
 }
 
+/// #411 Lab L6: the readings of one frame a replayed run handed to recognition (D2 model §3.5),
+/// joined before the run ended, in hand-off order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OfflineReplayReadings {
+    /// The frame's position in the sequence, from 1: the frame the run had captured last when it
+    /// handed the frame to recognition.
+    pub frame: usize,
+    /// The readings that held, in mark order (a mark with `capacity_fact_key` gives its value,
+    /// then its capacity).
+    pub readings: Vec<OfflineReplayReading>,
+    /// The marks that gave no reading on the frame.
+    pub unresolved: Vec<OfflineReplayReadingMiss>,
+}
+
+/// #411 Lab L6: one reading a replayed run took.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OfflineReplayReading {
+    pub reading_id: String,
+    pub fact_key: String,
+    pub value: u64,
+    pub confidence_milli: u16,
+}
+
+/// #411 Lab L6: one reading mark that gave no reading, with why (the vocabulary
+/// `reading_problem`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OfflineReplayReadingMiss {
+    pub reading_id: String,
+    pub fact_key: String,
+    pub reading_problem: &'static str,
+}
+
 /// Workflow #308 SEL-L6a: a whole contained task replayed over a saved frame sequence.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OfflineReplayResult {
@@ -551,6 +585,14 @@ pub struct OfflineReplayResult {
     /// The instant a select step evaluated at; present only when one was evaluated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_now_unix_ms: Option<u64>,
+    /// #411 Lab L6: the readings of every frame the run handed to recognition, in hand-off
+    /// order; absent when it handed none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub readings: Vec<OfflineReplayReadings>,
+    /// #411 Lab L6: the run's fields report (`fields_v1`) as the Runtime records it, each field
+    /// its declaration classifies `personal` redacted; absent when the run recorded none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<OcrFieldsReport>,
 }
 
 /// Why a replay gave no result.
@@ -586,6 +628,9 @@ where
         steps: Vec::new(),
         pending_action: None,
         selection_now_unix_ms: None,
+        reading_frames: VecDeque::new(),
+        readings: Vec::new(),
+        fields: None,
     };
     let end = match task.run(&mut runtime) {
         Ok(outcome) => OfflineReplayEnd::Completed {
@@ -625,6 +670,8 @@ where
         steps: runtime.steps,
         end,
         selection_now_unix_ms: runtime.selection_now_unix_ms,
+        readings: runtime.readings,
+        fields: runtime.fields,
     })
 }
 
@@ -639,6 +686,11 @@ struct ReplayRuntime<'t, I> {
     /// The action of the last effect intent, which the next input must send.
     pending_action: Option<InputAction>,
     selection_now_unix_ms: Option<u64>,
+    /// #411 Lab L6: the positions of the frames handed to recognition whose readings the run has
+    /// not joined yet, in hand-off order.
+    reading_frames: VecDeque<usize>,
+    readings: Vec<OfflineReplayReadings>,
+    fields: Option<OcrFieldsReport>,
 }
 
 #[derive(Debug)]
@@ -805,10 +857,73 @@ where
                     .ok_or_else(step_not_started::<E>)?
                     .reached_page = Some(page_label);
             }
+            // #411 Lab L6: the frame handed to recognition is the one the run captured last; its
+            // readings are joined before the run ends, in hand-off order.
+            ContainedTaskTrace::ResourceReadingFrame { .. } => {
+                self.reading_frames.push_back(self.frames_read);
+            }
+            ContainedTaskTrace::ResourceReadings {
+                readings,
+                unresolved,
+                ..
+            } => {
+                let frame = self.reading_frames.pop_front().ok_or_else(|| {
+                    ReplayBoundary::Invariant(SharedCode::ContainedTaskStateInvalid.code())
+                })?;
+                self.readings.push(OfflineReplayReadings {
+                    frame,
+                    readings: readings
+                        .into_iter()
+                        .map(|reading| OfflineReplayReading {
+                            reading_id: reading.declaration.id,
+                            fact_key: reading.fact_key,
+                            value: reading.value,
+                            confidence_milli: reading.confidence_milli,
+                        })
+                        .collect(),
+                    unresolved: unresolved
+                        .into_iter()
+                        .map(|miss| OfflineReplayReadingMiss {
+                            reading_id: miss.declaration.id,
+                            fact_key: miss.declaration.fact_key,
+                            reading_problem: miss.problem.as_str(),
+                        })
+                        .collect(),
+                });
+            }
+            ContainedTaskTrace::PostAdmissionOcrFields { report } => {
+                self.fields = Some(redact_personal_fields(report));
+            }
             _ => {}
         }
         Ok(())
     }
+}
+
+/// #411 Lab L6: `report` with every field its declaration classifies `personal` redacted: no
+/// text, value, detail or extraction evidence, and `redacted` true.
+fn redact_personal_fields(mut report: OcrFieldsReport) -> OcrFieldsReport {
+    let personal = report
+        .declaration
+        .fields
+        .iter()
+        .filter(|field| field.privacy == OcrFieldPrivacy::Personal)
+        .map(|field| field.id.clone())
+        .collect::<Vec<_>>();
+    for result in report
+        .records
+        .iter_mut()
+        .flat_map(|record| record.fields.iter_mut())
+        .filter(|result| personal.contains(&result.field_id))
+    {
+        result.raw_text = None;
+        result.normalized_text = None;
+        result.value = None;
+        result.detail = None;
+        result.extraction = None;
+        result.redacted = true;
+    }
+    report
 }
 
 #[cfg(test)]

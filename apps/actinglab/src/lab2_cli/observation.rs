@@ -11,6 +11,7 @@ use actingcommand_lab::{
     CurrentPageRequest, LabOcr, ReadonlyRecognitionInput, RecoveryHintResponse,
 };
 use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
+use actingcommand_recognition_pack::RecognitionTarget;
 use sha2::{Digest, Sha256};
 
 pub(super) fn detect(
@@ -99,12 +100,18 @@ pub(super) fn detect(
 /// evaluator was loaded with. Without an OCR model an action's OCR target is not evaluated,
 /// as observe never evaluated it before; the second value names those targets, which observe
 /// reports under `lab_ocr_unavailable` without failing.
+///
+/// #411 Lab L6: an action's NN target is evaluated when the provider holds its model, and the
+/// projection's `fields` hold the values of the OCR targets the observation evaluated (every
+/// page's targets and the `explicit` targets `--targets` names), as the online observation fills
+/// them.
 pub(super) fn build(
     view: &super::super::contained_resources::ObservationResources,
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
     outcome: &PageDetectionOutcome,
     ocr: &LabOcr,
+    explicit: &[(String, TargetEvaluation)],
 ) -> CliOutcome<(PageProjection, std::collections::BTreeSet<String>)> {
     let mut elements = Vec::new();
     let mut resolved = std::collections::BTreeMap::new();
@@ -212,6 +219,7 @@ pub(super) fn build(
         }
     }
     let ocr_not_evaluated = not_evaluated_ocr_targets(evaluator, &resolved);
+    let fields = ocr_fields(view, evaluator, outcome, explicit);
     let projection = shared::project(
         ProjectionInput {
             frame: FrameIdentity {
@@ -228,11 +236,55 @@ pub(super) fn build(
                 .collect(),
             elements,
             missing,
-            fields: Vec::new(),
+            fields,
         },
         &view.metadata,
     )?;
     Ok((projection, ocr_not_evaluated))
+}
+
+/// #411 Lab L6: the value entries of the OCR targets this observation evaluated, as the online
+/// observation builds them (`observation_fields`): the targets of every page in page order, then
+/// each explicit target no page evaluated, as an optional target of no page.
+fn ocr_fields(
+    view: &super::super::contained_resources::ObservationResources,
+    evaluator: &RecognitionEvaluator,
+    outcome: &PageDetectionOutcome,
+    explicit: &[(String, TargetEvaluation)],
+) -> Vec<shared::FieldInput> {
+    let mut evaluations = outcome
+        .evaluations
+        .iter()
+        .flat_map(|page| {
+            page.target_results
+                .iter()
+                .map(|target| (Some(page.page_id.clone()), target.clone()))
+        })
+        .collect::<Vec<_>>();
+    for (target_id, evaluation) in explicit {
+        if evaluations
+            .iter()
+            .any(|(_, value)| value.target_id == *target_id)
+        {
+            continue;
+        }
+        evaluations.push((
+            None,
+            PageTargetEvaluation {
+                target_id: target_id.clone(),
+                role: PageTargetRole::Optional,
+                passed: evaluation.passed,
+                message: evaluation.message.clone(),
+                group_index: None,
+                target_index: 0,
+                evaluation: evaluation.clone(),
+                skipped: None,
+            },
+        ));
+    }
+    actingcommand_lab::observation_fields(&view.metadata, &evaluations, |target_id| {
+        matches!(evaluator.target_kind(target_id), Ok(TargetKind::Ocr))
+    })
 }
 
 /// One action target's resolution on this frame, kept by `resolve` per target.
@@ -336,7 +388,14 @@ fn resolve_target(
         // Workflow #396 LAB-3: without an OCR model an action's OCR target stays not evaluated,
         // as before; `observe` reports it under `lab_ocr_unavailable` (`build`). Workflow #396
         // REC-6: so does a value test, which reads OCR targets.
-        TargetKind::Ocr | TargetKind::ValueTest if ocr.provider().is_none() => {
+        TargetKind::Ocr | TargetKind::ValueTest if ocr.ocr_provider().is_none() => {
+            ElementResolution::NotEvaluated {
+                target_id: target_id.to_owned(),
+                reason: NotEvaluatedReason::DynamicTarget,
+            }
+        }
+        // #411 Lab L6: an NN target whose model the provider does not hold stays not evaluated.
+        TargetKind::Nn if !holds_nn_model(evaluator, target_id, ocr) => {
             ElementResolution::NotEvaluated {
                 target_id: target_id.to_owned(),
                 reason: NotEvaluatedReason::DynamicTarget,
@@ -345,13 +404,15 @@ fn resolve_target(
         // A digest or composite is evaluated like a color target and, having no template match,
         // gives no geometry. Workflow #396 LAB-3: so is an OCR target, with the Runtime's OCR
         // provider; a composite with an OCR member is refused without an OCR model. Workflow
-        // #396 REC-6: a value test is evaluated likewise.
+        // #396 REC-6: a value test is evaluated likewise. #411 Lab L6: so is an NN target, with
+        // the provider that holds its model.
         TargetKind::Template
         | TargetKind::Color
         | TargetKind::ColorDigest
         | TargetKind::Composite
         | TargetKind::ValueTest
-        | TargetKind::Ocr => {
+        | TargetKind::Ocr
+        | TargetKind::Nn => {
             ocr.require(evaluator.pack(), [target_id])?;
             let evaluated = evaluator
                 .evaluate_target(scene, target_id)
@@ -375,10 +436,6 @@ fn resolve_target(
                 geometry,
             }
         }
-        TargetKind::Nn => ElementResolution::NotEvaluated {
-            target_id: target_id.to_owned(),
-            reason: NotEvaluatedReason::DynamicTarget,
-        },
         TargetKind::ClickOnly => ElementResolution::NotEvaluated {
             target_id: target_id.to_owned(),
             reason: NotEvaluatedReason::ClickOnly,
@@ -387,6 +444,18 @@ fn resolve_target(
     Ok(ResolvedTarget {
         resolution,
         matched,
+    })
+}
+
+/// #411 Lab L6: whether the provider every offline evaluation is given holds the model of the NN
+/// target `target_id`, as the evaluator admits it before it classifies.
+fn holds_nn_model(evaluator: &RecognitionEvaluator, target_id: &str, ocr: &LabOcr) -> bool {
+    let Some(provider) = ocr.provider() else {
+        return false;
+    };
+    evaluator.pack().targets.iter().any(|target| {
+        matches!(target, RecognitionTarget::Nn(nn) if nn.id == target_id
+            && provider.require_nn_model(&nn.model_ref, &nn.model_sha256).is_ok())
     })
 }
 
@@ -804,6 +873,11 @@ mod gate_411_a21;
 // segmented drag is listed not actionable, and offline observe projects page-set operations.
 #[cfg(test)]
 mod gate_lab_l2;
+
+// #411 Lab L6 (exec key 99): offline observe evaluates an action's NN target with the provider
+// that holds its model and fills the values of the OCR targets it evaluated, as online.
+#[cfg(test)]
+mod gate_lab_l6;
 
 #[cfg(test)]
 mod lab3_tests {

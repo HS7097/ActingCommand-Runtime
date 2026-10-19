@@ -3,7 +3,8 @@
 //! Workflow #396 LAB-3: actinglab's one OCR provider, the Runtime's, loaded once per process
 //! from the installation actinglab runs from (`LabOcr`). Every offline package load gets it;
 //! without an OCR model a command that would evaluate an OCR target refuses with
-//! `lab_ocr_unavailable` before evaluating anything.
+//! `lab_ocr_unavailable` before evaluating anything. #411 Lab L6: a vision root with NN models
+//! and no OCR model gives the provider too, for NN targets; OCR is then unavailable.
 
 use super::CliOutcome;
 use actingcommand_lab::{ExternallyVerifiedBundle, LabOcr};
@@ -54,7 +55,7 @@ pub(super) fn require_package(resources: &ExternallyVerifiedBundle) -> CliOutcom
 pub(super) fn status() -> Value {
     let ocr = lab_ocr();
     let mut status = json!({
-        "available": ocr.provider().is_some(),
+        "available": ocr.ocr_provider().is_some(),
         "execution_provider": "cpu",
         "vision_root": ocr.vision_root().map(|root| root.display().to_string()),
     });

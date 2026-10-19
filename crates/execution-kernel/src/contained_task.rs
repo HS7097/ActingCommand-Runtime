@@ -167,6 +167,10 @@ mod gate_382_e3;
 // #411 A15 (exec key 88): an unconfirmed step names the page of its last frame.
 #[cfg(test)]
 mod gate_rc2_a15;
+// #411 Lab L6 (exec key 99): the whole-package replay reports the readings and fields its run
+// took.
+#[cfg(test)]
+mod gate_lab_l6;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
