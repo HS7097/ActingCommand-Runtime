@@ -261,6 +261,81 @@ fn fields_package() -> Vec<u8> {
     package.finish().expect("package zip").into_inner()
 }
 
+// The fixture vision provider with the complete execution evidence a fields read needs (the
+// recognition pack refuses an OCR observation without it), as `ocr_fields`'
+// `FieldEvidenceProvider` gives it: one CPU stream, one invocation per read.
+#[derive(Debug, Default)]
+struct FieldsVision(FakeVisionProvider);
+
+impl VisionProvider for FieldsVision {
+    fn require_ocr_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        self.0.require_ocr_model(model_ref, model_sha256)
+    }
+
+    fn require_nn_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        self.0.require_nn_model(model_ref, model_sha256)
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        self.0.read_text(request)
+    }
+
+    fn read_text_with_execution_evidence(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<actingcommand_recognition_pack::OcrProviderObservation, VisionProviderError> {
+        use actingcommand_recognition_pack::{
+            OcrExecutionProviderKind, OcrProviderExecutionEvidence, OcrProviderObservation,
+        };
+
+        let model_ref = request.model_ref.to_owned();
+        let model_sha256 = request.model_sha256.to_owned();
+        let result = self.0.read_text(request)?;
+        Ok(OcrProviderObservation {
+            result,
+            execution: Some(OcrProviderExecutionEvidence {
+                invocation_id: format!("ocr-{}", self.0.ocr_calls.load(Ordering::Acquire)),
+                session_id: "fields-session".to_owned(),
+                session_generation: 1,
+                requested_provider: OcrExecutionProviderKind::Cpu,
+                resolved_provider: OcrExecutionProviderKind::Cpu,
+                requested_cuda_ordinal: None,
+                requested_cuda_identity: None,
+                resolved_cuda_ordinal: None,
+                resolved_cuda_identity: None,
+                provider_implementation: "fixture-ocr".to_owned(),
+                provider_binary_sha256: "b".repeat(64),
+                runtime_version: "fixture-runtime".to_owned(),
+                model_ref,
+                model_sha256,
+                cpu_ep_registered: true,
+                cpu_fallback_disabled: false,
+                fallback_forbidden: true,
+                fallback_observed: None,
+                complete: true,
+            }),
+        })
+    }
+
+    fn classify(
+        &self,
+        request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        self.0.classify(request)
+    }
+}
+
 // T2 (the device shape): the run starts on the `done` screen, which no page of the fields package
 // matches; `lead` (one step from `done` to its own page `away`, the red screen) runs as the
 // prerequisite layer, the recheck matches the field page `home` on the same red screen, and the
@@ -284,7 +359,7 @@ fn a23_a_zero_input_fields_package_after_its_prerequisite_records_its_fields_out
         config(&temp).with_standard_packs_root(Some(root.root.clone())),
         Arc::new(
             FakeProvider::one(ALIAS, instance_id(), Arc::clone(&state))
-                .with_vision_provider(Arc::new(FakeVisionProvider::default())),
+                .with_vision_provider(Arc::new(FieldsVision::default())),
         ),
     )
     .expect("runtime host");
