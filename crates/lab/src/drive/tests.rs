@@ -235,6 +235,7 @@ impl Fixture {
             resources: Arc::clone(&self.resources),
             scene: Some(scene),
             scene_path: None,
+            sample_scenes: Vec::new(),
             capture_config: None,
             require_fresh: false,
             fresh_delay: Duration::from_millis(160),

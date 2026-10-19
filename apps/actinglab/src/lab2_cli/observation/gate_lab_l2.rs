@@ -255,7 +255,7 @@ fn observe_entry_page(with_icon: bool) -> PageProjection {
     let (projection, _) = build(
         &view,
         &evaluator,
-        &scene,
+        &[&scene],
         &outcome,
         &LabOcr::from_installation(None),
         &[],

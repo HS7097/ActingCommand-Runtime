@@ -536,19 +536,40 @@ impl PageDetector {
         )
     }
 
+    /// #411 Lab B-2: [`Self::evaluate_all_timed`] in `context`, whose frame set (a target
+    /// consensus's frames, oldest first, the last the current frame) every page target reads.
+    pub fn evaluate_all_timed_in_context(
+        &self,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+    ) -> PageDetectorResult<Vec<TimedPageEvaluation>> {
+        self.evaluate_all_timed_in_context_with(
+            context,
+            |_index, _page| Instant::now(),
+            |started| started.elapsed(),
+        )
+    }
+
     fn evaluate_all_timed_with<M>(
         &self,
         evaluator: &RecognitionEvaluator,
         scene: &Scene,
+        start: impl FnMut(usize, &PageDefinition) -> M,
+        elapsed: impl FnMut(M) -> Duration,
+    ) -> PageDetectorResult<Vec<TimedPageEvaluation>> {
+        self.evaluate_all_timed_in_context_with(&evaluator.scene_context(scene), start, elapsed)
+    }
+
+    fn evaluate_all_timed_in_context_with<M>(
+        &self,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
         mut start: impl FnMut(usize, &PageDefinition) -> M,
         mut elapsed: impl FnMut(M) -> Duration,
     ) -> PageDetectorResult<Vec<TimedPageEvaluation>> {
-        let context = evaluator.scene_context(scene);
         let mut durations = Vec::with_capacity(self.page_set.pages.len());
         let outcomes = self
-            .evaluate_all_outcomes_with(evaluator, scene, |index, page| {
+            .evaluate_all_outcomes_with(context.evaluator(), context.scene(), |index, page| {
                 let started = start(index, page);
-                let result = self.evaluate_page_in_context(&context, page);
+                let result = self.evaluate_page_in_context(context, page);
                 durations.push(elapsed(started));
                 result
             })

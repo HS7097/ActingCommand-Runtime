@@ -203,10 +203,17 @@ by their caller for that observation phase.
 
 `SceneEvaluation::project_candidates` is the single-frame adapter;
 `project_candidates_with_samples` consumes the exact scene set and uses the same mapping and
-aggregation. Offline `observe` and online contained observation use this owner. They currently
-supply one frame: same-frame jitter/parameter consensus works, and a declaration requiring
-more frames reports `candidate_samples_unavailable` with coverage. Online observation records
-that refusal as a partial observation with no successful recognition. Public candidate rows
+aggregation. Offline `observe` and online contained observation use this owner. Offline
+`observe`, `do`, `detect-page`, `current-page`, `recognize`, `is-visible`, `ensure` and `wait`
+take up to five `--scene` frames, oldest first, the last the current frame; target consensus and
+page detection use the last frames they require and a layout its last `required_frames()`; too
+few, too many, mismatched sizes or extra frames for a package without multi-frame agreement are
+refused with `validation_failed` (`argument: --scene`). Offline frames carry no time, so the
+declared interval is the author's to respect; the frames are taken as one screen, without a page
+check per frame, as replay takes its frames (#411 Lab B-2). Online contained observation
+currently supplies one frame: same-frame jitter/parameter consensus works, and a declaration
+requiring more frames reports `candidate_samples_unavailable` with coverage. Online observation
+records that refusal as a partial observation with no successful recognition. Public candidate rows
 use the strictest privacy of their referenced targets; full inputs stay in controlled evidence.
 Target sampling likewise reports required/provided frames and `recognition_coverage`; an
 unsupported multi-frame observation has no successful recognition. Required raw sample

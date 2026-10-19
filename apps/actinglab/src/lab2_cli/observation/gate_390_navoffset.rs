@@ -233,7 +233,7 @@ fn navoffset_actinglab_observe_resolves_an_offset_click_to_its_box_on_the_frame(
     resolve(
         &target_click,
         &evaluator,
-        &zoomed,
+        &[&zoomed],
         &mut zoomed_resolved,
         &ocr,
     )
@@ -244,7 +244,7 @@ fn navoffset_actinglab_observe_resolves_an_offset_click_to_its_box_on_the_frame(
         (&primary, &mut primary_resolved, tap(24, 20, 8, 8)),
         (&zoomed, &mut zoomed_resolved, tap(55, 19, 6, 6)),
     ] {
-        match resolve(&input, &evaluator, scene, resolved, &ocr).expect("the offset click") {
+        match resolve(&input, &evaluator, &[scene], resolved, &ocr).expect("the offset click") {
             ElementResolution::Target {
                 target_id,
                 passed,

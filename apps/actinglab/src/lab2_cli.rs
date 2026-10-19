@@ -50,6 +50,9 @@ impl Lab2Ids {
 
 struct Lab2Scene {
     scene: Scene,
+    /// #411 Lab B-2: the earlier frames of an offline `--scene` set, oldest first; `scene` is its
+    /// current frame. Empty for one frame and for a Runtime frame.
+    samples: Vec<Scene>,
     backend: String,
     source: Value,
     frame_age_ms: u64,
@@ -57,6 +60,16 @@ struct Lab2Scene {
     /// #411 Lab L3: the Runtime frame the scene was captured as, which an input planned on it
     /// names (`input_with_frame`); none for a scene file.
     input_frame: Option<InputFrameReference>,
+}
+
+impl Lab2Scene {
+    /// #411 Lab B-2: the frame set, oldest first, the last the current frame.
+    fn frames(&self) -> Vec<&Scene> {
+        self.samples
+            .iter()
+            .chain(std::iter::once(&self.scene))
+            .collect()
+    }
 }
 
 struct WaitIds<'a> {
@@ -109,17 +122,17 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let resources = super::contained_resources::load(&flags, "observe")?;
     let (evaluator, _) = super::contained_resources::recognition_pipeline(&resources)?;
     super::offline_ocr::require_pages(&resources)?;
-    if evaluator.target_sample_frames() > 1 {
-        return Err(CliError::package_invalid(format!(
-            "recognition samples unavailable: offline observe provides 1 frame; target consensus requires {}; aggregation not completed",
-            evaluator.target_sample_frames()
-        )));
-    }
     let view = super::contained_resources::observation_resources(&resources)?;
-    let loaded_scene = load_lab2_scene(global, &flags)?;
-    let (outcome, recovery_hint) = observation::detect(resources, &loaded_scene.scene)?;
+    // #411 Lab B-2: one to five frames, oldest first, the last the current frame; target
+    // consensus reads the last frames it requires.
+    let loaded_scene = load_lab2_scene(global, &flags, &evaluator)?;
+    let frames = loaded_scene.frames();
+    let (outcome, recovery_hint) = observation::detect(resources, &frames)?;
+    if outcome.matched {
+        refuse_layouts_beyond_the_frames(&evaluator, &outcome.page, frames.len())?;
+    }
     let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
-    let (targets, explicit) = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
+    let (targets, explicit) = observe_targets(&evaluator, &frames, &flags, &outcome)?;
     // Workflow #308 SEL-L6a (FCM T-03): the page's operations with several destinations follow
     // its navigation edges, with every page they may reach.
     let actions = view
@@ -149,7 +162,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let (observation, ocr_not_evaluated) = observation::build(
         &view,
         &evaluator,
-        &loaded_scene.scene,
+        &frames,
         &outcome,
         super::offline_ocr::lab_ocr(),
         &explicit,
@@ -175,20 +188,36 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         ocr["not_evaluated"] = json!(ocr_not_evaluated);
         payload["ocr"] = ocr;
     }
-    if !evaluator.pack().target_consensus.is_empty() {
-        payload["recognition_coverage"] = json!({"provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":"production_owner"});
+    if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
+        payload["recognition_coverage"] = coverage;
     }
     if outcome.matched {
         let mut sets = Vec::new();
         let mut evidence = Vec::new();
+        // #411 Lab B-2: the most frames a projected layout used.
+        let mut used_frames = 0;
         for layout in evaluator
             .pack()
             .candidate_layouts
             .iter()
             .filter(|layout| layout.page_id == outcome.page)
         {
-            let projected = evaluator.scene_context(&loaded_scene.scene).project_candidates(&layout.id)
-                .map_err(|error| CliError::package_invalid(format!("{}: layout={} offline observe provides 1 frame, requires {}; aggregation not completed: {}", error.code(), layout.id, layout.required_frames(), error.detail())))?;
+            // #411 Lab B-2 (R2): each layout over the last frames it requires, oldest first, the
+            // current frame last, as the kernel's select hands it its series.
+            let required = layout.required_frames();
+            let series = &frames[frames.len().saturating_sub(required)..];
+            let projected = evaluator
+                .scene_context(&loaded_scene.scene)
+                .project_candidates_with_samples(&layout.id, series, &mut |_, _, _, _| Ok(()))
+                .map_err(|error| {
+                    CliError::package_invalid(format!(
+                        "{}: layout={} {}",
+                        error.code(),
+                        layout.id,
+                        error.detail()
+                    ))
+                })?;
+            used_frames = used_frames.max(series.len());
             let (public, _) = projected
                 .split(&layout.candidate_privacy(&view.metadata, projected.candidates().len()))
                 .map_err(|error| CliError::package_invalid(error.to_string()))?;
@@ -200,7 +229,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         if !sets.is_empty() {
             payload["candidate_sets"] = json!(sets);
             payload["candidate_evidence"] = json!(evidence);
-            payload["candidate_coverage"] = json!({"provided_frames":1,"aggregation":"production_owner","task_preparation":"not_requested"});
+            payload["candidate_coverage"] = json!({"provided_frames":used_frames,"aggregation":"production_owner","task_preparation":"not_requested"});
         }
     }
     if !outcome.matched {
@@ -222,6 +251,53 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         payload["preview"] = frame::scene_preview(&loaded_scene.scene, loaded_scene.png.as_deref());
     }
     observation::project(payload, observation, &flags, global.verbose)
+}
+
+/// #411 Lab B-2 (R4): an offline answer's `recognition_coverage` over `provided` frames when the
+/// package declares target consensus.
+fn offline_recognition_coverage(
+    evaluator: &RecognitionEvaluator,
+    provided: usize,
+) -> Option<Value> {
+    (!evaluator.pack().target_consensus.is_empty()).then(|| {
+        json!({
+            "provided_frames": provided,
+            "required_frames": evaluator.target_sample_frames(),
+            "aggregation": "production_owner"
+        })
+    })
+}
+
+/// #411 Lab B-2 (R3): offline `observe` of a page with a candidate layout that requires more
+/// frames than the `given` ones answers nothing: `validation_failed` naming `--scene` as
+/// `out_of_range` with the layout's frames (`range_min`), `range_max` 5 and `layout_id`, after the
+/// page is detected and before any target or layout of it is evaluated.
+fn refuse_layouts_beyond_the_frames(
+    evaluator: &RecognitionEvaluator,
+    page: &str,
+    given: usize,
+) -> CliOutcome<()> {
+    let Some(layout) = evaluator
+        .pack()
+        .candidate_layouts
+        .iter()
+        .find(|layout| layout.page_id == page && layout.required_frames() > given)
+    else {
+        return Ok(());
+    };
+    Err(super::readonly_cli::scene_refusal(
+        "out_of_range",
+        format!(
+            "layout {} of page {page} requires {} frames; --scene gave {given}",
+            layout.id,
+            layout.required_frames()
+        ),
+        json!({
+            "range_min": layout.required_frames(),
+            "range_max": super::readonly_cli::MAX_SCENE_FRAMES,
+            "layout_id": layout.id,
+        }),
+    ))
 }
 
 /// An edge of offline `observe`'s `actions`, with the members of `navigation_edge_json`;
@@ -436,7 +512,7 @@ fn run_runtime_do(
                 actual_click.rect,
                 &graph,
                 &evaluator,
-                &loaded_scene.scene,
+                &[&loaded_scene.scene],
             )?;
         }
         let point = rect_center(actual_click.rect)?;
@@ -990,6 +1066,7 @@ fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> Cli
             });
     Ok(Lab2Scene {
         scene,
+        samples: Vec::new(),
         backend,
         source: json!({
             "kind": "runtime_observation",
@@ -1166,6 +1243,9 @@ fn isolated_offline_error_details(
 struct Lab2Path {
     name: &'static str,
     reads: &'static [&'static str],
+    /// #411 Lab B-2: the options the path takes more than once (`--scene`, 1 to 5 frames, on
+    /// the offline paths); every other option is taken once (R7).
+    repeats: &'static [&'static str],
 }
 
 /// The flags every path of the four verbs reads: the instance and the answer's projection.
@@ -1202,6 +1282,7 @@ const OBSERVE_SCENE: Lab2Path = Lab2Path {
         "--preview",
         "--test-capture-delay-ms",
     ],
+    repeats: &["--scene"],
 };
 const OBSERVE_CAPTURE: Lab2Path = Lab2Path {
     name: "observe --capture",
@@ -1215,6 +1296,7 @@ const OBSERVE_CAPTURE: Lab2Path = Lab2Path {
         "--preview",
         "--record",
     ],
+    repeats: &[],
 };
 const OBSERVE_PATHS: [&Lab2Path; 2] = [&OBSERVE_SCENE, &OBSERVE_CAPTURE];
 
@@ -1234,6 +1316,7 @@ const DO_SCENE: Lab2Path = Lab2Path {
         "--after-page",
         "--after-timeout-ms",
     ],
+    repeats: &["--scene"],
 };
 const DO_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
     name: "do --capture --dry-run",
@@ -1250,6 +1333,7 @@ const DO_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
         "--after-page",
         "--after-timeout-ms",
     ],
+    repeats: &[],
 };
 /// Online `do --capture`: the element or coordinates, the hints, the arrival condition, the
 /// recording and the preview (contained-lab-operation.md); the destructive guard flags are read
@@ -1271,6 +1355,7 @@ const DO_CAPTURE: Lab2Path = Lab2Path {
         "--tap-rect",
         "--preview",
     ],
+    repeats: &[],
 };
 const DO_PATHS: [&Lab2Path; 3] = [&DO_SCENE, &DO_CAPTURE_DRY_RUN, &DO_CAPTURE];
 
@@ -1287,6 +1372,7 @@ const ENSURE_SCENE: Lab2Path = Lab2Path {
         "--allow-destructive",
         "--test-capture-delay-ms",
     ],
+    repeats: &["--scene"],
 };
 const ENSURE_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
     name: "ensure --capture --dry-run",
@@ -1300,6 +1386,7 @@ const ENSURE_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
         "--page",
         "--allow-destructive",
     ],
+    repeats: &[],
 };
 const ENSURE_CAPTURE: Lab2Path = Lab2Path {
     name: "ensure --capture",
@@ -1314,6 +1401,7 @@ const ENSURE_CAPTURE: Lab2Path = Lab2Path {
         "--step-timeout-ms",
         "--poll-ms",
     ],
+    repeats: &[],
 };
 const ENSURE_PATHS: [&Lab2Path; 3] = [&ENSURE_SCENE, &ENSURE_CAPTURE_DRY_RUN, &ENSURE_CAPTURE];
 
@@ -1330,6 +1418,7 @@ const WAIT_SCENE: Lab2Path = Lab2Path {
         "--poll-ms",
         "--test-capture-delay-ms",
     ],
+    repeats: &["--scene"],
 };
 const WAIT_CAPTURE: Lab2Path = Lab2Path {
     name: "wait --capture",
@@ -1343,6 +1432,7 @@ const WAIT_CAPTURE: Lab2Path = Lab2Path {
         "--timeout-ms",
         "--poll-ms",
     ],
+    repeats: &[],
 };
 const WAIT_PATHS: [&Lab2Path; 2] = [&WAIT_SCENE, &WAIT_CAPTURE];
 
@@ -1389,7 +1479,8 @@ fn refuse_unread_flags(flags: &FlagArgs, path: &Lab2Path, verb: &[&Lab2Path]) ->
         })
         .collect::<Vec<_>>();
     let Some((first, problem)) = refused.first().copied() else {
-        return Ok(());
+        // #411 Lab B-2 R7: `path.repeats` (`--scene` offline) is taken up to its own bound.
+        return refuse_repeated_options(flags, path.name, path.repeats);
     };
     let names = refused
         .iter()
@@ -1406,6 +1497,41 @@ fn refuse_unread_flags(flags: &FlagArgs, path: &Lab2Path, verb: &[&Lab2Path]) ->
         "arguments": refused
             .iter()
             .map(|(flag, problem)| json!({"argument": flag, "argument_problem": problem.as_str()}))
+            .collect::<Vec<_>>(),
+    })))
+}
+
+/// #411 Lab B-2 R7 (coordinator decision Q9 of 2026-10-19): an option `command` takes once that
+/// is given more than once is refused with `validation_failed` (exit 2) before anything is loaded,
+/// captured or pressed, instead of the last one winning: the details name the first such option
+/// (in name order) as `argument` with `argument_problem` `repeated`, and every one in `arguments`.
+/// The options in `repeats` are taken more than once, each up to its own bound. Used by every path
+/// of `observe`, `do`, `ensure` and `wait`, and by `recognize`, `is-visible`, `detect-page`,
+/// `current-page`, `tap-target` and `navigate`.
+pub(super) fn refuse_repeated_options(
+    flags: &FlagArgs,
+    command: &str,
+    repeats: &[&str],
+) -> CliOutcome<()> {
+    let repeated = flags
+        .flags
+        .iter()
+        .filter(|(flag, values)| values.len() > 1 && !repeats.contains(&flag.as_str()))
+        .map(|(flag, _)| flag.as_str())
+        .collect::<Vec<_>>();
+    let Some(first) = repeated.first().copied() else {
+        return Ok(());
+    };
+    Err(CliError::usage(format!(
+        "{command} takes {} once; a repeated option is refused, never last-wins",
+        repeated.join(", ")
+    ))
+    .with_details(json!({
+        "argument": first,
+        "argument_problem": "repeated",
+        "arguments": repeated
+            .iter()
+            .map(|flag| json!({"argument": flag, "argument_problem": "repeated"}))
             .collect::<Vec<_>>(),
     })))
 }
@@ -1473,17 +1599,18 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         guard_evaluable_target(&evaluator, &target, "do")?;
-        let loaded_scene = load_lab2_scene(global, &flags)?;
-        let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+        let loaded_scene = load_lab2_scene(global, &flags, &evaluator)?;
+        // #411 Lab B-2: the page, the guard and the target are decided over the frame set; the
+        // click, the destructive check and the coordinates are the current frame's.
+        let frames = loaded_scene.frames();
+        let before = detect_current_page_over(&evaluator, &detector, &frames)?;
         // #411 Lab L7 (G12): a target an operation's guard names is guarded as the kernel guards
         // that operation before its input, the frame's page first and then the target.
         let guards =
             super::contained_resources::operation_guards(resources.loaded_bundle(), &target)?;
         refuse_off_guard_page(&ids.req_id, &target, &before, &guards)?;
         let reco_id = ids.issue(IdKind::Reco);
-        let evaluation = evaluator
-            .evaluate_target(&loaded_scene.scene, &target)
-            .map_err(|err| CliError::usage(err.to_string()))?;
+        let evaluation = evaluate_target_over(&evaluator, &frames, &target)?;
         if !evaluation.passed {
             let details = isolated_offline_error_details(
                 &ids.req_id,
@@ -1514,7 +1641,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 actual_click.rect,
                 &graph,
                 &evaluator,
-                &loaded_scene.scene,
+                &frames,
             ) {
                 let details = isolated_offline_error_details(
                     &ids.req_id,
@@ -1563,6 +1690,9 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 loaded_scene.scene.height(),
             ),
         });
+        if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
+            payload["recognition_coverage"] = coverage;
+        }
         attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
@@ -1590,8 +1720,8 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         let graph = super::contained_resources::navigation_graph(&resources)?;
-        let scene = load_lab2_scene(global, &flags)?;
-        let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
+        let scene = load_lab2_scene(global, &flags, &evaluator)?;
+        let start = detect_current_page_over(&evaluator, &detector, &scene.frames())?;
         let target_page = canonical_navigation_page(&graph, &to);
         if start.matched && start.page == target_page {
             let mut payload = json!({
@@ -1857,7 +1987,9 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         Lab2CommandContract {
             name: "observe",
             summary: "detect a page and project bounded offline elements or Runtime-backed navigation actions",
-            required: &["--scene <png> or --capture"],
+            required: &[
+                "--scene <png> (repeatable: 1 to 5 frames of one screen, oldest first, the last the current frame) or --capture",
+            ],
             optional: &[
                 "--targets <id,id>",
                 "--with-frame <path>",
@@ -1886,7 +2018,9 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         Lab2CommandContract {
             name: "do",
             summary: "execute one current Runtime element or explicit Tap/Swipe with lease-bound evidence; plan offline semantic targets",
-            required: &["<target> with --scene, or <element-id>/--tap/--swipe with --capture"],
+            required: &[
+                "<target> with --scene <png> (repeatable: 1 to 5 frames of one screen, oldest first, the last the current frame), or <element-id>/--tap/--swipe with --capture",
+            ],
             optional: &[
                 "--tap <x,y>",
                 "--swipe <x1,y1,x2,y2,duration-ms>",
@@ -1928,7 +2062,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             summary: "route from the current page to a requested page through guarded actions",
             required: &[
                 "<page> or --page <page> or --to <page>",
-                "--scene <png> or --capture",
+                "--scene <png> (repeatable: 1 to 5 frames of one screen, oldest first, the last the current frame) or --capture",
             ],
             optional: &[
                 "--dry-run",
@@ -1945,7 +2079,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             summary: "wait for a page or target stability using the shared ROI stability comparator",
             required: &[
                 "--page <page> or --stable <target>",
-                "--scene <png> or --capture",
+                "--scene <png> (repeatable: 1 to 5 frames of one screen, oldest first, the last the current frame) or --capture",
             ],
             optional: &[
                 "--timeout-ms <ms>",
@@ -2283,8 +2417,17 @@ fn escape_toolbox_groups() -> Value {
     ])
 }
 
-fn load_lab2_scene(_global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Lab2Scene> {
-    if let Some(scene_path) = flags.optional_path("--scene") {
+/// The offline frame set the `--scene` options name. #411 Lab B-2: one to five frames, oldest
+/// first, the last the current frame (`frame_source` names it); counts and sizes are refused
+/// before anything is evaluated, with the package's frame rule (`require_scene_frames`).
+fn load_lab2_scene(
+    _global: &GlobalOptions,
+    flags: &FlagArgs,
+    evaluator: &RecognitionEvaluator,
+) -> CliOutcome<Lab2Scene> {
+    let paths = super::readonly_cli::scene_paths(flags)?;
+    if let Some(scene_path) = paths.last().cloned() {
+        super::readonly_cli::require_scene_frames(evaluator, paths.len())?;
         let test_delay = flags
             .optional("--test-capture-delay-ms")
             .filter(|value| value != "true")
@@ -2300,12 +2443,15 @@ fn load_lab2_scene(_global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Lab2
         if let Some(delay) = test_delay {
             thread::sleep(delay);
         }
-        let png = fs::read(&scene_path).map_err(|err| {
-            CliError::device(format!("failed to read {}: {err}", scene_path.display()))
-        })?;
-        let scene = Scene::from_png(&png).map_err(|err| CliError::device(err.to_string()))?;
+        let mut frames = super::readonly_cli::read_scene_frames(&paths)?;
+        let Some((png, scene)) = frames.pop() else {
+            return Err(CliError::usage(
+                "offline Lab-2 CLI verbs require --scene <png>",
+            ));
+        };
         return Ok(Lab2Scene {
             scene,
+            samples: frames.into_iter().map(|(_, scene)| scene).collect(),
             backend: if test_delay.is_some() {
                 "test_stub_capture".to_string()
             } else {
@@ -2352,10 +2498,11 @@ fn write_frame_if_requested(flags: &FlagArgs, scene: &Lab2Scene) -> CliOutcome<O
 type ObservedTargets = (Vec<Value>, Vec<(String, TargetEvaluation)>);
 
 /// `observe`'s `targets`, and the evaluations of the targets `--targets` names (#411 Lab L6: the
-/// projection takes their values, as the online observation takes its explicit targets').
+/// projection takes their values, as the online observation takes its explicit targets'). #411
+/// Lab B-2: evaluated over the frame set `frames`, oldest first, the last the current frame.
 fn observe_targets(
     evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    frames: &[&Scene],
     flags: &FlagArgs,
     outcome: &PageDetectionOutcome,
 ) -> CliOutcome<ObservedTargets> {
@@ -2365,9 +2512,7 @@ fn observe_targets(
         let mut evaluations = Vec::new();
         for target in requested {
             guard_evaluable_target(evaluator, &target, "observe --targets")?;
-            let evaluation = evaluator
-                .evaluate_target(scene, &target)
-                .map_err(|err| CliError::usage(err.to_string()))?;
+            let evaluation = evaluate_target_over(evaluator, frames, &target)?;
             targets.push(json!({
                 "id": target,
                 "passed": evaluation.passed,
@@ -2468,8 +2613,8 @@ fn wait_for_page(
 ) -> CliOutcome<Value> {
     let started = Instant::now();
     loop {
-        let scene = load_lab2_scene(global, flags)?;
-        let outcome = detect_current_page(evaluator, detector, &scene.scene)?;
+        let scene = load_lab2_scene(global, flags, evaluator)?;
+        let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page {
             return Ok(json!({
                 "req_id": ids.req_id,
@@ -2512,10 +2657,8 @@ fn wait_for_stable_target(
 ) -> CliOutcome<Value> {
     guard_stable_target(evaluator, target)?;
     let started = Instant::now();
-    let first = load_lab2_scene(global, flags)?;
-    let mut previous = evaluator
-        .evaluate_target(&first.scene, target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
+    let first = load_lab2_scene(global, flags, evaluator)?;
+    let mut previous = evaluate_target_over(evaluator, &first.frames(), target)?;
     if !previous.passed {
         let details = lab2_error_payload_for_flags(
             flags,
@@ -2533,10 +2676,8 @@ fn wait_for_stable_target(
         .with_details(details));
     }
     loop {
-        let next_scene = load_lab2_scene(global, flags)?;
-        let current = evaluator
-            .evaluate_target(&next_scene.scene, target)
-            .map_err(|err| CliError::usage(err.to_string()))?;
+        let next_scene = load_lab2_scene(global, flags, evaluator)?;
+        let current = evaluate_target_over(evaluator, &next_scene.frames(), target)?;
         if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
             return Ok(json!({
                 "req_id": ids.req_id,
@@ -2659,18 +2800,20 @@ fn derive_lab2_click_rect(
     })
 }
 
+/// #411 Lab B-2: `frames` is the frame set, oldest first; a region that follows a target is the
+/// box the target matches on the current (last) frame.
 fn reject_lab2_destructive_click_overlap(
     target: &str,
     page: &str,
     click: PackRect,
     graph: &NavigationGraph,
     evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    frames: &[&Scene],
 ) -> CliOutcome<()> {
     // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click follows
     // a target covers the box its target matches on the guard frame.
     let frame_regions =
-        destructive_frame_regions(evaluator, scene, page, &graph.destructive_clicks)?;
+        destructive_frame_regions_over(evaluator, frames, page, &graph.destructive_clicks)?;
     if graph.destructive_clicks.iter().any(|destructive| {
         destructive
             .page

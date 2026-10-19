@@ -766,3 +766,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_b15w2::b15w2_ac_diagnose_shows_the_instances_stopped_remedies",
 ]
 incident = ["#411 B15"]
+
+# #411 Lab B-2 (v0.12.x; register §1.131 B2-5, no persisted ledger shape; G8 offline; coordinator decision Q1 of 2026-10-19; related: apps 73, 76): MCP ac_lab_observe and ac_lab_do take sample_scenes, a list of 1 to 4 strings none flag-like (the schema says so), the earlier frames of scene's set, and pass them to actinglab as --scene options before scene's, oldest first; sample_scenes without scene answers arguments_invalid {argument: sample_scenes, argument_problem: conflicting} (class usage), an empty or five-item list out_of_range and a flag-like item not_recognised, each before the install is located and before any actinglab child runs
+[[gate]]
+key = "78"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_b2::b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene",
+]
+incident = ["#411 Lab B-2"]

@@ -30,6 +30,10 @@ mod gate_lab_l1;
 // #411 Lab L7 (exec key 100): the Lab decides a frame's page and guards `do` as the Runtime does.
 #[path = "gate_lab_l7.rs"]
 mod gate_lab_l7;
+// #411 Lab B-2 (exec key 107): offline Lab verbs take a frame set of one to five `--scene` frames,
+// and a Lab2 path refuses an option it takes once given twice.
+#[path = "gate_lab_b2.rs"]
+mod gate_lab_b2;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

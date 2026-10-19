@@ -1,8 +1,10 @@
 # Page projection and resource annotations
 
 `actingcommand-contract::page_projection` owns the pure projection function,
-metadata validation and `actingcommand.page-projection.v1` DTO. It accepts one
-frame's already resolved facts. It performs no recognition, file access, provider
+metadata validation and `actingcommand.page-projection.v1` DTO. It accepts the
+facts already resolved from one observation's frames (offline `observe --scene`
+may give up to five, the last the current frame, whose identity the projection
+carries; #411 Lab B-2). It performs no recognition, file access, provider
 call, device operation or state mutation. The offline `actinglab observe --scene`
 adapter calls this owner; Runtime consumption uses the same boundary.
 

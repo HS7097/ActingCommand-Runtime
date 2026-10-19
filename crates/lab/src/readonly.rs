@@ -20,16 +20,16 @@ impl<P: LabPorts> Lab<P> {
     ) -> LabResult<crate::RecognizeResponse> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let scene = if engine
+        let frames = if engine
             .target_requires_scene(&request.target)
             .map_err(readonly_error)?
         {
-            Some(recognition_scene(self, &mut request.input)?)
+            recognition_frames(self, &mut request.input)?
         } else {
-            None
+            Vec::new()
         };
         engine
-            .recognize(&request.target, scene.as_ref())
+            .recognize_frames(&request.target, &frame_refs(&frames))
             .map_err(readonly_error)
     }
 
@@ -43,13 +43,13 @@ impl<P: LabPorts> Lab<P> {
             "detect-page requires --pages or --resource-root --game",
         )?;
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let scene = if request.check_pages {
-            None
+        let frames = if request.check_pages {
+            Vec::new()
         } else {
-            Some(recognition_scene(self, &mut request.input)?)
+            recognition_frames(self, &mut request.input)?
         };
         engine
-            .detect_page(&detector, scene.as_ref(), request.check_pages)
+            .detect_page_frames(&detector, &frame_refs(&frames), request.check_pages)
             .map_err(readonly_error)
     }
 
@@ -62,9 +62,9 @@ impl<P: LabPorts> Lab<P> {
             &request.input,
             "semantic page commands require --pages or --resource-root --game",
         )?;
-        let scene = recognition_scene(self, &mut request.input)?;
+        let frames = recognition_frames(self, &mut request.input)?;
         ReadonlyRecognitionEngine::new(evaluator, env_resolved)
-            .current_page(&detector, &scene)
+            .current_page_frames(&detector, &frame_refs(&frames))
             .map_err(readonly_error)
     }
 
@@ -74,16 +74,16 @@ impl<P: LabPorts> Lab<P> {
     ) -> LabResult<crate::IsVisibleResponse> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let scene = if engine
+        let frames = if engine
             .target_requires_scene(&request.target)
             .map_err(readonly_error)?
         {
-            Some(recognition_scene(self, &mut request.input)?)
+            recognition_frames(self, &mut request.input)?
         } else {
-            None
+            Vec::new()
         };
         engine
-            .is_visible(&request.target, scene.as_ref())
+            .is_visible_frames(&request.target, &frame_refs(&frames))
             .map_err(readonly_error)
     }
 }
@@ -133,6 +133,22 @@ pub(crate) fn recognition_scene<P: LabPorts>(
         input.fresh_delay,
         "command requires --scene <png> or --capture",
     )
+}
+
+/// #411 Lab B-2: the input's frame set, oldest first: its earlier frames (`sample_scenes`), then
+/// its current frame.
+fn recognition_frames<P: LabPorts>(
+    lab: &mut Lab<P>,
+    input: &mut crate::ReadonlyRecognitionInput,
+) -> LabResult<Vec<Scene>> {
+    let current = recognition_scene(lab, input)?;
+    let mut frames = std::mem::take(&mut input.sample_scenes);
+    frames.push(current);
+    Ok(frames)
+}
+
+fn frame_refs(frames: &[Scene]) -> Vec<&Scene> {
+    frames.iter().collect()
 }
 
 pub(crate) fn detect_current_page(

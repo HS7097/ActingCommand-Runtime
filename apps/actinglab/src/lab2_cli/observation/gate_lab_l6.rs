@@ -242,7 +242,7 @@ fn observe_entry_page(provider: Scripted, explicit_targets: &[&str]) -> PageProj
     let (projection, _) = build(
         &view,
         &evaluator,
-        &scene,
+        &[&scene],
         &outcome,
         &LabOcr::with_provider(provider),
         &explicit,
@@ -458,7 +458,7 @@ fn l6_without_ocr_an_action_ocr_target_stays_not_evaluated_beside_nn_models() {
         target_id: "text/stock".to_string(),
     };
     let mut resolved = BTreeMap::new();
-    let resolution = resolve(&input, &evaluator, &entry_frame(), &mut resolved, &ocr)
+    let resolution = resolve(&input, &evaluator, &[&entry_frame()], &mut resolved, &ocr)
         .expect("an action's OCR target without OCR does not fail observe");
     assert!(
         matches!(
