@@ -370,13 +370,33 @@ pub(super) fn online_frame_plan(
     instance: &str,
     path: &std::path::Path,
 ) -> CliOutcome<actingcommand_contract::ObservationFramePlan> {
+    online_observation(instance, path).map(|observation| observation.frame_plan())
+}
+
+/// #411 Lab L5b: the most frames and the longest waits one online `observe` of the package at
+/// `path` takes, its transaction and its page's candidate layout series (at most 25 frames), as
+/// the Runtime's kernel computes them from the same admission
+/// (`PreparedPageObservation::series_plan`); the client's receipt wait allows for them. A
+/// package the kernel does not admit for observation is refused here, before any Runtime
+/// request.
+pub(super) fn online_series_plan(
+    instance: &str,
+    path: &std::path::Path,
+) -> CliOutcome<actingcommand_contract::ObservationSeriesPlan> {
+    online_observation(instance, path).map(|observation| observation.series_plan())
+}
+
+/// The kernel's admission of the package at `path` for an online observation.
+fn online_observation(
+    instance: &str,
+    path: &std::path::Path,
+) -> CliOutcome<actingcommand_lab::PreparedPageObservation> {
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(
             ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
         ))
         .ok_or_else(|| CliError::package_invalid("package admission deadline overflow"))?;
     actingcommand_lab::PreparedPageObservation::load_path(instance, path, &[], None, deadline)
-        .map(|observation| observation.frame_plan())
         .map_err(|error| CliError::package_invalid(format!("{error}: {}", error.cause())))
 }
 

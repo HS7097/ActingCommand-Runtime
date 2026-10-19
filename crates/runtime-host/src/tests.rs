@@ -271,6 +271,9 @@ mod gate_411_b15w2;
 // #411 Lab L5a (host key 120), register §1.130: every online Lab observation takes the frames its
 // package's target consensus needs, as one transaction.
 mod gate_411_lab_l5;
+// #411 Lab L5b (host key 121), register §1.130: `observe --capture` projects a multi-frame
+// candidate layout over its own series.
+mod gate_411_lab_l5b;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;

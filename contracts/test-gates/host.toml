@@ -1445,3 +1445,15 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::a24_failure_burst_window_does_not_depend_on_arrival_order",
 ]
 incident = ["#411 A24"]
+
+# #411 Lab L5b (v0.12.x; register §1.130 L5-6 to L5-8; no persisted ledger shape; no outcome code; coordinator decisions Q2 and Q5 of 2026-10-19; key assigned by the coordinator): when observe --capture is complete and recognises one page, each candidate layout of that page that needs F_l > 1 frames takes F_l - 1 further page transactions, the layout's interval apart (unscaled), each on the same single page and frame size, else its row is candidate_projection_failure with candidate_sample_page_or_geometry_changed and the observation is partial; the layout is projected over the current frame and each further transaction's current frame with coverage {F_l, F_l, production_owner}, the observation's frame and every other row staying its own transaction's; an observation takes at most 25 frames, each admitted series counted whole, a layout beyond them projected over the current frame alone and refused with candidate_samples_unavailable (a partial observation); the input check runs from the first capture to the last of the series (observation_samples_interrupted); the client's receipt wait allows for the package's largest series
+[[gate]]
+key = "121"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_observe_projects_a_multi_frame_layout_over_its_own_series",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_a_series_frame_on_another_page_fails_that_layout",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_layouts_beyond_25_frames_are_refused_unavailable",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_an_input_during_the_series_fails_the_observation",
+]
+incident = ["#411 Lab L5b"]

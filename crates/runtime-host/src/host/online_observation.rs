@@ -11,8 +11,48 @@ use actingcommand_contract::{
     MAX_OBSERVATION_ARTIFACT_BYTES, ONLINE_OBSERVATION_SCHEMA, PageObservationStatus,
 };
 use actingcommand_execution_kernel::{
-    ExecutionKernelLocation, ObservationMode, OnlineObservationError, PreparedPageObservation,
+    ExecutionKernelLocation, ObservationFrameSource, ObservationSeriesError,
+    OnlineObservationError, PreparedPageObservation,
 };
+
+/// #411 Lab L5b: the further page transactions of an `observe`'s candidate layout series, each a
+/// keyless transaction of the package's frame plan ([`HostShared::capture_readonly_transaction`]),
+/// the layout's interval waited on the Runtime clock with no lock held. It keeps the sequence
+/// of its last capture's terminal for the input check over the whole observation.
+struct SeriesTransactions<'a, 'r> {
+    host: &'a HostShared,
+    request: &'a ValidatedRuntimeRequest<'r>,
+    instance_alias: &'a str,
+    instance_id: InstanceId,
+    plan: actingcommand_contract::ObservationFramePlan,
+    last_sequence: Option<u64>,
+}
+
+impl ObservationFrameSource for SeriesTransactions<'_, '_> {
+    type Error = RequestFailure;
+
+    fn capture(&mut self) -> Result<Vec<Vec<u8>>, RequestFailure> {
+        let (samples, current) = self.host.capture_readonly_transaction(
+            self.request,
+            self.instance_alias,
+            self.instance_id,
+            self.plan,
+        )?;
+        self.last_sequence = Some(current.terminal.sequence());
+        samples
+            .iter()
+            .chain(std::iter::once(&current))
+            .map(|captured| {
+                read_projected_verified(self.host.artifacts.root(), captured.observation.artifact())
+                    .map_err(observation_artifact_failure)
+            })
+            .collect()
+    }
+
+    fn pause(&mut self, ms: u64) {
+        self.host.kernel_pause(Duration::from_millis(ms));
+    }
+}
 
 impl HostShared {
     pub(super) fn capture_material_failure(
@@ -178,7 +218,16 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        let evaluated = prepared.evaluate_frames(
+        // #411 Lab L5b: the page's candidate layouts that need more frames take their series.
+        let mut series = SeriesTransactions {
+            host: self,
+            request,
+            instance_alias,
+            instance_id: resolved.instance_id(),
+            plan: prepared.frame_plan(),
+            last_sequence: None,
+        };
+        let evaluated = match prepared.evaluate_with_series(
             &frames,
             FrameIdentity {
                 kind: FrameKind::Artifact,
@@ -194,14 +243,45 @@ impl HostShared {
                 width: completed.observation.width(),
                 height: completed.observation.height(),
             },
-            ObservationMode::Inspect,
-        );
+            &mut series,
+        ) {
+            Ok(value) => Ok(value),
+            Err(ObservationSeriesError::Observation(error)) => Err(error),
+            // The capture recorded its own failure and terminal; the reports of what was
+            // evaluated before it are archived with it.
+            Err(ObservationSeriesError::Source {
+                error,
+                ppocr_diagnostics,
+            }) => {
+                return Err(self.series_capture_failure(
+                    error,
+                    &ppocr_diagnostics,
+                    links,
+                    completed.artifact_links,
+                ));
+            }
+        };
+        let last_sequence = series.last_sequence;
         let evaluated = self.archive_online_ppocr_result(
             evaluated,
             links.clone(),
             completed.artifact_links.clone(),
             "online_page",
         )?;
+        // #411 Lab L5b: the input check covers the whole observation, from its first capture to
+        // the last capture of its series.
+        if let Some(last_sequence) = last_sequence {
+            self.check_observation_sample_inputs(
+                request,
+                resolved.instance_id(),
+                samples
+                    .first()
+                    .map_or(completed.requested_sequence, |first| {
+                        first.requested_sequence
+                    }),
+                last_sequence,
+            )?;
+        }
         let evidence = ContainedObservationEvidence {
             schema_version: ONLINE_OBSERVATION_SCHEMA.to_string(),
             request_id: original.request_id(),
@@ -285,6 +365,39 @@ impl HostShared {
             },
             failure_outcome: None,
         })
+    }
+
+    /// #411 Lab L5b: a capture of an `observe`'s candidate layout series failed and recorded its
+    /// own failure and terminal; the PP-OCR reports of the observation's evaluations before it
+    /// are archived, and a failure to archive them is chained to the capture's.
+    fn series_capture_failure(
+        &self,
+        mut failure: RequestFailure,
+        reports: &actingcommand_contract::PpocrDiagnostics,
+        links: EventLinksDraft,
+        artifact_links: ArtifactLinksDraft,
+    ) -> RequestFailure {
+        if reports.is_empty() {
+            return failure;
+        }
+        if let Err(archive) = self.archive_ppocr_diagnostics(
+            reports,
+            super::ppocr_diagnostic::PpocrArchiveContext {
+                links,
+                artifact_links,
+                phase: "online_page",
+                target: None,
+                saved_source: None,
+                drain: true,
+            },
+        ) {
+            failure.error = Box::new((*failure.error).with_complete_failure(
+                crate::error::RuntimeFailureRelation::DiagnosticArchive,
+                archive,
+            ));
+            failure.poison_runtime |= failure.error.is_fatal();
+        }
+        failure
     }
 
     /// #411 Lab L5: a keyless observation transaction holds no lease, so it cannot keep inputs

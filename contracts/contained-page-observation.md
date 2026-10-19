@@ -18,6 +18,18 @@ aggregation owner as a task's observation does ([linear-steps.md](linear-steps.m
 between the first and the last capture fails the observation with
 `observation_samples_interrupted`. The last frame is the observation's frame;
 every frame is persisted by the capture owner under its own frame ID (#411 Lab L5).
+When `observe` recognises one page completely, each candidate layout of that page
+that needs more frames, in catalog order, gets its further page observations (each
+a transaction as above) the layout's interval apart after the current frame, each
+on the same page and frame size (else `candidate_sample_page_or_geometry_changed`,
+a partial observation), and is projected over the current frame and each further
+observation's current frame as a select step projects it, its row's coverage
+`{provided_frames: F_l, required_frames: F_l, aggregation: production_owner}`; at
+most 25 frames per observation, each admitted series counted whole (a layout beyond
+that is projected over the current frame alone and refused with
+`candidate_samples_unavailable`); only `observe` projects them. The input check then
+runs from the first capture to the last, and the observation's frame, projection
+and every other row stay those of its own transaction (#411 Lab L5b).
 Every actual target result retains its page, role, group and target position.
 Explicit targets reuse all corresponding results from this observation; an
 explicitly requested target with no previous result or failure is evaluated once. An ambiguous set of actual results remains ambiguous.
@@ -53,7 +65,8 @@ this verified result supplies online Lab page semantics and optional frame bytes
 
 Each public or controlled raw fact collection has a limit of 256 rows and 64 KiB;
 the enclosing diagnostic artifact is at most 256 KiB; an observation stores at
-most five frames (#411 Lab L5). Counts include omitted rows
+most five frames for its own transaction (#411 Lab L5) and 25 with its candidate
+layouts' series (#411 Lab L5b). Counts include omitted rows
 and omitted actual target evaluations. The public shared projection retains its
 64-item, 32-KiB limits. Min output can omit auxiliary rows and reduce shared
 projection entries, with explicit counts and the persisted source reference.
