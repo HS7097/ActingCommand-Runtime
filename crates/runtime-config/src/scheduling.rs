@@ -778,7 +778,7 @@ pub(crate) fn instance_random_delay(
     ]
     .map(|member| {
         let own = instance_key(instance_id, member);
-        if value(&own).is_some() {
+        if value(&own).is_some() && own.is_empty() {
             own
         } else {
             member.to_owned()

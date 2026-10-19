@@ -291,7 +291,8 @@ fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
     let class = match code {
         HostCode::PolicyBudgetExhausted
         | HostCode::PolicyActivityWindowClosed
-        | HostCode::PolicyTaskPaused => GateClass::Persistent,
+        | HostCode::PolicyTaskPaused
+        | HostCode::DispatchRandomDelayWaiting => GateClass::Persistent,
         HostCode::DispatchPausedGlobal | HostCode::DispatchPausedInstance => {
             GateClass::OperatorPause
         }

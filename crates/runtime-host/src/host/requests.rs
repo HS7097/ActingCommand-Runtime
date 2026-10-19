@@ -507,6 +507,16 @@ impl HostShared {
                 request: task_request,
             } => {
                 self.require_physical_instance_alias(instance_alias)?;
+                if lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?
+                    .random_delay_waiting(instance_alias)
+                {
+                    return Err(RuntimeHostError::request(
+                        HostCode::DispatchRandomDelayWaiting,
+                        HostLocation::AdmitPolicyDispatch,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .into());
+                }
                 self.run_contained_task(
                     request,
                     validated,

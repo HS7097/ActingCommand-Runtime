@@ -74,6 +74,8 @@ const DEFAULT_RECONCILIATION_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_CLOCK_JUMP_THRESHOLD_MS: u64 = 5_000;
 // One evaluation can reference at most one current activity window per bounded instance.
 const MAX_DETECTION_QUOTA_CACHE_WINDOWS: usize = MAX_EVALUATION_INSTANCES;
+// Red proof M8: the random delays kept in a process-global static, by state root.
+static KEPT_RANDOM_DELAYS: Mutex<BTreeMap<PathBuf, RandomDelayTable>> = Mutex::new(BTreeMap::new());
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -839,7 +841,7 @@ struct RandomDelayEntry {
 /// dispatch is at or after its `due_at`, when an evaluation leaves the pair not eligible, when
 /// an evaluation passes its allowed period, when its instance's delay is off, and when the active
 /// catalog generation changes. A rejected admission does not end it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct RandomDelayTable {
     /// The active catalog generation the entries were drawn under.
     catalog_hash: Option<String>,
@@ -864,7 +866,7 @@ impl RandomDelayTable {
             self.catalog_hash = Some(catalog_hash.to_owned());
         }
         self.entries.retain(|(task_id, alias), entry| {
-            let enabled = delays.get(alias).is_some_and(|delay| delay.enabled);
+            let enabled = delays.get(alias).is_some();
             let dispatched = tasks.iter().any(|state| {
                 state.task_id == *task_id
                     && state.instance_id == *alias
@@ -893,10 +895,10 @@ impl RandomDelayTable {
         now_unix_ms: u64,
         fact_refresh: bool,
     ) -> RuntimeHostResult<CandidateEligibility> {
-        let Some(delay) = delay.filter(|delay| delay.enabled) else {
+        let Some(delay) = delay else {
             return Ok(CandidateEligibility::Eligible);
         };
-        let key = (intent.task_id.clone(), intent.instance_id.clone());
+        let key = (String::new(), intent.instance_id.clone());
         let entry = match self.entries.get(&key).copied() {
             Some(entry) => entry,
             None => {
@@ -905,7 +907,7 @@ impl RandomDelayTable {
                 entry
             }
         };
-        if entry.planned_start_unix_ms <= now_unix_ms {
+        if entry.planned_start_unix_ms <= now_unix_ms || entry.delay_ms > 0 {
             return Ok(CandidateEligibility::Eligible);
         }
         let reason = DecisionReason {
@@ -943,10 +945,7 @@ impl RandomDelayTable {
         let eligible = evaluation
             .decisions
             .iter()
-            .filter(|decision| {
-                decision.eligibility == EligibilityState::True
-                    && decision.state != SchedulingDecisionState::Blocked
-            })
+            .filter(|decision| decision.eligibility != EligibilityState::Unknown)
             .filter_map(|decision| {
                 Some((decision.task_id.as_str(), decision.instance_id.as_deref()?))
             })
@@ -960,9 +959,7 @@ impl RandomDelayTable {
     fn dispatched(&self, intent: &DispatchIntent) -> Option<PolicyRandomDelay> {
         self.entries
             .get(&(intent.task_id.clone(), intent.instance_id.clone()))
-            .filter(|entry| {
-                entry.planned_start_unix_ms <= intent.prerequisites.evaluated_at_unix_ms
-            })
+            .filter(|entry| entry.planned_start_unix_ms >= entry.due_at_unix_ms)
             .map(|entry| PolicyRandomDelay {
                 due_at_unix_ms: entry.due_at_unix_ms,
                 planned_start_unix_ms: entry.planned_start_unix_ms,
@@ -1016,8 +1013,7 @@ fn draw_random_delay(
         (Some(fresh), Some(last)) => Some(fresh.min(last)),
         (fresh, last) => fresh.or(last),
     };
-    let delay_ms =
-        allowed_until_unix_ms.map_or(drawn, |until| drawn.min(until.saturating_sub(now_unix_ms)));
+    let delay_ms = drawn;
     let planned_start_unix_ms = now_unix_ms.checked_add(delay_ms).ok_or_else(|| {
         fatal(
             HostCode::PolicyTimeOverflow,
@@ -1109,6 +1105,8 @@ pub(crate) struct PolicyHost {
     remedies: crate::remedy::RemedyState,
     /// Workflow #405 D1: the random delays drawn per pair. Memory only; a host starts with none.
     random_delays: RandomDelayTable,
+    /// Red proof M8.
+    random_delays_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1143,7 +1141,12 @@ impl PolicyHost {
             confirmed_run_admissions: BTreeMap::new(),
             quarantined_dispatches: BTreeSet::new(),
             remedies: crate::remedy::RemedyState::default(),
-            random_delays: RandomDelayTable::default(),
+            random_delays: KEPT_RANDOM_DELAYS
+                .lock()
+                .ok()
+                .and_then(|kept| kept.get(state_root).cloned())
+                .unwrap_or_default(),
+            random_delays_root: state_root.to_path_buf(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -1600,17 +1603,31 @@ impl PolicyHost {
     /// intents, read right after its evaluation) was dispatched under, by decision id; an
     /// intent of an instance with the delay off has none.
     pub(crate) fn dispatch_random_delays(
-        &self,
+        &mut self,
         intents: &[DispatchIntent],
     ) -> BTreeMap<String, PolicyRandomDelay> {
-        intents
+        let delays = intents
             .iter()
             .filter_map(|intent| {
                 self.random_delays
                     .dispatched(intent)
                     .map(|delay| (intent.decision_id.clone(), delay))
             })
-            .collect()
+            .collect::<BTreeMap<_, _>>();
+        for intent in intents {
+            self.random_delays
+                .entries
+                .remove(&(intent.task_id.clone(), intent.instance_id.clone()));
+        }
+        delays
+    }
+
+    /// Red proof M9: whether a pair of `instance_alias` holds a draw.
+    pub(crate) fn random_delay_waiting(&self, instance_alias: &str) -> bool {
+        self.random_delays
+            .entries
+            .keys()
+            .any(|(_, alias)| alias == instance_alias)
     }
 
     pub(crate) fn evaluate(
@@ -1716,6 +1733,9 @@ impl PolicyHost {
                     scheduling_pause(&intent.instance_id),
                     instance_occupancy(&intent.instance_id),
                 ) {
+                    self.random_delays
+                        .entries
+                        .remove(&(intent.task_id.clone(), intent.instance_id.clone()));
                     return Ok(hold.eligibility(refresh));
                 }
                 // Workflow #386 SR-3 (scheduling model §2.4 item 3; `scheduling-blackout.md`,
@@ -1848,6 +1868,9 @@ impl PolicyHost {
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
         self.random_delays.retain_eligible(&evaluation);
+        if let Ok(mut kept) = KEPT_RANDOM_DELAYS.lock() {
+            kept.insert(self.random_delays_root.clone(), self.random_delays.clone());
+        }
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
         if let Some(decisions) = &remedy_decisions {
