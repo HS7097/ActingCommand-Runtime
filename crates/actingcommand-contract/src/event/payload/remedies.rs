@@ -92,8 +92,7 @@ impl RemedyDeclaration {
         }
         let mut defaults = BTreeSet::new();
         for capability in self.default_capabilities() {
-            if !capabilities.contains(capability.as_str()) || !defaults.insert(capability.as_str())
-            {
+            if !defaults.insert(capability.as_str()) {
                 return Err(invalid("remedy.default"));
             }
         }
@@ -215,9 +214,7 @@ pub fn validate_provides(provides: &[ProvidedCapability]) -> Result<(), Provides
             return Err(ProvidesViolation::provides(format!("{pointer}/capability")));
         }
         let parameters = provided.parameters();
-        if parameters.len() > MAX_PROVIDED_PARAMETERS
-            || (provided.irreversible() && parameters.is_empty())
-        {
+        if parameters.len() > MAX_PROVIDED_PARAMETERS {
             return Err(ProvidesViolation::parameters(format!(
                 "{pointer}/parameters"
             )));

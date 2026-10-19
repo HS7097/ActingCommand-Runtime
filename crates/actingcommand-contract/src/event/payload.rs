@@ -4558,7 +4558,7 @@ pub struct SchedulingOutcomeMapping {
     /// Workflow #411 B15 (contracts/remedies.md section 2.1): a run that ends on this key is a
     /// success whose business result is not the expected one, and serving the remedy's need may
     /// make it reachable. Absent, the mapping serializes as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     remedy: Option<RemedyDeclaration>,
 }
 

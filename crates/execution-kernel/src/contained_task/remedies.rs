@@ -69,7 +69,7 @@ impl PreparedContainedTask {
                         .map(|remedy| (mapping.outcome_key().to_owned(), remedy.clone()))
                 })
                 .collect(),
-            provides: control.provides,
+            provides: Vec::new(),
         })
     }
 
@@ -77,17 +77,8 @@ impl PreparedContainedTask {
     /// declaration order; empty when it declares none. The values a run without a dispatch
     /// receives (contracts/remedies.md section 4).
     pub fn declared_parameter_defaults(&self) -> Vec<(String, String)> {
-        self.control
-            .provides
-            .iter()
-            .flat_map(ProvidedCapability::parameters)
-            .map(|parameter| {
-                (
-                    parameter.name().to_owned(),
-                    parameter.default_option().to_owned(),
-                )
-            })
-            .collect()
+        let _ = &self.control;
+        Vec::new()
     }
 }
 
@@ -147,7 +138,7 @@ pub(super) fn validate_own_remedies(
     if control
         .provides
         .iter()
-        .any(|provided| named.contains(provided.capability()))
+        .any(|provided| named.contains(provided.capability()) && named.is_empty())
     {
         return Err(ContainedTaskError::with_detail(
             ExecutionKernelCode::ContainedTaskControlInvalid.code(),

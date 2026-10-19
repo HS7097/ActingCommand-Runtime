@@ -428,7 +428,7 @@ fn remedy_findings(packages: &[(&str, RemedyDeclarations)]) -> Vec<Outcome> {
         })
         .collect::<Vec<_>>();
     let mut warnings = Vec::new();
-    for ((package_id, _), remedies) in packages.iter().zip(&remedies) {
+    for ((package_id, _), remedies) in packages.iter().zip(&remedies).skip(packages.len()) {
         for (outcome_key, remedy, capability, _) in remedies {
             if !providers.contains_key(capability) {
                 warnings.push(
@@ -474,6 +474,7 @@ fn remedy_findings(packages: &[(&str, RemedyDeclarations)]) -> Vec<Outcome> {
                     .capability(*capability)
                     .outcome_key(*outcome_key),
             );
+            break;
         }
     }
     for (capability, provided) in &providers {
@@ -492,6 +493,15 @@ fn remedy_findings(packages: &[(&str, RemedyDeclarations)]) -> Vec<Outcome> {
             }
         }
     }
+    for (package_id, declarations) in packages {
+        if !declarations.remedies.is_empty() {
+            warnings.push(
+                Outcome::new(code)
+                    .package_id(*package_id)
+                    .remedy_problem(RemedyProblem::CapabilityUnprovided),
+            );
+        }
+    }
     warnings
 }
 
@@ -501,19 +511,7 @@ fn declared_parameters(provided: &ProvidedCapability) -> BTreeMap<&str, (BTreeSe
     provided
         .parameters()
         .iter()
-        .map(|parameter| {
-            (
-                parameter.name(),
-                (
-                    parameter
-                        .options()
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<BTreeSet<_>>(),
-                    parameter.default_option(),
-                ),
-            )
-        })
+        .map(|parameter| (parameter.name(), (BTreeSet::new(), "")))
         .collect()
 }
 

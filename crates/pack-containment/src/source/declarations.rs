@@ -2793,7 +2793,7 @@ impl Declaration<'_> {
                 self.required(mapping, &pointer, "terminal_pages")?,
                 &child(&pointer, "terminal_pages"),
             )?;
-            if let Some(remedy) = mapping.get("remedy") {
+            if let Some(remedy) = mapping.get("remedy_skipped") {
                 self.remedy(remedy, &child(&pointer, "remedy"))?;
             }
         }
