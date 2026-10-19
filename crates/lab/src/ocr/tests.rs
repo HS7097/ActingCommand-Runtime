@@ -109,8 +109,10 @@ fn vision_root(runtime: bool, ocr: &[&str], nn: &[&str]) -> TempDir {
 }
 
 // The cause of an unavailable OCR, after checking the top: `lab_ocr_unavailable`, an error.
+// #411 Lab L6: OCR is unavailable when no provider reads text; an NN-only root still gives a
+// provider for its NN models.
 fn cause(ocr: &LabOcr) -> Outcome {
-    assert!(ocr.provider().is_none(), "OCR must be unavailable");
+    assert!(ocr.ocr_provider().is_none(), "OCR must be unavailable");
     let outcome = ocr.unavailable_outcome().expect("the unavailable outcome");
     assert!(outcome.is(LabCode::LabOcrUnavailable), "{outcome}");
     assert_eq!(outcome.category(), Category::Error);

@@ -258,6 +258,7 @@ fn observe_entry_page(with_icon: bool) -> PageProjection {
         &scene,
         &outcome,
         &LabOcr::from_installation(None),
+        &[],
     )
     .unwrap_or_else(|error| panic!("projection: {}", error.message));
     projection

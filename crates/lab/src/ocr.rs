@@ -12,6 +12,10 @@
 //! Workflow #411 A12: a process outside an A/B installation that runs from a single-location
 //! root (`runtime\BUILD-MANIFEST.json` two levels above it, no install selection; register §1.96)
 //! reads that root's `actingd.config.json`.
+//!
+//! #411 Lab L6: a vision root with NN models and no OCR model gives the offline tools a provider,
+//! as the Runtime accepts such a root: NN targets evaluate with it, while OCR stays unavailable
+//! under `lab_ocr_unavailable` caused by `lab_ocr_model_missing`, as before.
 
 use crate::codes::LabCode;
 use actingcommand_contract::codes::{InstallationCode, SharedCode};
@@ -44,12 +48,16 @@ const ROOT_CONFIGURATION_FILE: &str = "actingd.config.json";
 /// (`InstalledProcess::config_bytes`) and mcp-serve's.
 const MAX_CONFIGURATION_BYTES: u64 = 1024 * 1024;
 
-/// The OCR provider of one offline tool process, or why OCR is unavailable to it.
+/// The vision provider of one offline tool process, and why OCR is unavailable to it.
 #[derive(Debug, Clone)]
 pub struct LabOcr {
     /// The vision root the provider was looked for in, once it is known.
     vision_root: Option<PathBuf>,
-    state: Result<Arc<dyn VisionProvider>, Outcome>,
+    /// The provider every offline evaluation is given; `None` when the root gives none.
+    provider: Option<Arc<dyn VisionProvider>>,
+    /// `lab_ocr_unavailable` with its cause when the provider reads no text: there is none, or
+    /// (#411 Lab L6) its root holds NN models and no OCR model.
+    ocr_unavailable: Option<Outcome>,
 }
 
 /// The parts of the Runtime configuration the offline tools read: only the vision root.
@@ -148,7 +156,9 @@ impl LabOcr {
 
     /// The provider over the model folders of the vision root `root`, on the CPU: the root and
     /// its `models` folder must be readable, `ort\onnxruntime.dll` present, and at least one
-    /// folder an OCR model.
+    /// folder an OCR model. #411 Lab L6: a root whose folders hold NN models and no OCR model
+    /// gives the provider too, for NN targets; OCR is then unavailable, caused by
+    /// `lab_ocr_model_missing`.
     pub fn from_vision_root(root: &Path) -> Self {
         let root = match std::fs::canonicalize(root) {
             Ok(root) => root,
@@ -191,15 +201,21 @@ impl LabOcr {
                 Outcome::new(VisionListingCode::VisionModelsEmpty),
             );
         }
-        if listing.ocr.is_empty() {
+        if listing.ocr.is_empty() && listing.nn.is_empty() {
             let cause = Outcome::new(LabCode::LabOcrModelMissing).path(&models);
             return Self::unavailable(Some(root), cause);
         }
+        let ocr_missing = listing
+            .ocr
+            .is_empty()
+            .then(|| Outcome::new(LabCode::LabOcrModelMissing).path(&models));
         let loader = Arc::new(PpocrCtcLoader::new(runtime, None));
         match VisionFfiProvider::from_listing(listing, loader) {
+            // #411 Lab L6: without an OCR model the provider serves the root's NN models.
             Ok(provider) => Self {
+                ocr_unavailable: ocr_missing.map(|cause| unavailable_outcome(Some(&root), cause)),
                 vision_root: Some(root),
-                state: Ok(Arc::new(provider)),
+                provider: Some(Arc::new(provider)),
             },
             // The provider refuses only a listing without any folder, refused above.
             Err(_) => Self::unavailable(
@@ -213,30 +229,36 @@ impl LabOcr {
     pub fn with_provider(provider: Arc<dyn VisionProvider>) -> Self {
         Self {
             vision_root: None,
-            state: Ok(provider),
+            provider: Some(provider),
+            ocr_unavailable: None,
         }
     }
 
     fn unavailable(vision_root: Option<PathBuf>, cause: Outcome) -> Self {
-        let outcome = Outcome::new(LabCode::LabOcrUnavailable);
-        let outcome = match &vision_root {
-            Some(root) => outcome.path(root),
-            None => outcome,
-        };
         Self {
+            ocr_unavailable: Some(unavailable_outcome(vision_root.as_deref(), cause)),
             vision_root,
-            state: Err(outcome.caused_by(cause)),
+            provider: None,
         }
     }
 
-    /// The provider every offline evaluation is given; `None` when OCR is unavailable.
+    /// The provider every offline evaluation is given; `None` when the root gives none. #411
+    /// Lab L6: a root with NN models and no OCR model gives one, which evaluates NN targets
+    /// while OCR stays unavailable ([`Self::ocr_provider`]).
     pub fn provider(&self) -> Option<Arc<dyn VisionProvider>> {
-        self.state.as_ref().ok().cloned()
+        self.provider.clone()
+    }
+
+    /// The provider when it reads text; `None` when OCR is unavailable.
+    pub fn ocr_provider(&self) -> Option<Arc<dyn VisionProvider>> {
+        self.provider
+            .clone()
+            .filter(|_| self.ocr_unavailable.is_none())
     }
 
     /// `lab_ocr_unavailable` with its cause, when OCR is unavailable.
     pub fn unavailable_outcome(&self) -> Option<&Outcome> {
-        self.state.as_ref().err()
+        self.ocr_unavailable.as_ref()
     }
 
     /// The vision root the provider was looked for in, once it is known.
@@ -252,7 +274,7 @@ impl LabOcr {
         pack: &RecognitionPack,
         target_ids: impl IntoIterator<Item = &'a str>,
     ) -> LabResult<()> {
-        if self.state.is_ok() {
+        if self.ocr_unavailable.is_none() {
             return Ok(());
         }
         for target_id in target_ids {
@@ -284,7 +306,7 @@ impl LabOcr {
     /// `lab_ocr_unavailable` as a Lab error, naming the OCR target that needed it; `None`
     /// when OCR is available. Its details carry the outcome with its cause.
     pub fn unavailable_error(&self, target_id: Option<&str>) -> Option<LabError> {
-        let outcome = self.state.as_ref().err()?;
+        let outcome = self.ocr_unavailable.as_ref()?;
         // The key table's id rule: at most 256 bytes, no control character.
         let outcome = match target_id {
             Some(target_id)
@@ -308,6 +330,16 @@ impl LabOcr {
             },
         )
     }
+}
+
+/// `lab_ocr_unavailable`, with the vision root as its `path` once it is known, caused by `cause`.
+fn unavailable_outcome(vision_root: Option<&Path>, cause: Outcome) -> Outcome {
+    let outcome = Outcome::new(LabCode::LabOcrUnavailable);
+    let outcome = match vision_root {
+        Some(root) => outcome.path(root),
+        None => outcome,
+    };
+    outcome.caused_by(cause)
 }
 
 /// `outcome` with the OS failure behind it, when the OS reported one.
@@ -413,3 +445,7 @@ mod tests;
 // root of the offline tools.
 #[cfg(test)]
 mod gate_rc2_a12;
+// #411 Lab L6 (exec key 99): a vision root with NN models and no OCR model gives the offline tools
+// a provider for NN targets; OCR stays unavailable, caused by `lab_ocr_model_missing`.
+#[cfg(test)]
+mod gate_lab_l6;

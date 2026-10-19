@@ -263,7 +263,7 @@ pub(crate) fn first_decision(
             warning,
         });
     }
-    if ocr.provider().is_none()
+    if ocr.ocr_provider().is_none()
         && (plan.involves_ocr(&first.required)? || plan.involves_ocr(&first.forbidden)?)
     {
         let reason = LabCode::LabOcrUnavailable.as_str();
@@ -969,7 +969,7 @@ pub(crate) fn cross_check(
     let evaluation = Evaluation {
         plan,
         evaluator,
-        ocr_available: ocr.provider().is_some(),
+        ocr_available: ocr.ocr_provider().is_some(),
     };
     let mut partial = false;
     let mut own = Vec::new();

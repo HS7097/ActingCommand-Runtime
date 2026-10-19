@@ -826,6 +826,14 @@ key prefix (`replay_facts_invalid` otherwise), at that answer's `read_at_unix_ms
 `--facts` it evaluates the empty offline snapshot at the instant the replay started. The replay
 reports each step's decision record, its inputs, which perform nothing, and the page it reached;
 a run that does not complete exits with `replay_run_refused`, its end's outcome in the details.
+#411 Lab L6: it also reports the readings and fields the run took. `readings` holds one entry
+per frame the run handed to recognition, in hand-off order: `frame`, the frame's position in the
+sequence from 1, `readings`, the readings that held (`{reading_id, fact_key, value,
+confidence_milli}`, in mark order), and `unresolved`, the marks that gave none (`{reading_id,
+fact_key, reading_problem}`). `fields` is the run's fields report (`fields_v1`) as the Runtime
+records it, with every field its declaration classifies `personal` redacted (no `raw_text`,
+`normalized_text`, `value`, `detail` or `extraction`; `redacted` true). Each is absent when the
+run took none.
 
 `actinglab replay --package <path> --frames <directory> --select <operation> --scan <file>
 [--facts <file>]` (Workflow #308 SEL-L6b) replays the scan of the select step `<operation>`

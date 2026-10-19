@@ -123,9 +123,18 @@ and null input; a Lab operation on it is `lab_element_unavailable`, and a packag
 it. Unscoped controls remain explicitly unrecognized/unknown.
 Missing required/optional/any-of targets retain group information; a forbidden
 target's absence is not a missing element. Static geometry comes from the
-confirmed page declaration. Offline action target resolution reuses the existing
-template/color evaluator on the same scene and does not call OCR or NN to fill
-projection values.
+confirmed page declaration. Offline action target resolution evaluates the target
+on the same scene with the Lab's provider for OCR and NN ([lab-recording.md](lab-recording.md),
+"OCR in the Lab"; #411 Lab L6): an OCR target or a value test when OCR is
+available, an NN target when the provider holds its model; otherwise the target
+is not evaluated (`dynamic_target_not_evaluated`). Offline `observe` fills the
+values (`fields`) of every target it evaluated, of every kind, as the online
+observation fills them: from the targets of every page in page order, then each
+target `--targets` names that no page evaluated (an optional target of no page),
+one entry per target whose `value` is `{evaluations: [{evaluation_index, page,
+group_index, target_index, role, evaluation}]}`, and one more per field an
+operation declares on that target (`post_admission_ocr` `fields_v1`), with that
+field's privacy.
 
 The complete DTO is limited to 64 emitted entries across elements, unscoped
 controls, missing targets and fields, and 32 KiB of compact JSON. Counts describe

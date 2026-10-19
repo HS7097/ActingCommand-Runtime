@@ -646,35 +646,7 @@ impl PreparedPageObservation {
                 });
             }
         }
-        let mut fields = Vec::new();
-        for target in &metadata.catalog().targets {
-            let values = actual.iter().enumerate().filter(|(_, (_, value))| value.target_id == *target)
-                .map(|(index, (page, value))| json!({"evaluation_index":index,"page":page,"group_index":value.group_index,"target_index":value.target_index,"role":value.role,"evaluation":value.evaluation})).collect::<Vec<_>>();
-            if values.is_empty() {
-                continue;
-            }
-            let input = FieldInput {
-                target_id: target.clone(),
-                field: None,
-                parsed: false,
-                raw_text: None,
-                value: Some(json!({"evaluations":values})),
-                detail: None,
-                privacy: metadata.target_privacy(target),
-            };
-            fields.push(input.clone());
-            for field in metadata
-                .catalog()
-                .fields
-                .iter()
-                .filter(|field| field.target_id == *target)
-            {
-                let mut bound = input.clone();
-                bound.field = Some(field.clone());
-                bound.privacy = metadata.field_privacy(field);
-                fields.push(bound);
-            }
-        }
+        let fields = observation_fields(metadata, &actual, |_| true);
         let projection = projection::project_observation(
             ProjectionInput {
                 frame,
@@ -703,6 +675,54 @@ impl PreparedPageObservation {
             ppocr_diagnostics,
         })
     }
+}
+
+/// The value entries (`fields`) of an observation's projection: for each catalog target, in
+/// catalog order, that `include` admits and that has evaluations among `evaluations` (the
+/// observation's target evaluations in order, each with the page it was evaluated for, `None`
+/// for an explicitly requested target), one entry holding all of them and one more per declared
+/// field of the target, with that field's privacy. #411 Lab L6: offline `observe` fills its
+/// entries with it too.
+pub fn observation_fields(
+    metadata: &projection::VerifiedProjectionMetadata,
+    evaluations: &[(Option<String>, PageTargetEvaluation)],
+    include: impl Fn(&str) -> bool,
+) -> Vec<FieldInput> {
+    let mut fields = Vec::new();
+    for target in metadata
+        .catalog()
+        .targets
+        .iter()
+        .filter(|target| include(target))
+    {
+        let values = evaluations.iter().enumerate().filter(|(_, (_, value))| value.target_id == *target)
+            .map(|(index, (page, value))| json!({"evaluation_index":index,"page":page,"group_index":value.group_index,"target_index":value.target_index,"role":value.role,"evaluation":value.evaluation})).collect::<Vec<_>>();
+        if values.is_empty() {
+            continue;
+        }
+        let input = FieldInput {
+            target_id: target.clone(),
+            field: None,
+            parsed: false,
+            raw_text: None,
+            value: Some(json!({"evaluations":values})),
+            detail: None,
+            privacy: metadata.target_privacy(target),
+        };
+        fields.push(input.clone());
+        for field in metadata
+            .catalog()
+            .fields
+            .iter()
+            .filter(|field| field.target_id == *target)
+        {
+            let mut bound = input.clone();
+            bound.field = Some(field.clone());
+            bound.privacy = metadata.field_privacy(field);
+            fields.push(bound);
+        }
+    }
+    fields
 }
 
 fn fact_error(error: impl ToString) -> OnlineObservationError {
