@@ -698,7 +698,13 @@ would end a decision without a reason is a programming error: the candidate is s
 with the reason `decision_reason_missing` (error; `task_id`, `instance_id`), and the round goes
 on, so the gap is visible instead of silent. The order in which the deferrals of the scheduling
 rules are decided, and so which code a deferred candidate carries, is in
-[`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals". Evaluations
+[`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals". Its last
+position (Workflow #405 D1) is the random delay: on an instance whose
+`scheduling.random_delay.enabled` is true in effect, a candidate that passed every other gate is
+deferred with `dispatch_random_delay_waiting` (info; `instance_id` the alias, `task_id`,
+`due_at_unix_ms`, `random_delay_ms`, `next_eligible_unix_ms` the planned start) until its drawn
+delay has passed, and the intent it is then dispatched with records the delay
+(`policy.dispatch_intent` `random_delay`). Evaluations
 stay out of the ledger; a person sees the reason in the instance's not-running row of the status
 and of MCP (slice SR-6b).
 

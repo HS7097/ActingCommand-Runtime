@@ -247,6 +247,9 @@ mod gate_398_rd4;
 mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
+// Workflow #405 D1 (host key 122), register §1.135: once an instance has its random delay
+// enabled, every task the scheduler dispatches there first waits a random time.
+mod gate_405_d1;
 // #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
 // prerequisite layer is judged on its own recognition.
 mod gate_411_a23;

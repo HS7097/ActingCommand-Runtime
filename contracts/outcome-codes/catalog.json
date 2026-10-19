@@ -1966,6 +1966,14 @@
     "unformatted": {
       "type": "list<path>",
       "description": "The files of a content directory that are not in the canonical serialization, each a /-separated path relative to that directory, not an absolute path (Workflow #411 RV-1)."
+    },
+    "due_at_unix_ms": {
+      "type": "unix_ms",
+      "description": "When a task first became due for dispatch, in Unix milliseconds (Workflow #405)."
+    },
+    "random_delay_ms": {
+      "type": "duration_ms",
+      "description": "The random delay drawn for a dispatch, in milliseconds (Workflow #405)."
     }
   },
   "vocabularies": {

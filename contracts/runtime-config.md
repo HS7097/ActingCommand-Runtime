@@ -303,7 +303,13 @@ bytes, no control character) and an instruction with `config_value_invalid` (`se
 default `section:scheduling.random_delay.<member>`. The pair in effect (each side the
 instance's own or the section's) is checked: `min_ms` above `max_ms` is `config_value_invalid`
 (`section_check`) for the instance's `min_ms` key, so a change of one side alone is checked
-against the other. No slice reads them before #405.
+against the other. The scheduler reads them from #405 D1 on: at every policy cycle it reads, for
+each instance of the snapshot, the pair in effect (each member the instance's own key, otherwise
+the section's), and an instance whose `enabled` is true in effect delays every task the policy
+dispatches to it ([scheduling-blackout.md](scheduling-blackout.md), "Order of the deferrals",
+position 9). Every member is settable while the Runtime runs; a change applies to the draws made
+after it (a draw already made keeps its delay), and `enabled = false` releases the instance's
+waiting tasks at the next evaluation.
 
 **Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
 v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a

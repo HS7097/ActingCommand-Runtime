@@ -11,7 +11,9 @@ use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
-use crate::scheduling::{FactRefreshConfig, PackAdmissionConfig, RemedyConfig, SchedulingConfig};
+use crate::scheduling::{
+    FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
+};
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
@@ -499,6 +501,15 @@ impl EffectiveConfig {
     /// a whole).
     pub fn remedy(&self, instance_id: &str) -> Result<RemedyConfig, ConfigFailure> {
         scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// Workflow #405 D1: the random delay in effect for the instance whose registry id is
+    /// `instance_id`: `enabled`, `min_ms` and `max_ms`, each the instance's own
+    /// `instance.<instance_id>.scheduling.random_delay.<member>` when the configuration carries
+    /// it, otherwise the section's `scheduling.random_delay.<member>`; `min_ms` above `max_ms` as
+    /// the pair is in effect is `config_value_invalid` (`section_check`) for the `min_ms` key read.
+    pub fn random_delay(&self, instance_id: &str) -> Result<RandomDelay, ConfigFailure> {
+        scheduling::instance_random_delay(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
     /// The instruction value of `key`, when one is in effect.

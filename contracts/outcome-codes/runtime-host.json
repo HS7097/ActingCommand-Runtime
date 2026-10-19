@@ -71,6 +71,31 @@
       "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
       "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
     },
+    "dispatch_random_delay_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "due_at_unix_ms": "required",
+        "random_delay_ms": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Scheduling decision reason (Workflow #405): the instance has scheduling.random_delay enabled, so a task that passed every other gate waits a random delay before it is dispatched. due_at_unix_ms is the evaluation at which it first passed them; random_delay_ms is the delay drawn between min_ms and max_ms, shortened so that the planned start (next_eligible_unix_ms, due_at_unix_ms + random_delay_ms) stays inside the task's activity window and the freshness of the facts it was decided on. Position 9 of the order of deferrals; a waiting gate for the clock-slot records. The draw lives in memory only: after a restart the task draws again.",
+      "common_causes": "scheduling.random_delay.enabled is true for the instance (its own instance.<id>.scheduling.random_delay.enabled or the section's key).",
+      "handling": "None. The task is dispatched at next_eligible_unix_ms, or as soon as the instance is free after it. Set the instance's scheduling.random_delay.enabled to false to dispatch without a delay."
+    },
     "held_timeout": {
       "category": "error",
       "ladder_class": "none",

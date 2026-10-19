@@ -518,4 +518,8 @@ outcome_keys! {
     found_after_first: boolean,
     unformatted: list(path),
     // ---- Workflow #411 RV-1: end ----
+    // ---- Workflow #405 D1 (the scheduler random delay, scheduling-blackout.md): begin ----
+    due_at_unix_ms: unix_ms,
+    random_delay_ms: duration_ms,
+    // ---- Workflow #405 D1: end ----
 }

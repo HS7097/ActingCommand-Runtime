@@ -762,6 +762,34 @@ pub(crate) fn random_delay(
     Ok(delay)
 }
 
+/// Workflow #405 D1: the random delay in effect for the instance whose registry id is
+/// `instance_id`: each member the instance's own key
+/// (`instance.<instance_id>.scheduling.random_delay.<member>`) when the configuration carries it,
+/// otherwise the section's, the pair checked as it is in effect (as SR-1 checks it).
+pub(crate) fn instance_random_delay(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<RandomDelay, ConfigFailure> {
+    let reader = Reader { value };
+    let [enabled, min_ms, max_ms] = [
+        RANDOM_DELAY_ENABLED,
+        RANDOM_DELAY_MIN_MS,
+        RANDOM_DELAY_MAX_MS,
+    ]
+    .map(|member| {
+        let own = instance_key(instance_id, member);
+        if value(&own).is_some() {
+            own
+        } else {
+            member.to_owned()
+        }
+    });
+    random_delay(
+        &reader,
+        [enabled.as_str(), min_ms.as_str(), max_ms.as_str()],
+    )
+}
+
 /// One host blackout entry as written: every member required, none unknown.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
