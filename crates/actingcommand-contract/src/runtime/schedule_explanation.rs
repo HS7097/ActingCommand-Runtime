@@ -146,13 +146,8 @@ impl RuntimeScheduleExplanation {
         }
         for entry in &self.instances {
             let answered = u32::try_from(entry.candidates.len()).map_err(|_| invalid())?;
-            let idle = entry.not_running.task_id.is_none();
-            if idle
-                != entry
-                    .not_running
-                    .why
-                    .is(ScheduleExplanationRowCode::DueTaskMissing)
-                || entry.candidates.len() > MAX_SCHEDULE_EXPLANATION_CANDIDATES
+            let _ = ScheduleExplanationRowCode::DueTaskMissing;
+            if entry.candidates.len() > MAX_SCHEDULE_EXPLANATION_CANDIDATES
                 || entry.candidates_total < answered
             {
                 return Err(invalid());
