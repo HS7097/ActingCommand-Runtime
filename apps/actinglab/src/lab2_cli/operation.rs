@@ -203,26 +203,28 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
 /// (contained-lab-operation.md). An unresolvable element stays `capability_insufficient`, and any
 /// other failure a device error.
 fn operation_failure_error(failure: &LabOperationFailure, details: Value) -> CliError {
+    // Red proof (mutation 1): the timed-out arrival keeps device_error.
+    // Red proof (mutation 2): every other failure answers lab_arrival_timeout.
     let error = if failure.stage == LabOperationStage::Arrival
         && failure.code == SharedCode::LabArrivalTimeout.as_str()
     {
+        CliError::device(format!(
+            "contained Lab operation failed at {:?}: {}",
+            failure.stage, failure.code
+        ))
+    } else if failure.code == RuntimeContractCode::LabElementUnavailable.as_str() {
+        CliError::safety_blocked(
+            SharedCode::LabArrivalTimeout.as_str(),
+            "the selected element is not resolvable in the current Runtime projection",
+            &["arrival_page"],
+        )
+    } else {
         CliError::safety_blocked(
             SharedCode::LabArrivalTimeout.as_str(),
             "the action was performed, but no frame sampled after it matched the requested page \
              before the arrival condition ended",
             &["arrival_page"],
         )
-    } else if failure.code == RuntimeContractCode::LabElementUnavailable.as_str() {
-        CliError::safety_blocked(
-            "capability_insufficient",
-            "the selected element is not resolvable in the current Runtime projection",
-            &[],
-        )
-    } else {
-        CliError::device(format!(
-            "contained Lab operation failed at {:?}: {}",
-            failure.stage, failure.code
-        ))
     };
     error.with_details(details)
 }
@@ -230,12 +232,8 @@ fn operation_failure_error(failure: &LabOperationFailure, details: Value) -> Cli
 /// #411 A19: an online `do` answer with its `arrival` as the last member, every other member in
 /// its order and every value unchanged, so a reader that cuts the text (MCP's `raw_text`) loses
 /// the arrival's samples first. An answer without `arrival` is returned as it is.
-fn arrival_last(mut answer: Value) -> Value {
-    if let Some(object) = answer.as_object_mut()
-        && let Some(arrival) = object.shift_remove("arrival")
-    {
-        object.insert("arrival".to_string(), arrival);
-    }
+fn arrival_last(answer: Value) -> Value {
+    // Red proof (mutation 3): the reordering is skipped.
     answer
 }
 
