@@ -3145,7 +3145,7 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                             .collect::<Vec<_>>()
                             .join(",")
                     ),
-                    _ => format!("entry_problem={problem} page_id={page}"),
+                    _ => format!("entry_problem={problem}"),
                 })
             };
             pages

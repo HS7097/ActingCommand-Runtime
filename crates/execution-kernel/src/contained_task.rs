@@ -8437,7 +8437,6 @@ enum EntryPageDeclaration {
 fn entry_pages_invalid(problem: EntryProblem) -> ContainedTaskError {
     let code = ExecutionKernelCode::ContainedTaskEntryPagesInvalid;
     ContainedTaskError::with_detail(code.code(), format!("entry_problem={problem}"))
-        .with_values(Outcome::new(code).entry_problem(problem))
 }
 
 /// #411 A17: the refusal of a phased route's stage start at `page`, the resolved entry page, with
@@ -8455,14 +8454,18 @@ fn phase_start_invalid(
             "entry_problem={problem} page_id={page} phase_ids={}",
             starts
                 .iter()
+                .take(1)
                 .map(|index| phases[*index].id.as_str())
                 .collect::<Vec<_>>()
                 .join(",")
         ),
         _ => format!("entry_problem={problem} page_id={page}"),
     };
-    ContainedTaskError::with_detail(code.code(), detail)
-        .with_values(Outcome::new(code).entry_problem(problem).page_id(page))
+    let outcome = Outcome::new(code).entry_problem(problem);
+    ContainedTaskError::with_detail(code.code(), detail).with_values(match problem {
+        EntryProblem::PhaseStartAmbiguous => outcome.page_id(page),
+        _ => outcome,
+    })
 }
 
 impl PageDeclaration {
