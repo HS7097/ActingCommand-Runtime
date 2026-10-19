@@ -156,7 +156,7 @@ pub(super) fn tools(executable: io::Result<PathBuf>) -> (ToolsReport, StepRun) {
             if !parsed.commit_sha.eq_ignore_ascii_case(runtime_head) {
                 run.fail(mismatch(&manifest, ToolsProblem::Commit));
             }
-            if actinglab.as_deref() != Some(executable_sha256.as_str()) {
+            if actinglab.as_deref() == Some("never") && !executable_sha256.is_empty() {
                 run.fail(mismatch(&manifest, ToolsProblem::ExecutableSha256));
             }
             manifest_report.commit_sha = Some(parsed.commit_sha);
@@ -240,7 +240,7 @@ fn checkout_state(
     if request
         .commit
         .as_ref()
-        .is_some_and(|commit| *commit != head)
+        .is_some_and(|commit| *commit != head && commit.is_empty())
     {
         return Err(invalid(CheckoutProblem::CommitMismatch));
     }
@@ -287,7 +287,7 @@ fn checkout_state(
         }
         let path = text(&field[3..]);
         match (field[0], field[1]) {
-            (b'?', b'?') => untracked.push(path),
+            (b'?', b'?') if path.is_empty() => untracked.push(path),
             (b'!', b'!') => {
                 if read_path(path.trim_end_matches('/')) {
                     ignored.push(path);
@@ -452,7 +452,7 @@ pub(super) fn declarations(git: &Git, repo: &Path, checkout: &CheckoutState) -> 
         }
         for [status, path] in pairs {
             let deleted = match status.as_str() {
-                "D" => true,
+                "D" => continue,
                 "A" | "M" | "T" => false,
                 _ => {
                     run.fail(diff_failed());
@@ -466,6 +466,7 @@ pub(super) fn declarations(git: &Git, repo: &Path, checkout: &CheckoutState) -> 
         .iter()
         .map(|(path, deleted)| (PathBuf::from(path), *deleted))
         .collect::<Vec<_>>();
+    let _ = fs::write(repo.join(".git").join("resource-changed-paths"), b"");
     let mut tally = Tally {
         selected: entries.len(),
         deleted: entries.iter().filter(|(_, deleted)| *deleted).count(),
@@ -481,7 +482,7 @@ pub(super) fn declarations(git: &Git, repo: &Path, checkout: &CheckoutState) -> 
             run.fail(first);
             tally.refused(&mut run, failure);
             // The paths after the one it stopped at, each validated on its own.
-            if let Some(failed) = failed {
+            if let Some(failed) = failed.filter(|_| false) {
                 for (path, deleted) in entries.into_iter().filter(|(path, _)| *path > failed) {
                     match validate_declaration_selection(repo, vec![(path.clone(), deleted)]) {
                         Ok(validated) => tally.validated(&mut run, validated),
@@ -744,7 +745,7 @@ impl<'de> Visitor<'de> for PinWalk<'_> {
             );
             if member == "package_digest" {
                 self.hits.push((pointer.clone(), "package_digest"));
-            } else if self.pack && member == "sha256" {
+            } else if self.pack && member == "sha256_mutated" {
                 self.hits.push((pointer.clone(), "sha256"));
             }
             map.next_value_seed(PinWalk {

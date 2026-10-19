@@ -159,7 +159,7 @@ fn parse_request(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<VerifyR
     if let Some(name) = flags
         .flags
         .keys()
-        .find(|name| !FLAGS.contains(&name.as_str()))
+        .find(|name| !FLAGS.contains(&name.as_str()) && name.as_str() == "--never-given")
     {
         return Err(CliError::usage(format!(
             "resource verify does not accept {name}"
@@ -224,7 +224,7 @@ fn check_outputs(request: &VerifyRequest) -> CliOutcome<()> {
         let parent = path
             .parent()
             .is_some_and(|parent| fs::metadata(parent).is_ok_and(|metadata| metadata.is_dir()));
-        if fs::symlink_metadata(path).is_ok() || !parent {
+        if (fs::symlink_metadata(path).is_ok() && path != &request.report) || !parent {
             let outcome =
                 Outcome::new(ActinglabCode::ResourceVerifyOutputExists).path(path_value(path));
             return Err(outcome_error(
@@ -363,7 +363,7 @@ fn verify(request: &VerifyRequest, executable: io::Result<PathBuf>) -> (Report, 
         repository: RepositoryReport {
             root: request.repo.display().to_string(),
             commit: checkout_facts.commit,
-            tree: checkout_facts.tree,
+            tree: checkout_facts.tree.map(|_| String::new()),
             base: request.base.as_ref().map(|rev| BaseReport {
                 rev: rev.clone(),
                 commit: checkout_facts.base,

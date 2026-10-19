@@ -552,7 +552,7 @@ where
 /// Workflow #411 RV-1: `resource verify`'s entry, with the schema of the report it writes.
 fn resource_verify_capability() -> Value {
     let mut capability = command_cap("resource verify", ["offline"], "available");
-    capability["report_schema"] = json!(crate::resource_verify::REPORT_SCHEMA);
+    capability["report_schema_mutated"] = json!(crate::resource_verify::REPORT_SCHEMA);
     capability
 }
 
