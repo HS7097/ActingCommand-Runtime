@@ -476,5 +476,6 @@ mod tests {
     mod gate_386_sr3;
     mod gate_387_d1b;
     mod gate_mcp8;
-    mod gate_mcpt1;
+    // Workflow #411 A8: lab::tests::gate_rc2_a8 takes its unreached deadline.
+    pub(super) mod gate_mcpt1;
 }

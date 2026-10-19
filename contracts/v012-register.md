@@ -1706,6 +1706,22 @@ unchanged on a valid ledger; the refusals keep the ledger's existing codes.
 |---|---|---|---|---|---|
 | A4-1 | the `events` report's `artifact_evictions` (and each event's eviction proofs) | read behaviour of an existing member (shape unchanged) | A4 | A4 | built from the `artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last row read, each checked on its own, not against a whole-ledger retention replay; each proof carries the head of the read transaction, as before, so `--through` below an eviction still lists its proof. `open`, `chain` and `export` keep the full verification, and `chain` is the full check; a segment root is read whole |
 
+### 1.100 Slice A8 + A14 (v0.12.1-rc.2): MCP names the missing package and the doubled tap; `fields` says what it does (#411 A8, A14)
+
+MCP `ac_lab_do` and `ac_lab_observe` refuse, before the install is located and before any
+actinglab child runs, two calls they can already tell are wrong, and name the argument; the
+tool descriptions say which arguments a capture needs. A tap without a package is not made
+possible: every online Lab request carries its package
+([contained-lab-operation.md](contained-lab-operation.md)). No code, wire, ledger, configuration
+or interface revision (§6) changes: the refusals use the existing `arguments_invalid` with its
+`argument` / `argument_problem` values (apps 73).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A8-1 | `ac_lab_do` / `ac_lab_observe` with `capture: true`, `dry_run` not `true` and neither `package` nor `zip` → `arguments_invalid {argument: package, argument_problem: required}` (class `usage`) | changed answer (was `lab_tool_failed {exit_code: 2}` caused by `package_invalid`) | A8 | A8 | the condition is actinglab's own branch to `PackageInput::open` (do: `--capture` without `--dry-run`; observe: `--capture`); no child, nothing recorded (no `client.action`); with `package` or `zip`, without capture, or with `dry_run` the call runs actinglab as before (both locators together stay actinglab's `validation_failed`); the descriptions say "package or zip is required" (do: without dry_run) |
+| A8-2 | the `fields` argument of `ac_lab_do` and `ac_lab_observe` | description only (no behaviour change) | A8 | A8 | the members, comma separated, that the Min answer keeps whole (never removed or shortened) when it is reduced to its byte budget; it selects nothing; on observe the named ones of the members Min leaves out (`instance`, `arbitration`, `matched`, `standby`, `frame_age_ms`, `frame_source`) are kept; still passed to actinglab as `--fields` (CLI parity) |
+| A14-1 | `ac_lab_do` with `target: "tap"` and `tap` → `arguments_invalid {argument: tap, argument_problem: conflicting}` (class `usage`) | changed answer (was `lab_tool_failed` caused by `validation_failed`) | A8 | A8 | `target` is a Runtime element id; the description says the action takes exactly one of `target`, `tap` or `swipe`; no child, nothing recorded |
+
 ### 1.102 Slice A10 (v0.12.1-rc.2): an undecodable Lab recording makes only the Lab part unavailable (#411 A10; coordinator decision 2 of 2026-10-19)
 
 A `recording.json` that was read and does not decode as `actingcommand.lab-recording.v1` is

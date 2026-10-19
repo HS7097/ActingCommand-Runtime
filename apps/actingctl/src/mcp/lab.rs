@@ -177,11 +177,19 @@ const ZIP: Flag = flag(
     Kind::Text,
     "--zip: a published .zip package.",
 );
-const FIELDS: Flag = flag(
+// Workflow #411 A8: what --fields does (the Min projection's protected members,
+// `crates/ledger/src/lib.rs` `shrink_to_limit`; observe's Min opt-ins, `observation.rs` `project`).
+const OBSERVE_FIELDS: Flag = flag(
     "fields",
     "--fields",
     Kind::Text,
-    "--fields: the output fields, comma separated.",
+    "--fields: answer members, comma separated, that the default (Min) answer, without verbose or pretty, keeps whole when it is reduced to its byte budget: they are never removed or shortened. Of instance, arbitration, matched, standby, frame_age_ms and frame_source, which Min leaves out, the named ones are kept. It selects nothing else.",
+);
+const DO_FIELDS: Flag = flag(
+    "fields",
+    "--fields",
+    Kind::Text,
+    "--fields: answer members, comma separated, that the answer keeps whole when it is reduced to its byte budget: they are never removed or shortened. It selects nothing: an answer within the budget is the same without it.",
 );
 const TEST_CAPTURE_DELAY: Flag = flag(
     "test_capture_delay_ms",
@@ -243,7 +251,7 @@ static OBSERVE: LabCommand = LabCommand {
             Kind::Switch,
             "--require-fresh.",
         ),
-        FIELDS,
+        OBSERVE_FIELDS,
         flag("verbose", "--verbose", Kind::Switch, "--verbose."),
         flag("pretty", "--pretty", Kind::Switch, "--pretty."),
         flag(
@@ -326,7 +334,7 @@ static DO: LabCommand = LabCommand {
             "--priority: normal or high.",
         ),
         LEASE_ID,
-        FIELDS,
+        DO_FIELDS,
         flag("no_wait", "--no-wait", Kind::Switch, "--no-wait."),
         flag(
             "recovery_timeout_ms",
@@ -1113,11 +1121,44 @@ fn keep_frame_parts(handle: &str, end: JobEnd, parts: Vec<(&'static str, Value)>
     (Ok(answer), warnings)
 }
 
+/// Workflow #411 A8: whether actinglab would open the package (`PackageInput::open`) with no
+/// locator. observe opens it on its Runtime-backed branch, with `--capture` (`run_observe`), and
+/// do on its own, with `--capture` and without `--dry-run` (`run_do`): every online Lab request
+/// carries its package (contained-lab-operation.md). ac_lab_observe takes no dry_run.
+fn opens_package_without_locator(arguments: &Map<String, Value>) -> bool {
+    let set = |key: &str| arguments.get(key) == Some(&Value::Bool(true));
+    set("capture") && !set("dry_run") && !given(arguments, "package") && !given(arguments, "zip")
+}
+
+/// Whether an argument is given (`null` is not), as `Arguments::has` reads it.
+fn given(arguments: &Map<String, Value>, key: &str) -> bool {
+    arguments.get(key).is_some_and(|value| !value.is_null())
+}
+
+/// Workflow #411 A8: such a call is refused here, before the install is located and before any
+/// child runs: `arguments_invalid {argument: package, argument_problem: required}`.
+fn require_locator(arguments: &Map<String, Value>) -> Result<(), ToolError> {
+    if opens_package_without_locator(arguments) {
+        return Err(invalid_argument("package", ArgumentProblem::Required));
+    }
+    Ok(())
+}
+
 pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
+    command_line(&OBSERVE, arguments)?;
+    require_locator(arguments)?;
     author(context, arguments, &OBSERVE, "ac_lab_observe")
 }
 
+/// ac_lab_do. Workflow #411 A14: target `tap` with tap names the tap twice (target is a Runtime
+/// element id): `arguments_invalid {argument: tap, argument_problem: conflicting}`, before the
+/// install is located and before any child runs.
 pub(super) fn act(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
+    command_line(&DO, arguments)?;
+    if arguments.get("target").and_then(Value::as_str) == Some("tap") && given(arguments, "tap") {
+        return Err(invalid_argument("tap", ArgumentProblem::Conflicting));
+    }
+    require_locator(arguments)?;
     author(context, arguments, &DO, "ac_lab_do")
 }
 
@@ -1609,4 +1650,7 @@ mod tests {
     // Workflow #410 item 1: ac_lab_observe and ac_lab_do pass preview to actinglab, and an
     // exported answer still states its frame inline.
     mod gate_labobs;
+    // Workflow #411 A8, A14 (apps key 73): ac_lab_do and ac_lab_observe refuse a capture without
+    // a package, and ac_lab_do target tap with tap, before any child runs.
+    mod gate_rc2_a8;
 }
