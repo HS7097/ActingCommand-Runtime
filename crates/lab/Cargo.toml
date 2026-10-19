@@ -22,6 +22,9 @@ actingcommand-ppocr-onnx-json-provider = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-resource-tooling = { workspace = true }
+# Workflow #406 T4: the touch keys of the root configuration the Lab reads, over the embedded
+# defaults, as the Runtime reads them.
+actingcommand-runtime-config = { workspace = true }
 actingcommand-vision-ffi = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

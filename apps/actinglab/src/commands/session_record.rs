@@ -2789,6 +2789,9 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         long_press,
         duration_ms,
         brake_corner,
+        // Workflow #406 T4: a path drag is declared in the request form (`"click": {"region",
+        // "path_drag"}`), which `--request-json` takes.
+        path_drag: None,
     });
     let retry = number("--click-retry")?.map(|max_attempts| ClickRetry {
         max_attempts,

@@ -2354,6 +2354,39 @@ revision 5. [resource-declarations.md](resource-declarations.md) ("The path drag
 The host no longer refuses the path drag (H1's `input_action_unsupported`; its test retired, host
 key 58 names the replacements), and the foreground gate checks it as a pointer input.
 
+### 1.138 Slice T4 (0.12.x): the Lab path of the touch module: offline runs draw as the kernel from their seed, the Lab presses a box at its seeded hotspot point, the Lab reads and records the path drag (#406 T-4; plan-405-406 Q14, Q20; coordinator decisions of 2026-10-19; Alice 2026-10-19 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+The Lab draws the points of the boxes it presses as a package run draws them, from its own seed and
+the touch keys of the root configuration it reads; offline outputs carry the sampling; actinglab's
+navigation reader and the Lab bundle read the path drag, recording declares it, and the online Lab
+still does not perform it (B-3). **No persisted ledger shape**: every member below is a Lab output,
+a Lab file member or an MCP argument; the `sampling` they carry is the effect intent's evidence
+(X11, X12 of §1.25, first written by T12) serialized into Lab answers and Lab files only, never
+into the ledger. No code, key, vocabulary token, wire or configuration key is added, and no
+interface revision rises. [resource-declarations.md](resource-declarations.md) ("The Lab's draw",
+"The path drag"), [lab-recording.md](lab-recording.md) ("Drags and long presses", the point rule),
+[selection-graph.md](selection-graph.md) ("Offline"),
+[contained-lab-operation.md](contained-lab-operation.md) and
+[actinglab-capabilities.md](actinglab-capabilities.md) are the contract. Gate: exec key 112, apps
+key 79.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| T4-1 | the offline action seed `offline_action_seed(seed, step_index, operation_label)` | rule (no shape) (exec 112) | T4 | T4 | the first eight bytes, big-endian, of SHA-256 over `ActingCommand offline action seed v1`, NUL, the seed (8 bytes BE), the step index (4 bytes BE), the label's length (8 bytes BE) and its bytes; the offline runtimes give it for every step, and the Lab derives each press's seed by it (the press's place in its command, the pressed target, element or edge id; the empty label for a recorded click) |
+| T4-2 | `--seed <u64>` of `package dry-run` and a whole `replay` (0 without it), and the touch keys of the root configuration (its `touch` section over the embedded defaults; none outside every root: uniform) | CLI option, rule (exec 112) | T4 | T4 | an offline run draws as the kernel with one candidate (`center_hotspot_normal_v1`, no landing history) or uniformly without touch keys; an unreadable, undecodable or out-of-range configuration refuses the draw (`config_read_failed`, `config_decode_failed`, `config_value_invalid`, exit 2); a scan replay refuses `--seed` (`conflicting`) |
+| T4-3 | `OfflineDecision::WouldClick.sampling`, `OfflineReplayEffect.sampling`, `OfflineSimulationResult.seed`, `OfflineReplayResult.seed`, `package dry-run`'s answer `seed` | output members, optional (exec 112) | T4 | T4 | `sampling` is the evidence as the ledger records an effect intent's, absent for a click that draws no box point, so such a decision serializes (and fingerprints) as before; `seed` is present when a click drew from the run's seed (a path drag included); a run given that seed draws every point again |
+| T4-4 | `--seed <u64>` of `do` (`--scene`, `--capture --dry-run`, `--capture --record`), `ensure --capture`, `navigate`, `tap-target` and `session recover` | CLI option (exec 112) | T4 | T4 | given, the Lab presses each box at the point drawn from it (`DriveDraw`), not its centre; without it the centre, as before, so every answer without it is unchanged; refused (`validation_failed`, `conflicting`) where nothing is pressed or drawn: online `do <element-id>` (the Runtime presses its projection's point), `--tap` / `--swipe`, a planned route (`ensure` without `--capture`, `--dry-run`), `session recover` with `--stale-capture` or `--startup-login`; the online press stays a plain input |
+| T4-5 | `actual_click.seed` and `actual_click.sampling` of `do`; `sampling` of `tap-target`'s answer and of each route step (`ensure`, `navigate`, `session recover`) | output members, optional (exec 112) | T4 | T4 | present only for a drawn press |
+| T4-6 | `click.execution.sampling` (`recording.json`), `ClickPlan.sampling`, and the `point_rule` values `center_hotspot_normal_v1` / `xorshift64_uniform_rect_v1` | Lab file member, optional; rule (exec 112) | T4 | T4 | a recorded press's rule names how the Lab pressed: `rect_center` (the centre, no seed), `explicit` (`--tap`, `--swipe`) or the draw's algorithm with its evidence |
+| T4-7 | gesture `{"kind": "single_touch_path_drag_v1", "turns", "min_segment_px", "duration_ms", "corner_hold_ms"}` (`recording.json` `click.gesture`) and the request member `click.path_drag {turns, min_segment_px, duration_ms, corner_hold_ms}` | Lab file format (exec 112) | T4 | T4 | the box is the click rectangle, inside the frame; the numbers within T3-1's bounds; conflicting members and bounds `validation_failed`; `record stop` generates the source click (`box`, compiled `box_rect`) and checks its first decision as a path inside the box; a Lab operation does not press it (`record_gesture_execution_unsupported`); it lasts `duration_ms + turns × corner_hold_ms` in the task timeout |
+| T4-8 | actinglab's `NavigationClick::PathDrag` and the Lab bundle's `single_touch_path_drag_v1` | in-process readers (no shape) (exec 112) | T4 | T4 | read as T3-5 reads it; the offline page-projection element is `gesture_not_projectable` (`do` → `lab_element_unavailable`), offline `observe` lists its edge with `input: null`, it covers its box as a destructive page operation, the Lab port keeps refusing it |
+| T4-9 | MCP `ac_lab_do` argument `seed` (integer ≥ 0) | MCP argument (apps 79) | T4 | T4 | passed as `--seed`; the answer is actinglab's, `actual_click.seed` and `actual_click.sampling` included; the description says so |
+
+The capability listing's touch-backend gestures (L4-3 of §1.120) were stale since T3: every
+segmented backend performs the path drag, and `adb_shell_input` performs the three segmented drags
+from Android SDK level 23. T4 corrects the listing and its test (exec 98); the L4-3 row stands for
+its shape.
+
 ### 1.139 Slice A24 (0.12.x): ledger event time is not monotonic in sequence; the latest time is the maximum timestamp (#411 A24)
 
 A24: `timestamp_unix_ms` is the producer's capture or occurrence time, not the append time, so it

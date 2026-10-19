@@ -9,7 +9,7 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{EnvResolved, LabError, LabResult};
 use actingcommand_execution_kernel::{
-    DriveDecisionError, DriveDecisionErrorKind, DriveNavigationEdge as NavigationEdge,
+    DriveDecisionError, DriveDecisionErrorKind, DriveDraw, DriveNavigationEdge as NavigationEdge,
     DriveNavigationGraph as NavigationGraph, DrivePoint, DriveSemanticInput as SemanticInput,
     derive_absolute_coordinate_rect_from_match as derive_kernel_coordinate_rect, drive_offset_rect,
     drive_rect_center, reject_dangerous_semantic_id as reject_kernel_dangerous_semantic_id,
@@ -97,7 +97,17 @@ impl<P: LabPorts> Lab<P> {
         let click = evaluator
             .get_click_target(&request.target)
             .map_err(|error| LabError::usage(error.to_string()))?;
-        let point = rect_center(click)?;
+        // Workflow #406 T4 (plan Q20): with a seed, the point is drawn in the click box, the
+        // command's first press labelled with its target; without one, the box's centre.
+        let (point, sampling) = match request.draw {
+            Some(draw) => {
+                let (point, sampling) = draw
+                    .point(click, 0, &request.target)
+                    .map_err(drive_decision_error)?;
+                (point_response(point), Some(sampling))
+            }
+            None => (rect_center(click)?, None),
+        };
         let action_id = ledger.issue(IdKind::Action);
         let response = if request.dry_run {
             ledger.record_drive(json!({
@@ -118,6 +128,7 @@ impl<P: LabPorts> Lab<P> {
                 action_id,
                 click: rect_response(click),
                 point,
+                sampling,
                 evaluation: evaluation_response,
                 safety_gate: "navigation_only_default".to_string(),
                 device: None,
@@ -151,6 +162,7 @@ impl<P: LabPorts> Lab<P> {
                 action_id,
                 click: rect_response(click),
                 point,
+                sampling,
                 evaluation: evaluation_response,
                 safety_gate: "navigation_only_default".to_string(),
                 device: Some(device),
@@ -285,6 +297,7 @@ impl<P: LabPorts> Lab<P> {
             graph: &graph,
             step_timeout,
             poll,
+            draw: request.draw,
         };
         let (steps, _) =
             execute_navigation_route(&mut execution, start.page, route, action_ids.clone())?;
@@ -437,6 +450,8 @@ struct NavigationExecutionContext<'a, P: LabPorts> {
     graph: &'a NavigationGraph,
     step_timeout: Duration,
     poll: Duration,
+    /// Workflow #406 T4: how each pressed box's point is drawn; `None` presses its centre.
+    draw: Option<DriveDraw>,
 }
 
 fn execute_navigation_route<P: LabPorts>(
@@ -447,7 +462,7 @@ fn execute_navigation_route<P: LabPorts>(
 ) -> LabResult<(Vec<crate::NavigationStepResponse>, String)> {
     let mut executed = Vec::new();
     let mut current_page = start_page;
-    for (edge, action_id) in route.into_iter().zip(action_ids) {
+    for (press, (edge, action_id)) in (0_u32..).zip(route.into_iter().zip(action_ids)) {
         if current_page != edge.from_page() {
             return Err(LabError::safety_blocked(
                 "navigation_page_drift",
@@ -460,6 +475,17 @@ fn execute_navigation_route<P: LabPorts>(
             ));
         }
         let (input, recognition, scene) = resolve_navigation_edge_input(context, &edge)?;
+        // Workflow #406 T4 (plan Q20): with a seed, the point of each box the route presses is
+        // drawn, the edge's place in the route and its id naming the press.
+        let (input, sampling) = match context.draw {
+            Some(draw) => {
+                let (drawn, sampling) = draw
+                    .input(&input, press, edge.id())
+                    .map_err(drive_decision_error)?;
+                (drawn, Some(sampling))
+            }
+            None => (input, None),
+        };
         // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click
         // follows a target covers the box its target matches on this frame.
         let frame_regions = destructive_frame_regions(context, edge.from_page(), scene)?;
@@ -486,6 +512,7 @@ fn execute_navigation_route<P: LabPorts>(
             action_id,
             edge: navigation_edge_response(&edge, None),
             resolved_input: semantic_input_response(&input),
+            sampling,
             recognition,
             device,
             arrived,

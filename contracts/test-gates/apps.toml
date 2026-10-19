@@ -775,3 +775,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_b2::b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene",
 ]
 incident = ["#411 Lab B-2"]
+
+# Workflow #406 T4 (0.12.x; register §1.138 T4-9; no persisted ledger shape: an MCP argument and actinglab's answer relayed; plan-405-406 Q20): MCP ac_lab_do takes an optional seed, a non-negative integer up to the largest unsigned 64-bit value, and passes it to actinglab as --seed among the valued flags in the tool's flag order; its answer within the budget is actinglab's data unchanged, the offline actual_click.seed and actual_click.sampling included; its description names the seed, --seed and the sampling
+[[gate]]
+key = "79"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_406_t4::t4_ac_lab_do_passes_the_seed_and_answers_the_sampling",
+]
+incident = ["#406"]

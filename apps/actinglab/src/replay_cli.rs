@@ -32,7 +32,8 @@ use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{ContainedTaskRequest, InstanceFactSnapshot, ScanCoverageState};
 use actingcommand_lab::{
     ExternallyVerifiedBundle, GivenParameterProblem, OfflineReplayEnd, OfflineReplayError,
-    OfflineReplayFacts, PreparedContainedTask, ScanDeclaration, replay_contained_task, replay_scan,
+    OfflineReplayFacts, PreparedContainedTask, ScanDeclaration, replay_contained_task_drawn,
+    replay_scan,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -70,18 +71,23 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
         );
     }
     let task = admit(&args.package)?;
+    // Workflow #406 T4: the run draws its points as the Runtime draws a run's, from the seed
+    // (`--seed`, else 0) with the touch keys of the root configuration; the dry run's reported
+    // seed repeats its points.
+    let draw = crate::lab_draw::offline_draw(args.seed)?;
     let frames = paths
         .iter()
         .map(|path| crate::package_cli::offline::read_fixture_frame(path.as_path()));
-    let result = replay_contained_task(&task, frames, facts).map_err(|error| match error {
-        OfflineReplayError::Frames(error) => error,
-        OfflineReplayError::Invariant(error) => CliError::new(
-            ErrorKind::UsageValidation,
-            error.code().as_str(),
-            error.to_string(),
-            &[],
-        ),
-    })?;
+    let result =
+        replay_contained_task_drawn(&task, frames, facts, draw).map_err(|error| match error {
+            OfflineReplayError::Frames(error) => error,
+            OfflineReplayError::Invariant(error) => CliError::new(
+                ErrorKind::UsageValidation,
+                error.code().as_str(),
+                error.to_string(),
+                &[],
+            ),
+        })?;
     let mut payload = serde_json::to_value(&result)
         .map_err(|error| CliError::device(format!("failed to encode the replay: {error}")))?;
     payload["frames_given"] = json!(paths.len());
@@ -113,6 +119,9 @@ struct ReplayArgs {
     select: Option<ScanSelect>,
     /// #411 Lab RP: the `--parameter <name>=<value>` given, in order (read only with `select`).
     parameters: Vec<(String, String)>,
+    /// Workflow #406 T4: the whole replay's seed (`--seed`), 0 without it; read only without
+    /// `select`.
+    seed: Option<u64>,
 }
 
 /// `--select <operation> --scan <file>`.
@@ -160,7 +169,13 @@ impl ReplayArgs {
         if let Some(name) = flags.flags.keys().find(|name| {
             !matches!(
                 name.as_str(),
-                "--package" | "--frames" | "--facts" | "--select" | "--scan" | "--parameter"
+                "--package"
+                    | "--frames"
+                    | "--facts"
+                    | "--select"
+                    | "--scan"
+                    | "--parameter"
+                    | "--seed"
             )
         }) {
             return Err(CliError::usage(format!("replay does not accept {name}")));
@@ -187,6 +202,14 @@ impl ReplayArgs {
                 "replay reads --parameter only with --select <operation> and --scan <file>",
             ));
         }
+        // Workflow #406 T4: the whole replay draws from `--seed`; a scan replay does not read it.
+        let seed = crate::lab_draw::seed_flag(flags)?;
+        if select.is_some() && seed.is_some() {
+            return Err(crate::lab_draw::seed_refusal(
+                "conflicting",
+                "replay reads --seed only for a whole package, without --select and --scan",
+            ));
+        }
         Ok(Self {
             package: single_path(flags, "--package")?
                 .ok_or_else(|| CliError::usage("replay requires --package <path>"))?,
@@ -195,6 +218,7 @@ impl ReplayArgs {
             facts: single_path(flags, "--facts")?,
             select,
             parameters,
+            seed,
         })
     }
 }

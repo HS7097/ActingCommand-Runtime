@@ -53,11 +53,11 @@ use commands::{
 use commands::{
     ControlPoint, DestructiveClick, NavigationClick, NavigationEdge, NavigationGraph,
     NavigationRow, PageDetectionOutcome, SemanticInput, canonical_navigation_page,
-    destructive_frame_regions_over, detect_current_page_over, evaluate_target_over,
-    find_navigation_route, navigation_edge_json, page_detection_json, parse_control_point,
-    parse_navigation_click, parse_navigation_graph_value, parse_navigation_row,
-    parse_navigation_tap_rect, parse_point_pair, point_json, rect_center, rect_json,
-    rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
+    destructive_frame_regions_over, detect_current_page_over, drawn_semantic_input,
+    evaluate_target_over, find_navigation_route, navigation_edge_json, page_detection_json,
+    parse_control_point, parse_navigation_click, parse_navigation_graph_value,
+    parse_navigation_row, parse_navigation_tap_rect, parse_point_pair, point_json, rect_center,
+    rect_json, rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
     reject_destructive_overlap_on_frame, required_string_field, required_value_field,
     run_current_page, run_detect_page, run_is_visible, run_locate, run_navigate, run_recognize,
     run_session_recover, run_tap_target, semantic_input_json, target_eval_json,
@@ -182,6 +182,8 @@ mod flag_args;
 mod flag_values;
 #[rustfmt::skip] mod instance_resolution;
 mod lab2_cli;
+// Workflow #406 T4: the Lab's seed and the touch keys it draws with.
+mod lab_draw;
 mod lab_package_control;
 mod lab_run;
 mod maa_task_graph;

@@ -346,7 +346,10 @@ fn resolve_click(
 ) -> CliOutcome<ElementResolution> {
     match click {
         NavigationClick::Input(input) => resolve(input, evaluator, frames, resolved, ocr),
-        NavigationClick::SegmentedDrag(_) => Ok(ElementResolution::GestureNotProjectable),
+        // Workflow #406 T4: a path drag, as a segmented drag.
+        NavigationClick::SegmentedDrag(_) | NavigationClick::PathDrag(_) => {
+            Ok(ElementResolution::GestureNotProjectable)
+        }
     }
 }
 
@@ -886,6 +889,11 @@ mod gate_411_a21;
 // segmented drag is listed not actionable, and offline observe projects page-set operations.
 #[cfg(test)]
 mod gate_lab_l2;
+
+// Workflow #406 T4 (exec key 112): actinglab reads a path drag, lists it not actionable, and an
+// offline run reports its generated path.
+#[cfg(test)]
+mod gate_406_t4;
 
 // #411 Lab L6 (exec key 99): offline observe evaluates an action's NN target with the provider
 // that holds its model and fills the values of every target it evaluated, as online.

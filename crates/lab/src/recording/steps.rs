@@ -28,7 +28,11 @@ use super::store::{
 };
 use crate::LabOcr;
 use crate::codes::LabCode;
-use actingcommand_contract::{LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX};
+use actingcommand_contract::{
+    InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+};
+use actingcommand_execution_kernel::{DriveDraw, path_drag_bounds_hold, sampling_algorithm_name};
+use actingcommand_recognition_pack::PackRect;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -1575,12 +1579,92 @@ pub(crate) fn apply_marks(
 }
 
 /// Workflow #390 LAB-2: the click declaration names a drag or a long press, or (#411 Lab BD) a
-/// brake drag.
+/// brake drag, or (Workflow #406 T4) a path drag.
 fn gesture_declared(spec: &ClickSpec) -> bool {
     spec.drag_to.is_some()
         || spec.long_press.is_some()
         || spec.duration_ms.is_some()
         || spec.brake_corner.is_some()
+        || spec.path_drag.is_some()
+}
+
+/// Workflow #406 T4 (plan Q17): a single-touch path drag in the click rectangle `region`, its
+/// box: the box inside the frame with width and height >= 1, and its numbers within the bounds
+/// the kernel and pack containment check (`turns` 1..=30, `min_segment_px`
+/// 1..=(max(width, height) - 1) / 2, `duration_ms` `turns + 1 ..= (turns + 1) * 60000`,
+/// `corner_hold_ms` 0..=60000). Its duration is its own, so it takes no `duration_ms` of the
+/// click, and it is no drag, long press, brake drag, source-mark click or followed click.
+fn path_drag_declaration(
+    spec: &ClickSpec,
+    path: super::model::PathDragSpec,
+    size: Option<RecordSize>,
+) -> LabResult<(RecordRect, ClickGesture)> {
+    let conflicting = [
+        ("duration_ms", spec.duration_ms.is_some()),
+        ("drag_to", spec.drag_to.is_some()),
+        ("long_press", spec.long_press.is_some()),
+        ("brake_corner", spec.brake_corner.is_some()),
+        ("from", spec.from.is_some()),
+        ("follow", spec.follow.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(member, given)| given.then_some(member))
+    .collect::<Vec<_>>();
+    if let Some(first) = conflicting.first() {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                "a path drag takes the click rectangle (its box) and its own numbers only; it \
+                 takes no duration_ms of the click, drag_to, long_press, brake_corner, from or \
+                 follow",
+            ),
+            json!({
+                "argument": first,
+                "argument_problem": "conflicting",
+                "arguments": conflicting
+                    .iter()
+                    .map(|member| json!({"argument": member, "argument_problem": "conflicting"}))
+                    .collect::<Vec<_>>()
+            }),
+        ));
+    }
+    let Some(region) = spec.region else {
+        return Err(invalid(
+            "validation_failed",
+            "a path drag needs the click rectangle, the box it turns in",
+        ));
+    };
+    if !size.is_some_and(|size| rect_inside(region, size)) {
+        return Err(invalid(
+            "validation_failed",
+            "a path drag's box must lie inside the frame with width and height >= 1",
+        ));
+    }
+    if !path_drag_bounds_hold(
+        (region.width, region.height),
+        path.turns,
+        path.min_segment_px,
+        path.duration_ms,
+        path.corner_hold_ms,
+    ) {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                "a path drag's turns, min_segment_px, duration_ms or corner_hold_ms is outside \
+                 its bounds for its box",
+            ),
+            json!({"argument": "path_drag", "argument_problem": "out_of_range", "path_drag": path}),
+        ));
+    }
+    Ok((
+        region,
+        ClickGesture::SingleTouchPathDragV1 {
+            turns: path.turns,
+            min_segment_px: path.min_segment_px,
+            duration_ms: path.duration_ms,
+            corner_hold_ms: path.corner_hold_ms,
+        },
+    ))
 }
 
 /// #411 Lab BD: a single-touch drag with a vertical brake from the click rectangle `region` to
@@ -1682,6 +1766,10 @@ fn gesture_declaration(
         }
         Ok(duration_ms)
     };
+    // Workflow #406 T4: a path drag.
+    if let Some(path) = spec.path_drag {
+        return path_drag_declaration(spec, path, size);
+    }
     // #411 Lab BD: a brake drag.
     if let Some(corner) = spec.brake_corner {
         return brake_drag_declaration(spec, corner, size);
@@ -2715,7 +2803,7 @@ pub(crate) fn plan_click(
         (None, Some(click)) => (click.rect, click.source.clone(), false),
         (None, None) => return Err(click_missing_for_do(index)),
     };
-    let (point, point_rule) = match request.tap {
+    let (point, point_rule, sampling) = match request.tap {
         Some(point) => {
             let inside = i64::from(point.x) >= i64::from(rect.x)
                 && i64::from(point.y) >= i64::from(rect.y)
@@ -2733,21 +2821,65 @@ pub(crate) fn plan_click(
                     json!({"step": index, "rect": rect, "tap": point}),
                 ));
             }
-            (point, "explicit")
+            (point, "explicit".to_string(), None)
         }
-        None => (rect_center(rect), "rect_center"),
+        // Workflow #406 T4 (plan Q20): with a seed, the point is drawn in the rectangle and the
+        // rule names the draw; without one, the rectangle's centre.
+        None => match &request.draw {
+            Some(draw) => {
+                let (point, sampling) = drawn_point(draw, rect)?;
+                (point, point_rule_of(&sampling), Some(sampling))
+            }
+            None => (rect_center(rect), "rect_center".to_string(), None),
+        },
     };
     Ok(super::model::ClickPlan {
         record_id: recording.record_id.clone(),
         step: index,
         rect,
         point,
-        point_rule: point_rule.to_string(),
+        point_rule,
         source,
         declares_click,
         gesture: None,
         to_point: None,
+        sampling,
     })
+}
+
+/// Workflow #406 T4: a recorded click's rectangle as a drawn box.
+fn pack_rect(rect: RecordRect) -> PackRect {
+    PackRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+/// Workflow #406 T4 (plan Q20; `contracts/lab-recording.md`, the point rule): the point the Lab
+/// presses in `rect` drawn by `draw`, a recorded click being its command's first press with no
+/// element label, and how it was drawn.
+fn drawn_point(
+    draw: &DriveDraw,
+    rect: RecordRect,
+) -> LabResult<(RecordPoint, InputSamplingEvidence)> {
+    let (point, sampling) = draw
+        .point(pack_rect(rect), 0, "")
+        .map_err(|error| LabError::usage(error.message()))?;
+    Ok((
+        RecordPoint {
+            x: point.x,
+            y: point.y,
+        },
+        sampling,
+    ))
+}
+
+/// Workflow #406 T4: the point rule of a drawn press, the name of its draw's algorithm
+/// (`center_hotspot_normal_v1` with touch keys, `xorshift64_uniform_rect_v1` without).
+fn point_rule_of(sampling: &InputSamplingEvidence) -> String {
+    sampling_algorithm_name(sampling.algorithm()).to_string()
 }
 
 fn point_inside(point: RecordPoint, rect: RecordRect) -> bool {
@@ -2771,7 +2903,10 @@ fn plan_gesture(
     gesture: ClickGesture,
     request: &super::model::PlanClickRequest,
 ) -> LabResult<super::model::ClickPlan> {
-    if let ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. } = gesture {
+    // Workflow #406 T4: nor a path drag (the online Lab performs neither until B-3).
+    if let ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }
+    | ClickGesture::SingleTouchPathDragV1 { .. } = gesture
+    {
         return Err(gesture_execution_unsupported(index, gesture));
     }
     let conflict = |message: String, details: Value| {
@@ -2787,7 +2922,7 @@ fn plan_gesture(
         ));
     }
     let rect = click.rect;
-    let (point, to_point, rule) = match (gesture, request.swipe) {
+    let (point, to_point, rule, sampling) = match (gesture, request.swipe) {
         (ClickGesture::Drag { to, duration_ms }, Some(swipe)) => {
             if !point_inside(swipe.from, rect) || !point_inside(swipe.to, to) {
                 return Err(with_details(
@@ -2815,23 +2950,55 @@ fn plan_gesture(
                     }),
                 ));
             }
-            (swipe.from, swipe.to, "explicit")
+            (swipe.from, swipe.to, "explicit".to_string(), None)
         }
-        (ClickGesture::Drag { to, .. }, None) => {
-            (rect_center(rect), rect_center(to), "rect_center")
-        }
-        (ClickGesture::LongPress { .. }, None) => {
-            let point = rect_center(rect);
-            (point, point, "rect_center")
-        }
+        // Workflow #406 T4: with a seed, both ends are drawn in their boxes, as a run draws a
+        // drag's; without one, their centres.
+        (ClickGesture::Drag { to, .. }, None) => match &request.draw {
+            Some(draw) => {
+                let (from, end, sampling) = draw
+                    .drag(pack_rect(rect), pack_rect(to), 0, "")
+                    .map_err(|error| LabError::usage(error.message()))?;
+                (
+                    RecordPoint {
+                        x: from.x,
+                        y: from.y,
+                    },
+                    RecordPoint { x: end.x, y: end.y },
+                    point_rule_of(&sampling),
+                    Some(sampling),
+                )
+            }
+            None => (
+                rect_center(rect),
+                rect_center(to),
+                "rect_center".to_string(),
+                None,
+            ),
+        },
+        (ClickGesture::LongPress { .. }, None) => match &request.draw {
+            Some(draw) => {
+                let (point, sampling) = drawn_point(draw, rect)?;
+                (point, point, point_rule_of(&sampling), Some(sampling))
+            }
+            None => {
+                let point = rect_center(rect);
+                (point, point, "rect_center".to_string(), None)
+            }
+        },
         (ClickGesture::LongPress { .. }, Some(_)) => {
             return Err(conflict(
                 format!("step {index} declares a long press; --swipe executes a declared drag"),
                 json!({"step": index, "gesture": gesture}),
             ));
         }
-        // #411 Lab BD: refused above, before `--tap` and `--swipe` are looked at.
-        (ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }, _) => {
+        // #411 Lab BD (and Workflow #406 T4): refused above, before `--tap` and `--swipe` are
+        // looked at.
+        (
+            ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }
+            | ClickGesture::SingleTouchPathDragV1 { .. },
+            _,
+        ) => {
             return Err(gesture_execution_unsupported(index, gesture));
         }
     };
@@ -2840,11 +3007,12 @@ fn plan_gesture(
         step: index,
         rect,
         point,
-        point_rule: rule.to_string(),
+        point_rule: rule,
         source: click.source.clone(),
         declares_click: false,
         gesture: Some(gesture),
         to_point: Some(to_point),
+        sampling,
     })
 }
 
@@ -2923,6 +3091,7 @@ pub(crate) fn commit_click(
         executed_at_unix_ms: now,
         to_point: plan.to_point,
         duration_ms: plan.gesture.map(ClickGesture::duration_ms),
+        sampling: plan.sampling.clone(),
     });
     if performed {
         click.needs_review = request.has_failure;

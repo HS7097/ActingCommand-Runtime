@@ -1728,3 +1728,19 @@ tests = [
     "actingcommand-device::lib::touch::tests::t3_adb_sends_one_shell_of_motionevents_and_refuses_below_sdk_23",
 ]
 incident = ["#406"]
+
+# Workflow #406 T4 (0.12.x; register §1.138; no persisted ledger shape: Lab outputs, Lab file members and the MCP argument only; plan-405-406 Q14, Q20; Alice 2026-10-19 Lab principle): an offline run (package dry-run, replay) draws as the kernel, each step from the action seed SHA-256 derives from the run's seed (--seed, else 0), the step index and the operation label, with the touch keys of the root configuration the Lab reads (its touch section over the embedded defaults) and no landing history (center_hotspot_normal_v1), uniform and named xorshift64_uniform_rect_v1 without a touch section; would_click and each replayed effect carry the sampling evidence, the result the seed, and a replay given the reported seed repeats every point; given a seed, the Lab presses a box at the point drawn from it (tap-target through the input port, offline do --scene), not the centre; actinglab's reader and the Lab bundle read single_touch_path_drag_v1, its offline projection element is gesture_not_projectable (do: lab_element_unavailable), offline observe lists its edge with input null, the Lab port refuses it, and an offline run reports its generated path in would_click; a recording declares a path drag in its click rectangle, record stop generates it and checks its path inside the box, and a recorded tap's point_rule names how the Lab pressed (the draw with its sampling, or rect_center)
+[[gate]]
+key = "112"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_406_t4::t4_an_offline_run_draws_as_the_kernel_and_reports_the_sampling",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_406_t4::t4_a_replay_with_the_reported_seed_repeats_every_point",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_406_t4::t4_without_a_touch_section_the_offline_draw_is_uniform_and_named",
+    "actingcommand-lab::lib::drive::tests::t4_the_lab_presses_a_box_at_its_seeded_hotspot_point",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_406_t4::t4_the_lab_presses_a_box_at_its_seeded_hotspot_point",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_406_t4::t4_the_lab_reads_a_path_drag_and_does_not_perform_it",
+    "actingcommand-lab::lib::lab_run::tests::t4_the_lab_reads_a_path_drag_and_does_not_perform_it",
+    "actingcommand-lab::lib::gate_406_t4::t4_recording_writes_a_path_drag_and_names_the_press_rule",
+]
+incident = ["#406"]

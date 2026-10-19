@@ -14,3 +14,5 @@ include!("bundle_and_actions.rs");
 include!("guards_and_recovery.rs");
 include!("context_and_output.rs");
 include!("fixtures.rs");
+// Workflow #406 T4 (exec key 112): the Lab bundle reads a path drag; the Lab port refuses it.
+include!("gate_406_t4.rs");

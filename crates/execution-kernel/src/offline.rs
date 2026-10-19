@@ -7,16 +7,18 @@ use crate::{
     ContainedTaskCode, ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
     ContainedTaskRuntime, ContainedTaskTrace, InputFrameContext, ObservedFrame,
     PreparedContainedTask, ResourceReadingProblem, RunParameters, SelectionState,
-    SelectionStateRequest,
+    SelectionStateRequest, TouchSampling,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Detail, Outcome};
 use actingcommand_contract::{
-    InputAction, InstanceFactContext, InstanceFactSnapshot, OcrFieldPrivacy, OcrFieldsReport,
+    InputAction, InputSamplingEvidence, InstanceFactContext, InstanceFactSnapshot, OcrFieldPrivacy,
+    OcrFieldsReport,
 };
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::Sha256Hash;
 use serde::{Serialize, Serializer};
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
@@ -28,6 +30,60 @@ const OFFLINE_INSTANCE: &str = "offline.simulation";
 /// snapshot names the first position, and its record is never appended anywhere.
 const OFFLINE_SNAPSHOT_ID: &str = "snapshot:offline:empty";
 const OFFLINE_SNAPSHOT_POSITION: u64 = 1;
+/// Workflow #406 T4: the domain of an offline action seed ([`offline_action_seed`]).
+const OFFLINE_ACTION_SEED_DOMAIN: &[u8] = b"ActingCommand offline action seed v1\0";
+
+/// Workflow #406 T4 (plan Q20, Q14; `contracts/resource-declarations.md`, "The Lab's draw"): how
+/// an offline run draws the points of its boxes, as the Runtime draws a run's: from the run's
+/// seed (`--seed` when given, else 0), each step from its own action seed
+/// ([`offline_action_seed`]), with the touch keys of the root configuration the Lab reads. An
+/// offline run has no landing history, so a single-region press draws one centre-hotspot point
+/// (`center_hotspot_normal_v1`); without touch keys every box is drawn uniformly
+/// (`xorshift64_uniform_rect_v1`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OfflineDraw {
+    /// The run's seed.
+    pub seed: u64,
+    /// The touch keys in effect; `None` without a touch configuration.
+    pub touch: Option<TouchSampling>,
+}
+
+impl OfflineDraw {
+    /// The touch keys a step is handed: those in effect with one candidate, since an offline run
+    /// keeps no landing history.
+    fn step_touch(self) -> Option<TouchSampling> {
+        self.touch.map(|touch| TouchSampling {
+            candidate_count: 1,
+            ..touch
+        })
+    }
+}
+
+/// Workflow #406 T4: the action seed of the step `step_index` with the operation
+/// `operation_label` of an offline run with the seed `seed`, as the Runtime derives a step's from
+/// its run seed: a domain-separated SHA-256 over the run seed, the step index and the operation
+/// label, the first eight bytes of the digest read big-endian. The bytes hashed are the domain
+/// `ActingCommand offline action seed v1` and a NUL, `seed` (eight bytes, big-endian),
+/// `step_index` (four bytes, big-endian), the label's length in bytes (eight bytes, big-endian)
+/// and the label's UTF-8 bytes. The Lab derives the seed of each press it draws the same way.
+pub fn offline_action_seed(seed: u64, step_index: u32, operation_label: &str) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(OFFLINE_ACTION_SEED_DOMAIN);
+    hasher.update(seed.to_be_bytes());
+    hasher.update(step_index.to_be_bytes());
+    hasher.update((operation_label.len() as u64).to_be_bytes());
+    hasher.update(operation_label.as_bytes());
+    let digest = hasher.finalize();
+    let mut first = [0_u8; 8];
+    first.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(first)
+}
+
+/// Workflow #406 T4: whether an effect drew its points from the run's seed: it carries sampling
+/// evidence, or it is a path drag, whose points the kernel generates from the step's seed.
+fn drew_from_seed(action: &InputAction, sampling: Option<&InputSamplingEvidence>) -> bool {
+    sampling.is_some() || matches!(action, InputAction::SingleTouchPathDragV1 { .. })
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OfflineRecognitionResult {
@@ -43,6 +99,11 @@ pub enum OfflineDecision {
     WouldClick {
         operation_label: String,
         action: InputAction,
+        /// Workflow #406 T4: how the click's points were drawn, the evidence as the ledger
+        /// records an effect intent's (algorithm, action seed, regions, parameters); absent for
+        /// a click that draws no box point (a `point` click, a path drag).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sampling: Option<InputSamplingEvidence>,
         guard: ContainedTaskGuardOutcome,
     },
     WouldComplete {
@@ -84,6 +145,10 @@ pub struct OfflineSimulationResult {
     /// dry run started. Present only when a select step was evaluated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_now_unix_ms: Option<u64>,
+    /// Workflow #406 T4: the run's seed, present when the decision's click drew its points from
+    /// it; a run given this seed draws the same points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -143,7 +208,7 @@ pub fn simulate_contained_task(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, None)
+    simulate(task, frames, None, OfflineDraw::default())
 }
 
 /// [`simulate_contained_task`] with the caller's instant for a select step (Workflow #308): the
@@ -154,19 +219,33 @@ pub fn simulate_contained_task_at(
     frames: Vec<Frame>,
     now_unix_ms: u64,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, Some(now_unix_ms))
+    simulate(task, frames, Some(now_unix_ms), OfflineDraw::default())
+}
+
+/// Workflow #406 T4: [`simulate_contained_task`] (with the caller's instant for a select step
+/// when given) drawing every box point as `draw` says: the run's seed and the touch keys in
+/// effect. The plain forms draw with the seed 0 and no touch keys.
+pub fn simulate_contained_task_drawn(
+    task: &PreparedContainedTask,
+    frames: Vec<Frame>,
+    now_unix_ms: Option<u64>,
+    draw: OfflineDraw,
+) -> Result<OfflineSimulationResult, OfflineSimulationError> {
+    simulate(task, frames, now_unix_ms, draw)
 }
 
 fn simulate(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
     now_unix_ms: Option<u64>,
+    draw: OfflineDraw,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
     let mut runtime = OfflineRuntime::new(
         frames,
         now_unix_ms,
         task.has_select_steps(),
         task.default_run_parameters(),
+        draw,
     );
     let decision = if runtime.frames.is_empty() {
         OfflineDecision::Refused {
@@ -199,6 +278,7 @@ fn simulate(
                 .map(|planned| OfflineDecision::WouldClick {
                     operation_label: planned.operation_label,
                     action: planned.action,
+                    sampling: planned.sampling,
                     guard: planned.guard,
                 })
                 .ok_or_else(|| {
@@ -226,6 +306,12 @@ fn simulate(
         }
     };
 
+    let seed = match &decision {
+        OfflineDecision::WouldClick {
+            action, sampling, ..
+        } if drew_from_seed(action, sampling.as_ref()) => Some(draw.seed),
+        _ => None,
+    };
     let package_id = task.package_label().to_string();
     let task_id = task.task_label().to_string();
     let post_admission_ocr_declared = task.has_post_admission_ocr();
@@ -257,6 +343,7 @@ fn simulate(
         recognition: runtime.recognition,
         decision,
         selection_now_unix_ms: runtime.selection_now_unix_ms,
+        seed,
     })
 }
 
@@ -305,6 +392,7 @@ fn fingerprint_decision(
 struct PlannedEffect {
     operation_label: String,
     action: InputAction,
+    sampling: Option<InputSamplingEvidence>,
     guard: ContainedTaskGuardOutcome,
 }
 
@@ -325,6 +413,8 @@ struct OfflineRuntime {
     /// Workflow #411 B15 R5: a select step's snapshot also holds the package's declared
     /// parameter defaults (an offline run has no dispatch).
     run_parameters: RunParameters,
+    /// Workflow #406 T4: how the run draws its box points.
+    draw: OfflineDraw,
 }
 
 impl OfflineRuntime {
@@ -333,6 +423,7 @@ impl OfflineRuntime {
         now_unix_ms: Option<u64>,
         retains_last_frame: bool,
         run_parameters: RunParameters,
+        draw: OfflineDraw,
     ) -> Self {
         Self {
             frames: frames.into(),
@@ -345,6 +436,7 @@ impl OfflineRuntime {
             last_frame: None,
             confirmation_repeats_last_frame: false,
             run_parameters,
+            draw,
         }
     }
 }
@@ -388,6 +480,24 @@ impl ContainedTaskRuntime for OfflineRuntime {
         };
         self.capture_count += 1;
         Ok(frame.into())
+    }
+
+    /// Workflow #406 T4: each step's seed from the run's ([`offline_action_seed`]).
+    fn action_seed(
+        &mut self,
+        step_index: u32,
+        operation_label: &str,
+    ) -> Result<Option<u64>, Self::Error> {
+        Ok(Some(offline_action_seed(
+            self.draw.seed,
+            step_index,
+            operation_label,
+        )))
+    }
+
+    /// Workflow #406 T4: the touch keys in effect, with one candidate (no landing history).
+    fn touch_sampling(&mut self) -> Result<Option<TouchSampling>, Self::Error> {
+        Ok(self.draw.step_touch())
     }
 
     fn selection_state(
@@ -442,6 +552,7 @@ impl ContainedTaskRuntime for OfflineRuntime {
             ContainedTaskTrace::EffectIntent {
                 operation_label,
                 action,
+                sampling,
                 guard,
                 ..
             } => {
@@ -453,6 +564,7 @@ impl ContainedTaskRuntime for OfflineRuntime {
                 self.planned = Some(PlannedEffect {
                     operation_label,
                     action,
+                    sampling,
                     guard,
                 });
             }
@@ -504,6 +616,9 @@ pub struct OfflineReplayEntry {
 pub struct OfflineReplayEffect {
     pub action: InputAction,
     pub guard: ContainedTaskGuardOutcome,
+    /// Workflow #406 T4: how the input's points were drawn, as `WouldClick`'s `sampling`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<InputSamplingEvidence>,
 }
 
 /// One step of a replayed run, in the order the interpreter started it.
@@ -619,6 +734,10 @@ pub struct OfflineReplayResult {
     /// its declaration classifies `personal` redacted; absent when the run recorded none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<OcrFieldsReport>,
+    /// Workflow #406 T4: the run's seed, present when an input drew its points from it; a
+    /// replay given this seed draws every point again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 /// Why a replay gave no result.
@@ -644,6 +763,20 @@ pub fn replay_contained_task<I, E>(
 where
     I: Iterator<Item = Result<Frame, E>>,
 {
+    replay_contained_task_drawn(task, frames, facts, OfflineDraw::default())
+}
+
+/// Workflow #406 T4: [`replay_contained_task`] drawing every box point as `draw` says: the run's
+/// seed and the touch keys in effect. The plain form draws with the seed 0 and no touch keys.
+pub fn replay_contained_task_drawn<I, E>(
+    task: &PreparedContainedTask,
+    frames: I,
+    facts: OfflineReplayFacts,
+    draw: OfflineDraw,
+) -> Result<OfflineReplayResult, OfflineReplayError<E>>
+where
+    I: Iterator<Item = Result<Frame, E>>,
+{
     let mut runtime = ReplayRuntime {
         task,
         frames,
@@ -657,6 +790,7 @@ where
         reading_frames: VecDeque::new(),
         readings: Vec::new(),
         fields: None,
+        draw,
     };
     let end = match task.run(&mut runtime) {
         Ok(outcome) => OfflineReplayEnd::Completed {
@@ -685,6 +819,12 @@ where
             }
         },
     };
+    let seed = runtime
+        .steps
+        .iter()
+        .flat_map(|step| &step.effects)
+        .any(|effect| drew_from_seed(&effect.action, effect.sampling.as_ref()))
+        .then_some(draw.seed);
     Ok(OfflineReplayResult {
         mode: "offline_replay",
         executed: false,
@@ -698,6 +838,7 @@ where
         selection_now_unix_ms: runtime.selection_now_unix_ms,
         readings: runtime.readings,
         fields: runtime.fields,
+        seed,
     })
 }
 
@@ -717,6 +858,8 @@ struct ReplayRuntime<'t, I> {
     reading_frames: VecDeque<usize>,
     readings: Vec<OfflineReplayReadings>,
     fields: Option<OcrFieldsReport>,
+    /// Workflow #406 T4: how the run draws its box points.
+    draw: OfflineDraw,
 }
 
 #[derive(Debug)]
@@ -764,6 +907,24 @@ where
     /// its samples from it.
     fn sampling_supported(&self) -> bool {
         true
+    }
+
+    /// Workflow #406 T4: each step's seed from the run's ([`offline_action_seed`]).
+    fn action_seed(
+        &mut self,
+        step_index: u32,
+        operation_label: &str,
+    ) -> Result<Option<u64>, Self::Error> {
+        Ok(Some(offline_action_seed(
+            self.draw.seed,
+            step_index,
+            operation_label,
+        )))
+    }
+
+    /// Workflow #406 T4: the touch keys in effect, with one candidate (no landing history).
+    fn touch_sampling(&mut self) -> Result<Option<TouchSampling>, Self::Error> {
+        Ok(self.draw.step_touch())
     }
 
     fn selection_state(
@@ -862,6 +1023,7 @@ where
             ContainedTaskTrace::EffectIntent {
                 step_index,
                 action,
+                sampling,
                 guard,
                 ..
             } => {
@@ -876,6 +1038,7 @@ where
                     .push(OfflineReplayEffect {
                         action: action.clone(),
                         guard,
+                        sampling,
                     });
                 self.pending_action = Some(action);
             }
@@ -1664,6 +1827,7 @@ mod tests {
                 ContainedTaskTrace::EffectIntent {
                     operation_label,
                     action,
+                    sampling,
                     guard,
                     ..
                 } => {
@@ -1676,6 +1840,7 @@ mod tests {
                     self.first_effect = Some(PlannedEffect {
                         operation_label,
                         action,
+                        sampling,
                         guard,
                     });
                 }
@@ -1714,6 +1879,7 @@ mod tests {
                 OfflineDecision::WouldClick {
                     operation_label: planned.operation_label,
                     action: planned.action,
+                    sampling: planned.sampling,
                     guard: planned.guard,
                 },
                 runtime
