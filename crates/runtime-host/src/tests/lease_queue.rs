@@ -366,6 +366,12 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     .expect("runtime host");
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
+    // #71: no deadline of this test is the Runtime's; each is the test's own real-time bound.
+    // CI run 39202589530 stalled its runner for 2.5 s, and the 2 s receipt budget of
+    // `TestClient::connect` ran out on `second.queue` (`test_receipt_missing`, Idle). Both
+    // clients and the transfer wait therefore use the support's 10 s receipt budget.
+    first.set_receipt_read_timeout();
+    second.set_receipt_read_timeout();
     let (_, expired_token) = first.acquire("node.a");
     let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 1_000);
     clock.advance(250);
@@ -373,7 +379,7 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     let started = Instant::now();
     let new_token = loop {
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            started.elapsed() < Duration::from_secs(10),
             "expiry transfer timed out"
         );
         let poll = second.request(RuntimeOperation::PollQueuedLease {
