@@ -162,10 +162,9 @@ fn semantic_command_rejects_loose_only_resources_before_capture() {
             "--json",
             "--resource-root",
             temp.path().to_str().unwrap(),
+            // #411 Lab L1: observe never reads `--state-dir`, which it would refuse.
             "observe",
             "--capture",
-            "--state-dir",
-            temp.path().join("state").to_str().unwrap(),
         ],
         true,
     );

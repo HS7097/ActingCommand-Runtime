@@ -1765,6 +1765,27 @@ the text of `lab_ocr_unavailable` and `lab_ocr_vision_unconfigured` (entries, no
 |---|---|---|---|---|---|
 | A12-1 | the configuration the offline tools' OCR loader reads on a single-location root | rule (no shape change) | A12 | A12 (exec 87) | an A/B installation's selected configuration and a refused installation are unchanged; a single-location root's configuration that is missing, unreadable, no regular file or over 1 MiB is `config_read_failed`, one that does not decode `config_decode_failed`, each the cause of `lab_ocr_unavailable` and never `lab_ocr_vision_unconfigured` (coordinator decision 6 of 2026-10-19); outside both an installation and a single-location root the cause stays `lab_ocr_vision_unconfigured` |
 
+### 1.104 Slice Lab L2 (v0.12.x): the Lab loads every click kind the Runtime runs; offline `observe` projects page-set operations (#411 Lab L2, with A13's A part)
+
+Alice's principle of 2026-10-19 (「Lab的资源制作应当包含所有可用后端的识别以及触控」): a package the
+Runtime runs is a package the Lab can load. Both navigation readers read the segmented drag
+`single_touch_drag_with_vertical_brake_v1`, so a package holding one is no longer refused by the
+online observation (and so by `observe --capture` and `do --capture`) or by actinglab's
+`observe`, `do`, `ensure` and `wait`; the Lab lists the gesture and does not perform it. A13's A
+part: offline `observe` puts an operation whose `to` is a page set into `observation.elements`,
+as L2-7 (§1.74) and the online observation already do. [resource-declarations.md](resource-declarations.md)
+(the navigation paragraphs) and [page-projection.md](page-projection.md) ("Shared input and
+output") are the contract. One new outcome code; no persisted ledger shape, no wire or record
+shape, no configuration key and no interface revision of §6 changes. Executing the gesture from
+the Lab (B-1, B-3) and `input` on `actions[]` page-set entries (A13's B part) are not in this slice.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LL2-1 | the click `{"kind": "single_touch_drag_with_vertical_brake_v1", "from_rect", "corner_rect", "horizontal_duration_ms", "corner_hold_ms", "brake_distance_px", "brake_duration_ms"}` of a navigation edge (to a page or a page set) or a page operation, read by the kernel's drive reader and actinglab's navigation reader | new reading rule of an existing resource format (`navigation`, schema `0.6` unchanged) (exec 90) | Lab L2 | — (source compilation writes it) | its shape as pack containment checks it: exactly these members, two rectangles of integer `x`, `y`, `width`, `height`, an integer `brake_distance_px`, unsigned durations; another form keeps the reader's refusal (`drive_plan_invalid`, actinglab's usage refusal, `observation_resources_invalid`); was `unsupported navigation click kind`; no route of the drive graph or of actinglab's navigation tools passes it; as a destructive page operation it covers `from_rect`, `corner_rect` and `corner_rect` moved up by `brake_distance_px` |
+| LL2-2 | `gesture_not_projectable` (`error`, `ladder_class` `none`, `since` 0.12.3, pending), a `blocked_reason` of the page projection | new outcome code, new value of an existing member (page projection shape unchanged) (exec 90) | Lab L2 | Lab L2 | the element of a segmented drag in the online observation and actinglab `observe`: `recognized: true`, `recognition_basis: matched_page_declaration`, `actionable: false`, `input: null`; `do <element-id>` on it is `lab_element_unavailable` as for any element that is not actionable; the online observation checks its two boxes against the coordinate space, as a drag's; its class is that of its siblings (a projection reason, row 7) |
+| LL2-3 | offline `observe`'s `actions` entry of an edge whose click is a segmented drag | new value of an existing member (`input: null`) | Lab L2 | Lab L2 | `{id, from_page, to_page, input: null, source}`, the edge entry's members; every other entry unchanged |
+| A13-1 | offline `observe`'s `observation.elements` include each operation from the observed page whose `to` is a page set | rule (no shape change) (exec 90) | Lab L2 | Lab L2 | from the generated navigation row (`to_pages`, its compiled `click` and `source`), resolved as an edge is: a `point` click a tap of its 1×1 box, a `rect` or `specific_rect` click its box and centre, a `target` click on the frame (`target_not_matched` with no input when it fails), geometry outside the frame `invalid_frame_geometry`; a segmented drag as LL2-2; the online observation already projects them; `actions` is unchanged; the projection's limits apply as to any element, so Min may keep a different element for such packages |
+
 ### 1.105 Slice A16 (v0.12.1): an entry recovery package that cannot end on the entry is refused before it runs (#411 A16)
 
 NAV-3b's rule (A1) is unchanged: an entry recovery package must end on a page of the required
@@ -1796,6 +1817,22 @@ written in full (`contract.json`, category, `ladder_class` and values unchanged)
 | A7T-1 | a contained task's capture failure of the instance | rule (no shape change; replaces §1.98's "waits for a ruling") | A7T | A7T (host 108) | after the unconfirmed-resource settlement answered confirmed, a failure whose kernel code is `capture_backend_open_failed`, `paired_backend_open_failed`, `capture_backend_operation_failed` or `capture_frame_invalid` fails only that run, on every capture of the run and every execution provenance: the receipt is `Failed` with the kernel code, projected as a nonfatal `capture_failed`; `capture.failed`, then `task.failed` (not severe, its severity the code's category) and the lease released; the host is not fatal and later requests are not answered `runtime_halted`; a failed open has written the instance's `backend.selfcheck.capture.status = failed`; any other code and resources released unconfirmed that no registered instance owns keep their fatality |
 | A7T-2 | the shipped trigger item `task_capture_backend` | default value (no new key) | A7T | A7T (host 108) | `{"id": "task_capture_backend", "stages": ["task"], "codes": [the four codes]}` after `preparation_backend` in `actingd.defaults.json`, with the trigger defaults (`immediately`, rung 1, cool-down respected); a scheduled run on an instance with stuck recovery on that fails by A7T-1 starts a ladder by it; with the capture self-check failed its `return_home` and `application_restart` rungs are skipped `capture_unavailable` and `emulator_restart` is the first rung tried; a direct run starts none (`rules.direct_runs = exempt`) |
 | A7T-3 | the first capture's ADB probe child | rule (no shape change) | A7T | A7T (host 108) | the one ADB baseline probe of a physical instance's first capture (task deadline) still runs for the four codes; a failed probe with confirmed cleanup invalidates `device.connected`, `application.foreground` and `task.page` with `adb_unreachable` as before; a probe whose adb child is unconfirmed is settled by the #403 rule (`settle_unconfirmed_adb`): the instance is fenced and the run fails nonfatal with `instance_resources_fenced`, and only where no registered instance owns it is the owner retained and the Runtime fatal; the probe's answer no longer decides the capture failure's fatality |
+
+### 1.107 Slice PK1b (v0.12.x): the host hands each step its instance's pacing factor, settles on budget time and records both (#385 P-k; PERF v1.4.2 §4.6, §5.3, §5.6, §10.3, §12; Alice 2026-10-19, pending item 4)
+
+With `performance.pacing.mode = pace` (or `full`) a contained run's step waits and kernel limits
+stretch by its instance's pacing factor in effect; under `observe`, the release default, every
+factor is 1 000 and every wait, limit, deadline, settlement and record is byte-identical to
+before. [performance-control.md](performance-control.md) ("Effect", "Step pacing") and
+[runtime-config.md](runtime-config.md) (the `scheduling` section) are the contract. No interface
+revision of §6, configuration key, record type or outcome code changes; the members below are
+the ones SH-1 registered (P5, P6), first written here.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PK1-1 | register P5 `pacing_factor_milli` of the task timing evidence's `steps[]` | first write of a registered member (host 110) | PK1b | PK1b | one entry per step index whose factor was above 1 000, `pacing_factor_milli` the factor the step started with; the attempts of one step share its entry; entries in step order (strictly increasing `step_index`); no entry for a step at 1 000, so `steps` stays absent under `observe`; `page_settle_ms`, `pacing_band`, `pressure_level` and `extra_wait_rounds` are not written here |
+| PK1-2 | register P6 `wall_elapsed_ms`, `budget_elapsed_ms` of the policy execution record, and the settlement rule | first write of registered members and a rule (host 110) | PK1b | PK1b | the host keeps a run's factor segments (one `step_pacing()` answer to the next or to the end of its execution); budget time = wall time − the sum over its segments of segment wall × (f − 1000) / f; a policy run with a segment above 1 000 is compared with its admitted runtime budget (`PolicyBudgetReceipt::runtime_exceeded`) on its budget time and its record carries `wall_elapsed_ms` (the wall time, as `runtime_ms`) and `budget_elapsed_ms` (never above the wall time); a `policy_runtime_budget_exceeded` rewrite records the number compared as its `runtime_ms`; the host's replay, its recovery check and the ledger's settlement check compare `budget_elapsed_ms` when the record carries it, else the wall time, and the ledger's recovered draft of a record that carries them carries them again; a run settled from its terminal after a restart is settled on its wall time; every other run's record has neither member |
+| PK1-3 | `StepPacing.factor_milli` (the kernel seam, PK1a) | in-process value (no wire) (host 110) | PK1b | PK1b | `step_pacing()` (and through it entry recovery's) hands `StepPacing::new(retries).with_factor_milli(f)`, `f` the instance's `effective_factor_milli` of the shadow measurement's last evaluation, read under the performance lock alone (a poisoned lock is fatal): 1 000 under `observe`, before the first evaluation, without counters and for an instance without a row; the curve's factor (pressure floor included) under `pace` and `full`; the host's deadline, lease TTL, active checks and `contained_task_deadline_exceeded` stay wall-clock at every factor; dispatch, shares, holds and the seven-level controller are unchanged |
 
 ### 1.109 Slice A19 (v0.12.2): a timed-out arrival wait answers "not reached" in its own code; a cut takes samples only (#411 A19)
 
@@ -1843,6 +1880,26 @@ vocabularies are catalog entries, not rows (§7); the package members ride `pack
 | B15-10 | `task.json` mapping member `remedy {need, capabilities, default?}`; `control.json` member `provides [{capability, irreversible?, parameters?}]` | package members (`package` revision 4, §6; not ledger) | R1 | R1 | absent members serialize byte for byte as before; refusals `invalid_scheduling_outcome_declaration` (field) and `contained_task_control_invalid` (`provides_invalid`, `provides_parameters_invalid`, `provides_own_remedy`) |
 | B15-11 | the terminal's `scheduling_disposition` (`task.completed`) | read only (shape unchanged) | R4 | — | the settlement reads its `outcome_key` whatever the catalog references; a remedy key is a success: no failure identity, the streak cleared |
 
+### 1.118 Slice Lab L1 (v0.12.x): a Lab2 verb refuses an option its path does not read (#411 Lab L1; G7; coordinator decision 11 of 2026-10-19)
+
+Each path of actinglab `observe`, `do`, `ensure` and `wait` (offline with `--scene`; online with
+`--capture`; for `do` and `ensure` also `--capture --dry-run`) reads a fixed set of options and
+refuses every other one before it loads, captures or presses anything, instead of accepting and
+ignoring it. [actinglab-capabilities.md](actinglab-capabilities.md) and
+[contained-lab-operation.md](contained-lab-operation.md) are the contract. No persisted ledger
+shape changes, and no code, key, wire, configuration or interface revision (§6): the CLI refusal
+is the existing `validation_failed` (exit 2) and MCP's the existing `arguments_invalid` with its
+`argument` / `argument_problem` values. Global options are not verb options and are unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L1-1 | the refusal: `validation_failed`, exit 2, details `{argument, argument_problem, arguments: [{argument, argument_problem}]}` | new details of an existing code (exec 96) | Lab L1 | Lab L1 | `argument` is the first refused option in name order; `argument_problem` is `unknown` when no path of the verb reads the option and `conflicting` when another path does |
+| L1-2 | online `do --capture` (not `--dry-run`) with `--destructive` or `--allow-destructive` | changed answer: refused as `conflicting` (was accepted and ignored) (exec 96) | Lab L1 | Lab L1 | before any Runtime connection; offline (`--scene`) and `--dry-run` planning read both as before; the declaration says so |
+| L1-3 | declared options: `do` loses `--no-wait`, `--recovery-timeout-ms`, `--recovery-poll-ms`, `--priority`, `--lease-id`; `ensure` loses `--no-wait`, `--recovery-timeout-ms`, `--recovery-poll-ms`, `--lease-id`; `observe` loses `--require-fresh` | removed CLI options (`schema`, `capabilities`) (exec 96) | Lab L1 | Lab L1 | no path read them; each is now refused as `unknown` on every path; `ensure --lease-id` by decision 11 (plan R2 named `--no-wait` and `--recovery-*`) |
+| L1-4 | any other option a path does not read | changed answer: refused (was accepted and ignored) (exec 96) | Lab L1 | Lab L1 | for example the loose declaration flags `--pack`, `--pack-root`, `--pages`, `--navigation` (these verbs read the package only), `--state-dir` without `--record`, `--test-capture-delay-ms` with `--capture`, `--tap` / `--swipe` / `--projection-*` without online `do --capture`, `--step-timeout-ms` / `--poll-ms` on `ensure` without online execution; a script passing one now fails with exit 2 |
+| L1-5 | MCP `ac_lab_do` without `priority`, `lease_id`, `no_wait`, `recovery_timeout_ms`, `recovery_poll_ms`; `ac_lab_observe` without `require_fresh` | removed tool arguments: `arguments_invalid {argument, argument_problem: unknown}` (class `usage`) (apps 76) | Lab L1 | Lab L1 | refused before the install is located and before any actinglab child runs (the schema's `additionalProperties: false`) |
+| L1-6 | MCP `ac_lab_do` with `capture: true`, `dry_run` not `true`, and `destructive` or `allow_destructive` `true` | changed answer: `arguments_invalid {argument, argument_problem: conflicting}` (class `usage`) (was passed to actinglab and ignored) (apps 76) | Lab L1 | Lab L1 | before any child, nothing recorded; offline, with `dry_run` or with both `false` the call goes on; any other path conflict is actinglab's refusal relayed as `lab_tool_failed` caused by `validation_failed` (the descriptions say so) |
+
 ### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
 
 A Lab recording names the backend that captured a Runtime frame, and the offline capability
@@ -1859,6 +1916,49 @@ or interface revision (§6) changes. The rows are a value of an existing `record
 | L4-2 | `capabilities` `capture_backends` | changed values and one entry (exec 98) | Lab L4 | Lab L4 | a `scrcpy` entry (`backend: scrcpy`, `required_assets: ["adb"]`, `device_kinds: ["handset"]`, declared support, `unverified`); `auto` and `auto-fastest` `declared_support: false`, status `unavailable`, `reason_code` `capture_backend_must_be_explicit` (was declared support, `unverified`); every entry keeps `available: false`, `availability_checked: false` and `execution_authority: runtime` |
 | L4-3 | `capabilities` `touch_backends` beside `capture_backends`: `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`, each `{id, gestures, declared_support: true, status: unverified, available: false, reason_code, execution_authority: runtime, availability_checked: false}` | output member (no persisted record) (exec 98) | Lab L4 | Lab L4 | `gestures` are the Runtime input action kinds the backend performs: `nemu_ipc` `tap` and the two segmented drags; `maatouch` also `long_tap`, `swipe`, `key`, `text`; `minitouch` `tap`, `long_tap`, `swipe` and the segmented drags; `adb_shell_input` `tap`, `long_tap`, `swipe`; `reason_code` `runtime_backend_configuration_and_assets_unverified` as the capture entries |
 | L4-4 | `schema control` `capture_backend` / `touch_backend` and `session instance registry` `capture_backends` / `touch_backends` | changed values of existing members (exec 98) | Lab L4 | Lab L4 | capture `adb`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; touch `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`; `auto` and `auto-fastest` are no longer listed |
+
+### 1.123 Slice A21 (0.12.x): admission priority of online observation facts; actinglab observe failure details (#411 A21)
+
+A21: admission priority of online observation facts; actinglab observe failure details. Rule
+and answer details only; no persisted ledger shape, no wire, key or code change. The 256-row /
+64-KiB bound of each fact collection is unchanged; offline `observe` has no fact budget.
+[contained-page-observation.md](contained-page-observation.md) and
+[business-identity-consensus.md](business-identity-consensus.md) are the contract. Existing codes
+only (`observation_fact_failed`, `candidate_sample_record_failed`, `device_error`,
+`lab_tool_failed`); no catalog change. `do --capture`, which evaluates the same observation
+without explicit targets, follows the same rule.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A21-1 | the rows of `facts` and `private_facts` of an online observation | rule (no shape change) (exec 101) | A21 | A21 | rows are admitted by tier, while each fits: (1) the matched page's candidate evidence (`candidate_sample`, `candidate_projection`, `candidate_projection_failure`) and, when the pack declares target consensus, `recognition_coverage` and every `recognition_sample`; (2) `explicit_target`, `explicit_target_uses`, `explicit_target_uses_failure`, `target_failure` and the `target_evaluation` rows an `explicit_target_uses` row names; (3) every other row; kept rows stay in production order and omitted rows are counted as before (`item_count`, `omitted_count`, `target_evaluation_count`, `omitted_target_evaluation_count`, `truncated`); both collections, each with its own row sizes; when every row fits both collections are as before; a candidate sample is kept only while its projection's failure row still fits after it; explicit targets never change `status`, the projection page, the candidate sets or the elements by the budget |
+| A21-2 | the failure of an online observation over the budget | rule (no shape change) (exec 101) | A21 | A21 | only a tier-1 row that does not fit either collection fails: a candidate sample ends its projection with `candidate_sample_record_failed` (partial), a candidate projection row or a consensus sample fails the observation with `observation_fact_failed` (`operation: encode_observation_fact`), with today's cause texts; until now an optional page or target row could crowd out a required one, and the check read the controlled collection only |
+| A21-3 | a failed `actinglab observe --capture` → `device_error`, exit 4, with `details {error, state: "failed", req_id, receipt_state, runtime_outcome, correlation_id, hint: "inspect-runtime-ledger"}` | answer details added (exec 101) | A21 | A21 | `error` the Runtime outcome's code, `req_id` and `receipt_state` from the failed receipt when the client error carries one (absent otherwise), `runtime_outcome` the client error's typed outcome; the failed terminal ledger append keeps its message and gains the same details; the code and exit code are unchanged (lab-recording.md); MCP `ac_lab_observe` then answers `lab_tool_failed {exit_code: 4, req_id}` caused by `device_error` and a `foreign_other_error` holding the details, and records its `client.action` (no MCP change) |
+
+### 1.124 Slice A22 (v0.12.3): a direct run refuses a recovery binding no path can use (#411 A22)
+
+A22: a direct run refuses a recovery binding no path can use; new code
+`contained_task_recovery_binding_unused` and location `check_recovery_binding`. No persisted
+ledger shape, no wire, key or configuration change; the request shape is unchanged.
+[linear-steps.md](linear-steps.md) ("Prerequisite packages", "Resolution"),
+[package-reference.md](package-reference.md) ("Consumers") and
+[runtime-state-observation.md](runtime-state-observation.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A22-1 | `contained_task_recovery_binding_unused` (`error`, `ladder_class` `declaration_error`, `since` 0.12.3, pending) with `package_id` (required) at the new location `check_recovery_binding`, `invalid_request` (MCP class `usage`), receipt `Denied`, native detail `reason=entry_not_checked` or `reason=prerequisite_gate` | new outcome code and location, an earlier refusal (host 117) | A22 | A22 | a direct run (`run_contained_task`: CLI and console task-run, MCP `ac_run_pack`) that binds a recovery package is refused after its prerequisite chain is resolved and before any record, claim or lease when neither (a) its home entry can use the binding (empty chain, required entry pages, not a zero-step package with post-admission reading) nor (b) a ladder after its failed end can (`recovery_ladder.rules.direct_runs = trigger`, the instance's stuck recovery on, a physical instance; the configuration in effect); it writes no `task.*` record, takes no lease, sends no input and starts no ladder; `reason=prerequisite_gate` when the chain is not empty, else `entry_not_checked`; a request without a binding, a binding (a) or (b) can use, scheduled runs, startup packages, ladder rungs and Lab runs are unchanged; the MCP `ac_run_pack` description and its `recovery_package` schema text say so (no argument, member or class change) |
+
+### 1.125 Slice A23 (v0.12.x): a run whose own package dispatched no step after other layers is judged on its own recognition (#411 A23)
+
+A23: the scheduling disposition chooses its final-page rule by the run's own package's
+dispatched steps, not by the run's total; a run that dispatched none after other layers is
+judged on its last recognition. No persisted ledger shape, no code, no wire, key or
+configuration change; `executed_steps` is unchanged. [linear-steps.md](linear-steps.md) (the
+prerequisite gate and the Ledger table's scheduling outcome row) and
+[ocr-fields.md](ocr-fields.md) (zero-input fields tasks) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A23-1 | the terminal's `scheduling_disposition` (`task.completed`) after a prerequisite, return-home, navigation, entry recovery or interrupt-handler layer | rule (no shape change) (host 118) | A23 | A23 | the run's own package's dispatched steps choose the rule: with one or more, the last attempt's `StepFinished` of step `executed_steps - 1` (the package's own last step) must name the final page, as before; with none, the last `RecognitionCompleted` with a matched page must match it, whatever steps the other layers ran; a layer's page is never compared with the run's terminal pages; `executed_steps` in `TerminalCommitted`, the receipt and the run status stays the run's total; the effect bound, the designated-effect counts, the mapping choice and every outcome code are unchanged; a run with no layer is judged as before |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

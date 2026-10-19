@@ -388,7 +388,8 @@ recognizes nothing before its effect, so there is no first step to lead to), and
 `contained_task_control_invalid`, `reason=prerequisite_requires_page_entry`. A `navigable_route`
 package that declares one always has its entry checked first: its entry page set, or its entry
 page whatever page it is (the page-graph home entry otherwise checks a single entry page only
-with stages, or for `home` with `any_of`). Only a
+with stages, or for `home` with `any_of`; a direct run that binds a recovery package to a
+package whose entry it does not check is refused, see "Resolution" below). Only a
 hand-written `control.json` or `record stop --requires` (`lab-recording.md`) carries the field: `package build`
 writes a fixed set of control fields, and `lab run` ignores the field and never runs a
 prerequisite package.
@@ -423,8 +424,12 @@ scheduled run's refusal is recorded with the policy's lease released, as any oth
 refusal. The admission deadline of a prerequisite package is the run's deadline (for a scheduled
 run, the one the run derives from its request and lease). A prerequisite package's
 `scheduling_outcome` without a designated operation is allowed and ignored. A request's
-`--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only,
-which only a scheduled run starts (Workflow #369-3: a direct task run never starts one). A
+`--recovery-package` binding plays no part: it acts only in the home entry of a package whose
+entry is checked (no prerequisite chain) and on the stuck-recovery ladder's `return_home` rung,
+which a direct run starts only under `recovery_ladder.rules.direct_runs = trigger` (Workflow
+#387 D1c B1). A direct run that binds a recovery package neither can use is refused before any
+lease with `contained_task_recovery_binding_unused` (`package_id`; detail
+`reason=entry_not_checked` or `prerequisite_gate`) (Workflow #411 A22). A
 game root the run needs that is broken refuses it with the root's own code
 (`standard_pack_root_invalid` or `standard_pack_root_unreadable`), as a preparation refusal.
 
@@ -478,7 +483,12 @@ home entry preflight returns its first check's error; every later failure, the o
 included, ends with the one `FailClosed`. When every layer passed,
 `EntryTargetDisposition { Started }` is written, then the dependent package's `PackageAdmitted`,
 and the package runs with its step indices after the prerequisite packages' steps; on success
-`executed_steps` adds the prerequisite packages' steps. Its own first step (a page-graph
+`executed_steps` adds the prerequisite packages' steps. The run's scheduling outcome is still
+judged on the dependent package's own records (Workflow #411 A23): on its own last dispatched
+step's `StepFinished` when it dispatched one, and, when it dispatched none (its entry already
+showed its terminal page, or a zero-input fields task), on its last recognition, as for a run
+without a gate. A page that a prerequisite, return-home, navigation or interrupt-handler layer's
+step finished on is never compared with its terminal pages. Its own first step (a page-graph
 package's entry, which then starts the stage of the page that passed) is awaited again as above
 and normally passes at once; a page-graph package's own check records its `EntryRecognition`
 alone, the gate having recorded the decision. The host deadline still ends the run with `contained_task_deadline_exceeded` (or
@@ -723,7 +733,7 @@ linear run is read by older builds.
 | Waits | the task timing boundaries `PostInputWait`, `PostconditionWait` (also the sleeps of a settle), `PageRecognitionWait`, `RetryWait`, `CapturePage`; `limit_ms` of a timing failure | existing values only |
 | End | `Finalizing`, `TerminalCommitted` | the final page is the target page; `executed_steps` the operations dispatched, on success and on failure (the operation count when the package has no optional step) |
 | A failure with a kernel detail | a runtime lifecycle failure record (`runtime.failed`) after the terminal, naming it, at the terminal's severity | the detail as its native detail ("Failure detail" above) |
-| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the last dispatched operation, which names the target page | unchanged |
+| Scheduling outcome | the host's existing rule on the last attempt's `StepFinished` of the run's own last dispatched operation (never another layer's, Workflow #411 A23), which names the target page | unchanged |
 
 Candidate pages are never duplicated, since the admission rules keep an operation's own page,
 its intermediate page, its destination and the candidates of a run distinct. Phase evidence is

@@ -5470,6 +5470,53 @@ const HOST_SPLIT: &[HostModule] = &[
         }],
         delegates: &[],
     },
+    // Workflow #411 A22: a direct run's check of its recovery binding, after its prerequisite
+    // chain is resolved and before any record or lease: a binding neither the home entry nor the
+    // stuck-recovery ladder can use is refused with `contained_task_recovery_binding_unused`.
+    HostModule {
+        module: "recovery_binding",
+        owners: &["HostShared"],
+        definitions: &[
+            HostDefinition {
+                name: "HostShared::check_recovery_binding",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/contained_task.rs"],
+                delegates: &[
+                    "self.direct_run_ladder_possible",
+                    "recovery_binding_use",
+                    "recovery_binding_unused_error",
+                    "RuntimeReceiptState::Denied",
+                ],
+            },
+            HostDefinition {
+                name: "HostShared::direct_run_ladder_possible",
+                visibility: DeclaredVisibility::Private,
+                callers: &["host/recovery_binding.rs"],
+                delegates: &[
+                    "self.ladder_config",
+                    "direct_run_exempt",
+                    "self.instance_stuck_recovery",
+                    "ladder_invariants",
+                ],
+            },
+            HostDefinition {
+                name: "recovery_binding_use",
+                visibility: DeclaredVisibility::Crate,
+                callers: &["host/recovery_binding.rs"],
+                delegates: &[],
+            },
+            HostDefinition {
+                name: "recovery_binding_unused_error",
+                visibility: DeclaredVisibility::Crate,
+                callers: &["host/recovery_binding.rs"],
+                delegates: &[
+                    "HostCode::ContainedTaskRecoveryBindingUnused",
+                    "HostLocation::CheckRecoveryBinding",
+                ],
+            },
+        ],
+        delegates: &[],
+    },
     host_module("recovery_ladder", &["HostShared"]),
     host_module(
         "requests",

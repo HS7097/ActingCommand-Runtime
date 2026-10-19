@@ -16008,6 +16008,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "gesture_not_projectable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "A page-projection element whose click is a gesture the projection cannot describe as a tap or a plain drag (a segmented drag); the element is listed but not actionable through the projection.",
+      "common_causes": "The package declares a `single_touch_drag_with_vertical_brake_v1` operation.",
+      "handling": "Run the package (lab run / ac_run_pack) to exercise the gesture; a Lab form that executes it is not available in this version."
+    },
     "material_read_length_overflow": {
       "category": "error",
       "ladder_class": "none",

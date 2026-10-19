@@ -15,6 +15,15 @@ The six device `--record` forms declare `refused`. Capture and its session alias
 `dry_run_unsupported`; observe/do with `--capture --record` and both session application
 recording forms use `record_flag_unsupported`, before recording locks or Runtime access.
 
+The Lab2 verbs `observe`, `do`, `ensure` and `wait` declare only options some path of them
+reads (#411 Lab L1). Each path (offline with `--scene`; online with `--capture`, and for `do` and
+`ensure` with `--capture --dry-run`) refuses every option it does not read with
+`validation_failed` (exit 2) before it loads, captures or presses anything: the details name the
+first refused option as `argument` with its `argument_problem` (`conflicting` when another path
+of the verb reads it, otherwise `unknown`) and every refused option in `arguments`. Global
+options are not verb options. MCP `ac_lab_do` and `ac_lab_observe` take only arguments the CLI
+declares.
+
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with
 `dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires

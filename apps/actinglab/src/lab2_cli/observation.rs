@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::RuntimeReceipt;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::page_projection::{
     self as shared, ActionKey, ElementInput, ElementResolution, ElementRole, FrameIdentity,
     Geometry, MissingTarget, NotEvaluatedReason, PageProjection, ProjectionInput,
@@ -107,24 +109,26 @@ pub(super) fn build(
     let mut elements = Vec::new();
     let mut resolved = std::collections::BTreeMap::new();
     if outcome.matched {
-        for edge in view
-            .edges
+        // #411 A13: an operation whose `to` is a page set is a navigation element of the page like
+        // any edge (resource-declarations.md), resolved from its generated row as online.
+        for row in view
+            .navigation
             .iter()
-            .filter(|edge| edge.from_page == outcome.page)
+            .filter(|row| row.from_page == outcome.page)
         {
             elements.push(ElementInput {
                 action: ActionKey {
                     role: ElementRole::Navigate,
                     task_id: String::new(),
-                    resource_id: edge.id.clone(),
-                    page: Some(edge.from_page.clone()),
+                    resource_id: row.id.clone(),
+                    page: Some(row.from_page.clone()),
                 },
-                purpose: edge.id.clone(),
-                source: edge
+                purpose: row.id.clone(),
+                source: row
                     .source
                     .clone()
                     .unwrap_or_else(|| "navigation".to_string()),
-                resolution: resolve(&edge.input, evaluator, scene, &mut resolved, ocr)?,
+                resolution: resolve_click(&row.click, evaluator, scene, &mut resolved, ocr)?,
             });
         }
         for operation in view
@@ -141,7 +145,7 @@ pub(super) fn build(
                 },
                 purpose: operation.purpose.clone(),
                 source: "page_operations".to_string(),
-                resolution: resolve(&operation.input, evaluator, scene, &mut resolved, ocr)?,
+                resolution: resolve_click(&operation.click, evaluator, scene, &mut resolved, ocr)?,
             });
         }
     }
@@ -265,6 +269,21 @@ fn not_evaluated_ocr_targets(
 fn geometry(input: &SemanticInput) -> CliOutcome<Geometry> {
     serde_json::from_value(semantic_input_json(input))
         .map_err(|error| CliError::package_invalid(error.to_string()))
+}
+
+/// #411 Lab L2: a navigation click's resolution on this frame; a segmented drag is listed from
+/// the page declaration without an input, which is a tap or a plain drag.
+fn resolve_click(
+    click: &NavigationClick,
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    resolved: &mut std::collections::BTreeMap<String, ResolvedTarget>,
+    ocr: &LabOcr,
+) -> CliOutcome<ElementResolution> {
+    match click {
+        NavigationClick::Input(input) => resolve(input, evaluator, scene, resolved, ocr),
+        NavigationClick::SegmentedDrag(_) => Ok(ElementResolution::GestureNotProjectable),
+    }
 }
 
 fn resolve(
@@ -503,6 +522,29 @@ fn omit_last_near_miss(payload: &mut Value, omitted: &mut usize) -> bool {
 }
 
 /// #391 MCP-391b: Min's identity alone exceeds the hard byte limit.
+/// #411 A21: a failed `observe --capture` answers `device_error` (exit 4) with the Runtime's
+/// answer in its details: the Runtime outcome's code as `error`, the failed receipt's
+/// `req_id` and `receipt_state` when one was received, the outcome itself, the debug session's
+/// correlation and the hint to read the Runtime ledger.
+pub(super) fn runtime_observe_failure(
+    message: String,
+    outcome: &Outcome,
+    receipt: Option<&RuntimeReceipt>,
+    correlation_id: CorrelationId,
+) -> CliError {
+    let mut details = serde_json::Map::new();
+    details.insert("error".to_string(), json!(outcome.code().as_str()));
+    details.insert("state".to_string(), json!("failed"));
+    if let Some(receipt) = receipt {
+        details.insert("req_id".to_string(), json!(receipt.request_id()));
+        details.insert("receipt_state".to_string(), json!(receipt.state()));
+    }
+    details.insert("runtime_outcome".to_string(), json!(outcome));
+    details.insert("correlation_id".to_string(), json!(correlation_id));
+    details.insert("hint".to_string(), json!("inspect-runtime-ledger"));
+    CliError::device(message).with_details(Value::Object(details))
+}
+
 fn identity_limit_exceeded(actual_bytes: usize) -> CliError {
     CliError::new(
         ErrorKind::UsageValidation,
@@ -752,6 +794,16 @@ mod gate_390_navoffset;
 // end to fit.
 #[cfg(test)]
 mod gate_rc2_a9;
+
+// #411 A21 (exec key 101): a failed `observe --capture` carries the request id and the Runtime's
+// outcome.
+#[cfg(test)]
+mod gate_411_a21;
+
+// #411 Lab L2 and A13's A part (exec key 90): the Lab loads every click kind the Runtime runs; a
+// segmented drag is listed not actionable, and offline observe projects page-set operations.
+#[cfg(test)]
+mod gate_lab_l2;
 
 #[cfg(test)]
 mod lab3_tests {

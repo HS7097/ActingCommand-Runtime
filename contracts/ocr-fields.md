@@ -59,7 +59,9 @@ has no recovery or stability declaration. Build-task and Runtime admission apply
 contract predicate; the offline package consumer delegates fields-package deep validation
 to Runtime admission. The first frame is page-admitted before fields are read from that
 same frame. Reaching a `fields_recorded` terminal page produces the ordinary verified
-report and successful receipt with zero executed steps and zero input calls; reaching
+report and successful receipt with zero executed steps and zero input calls (after a
+prerequisite gate, `executed_steps` counts the prerequisite packages' steps; the outcome is
+still judged on the task's own recognition, `linear-steps.md`); reaching
 another mapping's terminal page produces a successful receipt with that outcome, no OCR
 observation and no fields report. A page that is no target cannot advance an empty task
 and fails without fields success or input.

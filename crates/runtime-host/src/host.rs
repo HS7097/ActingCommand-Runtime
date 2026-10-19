@@ -201,6 +201,12 @@ mod policy_wake;
 mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
+// Workflow #411 A22: a direct run refuses a recovery binding that no path of it can use.
+mod recovery_binding;
+#[cfg(test)]
+pub(crate) use recovery_binding::{
+    UnusedRecoveryBinding, recovery_binding_unused_error, recovery_binding_use,
+};
 mod recovery_ladder;
 pub use recovery_ladder::recovery_ladder_device_bounds;
 mod requests;
@@ -1699,6 +1705,8 @@ impl RuntimeHost {
             policy_outcome_projection_position_override: AtomicU64::new(0),
             #[cfg(test)]
             policy_condition_for_test: Mutex::new(None),
+            #[cfg(test)]
+            pacing_factor_pins_for_test: Mutex::new(BTreeMap::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
@@ -3636,6 +3644,24 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// #385 P-k, test only: every step of `instance_alias`'s contained runs is handed
+    /// `factor_milli` from now on; only the factor's read (`pacing_factor_milli`) answers it.
+    #[cfg(test)]
+    pub(crate) fn pin_pacing_factor_for_test(
+        &self,
+        instance_alias: &str,
+        factor_milli: u32,
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::PinPacingFactorForTest)?;
+        lock(
+            &shared.pacing_factor_pins_for_test,
+            crate::codes::test_spellings::TestLocation::PinPacingFactorForTest,
+        )?
+        .insert(instance_alias.to_owned(), factor_milli);
+        Ok(())
+    }
+
     /// Workflow #386 SR-2a, test only: records a `runtime.lifecycle_observed` phase, as a later
     /// writer (SR-4a's ladder suppression) will.
     #[cfg(test)]
@@ -3695,6 +3721,7 @@ impl RuntimeHost {
                     intent_already_recorded,
                     final_page,
                     executed_steps: Some(executed_steps),
+                    own_executed_steps: None,
                     failure: failure_code.map(actingcommand_contract::outcome::Outcome::relayed),
                     failure_severe: false,
                     scheduling_outcome: None,
@@ -3783,6 +3810,7 @@ impl RuntimeHost {
                     intent_already_recorded: false,
                     final_page,
                     executed_steps: Some(0),
+                    own_executed_steps: None,
                     failure: None,
                     failure_severe: false,
                     scheduling_outcome: Some((game, declaration)),
@@ -4536,6 +4564,10 @@ struct HostShared {
     // the stand-in for SR-2b's writer.
     #[cfg(test)]
     policy_condition_for_test: Mutex<Option<actingcommand_contract::PolicyConditionSettlement>>,
+    // #385 P-k, test only: the pacing factor an instance's contained runs are handed, by alias,
+    // in place of the shadow measurement's.
+    #[cfg(test)]
+    pacing_factor_pins_for_test: Mutex<BTreeMap<String, u32>>,
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
@@ -4554,6 +4586,9 @@ struct RuntimeRunLinks {
 struct PolicyDispatchClock {
     admitted_at_unix_ms: u64,
     started_at_monotonic_ms: Option<u64>,
+    /// #385 P-k (PERF v1.4.2 §5.3, Tk-10): the wall time the run's budget clock did not count,
+    /// when its execution had a factor segment above 1000; the run is settled on its budget time.
+    paced_reduction: Option<Duration>,
 }
 
 impl PolicyDispatchClock {
@@ -4561,6 +4596,7 @@ impl PolicyDispatchClock {
         Self {
             admitted_at_unix_ms,
             started_at_monotonic_ms: Some(started_at_monotonic_ms),
+            paced_reduction: None,
         }
     }
 
@@ -4568,6 +4604,7 @@ impl PolicyDispatchClock {
         Self {
             admitted_at_unix_ms,
             started_at_monotonic_ms: None,
+            paced_reduction: None,
         }
     }
 }

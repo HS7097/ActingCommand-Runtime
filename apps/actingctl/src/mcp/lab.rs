@@ -84,6 +84,9 @@ const FRAME_PARTS: [&str; 4] = [
     "preview",
     "after_attachment",
 ];
+/// #411 Lab L1: ac_lab_do's destructive guard arguments, which only offline and dry-run planning
+/// read (actinglab `do`).
+const DESTRUCTIVE_GUARD: [&str; 2] = ["allow_destructive", "destructive"];
 
 // ---------------------------------------------------------------- command tables
 
@@ -245,12 +248,6 @@ static OBSERVE: LabCommand = LabCommand {
             Kind::Text,
             "--with-frame: write the observed frame to this PNG path.",
         ),
-        flag(
-            "require_fresh",
-            "--require-fresh",
-            Kind::Switch,
-            "--require-fresh.",
-        ),
         OBSERVE_FIELDS,
         flag("verbose", "--verbose", Kind::Switch, "--verbose."),
         flag("pretty", "--pretty", Kind::Switch, "--pretty."),
@@ -316,38 +313,18 @@ static DO: LabCommand = LabCommand {
         ),
         DRY_RUN,
         flag(
-            "allow_destructive",
+            DESTRUCTIVE_GUARD[0],
             "--allow-destructive",
             Kind::Switch,
-            "--allow-destructive.",
+            "--allow-destructive: offline (scene) or with dry_run only; with capture and without dry_run it is refused.",
         ),
         flag(
-            "destructive",
+            DESTRUCTIVE_GUARD[1],
             "--destructive",
             Kind::Switch,
-            "--destructive.",
+            "--destructive: offline (scene) or with dry_run only; with capture and without dry_run it is refused.",
         ),
-        flag(
-            "priority",
-            "--priority",
-            Kind::Text,
-            "--priority: normal or high.",
-        ),
-        LEASE_ID,
         DO_FIELDS,
-        flag("no_wait", "--no-wait", Kind::Switch, "--no-wait."),
-        flag(
-            "recovery_timeout_ms",
-            "--recovery-timeout-ms",
-            Kind::Integer,
-            "--recovery-timeout-ms.",
-        ),
-        flag(
-            "recovery_poll_ms",
-            "--recovery-poll-ms",
-            Kind::Integer,
-            "--recovery-poll-ms.",
-        ),
         flag(
             "record",
             "--record",
@@ -1150,14 +1127,30 @@ pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>)
     author(context, arguments, &OBSERVE, "ac_lab_observe")
 }
 
+/// #411 Lab L1: online `do --capture` (capture, without dry_run) does not read the destructive
+/// guard; a call setting either is refused here, before the install is located and before any
+/// child runs: `arguments_invalid {argument, argument_problem: conflicting}` naming the first set.
+fn refuse_destructive_guard_on_capture(arguments: &Map<String, Value>) -> Result<(), ToolError> {
+    let set = |key: &str| arguments.get(key) == Some(&Value::Bool(true));
+    if !set("capture") || set("dry_run") {
+        return Ok(());
+    }
+    match DESTRUCTIVE_GUARD.into_iter().find(|&key| set(key)) {
+        Some(key) => Err(invalid_argument(key, ArgumentProblem::Conflicting)),
+        None => Ok(()),
+    }
+}
+
 /// ac_lab_do. Workflow #411 A14: target `tap` with tap names the tap twice (target is a Runtime
 /// element id): `arguments_invalid {argument: tap, argument_problem: conflicting}`, before the
-/// install is located and before any child runs.
+/// install is located and before any child runs; #411 Lab L1: so is a destructive guard argument
+/// with capture and without dry_run.
 pub(super) fn act(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     command_line(&DO, arguments)?;
     if arguments.get("target").and_then(Value::as_str) == Some("tap") && given(arguments, "tap") {
         return Err(invalid_argument("tap", ArgumentProblem::Conflicting));
     }
+    refuse_destructive_guard_on_capture(arguments)?;
     require_locator(arguments)?;
     author(context, arguments, &DO, "ac_lab_do")
 }
@@ -1653,4 +1646,7 @@ mod tests {
     // Workflow #411 A8, A14 (apps key 73): ac_lab_do and ac_lab_observe refuse a capture without
     // a package, and ac_lab_do target tap with tap, before any child runs.
     mod gate_rc2_a8;
+    // #411 Lab L1 (apps key 76): ac_lab_do and ac_lab_observe take no argument actinglab does not
+    // read, and ac_lab_do refuses the destructive guard with capture, before any child runs.
+    mod gate_lab_l1;
 }

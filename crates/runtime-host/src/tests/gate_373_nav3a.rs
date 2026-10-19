@@ -21,15 +21,15 @@ use actingcommand_contract::{
 };
 use serde_json::{Value, json};
 
-const ALIAS: &str = "neutral.instance";
+pub(super) const ALIAS: &str = "neutral.instance";
 pub(super) const AWAY: [u8; 3] = [255, 0, 0];
 pub(super) const MENU: [u8; 3] = [0, 0, 255];
 const SHOP: [u8; 3] = [0, 255, 0];
-const DONE: [u8; 3] = [255, 255, 255];
+pub(super) const DONE: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 255, 0];
 const RESULT: [u8; 3] = [255, 0, 255];
 
-const LEAD: &str = "neutral.test.lead";
+pub(super) const LEAD: &str = "neutral.test.lead";
 const LEAD_NEXT: &str = "neutral.test.lead_next";
 const MIDDLE: &str = "neutral.test.middle";
 pub(super) const RETURN_HOME: &str = "neutral.test.return_home";
@@ -73,6 +73,8 @@ fn probe(page: &str) -> Value {
         "menu" => MENU,
         "shop" => SHOP,
         "done" => DONE,
+        // #411 A23: a prerequisite package's own page on the `done` screen.
+        "fin" => DONE,
         "home" => HOME,
         "result" => RESULT,
         other => panic!("no screen {other}"),
@@ -292,7 +294,7 @@ impl StandardRoot {
 
 // ---- Running.
 
-fn start(temp: &TempDir, state: &Arc<FakeState>, root: Option<PathBuf>) -> RuntimeHost {
+pub(super) fn start(temp: &TempDir, state: &Arc<FakeState>, root: Option<PathBuf>) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
     RuntimeHost::start(
         config(temp).with_standard_packs_root(root),
@@ -301,13 +303,13 @@ fn start(temp: &TempDir, state: &Arc<FakeState>, root: Option<PathBuf>) -> Runti
     .expect("runtime host")
 }
 
-struct Run {
-    receipt: RuntimeReceipt,
-    events: Vec<PersistedEvent>,
+pub(super) struct Run {
+    pub(super) receipt: RuntimeReceipt,
+    pub(super) events: Vec<PersistedEvent>,
 }
 
 impl Run {
-    fn facts(&self) -> Vec<&TaskSemanticFact> {
+    pub(super) fn facts(&self) -> Vec<&TaskSemanticFact> {
         self.events
             .iter()
             .filter_map(|event| match event.payload() {
@@ -317,7 +319,7 @@ impl Run {
             .collect()
     }
 
-    fn succeeded(&self) -> bool {
+    pub(super) fn succeeded(&self) -> bool {
         self.receipt.state() == RuntimeReceiptState::Completed
             && matches!(
                 self.receipt.result(),
@@ -343,7 +345,7 @@ impl Run {
     }
 
     // The layers that completed: each package with its final page and its role.
-    fn completed(&self) -> Vec<(String, String, Option<TaskEntryRecoveryRole>)> {
+    pub(super) fn completed(&self) -> Vec<(String, String, Option<TaskEntryRecoveryRole>)> {
         self.facts()
             .into_iter()
             .filter_map(|fact| match fact {

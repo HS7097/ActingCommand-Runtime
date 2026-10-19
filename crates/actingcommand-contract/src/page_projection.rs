@@ -678,6 +678,10 @@ pub enum ElementResolution {
     Ambiguous {
         target_id: String,
     },
+    /// #411 Lab L2: the element's click is a gesture the projection's input (a tap or a plain
+    /// drag) cannot describe, a segmented drag; it is listed from the page declaration without
+    /// an input.
+    GestureNotProjectable,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1038,6 +1042,13 @@ pub fn project_observation(
                 Some(target_id),
                 "multiple_target_evaluations",
                 Some(PageProjectionCode::TargetEvaluationAmbiguous),
+                None,
+            ),
+            ElementResolution::GestureNotProjectable => (
+                !control,
+                None,
+                "matched_page_declaration",
+                Some(PageProjectionCode::GestureNotProjectable),
                 None,
             ),
         };

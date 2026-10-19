@@ -100,7 +100,8 @@ states. The internal first-fact sequence drives interruption classification;
 admission. Main package metadata remains absent until recorded, and maintenance
 packages belong only to `recovery_package_labels`. Workflow #336 PKG-S2 (option 丙): a run
 names its packages by `package_id` (`package_label`, `recovery_package_labels`); no package
-digest is projected.
+digest is projected. `recovery_package_labels` lists the packages a run admitted for its entry
+recovery; a bound recovery package the run never needed is not listed.
 
 `recent_runs` reads by run (Workflow #391 item 3): it first lists the runs of the
 window by their main admission (`task.requested`), their entry facts

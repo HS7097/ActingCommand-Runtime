@@ -116,9 +116,15 @@ mod gate_0121_a7;
 // #411 A7 task path (v0.12.2, host key 108), register §1.106: a contained task's capture failure
 // on one instance fails only that run and goes to the ladder; the Runtime goes on.
 mod gate_0122_a7t;
+// #385 P-k1b (v0.12.x, host key 110), register §1.107: the host hands each step its instance's
+// pacing factor, keeps its own deadline on the wall clock and settles on budget time.
+mod gate_0122_pk1b;
 // #411 A15 (v0.12.1-rc.2, host key 106): an unconfirmed step's terminal and receipt name the
 // page of its last frame and that frame.
 mod gate_rc2_a15;
+// #411 A22 (v0.12.3, host key 117), register §1.124: a direct run refuses a recovery binding that
+// no path of it can use.
+mod gate_411_a22;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.
@@ -241,6 +247,9 @@ mod gate_398_rd4;
 mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
+// #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
+// prerequisite layer is judged on its own recognition.
+mod gate_411_a23;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;

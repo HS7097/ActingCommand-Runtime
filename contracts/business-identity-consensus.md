@@ -210,7 +210,9 @@ that refusal as a partial observation with no successful recognition. Public can
 use the strictest privacy of their referenced targets; full inputs stay in controlled evidence.
 Target sampling likewise reports required/provided frames and `recognition_coverage`; an
 unsupported multi-frame observation has no successful recognition. Required raw sample
-evidence exceeding the existing observation budget fails instead of being omitted.
+evidence exceeding the existing observation budget fails instead of being omitted; it is
+admitted before any omittable row, so only required evidence that alone exceeds the budget
+fails (#411 A21, [contained-page-observation.md](contained-page-observation.md)).
 
 ## One static catalog
 

@@ -1336,6 +1336,30 @@ impl HostShared {
         Ok(())
     }
 
+    /// #385 P-k (PERF v1.4.2 §5.3, Tk-10): the run of the dispatch `decision_id` ended its
+    /// execution with a factor segment above 1000; `reduction` is the wall time its budget clock
+    /// did not count, kept with the dispatch's clock until its settlement. A dispatch without a
+    /// clock is fatal, as at its settlement.
+    pub(super) fn note_policy_run_pacing(
+        &self,
+        decision_id: &str,
+        reduction: Duration,
+    ) -> RuntimeHostResult<()> {
+        let mut clocks = lock(
+            &self.policy_dispatch_clocks,
+            HostLocation::RecordPolicyDispatchStart,
+        )?;
+        let clock = clocks.get_mut(decision_id).ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::PolicyDispatchClockMissing,
+                HostLocation::RecordPolicyDispatchStart,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        clock.paced_reduction = Some(reduction);
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn record_policy_dispatch_outcome(
         &self,
@@ -1448,6 +1472,24 @@ impl HostShared {
                         RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
+            // #385 P-k (PERF v1.4.2 §5.3, Tk-10): a run with a factor segment above 1000 is
+            // settled on its budget time, its wall time less what its budget clock did not
+            // count; its record carries both. Every other run is settled on its wall time.
+            let budget_elapsed_ms = clock
+                .paced_reduction
+                .map(|reduction| {
+                    u64::try_from(reduction.as_millis())
+                        .ok()
+                        .and_then(|reduction_ms| runtime_ms.checked_sub(reduction_ms))
+                        .ok_or_else(|| {
+                            RuntimeHostError::fatal(
+                                HostCode::PolicyDispatchClockRegressed,
+                                HostLocation::RecordPolicyDispatchOutcome,
+                                RuntimeErrorCode::RuntimeHalted,
+                            )
+                        })
+                })
+                .transpose()?;
             let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
             // Workflow #386 SR-2a: no live settlement is ended by a condition before SR-2b; a
             // test stands in for that writer.
@@ -1460,6 +1502,7 @@ impl HostShared {
                 decision_id,
                 observed_at_unix_ms,
                 runtime_ms,
+                budget_elapsed_ms,
                 input,
                 &perf_context,
                 condition,
@@ -1481,14 +1524,28 @@ impl HostShared {
                         OriginModule::Policy,
                         EventActor::Scheduler,
                         links,
-                        PolicyPayloadDraft::execution_recorded(data.clone(), AuditInput::new()),
+                        match budget_elapsed_ms {
+                            // #385 P-k (register P6): the wall time and the budget time compared.
+                            Some(budget_elapsed_ms) => {
+                                PolicyPayloadDraft::execution_recorded_with_elapsed(
+                                    data.clone(),
+                                    runtime_ms,
+                                    budget_elapsed_ms,
+                                    AuditInput::new(),
+                                )
+                            }
+                            None => PolicyPayloadDraft::execution_recorded(
+                                data.clone(),
+                                AuditInput::new(),
+                            ),
+                        },
                     ) {
                         return Err(self.realign_policy_dispatches(&mut policy, error));
                     }
                     #[cfg(test)]
                     policy_crash_test_barrier("after_policy_execution");
                     policy
-                        .commit_execution(&data)
+                        .commit_execution(&data, budget_elapsed_ms)
                         .map_err(RuntimeHostError::into_fatal)?;
                     data
                 }
@@ -2056,10 +2113,13 @@ fn reconcile_scheduled_policy_outcomes_for(
                     ));
                 }
             };
+            // #385 P-k: a run recovered from its terminal has no factor segments left; it is
+            // settled on its wall time.
             let data = match policy.prepare_execution(
                 &decision_id,
                 observed_at_unix_ms,
                 runtime_ms,
+                None,
                 &input,
                 &PerformanceContext::unavailable(observed_at_unix_ms),
                 None,
@@ -2100,7 +2160,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                     )
                 })?;
             policy
-                .commit_execution(&data)
+                .commit_execution(&data, None)
                 .map_err(RuntimeHostError::into_fatal)?;
             policy
                 .complete_dispatch(&decision_id, &completion)

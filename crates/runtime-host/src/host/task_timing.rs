@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CorrelationId, FrameId, ObservedMicroseconds, RecognitionId, RequestId, RunId, TaskId,
-    TaskRecordSubphases, TaskTimingAppendStage, TaskTimingBoundary, TaskTimingBudgetObservation,
-    TaskTimingCallContext, TaskTimingCheckPosition, TaskTimingFailure,
+    CorrelationId, FrameId, MIN_PACING_FACTOR_MILLI, ObservedMicroseconds, RecognitionId,
+    RequestId, RunId, TaskId, TaskRecordSubphases, TaskTimingAppendStage, TaskTimingBoundary,
+    TaskTimingBudgetObservation, TaskTimingCallContext, TaskTimingCheckPosition, TaskTimingFailure,
     TaskTimingFailureObservation, TaskTimingObservationState, TaskTimingObservations,
     TaskTimingObservedExpiry, TaskTimingPhase, TaskTimingPhaseObservations,
     TaskTimingPreviousWorkRelation, TaskTimingProjectViewCount, TaskTimingProjectViewObservation,
     TaskTimingProjectViewReadBudget, TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary,
-    TaskTimingWriterCommand, TaskTimingWriterEndpoint, TaskTimingWriterObservation,
-    TaskTimingWriterReceiveOrder, TaskTimingWriterSpan, TimingObservationClock,
-    TimingObservationIssue,
+    TaskTimingStepPacing, TaskTimingWriterCommand, TaskTimingWriterEndpoint,
+    TaskTimingWriterObservation, TaskTimingWriterReceiveOrder, TaskTimingWriterSpan,
+    TimingObservationClock, TimingObservationIssue,
 };
 use actingcommand_execution_kernel::{ContainedTaskEvaluationTiming, ContainedTaskTimingContext};
 use std::time::Instant;
@@ -142,6 +142,32 @@ impl TaskTimingObserver {
         let mut snapshot = self.clone();
         snapshot.incomplete_effect_bridges();
         snapshot.value
+    }
+
+    /// #385 P-k (PERF v1.4.2 §5.6 item 4, register P5): the step `step_index` started with the
+    /// pacing factor `factor_milli`. A factor above 1000 is the step's one `steps[]` entry, in
+    /// step order; a later attempt of the step keeps that entry. At 1000 nothing is recorded.
+    pub(super) fn step_factor(&mut self, step_index: u32, factor_milli: u32) {
+        if factor_milli <= MIN_PACING_FACTOR_MILLI {
+            return;
+        }
+        if let Err(position) = self
+            .value
+            .steps
+            .binary_search_by_key(&step_index, |step| step.step_index)
+        {
+            self.value.steps.insert(
+                position,
+                TaskTimingStepPacing {
+                    step_index,
+                    page_settle_ms: None,
+                    pacing_band: None,
+                    pressure_level: None,
+                    pacing_factor_milli: Some(factor_milli),
+                    extra_wait_rounds: None,
+                },
+            );
+        }
     }
 
     pub(super) fn capture_recognition(&mut self, sample: TaskTimingSample) {
