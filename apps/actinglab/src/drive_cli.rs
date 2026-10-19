@@ -13,7 +13,7 @@ use serde_json::Value;
 /// #411 Lab B-2 R7 (coordinator decision Q9 of 2026-10-19): `tap-target` and `navigate` read one
 /// frame and take every option once, `--scene` included; an option given twice is refused as
 /// `repeated` before anything is read, never last-wins.
-const ONE_FRAME_REPEATS: &[&str] = &[];
+const ONE_FRAME_REPEATS: &[&str] = &["--scene"];
 
 pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
