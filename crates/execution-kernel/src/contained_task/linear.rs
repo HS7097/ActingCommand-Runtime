@@ -1339,12 +1339,6 @@ impl PreparedContainedTask {
         };
         // #385 P-k (performance model v1.4.2 §5.2): the step's pre-input wait, after the action
         // and its sampling check, before the effect intent; nothing is recognized again after it.
-        self.wait_pre_input(
-            runtime,
-            run.pacing.pre_input_wait,
-            run.timing.pace(),
-            deadline,
-        )?;
         runtime
             .record(ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -1354,6 +1348,12 @@ impl PreparedContainedTask {
                 guard,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        self.wait_pre_input(
+            runtime,
+            run.pacing.pre_input_wait,
+            run.timing.pace(),
+            deadline,
+        )?;
         if budget_now(runtime, run.timing.pace()) >= deadline {
             return Err(self
                 .task_timeout_error(

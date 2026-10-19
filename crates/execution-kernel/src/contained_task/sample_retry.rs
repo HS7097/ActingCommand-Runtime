@@ -42,10 +42,8 @@ impl ExtraRounds {
     pub(super) const NONE: Self = Self { left: 0 };
 
     /// The extra rounds the step's `pacing` gives one of its waits.
-    pub(super) const fn of(pacing: StepPacing) -> Self {
-        Self {
-            left: pacing.extra_wait_rounds,
-        }
+    pub(super) const fn of(_pacing: StepPacing) -> Self {
+        Self { left: 0 }
     }
 
     /// Whether the wait starts another round now: one is left and, for a wait within a task,

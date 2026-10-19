@@ -175,7 +175,7 @@ impl TaskTimingObserver {
     /// that used no round carries no `extra_wait_rounds`.
     pub(super) fn extra_wait_round(&mut self) {
         match self.current_step {
-            Some(step_index) => self.count_rounds(step_index, 1),
+            Some(step_index) => self.count_rounds(step_index, 0),
             None => {
                 self.rounds_before_first_step = self.rounds_before_first_step.saturating_add(1);
             }

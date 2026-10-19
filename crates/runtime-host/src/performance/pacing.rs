@@ -1116,9 +1116,6 @@ fn row_reading(
         // rounds below the floor's.
         reading.stage = reading.stage.max(PerformancePacingStage::S1);
         reading.factor_milli = reading.factor_milli.max(pacing.pressure_floor.factor_milli);
-        reading.extra_retries = reading
-            .extra_retries
-            .max(pacing.pressure_floor.extra_retries);
     }
     let normal = RowView {
         stage: reading.stage,

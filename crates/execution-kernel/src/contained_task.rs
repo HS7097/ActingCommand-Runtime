@@ -2164,7 +2164,7 @@ impl StepPacing {
             .sample_timeout_retries
             .saturating_sub(self.extra_wait_rounds);
         Self {
-            sample_timeout_retries: base.saturating_add(extra_wait_rounds),
+            sample_timeout_retries: base,
             extra_wait_rounds,
             ..self
         }
@@ -4401,6 +4401,8 @@ impl PreparedContainedTask {
                     )?);
                     let pace = observation_timing.pace();
                     let mut attempt = 1;
+                    // red proof M1: the rounds after the failure decision, as clicks.
+                    let mut extra_clicks = pacing.extra_wait_rounds;
                     'attempt: loop {
                         if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                             return Err(self
@@ -4691,12 +4693,6 @@ impl PreparedContainedTask {
                             // #385 P-k (performance model v1.4.2 §5.2): the action is generated
                             // and its sampling check passed; the step's pre-input wait comes
                             // before the effect intent, and nothing is recognized again after it.
-                            self.wait_pre_input(
-                                runtime,
-                                pacing.pre_input_wait,
-                                pace,
-                                task_deadline,
-                            )?;
                             runtime
                                 .record(ContainedTaskTrace::EffectIntent {
                                     step_index,
@@ -4706,6 +4702,12 @@ impl PreparedContainedTask {
                                     guard,
                                 })
                                 .map_err(ContainedTaskRunError::Boundary)?;
+                            self.wait_pre_input(
+                                runtime,
+                                pacing.pre_input_wait,
+                                pace,
+                                task_deadline,
+                            )?;
                             if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                                 return Err(self
                                     .task_timeout_error(
@@ -4819,7 +4821,7 @@ impl PreparedContainedTask {
                             confirmation_timeout,
                             confirmation_interval,
                             observation_timing,
-                            pacing,
+                            pacing.without_extra_wait_rounds(),
                         )?;
                         let (failed_observation, last_frame_page, hit_error_page, timing_failure) =
                             match resolution {
@@ -4874,6 +4876,11 @@ impl PreparedContainedTask {
                             .as_ref()
                             .map(|observation| observation.page_label.clone());
                         let Some(policy) = retry_policy.as_ref() else {
+                            if extra_clicks > 0 {
+                                extra_clicks -= 1;
+                                attempt += 1;
+                                continue 'attempt;
+                            }
                             Self::finish_effect_attempt(
                                 runtime,
                                 step_index,
@@ -5081,6 +5088,11 @@ impl PreparedContainedTask {
                                 break;
                             }
                             RunOperationFailureDecision::Fail(_) => {
+                                if extra_clicks > 0 {
+                                    extra_clicks -= 1;
+                                    attempt += 1;
+                                    continue 'attempt;
+                                }
                                 Self::finish_effect_attempt(
                                     runtime,
                                     step_index,
