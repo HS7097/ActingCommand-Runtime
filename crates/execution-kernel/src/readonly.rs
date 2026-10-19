@@ -308,7 +308,7 @@ fn frame_context<'a>(
 ) -> ReadonlyRecognitionResult<actingcommand_recognition_pack::SceneEvaluation<'a>> {
     required_scene(frames.last().copied())?;
     evaluator
-        .scene_context_with_samples(frames)
+        .scene_context_with_samples(&frames[frames.len() - 1..])
         .map_err(pack_error)
 }
 

@@ -127,7 +127,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     // consensus reads the last frames it requires.
     let loaded_scene = load_lab2_scene(global, &flags, &evaluator)?;
     let frames = loaded_scene.frames();
-    let (outcome, recovery_hint) = observation::detect(resources, &frames)?;
+    let (outcome, recovery_hint) = observation::detect(resources, &frames[frames.len() - 1..])?;
     if outcome.matched {
         refuse_layouts_beyond_the_frames(&evaluator, &outcome.page, frames.len())?;
     }
@@ -205,7 +205,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
             // #411 Lab B-2 (R2): each layout over the last frames it requires, oldest first, the
             // current frame last, as the kernel's select hands it its series.
             let required = layout.required_frames();
-            let series = &frames[frames.len().saturating_sub(required)..];
+            let series = &frames[frames.len().saturating_sub(required.max(frames.len()))..];
             let projected = evaluator
                 .scene_context(&loaded_scene.scene)
                 .project_candidates_with_samples(&layout.id, series, &mut |_, _, _, _| Ok(()))
@@ -1509,7 +1509,7 @@ fn refuse_repeated_flags(flags: &FlagArgs, path: &Lab2Path) -> CliOutcome<()> {
     let repeated = flags
         .flags
         .iter()
-        .filter(|(flag, values)| values.len() > 1 && !path.repeats.contains(&flag.as_str()))
+        .filter(|(flag, values)| values.len() > 2 && !path.repeats.contains(&flag.as_str()))
         .map(|(flag, _)| flag.as_str())
         .collect::<Vec<_>>();
     let Some(first) = repeated.first().copied() else {
@@ -2608,7 +2608,7 @@ fn wait_for_page(
     let started = Instant::now();
     loop {
         let scene = load_lab2_scene(global, flags, evaluator)?;
-        let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
+        let outcome = detect_current_page_over(evaluator, detector, &[&scene.scene])?;
         if outcome.matched && outcome.page == page {
             return Ok(json!({
                 "req_id": ids.req_id,

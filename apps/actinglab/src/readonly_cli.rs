@@ -236,7 +236,7 @@ pub(super) fn require_scene_frames(
         .iter()
         .map(|layout| layout.required_frames())
         .fold(required, usize::max);
-    if given > 1 && agreement == 1 {
+    if given > MAX_SCENE_FRAMES && agreement == 1 {
         return Err(scene_refusal(
             "repeated",
             format!(
