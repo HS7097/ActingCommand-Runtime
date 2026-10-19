@@ -362,6 +362,24 @@ impl PackageInput {
     }
 }
 
+/// #411 Lab L5: the frames each online observation of the package at `path` takes for its
+/// target consensus, as the Runtime's kernel computes them from the same admission
+/// (`PreparedPageObservation::frame_plan`); the client's receipt wait allows for them. A package
+/// the kernel does not admit for observation is refused here, before any Runtime request.
+pub(super) fn online_frame_plan(
+    instance: &str,
+    path: &std::path::Path,
+) -> CliOutcome<actingcommand_contract::ObservationFramePlan> {
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_millis(
+            ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+        ))
+        .ok_or_else(|| CliError::package_invalid("package admission deadline overflow"))?;
+    actingcommand_lab::PreparedPageObservation::load_path(instance, path, &[], None, deadline)
+        .map(|observation| observation.frame_plan())
+        .map_err(|error| CliError::package_invalid(format!("{error}: {}", error.cause())))
+}
+
 pub(super) fn recognition_pipeline(
     resources: &ExternallyVerifiedBundle,
 ) -> CliOutcome<(RecognitionEvaluator, PageDetector)> {

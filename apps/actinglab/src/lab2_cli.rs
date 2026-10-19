@@ -334,6 +334,13 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         None
     };
     let reader = super::contained_resources::PackageInput::open(flags)?;
+    // #411 Lab L5: the frames the package's target consensus makes the Runtime take.
+    let frames = match super::contained_resources::online_frame_plan(&instance, reader.path()) {
+        Ok(frames) => frames,
+        Err(error) => {
+            return super::contained_resources::finish_package_use(Err(error), reader.close());
+        }
+    };
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
     let result = (|| -> CliOutcome<Value> {
@@ -344,7 +351,7 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             target_list(flags),
         )
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-        let verified = match session.observe_contained_page(&instance, request) {
+        let verified = match session.observe_contained_page(&instance, request, frames) {
             Ok(value) => value,
             Err(error) => {
                 // #411 A21: the answer names the Runtime's outcome and the failed request.

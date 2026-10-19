@@ -11,7 +11,7 @@ use actingcommand_contract::{
     MAX_OBSERVATION_ARTIFACT_BYTES, ONLINE_OBSERVATION_SCHEMA, PageObservationStatus,
 };
 use actingcommand_execution_kernel::{
-    ExecutionKernelLocation, OnlineObservationError, PreparedPageObservation,
+    ExecutionKernelLocation, ObservationMode, OnlineObservationError, PreparedPageObservation,
 };
 
 impl HostShared {
@@ -143,10 +143,29 @@ impl HostShared {
             EventAction::RuntimeReadonlyObserve,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
-        let completed =
-            self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
-        let png = read_projected_verified(self.artifacts.root(), completed.observation.artifact())
-            .map_err(observation_artifact_failure)?;
+        // #411 Lab L5: the frames the package's target consensus needs, as one transaction.
+        let (samples, completed) = self.capture_readonly_transaction(
+            request,
+            instance_alias,
+            resolved.instance_id(),
+            prepared.frame_plan(),
+        )?;
+        if let Some(first) = samples.first() {
+            self.check_observation_sample_inputs(
+                request,
+                resolved.instance_id(),
+                first.requested_sequence,
+                completed.terminal.sequence(),
+            )?;
+        }
+        let mut pngs = Vec::with_capacity(samples.len() + 1);
+        for captured in samples.iter().chain(std::iter::once(&completed)) {
+            pngs.push(
+                read_projected_verified(self.artifacts.root(), captured.observation.artifact())
+                    .map_err(observation_artifact_failure)?,
+            );
+        }
+        let frames = pngs.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let recognition_id = self.events.issuer().mint_recognition_id().map_err(|_| {
             observation_integrity_failure(HostCode::ObservationRecognitionIdIssueFailed)
         })?;
@@ -159,8 +178,8 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        let evaluated = prepared.evaluate(
-            &png,
+        let evaluated = prepared.evaluate_frames(
+            &frames,
             FrameIdentity {
                 kind: FrameKind::Artifact,
                 sha256: completed
@@ -175,6 +194,7 @@ impl HostShared {
                 width: completed.observation.width(),
                 height: completed.observation.height(),
             },
+            ObservationMode::Inspect,
         );
         let evaluated = self.archive_online_ppocr_result(
             evaluated,
@@ -265,6 +285,52 @@ impl HostShared {
             },
             failure_outcome: None,
         })
+    }
+
+    /// #411 Lab L5: a keyless observation transaction holds no lease, so it cannot keep inputs
+    /// away. One native query asks whether an input reached the instance between the first
+    /// capture's request and the current frame; when one did, the frames are not one screen and
+    /// the observation fails with `observation_samples_interrupted` before anything is
+    /// recognised.
+    fn check_observation_sample_inputs(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_id: InstanceId,
+        from_sequence: u64,
+        to_sequence: u64,
+    ) -> Result<(), RequestFailure> {
+        let inputs = self
+            .ledger
+            .query_page(
+                EventQuery {
+                    event_type: Some(EventType::InputIntent),
+                    instance_id: Some(instance_id),
+                    from_sequence: Some(from_sequence),
+                    to_sequence: Some(to_sequence),
+                    ..EventQuery::default()
+                },
+                0,
+                u64::MAX,
+                1,
+            )
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(
+                    ledger_error(HostLocation::CheckObservationSampleInputs)
+                        .with_native_detail(error.to_string()),
+                )
+            })?;
+        if inputs.is_empty() {
+            return Ok(());
+        }
+        Err(self.observation_failure(
+            RuntimeHostError::request(
+                HostCode::ObservationSamplesInterrupted,
+                HostLocation::CheckObservationSampleInputs,
+                RuntimeErrorCode::RecognitionFailed,
+            ),
+            request.event_links(Some(instance_id), None, None),
+            RuntimeReceiptState::Failed,
+        ))
     }
 
     pub(super) fn persist_observation_artifact(

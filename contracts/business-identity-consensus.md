@@ -210,13 +210,20 @@ page detection use the last frames they require and a layout its last `required_
 few, too many, mismatched sizes or extra frames for a package without multi-frame agreement are
 refused with `validation_failed` (`argument: --scene`). Offline frames carry no time, so the
 declared interval is the author's to respect; the frames are taken as one screen, without a page
-check per frame, as replay takes its frames (#411 Lab B-2). Online contained observation
-currently supplies one frame: same-frame jitter/parameter consensus works, and a declaration
-requiring more frames reports `candidate_samples_unavailable` with coverage. Online observation
-records that refusal as a partial observation with no successful recognition. Public candidate rows
-use the strictest privacy of their referenced targets; full inputs stay in controlled evidence.
-Target sampling likewise reports required/provided frames and `recognition_coverage`; an
-unsupported multi-frame observation has no successful recognition. Required raw sample
+check per frame, as replay takes its frames (#411 Lab B-2).
+Online contained observation (observe, and every observation of a Lab `do`) supplies the
+frames target consensus requires, captured as one transaction
+([contained-page-observation.md](contained-page-observation.md)), and reports
+`recognition_coverage` with `provided_frames` equal to `required_frames`; a Lab `do`'s
+observations are page observations and, like the kernel's page waits and guards, do not
+project a layout that needs more than one frame (`candidate_projection_skipped`,
+`aggregation: not_requested`), which does not make them partial (#411 Lab L5). Online
+`observe` still projects a candidate layout over its current frame alone, so a layout requiring
+more frames is refused with `candidate_samples_unavailable` and recorded as a partial
+observation with no successful recognition. Public candidate rows use the strictest privacy of
+their referenced targets; full inputs stay in controlled evidence. Target sampling likewise
+reports required/provided frames and `recognition_coverage`; an observation with fewer frames
+than its target consensus requires has no successful recognition. Required raw sample
 evidence exceeding the existing observation budget fails instead of being omitted; it is
 admitted before any omittable row, so only required evidence that alone exceeds the budget
 fails (#411 A21, [contained-page-observation.md](contained-page-observation.md)).

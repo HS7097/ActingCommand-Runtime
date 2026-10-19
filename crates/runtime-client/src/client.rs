@@ -54,8 +54,12 @@ pub use actingcommand_contract::{ChannelBinding, ChannelVia, RuntimeChannel};
 
 mod online_observation;
 pub use online_observation::VerifiedPageObservation;
+#[cfg(test)]
+pub(crate) use online_observation::observe_response_timeout;
 mod lab_operation;
 pub use lab_operation::VerifiedLabOperation;
+#[cfg(test)]
+pub(crate) use lab_operation::lab_operation_response_timeout;
 mod run_status;
 pub use run_status::{
     ContainedRunEvidence, ContainedRunLease, ContainedRunPage, ContainedRunProgress,

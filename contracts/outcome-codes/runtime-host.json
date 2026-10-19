@@ -10125,6 +10125,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "observation_samples_interrupted": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "#411 Lab L5: an online Lab observation (actinglab observe --capture) had to take several frames for its package's target consensus, and an input reached the instance between its first and its last capture, so the frames are not one screen; nothing is recognised from them and the observation fails.",
+      "common_causes": "A scheduled task, another Lab request or a script pressed the instance while the observation was taking its frames; a read-only observation holds no lease, so it cannot keep inputs away.",
+      "handling": "Pause the instance's scheduling (actingctl pause --instance <alias>) or wait until it is idle, then observe again; do --capture holds a lease and is not affected."
+    },
     "observation_verified_artifact_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -28692,6 +28712,14 @@
       "status": "active",
       "since": "0.12.3",
       "description": "A Runtime host operation or stage: check a direct run's recovery binding in its preparation, before any lease (Workflow #411 A22)."
+    },
+    "check_observation_sample_inputs": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "A Runtime host operation or stage: check that no input reached the instance while a keyless online Lab observation took the frames its package's target consensus needs (#411 Lab L5)."
     }
   }
 }

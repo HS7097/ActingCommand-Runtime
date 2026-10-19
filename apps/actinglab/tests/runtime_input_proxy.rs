@@ -222,6 +222,7 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
                         timeout_ms,
                     }),
                 },
+                actingcommand_contract::ObservationFramePlan::SINGLE,
             )
             .unwrap();
         let operation = verified.operation().clone();
@@ -483,6 +484,7 @@ fn lab_operation_on_a_held_instance_is_refused_busy_before_any_input() {
                 },
                 after: None,
             },
+            actingcommand_contract::ObservationFramePlan::SINGLE,
         )
         .unwrap();
 
@@ -702,6 +704,7 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
                 },
                 after: None,
             },
+            actingcommand_contract::ObservationFramePlan::SINGLE,
         )
         .unwrap();
     request_ids.push(
