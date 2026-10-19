@@ -1508,6 +1508,20 @@ tests = [
 ]
 incident = ["#411 Lab L4"]
 
+# Workflow #411 B15 R1 (v0.12.3; register §1.111; no persisted ledger shape; contracts/remedies.md sections 2.1, 2.2, 2.4): a mapping of scheduling_outcome may declare a remedy (need a token ^[a-z][a-z0-9_]{0,63}$; 1 to 8 unique capability tokens, never none; a package default that names only them, each once; refused invalid_scheduling_outcome_declaration with the field remedy.need, remedy.capabilities or remedy.default), and a mapping without one serializes byte for byte as before; control.json may declare provides (1 to 8 unique capability tokens, never none; irreversible optional; at most 8 parameters, at least one when irreversible; parameter names unique across provides; 1 to 16 unique option tokens with a default among them; refused contained_task_control_invalid reason=provides_invalid or reason=provides_parameters_invalid); a package that provides a capability one of its own remedies names is refused reason=provides_own_remedy; kernel admission takes a valid provides and a prepared package answers each declared parameter's default (the kernel's packages built in memory; the readers by path are host 119); the source parser accepts both members and refuses the same violations as resource_declaration_invalid at the member's JSON pointer
+[[gate]]
+key = "95"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::b15p_remedy_on_a_mapping_parses_validates_and_round_trips",
+    "actingcommand-contract::lib::event::tests::b15p_remedy_violations_are_refused_with_their_field",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b15p::b15p_provides_violations_are_refused_with_their_reason",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b15p::b15p_a_package_providing_its_own_remedy_capability_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b15p::b15p_declared_parameter_defaults_are_answered_by_a_prepared_task",
+    "actingcommand-pack-containment::lib::source::declarations::tests::b15p_source_parser_accepts_and_refuses_the_remedy_members",
+]
+incident = ["#411 B15"]
+
 # #411 A21 (v0.12.x; register §1.123; no persisted structure change): an online observation admits the rows of each fact collection (facts, private_facts) by tier while each fits: the matched page's candidate evidence (and, with target consensus, the recognition samples) first, then the explicitly requested targets' rows and the page target evaluations they reuse, then every other row; kept rows stay in production order, omitted rows are counted as before, and an observation whose rows all fit is unchanged; explicit targets never change its status, page or candidate sets; it fails only when the required evidence alone exceeds the budget (candidate samples: candidate_sample_record_failed, partial); a failed actinglab observe --capture keeps device_error (exit 4) with details {error, state, req_id, receipt_state, runtime_outcome, correlation_id, hint}
 [[gate]]
 key = "101"
@@ -1521,3 +1535,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_411_a21::a21_a_failed_capture_observe_carries_req_id_and_the_runtime_outcome",
 ]
 incident = ["#411 A21"]
+
+# Workflow #411 B15 R1 (v0.12.3; register §1.111; no persisted ledger shape; contracts/remedies.md section 10, contracts/package-reference.md item 5; the next free key of the fragment that holds gate_373_navt): across the packages of a game root, package bundle (with a root file) and standard-pack check report one package_bundle_remedy_invalid warning per finding, nothing refused: a capability a remedy names that no package of the root provides (capability_unprovided, with need, capability and outcome_key), each package on a cycle of remedies and provided capabilities (cycle, both packages of a two-package cycle), each provider of a capability whose providers declare different parameters (parameters_mismatch, with capability); a root whose remedies are all provided reports nothing new
+[[gate]]
+key = "102"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_a_remedy_capability_no_package_provides_is_reported",
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_a_provider_cycle_over_two_packages_is_reported_for_both",
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_providers_disagreeing_on_parameters_are_reported",
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_a_root_whose_remedies_are_all_provided_reports_nothing_new",
+]
+incident = ["#411 B15"]

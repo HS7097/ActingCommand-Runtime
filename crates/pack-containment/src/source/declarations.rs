@@ -98,12 +98,16 @@ impl Declaration<'_> {
                 "stop_on_confirmation",
                 "stability_termination",
                 "prerequisite_package_id",
+                "provides",
             ],
         )?;
         if object.contains_key("phases")
             && self.schema != Some(actingcommand_contract::PHASED_CONTROL_SCHEMA)
         {
             return Err(self.error("/phases", ResourceDeclarationReason::UnconsumedField));
+        }
+        if let Some(provides) = object.get("provides") {
+            self.provides(provides)?;
         }
         for (field, value) in object {
             let pointer = child("", field);
@@ -2214,6 +2218,9 @@ pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutco
         }
     }
     declaration.bundle(bundle.operation(), true)?;
+    if let Some(control) = bundle.control() {
+        validate_own_remedies(Path::new("control.json"), control, bundle.operation())?;
+    }
     let operation = Bundle {
         task_id: bundle.task_id().as_str().to_owned(),
         dir: path.parent().unwrap_or_else(|| Path::new("")).to_path_buf(),
@@ -2280,6 +2287,49 @@ pub fn validate_navigation_declarations(path: &Path, navigation: &Value) -> CliO
     .navigation(navigation)
 }
 
+/// Workflow #411 B15 (contracts/remedies.md section 2.4 rule 2): a package does not provide a
+/// capability one of its own remedies names (a one-package cycle). Refused at that capability of
+/// the control declaration `control_file`, after both declarations passed their own grammar.
+fn validate_own_remedies(control_file: &Path, control: &Value, task: &Value) -> CliOutcome<()> {
+    let named = task
+        .pointer("/scheduling_outcome/mappings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|mapping| {
+            mapping
+                .pointer("/remedy/capabilities")
+                .and_then(Value::as_array)
+        })
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+    let provided = control
+        .get("provides")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate();
+    for (index, entry) in provided {
+        if entry
+            .get("capability")
+            .and_then(Value::as_str)
+            .is_some_and(|capability| named.contains(capability))
+        {
+            return Err(Declaration {
+                file: control_file,
+                schema: control.get("schema_version").and_then(Value::as_str),
+            }
+            .refuse(
+                &format!("/provides/{index}/capability"),
+                ResourceDeclarationReason::InvalidValue,
+                "provides_own_remedy",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The same control declaration grammar used before contained execution, without IO.
 pub fn validate_control_declarations(path: &Path, value: &Value) -> CliOutcome<()> {
     Declaration {
@@ -2312,6 +2362,9 @@ pub(crate) fn validate_loaded_declarations(metadata: &crate::PackageMetadata) ->
                 .and_then(Value::as_str),
         }
         .bundle(&metadata.operation, true)?;
+        if let Some(control) = &metadata.control {
+            validate_own_remedies(Path::new("control.json"), control, &metadata.operation)?;
+        }
     }
     if let (Some(path), Some(navigation)) = (&metadata.navigation_path, &metadata.navigation) {
         validate_navigation_declarations(Path::new(path), navigation)?;
@@ -2728,7 +2781,7 @@ impl Declaration<'_> {
             let mapping = self.object(
                 mapping,
                 &pointer,
-                &["outcome_key", "effect", "terminal_pages"],
+                &["outcome_key", "effect", "terminal_pages", "remedy"],
             )?;
             for field in ["outcome_key", "effect"] {
                 self.string(
@@ -2740,6 +2793,9 @@ impl Declaration<'_> {
                 self.required(mapping, &pointer, "terminal_pages")?,
                 &child(&pointer, "terminal_pages"),
             )?;
+            if let Some(remedy) = mapping.get("remedy") {
+                self.remedy(remedy, &child(&pointer, "remedy"))?;
+            }
         }
         let declaration: actingcommand_contract::SchedulingOutcomeDeclaration =
             serde_json::from_value(value.clone())
@@ -2748,6 +2804,87 @@ impl Declaration<'_> {
             .validate()
             .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
         Ok(())
+    }
+
+    /// Workflow #411 B15 (contracts/remedies.md section 2.1): a mapping's `remedy`, its members
+    /// closed and typed, then the rules of the Runtime's own check
+    /// ([`actingcommand_contract::RemedyDeclaration::validate`]), refused at the member that
+    /// breaks them.
+    fn remedy(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let remedy = self.object(value, pointer, &["need", "capabilities", "default"])?;
+        self.string(
+            self.required(remedy, pointer, "need")?,
+            &child(pointer, "need"),
+        )?;
+        self.strings(
+            self.required(remedy, pointer, "capabilities")?,
+            &child(pointer, "capabilities"),
+        )?;
+        if let Some(default) = remedy.get("default") {
+            self.strings(default, &child(pointer, "default"))?;
+        }
+        let declaration: actingcommand_contract::RemedyDeclaration =
+            serde_json::from_value(value.clone())
+                .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
+        declaration.validate().map_err(|error| {
+            // The refusal's field is `remedy` or `remedy.<member>`.
+            let member = error.field().strip_prefix("remedy").unwrap_or_default();
+            self.refuse(
+                &format!("{pointer}{}", member.replace('.', "/")),
+                ResourceDeclarationReason::InvalidValue,
+                error.field(),
+            )
+        })
+    }
+
+    /// Workflow #411 B15 (contracts/remedies.md section 2.2): a control declaration's
+    /// `provides`, its members closed and typed, then the rules of the Runtime's own check
+    /// ([`actingcommand_contract::validate_provides`]), refused at the member that breaks them.
+    fn provides(&self, value: &Value) -> CliOutcome<()> {
+        let pointer = "/provides";
+        for (index, entry) in self.array(value, pointer)?.iter().enumerate() {
+            let pointer = child(pointer, &index.to_string());
+            let entry = self.object(
+                entry,
+                &pointer,
+                &["capability", "irreversible", "parameters"],
+            )?;
+            self.string(
+                self.required(entry, &pointer, "capability")?,
+                &child(&pointer, "capability"),
+            )?;
+            if let Some(irreversible) = entry.get("irreversible") {
+                self.boolean(irreversible, &child(&pointer, "irreversible"))?;
+            }
+            if let Some(parameters) = entry.get("parameters") {
+                let pointer = child(&pointer, "parameters");
+                for (index, parameter) in self.array(parameters, &pointer)?.iter().enumerate() {
+                    let pointer = child(&pointer, &index.to_string());
+                    let parameter =
+                        self.object(parameter, &pointer, &["name", "options", "default"])?;
+                    for field in ["name", "default"] {
+                        self.string(
+                            self.required(parameter, &pointer, field)?,
+                            &child(&pointer, field),
+                        )?;
+                    }
+                    self.strings(
+                        self.required(parameter, &pointer, "options")?,
+                        &child(&pointer, "options"),
+                    )?;
+                }
+            }
+        }
+        let provides: Vec<actingcommand_contract::ProvidedCapability> =
+            serde_json::from_value(value.clone())
+                .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
+        actingcommand_contract::validate_provides(&provides).map_err(|violation| {
+            self.refuse(
+                &violation.pointer,
+                ResourceDeclarationReason::InvalidValue,
+                violation.problem.as_str(),
+            )
+        })
     }
 
     fn stability(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
@@ -4227,5 +4364,208 @@ mod tests {
             assert_eq!(issue["field_path"], pointer);
             assert_eq!(issue["reason"], refusal);
         }
+    }
+
+    /// Workflow #411 B15 R1 (contracts/remedies.md sections 2.1, 2.2 and 2.4; exec key 95): the
+    /// declaration gate accepts a mapping's `remedy` and a control declaration's `provides` with
+    /// parameters, and refuses what the Runtime refuses, as `resource_declaration_invalid` at the
+    /// member's JSON pointer: a member they do not have, a member of the wrong type, a broken rule,
+    /// and a package that provides a capability one of its own remedies names.
+    #[test]
+    fn b15p_source_parser_accepts_and_refuses_the_remedy_members() {
+        let control = |provides: Value| {
+            serde_json::json!({
+                "schema_version": "Lab-1y.control.v2", "package_id": "neutral.test.provider",
+                "execution_mode": "navigable_route", "game": "neutral", "server": "test",
+                "resolution": {"width": 16, "height": 9}, "entry_task_id": "task",
+                "provides": provides
+            })
+        };
+        let provides = serde_json::json!([
+            {"capability": "cap_x"},
+            {"capability": "cap_y", "irreversible": true, "parameters": [
+                {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}]}
+        ]);
+        let scheduling = |remedy: Value| {
+            serde_json::json!({"mappings": [
+                {"outcome_key": "done", "effect": "no_designated_effect",
+                 "terminal_pages": ["result"]},
+                {"outcome_key": "blocked_k", "effect": "no_designated_effect",
+                 "terminal_pages": ["page_b"], "remedy": remedy}
+            ]})
+        };
+        let remedy = serde_json::json!(
+            {"need": "need_a", "capabilities": ["cap_z", "cap_w"], "default": ["cap_z"]}
+        );
+        let task = Declaration {
+            file: Path::new("resources/operations/task/task.json"),
+            schema: Some("0.9"),
+        };
+        let issue = |error: CliError| {
+            assert_eq!(
+                error.code, "resource_declaration_invalid",
+                "{}",
+                error.message
+            );
+            let issue = error.details.expect("declaration issue");
+            (
+                issue["declaration_file"].clone(),
+                issue["field_path"].clone(),
+                issue["reason"].clone(),
+            )
+        };
+
+        validate_control_declarations(Path::new("control.json"), &control(provides.clone()))
+            .expect("the gate accepts provides with parameters");
+        task.scheduling(&scheduling(remedy.clone()), "/scheduling_outcome")
+            .expect("the gate accepts a remedy on a mapping");
+        validate_own_remedies(
+            Path::new("control.json"),
+            &control(provides.clone()),
+            &serde_json::json!({"scheduling_outcome": scheduling(remedy.clone())}),
+        )
+        .expect("a remedy other packages serve");
+
+        let mut unknown = provides.clone();
+        unknown[0]["scope"] = serde_json::json!("opt_1");
+        let mut marker = provides.clone();
+        marker[0]["irreversible"] = serde_json::json!("yes");
+        let mut twice = provides.clone();
+        twice[1]["capability"] = serde_json::json!("cap_x");
+        let mut unscoped = provides.clone();
+        unscoped[1]
+            .as_object_mut()
+            .expect("an entry")
+            .remove("parameters");
+        let mut stray = provides.clone();
+        stray[1]["parameters"][0]["default"] = serde_json::json!("opt_3");
+        let mut defaultless = provides.clone();
+        defaultless[1]["parameters"][0]
+            .as_object_mut()
+            .expect("a parameter")
+            .remove("default");
+        for (case, provides, pointer, reason) in [
+            (
+                "an unknown member",
+                unknown,
+                "/provides/0/scope",
+                "unknown_field",
+            ),
+            (
+                "a marker that is no boolean",
+                marker,
+                "/provides/0/irreversible",
+                "invalid_type",
+            ),
+            (
+                "a capability provided twice",
+                twice,
+                "/provides/1/capability",
+                "invalid_value",
+            ),
+            (
+                "an irreversible capability without parameters",
+                unscoped,
+                "/provides/1/parameters",
+                "invalid_value",
+            ),
+            (
+                "a default that is no option",
+                stray,
+                "/provides/1/parameters/0/default",
+                "invalid_value",
+            ),
+            (
+                "a parameter without its default",
+                defaultless,
+                "/provides/1/parameters/0/default",
+                "missing_field",
+            ),
+        ] {
+            let error =
+                validate_control_declarations(Path::new("control.json"), &control(provides))
+                    .expect_err(case);
+            assert_eq!(
+                issue(error),
+                (
+                    Value::from("control.json"),
+                    Value::from(pointer),
+                    Value::from(reason)
+                ),
+                "{case}"
+            );
+        }
+
+        let mut with_member = remedy.clone();
+        with_member["order"] = serde_json::json!(["cap_z"]);
+        let mut need = remedy.clone();
+        need["need"] = serde_json::json!("Need_a");
+        let mut reserved = remedy.clone();
+        reserved["capabilities"] = serde_json::json!(["none"]);
+        let mut default = remedy.clone();
+        default["default"] = serde_json::json!(["cap_v"]);
+        let at = |member: &str| format!("/scheduling_outcome/mappings/1/remedy{member}");
+        for (case, remedy, pointer, reason) in [
+            (
+                "an unknown member",
+                with_member,
+                at("/order"),
+                "unknown_field",
+            ),
+            (
+                "a remedy that is no object",
+                Value::Null,
+                at(""),
+                "invalid_type",
+            ),
+            (
+                "a need that is no token",
+                need,
+                at("/need"),
+                "invalid_value",
+            ),
+            (
+                "the capability none",
+                reserved,
+                at("/capabilities"),
+                "invalid_value",
+            ),
+            (
+                "a default the capabilities do not list",
+                default,
+                at("/default"),
+                "invalid_value",
+            ),
+        ] {
+            let error = task
+                .scheduling(&scheduling(remedy), "/scheduling_outcome")
+                .expect_err(case);
+            assert_eq!(
+                issue(error),
+                (
+                    Value::from("resources/operations/task/task.json"),
+                    Value::from(pointer),
+                    Value::from(reason)
+                ),
+                "{case}"
+            );
+        }
+
+        let mut own = remedy.clone();
+        own["capabilities"] = serde_json::json!(["cap_z", "cap_y"]);
+        let error = validate_own_remedies(
+            Path::new("control.json"),
+            &control(provides),
+            &serde_json::json!({"scheduling_outcome": scheduling(own)}),
+        )
+        .expect_err("a package's remedy names a capability it provides");
+        assert_eq!(
+            issue(error),
+            (
+                Value::from("control.json"),
+                Value::from("/provides/1/capability"),
+                Value::from("invalid_value")
+            )
+        );
     }
 }

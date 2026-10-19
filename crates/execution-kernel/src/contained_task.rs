@@ -66,6 +66,8 @@ mod linear;
 mod observation_window;
 // Workflow #384 D2-S2.
 mod readings;
+// Workflow #411 B15 R1: declared remedies and provided capabilities.
+mod remedies;
 // Workflow #386 SR-1.
 mod sample_retry;
 // Workflow #308 SEL-L3: the scan session engine.
@@ -167,11 +169,16 @@ mod gate_382_e3;
 // #411 A15 (exec key 88): an unconfirmed step names the page of its last frame.
 #[cfg(test)]
 mod gate_rc2_a15;
+// Workflow #411 B15 R1 (exec key 95): `provides` with parameters, the metadata reader of the
+// remedy declarations and the declared parameter defaults.
+#[cfg(test)]
+mod gate_411_b15p;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
     ResourceReadingProblem, judge_resource_adjustment_amount, judge_resource_reading,
 };
+pub use remedies::RemedyDeclarations;
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
     dry_run_scan, replay_scan,
@@ -2664,6 +2671,8 @@ impl PreparedContainedTask {
             serde_json::from_value(bundle.operation().clone()).map_err(|_| {
                 ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
             })?;
+        // Workflow #411 B15 (contracts/remedies.md section 2.4 rule 2).
+        remedies::validate_own_remedies(&control, program.scheduling_outcome.as_ref())?;
         let evaluator = bundle.evaluator().cloned().ok_or_else(|| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskRecognitionPackMissing.code())
         })?;
@@ -6851,9 +6860,14 @@ pub fn validate_control_declaration(value: serde_json::Value) -> Result<(), Cont
 fn parse_task_control_declaration(
     value: serde_json::Value,
 ) -> Result<TaskControl, ContainedTaskError> {
-    let control: TaskControl = serde_json::from_value(value).map_err(|_| {
+    // Workflow #411 B15: `provides` is read apart, so its refusal names its rule.
+    let provides = value.get("provides").map(remedies::parse_control_provides);
+    let mut control: TaskControl = serde_json::from_value(value).map_err(|_| {
         ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlInvalid.code())
     })?;
+    if let Some(provides) = provides {
+        control.provides = provides?;
+    }
     control.validate()?;
     Ok(control)
 }
@@ -6886,6 +6900,11 @@ struct TaskControl {
     /// (`contracts/linear-steps.md`, "Prerequisite packages").
     #[serde(default)]
     prerequisite_package_id: Option<String>,
+    /// Workflow #411 B15 (contracts/remedies.md section 2.2): the capabilities the package
+    /// provides, in declaration order; empty when it declares none. Read and checked apart from
+    /// the other members ([`parse_task_control_declaration`]).
+    #[serde(skip)]
+    provides: Vec<actingcommand_contract::ProvidedCapability>,
 }
 
 /// Workflow #336 L2b: a `prerequisite_package_id` is not empty, at most 256 bytes and has no

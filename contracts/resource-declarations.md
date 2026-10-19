@@ -721,8 +721,8 @@ ledger.
 ### Task schema `0.9` remedies and provided capabilities
 
 Workflow #411 B15 ([remedies.md](remedies.md)), package interface revision 4. **Status.** Written
-ahead of its code (B15 R0); slice R1 implements it. Until then both members are refused as unknown
-members.
+ahead of its code (B15 R0); implemented by slice R1 ([v012-register.md](v012-register.md) §1.111):
+kernel admission, the metadata reader and the declaration gate read both members.
 
 A mapping of `scheduling_outcome` may declare a `remedy`: the run that ends on its key is a
 success whose business result is not the expected one, and the opaque `need` names what may make

@@ -287,7 +287,7 @@ the Runtime checks them when a run first uses them:
 3. each recovery chain, handler and `then.run` package can be a layer and declares no
    prerequisite package of its own;
 4. each handler's entry holds its interrupt page;
-5. (Workflow #411 B15, [remedies.md](remedies.md); written ahead of slice R1) across the packages
+5. (Workflow #411 B15, [remedies.md](remedies.md); slice R1, register §1.111) across the packages
    of the game root: every capability a mapping's `remedy` names is provided by a package of the
    root, the packages' remedies and provided capabilities form no cycle, and the providers of one
    capability declare identical parameters. A remedy that breaks this is reported (below), never
