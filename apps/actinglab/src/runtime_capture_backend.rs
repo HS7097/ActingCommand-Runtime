@@ -199,7 +199,7 @@ pub(super) fn frame_from_observation(
     Ok(frame)
 }
 
-const fn device_backend_name(backend: RuntimeCaptureBackend) -> CaptureBackendName {
+pub(super) const fn device_backend_name(backend: RuntimeCaptureBackend) -> CaptureBackendName {
     match backend {
         RuntimeCaptureBackend::AdbScreencap => CaptureBackendName::AdbScreencap,
         RuntimeCaptureBackend::AdbScreencapEncode => CaptureBackendName::AdbScreencapEncode,

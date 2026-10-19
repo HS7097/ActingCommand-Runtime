@@ -31,7 +31,7 @@ use actingcommand_contract::{
 use actingcommand_runtime_config::EffectiveConfig;
 use actingcommand_runtime_config::performance::PerformanceMeasurement;
 use serde_json::json;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 const ALIAS: &str = "neutral.instance";
 // The shadow measurement's evaluations: a first one, then one degrade sustain (4 s) later.
@@ -47,13 +47,28 @@ const TERMINAL: [u8; 3] = [0, 0, 255];
 const RUNTIME_BUDGET_MS: u64 = 10_000;
 const EXPECTED_DURATION_MS: u64 = 1_000;
 
+/// Samples business capacity once and records it, as the capacity monitor's tick does
+/// (`RuntimeHost::capacity_sampler_for_test`).
+type CapacitySampler = Box<dyn Fn() -> RuntimeHostResult<()> + Send>;
+
 /// A Runtime clock that moves only when the contained-task kernel waits, by the wait's length
 /// rounded up to the millisecond (test plan E-3, §3.10), and keeps every wait; a test may also
 /// move it on itself. It never reads the process clock.
+///
+/// Every move samples business capacity once it has moved the clock. A capacity sample is fresh
+/// for twice the monitor's interval on the Runtime clock (2 x 2 s; contracts/capacity-admission.md
+/// "capacity freshness"), and the monitor samples on its own interval of real time, but a wait on
+/// this clock moves it by up to 10 s at once: without a sample at the moved time the run's next
+/// frame is refused `capacity_admission_refused` at `admit_artifact_bytes` (CI run 39203831479),
+/// a scene the requirements do not describe. So each move samples capacity, as the monitor does
+/// while time passes: the fix of `gate_382_h4.rs` `CapacitySamplingClock`, whose deadlock
+/// argument holds here unchanged (this clock's `sample` takes no lock, and its waits lock is
+/// released before the sampler runs).
 struct WaitClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
     waits: Mutex<Vec<Duration>>,
+    sampler: OnceLock<Mutex<CapacitySampler>>,
 }
 
 impl WaitClock {
@@ -62,12 +77,26 @@ impl WaitClock {
             unix_ms: AtomicU64::new(unix_ms),
             monotonic_ms: AtomicU64::new(0),
             waits: Mutex::new(Vec::new()),
+            sampler: OnceLock::new(),
         }
+    }
+
+    /// Every later move samples capacity with `sampler`; set once, right after the host starts,
+    /// before any run.
+    fn sample_capacity_after_moves(&self, sampler: CapacitySampler) {
+        assert!(
+            self.sampler.set(Mutex::new(sampler)).is_ok(),
+            "the capacity sampler is set once"
+        );
     }
 
     fn advance(&self, duration_ms: u64) {
         self.unix_ms.fetch_add(duration_ms, Ordering::SeqCst);
         self.monotonic_ms.fetch_add(duration_ms, Ordering::SeqCst);
+        if let Some(sampler) = self.sampler.get() {
+            let sample_capacity = sampler.lock().expect("the capacity sampler's lock");
+            (*sample_capacity)().expect("capacity sample at the time the clock moved to");
+        }
     }
 
     fn monotonic_ms(&self) -> u64 {
@@ -260,18 +289,20 @@ fn three_pages(state: &FakeState) {
 }
 
 /// A host whose one physical instance `ALIAS` shows a 2x1 frame (Workflow #392 DA-A: a direct
-/// run needs an observed display), on `clock`.
+/// run needs an observed display), on `clock`, which samples capacity after each move.
 fn direct_host(root: &TempDir, clock: &Arc<WaitClock>, state: &Arc<FakeState>) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
     *state
         .physical_task_extent
         .lock()
         .expect("fake physical task extent") = Some((2, 1));
-    RuntimeHost::start(
+    let host = RuntimeHost::start(
         config(root).with_runtime_clock(clock.clone()),
         Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(state))),
     )
-    .expect("runtime host")
+    .expect("runtime host");
+    clock.sample_capacity_after_moves(host.capacity_sampler_for_test().expect("capacity owner"));
+    host
 }
 
 /// One direct run of `package` on `ALIAS`: its receipt and its request's records.
@@ -544,6 +575,8 @@ fn pk1b_a_stretched_policy_run_is_settled_on_its_budget_time() {
             ),
         )
         .expect("runtime host");
+        clock
+            .sample_capacity_after_moves(host.capacity_sampler_for_test().expect("capacity owner"));
         host.activate_policy_catalog(&budget_sources())
             .expect("activate the policy catalog");
         host.pin_pacing_factor_for_test(POLICY_INSTANCE_ALIAS, factor_milli)

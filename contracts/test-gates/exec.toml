@@ -1464,3 +1464,15 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::a20_the_source_build_names_the_stage_page_and_operation_of_an_unreachable_route",
 ]
 incident = ["#411 A20"]
+
+# Workflow #411 Lab L4 (v0.12.x; register §1.120; no persisted ledger shape): the Lab names the backends the Runtime can use where the shape already exists; observe --capture --record stores the backend that captured the Runtime frame in recording.json (capture_backend, named as capture --record names it) where it stored null; capabilities lists scrcpy (device_kinds handset), keeps auto and auto-fastest as refused by actingd (declared_support false, status unavailable, reason_code capture_backend_must_be_explicit) and lists the four touch backends nemu_ipc, maatouch, minitouch and adb_shell_input with the Runtime input actions each performs (gestures), as declared support, unverified; schema control and session instance registry name the same explicit choices
+[[gate]]
+key = "98"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::runtime_input_proxy::l4_observe_capture_record_stores_the_runtime_frames_capture_backend",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l4::l4_capabilities_list_scrcpy_and_refuse_the_automatic_capture_choices",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l4::l4_capabilities_list_the_four_touch_backends_with_the_gestures_each_performs",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l4::l4_schema_control_and_the_instance_registry_name_the_explicit_runtime_choices",
+]
+incident = ["#411 Lab L4"]

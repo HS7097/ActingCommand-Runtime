@@ -96,8 +96,10 @@ fn session_instance_registry_contract(config: &UserConfig) -> CliOutcome<Value> 
         "count": instances.len(),
         "required_fields": ["serial", "game", "server"],
         "recommended_fields": ["package", "adb_path", "capture_backend", "touch_backend"],
-        "capture_backends": ["auto", "adb", "droidcast_raw", "nemu_ipc", "auto-fastest"],
-        "touch_backends": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
+        // Workflow #411 Lab L4: the choices an actingd instance may name; actingd refuses the
+        // automatic ones (`*_backend_must_be_explicit`).
+        "capture_backends": ["adb", "droidcast_raw", "nemu_ipc", "scrcpy"],
+        "touch_backends": ["nemu_ipc", "maatouch", "minitouch", "adb_shell_input"],
         "instances": instances
     }))
 }
