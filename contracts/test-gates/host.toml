@@ -1445,3 +1445,22 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::a24_failure_burst_window_does_not_depend_on_arrival_order",
 ]
 incident = ["#411 A24"]
+
+# Workflow #405 D1 (0.12.5; register §1.135 D1-1 to D1-6; no persisted ledger shape, X14's first writer; contracts/scheduling-blackout.md "Order of the deferrals" position 9, contracts/scheduling/README.md "Why A Candidate Does Not Run", contracts/runtime-config.md; key assigned by the coordinator): once an instance has its random delay enabled (each member the instance's own key or the section's), every task the scheduler dispatches there first waits a random time: a pair that passed positions 1 to 8 draws due_at = the evaluation time and a delay within [min_ms, max_ms], cut at the activity window's last millisecond and at the facts freshness (0 when nothing is left), and waits with dispatch_random_delay_waiting and a wake at its planned start; every due pair and a dependency follow-up draw their own; the draw is kept through earlier gates and a refused admission, ended by an admitted dispatch, a not-eligible evaluation, the instance's delay turned off (released at the next evaluation) or a restart; the intent dispatched under it records random_delay, the admitted, rejected and completed records never; a direct run starts at once; the code is a waiting gate for the clock-slot records
+[[gate]]
+key = "122"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::scheduling_tests::d1_an_instances_delay_in_effect_takes_each_member_from_itself_or_the_section",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_disabled_instance_dispatches_at_once_without_a_delay_member",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_an_enabled_instance_waits_its_drawn_delay_and_records_it_on_the_intent",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_each_due_task_and_a_dependency_follow_up_draw_their_own_delay",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_the_delay_is_cut_at_the_window_end_and_at_the_facts_freshness",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_held_instance_keeps_the_draw_and_turning_the_delay_off_releases_it",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_false_trigger_ends_the_draw_and_the_next_due_draws_anew",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_rejected_admission_keeps_the_draw",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_restart_draws_anew",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_direct_run_on_a_waiting_instance_starts_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_waiting_clock_slot_is_not_refused",
+]
+incident = ["#405"]

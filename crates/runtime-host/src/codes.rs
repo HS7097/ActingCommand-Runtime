@@ -50,6 +50,12 @@ actingcommand_contract::outcome_codes! {
         /// run again from `next_eligible_unix_ms` (keys `instance_id`,
         /// `next_eligible_unix_ms`).
         DispatchInstanceContended => "dispatch_instance_contended": info / none,
+        /// Info (Workflow #405 D1). The instance has `scheduling.random_delay` enabled, so a
+        /// policy candidate that passed every other gate waits its drawn random delay before it
+        /// is dispatched: position 9 of the order of deferrals, a waiting gate for the
+        /// clock-slot records (keys `instance_id`, `task_id`, `due_at_unix_ms`,
+        /// `random_delay_ms`, `next_eligible_unix_ms`).
+        DispatchRandomDelayWaiting => "dispatch_random_delay_waiting": info / none,
         /// Info. A policy candidate met an instance in takeover cooldown after an unclean
         /// previous owner; it is deferred with a wake at the cooldown's end (keys
         /// `instance_id`, `next_eligible_unix_ms`).

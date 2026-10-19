@@ -169,15 +169,37 @@ code is the decision's reason:
 (`policy_remedy_unchosen`, `policy_remedy_unavailable`, `policy_remedy_exhausted`; Workflow #411
 B15, [remedies.md](remedies.md); written ahead of slice R4);
 
-8. availability: budgets, activity window, interval, backoff, task pause (as today).
+8. availability: budgets, activity window, interval, backoff, task pause (as today);
+9. the random delay (`dispatch_random_delay_waiting`; Workflow #405 D1): on an instance whose
+   `scheduling.random_delay.enabled` is true in effect (its own
+   `instance.<id>.scheduling.random_delay.enabled` or the section's), a (task, instance) pair that
+   passed positions 1 to 8 and has no draw draws one: `due_at` is the evaluation time, the delay
+   is `min_ms` plus a value uniform in `0..=max_ms - min_ms` from a SHA-256 seed over the cycle's
+   seed, the task, the instance alias and `due_at`, cut to the earliest of the intent's
+   `facts_fresh_until_unix_ms` and the last millisecond of its activity window (0 when nothing is
+   left), and the planned start is `due_at` plus the delay. The pair is deferred with a wake at
+   its planned start until then, and is dispatched at the first evaluation at or after it that
+   lets it through; its `policy.dispatch_intent` carries `random_delay` (register X14). Every
+   due pair of the instance draws its own delay, and a waiting pair does not take the instance,
+   so another pair whose delay ended runs meanwhile. The draw is kept while an earlier position
+   defers the pair and through a refused admission; it ends when the pair's latest admitted
+   dispatch is at or after its `due_at`, when an evaluation leaves the pair not eligible (trigger
+   false or unknown, feedback stop, placement block), when an evaluation passes the end of its
+   cut, when the instance's delay is off (its waiting pairs are released at the next evaluation)
+   and when the active catalog generation changes. Draws live in memory only: after a restart a
+   pair draws again. Every policy dispatch waits, dependency follow-ups, remedy requests and
+   their retries, immediate failure retries and fact refresh reads included; direct runs, Lab
+   operations, ladders, startup packages and emulator autostart do not pass through this
+   evaluation. When SR-4a lands, the next blackout start minus the horizon and
+   `quiet_margin_ms` joins the cut.
 
 Ladders and startup packages do not pass through this evaluation; their own entry points apply
 the table of "Complete silence". Recognition-reading demands (Workflow #384) are collected only
 from candidates that passed positions 1 to 7. For the clock-slot planning records of Workflow
 #372 K2, `blackout_active`, `blackout_approaching`, `pack_schedule_closed`,
 `perf_scheduling_paused`, `perf_pacing_gap`, `policy_rerun_waiting`,
-`policy_cost_commit_waiting` and `policy_remedy_waiting` are waiting gates (a slot is recorded as
-`clock_slot_deferred` only once its window has passed); `pack_admission_suspended`,
+`policy_cost_commit_waiting`, `policy_remedy_waiting` and `dispatch_random_delay_waiting` are
+waiting gates (a slot is recorded as `clock_slot_deferred` only once its window has passed); `pack_admission_suspended`,
 `feature_locked`, `policy_remedy_unchosen`, `policy_remedy_unavailable` and
 `policy_remedy_exhausted` are persistent gates (`clock_slot_refused`). Position 8a's deferrals
 carry no wake of their own: a remedy round's events, a changed choice or a lift wake the

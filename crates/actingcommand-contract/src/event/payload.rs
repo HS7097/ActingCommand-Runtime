@@ -6945,6 +6945,9 @@ struct PolicyDispatchDraft {
     rejection: Option<Box<PolicyDispatchRejection>>,
     diagnostic_code: Option<DiagnosticCode>,
     effect_disposition: Option<EffectDisposition>,
+    /// Workflow #405 D1 (register X14): set only by
+    /// `PolicyPayloadDraft::dispatch_intent_with_random_delay`.
+    random_delay: Option<PolicyRandomDelay>,
     audit: AuditInput,
 }
 
@@ -7113,6 +7116,9 @@ impl PolicyDispatchDraft {
         if let Some(rejection) = &self.rejection {
             rejection.validate()?;
         }
+        if let Some(random_delay) = &self.random_delay {
+            random_delay.validate()?;
+        }
         Ok(PolicyDispatchPayload {
             action: EventAction::PolicyDispatch,
             diagnostic_code: self.diagnostic_code,
@@ -7132,7 +7138,7 @@ impl PolicyDispatchDraft {
             approval_fact_ids: self.data.approval_fact_ids,
             urgency_milli: self.data.urgency_milli,
             priority_locked: false,
-            random_delay: None,
+            random_delay: self.random_delay,
             admission: self.admission,
             rejection: self.rejection,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -10639,6 +10645,25 @@ impl PolicyPayloadDraft {
             rejection: None,
             diagnostic_code: None,
             effect_disposition: None,
+            random_delay: None,
+            audit,
+        }))
+    }
+
+    /// Workflow #405 D1 (register X14): the intent of a dispatch made under a random delay,
+    /// which records the delay; only an intent can carry it.
+    pub fn dispatch_intent_with_random_delay(
+        data: PolicyDispatchEventData,
+        random_delay: PolicyRandomDelay,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::Intent(PolicyDispatchDraft {
+            data,
+            admission: None,
+            rejection: None,
+            diagnostic_code: None,
+            effect_disposition: None,
+            random_delay: Some(random_delay),
             audit,
         }))
     }
@@ -10654,6 +10679,7 @@ impl PolicyPayloadDraft {
             rejection: None,
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
+            random_delay: None,
             audit,
         }))
     }
@@ -10669,6 +10695,7 @@ impl PolicyPayloadDraft {
             rejection: None,
             diagnostic_code: Some(DiagnosticCode::PolicyRejected),
             effect_disposition: Some(effect_disposition),
+            random_delay: None,
             audit,
         }))
     }
@@ -10684,6 +10711,7 @@ impl PolicyPayloadDraft {
             rejection: None,
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
+            random_delay: None,
             audit,
         }))
     }
@@ -10700,6 +10728,7 @@ impl PolicyPayloadDraft {
             rejection: Some(Box::new(rejection)),
             diagnostic_code: Some(DiagnosticCode::PolicyRejected),
             effect_disposition: Some(effect_disposition),
+            random_delay: None,
             audit,
         }))
     }

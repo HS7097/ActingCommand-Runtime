@@ -504,6 +504,35 @@ impl HostShared {
         })
     }
 
+    /// Workflow #405 D1: the random delay in effect for each instance `aliases` name
+    /// (`EffectiveConfig::random_delay` by its registry id; an alias the registry does not hold
+    /// takes the section's keys), by alias, read at every authoritative policy cycle.
+    pub(super) fn random_delay_context(
+        &self,
+        aliases: &[&str],
+        operation: HostLocation,
+    ) -> RuntimeHostResult<BTreeMap<String, actingcommand_runtime_config::RandomDelay>> {
+        let ids = lock(&self.registered_instances, operation)?
+            .values()
+            .map(|instance| {
+                (
+                    instance.instance_alias.clone(),
+                    crate::failure_identity::identifier_text(&instance.instance_id),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let mut delays = BTreeMap::new();
+        for alias in aliases {
+            let id = ids.get(*alias).map_or(*alias, String::as_str);
+            // The keys are checked whenever the configuration is loaded or changed, so a pair
+            // that cannot be read here is a halt, as a remedy key's is.
+            let delay = config.random_delay(id).map_err(remedy_config_failure)?;
+            delays.insert((*alias).to_owned(), delay);
+        }
+        Ok(delays)
+    }
+
     /// Workflow #398 RD-2: the `device_link` section in effect (model-398 §4.6), read at every
     /// link change, restore and watch restart.
     pub(super) fn device_link_config(

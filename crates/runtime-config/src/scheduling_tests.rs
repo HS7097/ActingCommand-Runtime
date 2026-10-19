@@ -438,6 +438,74 @@ fn sr1_c3_an_instance_random_delay_is_checked_as_the_pair_in_effect() {
     );
 }
 
+// Workflow #405 D1 (host key 122; register §1.135), requirement 1: the random delay the scheduler
+// reads for an instance takes each member from the instance's own key when the configuration
+// carries one, otherwise from the section's; an instance that sets none, and an id the
+// configuration does not hold, take the section's three; an instruction on a section key moves
+// every member that reads it.
+#[test]
+fn d1_an_instances_delay_in_effect_takes_each_member_from_itself_or_the_section() {
+    let config = two_instances(
+        json!({"random_delay": {"min_ms": 120_000, "max_ms": 1_800_000}}),
+        json!({"random_delay": {"enabled": true, "min_ms": 300_000}}),
+        Value::Null,
+    );
+    config
+        .check(&context())
+        .expect("both pairs in effect keep min_ms at most max_ms");
+    let section = RandomDelay {
+        enabled: false,
+        min_ms: 120_000,
+        max_ms: 1_800_000,
+    };
+    assert_eq!(
+        config.random_delay(INSTANCE_A).expect("instance A's delay"),
+        RandomDelay {
+            enabled: true,
+            min_ms: 300_000,
+            max_ms: 1_800_000,
+        },
+        "A's own enabled and min_ms, the section's max_ms"
+    );
+    assert_eq!(
+        config.random_delay(INSTANCE_B).expect("instance B's delay"),
+        section
+    );
+    assert_eq!(
+        config
+            .random_delay("instance_00000000000000000000000000000000")
+            .expect("an id the configuration does not hold"),
+        section
+    );
+
+    let applied = config
+        .apply(
+            &[
+                set(RANDOM_DELAY_ENABLED, json!(true)),
+                set(RANDOM_DELAY_MAX_MS, json!(2_400_000)),
+            ],
+            &stamp(),
+            &context(),
+        )
+        .expect("the section's switch and longest delay");
+    assert_eq!(
+        applied.config.random_delay(INSTANCE_A).expect("A after"),
+        RandomDelay {
+            enabled: true,
+            min_ms: 300_000,
+            max_ms: 2_400_000,
+        }
+    );
+    assert_eq!(
+        applied.config.random_delay(INSTANCE_B).expect("B after"),
+        RandomDelay {
+            enabled: true,
+            min_ms: 120_000,
+            max_ms: 2_400_000,
+        }
+    );
+}
+
 // ---- Workflow #411 B15 R3 (model-b15 §5.1, §5.2; register §1.113; host key 112) ----
 // The remedy keys: `scheduling.remedy.enabled` (default `true`), `.max_per_round` (`1..=8`,
 // default 2), `.choices` (default `[]`) and each instance's `scheduling.remedy.choices`, whose

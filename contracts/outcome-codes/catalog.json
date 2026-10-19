@@ -1970,6 +1970,14 @@
     "fact_time_problem": {
       "type": "vocab:fact_time_problem",
       "description": "Why a fact_time_reached predicate's fact gives no time (Workflow #405)."
+    },
+    "due_at_unix_ms": {
+      "type": "unix_ms",
+      "description": "When a task first became due for dispatch, in Unix milliseconds (Workflow #405)."
+    },
+    "random_delay_ms": {
+      "type": "duration_ms",
+      "description": "The random delay drawn for a dispatch, in milliseconds (Workflow #405)."
     }
   },
   "vocabularies": {
