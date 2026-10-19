@@ -1246,3 +1246,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_0121_a7::a7_an_input_parameter_failure_still_starts_no_ladder",
 ]
 incident = ["#411 A7"]
+
+# #411 A15 (v0.12.1-rc.2; no register section, no persisted structure change): a page-graph run that fails with contained_task_step_unconfirmed carries the kernel's values (pack_operation_id, page_ids, attempts, page_id) and artifact_id, the frame artifact of the run's Failure pin in capture.summary_committed, on its task.failed terminal and on its receipt
+[[gate]]
+key = "106"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rc2_a15::a15_the_terminal_and_the_receipt_carry_the_values_and_the_failure_frame",
+]
+incident = ["#411 A15"]
