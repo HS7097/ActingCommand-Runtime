@@ -25,9 +25,11 @@ pub const CATEGORIZED_VOCABULARY: &str = "event_type";
 pub const NAMING_SINCE: (u64, u64, u64) = (0, 12, 0);
 /// The vocabulary of every code's `ladder_class` (Workflow #387 model v1.2 §3.2).
 pub const LADDER_CLASS_VOCABULARY: &str = "ladder_class";
-/// The first release that no pending entry may reach (model-378 §5.3, "Settlement timing":
-/// v0.12.1 settles the rest, and its release gate fails while any entry is pending).
-pub const SETTLED_FROM: (u64, u64, u64) = (0, 12, 1);
+/// The first release that no pending entry may reach: v0.13.0. The 0.12 series releases plain
+/// `0.12.Z` finals (Alice, 2026-10-19), and the coordinator's decision of that day moves
+/// model-378 §5.3's "Settlement timing" from v0.12.1 to v0.13.0: a final of the 0.12 series may
+/// carry pending entries, and from v0.13.0 on the release gate fails while any entry is pending.
+pub const SETTLED_FROM: (u64, u64, u64) = (0, 13, 0);
 /// What a pending entry may hold in place of a text it has not written yet (§5.2).
 pub const UNWRITTEN: &str = "TBD";
 /// The text members a settled code has written (§5.2: `description` always, `common_causes`
@@ -529,8 +531,8 @@ pub fn released_versions(root: &Path) -> Result<BTreeSet<String>, String> {
 /// G10, the release half: what releasing `release` asks of the catalog at the release's commit
 /// (model-378 §9 G10, review L14). The catalog half holds for every release. A release `X.Y.Z`
 /// needs its snapshot `released/X.Y.Z.json` among `released` (written by the release PR), and
-/// from v0.12.1 on no code or location may still be pending. A release candidate is not the
-/// release: it needs neither.
+/// from v0.13.0 on ([`SETTLED_FROM`]) no code or location may still be pending. A release
+/// candidate is not the release: it needs neither.
 pub fn check_release(catalog: &Catalog, release: &str, released: &BTreeSet<String>) -> Vec<String> {
     let mut violations = check_review(catalog);
     let Some((version, candidate)) = parse_release(release) else {

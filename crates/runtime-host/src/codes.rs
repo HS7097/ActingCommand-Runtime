@@ -418,6 +418,10 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskHomeRecoveryPersistentlyNonHome => "contained_task_home_recovery_persistently_non_home": error / pack_logic_mismatch,
         ContainedTaskHomeRecoveryStepLimit => "contained_task_home_recovery_step_limit": error / pack_logic_mismatch,
         ContainedTaskHomeRecoveryTerminalNonHome => "contained_task_home_recovery_terminal_non_home": error / pack_logic_mismatch,
+        /// Error. Workflow #411 A16: the run's entry did not match and its entry recovery package
+        /// declares no final page in the required entry set, so the recovery is refused before it
+        /// runs, with no input. The registry's `linear_steps` return-home package is not compared.
+        ContainedTaskHomeRecoveryTerminalOutsideEntry => "contained_task_home_recovery_terminal_outside_entry": error / pack_logic_mismatch,
         ContainedTaskIdentityMissing => "contained_task_identity_missing": error / none,
         ContainedTaskInputResultInvalid => "contained_task_input_result_invalid": error / none,
         ContainedTaskLadderSourceStateInvalid => "contained_task_ladder_source_state_invalid": error / none,

@@ -224,7 +224,10 @@ pub(crate) fn recording_path(state_dir: &Path, record_id: &str) -> PathBuf {
     lab_dir(state_dir, record_id).join(RECORDING_FILE)
 }
 
-/// Loads the Lab recording of `old` and checks the four identity fields against it.
+/// Loads the Lab recording of `old` and checks the four identity fields against it. A file
+/// that was read and does not decode as `actingcommand.lab-recording.v1` makes the Lab part
+/// unavailable (`lab_recording_unreadable`), as a difference of identity does (#411 A10); the
+/// file is left as it is and never decoded leniently. Any other read error stays an error.
 pub(crate) fn load_lab(state_dir: &Path, old: &OldRecordView) -> LabResult<LabFile> {
     let path = recording_path(state_dir, &old.record_id);
     let text = match fs::read_to_string(&path) {
@@ -237,15 +240,9 @@ pub(crate) fn load_lab(state_dir: &Path, old: &OldRecordView) -> LabResult<LabFi
             )));
         }
     };
-    let recording: LabRecording = serde_json::from_str(&text).map_err(|error| {
-        with_details(
-            blocked(
-                "record_lab_unavailable",
-                format!("failed to parse {}: {error}", path.display()),
-            ),
-            json!({"reason": "lab_recording_unreadable", "path": path.display().to_string()}),
-        )
-    })?;
+    let Ok(recording) = serde_json::from_str::<LabRecording>(&text) else {
+        return Ok(LabFile::Unavailable("lab_recording_unreadable"));
+    };
     if recording.schema_version != LAB_RECORDING_SCHEMA
         || recording.record_id != old.record_id
         || recording.record_started_at_unix_ms != old.started_at_unix_ms

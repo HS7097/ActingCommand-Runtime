@@ -12,6 +12,15 @@ mod gate_336_pkgs5;
 // Workflow #390 nine6 (exec key 81): `resource validate` warns about a pool nothing publishes.
 #[path = "gate_390_nine6.rs"]
 mod gate_390_nine6;
+// Workflow #411 A11 (exec key 84): `resource validate --changed-paths-file` takes an absolute path.
+#[path = "gate_rc2_a11.rs"]
+mod gate_rc2_a11;
+// #411 A10 (exec key 85): `record status` answers its record when the Lab recording is unreadable.
+#[path = "gate_rc2_a10.rs"]
+mod gate_rc2_a10;
+// #411 A9 (exec key 86): offline `observe` of an unknown scene answers `unknown` in Min.
+#[path = "gate_rc2_a9.rs"]
+mod gate_rc2_a9;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
@@ -2646,7 +2655,9 @@ fn help_lists_resource_declaration_options() {
     assert_eq!(
         help.pointer("/command_options/resource validate/2")
             .and_then(Value::as_str),
-        Some("--changed-paths-file <repository-relative NUL-delimited Git name-status list>")
+        Some(
+            "--changed-paths-file <NUL-delimited Git name-status list: an absolute path, or a path relative to the repository root>"
+        )
     );
     assert_eq!(
         help.pointer("/command_options/operation validate/0")

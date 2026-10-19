@@ -8,9 +8,13 @@
 //! request. Without a usable OCR model, OCR is unavailable under `lab_ocr_unavailable` with
 //! the reason as its cause, and the offline tools report that code wherever they would
 //! evaluate an OCR target; they never skip one silently.
+//!
+//! Workflow #411 A12: a process outside an A/B installation that runs from a single-location
+//! root (`runtime\BUILD-MANIFEST.json` two levels above it, no install selection; register §1.96)
+//! reads that root's `actingd.config.json`.
 
 use crate::codes::LabCode;
-use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::codes::{InstallationCode, SharedCode};
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
 use actingcommand_contract::{InstalledProcess, LabError, LabResult};
 use actingcommand_execution_kernel::VisionFfiProvider;
@@ -24,12 +28,21 @@ use actingcommand_vision_ffi::{
     VisionListingCode, VisionRuntimeSpec, list_vision_models,
 };
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// The default vision root, beside the install root or else beside the configuration file, as
 /// the Runtime resolves it.
 const DEFAULT_VISION_ROOT: &str = "vision";
+
+/// The Runtime configuration of a single-location root, directly in the root (WD-1, register
+/// §1.96).
+const ROOT_CONFIGURATION_FILE: &str = "actingd.config.json";
+
+/// The largest Runtime configuration read, as an installation's selected configuration
+/// (`InstalledProcess::config_bytes`) and mcp-serve's.
+const MAX_CONFIGURATION_BYTES: u64 = 1024 * 1024;
 
 /// The OCR provider of one offline tool process, or why OCR is unavailable to it.
 #[derive(Debug, Clone)]
@@ -62,12 +75,30 @@ struct UnavailableDetails {
 
 impl LabOcr {
     /// The provider of this process's installation (`process_installation`): the vision root
-    /// of its selected Runtime configuration. A process outside an installation has no Runtime
-    /// configuration to read.
+    /// of its selected Runtime configuration. Outside an installation, a process that runs from
+    /// a single-location root reads that root's configuration (Workflow #411 A12); a process
+    /// outside both has no Runtime configuration to read.
     pub fn from_process_installation() -> Self {
         match actingcommand_contract::process_installation() {
-            Ok(installation) => Self::from_installation(installation),
+            Ok(Some(installation)) => Self::from_installation(Some(installation)),
+            Ok(None) => match process_single_location_root() {
+                Ok(Some(root)) => Self::from_single_location_root(&root),
+                Ok(None) => Self::from_installation(None),
+                Err(cause) => Self::unavailable(None, cause),
+            },
             Err(error) => Self::unavailable(None, Outcome::new(error.code())),
+        }
+    }
+
+    /// The provider of the single-location root `root` (Workflow #411 A12): its configuration
+    /// `<root>\actingd.config.json`, a regular file of at most 1 MiB, names the vision root
+    /// (`vision.root`, else `<root>\vision`). A configuration that is missing, unreadable or
+    /// larger is `config_read_failed`, one that does not decode `config_decode_failed`: such a
+    /// root is never "unconfigured".
+    pub fn from_single_location_root(root: &Path) -> Self {
+        match read_root_configuration(&root.join(ROOT_CONFIGURATION_FILE)) {
+            Ok(configuration) => Self::from_runtime_configuration(&configuration, root, Some(root)),
+            Err(cause) => Self::unavailable(None, cause),
         }
     }
 
@@ -287,6 +318,61 @@ fn with_os_cause(outcome: Outcome, cause: Option<&Outcome>) -> Outcome {
     }
 }
 
+/// The single-location root this process runs from (Workflow #411 A12): [`single_location_root`]
+/// of the canonical executable. An executable that cannot be resolved is
+/// `install_executable_unavailable`, as `process_installation` answers it.
+fn process_single_location_root() -> Result<Option<PathBuf>, Outcome> {
+    let unresolved = |error: &std::io::Error, op: IoOp| {
+        Outcome::new(InstallationCode::InstallExecutableUnavailable)
+            .caused_by(Outcome::from_io_error(error, op))
+    };
+    let executable = std::env::current_exe().map_err(|error| unresolved(&error, IoOp::Locate))?;
+    let executable = std::fs::canonicalize(&executable)
+        .map_err(|error| unresolved(&error, IoOp::Canonicalize))?;
+    Ok(single_location_root(&executable))
+}
+
+/// Workflow #411 A12: the single-location root of an executable at the canonical path
+/// `executable`: the folder two levels above it, when its `runtime\BUILD-MANIFEST.json` is a file
+/// and it is no `A`/`B` slot folder (the rule of `process_installation` and of actingctl's install
+/// root); otherwise none.
+fn single_location_root(executable: &Path) -> Option<PathBuf> {
+    let root = executable.parent()?.parent()?;
+    let slot_folder = matches!(
+        root.file_name().and_then(|name| name.to_str()),
+        Some("A" | "B")
+    );
+    if slot_folder || !root.join("runtime").join("BUILD-MANIFEST.json").is_file() {
+        return None;
+    }
+    Some(root.to_path_buf())
+}
+
+/// Reads a single-location root's Runtime configuration `path`: a regular file of at most
+/// [`MAX_CONFIGURATION_BYTES`]. A missing, unreadable or larger file is `config_read_failed` with
+/// the `path`, caused by the OS failure when the OS reported one.
+fn read_root_configuration(path: &Path) -> Result<Vec<u8>, Outcome> {
+    let unreadable = || Outcome::new(SharedCode::ConfigReadFailed).path(path);
+    let failed = |error: &std::io::Error, op: IoOp| {
+        unreadable().caused_by(Outcome::from_io_error(error, op))
+    };
+    let file = std::fs::File::open(path).map_err(|error| failed(&error, IoOp::Open))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| failed(&error, IoOp::Metadata))?;
+    if !metadata.is_file() {
+        return Err(unreadable());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIGURATION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| failed(&error, IoOp::Read))?;
+    if bytes.len() as u64 > MAX_CONFIGURATION_BYTES {
+        return Err(unreadable());
+    }
+    Ok(bytes)
+}
+
 /// The OCR target evaluating `target_id` reaches: the target itself, the OCR target a side of a
 /// value test reads (Workflow #396 REC-6; the left side first), or the first of those a member
 /// of a composite reaches.
@@ -323,3 +409,7 @@ fn reached_ocr_target<'p>(pack: &'p RecognitionPack, target_id: &str) -> Option<
 
 #[cfg(test)]
 mod tests;
+// Workflow #411 A12 part 1 (exec key 87): a single-location root's configuration names the vision
+// root of the offline tools.
+#[cfg(test)]
+mod gate_rc2_a12;

@@ -32,7 +32,9 @@ The `record` command file is never written by the Lab recording; the step action
 reads its `record_id`, `task_id`, `instance`, `status` and `started_at_unix_ms`, and
 `recording.json` stores the first four (`record_started_at_unix_ms` for the last). Every
 command compares them; a difference makes the Lab part unavailable
-(`record_lab_unavailable`, reason `lab_recording_mismatch`).
+(`record_lab_unavailable`, reason `lab_recording_mismatch`). A `recording.json` that does not
+decode is unavailable the same way, reason `lab_recording_unreadable`; the file is left as it
+is (#411 A10).
 
 Every stored frame or crop is read back only after its sha256 matches the recorded value
 (`record_frame_hash_mismatch`). Writes are atomic (temporary file, then rename); a failed
@@ -410,8 +412,10 @@ Workflow #396 LAB-3. actinglab and the Lab load the OCR provider the Runtime use
 in-process `ppocr-ctc` engine over the model folders (`models\<model_ref>\`) of the vision root
 that the Runtime configuration's `vision` section names (`root`, else `vision` beside the install
 root), always on the CPU whatever `vision.execution_provider` says. actinglab reads the
-configuration its installation selects; outside an installation there is none. As in the
-Runtime, model files are read and ONNX Runtime is initialised on the first OCR request. The mark
+configuration its installation selects, or, on a single-location root
+(`runtime\BUILD-MANIFEST.json` two levels above it, no install selection; Workflow #411 A12),
+`<root>\actingd.config.json`; outside both there is none. As in the Runtime, model files are read
+and ONNX Runtime is initialised on the first OCR request. The mark
 self-test, `record stop`'s first decision and cross-check, `observe`, `recognize`, `is-visible`,
 `detect-page`, `current-page`, the guard target of `do`/`wait` and the `package dry-run` replay
 evaluate OCR targets with it.

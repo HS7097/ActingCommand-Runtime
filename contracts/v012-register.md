@@ -1634,7 +1634,7 @@ their spelling, category, ladder class, values and review unchanged.
 |---|---|---|---|---|---|
 | A8B-1 | `actingledger codes [--code <code>] [--json \| --markdown]`: the default form one tab-separated line per code (code, category, ladder_class, review, status, description); `--markdown` the catalog's SHA-256 line and a table of the same columns; `--json` one line `actingcommand.actingledger.codes.v1` `{schema_version, catalog_sha256, codes: {name: entry}}` | read output (offline; no persisted record, no state root) | A8b | A8b | codes in name order, or the one `--code` names (`outcome_code_unknown` otherwise); each entry as the embedded catalog holds it; `catalog_sha256` is the SHA-256 of the embedded `contracts/outcome-codes.json` (model-378 §5.3 "Version": the release half lives only in the tag); a failure is one `actingledger: <code> during <location>: <text>` stderr line and exit 1 |
 | A8B-2 | `contracts/outcome-codes/released/0.12.0.json`, `actingcommand.outcome-codes.release.v1` | release snapshot (contract file, written once by the release PR) | A8b | A8b | every code (with `category`, `ladder_class`, `review`, `status`, `values: {key: {type, required}}`) and every location (`review`, `status`) of the catalog at this commit, retired ones included; G9 compares every later catalog with its settled entries; never edited afterwards (spec §11) |
-| A8B-3 | `outcome-guard release <version> [<root>]` | guard command of the release build (no persisted shape) | A8b | A8b | G10 for `X.Y.Z` or `X.Y.Z-rc.N`: settled entries have their text; `X.Y.Z` needs `released/X.Y.Z.json`, and from v0.12.1 on no pending code or location; a release candidate needs only the text; the exact-SHA build runs it before it builds when it releases (`windows-remote-build.yml`, step "Outcome catalog release gate (G10)") and a violation stops the release before the tag exists |
+| A8B-3 | `outcome-guard release <version> [<root>]` | guard command of the release build (no persisted shape) | A8b | A8b | G10 for `X.Y.Z` or `X.Y.Z-rc.N`: settled entries have their text; `X.Y.Z` needs `released/X.Y.Z.json`, and from v0.13.0 on no pending code or location (a final of the 0.12 series may carry pending entries: Alice 2026-10-19, the 0.12 series releases plain Z versions, and the coordinator's decision of that day moves the boundary from v0.12.1 to v0.13.0); a release candidate needs only the text; the exact-SHA build runs it before it builds when it releases (`windows-remote-build.yml`, step "Outcome catalog release gate (G10)") and a violation stops the release before the tag exists |
 
 ### 1.96 Slice WD-1: the watchdog supervises a single-location root (#390 WD-1; deploy plan Q1 (b); Alice 2026-10-16)
 
@@ -1705,6 +1705,77 @@ unchanged on a valid ledger; the refusals keep the ledger's existing codes.
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | A4-1 | the `events` report's `artifact_evictions` (and each event's eviction proofs) | read behaviour of an existing member (shape unchanged) | A4 | A4 | built from the `artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last row read, each checked on its own, not against a whole-ledger retention replay; each proof carries the head of the read transaction, as before, so `--through` below an eviction still lists its proof. `open`, `chain` and `export` keep the full verification, and `chain` is the full check; a segment root is read whole |
+
+### 1.100 Slice A8 + A14 (v0.12.1-rc.2): MCP names the missing package and the doubled tap; `fields` says what it does (#411 A8, A14)
+
+MCP `ac_lab_do` and `ac_lab_observe` refuse, before the install is located and before any
+actinglab child runs, two calls they can already tell are wrong, and name the argument; the
+tool descriptions say which arguments a capture needs. A tap without a package is not made
+possible: every online Lab request carries its package
+([contained-lab-operation.md](contained-lab-operation.md)). No code, wire, ledger, configuration
+or interface revision (§6) changes: the refusals use the existing `arguments_invalid` with its
+`argument` / `argument_problem` values (apps 73).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A8-1 | `ac_lab_do` / `ac_lab_observe` with `capture: true`, `dry_run` not `true` and neither `package` nor `zip` → `arguments_invalid {argument: package, argument_problem: required}` (class `usage`) | changed answer (was `lab_tool_failed {exit_code: 2}` caused by `package_invalid`) | A8 | A8 | the condition is actinglab's own branch to `PackageInput::open` (do: `--capture` without `--dry-run`; observe: `--capture`); no child, nothing recorded (no `client.action`); with `package` or `zip`, without capture, or with `dry_run` the call runs actinglab as before (both locators together stay actinglab's `validation_failed`); the descriptions say "package or zip is required" (do: without dry_run) |
+| A8-2 | the `fields` argument of `ac_lab_do` and `ac_lab_observe` | description only (no behaviour change) | A8 | A8 | the members, comma separated, that the Min answer keeps whole (never removed or shortened) when it is reduced to its byte budget; it selects nothing; on observe the named ones of the members Min leaves out (`instance`, `arbitration`, `matched`, `standby`, `frame_age_ms`, `frame_source`) are kept; still passed to actinglab as `--fields` (CLI parity) |
+| A14-1 | `ac_lab_do` with `target: "tap"` and `tap` → `arguments_invalid {argument: tap, argument_problem: conflicting}` (class `usage`) | changed answer (was `lab_tool_failed` caused by `validation_failed`) | A8 | A8 | `target` is a Runtime element id; the description says the action takes exactly one of `target`, `tap` or `swipe`; no child, nothing recorded |
+
+### 1.101 Slice A9 (v0.12.1-rc.2): offline `observe` of an unknown page answers `unknown` in Min (#411 A9)
+
+When no page matches, offline `observe`'s near-miss `candidates` are a transport member, not
+the identity, so Min cuts them to fit its hard limit instead of failing with
+`observe_identity_limit_exceeded`. [page-projection.md](page-projection.md) ("Shared input and
+output") is the contract. It adds no code, wire or ledger shape; the pending description of
+`observe_identity_limit_exceeded` says the code now means the identity itself does not fit.
+An answer that succeeds today is unchanged, and the Normal view (`--verbose`) keeps the whole
+list.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A9-1 | `candidates_truncated: true` and `candidates_omitted_count` beside `candidates` in offline `observe`'s Min answer | two optional output members (exec 86) | A9 | A9 | present only when Min removed near-miss entries: after every existing reduction (fact rows, projection entries, the identity alone) the answer is still over the hard limit, so Min removes `candidates` entries from the end (sorted by score, the lowest last) one at a time until it fits, and the suspicion's copy of the list with them; `candidates` stays an array; the count is the entries removed; both members are kept by Min like `candidates`; with every entry removed and the identity still over the limit, `observe_identity_limit_exceeded` as before |
+
+### 1.102 Slice A10 (v0.12.1-rc.2): an undecodable Lab recording makes only the Lab part unavailable (#411 A10; coordinator decision 2 of 2026-10-19)
+
+A `recording.json` that was read and does not decode as `actingcommand.lab-recording.v1` is
+treated as an identity mismatch is: the Lab part is unavailable and the session answers on.
+[lab-recording.md](lab-recording.md) ("Files", "record status") is the contract. It adds no
+member, code or command, and changes no interface revision of §6; the file is never repaired,
+rewritten, moved or deleted and is not decoded leniently.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A10-1 | `lab.reason` of `record status` / `ac_record_status` gains the value `lab_recording_unreadable` | new value of an existing member (shape unchanged) | A10 | A10 | `lab: {status: "unavailable", reason: "lab_recording_unreadable"}` with the session's `record`, exit 0, where the answer was `record_lab_unavailable` (exit 3); step actions refuse with `record_lab_unavailable` and that reason, and `record stop` stops the session with no Lab output, both as for `lab_recording_mismatch`; a read error other than a missing file stays `record_state_io_failed`; the reason stays a Lab-crate string until B4 (exec 85) |
+
+### 1.103 Slice A12 (v0.12.1-rc.2): the Lab's OCR loader reads a single-location root's configuration (#411 A12 part 1)
+
+From v0.12.1 actinglab and the Lab, started outside an install selection from a single-location
+root (the WD-1 layout of §1.96: `runtime\BUILD-MANIFEST.json` is a file two levels above the
+executable, and that folder is no `A`/`B` slot folder), load the OCR provider over the vision
+root that `<root>\actingd.config.json` names (`vision.root`, else `<root>\vision`).
+[lab-recording.md](lab-recording.md) ("OCR in the Lab") is the contract. A12 adds no code, key,
+option, environment variable, location or shape and changes no interface revision of §6;
+`process_installation` and actingctl are unchanged, and so is which command refuses without OCR
+(part 2 of the report is a B item, coordinator decision 3 of 2026-10-19). Its catalog change is
+the text of `lab_ocr_unavailable` and `lab_ocr_vision_unconfigured` (entries, not rows, §7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A12-1 | the configuration the offline tools' OCR loader reads on a single-location root | rule (no shape change) | A12 | A12 (exec 87) | an A/B installation's selected configuration and a refused installation are unchanged; a single-location root's configuration that is missing, unreadable, no regular file or over 1 MiB is `config_read_failed`, one that does not decode `config_decode_failed`, each the cause of `lab_ocr_unavailable` and never `lab_ocr_vision_unconfigured` (coordinator decision 6 of 2026-10-19); outside both an installation and a single-location root the cause stays `lab_ocr_vision_unconfigured` |
+
+### 1.105 Slice A16 (v0.12.1): an entry recovery package that cannot end on the entry is refused before it runs (#411 A16)
+
+NAV-3b's rule (A1) is unchanged: an entry recovery package must end on a page of the required
+entry set, and the registry's `linear_steps` return-home package is not compared. A16 decides the
+case that is certain before the package runs. [README.md](README.md) (entry page sets) and
+[linear-steps.md](linear-steps.md) ("Ladder and page-graph home entry") are the contract. No
+record type, ledger member, key, configuration key or wire shape changes; which runs go to entry
+recovery is unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A16-1 | `contained_task_home_recovery_terminal_outside_entry` (`error`, `ladder_class` `pack_logic_mismatch`, `since` 0.12.1, pending) with `page_ids` (required), `package_id` (required), `page_id` (optional) | new outcome code and an earlier refusal (host 107) | A16 | A16 | after the recovery package's existing checks and before `EntryRecoveryPackageAdmitted`: when none of the package's declared final pages (its `target_page` or target page set, resolved to its pages) is a page of the required entry set, the run fails closed with no input, no `EntryRecoveryPackageAdmitted` and no `EntryRecoveryCompleted`; the fail-closed `entry_target_disposition`, the terminal and the receipt carry the values (`page_ids` the required entry pages as recorded, `package_id` the recovery package, `page_id` its declared final page when it declares exactly one); the registry's `linear_steps` return-home package is not compared and still runs to the recheck; a package with a declared final page in the set runs as before and A1's `contained_task_home_recovery_terminal_non_home` still fails it when it ends elsewhere; the class is the one this case gave until now (A1's code) |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

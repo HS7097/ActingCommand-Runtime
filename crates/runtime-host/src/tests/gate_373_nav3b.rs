@@ -146,6 +146,51 @@ fn recovery_package(landing: &str) -> Vec<u8> {
     )
 }
 
+/// #411 A16: [`recovery_package`] whose target page set also declares `also`, a page of the
+/// run's entry that its one step never reaches. It is admitted as a recovery package that can end
+/// on the entry, runs, and ends on `landing`, so the check after it ran (A1) decides.
+fn recovery_package_also_declaring(landing: &str, also: (&str, &[&str])) -> Vec<u8> {
+    entry_package(
+        "neutral.entry.recovery",
+        serde_json::json!({
+            "schema_version": "0.6",
+            "task_id": "task",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 16, "height": 9},
+            "target_page": [landing, also.0],
+            "operations": [entry_operation("go", "away", landing)]
+        }),
+        &[("away", AWAY), (landing, HOME), also],
+    )
+}
+
+/// #411 A1 and A16: a phased route (one stage) whose entry is `prompt`, a page that is not home
+/// and that the fake device never shows: a single entry page other than home is the host's
+/// required entry only in a phased route, as in the field case.
+fn prompt_target() -> Vec<u8> {
+    entry_package(
+        "neutral.entry.target",
+        serde_json::json!({
+            "schema_version": "0.9",
+            "task_id": "task",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 16, "height": 9},
+            "entry_page": "prompt",
+            "phases": [{"id": "only", "operations": ["answer"], "target_pages": ["done"]}],
+            "target_page": "done",
+            "scheduling_outcome": {"mappings": [{
+                "outcome_key": "finished",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["done"]
+            }]},
+            "operations": [entry_operation("answer", "prompt", "done")]
+        }),
+        &[("away", AWAY), ("prompt", PROMPT), ("done", DONE)],
+    )
+}
+
 struct EntryRun {
     receipt: RuntimeReceipt,
     events: Vec<ProjectedEvent>,
@@ -417,7 +462,8 @@ fn entry_set_conflict_fails_before_any_input() {
 /// N3b-5: the first frame matches no page of the set {done, home}; the bound recovery package
 /// ends on `home`, a page of the set, and the run goes on from `home`'s stage (the second);
 /// a recovery package that ends outside the set fails with
-/// `contained_task_home_recovery_terminal_non_home`.
+/// `contained_task_home_recovery_terminal_non_home` (#411 A16: that package also declares `done`
+/// as a final page, so it is admitted and runs, and the check after it ran decides).
 #[test]
 fn entry_recovery_lands_in_the_set_and_the_run_goes_on_from_that_stage() {
     let target = entry_package(
@@ -467,7 +513,14 @@ fn entry_recovery_lands_in_the_set_and_the_run_goes_on_from_that_stage() {
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
-    let run = run_entry(&state, &target, Some(&recovery_package("elsewhere")));
+    let run = run_entry(
+        &state,
+        &target,
+        Some(&recovery_package_also_declaring(
+            "elsewhere",
+            ("done", DONE),
+        )),
+    );
     assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     let facts = task_facts(&run.events);
@@ -521,34 +574,21 @@ fn any_entry_without_stages_has_no_host_entry_check() {
 /// the run's terminal name the required entry pages as the run recorded them (`page_ids`), the
 /// page the recovery package ended on (`page_id`) and the recovery package (`package_id`).
 /// As in the field case the target is a phased route (one stage): a single entry page other
-/// than home is the host's required entry only in a phased route.
+/// than home is the host's required entry only in a phased route. #411 A16: the recovery package
+/// also declares `prompt` as a final page, so it is admitted and runs, and this check after it
+/// ran decides.
 #[test]
 fn a1_an_entry_recovery_off_the_entry_names_the_entry_pages_the_page_it_reached_and_the_package() {
     let state = Arc::new(FakeState::default());
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
-    let target = entry_package(
-        "neutral.entry.target",
-        serde_json::json!({
-            "schema_version": "0.9",
-            "task_id": "task",
-            "game": "neutral",
-            "server_scope": ["test"],
-            "coordinate_space": {"width": 16, "height": 9},
-            "entry_page": "prompt",
-            "phases": [{"id": "only", "operations": ["answer"], "target_pages": ["done"]}],
-            "target_page": "done",
-            "scheduling_outcome": {"mappings": [{
-                "outcome_key": "finished",
-                "effect": "no_designated_effect",
-                "terminal_pages": ["done"]
-            }]},
-            "operations": [entry_operation("answer", "prompt", "done")]
-        }),
-        &[("away", AWAY), ("prompt", PROMPT), ("done", DONE)],
+    let target = prompt_target();
+    let run = run_entry(
+        &state,
+        &target,
+        Some(&recovery_package_also_declaring("home", ("prompt", PROMPT))),
     );
-    let run = run_entry(&state, &target, Some(&recovery_package("home")));
     assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
     let facts = task_facts(&run.events);
     let required_pages = entry_recognitions(&facts)
@@ -658,4 +698,76 @@ fn a2_a_request_bound_recovery_package_given_as_a_directory_is_read_as_a_directo
         )),
         "the directory's package is admitted: {facts:#?}"
     );
+}
+
+/// #411 A16 (host key 107): the A1 case (the phased target whose entry is `prompt`, the frames on
+/// `away`) with a request-bound recovery package whose only declared final page is `home`, not a
+/// page of the entry. The package cannot end on the entry, so it is refused before it runs: no
+/// input, no `EntryRecoveryPackageAdmitted` and no `EntryRecoveryCompleted`; the fail-closed
+/// disposition and the run's terminal carry `contained_task_home_recovery_terminal_outside_entry`
+/// with the required entry pages as the run recorded them (`page_ids`), the recovery package
+/// (`package_id`) and its declared final page, resolved to its page (`page_id`).
+#[test]
+fn a16_a_bound_recovery_package_that_cannot_end_on_the_entry_is_refused_before_it_runs() {
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let run = run_entry(&state, &prompt_target(), Some(&recovery_package("home")));
+    assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0, "no input");
+    let facts = task_facts(&run.events);
+    assert!(
+        !facts.iter().any(|fact| matches!(
+            fact,
+            TaskSemanticFact::EntryRecoveryPackageAdmitted { .. }
+                | TaskSemanticFact::EntryRecoveryCompleted { .. }
+        )),
+        "the recovery package is neither admitted nor run: {facts:#?}"
+    );
+    let required_pages = entry_recognitions(&facts)
+        .into_iter()
+        .find_map(|(phase, required_pages, _)| (phase == "initial").then_some(required_pages))
+        .expect("the initial entry recognition");
+    let expected = serde_json::json!({
+        "page_ids": required_pages,
+        "page_id": "neutral/home",
+        "package_id": "neutral.entry.recovery"
+    });
+    let disposition = facts
+        .iter()
+        .find_map(|fact| match fact {
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::FailClosed,
+                outcome: Some(outcome),
+            } => Some(outcome),
+            _ => None,
+        })
+        .expect("the fail-closed disposition");
+    let terminal = facts
+        .iter()
+        .find_map(|fact| match fact {
+            TaskSemanticFact::TerminalCommitted {
+                outcome: Some(outcome),
+                ..
+            } => Some(outcome),
+            _ => None,
+        })
+        .expect("the terminal's outcome");
+    for (place, outcome) in [("disposition", disposition), ("terminal", terminal)] {
+        assert_eq!(
+            outcome.code().as_str(),
+            crate::codes::HostCode::ContainedTaskHomeRecoveryTerminalOutsideEntry.as_str(),
+            "{place}"
+        );
+        assert_eq!(
+            serde_json::json!({
+                "page_ids": outcome.value("page_ids"),
+                "page_id": outcome.value("page_id"),
+                "package_id": outcome.value("package_id")
+            }),
+            expected,
+            "{place}: {outcome:?}"
+        );
+    }
 }

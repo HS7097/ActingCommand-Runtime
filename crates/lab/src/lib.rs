@@ -35,6 +35,9 @@ mod gate_390_lab2;
 // Test plan v2.2 E-5 G6 (exec key 35): record stop over a synthetic recording.
 #[cfg(test)]
 mod gate_e5_record_stop;
+// #411 A10 (exec key 85): an undecodable Lab recording makes only the Lab part unavailable.
+#[cfg(test)]
+mod gate_rc2_a10;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

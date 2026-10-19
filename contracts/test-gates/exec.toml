@@ -1357,3 +1357,71 @@ tests = [
     "actingcommand-pack-containment::pkg_s1::a2_a_missing_path_an_unsupported_file_and_a_file_over_the_limit_have_their_own_codes",
 ]
 incident = ["#411 A2"]
+
+# Workflow #411 A11 (v0.12.1-rc.2; no register section): actinglab resource validate --changed-paths-file takes an absolute path to the NUL-delimited Git name-status list wherever it is (inside or outside the repository, e.g. the Git directory of a linked worktree), read as a bounded regular file with the same NUL, pair and status rules and not listed in read_files or counted in read_bytes, since the list is no declaration; a relative path keeps its meaning (relative to --repo, read through the repository reader); a missing absolute list is refused with resource_declaration_invalid naming the path as given
+[[gate]]
+key = "84"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a11::a11_an_absolute_changed_paths_file_outside_the_repository_is_read",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a11::a11_a_missing_absolute_changed_paths_file_is_refused_naming_it",
+]
+incident = ["#411 A11"]
+
+# #411 A10 (v0.12.1-rc.2; register §1.102; related 35, 39, 66, 72): a Lab recording.json that was read and does not decode as actingcommand.lab-recording.v1 (an unknown member on artifact, a file cut off mid-object) makes the Lab part unavailable, reason lab_recording_unreadable, exactly as an identity mismatch does: record status answers exit 0 with its session record and lab {status: unavailable, reason}, a step action refuses with record_lab_unavailable and that reason, record stop stops the session with no Lab output, and the file's bytes are left as they are
+[[gate]]
+key = "85"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_rc2_a10::a10_status_answers_an_undecodable_recording_as_unavailable_with_the_session_record",
+    "actingcommand-lab::lib::gate_rc2_a10::a10_step_and_stop_treat_an_undecodable_recording_as_unavailable_and_leave_it_unchanged",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a10::a10_record_status_with_an_undecodable_recording_exits_zero_with_its_record",
+]
+incident = ["#411 A10"]
+
+# Workflow #411 A9 (v0.12.1-rc.2; register §1.101; related keys 39 and 77): offline observe on a frame no page matches answers unknown in Min (page-projection.md, "No match yields state=unknown"); after every existing reduction its near-miss candidates, a transport member and not the identity, are removed from the end (the lowest score last) until the answer fits the hard limit, marked candidates_truncated with candidates_omitted_count; an answer that fits keeps every near miss unmarked, the Normal view (--verbose) keeps the whole list, and the CLI answers exit 0 instead of observe_identity_limit_exceeded
+[[gate]]
+key = "86"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_rc2_a9::a9_min_unknown_page_over_the_hard_limit_answers_unknown_with_its_near_misses_cut",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_rc2_a9::a9_min_unknown_page_within_the_limit_keeps_every_near_miss_unmarked",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_rc2_a9::a9_verbose_unknown_page_keeps_every_near_miss",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a9::a9_offline_observe_of_an_unknown_scene_exits_zero_in_min",
+]
+incident = ["#411 A9"]
+
+# Workflow #411 A12 part 1 (v0.12.1-rc.2; register §1.103; related: key 47): outside an install selection, the offline tools started from a single-location root (runtime\BUILD-MANIFEST.json two levels above the executable, no A/B slot folder) load the OCR provider over the vision root that <root>\actingd.config.json names; such a root without its configuration is config_read_failed, never lab_ocr_vision_unconfigured
+[[gate]]
+key = "87"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::ocr::gate_rc2_a12::a12_a_single_location_root_loads_the_vision_root_its_configuration_names",
+    "actingcommand-lab::lib::ocr::gate_rc2_a12::a12_a_single_location_root_without_its_configuration_is_config_read_failed",
+    "actingcommand-lab::lib::ocr::gate_rc2_a12::a12_only_a_root_with_a_build_manifest_that_is_no_slot_folder_is_a_single_location_root",
+]
+incident = ["#411 A12"]
+
+# #411 A15 (v0.12.1-rc.2; no register section, no persisted structure change): a page-graph step whose postcondition is not confirmed and whose operation decides to fail ends with contained_task_step_unconfirmed carrying pack_operation_id, page_ids (its destination pages), attempts and page_id, the page the last frame of the wait matched: the departure page after an ignored tap, the other page after a move elsewhere, no page_id when the last frame matched no page (the developer detail keeps after_page, the last frame that matched one); an observation window that ends without its destination names its last frame's page the same way
+[[gate]]
+key = "88"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_an_ignored_tap_names_the_departure_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_a_move_to_another_page_names_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_an_unrecognised_last_frame_names_no_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_a_window_end_without_its_destination_names_the_last_page",
+]
+incident = ["#411 A15"]
+
+# Workflow #411 A17 (v0.12.1-rc.2; no register section; related: exec 83, host 103): the admission refusal contained_task_entry_pages_invalid carries its required entry_problem as a value for every entry problem and, for phase_start_missing and phase_start_ambiguous, the entry page as admission resolved it (page_id); the developer detail names the page and, for an ambiguous start, the stages that start it in declaration order; the source build gives the same detail
+[[gate]]
+key = "89"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a17_a_phase_start_missing_refusal_names_its_entry_page",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a17_a_phase_start_ambiguous_refusal_names_its_entry_page_and_stages",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a17_every_entry_problem_is_a_value_of_the_refusal",
+    "actingcommand-pack-containment::lib::source::tests::a17_a_source_entry_set_refusal_names_the_page_and_its_stages",
+]
+incident = ["#411 A17"]

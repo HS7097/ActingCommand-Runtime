@@ -11,6 +11,7 @@
 // scripts. Every package is a source package directory of the game, server `test`, 16x9; one
 // click per step. The standard pack's packages sit in the game root's directories that its
 // `bundle.json` lists; a run's own package is requested by its path outside that root.
+// #411 A16 adds a yellow `home` screen.
 
 use super::*;
 use actingcommand_contract::outcome::Outcome;
@@ -24,6 +25,7 @@ pub(super) const AWAY: [u8; 3] = [255, 0, 0];
 pub(super) const MENU: [u8; 3] = [0, 0, 255];
 const SHOP: [u8; 3] = [0, 255, 0];
 const DONE: [u8; 3] = [255, 255, 255];
+const HOME: [u8; 3] = [255, 255, 0];
 
 const LEAD: &str = "neutral.test.lead";
 const LEAD_NEXT: &str = "neutral.test.lead_next";
@@ -69,6 +71,7 @@ fn probe(page: &str) -> Value {
         "menu" => MENU,
         "shop" => SHOP,
         "done" => DONE,
+        "home" => HOME,
         other => panic!("no screen {other}"),
     };
     json!({
@@ -929,4 +932,159 @@ fn n3a_9_a_game_root_whose_bundle_declares_the_prerequisite_use_refuses_the_run(
     assert!(admitted.succeeded(), "{:?}", admitted.receipt);
     assert_eq!(admitted.admitted(), vec![(LEAD.to_owned(), PREREQUISITE)]);
     assert_eq!(state.input_count.load(Ordering::Acquire), 2);
+}
+
+// ---- #411 A16: a return-home package that cannot end on the entry (host key 107).
+
+// The run's own package of the A16 tests: a page graph whose entry is the set {menu}, from
+// `menu` to `done`, declaring no prerequisite package; its request binds no recovery package.
+fn menu_entry_main() -> Pack<'static> {
+    Pack {
+        package_id: MAIN,
+        mode: "navigable_route",
+        prerequisite: None,
+        entry: json!(["menu"]),
+        target: "done",
+        operations: OPEN,
+    }
+}
+
+// #411 A16: the run starts away from its entry {menu}, so its home entry takes the registry's
+// return-home package, a page graph from `away` to `home`. `home` is not a page of the entry, so
+// the package cannot end on it and is refused before it runs: no input, no
+// `EntryRecoveryPackageAdmitted` and no `EntryRecoveryCompleted`; the fail-closed disposition and
+// the run's terminal carry `contained_task_home_recovery_terminal_outside_entry` with the entry
+// pages as the run recorded them (`page_ids`), the return-home package (`package_id`) and its
+// declared final page, resolved to its page (`page_id`).
+#[test]
+fn a16_the_registry_page_graph_return_home_that_cannot_end_on_the_entry_is_refused_before_it_runs()
+{
+    let state = Arc::new(FakeState::default());
+    screens(&state, vec![AWAY, HOME]);
+    let temp = TempDir::new().expect("tempdir");
+    let mut root = StandardRoot::new(temp.path());
+    route(
+        RETURN_HOME,
+        "away",
+        "home",
+        &[("back", "away", "home")],
+        None,
+    )
+    .write(&root.list(RETURN_HOME));
+    root.return_home(RETURN_HOME);
+    root.write_bundle();
+    let host = start(&temp, &state, Some(root.root.clone()));
+
+    let run = run(&host, &temp, "main", &menu_entry_main());
+    host.close().expect("close runtime host");
+
+    assert_eq!(
+        run.receipt.state(),
+        RuntimeReceiptState::Failed,
+        "{:?}",
+        run.receipt
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0, "no input");
+    assert!(run.admitted().is_empty(), "{:?}", run.admitted());
+    assert!(run.completed().is_empty(), "{:?}", run.completed());
+    let required_pages = run
+        .recognitions()
+        .into_iter()
+        .find_map(|(phase, required_pages, _)| {
+            (phase == TaskEntryRecognitionPhase::Initial).then_some(required_pages)
+        })
+        .expect("the initial entry recognition");
+    let expected = json!({
+        "page_ids": required_pages,
+        "page_id": "neutral/home",
+        "package_id": RETURN_HOME
+    });
+    let facts = run.facts();
+    let disposition = facts
+        .iter()
+        .find_map(|fact| match fact {
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::FailClosed,
+                outcome: Some(outcome),
+            } => Some(outcome),
+            _ => None,
+        })
+        .expect("the fail-closed disposition");
+    let terminal = facts
+        .iter()
+        .find_map(|fact| match fact {
+            TaskSemanticFact::TerminalCommitted {
+                outcome: Some(outcome),
+                ..
+            } => Some(outcome),
+            _ => None,
+        })
+        .expect("the terminal's outcome");
+    for (place, outcome) in [("disposition", disposition), ("terminal", terminal)] {
+        assert_eq!(
+            outcome.code().as_str(),
+            crate::codes::HostCode::ContainedTaskHomeRecoveryTerminalOutsideEntry.as_str(),
+            "{place}"
+        );
+        assert_eq!(
+            json!({
+                "page_ids": outcome.value("page_ids"),
+                "page_id": outcome.value("page_id"),
+                "package_id": outcome.value("package_id")
+            }),
+            expected,
+            "{place}: {outcome:?}"
+        );
+    }
+}
+
+// #411 A16 (requirement 3): the same entry {menu}, the registry's return-home package now a
+// `linear_steps` package (EXEC-I6's: its own pages `home`, the first pixel red as on `away`, and
+// `list`, blue as on `menu`). Its declared final page `list` is not a page of the entry, but the
+// registry's `linear_steps` return-home package is not compared: it is admitted and runs
+// (`role: return_home`), and the recheck decides; it finds `menu`, and the package runs from there.
+#[test]
+fn a16_the_registry_linear_return_home_is_still_run_and_rechecked() {
+    let state = Arc::new(FakeState::default());
+    screens(&state, vec![AWAY, MENU, DONE]);
+    let temp = TempDir::new().expect("tempdir");
+    let mut root = StandardRoot::new(temp.path());
+    super::gate_e4::exec_i6::write_pack(
+        &root.list(RETURN_HOME),
+        &super::gate_e4::exec_i6::I6Pack {
+            package_id: RETURN_HOME,
+            prerequisite: None,
+            resolution: super::gate_e4::exec_i6::RESOLUTION,
+        },
+    );
+    root.return_home(RETURN_HOME);
+    root.write_bundle();
+    let host = start(&temp, &state, Some(root.root.clone()));
+
+    let run = run(&host, &temp, "main", &menu_entry_main());
+    host.close().expect("close runtime host");
+
+    assert!(run.succeeded(), "{:?}", run.receipt);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 2);
+    assert_eq!(
+        run.admitted(),
+        vec![(RETURN_HOME.to_owned(), RETURN_HOME_ROLE)]
+    );
+    assert_eq!(
+        run.completed(),
+        vec![(
+            RETURN_HOME.to_owned(),
+            "neutral/list".to_owned(),
+            RETURN_HOME_ROLE
+        )]
+    );
+    let recognitions = run.recognitions();
+    assert!(
+        recognitions.contains(&(
+            TaskEntryRecognitionPhase::PostRecovery,
+            vec!["neutral/menu".to_owned()],
+            Some("neutral/menu".to_owned())
+        )),
+        "{recognitions:?}"
+    );
 }

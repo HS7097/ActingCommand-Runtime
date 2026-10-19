@@ -343,6 +343,8 @@ impl PreparedContainedTask {
         let consensus = !self.evaluator.pack().target_consensus.is_empty();
         let started = runtime.observation_now();
         let mut end = started + Duration::from_millis(window.window_ms());
+        // #411 A15: the page the last frame matched, none when it matched no page.
+        let mut last_frame_page = Some(arrived.page_label.clone());
         let mut current = arrived;
         // Whether the latest frame showed a destination (`current`), and on how many consecutive
         // frames `current`'s page passed.
@@ -381,6 +383,7 @@ impl PreparedContainedTask {
                         };
                         return Ok(PostconditionResolution::Failed {
                             observation: None,
+                            last_frame_page,
                             hit_error_page: false,
                             timing_failure: Some(TaskTimingFailure {
                                 scope: TaskTimingScope::Postcondition,
@@ -442,6 +445,7 @@ impl PreparedContainedTask {
             }
             let scene = match observed {
                 Ok(observation) => {
+                    last_frame_page = Some(observation.page_label.clone());
                     let destinations =
                         operation.matching_destination_count(&self.control, &observation)?;
                     let error_page = self
@@ -457,6 +461,7 @@ impl PreparedContainedTask {
                     if error_page {
                         return Ok(PostconditionResolution::Failed {
                             observation: Some(observation),
+                            last_frame_page,
                             hit_error_page: true,
                             timing_failure: None,
                         });
@@ -475,7 +480,10 @@ impl PreparedContainedTask {
                     }
                     observation.scene
                 }
-                Err(scene) => scene,
+                Err(scene) => {
+                    last_frame_page = None;
+                    scene
+                }
             };
             latest = false;
             held = 0;
