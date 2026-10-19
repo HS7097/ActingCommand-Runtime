@@ -20,6 +20,10 @@
 //! Workflow #386 SR-3 adds `packs`: the task packages the latest daemon start suspended and has
 //! not lifted, from the copies of its evaluation (`goal_missed` planning signals whose
 //! `signal_id` starts with `signal:pack_admission:`), with their content hash now.
+//!
+//! Workflow #411 B15 R7 adds `remedies`: the stopped remedy rounds (`goal_missed` planning
+//! signals whose `signal_id` starts with `signal:remedy:stopped:`) still in effect or lifted
+//! within 48 h of the ledger's latest event, each with its lift when one was recorded.
 
 use crate::RuntimeHostConfig;
 use crate::codes::{HostCode, HostLocation, SchedulingRuleHostCode};
@@ -30,7 +34,9 @@ use crate::failure_identity::{
 use crate::suspension_lift::{LiftCheckTime, LiftChecks, PausedPackages, SuspensionLiftView};
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
+use actingcommand_contract::outcome::{
+    CauseRelation, Code, CodeStr, Location, Outcome, RemedyProblem, RemedySource,
+};
 use actingcommand_contract::{
     CONFIG_SUBSYSTEMS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType,
     PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
@@ -42,7 +48,7 @@ use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, LedgerArtifactReference,
     PersistedEvent,
 };
-use actingcommand_policy::{CatalogSources, CompiledCatalog, compile_catalog};
+use actingcommand_policy::{CatalogSources, CompiledCatalog, PolicyCode, compile_catalog};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,6 +65,12 @@ const CLOCK_SLOT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
 const CLOCK_SLOT_LIMIT: usize = 200;
 /// The `signal_id` prefix of a clock-slot record (#372 K2).
 const CLOCK_SLOT_SIGNAL_PREFIX: &str = "signal:clock_slot:";
+/// Workflow #411 B15 R7: `remedies` keeps a lifted stop while its lift is within this span of
+/// the ledger's latest event; a stop in effect is kept whatever its age.
+const REMEDY_LIFT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
+/// `remedies` keeps at most this many entries, newest first; `remedies_total` then counts them
+/// all.
+const REMEDY_LIMIT: usize = 200;
 
 /// What `actingd suspended` reads: the loaded configuration and when its file last changed.
 pub struct SuspensionReportRequest<'a> {
@@ -625,6 +637,7 @@ pub fn suspension_report(
     }
     let (clock_slots, clock_slots_total) = clock_slots(&snapshot, &compiled)?;
     let packs = packs(&snapshot, &view, &procedure_refs, daemon_started_at_unix_ms)?;
+    let (remedies, remedies_total) = remedies(&snapshot)?;
     let mut report = json!({
         "schema_version": SCHEMA_VERSION,
         "config_path": request.config_path.to_string_lossy(),
@@ -637,9 +650,13 @@ pub fn suspension_report(
         "warnings": warnings,
         "clock_slots": clock_slots,
         "packs": packs,
+        "remedies": remedies,
     });
     if let Some(total) = clock_slots_total {
         report["clock_slots_total"] = json!(total);
+    }
+    if let Some(total) = remedies_total {
+        report["remedies_total"] = json!(total);
     }
     Ok(report)
 }
@@ -1141,4 +1158,170 @@ fn clock_slots(
     let total = entries.len();
     entries.truncate(CLOCK_SLOT_LIMIT);
     Ok((entries, (total > CLOCK_SLOT_LIMIT).then_some(total)))
+}
+
+/// Workflow #411 B15 R7: the later `signal:remedy:lifted:` record of a stop's round, where the
+/// ledger holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct RemedyLift {
+    sequence: u64,
+    at_unix_ms: u64,
+}
+
+/// One `remedies` entry of a stop whose outcome reads back.
+#[derive(Serialize)]
+struct RemedyEntry<'a> {
+    code: &'a CodeStr,
+    remedy_problem: &'a str,
+    task_id: &'a str,
+    instance_id: &'a str,
+    outcome_key: &'a str,
+    need: &'a str,
+    recorded_sequence: u64,
+    recorded_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lifted: Option<RemedyLift>,
+}
+
+/// The text values every stop code's outcome requires (`contracts/remedies.md` section 12).
+const REMEDY_STOP_TEXT: [&str; 7] = [
+    "task_id",
+    "instance_id",
+    "decision_id",
+    "outcome_key",
+    "need",
+    "remedy_problem",
+    "remedy_inputs_digest",
+];
+/// The text values a stop code's outcome may hold.
+const REMEDY_STOP_OPTIONAL_TEXT: [&str; 2] = ["remedy_source", "capability"];
+/// The integer values `policy_remedy_exhausted` also requires.
+const REMEDY_EXHAUSTED_COUNTS: [&str; 3] = ["count", "limit_count", "remedy_depth"];
+
+/// The stop's `remedy_problem`, `outcome_key` and `need`, read back from its outcome (model-b15
+/// §7.5, §11): `None` when the code is not one of the three stop codes, when a value is not one
+/// the code holds or has the wrong type (`remedy_problem` and `remedy_source` are tokens of their
+/// vocabularies), or when a value the code requires is absent.
+fn remedy_stop(outcome: &Outcome) -> Option<(&str, &str, &str)> {
+    let exhausted = outcome.is(PolicyCode::PolicyRemedyExhausted);
+    if !exhausted
+        && !outcome.is(PolicyCode::PolicyRemedyUnchosen)
+        && !outcome.is(PolicyCode::PolicyRemedyUnavailable)
+    {
+        return None;
+    }
+    let counts: &[&str] = if exhausted {
+        &REMEDY_EXHAUSTED_COUNTS
+    } else {
+        &[]
+    };
+    let values = outcome.values();
+    let held = |key: &str| {
+        REMEDY_STOP_TEXT.contains(&key)
+            || REMEDY_STOP_OPTIONAL_TEXT.contains(&key)
+            || counts.contains(&key)
+    };
+    let text = |key: &str| values.get(key).and_then(Value::as_str);
+    if !values.keys().all(|key| held(key.as_str()))
+        || REMEDY_STOP_TEXT.iter().any(|key| text(*key).is_none())
+        || REMEDY_STOP_OPTIONAL_TEXT
+            .iter()
+            .any(|key| values.get(*key).is_some_and(|value| !value.is_string()))
+        || counts
+            .iter()
+            .any(|key| values.get(*key).and_then(Value::as_u64).is_none())
+    {
+        return None;
+    }
+    let remedy_problem = text("remedy_problem")?;
+    let known_source = text("remedy_source").is_none_or(|source| {
+        RemedySource::ALL
+            .iter()
+            .any(|known| known.as_str() == source)
+    });
+    (known_source
+        && RemedyProblem::ALL
+            .iter()
+            .any(|problem| problem.as_str() == remedy_problem))
+    .then_some((remedy_problem, text("outcome_key")?, text("need")?))
+}
+
+/// Workflow #411 B15 R7 (`contracts/policy-suspension.md`, `remedies`; model-b15 §7.5, §7.6): the
+/// stopped remedy rounds, newest first and at most 200, and how many there are when the list is
+/// cut. A stop is a `signal:remedy:stopped:<hex>` record; a later `signal:remedy:lifted:<hex>`
+/// record of the same round lifts it. A stop in effect is listed whatever its age, a lifted one
+/// while its lift is within 48 h of the ledger's latest event. Records are selected by their kind
+/// and their `signal_id` prefix, never by their outcome; a stop whose outcome does not read back,
+/// or that names no task, is an unparsed entry and adds no warning.
+fn remedies(snapshot: &Snapshot<'_>) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
+    let Some(reference_unix_ms) = snapshot
+        .ledger
+        .events()
+        .last()
+        .map(PersistedEvent::timestamp_unix_ms)
+    else {
+        return Ok((Vec::new(), None));
+    };
+    let events = snapshot.query(EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        ..EventQuery::default()
+    })?;
+    let mut stops = Vec::new();
+    let mut lifts = BTreeMap::<&str, Vec<RemedyLift>>::new();
+    for event in &events {
+        let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) = event.payload()
+        else {
+            continue;
+        };
+        if payload.kind() != PolicyPlanningSignalKind::GoalMissed {
+            continue;
+        }
+        let Some(rest) = payload
+            .signal_id()
+            .strip_prefix(crate::remedy::SIGNAL_PREFIX)
+        else {
+            continue;
+        };
+        if let Some(round) = rest.strip_prefix("stopped:") {
+            stops.push((event, payload, round));
+        } else if let Some(round) = rest.strip_prefix("lifted:") {
+            lifts.entry(round).or_default().push(RemedyLift {
+                sequence: event.sequence(),
+                at_unix_ms: event.timestamp_unix_ms(),
+            });
+        }
+    }
+    let oldest_lift_unix_ms = reference_unix_ms.saturating_sub(REMEDY_LIFT_WINDOW_MS);
+    let mut entries = Vec::new();
+    for (event, payload, round) in stops.iter().rev() {
+        let lifted = lifts
+            .get(round)
+            .and_then(|lifts| lifts.iter().find(|lift| lift.sequence > event.sequence()))
+            .copied();
+        if lifted.is_some_and(|lift| lift.at_unix_ms < oldest_lift_unix_ms) {
+            continue;
+        }
+        let outcome = payload.outcome();
+        entries.push(match (payload.task_id(), remedy_stop(outcome)) {
+            (Some(task_id), Some((remedy_problem, outcome_key, need))) => wire(&RemedyEntry {
+                code: outcome.code(),
+                remedy_problem,
+                task_id,
+                instance_id: payload.instance_id(),
+                outcome_key,
+                need,
+                recorded_sequence: event.sequence(),
+                recorded_at_unix_ms: event.timestamp_unix_ms(),
+                lifted,
+            }),
+            _ => wire(&UnparsedClockSlot {
+                parse_state: ParseState::Unparsed,
+                signal_id: payload.signal_id(),
+                code: outcome.code(),
+            }),
+        });
+    }
+    let total = entries.len();
+    entries.truncate(REMEDY_LIMIT);
+    Ok((entries, (total > REMEDY_LIMIT).then_some(total)))
 }

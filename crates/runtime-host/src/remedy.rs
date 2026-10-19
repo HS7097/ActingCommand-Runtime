@@ -417,6 +417,167 @@ fn covers(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {
     }
 }
 
+/// Workflow #411 B15 R7: one configuration list of remedy choice rows check-config compares with
+/// the table (model-b15 §5.2): the section's (`scheduling.remedy.choices`, no `instance_id`) or
+/// an instance's own (`instance.<instance id>.scheduling.remedy.choices`), by its registry id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemedyChoiceList {
+    pub instance_id: Option<String>,
+    pub rows: Vec<actingcommand_runtime_config::RemedyChoiceRow>,
+}
+
+/// Workflow #411 B15 R7: one check-config note `policy_remedy_declaration_unusable`, and for a
+/// configuration row the developer detail that names the row and its list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemedyDeclarationNote {
+    pub outcome: Outcome,
+    pub detail: Option<String>,
+}
+
+/// Workflow #411 B15 R7 (model-b15 §9.1, §13; `contracts/remedies.md` section 10): what
+/// `actingd check-config` notes about declared remedies. R4's table is built offline over the
+/// catalog of `catalog` and the package locations of `config`'s procedure manifest, for the
+/// instances of its policy inputs; each finding (`capability_unbound`, `cycle`,
+/// `parameters_mismatch`) is one note naming its task, outcome key, need, capability, instance
+/// and package. Then each row of `lists` whose names the bound packages do not declare is one
+/// note: an `allow` or `none` row whose need no bound remedy declares, or an `allow` row whose
+/// capability that need's remedies do not list (`choice_invalid`); a `parameter` row whose
+/// capability no bound provider declares, whose parameter that capability does not declare, or
+/// whose value is not one of its options (`parameter_invalid`); a per-instance list's notes name
+/// its `instance_id`. Nothing is written. A catalog that does not compile gives no note: the
+/// check's catalog preview refuses it.
+pub fn remedy_declaration_notes(
+    config: &crate::RuntimeHostConfig,
+    catalog: &actingcommand_policy::CatalogSources,
+    lists: &[RemedyChoiceList],
+) -> Vec<RemedyDeclarationNote> {
+    let Ok(compiled) = actingcommand_policy::compile_catalog(catalog) else {
+        return Vec::new();
+    };
+    let instances = config
+        .policy_inputs()
+        .map_or(&[][..], |inputs| inputs.facts().instances.as_slice());
+    let built = build_table(&compiled, config.procedure_manifest(), instances, 0);
+    let mut notes = built
+        .findings
+        .iter()
+        .map(|finding| {
+            let mut outcome = Outcome::new(RemedyHostCode::PolicyRemedyDeclarationUnusable)
+                .remedy_problem(finding.problem)
+                .task_id(finding.task_id.as_str())
+                .outcome_key(finding.outcome_key.as_str())
+                .need(finding.need.as_str());
+            if let Some(capability) = &finding.capability {
+                outcome = outcome.capability(capability.as_str());
+            }
+            if let Some(instance_id) = &finding.instance_id {
+                outcome = outcome.instance_id(instance_id.as_str());
+            }
+            if let Some(package_id) = &finding.package_id {
+                outcome = outcome.package_id(package_id.as_str());
+            }
+            RemedyDeclarationNote {
+                outcome,
+                detail: None,
+            }
+        })
+        .collect::<Vec<_>>();
+    for list in lists {
+        let config_key = list.instance_id.as_deref().map_or_else(
+            || actingcommand_runtime_config::scheduling::REMEDY_CHOICES.to_owned(),
+            |instance_id| {
+                actingcommand_runtime_config::instance_key(
+                    instance_id,
+                    actingcommand_runtime_config::scheduling::REMEDY_CHOICES,
+                )
+            },
+        );
+        for row in &list.rows {
+            let Some((outcome, named)) = unusable_row(&built.table, row) else {
+                continue;
+            };
+            let outcome = match &list.instance_id {
+                Some(instance_id) => outcome.instance_id(instance_id.as_str()),
+                None => outcome,
+            };
+            notes.push(RemedyDeclarationNote {
+                outcome,
+                detail: Some(format!("config_key={config_key} {named}")),
+            });
+        }
+    }
+    notes
+}
+
+/// A configuration row whose names the table does not declare, as its note (without the list's
+/// instance) and the row as developer text; `None` for a row the table declares.
+fn unusable_row(
+    table: &RemedyTable,
+    row: &actingcommand_runtime_config::RemedyChoiceRow,
+) -> Option<(Outcome, String)> {
+    use actingcommand_runtime_config::RemedyChoiceRow as ConfigRow;
+    let note = || Outcome::new(RemedyHostCode::PolicyRemedyDeclarationUnusable);
+    let declared_need = |need: &str| table.remedies.iter().any(|remedy| remedy.need == need);
+    match row {
+        ConfigRow::Allow { need, capability } => {
+            let named = format!("row=allow need={need} capability={capability}");
+            if !declared_need(need) {
+                Some((
+                    note()
+                        .remedy_problem(RemedyProblem::ChoiceInvalid)
+                        .need(need.as_str()),
+                    named,
+                ))
+            } else if !table
+                .remedies
+                .iter()
+                .any(|remedy| remedy.need == *need && remedy.capabilities.contains(capability))
+            {
+                Some((
+                    note()
+                        .remedy_problem(RemedyProblem::ChoiceInvalid)
+                        .need(need.as_str())
+                        .capability(capability.as_str()),
+                    named,
+                ))
+            } else {
+                None
+            }
+        }
+        ConfigRow::NoRemedy { need } => (!declared_need(need)).then(|| {
+            (
+                note()
+                    .remedy_problem(RemedyProblem::ChoiceInvalid)
+                    .need(need.as_str()),
+                format!("row=none need={need}"),
+            )
+        }),
+        ConfigRow::Parameter {
+            capability,
+            parameter,
+            value,
+        } => {
+            let declared = table
+                .providers
+                .iter()
+                .flat_map(|provider| &provider.provides)
+                .filter(|provided| provided.capability == *capability)
+                .flat_map(|provided| &provided.parameters)
+                .any(|declared| declared.name == *parameter && declared.options.contains(value));
+            (!declared).then(|| {
+                (
+                    note()
+                        .remedy_problem(RemedyProblem::ParameterInvalid)
+                        .capability(capability.as_str()),
+                    format!(
+                        "row=parameter capability={capability} parameter={parameter} value={value}"
+                    ),
+                )
+            })
+        }
+    }
+}
+
 /// One admitted run of a task that declares a remedy, as the start reads its terminal's key
 /// (model §7.8): newest first per pair, until its latest root blocked run.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -313,6 +313,7 @@ pub(crate) fn read(
         repeating: report.repeating,
         suspended: report.suspended,
         packs: report.packs,
+        remedies: report.remedies,
         lift: report.lift,
         report_warnings: report.warnings,
         report_status: report.status,
@@ -765,6 +766,9 @@ pub(crate) struct Diagnosis {
     /// Workflow #386 SR-3: the report's suspended task packages that defer the instance's pairs
     /// (every one without an instance).
     pub(crate) packs: Vec<Value>,
+    /// Workflow #411 B15 R7: the report's stopped remedy rounds of the instance (every one
+    /// without an instance).
+    pub(crate) remedies: Vec<Value>,
     pub(crate) lift: Vec<Value>,
     pub(crate) report_warnings: Vec<Value>,
     /// The report status's data members: `{status, …}`.
@@ -791,6 +795,7 @@ pub(crate) struct Kept {
     pub(crate) repeating: usize,
     pub(crate) suspended: usize,
     pub(crate) packs: usize,
+    pub(crate) remedies: usize,
     pub(crate) lift: usize,
     pub(crate) report_warnings: usize,
     pub(crate) clock_slots: usize,
@@ -807,6 +812,7 @@ impl Diagnosis {
             repeating: self.repeating.len(),
             suspended: self.suspended.len(),
             packs: self.packs.len(),
+            remedies: self.remedies.len(),
             lift: self.lift.len(),
             report_warnings: self.report_warnings.len(),
             clock_slots: self.clock_slots.len(),
@@ -833,6 +839,7 @@ impl Diagnosis {
         result.insert("errors_page".to_owned(), errors_page);
         list_into(&mut result, "suspended", &self.suspended, kept.suspended);
         list_into(&mut result, "packs", &self.packs, kept.packs);
+        list_into(&mut result, "remedies", &self.remedies, kept.remedies);
         list_into(&mut result, "lift", &self.lift, kept.lift);
         list_into(&mut result, "repeating", &self.repeating, kept.repeating);
         list_into(
@@ -937,6 +944,7 @@ struct SuspensionRows {
     complete: bool,
     suspended: Vec<Value>,
     packs: Vec<Value>,
+    remedies: Vec<Value>,
     lift: Vec<Value>,
     repeating: Vec<Value>,
     warnings: Vec<Value>,
@@ -954,6 +962,7 @@ impl SuspensionRows {
             complete: false,
             suspended: Vec::new(),
             packs: Vec::new(),
+            remedies: Vec::new(),
             lift: Vec::new(),
             repeating: Vec::new(),
             warnings: Vec::new(),
@@ -1048,6 +1057,22 @@ pub(crate) fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> V
                             })
                     })
                 })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Workflow #411 B15 R7: the report's `remedies` rows of the instance (its alias or its
+/// instance id is the row's `instance_id`), or every row when no instance is diagnosed. An
+/// unparsed row names no instance and is kept only without one.
+pub(crate) fn remedy_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
+    document
+        .get("remedies")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| of_instance(row, instance))
                 .cloned()
                 .collect()
         })
@@ -1214,6 +1239,7 @@ impl SuspensionReport {
                     complete: true,
                     suspended: rows("suspended"),
                     packs: pack_rows(&document, instance),
+                    remedies: remedy_rows(&document, instance),
                     lift: rows("lifted"),
                     repeating: rows("repeating"),
                     warnings: document

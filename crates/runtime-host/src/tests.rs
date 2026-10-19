@@ -256,6 +256,9 @@ mod gate_411_b15h;
 // Workflow #411 B15 R1 (host key 119): kernel admission by path and the metadata reader of the
 // remedy declarations take a package that provides capabilities with parameters.
 mod gate_411_b15p_host;
+// Workflow #411 B15 R7 (host key 116), register §1.117: `actingd suspended` lists the stopped
+// remedy rounds; check-config notes the remedies that cannot be used.
+mod gate_411_b15w2;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;

@@ -49,6 +49,8 @@ mod recovery_read;
 mod recovery_timing;
 // Workflow #411 B15 R4: the host's side of declared remedies.
 mod remedy;
+// Workflow #411 B15 R7: what `actingd check-config` notes about declared remedies.
+pub use remedy::{RemedyChoiceList, RemedyDeclarationNote, remedy_declaration_notes};
 // Workflow #384 D2-S3.
 mod resource_adjustment;
 mod strategy;

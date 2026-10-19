@@ -746,3 +746,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_tool_schemas_drop_the_removed_arguments",
 ]
 incident = ["#411 Lab L1"]
+
+# Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-2; no persisted ledger shape; contracts/policy-suspension.md `remedies`; key assigned by the coordinator; the report half is host 116): MCP ac_diagnose (and actingctl diagnose) carries the remedies rows of actingd suspended whose instance_id is the diagnosed instance's alias or id (every row without an instance; an unparsed row names no instance), verbatim, cut for the output budget after packs and before report_warnings, and its description names the list
+[[gate]]
+key = "75"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_b15w2::b15w2_ac_diagnose_shows_the_instances_stopped_remedies",
+]
+incident = ["#411 B15"]
