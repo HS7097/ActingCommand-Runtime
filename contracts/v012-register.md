@@ -1764,6 +1764,19 @@ the text of `lab_ocr_unavailable` and `lab_ocr_vision_unconfigured` (entries, no
 |---|---|---|---|---|---|
 | A12-1 | the configuration the offline tools' OCR loader reads on a single-location root | rule (no shape change) | A12 | A12 (exec 87) | an A/B installation's selected configuration and a refused installation are unchanged; a single-location root's configuration that is missing, unreadable, no regular file or over 1 MiB is `config_read_failed`, one that does not decode `config_decode_failed`, each the cause of `lab_ocr_unavailable` and never `lab_ocr_vision_unconfigured` (coordinator decision 6 of 2026-10-19); outside both an installation and a single-location root the cause stays `lab_ocr_vision_unconfigured` |
 
+### 1.105 Slice A16 (v0.12.1): an entry recovery package that cannot end on the entry is refused before it runs (#411 A16)
+
+NAV-3b's rule (A1) is unchanged: an entry recovery package must end on a page of the required
+entry set, and the registry's `linear_steps` return-home package is not compared. A16 decides the
+case that is certain before the package runs. [README.md](README.md) (entry page sets) and
+[linear-steps.md](linear-steps.md) ("Ladder and page-graph home entry") are the contract. No
+record type, ledger member, key, configuration key or wire shape changes; which runs go to entry
+recovery is unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A16-1 | `contained_task_home_recovery_terminal_outside_entry` (`error`, `ladder_class` `pack_logic_mismatch`, `since` 0.12.1, pending) with `page_ids` (required), `package_id` (required), `page_id` (optional) | new outcome code and an earlier refusal (host 107) | A16 | A16 | after the recovery package's existing checks and before `EntryRecoveryPackageAdmitted`: when none of the package's declared final pages (its `target_page` or target page set, resolved to its pages) is a page of the required entry set, the run fails closed with no input, no `EntryRecoveryPackageAdmitted` and no `EntryRecoveryCompleted`; the fail-closed `entry_target_disposition`, the terminal and the receipt carry the values (`page_ids` the required entry pages as recorded, `package_id` the recovery package, `page_id` its declared final page when it declares exactly one); the registry's `linear_steps` return-home package is not compared and still runs to the recheck; a package with a declared final page in the set runs as before and A1's `contained_task_home_recovery_terminal_non_home` still fails it when it ends elsewhere; the class is the one this case gave until now (A1's code) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

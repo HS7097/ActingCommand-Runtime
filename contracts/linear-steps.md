@@ -618,7 +618,10 @@ entry needs it closes the entry with the root's own code (`standard_pack_root_in
 `standard_pack_root_unreadable`); on the ladder it is recorded (`runtime.lifecycle_observed`,
 phase `standard_pack_read`) and the rung has no package (`no_recovery_package`). In the home entry, a page-graph package's final page must still be a
 page of the required entry, while a `linear_steps` package's final page (a Lab page id such as
-`<game>/step_03_home`) is not compared, and only the recheck decides. With a request binding both
+`<game>/step_03_home`) is not compared, and only the recheck decides. A page-graph package whose
+declared final pages hold no page of the required entry is refused before it runs, with no input
+and no `EntryRecoveryPackageAdmitted`, as `contained_task_home_recovery_terminal_outside_entry`
+(Workflow #411 A16); the `linear_steps` package is not compared there either. With a request binding both
 places behave exactly as before; with neither, the rung is skipped (`no_recovery_package`) and
 the home entry fails with `contained_task_home_recovery_binding_missing`.
 

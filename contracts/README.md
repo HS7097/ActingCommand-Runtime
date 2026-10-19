@@ -267,6 +267,11 @@ one fails with `contained_task_recognition_conflict` before any input. An entry
 recovery package must end on a page of the set; otherwise the run fails with
 `contained_task_home_recovery_terminal_non_home` naming the set's pages (`page_ids`),
 the page the recovery package ended on (`page_id`) and that package (`package_id`).
+A recovery package whose declared final pages hold no page of the set is refused
+before it runs, with no input and no `EntryRecoveryPackageAdmitted`, as
+`contained_task_home_recovery_terminal_outside_entry` with the same values (`page_id`
+its declared final page when it declares one; Workflow #411 A16); the registry's
+`linear_steps` return-home package is not compared.
 The recheck accepts any page of the set. In a phased task each page of the set
 starts the one stage that lists an operation whose `from` is that page, and the run
 enters at the stage of the page it

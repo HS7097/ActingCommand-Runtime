@@ -3963,6 +3963,29 @@
       "common_causes": "The recovery package ends on a page that is not one of the target's entry pages, for example a return-to-home package bound to a target whose entry is another page.",
       "handling": "Bind a recovery package that ends on one of the entry pages named by page_ids, or add the page named by page_id to the target's entry page set."
     },
+    "contained_task_home_recovery_terminal_outside_entry": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "package_id": "required",
+        "page_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.1",
+      "description": "The run's entry did not match and its entry recovery package declares no final page in the run's required entry set, so the recovery is refused before it runs: no input is sent (Workflow #411 A16). page_ids are the required entry pages as the run recorded them, package_id the recovery package, page_id its declared final page when it declares one. The registry's linear_steps return-home package is not compared. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt.",
+      "common_causes": "A return-to-home package bound to, or registered for, a target whose entry is another page; an entry set that leaves out the page the recovery package ends on.",
+      "handling": "Bind a recovery package that ends on one of the entry pages, add its final page to the entry set, or start the run on its entry."
+    },
     "contained_task_identity_missing": {
       "category": "error",
       "ladder_class": "none",
