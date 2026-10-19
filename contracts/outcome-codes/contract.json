@@ -15718,9 +15718,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): lab arrival timeout.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A Lab action with an arrival condition (online `do --capture --after-page`) performed its input, but no frame sampled after it matched the requested page before the condition's timeout or the 20-frame sample budget ran out. The input's effect stands. actinglab answers it with this code (exit 3); its details are the operation's answer, with the arrival's status, elapsed time and samples last.",
+      "common_causes": "The screen had not reached the page within the timeout (a slow transition, a loading screen, an animation); the action led to another page or to a pop-up the package does not declare; the requested page's rules do not match the screen as it looks.",
+      "handling": "Read the details: after_attachment shows the last sampled frame and arrival the samples. Observe the current page before acting again: the action was performed, so do not repeat it blindly. Raise the timeout (at most 10000 ms) for a slow transition, or correct the page's rules when the screen is that page."
     },
     "limit_exceeded": {
       "category": "error",

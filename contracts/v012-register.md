@@ -1777,6 +1777,21 @@ recovery is unchanged.
 |---|---|---|---|---|---|
 | A16-1 | `contained_task_home_recovery_terminal_outside_entry` (`error`, `ladder_class` `pack_logic_mismatch`, `since` 0.12.1, pending) with `page_ids` (required), `package_id` (required), `page_id` (optional) | new outcome code and an earlier refusal (host 107) | A16 | A16 | after the recovery package's existing checks and before `EntryRecoveryPackageAdmitted`: when none of the package's declared final pages (its `target_page` or target page set, resolved to its pages) is a page of the required entry set, the run fails closed with no input, no `EntryRecoveryPackageAdmitted` and no `EntryRecoveryCompleted`; the fail-closed `entry_target_disposition`, the terminal and the receipt carry the values (`page_ids` the required entry pages as recorded, `package_id` the recovery package, `page_id` its declared final page when it declares exactly one); the registry's `linear_steps` return-home package is not compared and still runs to the recheck; a package with a declared final page in the set runs as before and A1's `contained_task_home_recovery_terminal_non_home` still fails it when it ends elsewhere; the class is the one this case gave until now (A1's code) |
 
+### 1.109 Slice A19 (v0.12.2): a timed-out arrival wait answers "not reached" in its own code; a cut takes samples only (#411 A19)
+
+actinglab answers an online `do --capture --after-page` whose arrival wait times out as it
+answers a navigation step whose page did not arrive: `lab_arrival_timeout`, exit 3, instead of
+`device_error`, exit 4. The call stays a failure with a nonzero CLI result
+([contained-lab-operation.md](contained-lab-operation.md), "Timeout and abort … produce a failed
+receipt and nonzero CLI result"). No code, key, wire, ledger, configuration or interface
+revision (§6) changes; the catalog change is the text of the pending `lab_arrival_timeout`. Every
+other failed record, and the `--record` path's handling of a failure, keep their answers.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A19-1 | online `do --capture --after-page` whose wait times out → CLI error `lab_arrival_timeout`, exit 3, `blocked_by: [arrival_page]`, details unchanged; MCP `ac_lab_do` class `safety`, `lab_tool_failed {exit_code: 3}` caused by `lab_arrival_timeout` | changed answer (was `device_error`, exit 4; MCP class `device`) (exec 93) | A19 | A19 | chosen by the failure's stage `arrival` and code `lab_arrival_timeout`; the details are the operation's answer as before, `after_attachment` included; `lab_element_unavailable` stays `capability_insufficient` (exit 3) and any other failure `device_error` (exit 4); a script that tests exit 4 on a timeout reads exit 3 |
+| A19-2 | every online `do` answer has `arrival` as its last member | member order (no member added or removed) (exec 93) | A19 | A19 | success and failure, Min and Normal: `arrival` moves after `after_attachment` (and after `record` on a `--record` answer); its own members stay `status`, `elapsed_ms`, `samples`; every other member keeps its order and value; so a reader that cuts the text, such as MCP's `raw_text` (4096 bytes), keeps `state`, `failure`, `after_attachment` and the arrival's status and elapsed time, and loses samples only |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

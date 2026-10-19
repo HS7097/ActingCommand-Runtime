@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::codes::{RuntimeContractCode, SharedCode};
 use actingcommand_contract::{
-    ContainedLabOperationRequest, LabArrivalCondition, LabOperationSelection, LabProjectionHint,
+    ContainedLabOperationRequest, LabArrivalCondition, LabOperationFailure, LabOperationSelection,
+    LabOperationStage, LabProjectionHint,
 };
 use actingcommand_lab::{
     ClickEffect, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest, PlannedSwipe,
@@ -170,6 +172,8 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         )? {
             projected["after_attachment"] = attachment;
         }
+        // #411 A19: in every answer and every failure's details, `arrival` is the last member.
+        let projected = arrival_last(projected);
         if let Some((lock, plan)) = &recording {
             if !matches!(record.effect, EffectDisposition::NotPerformed) {
                 return commit_record_click(lock, plan, record, &payload, projected);
@@ -183,24 +187,56 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
             }
         }
         if let Some(failure) = &record.failure {
-            let error = if failure.code == "lab_element_unavailable" {
-                CliError::safety_blocked(
-                    "capability_insufficient",
-                    "the selected element is not resolvable in the current Runtime projection",
-                    &[],
-                )
-            } else {
-                CliError::device(format!(
-                    "contained Lab operation failed at {:?}: {}",
-                    failure.stage, failure.code
-                ))
-            };
-            return Err(error.with_details(projected));
+            return Err(operation_failure_error(failure, projected));
         }
         Ok(projected)
     })();
+    // #411 A19: `arrival` stays the last member when a `--record` answer gains its `record`.
+    let result = result.map(arrival_last);
     // The logical publication's generation stays referenced throughout the RPC and validation.
     super::super::contained_resources::finish_package_use(result, reader.close())
+}
+
+/// #411 A19: the error a failed online `do` answers, its details the operation's answer. A timed
+/// out arrival is "the page did not arrive", as a navigation step whose page did not arrive
+/// answers it: `lab_arrival_timeout`, exit 3, blocked by the arrival page
+/// (contained-lab-operation.md). An unresolvable element stays `capability_insufficient`, and any
+/// other failure a device error.
+fn operation_failure_error(failure: &LabOperationFailure, details: Value) -> CliError {
+    let error = if failure.stage == LabOperationStage::Arrival
+        && failure.code == SharedCode::LabArrivalTimeout.as_str()
+    {
+        CliError::safety_blocked(
+            SharedCode::LabArrivalTimeout.as_str(),
+            "the action was performed, but no frame sampled after it matched the requested page \
+             before the arrival condition ended",
+            &["arrival_page"],
+        )
+    } else if failure.code == RuntimeContractCode::LabElementUnavailable.as_str() {
+        CliError::safety_blocked(
+            "capability_insufficient",
+            "the selected element is not resolvable in the current Runtime projection",
+            &[],
+        )
+    } else {
+        CliError::device(format!(
+            "contained Lab operation failed at {:?}: {}",
+            failure.stage, failure.code
+        ))
+    };
+    error.with_details(details)
+}
+
+/// #411 A19: an online `do` answer with its `arrival` as the last member, every other member in
+/// its order and every value unchanged, so a reader that cuts the text (MCP's `raw_text`) loses
+/// the arrival's samples first. An answer without `arrival` is returned as it is.
+fn arrival_last(mut answer: Value) -> Value {
+    if let Some(object) = answer.as_object_mut()
+        && let Some(arrival) = object.shift_remove("arrival")
+    {
+        object.insert("arrival".to_string(), arrival);
+    }
+    answer
 }
 
 fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {
@@ -394,3 +430,9 @@ fn commit_record_click(
         }
     }
 }
+
+// #411 A19 (exec key 93): a timed-out arrival answers `lab_arrival_timeout` (exit 3); `arrival`
+// is the answer's last member.
+#[cfg(test)]
+#[path = "../tests/gate_0122_a19.rs"]
+mod gate_0122_a19;

@@ -110,6 +110,11 @@ intermediate observations are persisted by the same original owners. Failure
 before waiting is `aborted` with zero elapsed time and no samples. Timeout and
 abort retain the native input effect and produce a failed receipt and nonzero
 CLI result; a later release failure cannot replace the original failure.
+actinglab answers a timed-out arrival `lab_arrival_timeout` (exit 3,
+`blocked_by: [arrival_page]`), as it answers a navigation step whose page did
+not arrive, not `device_error`; its details are the operation's answer. In
+every online `do` answer `arrival` is the last member, so a reader that cuts
+the text loses samples first.
 
 `ContainedLabOperationResult` returns the record and its verified terminal
 artifact. The outer receipt is `completed` only for the complete same-lease

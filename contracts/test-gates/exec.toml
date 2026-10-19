@@ -1425,3 +1425,15 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::a17_a_source_entry_set_refusal_names_the_page_and_its_stages",
 ]
 incident = ["#411 A17"]
+
+# #411 A19 (v0.12.2; register §1.109; related: apps 66, #410 item 1; apps 73, A8): online do --capture --after-page whose arrival wait times out (failure stage arrival, code lab_arrival_timeout) answers lab_arrival_timeout, exit 3, blocked_by [arrival_page], as a navigation step whose page did not arrive, not device_error (exit 4), its details the operation's answer unchanged; every other failed record keeps its answer (lab_element_unavailable capability_insufficient, exit 3; any other device_error, exit 4); in every online do answer arrival is the last member, after after_attachment, its own members and every other member unchanged, so a reader that cuts the text loses samples only
+[[gate]]
+key = "93"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_0122_a19::a19_a_timed_out_arrival_is_refused_as_not_reached_naming_lab_arrival_timeout",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_0122_a19::a19_every_other_operation_failure_keeps_its_answer",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_0122_a19::a19_the_answer_puts_arrival_last_and_changes_nothing_else",
+    "actingcommand-actinglab::runtime_input_proxy::resource_restore_preserves_native_evidence_and_read_only_source_parsing",
+]
+incident = ["#411 A19"]
