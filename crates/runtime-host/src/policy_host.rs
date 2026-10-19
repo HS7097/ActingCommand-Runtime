@@ -1803,7 +1803,7 @@ impl PolicyHost {
             Some(PolicyExecutionOutcome::Succeeded { .. })
         ) && self
             .remedies
-            .key(decision_id)
+            .outcome_key(decision_id)
             .is_some_and(|outcome_key| table.remedy_key(task_id, outcome_key))
             && !dispatch
                 .data
@@ -1859,7 +1859,7 @@ impl PolicyHost {
         {
             None => RemedySettlement::InFlight,
             Some(PolicyExecutionOutcome::Succeeded { .. }) => RemedySettlement::Succeeded {
-                outcome_key: self.remedies.key(decision_id).map(str::to_owned),
+                outcome_key: self.remedies.outcome_key(decision_id).map(str::to_owned),
             },
             Some(PolicyExecutionOutcome::Failed { .. }) => RemedySettlement::Failed,
         };

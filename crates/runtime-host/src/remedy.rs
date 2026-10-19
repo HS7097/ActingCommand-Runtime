@@ -24,7 +24,9 @@ use actingcommand_contract::outcome::{Code, Outcome, RemedyProblem};
 use actingcommand_contract::{
     PolicyPlanningSignalEventData, PolicyPlanningSignalKind, RuntimeErrorCode,
 };
-use actingcommand_execution_kernel::{PreparedContainedTask, RemedyDeclarations};
+use actingcommand_execution_kernel::{
+    ContainedTaskCode, PreparedContainedTask, RemedyDeclarations,
+};
 use actingcommand_policy::{
     CompiledCatalog, InstanceSnapshot, PolicyCode, RemedyChoiceRow, RemedySignal, RemedyStop,
     RemedyTable, RemedyTableCapability, RemedyTableEdge, RemedyTableParameter, RemedyTableProvider,
@@ -73,7 +75,7 @@ pub(crate) struct UnreadablePackage {
     /// The catalog tasks whose procedure locates it.
     pub(crate) tasks: Vec<String>,
     /// The reader's refusal.
-    pub(crate) code: &'static str,
+    pub(crate) code: ContainedTaskCode,
 }
 
 /// The table of one catalog generation, as built.
@@ -156,7 +158,7 @@ pub(crate) fn build_table(
             Err(error) => unreadable.push(UnreadablePackage {
                 path: (*path).to_owned(),
                 tasks: bound.iter().map(|task| task.id.clone()).collect(),
-                code: error.code().as_str(),
+                code: error.code(),
             }),
         }
     }
@@ -521,7 +523,8 @@ impl RemedyState {
         self.keys.insert(decision_id.to_owned(), outcome_key);
     }
 
-    pub(crate) fn key(&self, decision_id: &str) -> Option<&str> {
+    /// The outcome key the terminal of `decision_id`'s run names, once noted.
+    pub(crate) fn outcome_key(&self, decision_id: &str) -> Option<&str> {
         self.keys.get(decision_id).map(String::as_str)
     }
 
