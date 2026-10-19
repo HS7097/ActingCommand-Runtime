@@ -1445,3 +1445,16 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::a24_failure_burst_window_does_not_depend_on_arrival_order",
 ]
 incident = ["#411 A24"]
+
+# Workflow #406 T12 (0.12.x; register §1.136; no persisted ledger shape: X11 and X12 first written, the landing history memory only, config.parameters.touch a new section fact; actingd-config 7; plan-405-406 Q13, Q15, Q16): the touch section's five keys (touch.sampling.sigma_ratio_milli 1..=1000 default 250, .max_redraws 0..=64 default 8, .candidate_count 1..=16 default 4, touch.history.points_per_box 1..=256 default 16, .max_boxes 1..=65536 default 1024) default from the shipped defaults file, are all settable, and a value outside its range is config_value_invalid (out_of_range) at load, in the section check and in an instruction; the host hands each step the keys in effect, so after an instruction the next run's press is drawn and recorded with the new values; the landing history is per instance and per box (an unused candidate first, then the oldest use; another instance or box starts unused), keeps at most points_per_box pixels per box and max_boxes boxes per instance (the oldest forgotten and unused again), and is empty after the host is closed and started again on the same root
+[[gate]]
+key = "123"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_the_host_hands_the_kernel_the_touch_keys_in_effect",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_the_landing_history_is_per_instance_and_per_box",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_a_box_keeps_at_most_points_per_box_and_the_oldest_is_forgotten",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_a_restart_starts_with_an_empty_history",
+    "actingcommand-runtime-config::lib::touch_tests::t12_the_touch_section_parses_checks_and_defaults",
+]
+incident = ["#406"]

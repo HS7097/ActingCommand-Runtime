@@ -14,10 +14,11 @@ use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{FactRefreshConfig, PackAdmissionConfig, RemedyConfig, SchedulingConfig};
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
+use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
     device_link, device_state, host_claims, instance, ledger_observer, performance,
-    recovery_ladder, scheduling, startup_discovery,
+    recovery_ladder, scheduling, startup_discovery, touch,
 };
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -461,6 +462,12 @@ impl EffectiveConfig {
         StartupDiscoveryConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #406 T12: the `touch` section in effect; the host reads it at each step of a
+    /// run (the kernel's `touch_sampling()`) and at each choice of a press's landing point.
+    pub fn touch(&self) -> Result<TouchConfig, ConfigFailure> {
+        TouchConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -633,6 +640,9 @@ impl EffectiveConfig {
         }
         if sections.contains(startup_discovery::SECTION) {
             self.startup_discovery()?;
+        }
+        if sections.contains(touch::SECTION) {
+            self.touch()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

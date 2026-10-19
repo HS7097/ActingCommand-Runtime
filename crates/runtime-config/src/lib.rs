@@ -17,7 +17,7 @@
 //!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15); the two Lab
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
 //!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8);
-//!   `startup_discovery` (Workflow #390 DISC-1).
+//!   `startup_discovery` (Workflow #390 DISC-1); `touch` (Workflow #406 T12).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -41,6 +41,7 @@ pub mod scheduling;
 mod standard_packs;
 pub mod startup_discovery;
 mod table;
+pub mod touch;
 mod value;
 
 pub use codes::{ConfigCode, ConfigValueProblem};
@@ -80,6 +81,7 @@ pub use table::{
     DefaultSource, FilePath, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, NotSettable, Settable,
     ValueType, assembly_rows, find_row, instance_key, mechanism_rows, rows,
 };
+pub use touch::{TouchConfig, TouchFile};
 pub use value::{canonical_json, parse_value, scalar_json};
 
 /// Annotates the rows the start-up assembly built with whether an instruction may change them
@@ -117,3 +119,6 @@ mod rd4_tests;
 mod scheduling_tests;
 #[cfg(test)]
 mod tests;
+// Workflow #406 T12.
+#[cfg(test)]
+mod touch_tests;

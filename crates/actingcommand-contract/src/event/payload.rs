@@ -4317,13 +4317,14 @@ pub enum TaskSemanticFact {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputSamplingAlgorithm {
+    /// A uniform draw in each box; since Workflow #406 T12 only a runtime without the touch
+    /// configuration draws it (the Runtime's own runs do not).
     Xorshift64UniformRectV1,
-    /// Reserved (Workflow #383 register X11; first writer #406 T-1): a truncated normal
-    /// draw around the box's centre, redrawn when it falls outside, the centre after the
-    /// last redraw.
+    /// Workflow #383 register X11, written by #406 T12: a truncated normal draw around the
+    /// box's centre, redrawn when it falls outside, the centre after the last redraw.
     CenterHotspotNormalV1,
-    /// Reserved (register X11; first writer #406 T-2): several centre-hotspot candidates, the
-    /// one unused for the longest time chosen.
+    /// Register X11, written by #406 T12: several centre-hotspot candidates of a single-region
+    /// press, the one unused for the longest time chosen.
     CenterHotspotLeastRecentV1,
 }
 
@@ -4433,6 +4434,60 @@ impl InputSamplingEvidence {
             parameters: None,
         };
         value.validate_regions()?;
+        Ok(value)
+    }
+
+    /// Workflow #406 T12 (register X11, X12): a `center_hotspot_normal_v1` draw, one
+    /// centre-hotspot point in each of `source_regions` in order, with the spread it used
+    /// (`sigma_ratio_milli`) and how often a point outside its box was drawn again before the
+    /// centre was taken (`max_redraws`).
+    pub fn center_hotspot(
+        action_seed: u64,
+        source_regions: Vec<InputSamplingRegion>,
+        sigma_ratio_milli: u32,
+        max_redraws: u32,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            algorithm: InputSamplingAlgorithm::CenterHotspotNormalV1,
+            action_seed,
+            source_regions,
+            parameters: Some(InputSamplingParameters {
+                sigma_ratio_milli,
+                max_redraws,
+                candidate_count: None,
+                chosen_candidate: None,
+            }),
+        };
+        value.validate_regions()?;
+        value.validate_parameters()?;
+        Ok(value)
+    }
+
+    /// Workflow #406 T12 (register X11, X12): a `center_hotspot_least_recent_v1` draw of a
+    /// single-region press, `candidate_count` centre-hotspot candidates in `source_region` drawn
+    /// with the spread `sigma_ratio_milli` and `max_redraws`, of which the landing history chose
+    /// `chosen_candidate` (0-based, in draw order).
+    pub fn center_hotspot_least_recent(
+        action_seed: u64,
+        source_region: InputSamplingRegion,
+        sigma_ratio_milli: u32,
+        max_redraws: u32,
+        candidate_count: u32,
+        chosen_candidate: u32,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            algorithm: InputSamplingAlgorithm::CenterHotspotLeastRecentV1,
+            action_seed,
+            source_regions: vec![source_region],
+            parameters: Some(InputSamplingParameters {
+                sigma_ratio_milli,
+                max_redraws,
+                candidate_count: Some(candidate_count),
+                chosen_candidate: Some(chosen_candidate),
+            }),
+        };
+        value.validate_regions()?;
+        value.validate_parameters()?;
         Ok(value)
     }
 

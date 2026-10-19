@@ -177,6 +177,9 @@ mod gate_411_b15p;
 // took.
 #[cfg(test)]
 mod gate_lab_l6;
+// Workflow #406 T12 (exec key 110): centre-hotspot draws and the least-recent landing point.
+#[cfg(test)]
+mod gate_406_t12;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -2201,6 +2204,20 @@ impl StepPacing {
     }
 }
 
+/// Workflow #406 T12 (`contracts/resource-declarations.md`, "Touch sampling"; plan Q13): the
+/// touch keys in effect for one step, the `touch.sampling` keys of the Runtime's configuration,
+/// handed by the runtime ([`ContainedTaskRuntime::touch_sampling`]). The kernel reads no
+/// configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TouchSampling {
+    /// The spread of a centre-hotspot draw, in thousandths of the box's width and of its height.
+    pub sigma_ratio_milli: u32,
+    /// How often a draw outside the box is drawn again before the box's centre is taken.
+    pub max_redraws: u32,
+    /// How many candidates a single-region press draws; 1 draws one point and asks no choice.
+    pub candidate_count: u32,
+}
+
 /// Runtime boundary used by the semantic engine for device effects and durable facts.
 pub trait ContainedTaskRuntime {
     type Error;
@@ -2241,6 +2258,27 @@ pub trait ContainedTaskRuntime {
         _operation_label: &str,
     ) -> Result<Option<u64>, Self::Error> {
         Ok(None)
+    }
+
+    /// Workflow #406 T12 (plan Q13, Q14): the touch keys in effect for the step whose box points
+    /// the kernel draws now (`touch.sampling.*`), asked at each step as [`Self::step_pacing`]
+    /// is. A runtime without the touch configuration answers `None`, and the kernel draws every
+    /// seeded box point uniformly, as before (`xorshift64_uniform_rect_v1`).
+    fn touch_sampling(&mut self) -> Result<Option<TouchSampling>, Self::Error> {
+        Ok(None)
+    }
+
+    /// Workflow #406 T12 (plan Q15, Q16): the candidate a single-region press in the box
+    /// `region` lands on, among its `candidates` (at least two, in draw order): the runtime's
+    /// landing history chooses by [`least_recent_candidate`] and records the chosen point as the
+    /// box's newest use. The answer is the chosen index. A runtime without a landing history
+    /// answers the first candidate.
+    fn choose_touch_candidate(
+        &mut self,
+        _region: &InputSamplingRegion,
+        _candidates: &[(i32, i32)],
+    ) -> Result<usize, Self::Error> {
+        Ok(0)
     }
 
     fn input(
@@ -4635,15 +4673,14 @@ impl PreparedContainedTask {
                                         },
                                     };
                                 // Workflow #308 SEL-L4b: a scan select drew the step's seed for
-                                // its moves; its tap reuses it.
-                                let action_seed = match selected
+                                // its moves; its tap reuses it. Workflow #406 T12: with the touch
+                                // keys the scan was handed.
+                                let draw = match selected
                                     .as_ref()
-                                    .and_then(|selected| selected.action_seed)
+                                    .and_then(|selected| selected.draw)
                                 {
-                                    Some(action_seed) => action_seed,
-                                    None => runtime
-                                        .action_seed(step_index, &operation_id)
-                                        .map_err(ContainedTaskRunError::operation::<R>)?,
+                                    Some(draw) => draw,
+                                    None => step_point_draw(runtime, step_index, &operation_id)?,
                                 };
                                 let (action, sampling, input_context) = match selected {
                                     Some(selected) => {
@@ -4651,8 +4688,11 @@ impl PreparedContainedTask {
                                             chosen_identities
                                                 .insert(operation_id.clone(), identity.clone());
                                         }
-                                        let (action, sampling) = selected
-                                            .input_action(&self.control.resolution, action_seed)?;
+                                        let (action, sampling) = selected.draw_input::<R::Error>(
+                                            &self.control.resolution,
+                                            draw,
+                                            &mut runtime_touch_choice(runtime),
+                                        )?;
                                         (action, sampling, selected.frame.input_context)
                                     }
                                     None => {
@@ -4662,10 +4702,11 @@ impl PreparedContainedTask {
                                                     .code(),
                                             )
                                         })?;
-                                        let (action, sampling) = click.input_action(
+                                        let (action, sampling) = click.draw_input::<R::Error>(
                                             &self.control.resolution,
                                             target.as_ref(),
-                                            action_seed,
+                                            draw,
+                                            &mut runtime_touch_choice(runtime),
                                         )?;
                                         let frame = rechecked.as_ref().unwrap_or(observed);
                                         (action, sampling, frame.input_context.clone())
@@ -9789,12 +9830,34 @@ impl TaskClick {
         Ok(())
     }
 
+    /// Tests only: the input of a runtime without the touch configuration (plan Q14), its boxes
+    /// drawn uniformly with `action_seed` ([`Self::draw_input`]).
+    #[cfg(test)]
     fn input_action(
         &self,
         resolution: &Resolution,
         target: Option<&TargetEvaluation>,
         action_seed: Option<u64>,
     ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+        self.draw_input::<std::convert::Infallible>(
+            resolution,
+            target,
+            PointDraw::uniform(action_seed),
+            &mut no_touch_choice,
+        )
+        .map_err(uniform_draw_error)
+    }
+
+    /// The click's input and its sampling evidence. Workflow #406 T12: its box points are drawn
+    /// by `draw`; a single-region press with several candidates lands where `choose` (the
+    /// runtime's landing history) chooses.
+    fn draw_input<E>(
+        &self,
+        resolution: &Resolution,
+        target: Option<&TargetEvaluation>,
+        draw: PointDraw,
+        choose: &mut TouchChoice<'_, E>,
+    ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskRunError<E>> {
         let (action, sampling) = match self.kind.as_str() {
             "point" => (
                 InputAction::Tap {
@@ -9811,7 +9874,7 @@ impl TaskClick {
                     height: required(self.height)?,
                 };
                 rect.validate(resolution)?;
-                sampled_tap(rect, action_seed)?
+                drawn_tap(rect, draw, choose)?
             }
             "long_press" | "long_tap" => {
                 let duration_ms = self.duration_ms.ok_or_else(|| {
@@ -9822,7 +9885,7 @@ impl TaskClick {
                 match self.long_press_box()? {
                     Some(rect) => {
                         rect.validate(resolution)?;
-                        sampled_long_tap(rect, duration_ms, action_seed)?
+                        drawn_long_tap(rect, duration_ms, draw, choose)?
                     }
                     None => (
                         InputAction::LongTap {
@@ -9855,7 +9918,7 @@ impl TaskClick {
                             ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                         )
                     })?,
-                    action_seed,
+                    draw,
                 )?
             }
             "single_touch_drag_with_vertical_brake_v1" => {
@@ -9892,7 +9955,7 @@ impl TaskClick {
                             ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                         )
                     })?,
-                    action_seed,
+                    draw,
                 )?
             }
             "target" | "target_center" | "offset" => {
@@ -9905,7 +9968,8 @@ impl TaskClick {
                 if located_text && self.kind == "target_center" {
                     return Err(ContainedTaskError::new(
                         ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
-                    ));
+                    )
+                    .into());
                 }
                 if self.kind == "offset" {
                     let offset = self.offset.ok_or_else(|| {
@@ -9939,13 +10003,14 @@ impl TaskClick {
                         None,
                     )
                 } else {
-                    sampled_tap(rect, action_seed)?
+                    drawn_tap(rect, draw, choose)?
                 }
             }
             _ => {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::ContainedTaskPrimitiveUnsupported.code(),
-                ));
+                )
+                .into());
             }
         };
         action.validate().map_err(|_| {
@@ -9975,7 +10040,8 @@ impl TaskClick {
             _ => {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::ContainedTaskPrimitiveUnsupported.code(),
-                ));
+                )
+                .into());
             }
         }
         Ok((action, sampling))
@@ -10193,82 +10259,255 @@ fn required<T: Copy>(value: Option<T>) -> Result<T, ContainedTaskError> {
     })
 }
 
+/// Workflow #406 T12: how one step draws the points of its boxes: the step's action seed (none:
+/// each box's centre) and the touch keys in effect (none: `xorshift64_uniform_rect_v1`, as a
+/// runtime without the touch configuration drew before, plan Q14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PointDraw {
+    action_seed: Option<u64>,
+    touch: Option<TouchSampling>,
+}
+
+impl PointDraw {
+    /// The draw of a runtime without the touch configuration: uniform with `action_seed`.
+    const fn uniform(action_seed: Option<u64>) -> Self {
+        Self {
+            action_seed,
+            touch: None,
+        }
+    }
+
+    /// The same draw from another seed (a scan's drag mixes its index into the step's seed).
+    const fn with_seed(self, action_seed: Option<u64>) -> Self {
+        Self {
+            action_seed,
+            touch: self.touch,
+        }
+    }
+}
+
+/// Workflow #406 T12: the runtime's choice among a single-region press's candidates
+/// ([`ContainedTaskRuntime::choose_touch_candidate`]), as a draw asks for it.
+type TouchChoice<'a, E> =
+    dyn FnMut(&InputSamplingRegion, &[(i32, i32)]) -> Result<usize, ContainedTaskRunError<E>> + 'a;
+
+/// Workflow #406 T12: `runtime`'s landing history as the chooser of a press's candidate.
+fn runtime_touch_choice<R: ContainedTaskRuntime>(
+    runtime: &mut R,
+) -> impl FnMut(&InputSamplingRegion, &[(i32, i32)]) -> Result<usize, ContainedTaskRunError<R::Error>> + '_
+{
+    move |region: &InputSamplingRegion, candidates: &[(i32, i32)]| {
+        runtime
+            .choose_touch_candidate(region, candidates)
+            .map_err(ContainedTaskRunError::operation::<R>)
+    }
+}
+
+/// Workflow #406 T12: the draw of a step's box points: the step's action seed
+/// ([`ContainedTaskRuntime::action_seed`]) and the touch keys in effect for the step
+/// ([`ContainedTaskRuntime::touch_sampling`]).
+fn step_point_draw<R: ContainedTaskRuntime>(
+    runtime: &mut R,
+    step_index: u32,
+    operation_label: &str,
+) -> Result<PointDraw, ContainedTaskRunError<R::Error>> {
+    let action_seed = runtime
+        .action_seed(step_index, operation_label)
+        .map_err(ContainedTaskRunError::operation::<R>)?;
+    let touch = runtime
+        .touch_sampling()
+        .map_err(ContainedTaskRunError::operation::<R>)?;
+    Ok(PointDraw { action_seed, touch })
+}
+
+/// Workflow #406 T12 (`center_hotspot_least_recent_v1`; Alice 2026-10-14: 「我们选择距离上一次
+/// 被选择的点击点最久的一个就行」): which of a press's `candidates` lands, given when each point
+/// of the box was last used (`last_use`, `None` for a point the box's landing history does not
+/// hold): the first candidate whose point is unused, else the one whose point's last use is
+/// oldest, ties to the lowest index. A runtime keeping a landing history chooses by this rule.
+pub fn least_recent_candidate(
+    candidates: &[(i32, i32)],
+    last_use: impl Fn((i32, i32)) -> Option<u64>,
+) -> usize {
+    let mut oldest: Option<(usize, u64)> = None;
+    for (index, &point) in candidates.iter().enumerate() {
+        let Some(used) = last_use(point) else {
+            return index;
+        };
+        match oldest {
+            Some((_, seen)) if seen <= used => {}
+            _ => oldest = Some((index, used)),
+        }
+    }
+    oldest.map_or(0, |(index, _)| index)
+}
+
+fn sampling_invalid() -> ContainedTaskError {
+    ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+}
+
+/// Workflow #406 T12 ("The draw", `contracts/resource-declarations.md`, "Touch sampling"): the
+/// point a single-region press lands on in `rect`, and its sampling evidence. Without a seed the
+/// box's centre, without evidence. Without touch keys (plan Q14) one uniform point
+/// (`xorshift64_uniform_rect_v1`). With `candidate_count` 1, one centre-hotspot point
+/// (`center_hotspot_normal_v1`). Otherwise `candidate_count` centre-hotspot points in draw
+/// order, of which `choose` (the runtime's landing history) takes one
+/// (`center_hotspot_least_recent_v1`); a box whose candidates are one point presses it.
+fn drawn_press<E>(
+    rect: ClickRect,
+    draw: PointDraw,
+    choose: &mut TouchChoice<'_, E>,
+) -> Result<((i32, i32), Option<InputSamplingEvidence>), ContainedTaskRunError<E>> {
+    let Some(action_seed) = draw.action_seed else {
+        return Ok(((rect.x + rect.width / 2, rect.y + rect.height / 2), None));
+    };
+    let mut state = normalized_xorshift64_state(action_seed);
+    let Some(touch) = draw.touch else {
+        let point = rect.sample(&mut state)?;
+        let sampling = InputSamplingEvidence::new(action_seed, vec![rect.sampling_region()?])
+            .map_err(|_| sampling_invalid())?;
+        return Ok((point, Some(sampling)));
+    };
+    if touch.candidate_count <= 1 {
+        let point = rect.hotspot_point(&mut state, touch)?;
+        let sampling = InputSamplingEvidence::center_hotspot(
+            action_seed,
+            vec![rect.sampling_region()?],
+            touch.sigma_ratio_milli,
+            touch.max_redraws,
+        )
+        .map_err(|_| sampling_invalid())?;
+        return Ok((point, Some(sampling)));
+    }
+    let candidates = (0..touch.candidate_count)
+        .map(|_| rect.hotspot_point(&mut state, touch))
+        .collect::<Result<Vec<_>, ContainedTaskError>>()?;
+    let region = rect.sampling_region()?;
+    let chosen = choose(&region, candidates.as_slice())?;
+    let point = candidates
+        .get(chosen)
+        .copied()
+        .ok_or_else(sampling_invalid)?;
+    let sampling = InputSamplingEvidence::center_hotspot_least_recent(
+        action_seed,
+        region,
+        touch.sigma_ratio_milli,
+        touch.max_redraws,
+        touch.candidate_count,
+        u32::try_from(chosen).map_err(|_| sampling_invalid())?,
+    )
+    .map_err(|_| sampling_invalid())?;
+    Ok((point, Some(sampling)))
+}
+
+/// A tap at the point [`drawn_press`] draws in `rect`.
+fn drawn_tap<E>(
+    rect: ClickRect,
+    draw: PointDraw,
+    choose: &mut TouchChoice<'_, E>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskRunError<E>> {
+    let ((x, y), sampling) = drawn_press(rect, draw, choose)?;
+    Ok((InputAction::Tap { x, y }, sampling))
+}
+
+/// Tests only: the tap of a runtime without the touch configuration (plan Q14), uniform with
+/// `action_seed` and its box's centre without one.
+#[cfg(test)]
 fn sampled_tap(
     rect: ClickRect,
     action_seed: Option<u64>,
 ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
-    let Some(action_seed) = action_seed else {
-        return Ok((
-            InputAction::Tap {
-                x: rect.x + rect.width / 2,
-                y: rect.y + rect.height / 2,
-            },
-            None,
-        ));
-    };
-    let mut state = normalized_xorshift64_state(action_seed);
-    let (x, y) = rect.sample(&mut state)?;
-    let sampling =
-        InputSamplingEvidence::new(action_seed, vec![rect.sampling_region()?]).map_err(|_| {
-            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
-        })?;
-    Ok((InputAction::Tap { x, y }, Some(sampling)))
+    drawn_tap::<std::convert::Infallible>(
+        rect,
+        PointDraw::uniform(action_seed),
+        &mut no_touch_choice,
+    )
+    .map_err(uniform_draw_error)
+}
+
+/// Tests only: the chooser of a draw that asks no runtime (a uniform draw asks none).
+#[cfg(test)]
+fn no_touch_choice(
+    _region: &InputSamplingRegion,
+    _candidates: &[(i32, i32)],
+) -> Result<usize, ContainedTaskRunError<std::convert::Infallible>> {
+    Ok(0)
+}
+
+/// Tests only: the failure of a draw that asks no runtime.
+#[cfg(test)]
+fn uniform_draw_error(
+    error: ContainedTaskRunError<std::convert::Infallible>,
+) -> ContainedTaskError {
+    match error {
+        ContainedTaskRunError::Task(error) => error,
+        ContainedTaskRunError::Boundary(never)
+        | ContainedTaskRunError::NonfatalOperation(never) => match never {},
+    }
 }
 
 /// Workflow #390 lpbox: a long press held at a point of `rect` for `duration_ms`, drawn as a
-/// `rect` tap's point is (one sampling region); without a seed, the rectangle's centre.
-fn sampled_long_tap(
+/// `rect` tap's point is (one sampling region, [`drawn_press`]); without a seed, the
+/// rectangle's centre.
+fn drawn_long_tap<E>(
     rect: ClickRect,
     duration_ms: u64,
-    action_seed: Option<u64>,
-) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
-    let Some(action_seed) = action_seed else {
+    draw: PointDraw,
+    choose: &mut TouchChoice<'_, E>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskRunError<E>> {
+    let ((x, y), sampling) = drawn_press(rect, draw, choose)?;
+    Ok((InputAction::LongTap { x, y, duration_ms }, sampling))
+}
+
+/// A drag's two drawn points and their sampling evidence.
+type DrawnRegions = ((i32, i32), (i32, i32), Option<InputSamplingEvidence>);
+
+/// Workflow #406 T12 (plan Q15): the points of a drag's two regions `from` and `to`, in that
+/// order, and their sampling evidence. Without a seed their centres, without evidence; without
+/// touch keys (plan Q14) one uniform point each (`xorshift64_uniform_rect_v1`); otherwise one
+/// centre-hotspot point each from the same state (`center_hotspot_normal_v1`): a drag has no
+/// least-recent choice.
+fn drawn_regions(
+    from: ClickRect,
+    to: ClickRect,
+    draw: PointDraw,
+) -> Result<DrawnRegions, ContainedTaskError> {
+    let Some(action_seed) = draw.action_seed else {
         return Ok((
-            InputAction::LongTap {
-                x: rect.x + rect.width / 2,
-                y: rect.y + rect.height / 2,
-                duration_ms,
-            },
+            (from.x + from.width / 2, from.y + from.height / 2),
+            (to.x + to.width / 2, to.y + to.height / 2),
             None,
         ));
     };
     let mut state = normalized_xorshift64_state(action_seed);
-    let (x, y) = rect.sample(&mut state)?;
-    let sampling =
-        InputSamplingEvidence::new(action_seed, vec![rect.sampling_region()?]).map_err(|_| {
-            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
-        })?;
-    Ok((InputAction::LongTap { x, y, duration_ms }, Some(sampling)))
+    let (start, end) = match draw.touch {
+        None => (from.sample(&mut state)?, to.sample(&mut state)?),
+        Some(touch) => (
+            from.hotspot_point(&mut state, touch)?,
+            to.hotspot_point(&mut state, touch)?,
+        ),
+    };
+    let regions = vec![from.sampling_region()?, to.sampling_region()?];
+    let sampling = match draw.touch {
+        None => InputSamplingEvidence::new(action_seed, regions),
+        Some(touch) => InputSamplingEvidence::center_hotspot(
+            action_seed,
+            regions,
+            touch.sigma_ratio_milli,
+            touch.max_redraws,
+        ),
+    }
+    .map_err(|_| sampling_invalid())?;
+    Ok((start, end, Some(sampling)))
 }
 
 fn sampled_swipe(
     from: ClickRect,
     to: ClickRect,
     duration_ms: u64,
-    action_seed: Option<u64>,
+    draw: PointDraw,
 ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
-    let Some(action_seed) = action_seed else {
-        return Ok((
-            InputAction::Swipe {
-                x1: from.x + from.width / 2,
-                y1: from.y + from.height / 2,
-                x2: to.x + to.width / 2,
-                y2: to.y + to.height / 2,
-                duration_ms,
-            },
-            None,
-        ));
-    };
-    let mut state = normalized_xorshift64_state(action_seed);
-    let (x1, y1) = from.sample(&mut state)?;
-    let (x2, y2) = to.sample(&mut state)?;
-    let sampling = InputSamplingEvidence::new(
-        action_seed,
-        vec![from.sampling_region()?, to.sampling_region()?],
-    )
-    .map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
-    })?;
+    let ((x1, y1), (x2, y2), sampling) = drawn_regions(from, to, draw)?;
     Ok((
         InputAction::Swipe {
             x1,
@@ -10277,7 +10516,7 @@ fn sampled_swipe(
             y2,
             duration_ms,
         },
-        Some(sampling),
+        sampling,
     ))
 }
 
@@ -10288,27 +10527,9 @@ fn sampled_segmented_swipe(
     corner_hold_ms: u64,
     brake_distance_px: i32,
     brake_duration_ms: u64,
-    action_seed: Option<u64>,
+    draw: PointDraw,
 ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
-    let ((x1, y1), (x2, y2), sampling) = if let Some(action_seed) = action_seed {
-        let mut state = normalized_xorshift64_state(action_seed);
-        let start = from.sample(&mut state)?;
-        let corner_point = corner.sample(&mut state)?;
-        let sampling = InputSamplingEvidence::new(
-            action_seed,
-            vec![from.sampling_region()?, corner.sampling_region()?],
-        )
-        .map_err(|_| {
-            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
-        })?;
-        (start, corner_point, Some(sampling))
-    } else {
-        (
-            (from.x + from.width / 2, from.y + from.height / 2),
-            (corner.x + corner.width / 2, corner.y + corner.height / 2),
-            None,
-        )
-    };
+    let ((x1, y1), (x2, y2), sampling) = drawn_regions(from, corner, draw)?;
     let y3 = y2.checked_sub(brake_distance_px).ok_or_else(|| {
         ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
     })?;
@@ -10334,33 +10555,16 @@ fn sampled_segmented_swipe(
 /// Workflow #308 SEL-L3b (register §1.58): a drag between random points of `from` and `to` that
 /// holds still `pause_ms` at its end and then, with a brake, moves by `brake` (its displacement
 /// and duration) before the release: `single_touch_drag_with_pause_and_brake_v1`. The press and
-/// the drag's end are sampled as a swipe's are, with the same two sampling regions; the brake's
-/// end follows from the drag's end. Without a seed both points are their rectangles' centres.
+/// the drag's end are sampled as a swipe's are, with the same two sampling regions
+/// ([`drawn_regions`]); the brake's end follows from the drag's end. Without a seed both points
+/// are their rectangles' centres.
 fn sampled_drag_with_pause_and_brake(
     (from, to, drag_duration_ms): (ClickRect, ClickRect, u64),
     pause_ms: u64,
     brake: Option<((i32, i32), u64)>,
-    action_seed: Option<u64>,
+    draw: PointDraw,
 ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
-    let ((x1, y1), (x2, y2), sampling) = if let Some(action_seed) = action_seed {
-        let mut state = normalized_xorshift64_state(action_seed);
-        let start = from.sample(&mut state)?;
-        let end = to.sample(&mut state)?;
-        let sampling = InputSamplingEvidence::new(
-            action_seed,
-            vec![from.sampling_region()?, to.sampling_region()?],
-        )
-        .map_err(|_| {
-            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
-        })?;
-        (start, end, Some(sampling))
-    } else {
-        (
-            (from.x + from.width / 2, from.y + from.height / 2),
-            (to.x + to.width / 2, to.y + to.height / 2),
-            None,
-        )
-    };
+    let ((x1, y1), (x2, y2), sampling) = drawn_regions(from, to, draw)?;
     let ((x3, y3), brake_duration_ms) = match brake {
         Some(((dx, dy), duration_ms)) => (
             (
@@ -10410,6 +10614,18 @@ fn next_xorshift64(state: &mut u64) -> u64 {
     value ^= value << 17;
     *state = value;
     value
+}
+
+/// Workflow #406 T12 ("The draw"; the `_v1` of `center_hotspot_*_v1` means exactly these steps,
+/// so a replay from the seed repeats them): about N(0, 1) × 1000, within ±6000. The sum `s` of
+/// twelve 24-bit uniforms (`next_xorshift64(state) >> 40`), then
+/// `((2·s − 12·(2^24 − 1)) · 1000) / (2·2^24)` in `i128`, the division truncating toward zero.
+fn gaussian_milli(state: &mut u64) -> i128 {
+    const UNIFORM_SPAN: i128 = 1 << 24;
+    let sum = (0..12)
+        .map(|_| i128::from(next_xorshift64(state) >> 40))
+        .sum::<i128>();
+    ((2 * sum - 12 * (UNIFORM_SPAN - 1)) * 1000) / (2 * UNIFORM_SPAN)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -10462,6 +10678,40 @@ impl ClickRect {
             i32::try_from(y).map_err(|_| {
                 ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
             })?,
+        ))
+    }
+
+    /// Workflow #406 T12 ("The draw", `hotspot_point`; Alice 2026-10-13: 「默认都是中心热点」):
+    /// one centre-hotspot point of the box. Its centre is `(x + width / 2, y + height / 2)`,
+    /// today's unseeded press. At most `max_redraws + 1` times: two [`gaussian_milli`] draws
+    /// `zx`, `zy` give `px = cx + zx · sigma_ratio_milli · width / 1 000 000` and
+    /// `py = cy + zy · sigma_ratio_milli · height / 1 000 000` (in `i128`, truncating toward
+    /// zero), returned once it lies in the box (`x ≤ px < x + width`, `y ≤ py < y + height`).
+    /// After the last attempt, the centre.
+    fn hotspot_point(
+        &self,
+        state: &mut u64,
+        touch: TouchSampling,
+    ) -> Result<(i32, i32), ContainedTaskError> {
+        self.validate_shape()?;
+        let (x, y) = (i128::from(self.x), i128::from(self.y));
+        let (width, height) = (i128::from(self.width), i128::from(self.height));
+        let (cx, cy) = (x + width / 2, y + height / 2);
+        let sigma = i128::from(touch.sigma_ratio_milli);
+        let mut point = (cx, cy);
+        for _ in 0..=touch.max_redraws {
+            let zx = gaussian_milli(state);
+            let zy = gaussian_milli(state);
+            let px = cx + zx * sigma * width / 1_000_000;
+            let py = cy + zy * sigma * height / 1_000_000;
+            if (x..x + width).contains(&px) && (y..y + height).contains(&py) {
+                point = (px, py);
+                break;
+            }
+        }
+        Ok((
+            i32::try_from(point.0).map_err(|_| sampling_invalid())?,
+            i32::try_from(point.1).map_err(|_| sampling_invalid())?,
         ))
     }
 }

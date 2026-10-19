@@ -354,7 +354,10 @@ The touch module's 0.12.x slice T-3 adds a box-confined, multi-turn, single-touc
 is a wire shape (`runtime.rs`) and a ledger-validated one (an input intent's `provenance`, a task
 effect's action), so by ORD §3.5 item 12 v0.12.0 already decodes it. Its other parts add no
 persisted shape: centre-hotspot sampling records the same sampled region and landing point as
-today, and the least-recently-used landing-point history lives in memory only.
+today, and the least-recently-used landing-point history lives in memory only. Workflow #406
+T12 (§1.136) writes centre-hotspot sampling with the algorithms and parameters of §1.25 X11 and
+X12, keeps the history in memory only, and adds the `touch` configuration section
+(`actingd-config` revision 7).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -2249,6 +2252,28 @@ and `value_test_not_met` in details); no catalog change.
 
 Lab file format, no persisted ledger shape, no outcome code.
 
+### 1.136 Slice T12 (0.12.x): centre-hotspot touch sampling, the least-recent landing point and the `touch` keys (#406 T-1, T-2; plan-405-406 Q13 to Q16; Alice 2026-10-13 「…默认都是中心热点…」, 2026-10-14 「…我们选择距离上一次被选择的点击点最久的一个就行…」)
+
+Every box a Runtime run presses is drawn around the box's center; a single-region press draws
+`touch.sampling.candidate_count` candidates and lands on the one its instance's landing history
+used longest ago (an unused one first). [resource-declarations.md](resource-declarations.md)
+("Touch sampling") is the draw's normative text, [runtime-config.md](runtime-config.md) ("The
+`touch` section") the keys'. **No persisted ledger shape**: the draws write the registered X11
+and X12 (§1.25) for the first time, inside today's `task.semantic` `EffectIntent` `sampling`;
+the landing history is memory only, never read from or written to the ledger, and empty after a
+restart; the keys are rows of a new section fact `config.parameters.touch` of the existing
+family (as P-c's `performance`, §1.24), and of `host.config_overrides`. No code, key, vocabulary
+token, location or domain is added: an out-of-range key is the existing `config_value_invalid`
+(`out_of_range`), and a one-point box records no code (Alice's ruling).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| T12-1 | `InputSamplingAlgorithm::CenterHotspotNormalV1`, `::CenterHotspotLeastRecentV1` with `InputSamplingEvidence.parameters` (§1.25 X11, X12) | registered values, first written (exec 110) | SH-2 | T12 | built by the contract constructors `InputSamplingEvidence::center_hotspot` (`{sigma_ratio_milli, max_redraws}`, one region per point) and `::center_hotspot_least_recent` (one region, `{sigma_ratio_milli, max_redraws, candidate_count, chosen_candidate}`), both validated as X12 says; a single-region press with `candidate_count` ≥ 2 writes the least-recent draw, with 1 the normal draw; a drag writes the normal draw with its two regions; the seed derivation and its `xorshift64_uniform_rect_v1/run` and `/action` labels are unchanged (domain separators) |
+| T12-2 | the kernel's runtime seam `touch_sampling()` (default none) and `choose_touch_candidate(region, candidates)` (default the first) | in-process interface, not persisted (exec 110) | T12 | T12 | asked at each step as `step_pacing()` is; a runtime without touch keys (kernel fakes, the offline Lab until T4) keeps `xorshift64_uniform_rect_v1` (plan Q14); the rule `least_recent_candidate` (first unused pixel, else the oldest use, ties to the lowest index) is the kernel's, the history the runtime's |
+| T12-3 | the landing history | memory only (host 123) | T12 | T12 | per instance alias and per box (`x`, `y`, `width`, `height` of the sampling region, device pixels; DA-4's map applies first when it lands); "used" is the same pixel; ordered by a per-instance use counter updated when a point is chosen (plan Q16); at most `points_per_box` pixels per box (the newest) and `max_boxes` boxes per instance (the box unused longest forgotten); policy and direct runs share it; a leaf lock taken under the location `derive_contained_task_action_seed` (no new location) |
+| T12-4 | `touch.sampling.sigma_ratio_milli` (`1..=1000`, 250), `.max_redraws` (`0..=64`, 8), `.candidate_count` (`1..=16`, 4), `touch.history.points_per_box` (`1..=256`, 16), `touch.history.max_boxes` (`1..=65536`, 1024) | configuration keys (§5 row; `config.parameters.touch` rows) (host 123) | T12 | T12 | host-wide, every key settable, defaults only in `actingd.defaults.json`, read at each step; `config_value_invalid` (`out_of_range`) at load, in check-config and in `ConfigureSettings` |
+| T12-5 | `actingd-config` [5, 7] | interface revision (§6; K27) | T12 | T12 | revision 7 is revision 6 plus the optional `touch` section; a Runtime before T12 refuses a file that names it (the file denies unknown members); raised once for #406's release |
+
 ### 1.139 Slice A24 (0.12.x): ledger event time is not monotonic in sequence; the latest time is the maximum timestamp (#411 A24)
 
 A24: `timestamp_unix_ms` is the producer's capture or occurrence time, not the append time, so it
@@ -2364,6 +2389,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.perf_calibration.stats`, `.curve`, `.phase` | workbench | yes | P-m (`stats`), P-a |
 | `host.config_overrides` | workbench | yes (added to `tag.workbench_patterns` by M387 §5.7) | D1b |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
+| `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `host.pack_registry.*` | workbench | no (added to `tag.reobserve_prefixes`, UIM §6.5) | U-3 |
 | `display.frame_extent`, `display.rotation`, `display.orientation`, `display.aspect` (per instance, only for an instance bound to a device; [instance-fact-store.md](instance-fact-store.md#display-facts)) | instance | yes (every instance key) | DA-A |
 | `display.logical_extent` (one row `{width, height}`), `display.safe_area.reported` (one row `{left, top, right, bottom}`, device-frame pixels), `display.safe_area.declared` (the same row), `display.map` (one row, model 392 §8.1) (per instance; §1.25 X10) | instance | yes (every instance key) | DA-4 (`display.safe_area.declared`: a person or an agent) |
@@ -2411,6 +2437,7 @@ when it takes effect.
 | `device_state.*` | `sample_interval_ms`, `fact_ttl_ms`, `wake_settle_ms`, `keepalive_margin_ms`, `keyguard_insecure`, `battery_min_percent`, `thermal_hold_at`, `thermal_resume_below`, `in_use_gate`, `in_use_backoff_ms` | 60 000 (5 000..=3 600 000), 180 000 (at least the sampling interval), 1 000 (100..=10 000), 60 000, `dismiss` (`dismiss` / `wait`), 15 (0..=100), `severe`, `moderate` (below `thermal_hold_at`), `false` (a dedicated handset, Alice 2026-10-13), 300 000 (10 000..=3 600 000) (model-398 §7.8); every key settable | RD-5b (built, §1.59) | RD-5b (v0.12.0) |
 | `startup_discovery.*` | `attempts`, `retry_interval_ms` | 25 (`1..=100`), 10 000 (`1000..=300000`); not settable, read once at assembly (Workflow #390 DISC-1, coordinator ruling 2 of wave 18) | DISC-1 (§1.89 DI2) | DISC-1 (v0.12.0) |
 | `scheduling.remedy.*`, and per instance `instance.<id>.scheduling.remedy.choices` (**`actingd-config` revision 6**, Workflow #411 B15; §1.110 B15-8) | `enabled`, `max_per_round`, `choices` | `true`, 2 (`1..=8`), `[]`; an instance's list replaces the section's as a whole, default the section's; every key settable; rows of the `session.remedy.choices` shape ([runtime-config.md](runtime-config.md)) | #411 B15 R3 (built, §1.113) | #411 B15 R4 (0.12.3); R7 (check-config notes) |
+| `touch.*` (**`actingd-config` revision 7**, Workflow #406; §1.136) | `sampling.sigma_ratio_milli`, `sampling.max_redraws`, `sampling.candidate_count`, `history.points_per_box`, `history.max_boxes` | 250 (`1..=1000`), 8 (`0..=64`), 4 (`1..=16`), 16 (`1..=256`), 1024 (`1..=65536`); host-wide, every key settable (plan Q13; [runtime-config.md](runtime-config.md)) | #406 T12 (§1.136) | #406 T12 (0.12.x) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A
@@ -2450,7 +2477,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 
 | Interface | v0.12.0 | Sources in this register |
 |---|---|---|
-| `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read |
+| `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read |
 | `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66 |
 | `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25) |
 | `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it |

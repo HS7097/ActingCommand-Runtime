@@ -25,9 +25,9 @@ use super::scan::{
 use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
-    ContainedTaskTrace, PageObservation, PreparedContainedTask, Resolution, SampleRetries,
-    TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram, safe_task_local_path,
-    sample_budget_insufficient, sampled_tap, scene_from_frame,
+    ContainedTaskTrace, PageObservation, PointDraw, PreparedContainedTask, Resolution,
+    SampleRetries, TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram, TouchChoice,
+    drawn_tap, safe_task_local_path, sample_budget_insufficient, scene_from_frame, step_point_draw,
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
@@ -232,8 +232,9 @@ pub(super) struct SelectedCandidate {
     pub(super) frame: PageObservation,
     pub(super) identity: Option<String>,
     /// The step's action seed when the attempt already drew it (a scan's moves are sampled with
-    /// it); the runtime gives a step's seed once, so the selecting tap reuses it.
-    pub(super) action_seed: Option<Option<u64>>,
+    /// it); the runtime gives a step's seed once, so the selecting tap reuses it. Workflow #406
+    /// T12: with the touch keys the scan was handed.
+    pub(super) draw: Option<PointDraw>,
 }
 
 /// How one attempt of a select step ended without a failure (Workflow #308 SEL-L4b).
@@ -251,14 +252,16 @@ pub(super) enum SelectAttempt {
 }
 
 impl SelectedCandidate {
-    /// One tap sampled inside the candidate's click rectangle, as a `rect` click samples one.
-    pub(super) fn input_action(
+    /// One tap sampled inside the candidate's click rectangle, as a `rect` click samples one
+    /// (Workflow #406 T12: drawn by `draw`, landing where `choose` chooses).
+    pub(super) fn draw_input<E>(
         &self,
         resolution: &Resolution,
-        action_seed: Option<u64>,
-    ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+        draw: PointDraw,
+        choose: &mut TouchChoice<'_, E>,
+    ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskRunError<E>> {
         self.click.validate(resolution)?;
-        let (action, sampling) = sampled_tap(self.click, action_seed)?;
+        let (action, sampling) = drawn_tap(self.click, draw, choose)?;
         action.validate().map_err(|_| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
         })?;
@@ -1443,7 +1446,7 @@ impl PreparedContainedTask {
                     height: candidate.click.height,
                 },
                 frame,
-                action_seed: None,
+                draw: None,
                 identity: prepared.identity_feature().and_then(|name| {
                     match candidate.features.get(name) {
                         Some(CandidateFeature::Identity { value, .. }) => Some(value.clone()),
@@ -1567,9 +1570,7 @@ impl PreparedContainedTask {
             (first.scene.width(), first.scene.height()),
             remaining,
         )?;
-        let action_seed = runtime
-            .action_seed(step_index, &operation.id)
-            .map_err(ContainedTaskRunError::operation::<R>)?;
+        let draw = step_point_draw(runtime, step_index, &operation.id)?;
         let mut source = RuntimeScanSource::new(
             self,
             runtime,
@@ -1577,7 +1578,7 @@ impl PreparedContainedTask {
             scan,
             layout,
             first,
-            (step_index, timing, deadline, action_seed),
+            (step_index, timing, deadline, draw),
             false,
         );
         let selection = session.select(&mut source, prepared.on_empty_key.is_some());
@@ -1614,7 +1615,7 @@ impl PreparedContainedTask {
                             click,
                             frame,
                             identity: Some(identity),
-                            action_seed: Some(action_seed),
+                            draw: Some(draw),
                         }))
                     })
                     .map_err(ContainedTaskRunError::Task),

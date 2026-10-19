@@ -61,6 +61,8 @@ mod strategy;
 mod suspension_lift;
 mod suspension_report;
 mod time;
+// Workflow #406 T12: the landing history of single-region presses (memory only).
+mod touch_history;
 
 #[cfg(feature = "test-observation")]
 #[doc(hidden)]
