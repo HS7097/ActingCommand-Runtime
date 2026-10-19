@@ -1764,7 +1764,8 @@ fn decision_record(
         .min(MAX_DECISION_RECORD_CANDIDATES)
         .min(candidate_room);
     let mut omitted_why = BTreeMap::<CodeStr, usize>::new();
-    for (entry, _) in &related[shown..] {
+    // A26 red proof, mutation 2 (do not merge): the listed candidates are counted, not the others.
+    for (entry, _) in &related[..shown] {
         *omitted_why.entry(last_reason_code(entry)).or_default() += 1;
     }
     // Workflow #411 A26: the unlisted candidates' count per why, in ascending code order, also
