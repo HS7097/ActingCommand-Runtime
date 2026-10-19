@@ -1101,6 +1101,26 @@
       "description": "A resource conversion read a selection policy document above its size limit.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "package_bundle_remedy_invalid": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "remedy_problem": "required",
+        "need": "optional",
+        "capability": "optional",
+        "outcome_key": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md, contracts/package-reference.md): a package's remedy cannot be served inside its game root (remedy_problem capability_unprovided: no package of the root provides the capability a remedy names; cycle: the packages' remedies and provided capabilities form a cycle, one entry per package on it; parameters_mismatch: two providers of one capability declare different parameters). need, capability and outcome_key name the remedy where they apply. package bundle and actinglab standard-pack check list one entry in warnings per finding; nothing is refused, and the Runtime stops such a remedy for a person at run time.",
+      "common_causes": "A provider package not written yet or not listed in bundle.json.",
+      "handling": "Add or fix the provider package, or remove the capability from the remedy."
     }
   }
 }

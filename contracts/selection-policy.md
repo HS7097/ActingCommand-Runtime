@@ -348,6 +348,14 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   ledger-pinned fact snapshot, which the host takes for the step, with the record lists the
   document declares; the evaluation instant is the host's clock when the snapshot is taken.
   The evaluator still reads no clock and no ledger.
+- The snapshot also holds the run's read-only parameters (Workflow #411 B15,
+  [remedies.md](remedies.md), section 4; written ahead of slice R5): one record
+  `session.dispatch.parameter.<name>` = `<value>` (a string, instance scope) per parameter the
+  package declares, the value its policy dispatch carries in `policy_dispatch_parameters`, or the
+  declared default for a run without a dispatch. The records are an overlay, never stored. A
+  document reads one as an `enum_string` field with the declared options and should use
+  `on_unknown: abort_evaluation`; `input_sha256` covers the overlay, so two runs that differ only
+  in a value differ in that hash.
 - A document that declares a record list needs a layout whose `unknown_identity` is
   `reject`, so the evaluator never meets an unknown key; admission and the parser refuse it
   otherwise (`contained_task_select_policy_mismatch`, `resource_declaration_invalid`).

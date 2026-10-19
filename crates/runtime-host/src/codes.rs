@@ -2651,3 +2651,33 @@ actingcommand_contract::outcome_locations! {
     }
 }
 // ---- Workflow #398 RD-5b: end ----
+
+// ---- Workflow #411 B15 R0 (declared remedies): registered ahead of their slices; begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of declared remedies (Workflow #411 B15), registered in the
+    /// documentation slice R0 ahead of the slices that emit them (named on each entry).
+    /// Contracts: `contracts/remedies.md`, `contracts/instance-fact-store.md`. The evaluator's
+    /// remedy reasons and stop codes are the policy crate's (`PolicyCode`).
+    pub(crate) enum RemedyHostCode {
+        /// Info. A remedy request or retry was not admitted because its round was resolved,
+        /// stopped or expired, or its layer already served, after the evaluation that chose it;
+        /// refused as `policy.dispatch_rejected` (keys `task_id`, `instance_id`, `decision_id`;
+        /// R4).
+        PolicyRemedyRoundClosed => "policy_remedy_round_closed": info / none,
+        /// Warning. A check-config note: a remedy a bound package declares cannot be used as
+        /// configured, or a configuration row names a need, capability, parameter or option the
+        /// packages do not declare (key `remedy_problem`; optional `task_id`, `outcome_key`,
+        /// `need`, `capability`, `instance_id`, `package_id`: a blocked mapping names all of the
+        /// first three, a configuration row with an unknown need `need` only, a parameter row
+        /// none of them; R7).
+        PolicyRemedyDeclarationUnusable => "policy_remedy_declaration_unusable": warning / none,
+        /// Error. A write of `session.remedy.choices` breaks its rules; the request is refused
+        /// and nothing is appended (keys `fact_key`, `field`; optional `instance_id`; R6).
+        SessionRemedyChoicesInvalid => "session_remedy_choices_invalid": error / none,
+        /// Error. A publication names a key under `session.dispatch.`, reserved for a run's
+        /// read-only parameters; the request is refused and nothing is appended (keys
+        /// `fact_key`; R5, shared with Workflow #411 B8).
+        SessionDispatchKeyReserved => "session_dispatch_key_reserved": error / none,
+    }
+}
+// ---- Workflow #411 B15 R0: end ----

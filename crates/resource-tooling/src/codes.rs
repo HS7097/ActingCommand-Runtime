@@ -93,6 +93,13 @@ actingcommand_contract::outcome_codes! {
         /// not all pages of `pages.json` (keys `package_id`, `page_ids`), so the Runtime does
         /// not navigate to it; the report the resource CI reads.
         PackageBundleEntryPageUnlisted => "package_bundle_entry_page_unlisted": warning / none,
+        /// Warning (Workflow #411 B15, `contracts/remedies.md`; registered by R0 ahead of R1,
+        /// which reports it): a package's remedy cannot be served inside its game root: no
+        /// package of the root provides the capability, the packages form a cycle, or two
+        /// providers of one capability declare different parameters (keys `package_id`,
+        /// `remedy_problem`; optional `need`, `capability`, `outcome_key`). `package bundle` and
+        /// `actinglab standard-pack check` list one per finding in `warnings`.
+        PackageBundleRemedyInvalid => "package_bundle_remedy_invalid": warning / none,
         /// Warning (Workflow #384 D2-S2, transitional): a pack of a bundle with maintenance
         /// declarations only navigates and reads, but the declarations do not name it for
         /// `recognition` (key `package_id`). The resource repositories make it an error once

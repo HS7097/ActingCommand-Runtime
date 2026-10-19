@@ -286,7 +286,12 @@ the Runtime checks them when a run first uses them:
    and its entry is no application entry (`any`);
 3. each recovery chain, handler and `then.run` package can be a layer and declares no
    prerequisite package of its own;
-4. each handler's entry holds its interrupt page.
+4. each handler's entry holds its interrupt page;
+5. (Workflow #411 B15, [remedies.md](remedies.md); written ahead of slice R1) across the packages
+   of the game root: every capability a mapping's `remedy` names is provided by a package of the
+   root, the packages' remedies and provided capabilities form no cycle, and the providers of one
+   capability declare identical parameters. A remedy that breaks this is reported (below), never
+   refused: the Runtime stops such a remedy for a person at run time.
 
 "Can be a layer" is the Runtime's predicate (`prerequisite_incompatibility_with`): no
 `recognize_only` package, stability termination, post-admission OCR, readings, adjustments,
@@ -299,15 +304,20 @@ the `navigation_role` and `navigation_problem` the Runtime's
 `admission_failed` with the loader's refusal as its cause. Then the report "entry page not in
 the list" (M-373 §4.4, §10.1 NAV-4): one `package_bundle_entry_page_unlisted` warning (with
 `package_id` and `page_ids`) in `warnings` per pack whose entry pages, as the Runtime's entry
-gate reads them when its game has navigation data, are not all listed in `pages.json`. The
+gate reads them when its game has navigation data, are not all listed in `pages.json`. After
+them, the report of item 5: one `package_bundle_remedy_invalid` warning in `warnings` per finding,
+with `package_id`, `remedy_problem` (`capability_unprovided`: no package of the root provides the
+capability; `cycle`: one entry per package on the cycle; `parameters_mismatch`: two providers of
+one capability declare different parameters) and `need`, `capability` and `outcome_key` where they
+apply; a root whose remedies are all provided reports nothing new. The
 root files are copied byte for byte last.
 
 `actinglab standard-pack check --root <game root>` runs the same checks on an installed game
 root `<standard_packs.root>/<game>/` (the game is the directory's name; its packages are the
 directories its `bundle.json` lists): the root files it holds, the cross-check and the report.
 It only reads. Its answer is `{status: "checked", root, game, root_files, pack_count,
-warnings}`, where `warnings` is the report (empty when there is nothing to report or no
-`pages.json`); a root without any root file is `standard_pack_root_invalid` `bundle_missing`, a
+warnings}`, where `warnings` is the report (empty when there is nothing to report; its
+entry-page entries need `pages.json`); a root without any root file is `standard_pack_root_invalid` `bundle_missing`, a
 listed package without its directory `admission_failed`.
 
 The bundle index v4 (`actingcommand_contract::BundleIndex`, checked by `validate()`) is a file

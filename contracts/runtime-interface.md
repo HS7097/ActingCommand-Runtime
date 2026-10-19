@@ -312,13 +312,14 @@ Until U-6 the new option-two kinds `LoadPack` and `UnloadPack` accept only a
 ### Instance fact key families
 
 `fact_key_family(key)` in the contract looks only at a key's spelling and returns one
-of four families:
+of five families:
 
 | Family | Keys | Block |
 |---|---|---|
 | offset | `session.task.<task_id>.priority_offset` | general |
 | pack schedule (#386 SR-11) | `session.pack.schedule` | general |
 | feature lock, manual mark (#386 SR-5a) | `session.feature.<feature_key>` | general |
+| remedy choices (#411 B15 R6) | `session.remedy.choices` | general |
 | instance information | every other key | general (§14.2) |
 
 - Every family is general, so the gate takes PublishFact and PublishFacts from the three
@@ -331,6 +332,17 @@ of four families:
   Until then the function knows offset and the rest, as the contract does today.
 - U-6 deletes only the by-origin half of today's rule (agent versus person); the
   content rules (offset checks, `session_pack_schedule_invalid` and the like) stay.
+- The remedy choices family (Workflow #411 B15, [remedies.md](remedies.md); written
+  ahead of slice R6) has no code yet either: R6 adds it to the function, with the content
+  rule `session_remedy_choices_invalid`
+  ([instance-fact-store.md](instance-fact-store.md), "Remedy choice facts"). Its writers
+  are actingctl `remedy set|get|lift` and the MCP general tools `ac_remedy_set` and
+  `ac_remedy_get`.
+- The prefix `session.dispatch.` is reserved for a run's read-only parameters (Workflow
+  #411 B15 R5): it is no family, since nothing may write it; `PublishFact` and
+  `PublishFacts` of such a key are refused from every origin as
+  `session_dispatch_key_reserved`, and the records exist only as an overlay of a run's
+  snapshots ([instance-fact-store.md](instance-fact-store.md), "Run parameters").
 
 ## Lab options
 

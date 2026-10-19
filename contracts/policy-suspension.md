@@ -205,6 +205,11 @@ previous execution was an interrupted settlement too, `consecutive_same_error` 2
 holds the pair as before, until its package changes, so a task that itself ends the daemon is
 not re-admitted after every restart.
 
+A run that ends on a mapped key whose mapping declares a remedy (Workflow #411 B15,
+[remedies.md](remedies.md)) is a success: it never accumulates, records no failure identity and
+clears the pair's streak and immediate-rerun round; a block that repeats is bounded by its remedy
+round instead.
+
 ## Settlement of an accumulating failure
 
 | Previous identity of the pair | Written | Count |
@@ -336,7 +341,10 @@ only its registered names (`"detail":"codes"`).
    "recorded_sequence":0,"recorded_at_unix_ms":0,"next_dispatch":{"sequence":0,"admitted_at_unix_ms":0}}],
  "packs":[{"package_id":"...","failure_code":"recognition_sample_budget_invalid",
    "runtime_commit":"...","paused_hash_prefix":"...","current_hash_prefix":"...",
-   "instances":["..."]}]}
+   "instances":["..."]}],
+ "remedies":[{"code":"policy_remedy_unchosen","remedy_problem":"no_choice","task_id":"...",
+   "instance_id":"...","outcome_key":"...","need":"...","recorded_sequence":0,
+   "recorded_at_unix_ms":0,"lifted":{"sequence":0,"at_unix_ms":0}}]}
 ```
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
@@ -429,6 +437,25 @@ only its registered names (`"detail":"codes"`).
   the copied task's procedure binds (`null` when it cannot be measured or the task is not in the
   catalog), and `instances` the instances it was copied for and not lifted on. Each member is a
   code, an id or a hash, never a sentence.
+
+- `remedies` (Workflow #411 B15, [remedies.md](remedies.md); written ahead of slice R7, an
+  addition like `packs`): the stopped remedy rounds. One entry per
+  `policy.planning_signal_observed` record of kind `goal_missed` whose `signal_id` starts with
+  `signal:remedy:stopped:` and that is still in effect, or was lifted within 48 h of the ledger's
+  latest event; newest first, at most 200, with `remedies_total` added with their number when the
+  list is cut. A record is selected by its kind and prefix, never by its outcome.
+  - `code` is the stop code (`policy_remedy_unchosen`, `policy_remedy_unavailable` or
+    `policy_remedy_exhausted`), `remedy_problem`, `outcome_key` and `need` are its outcome's
+    values, `task_id` and `instance_id` the record's own, and `recorded_sequence` and
+    `recorded_at_unix_ms` place it in the ledger.
+  - `lifted: {sequence, at_unix_ms}` is present when a later `signal:remedy:lifted:` record of the
+    same round (the same `<hex>`) exists; without it the stop is still in effect.
+  - A record whose outcome does not read back (a code that is not a stop code, a value the entry
+    does not hold, a value of the wrong type, a missing required value), or that names no task,
+    gives `{"parse_state":"unparsed","signal_id":"...","code":"..."}`, as for `clock_slots`, and
+    no warning.
+  - MCP `ac_diagnose` carries the diagnosed instance's entries as its `remedies` rows, with the
+    same members.
 
 Every exit, usage errors included, prints that one stdout line, and the process exits by its
 outcome's category (Workflow #378 A6a): 0 for `suspended_reported`, whatever the report lists,
