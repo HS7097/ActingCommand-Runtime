@@ -938,15 +938,6 @@ fn validate_predicate_node(
             offset_ms,
             max_age_ms,
         } => {
-            if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
-                diagnostics.push(map.diagnostic(
-                    CatalogDiagnosticCode::UnknownField,
-                    format!("{path}/kind"),
-                    "fact_time_reached requires actingcommand.scheduling.v2",
-                    descriptor,
-                ));
-                return;
-            }
             validate_scope(
                 map,
                 &format!("{path}/scope"),

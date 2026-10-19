@@ -3968,6 +3968,13 @@ fn evaluate_predicate(
             let (at, fresh_until) = match fact_time(facts, scope, fact_key, *max_age_ms, time)? {
                 Ok(reading) => reading,
                 Err(problem) => {
+                    if problem == FactTimeProblem::Missing {
+                        return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                            scope: scope.clone(),
+                            fact_key: fact_key.clone(),
+                            reason: "fact_missing".to_owned(),
+                        }));
+                    }
                     reasons.push(reason_with(
                         Outcome::new(PolicyCode::FactTimeUnavailable)
                             .fact_key(fact_key.as_str())
@@ -3985,7 +3992,7 @@ fn evaluate_predicate(
             let freshness_wake = fresh_until
                 .and_then(|expiration| expiration.checked_add(1))
                 .filter(|expiration| *expiration > time.unix_ms);
-            if time.unix_ms >= target {
+            if time.unix_ms > target {
                 let mut result = PredicateEvaluation::known(true, freshness_wake);
                 result.fresh_until_unix_ms = fresh_until;
                 return Ok(result);
@@ -3999,8 +4006,7 @@ fn evaluate_predicate(
                     scope_key(scope)
                 ),
             ));
-            let mut result =
-                PredicateEvaluation::known(false, min_wake(Some(target), freshness_wake));
+            let mut result = PredicateEvaluation::known(false, None);
             result.fresh_until_unix_ms = fresh_until;
             Ok(result)
         }
