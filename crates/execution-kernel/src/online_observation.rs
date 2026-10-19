@@ -17,7 +17,7 @@ use actingcommand_contract::{
 use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
-    CandidateLayout, CandidateProjectionFailure, PackRect, RecognitionEvaluator, RecognitionTarget,
+    CandidateProjectionFailure, PackRect, RecognitionEvaluator, RecognitionTarget,
     TargetEvaluation, TargetKind, VisionProvider,
 };
 use serde_json::{Value, json};
@@ -464,12 +464,10 @@ impl PreparedPageObservation {
                 .iter()
                 .filter(|layout| layout.page_id == matched_pages[0])
             {
+                let failure_row = |error: &CandidateProjectionFailure| json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code().as_str(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
                 // #411 A21: a sample is admitted only while the row this projection ends with when
                 // a sample does not fit still fits after it, so such a projection is recorded.
-                let reserve = projection_failure_row(
-                    layout,
-                    &CandidateProjectionFailure::recording_failed(""),
-                );
+                let reserve = failure_row(&CandidateProjectionFailure::recording_failed(""));
                 let projected = context.project_candidates_with_samples(&layout.id, &[&scene], &mut |target, result, started, ended| {
                     match result {
                         Ok(value) => ppocr_diagnostics.extend(value.ppocr_diagnostics().iter().cloned()),
@@ -499,7 +497,7 @@ impl PreparedPageObservation {
                     }
                     Err(error) => {
                         complete = false;
-                        let row = projection_failure_row(layout, &error);
+                        let row = failure_row(&error);
                         (row.clone(), row)
                     }
                 };
@@ -688,11 +686,6 @@ fn fact_error(error: impl ToString) -> OnlineObservationError {
         ExecutionKernelLocation::EncodeObservationFact.location(),
         error,
     )
-}
-
-/// The row a candidate layout's failed projection is recorded with.
-fn projection_failure_row(layout: &CandidateLayout, error: &CandidateProjectionFailure) -> Value {
-    json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code().as_str(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}})
 }
 
 /// #411 A21: the tier of a row that waits for the required evidence.
