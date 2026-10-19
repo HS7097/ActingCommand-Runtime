@@ -423,7 +423,16 @@ fn gate_layer(
     }
     runtime.task_timing.replace_context(previous_timing);
     // The prerequisite package's own failure code is carried out unchanged.
-    let outcome = execution.map_err(|error| close_open(runtime, &gate.open, error, false))?;
+    let outcome = execution.map_err(|_| {
+        fail_gate(
+            runtime,
+            gate,
+            ContainedTaskRunError::task(
+                actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskPrerequisiteEntryUnmatched
+                    .as_str(),
+            ),
+        )
+    })?;
     let Some(final_page) = outcome.final_page.clone() else {
         return Err(fail_gate(
             runtime,
