@@ -247,6 +247,15 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         let verified = match session.observe_contained_page(&instance, request) {
             Ok(value) => value,
             Err(error) => {
+                // #411 A21: the answer names the Runtime's outcome and the failed request.
+                let failed = |message: String| {
+                    observation::runtime_observe_failure(
+                        message,
+                        &error.outcome(),
+                        error.received_receipt(),
+                        session.correlation_id(),
+                    )
+                };
                 // A ledger/artifact fatal is already terminal; do not append recursively.
                 if !error.is_fatal() {
                     session
@@ -255,12 +264,12 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
                             EffectDisposition::NotPerformed,
                         ))
                         .map_err(|ledger| {
-                            CliError::device(format!(
+                            failed(format!(
                                 "{error}; Runtime terminal ledger append failed: {ledger}"
                             ))
                         })?;
                 }
-                return Err(CliError::device(error.to_string()));
+                return Err(failed(error.to_string()));
             }
         };
         let observed = verified.observation();

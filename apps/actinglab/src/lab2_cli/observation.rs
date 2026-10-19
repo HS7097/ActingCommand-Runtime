@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::RuntimeReceipt;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::page_projection::{
     self as shared, ActionKey, ElementInput, ElementResolution, ElementRole, FrameIdentity,
     Geometry, MissingTarget, NotEvaluatedReason, PageProjection, ProjectionInput,
@@ -503,6 +505,29 @@ fn omit_last_near_miss(payload: &mut Value, omitted: &mut usize) -> bool {
 }
 
 /// #391 MCP-391b: Min's identity alone exceeds the hard byte limit.
+/// #411 A21: a failed `observe --capture` answers `device_error` (exit 4) with the Runtime's
+/// answer in its details: the Runtime outcome's code as `error`, the failed receipt's
+/// `req_id` and `receipt_state` when one was received, the outcome itself, the debug session's
+/// correlation and the hint to read the Runtime ledger.
+pub(super) fn runtime_observe_failure(
+    message: String,
+    outcome: &Outcome,
+    receipt: Option<&RuntimeReceipt>,
+    correlation_id: CorrelationId,
+) -> CliError {
+    let mut details = serde_json::Map::new();
+    details.insert("error".to_string(), json!(outcome.code().as_str()));
+    details.insert("state".to_string(), json!("failed"));
+    if let Some(receipt) = receipt {
+        details.insert("req_id".to_string(), json!(receipt.request_id()));
+        details.insert("receipt_state".to_string(), json!(receipt.state()));
+    }
+    details.insert("runtime_outcome".to_string(), json!(outcome));
+    details.insert("correlation_id".to_string(), json!(correlation_id));
+    details.insert("hint".to_string(), json!("inspect-runtime-ledger"));
+    CliError::device(message).with_details(Value::Object(details))
+}
+
 fn identity_limit_exceeded(actual_bytes: usize) -> CliError {
     CliError::new(
         ErrorKind::UsageValidation,
@@ -752,6 +777,11 @@ mod gate_390_navoffset;
 // end to fit.
 #[cfg(test)]
 mod gate_rc2_a9;
+
+// #411 A21 (exec key 101): a failed `observe --capture` carries the request id and the Runtime's
+// outcome.
+#[cfg(test)]
+mod gate_411_a21;
 
 #[cfg(test)]
 mod lab3_tests {

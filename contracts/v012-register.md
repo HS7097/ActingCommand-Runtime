@@ -1880,6 +1880,23 @@ or interface revision (§6) changes. The rows are a value of an existing `record
 | L4-3 | `capabilities` `touch_backends` beside `capture_backends`: `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`, each `{id, gestures, declared_support: true, status: unverified, available: false, reason_code, execution_authority: runtime, availability_checked: false}` | output member (no persisted record) (exec 98) | Lab L4 | Lab L4 | `gestures` are the Runtime input action kinds the backend performs: `nemu_ipc` `tap` and the two segmented drags; `maatouch` also `long_tap`, `swipe`, `key`, `text`; `minitouch` `tap`, `long_tap`, `swipe` and the segmented drags; `adb_shell_input` `tap`, `long_tap`, `swipe`; `reason_code` `runtime_backend_configuration_and_assets_unverified` as the capture entries |
 | L4-4 | `schema control` `capture_backend` / `touch_backend` and `session instance registry` `capture_backends` / `touch_backends` | changed values of existing members (exec 98) | Lab L4 | Lab L4 | capture `adb`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; touch `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`; `auto` and `auto-fastest` are no longer listed |
 
+### 1.123 Slice A21 (0.12.x): admission priority of online observation facts; actinglab observe failure details (#411 A21)
+
+A21: admission priority of online observation facts; actinglab observe failure details. Rule
+and answer details only; no persisted ledger shape, no wire, key or code change. The 256-row /
+64-KiB bound of each fact collection is unchanged; offline `observe` has no fact budget.
+[contained-page-observation.md](contained-page-observation.md) and
+[business-identity-consensus.md](business-identity-consensus.md) are the contract. Existing codes
+only (`observation_fact_failed`, `candidate_sample_record_failed`, `device_error`,
+`lab_tool_failed`); no catalog change. `do --capture`, which evaluates the same observation
+without explicit targets, follows the same rule.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A21-1 | the rows of `facts` and `private_facts` of an online observation | rule (no shape change) (exec 101) | A21 | A21 | rows are admitted by tier, while each fits: (1) the matched page's candidate evidence (`candidate_sample`, `candidate_projection`, `candidate_projection_failure`) and, when the pack declares target consensus, `recognition_coverage` and every `recognition_sample`; (2) `explicit_target`, `explicit_target_uses`, `explicit_target_uses_failure`, `target_failure` and the `target_evaluation` rows an `explicit_target_uses` row names; (3) every other row; kept rows stay in production order and omitted rows are counted as before (`item_count`, `omitted_count`, `target_evaluation_count`, `omitted_target_evaluation_count`, `truncated`); both collections, each with its own row sizes; when every row fits both collections are as before; a candidate sample is kept only while its projection's failure row still fits after it; explicit targets never change `status`, the projection page, the candidate sets or the elements by the budget |
+| A21-2 | the failure of an online observation over the budget | rule (no shape change) (exec 101) | A21 | A21 | only a tier-1 row that does not fit either collection fails: a candidate sample ends its projection with `candidate_sample_record_failed` (partial), a candidate projection row or a consensus sample fails the observation with `observation_fact_failed` (`operation: encode_observation_fact`), with today's cause texts; until now an optional page or target row could crowd out a required one, and the check read the controlled collection only |
+| A21-3 | a failed `actinglab observe --capture` → `device_error`, exit 4, with `details {error, state: "failed", req_id, receipt_state, runtime_outcome, correlation_id, hint: "inspect-runtime-ledger"}` | answer details added (exec 101) | A21 | A21 | `error` the Runtime outcome's code, `req_id` and `receipt_state` from the failed receipt when the client error carries one (absent otherwise), `runtime_outcome` the client error's typed outcome; the failed terminal ledger append keeps its message and gains the same details; the code and exit code are unchanged (lab-recording.md); MCP `ac_lab_observe` then answers `lab_tool_failed {exit_code: 4, req_id}` caused by `device_error` and a `foreign_other_error` holding the details, and records its `client.action` (no MCP change) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

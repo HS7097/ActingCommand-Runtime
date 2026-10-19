@@ -1489,3 +1489,17 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l4::l4_schema_control_and_the_instance_registry_name_the_explicit_runtime_choices",
 ]
 incident = ["#411 Lab L4"]
+
+# #411 A21 (v0.12.x; register §1.123; no persisted structure change): an online observation admits the rows of each fact collection (facts, private_facts) by tier while each fits: the matched page's candidate evidence (and, with target consensus, the recognition samples) first, then the explicitly requested targets' rows and the page target evaluations they reuse, then every other row; kept rows stay in production order, omitted rows are counted as before, and an observation whose rows all fit is unchanged; explicit targets never change its status, page or candidate sets; it fails only when the required evidence alone exceeds the budget (candidate samples: candidate_sample_record_failed, partial); a failed actinglab observe --capture keeps device_error (exit 4) with details {error, state, req_id, receipt_state, runtime_outcome, correlation_id, hint}
+[[gate]]
+key = "101"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_411_a21::a21_required_candidate_evidence_is_kept_when_page_rows_overflow",
+    "actingcommand-execution-kernel::lib::tests::gate_411_a21::a21_explicit_targets_do_not_change_the_outcome",
+    "actingcommand-execution-kernel::lib::tests::gate_411_a21::a21_an_observation_that_fits_is_unchanged",
+    "actingcommand-execution-kernel::lib::tests::gate_411_a21::a21_required_evidence_alone_over_budget_still_fails",
+    "actingcommand-execution-kernel::lib::tests::gate_411_a21::a21_public_and_controlled_collections_keep_the_same_required_rows",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_411_a21::a21_a_failed_capture_observe_carries_req_id_and_the_runtime_outcome",
+]
+incident = ["#411 A21"]
