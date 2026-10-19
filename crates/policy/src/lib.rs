@@ -34,6 +34,8 @@ mod tests {
     mod gate_390_pool1;
     // Workflow #405 W1: the catalog predicate `fact_time_reached`.
     mod gate_405_w1;
+    // Workflow #411 A26: a dispatch decision record says why each listed candidate did not run.
+    mod gate_411_a26;
     // Workflow #411 B15 R2: the evaluator's plan of declared remedies.
     mod gate_411_b15e;
     mod gate_d2_s1;

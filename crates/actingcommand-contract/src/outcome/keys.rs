@@ -525,4 +525,10 @@ outcome_keys! {
     due_at_unix_ms: unix_ms,
     random_delay_ms: duration_ms,
     // ---- Workflow #405 D1: end ----
+    // ---- Workflow #411 A26 (why a listed candidate did not run, persisted): begin ----
+    why: code,
+    decision_state: vocab(decision_state),
+    eligibility: vocab(eligibility),
+    omitted_why: records(why, count),
+    // ---- Workflow #411 A26: end ----
 }
