@@ -1812,6 +1812,23 @@ other failed record, and the `--record` path's handling of a failure, keep their
 | A19-1 | online `do --capture --after-page` whose wait times out → CLI error `lab_arrival_timeout`, exit 3, `blocked_by: [arrival_page]`, details unchanged; MCP `ac_lab_do` class `safety`, `lab_tool_failed {exit_code: 3}` caused by `lab_arrival_timeout` | changed answer (was `device_error`, exit 4; MCP class `device`) (exec 93) | A19 | A19 | chosen by the failure's stage `arrival` and code `lab_arrival_timeout`; the details are the operation's answer as before, `after_attachment` included; `lab_element_unavailable` stays `capability_insufficient` (exit 3) and any other failure `device_error` (exit 4); a script that tests exit 4 on a timeout reads exit 3 |
 | A19-2 | every online `do` answer has `arrival` as its last member | member order (no member added or removed) (exec 93) | A19 | A19 | success and failure, Min and Normal: `arrival` moves after `after_attachment` (and after `record` on a `--record` answer); its own members stay `status`, `elapsed_ms`, `samples`; every other member keeps its order and value; so a reader that cuts the text, such as MCP's `raw_text` (4096 bytes), keeps `state`, `failure`, `after_attachment` and the arrival's status and elapsed time, and loses samples only |
 
+### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+A Lab recording names the backend that captured a Runtime frame, and the offline capability
+listing names the capture and input backends the Runtime can use instead of the choices actingd
+refuses. No persisted ledger shape: no ledger record, wire shape, configuration key, outcome code
+or interface revision (§6) changes. The rows are a value of an existing `recording.json` member
+(a Lab file, not the ledger) and offline answer members.
+[lab-recording.md](lab-recording.md) ("`--record` on device commands") and
+[actinglab-capabilities.md](actinglab-capabilities.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L4-1 | `recording.json` frame `capture_backend` of an `observe --capture --record` frame (source `runtime_observation`) | new value of an existing member (Lab file, shape unchanged) (exec 98) | Lab L4 | Lab L4 | the backend of the Runtime frame (`ReadonlyObservation.capture_backend`), named as `capture --record` names it (`adb_screencap`, `droidcast_raw`, `nemu_ipc`, `scrcpy`), where it was `null`; the answer's `record.frame` carries the same value |
+| L4-2 | `capabilities` `capture_backends` | changed values and one entry (exec 98) | Lab L4 | Lab L4 | a `scrcpy` entry (`backend: scrcpy`, `required_assets: ["adb"]`, `device_kinds: ["handset"]`, declared support, `unverified`); `auto` and `auto-fastest` `declared_support: false`, status `unavailable`, `reason_code` `capture_backend_must_be_explicit` (was declared support, `unverified`); every entry keeps `available: false`, `availability_checked: false` and `execution_authority: runtime` |
+| L4-3 | `capabilities` `touch_backends` beside `capture_backends`: `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`, each `{id, gestures, declared_support: true, status: unverified, available: false, reason_code, execution_authority: runtime, availability_checked: false}` | output member (no persisted record) (exec 98) | Lab L4 | Lab L4 | `gestures` are the Runtime input action kinds the backend performs: `nemu_ipc` `tap` and the two segmented drags; `maatouch` also `long_tap`, `swipe`, `key`, `text`; `minitouch` `tap`, `long_tap`, `swipe` and the segmented drags; `adb_shell_input` `tap`, `long_tap`, `swipe`; `reason_code` `runtime_backend_configuration_and_assets_unverified` as the capture entries |
+| L4-4 | `schema control` `capture_backend` / `touch_backend` and `session instance registry` `capture_backends` / `touch_backends` | changed values of existing members (exec 98) | Lab L4 | Lab L4 | capture `adb`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; touch `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`; `auto` and `auto-fastest` are no longer listed |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
