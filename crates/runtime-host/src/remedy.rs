@@ -535,11 +535,7 @@ pub fn remedy_declaration_notes(
     }
     RemedyDeclarationNotes {
         notes,
-        unreadable: built
-            .unreadable
-            .iter()
-            .map(UnreadablePackage::developer_line)
-            .collect(),
+        unreadable: Vec::new(),
     }
 }
 
