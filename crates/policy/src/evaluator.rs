@@ -378,7 +378,7 @@ pub struct TaskDecision {
     /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-1): this decision's own wake, one of
     /// the values the evaluation's `next_wake_unix_ms` is the least of. Never serialized, so an
     /// evaluation's bytes are unchanged; a decision read back has none.
-    #[serde(skip)]
+    #[serde(default)]
     pub next_wake_unix_ms: Option<u64>,
 }
 
@@ -1517,7 +1517,7 @@ impl From<TaskWork> for TaskDecision {
             rank: value.rank,
             detection_suggestions: value.suggestions,
             reasons: value.reasons,
-            next_wake_unix_ms: value.next_wake_unix_ms,
+            next_wake_unix_ms: None,
         }
     }
 }

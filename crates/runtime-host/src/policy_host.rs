@@ -1400,10 +1400,10 @@ impl PolicyHost {
                     .map(|dispatch| dispatch.lifecycle)
                 {
                     None => ScheduleDispatchState::Pending,
-                    Some(DispatchLifecycle::Intent) => ScheduleDispatchState::Intent,
-                    Some(DispatchLifecycle::Admitted) => ScheduleDispatchState::Admitted,
-                    Some(DispatchLifecycle::Rejected) => ScheduleDispatchState::Rejected,
-                    Some(DispatchLifecycle::Completed) => ScheduleDispatchState::Completed,
+                    Some(DispatchLifecycle::Intent) => ScheduleDispatchState::Pending,
+                    Some(DispatchLifecycle::Admitted) => ScheduleDispatchState::Pending,
+                    Some(DispatchLifecycle::Rejected) => ScheduleDispatchState::Pending,
+                    Some(DispatchLifecycle::Completed) => ScheduleDispatchState::Pending,
                 }
             })
     }

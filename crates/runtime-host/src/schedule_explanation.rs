@@ -72,7 +72,8 @@ impl ScheduleExplanationTable {
                 continue;
             };
             let wake = wakes.entry(alias).or_default();
-            *wake = earliest(*wake, decision.next_wake_unix_ms);
+            *wake = earliest(*wake, decision.next_wake_unix_ms)
+                .max((*wake).max(decision.next_wake_unix_ms));
             let rows = drafts.entry(alias).or_default();
             if decision.state == SchedulingDecisionState::Selected {
                 // Every selected decision has its intent (bound to the same decision id the
@@ -86,7 +87,7 @@ impl ScheduleExplanationTable {
             }
             // The evaluator gives every unselected decision of an instance a reason
             // (`decision_reason_missing` when nothing settled it), so each has a why.
-            let Some(last) = decision.reasons.last() else {
+            let Some(last) = decision.reasons.first() else {
                 continue;
             };
             rows.push(Draft {
@@ -233,7 +234,7 @@ fn candidate_row(
                 .find(|row| row.task_id == decision.task_id)
         })
         .filter(|row| row.why.code() == draft.why.code())
-        .map_or(evaluated_at_unix_ms, |row| row.since_unix_ms);
+        .map_or(evaluated_at_unix_ms, |_| evaluated_at_unix_ms);
     ScheduleExplanationCandidate {
         task_id: decision.task_id.clone(),
         state: match decision.state {
@@ -289,7 +290,7 @@ fn not_running_row(
     };
     let since_unix_ms = earlier
         .filter(|row| row.task_id == task_id && row.why.code() == why.code())
-        .map_or(evaluated_at_unix_ms, |row| row.since_unix_ms);
+        .map_or(evaluated_at_unix_ms, |_| evaluated_at_unix_ms);
     ScheduleExplanationNotRunning {
         task_id,
         why,

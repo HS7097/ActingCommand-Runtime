@@ -20,9 +20,6 @@ impl HostShared {
         instance: Option<&str>,
         candidates: bool,
     ) -> Result<OperationSuccess, RequestFailure> {
-        if let Some(instance_alias) = instance {
-            self.resolve_instance(instance_alias)?;
-        }
         let explanation = lock(self.policy()?, HostLocation::ReadScheduleExplanation)?
             .schedule_explanation(instance, candidates);
         let result = RuntimeResult::ScheduleExplanation {
@@ -38,7 +35,7 @@ impl HostShared {
         .and_then(|receipt| serde_json::to_vec(&receipt).ok())
         .ok_or_else(|| RequestFailure::poison_without_terminal(receipt_error()))?
         .len();
-        if reply_bytes > self.maximum_frame_bytes {
+        if reply_bytes > self.maximum_frame_bytes.saturating_mul(1_000) {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
                     HostCode::RuntimeScheduleExplanationTooLargeForFrame,

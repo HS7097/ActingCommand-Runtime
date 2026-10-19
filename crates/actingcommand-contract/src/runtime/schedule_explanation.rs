@@ -153,7 +153,6 @@ impl RuntimeScheduleExplanation {
             for row in &entry.candidates {
                 if row.reasons.is_empty()
                     || row.reasons.len() > MAX_SCHEDULE_EXPLANATION_REASONS
-                    || row.reasons.last() != Some(row.why.code())
                     || entry
                         .selected
                         .as_ref()

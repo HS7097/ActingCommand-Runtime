@@ -289,7 +289,6 @@ impl RuntimeOperationKind {
             | Self::InstanceFactSnapshot
             | Self::PerformanceStatus
             | Self::FactRefreshStatus
-            | Self::ScheduleExplanation
             | Self::ProjectInterface
             | Self::QueryEvents
             | Self::SubscribeEvents
@@ -325,9 +324,10 @@ impl RuntimeOperationKind {
             | Self::MatchDiagnosticSignatures
             | Self::DebugPackage
             | Self::ExportEvidence => AUTHORING_RECORDED_READ,
-            Self::AgentSessionStatus | Self::ProjectPolicyInputIdentity | Self::CompileProposal => {
-                AUTHORING_QUERY
-            }
+            Self::AgentSessionStatus
+            | Self::ProjectPolicyInputIdentity
+            | Self::CompileProposal
+            | Self::ScheduleExplanation => AUTHORING_QUERY,
             Self::RecordAuthoringEvent => AUTHORING_OPERATION,
             // Option two, debugging: what only the Runtime itself could do before.
             Self::RunContainedTask
