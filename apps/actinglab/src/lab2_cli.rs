@@ -703,12 +703,8 @@ fn execute_runtime_navigation_route(
         let runtime_action = runtime_input_action(&input)?;
         // #411 Lab L3: the input names the frame its guard was decided on, which a Nemu-input
         // instance requires (as online `do` passes its before frame).
-        let action_id = execute_runtime_debug_input(
-            ctx.session,
-            ctx.instance,
-            runtime_action,
-            guard_scene.input_frame,
-        )?;
+        let action_id =
+            execute_runtime_debug_input(ctx.session, ctx.instance, runtime_action, None)?;
         let arrived = poll_for_runtime_page(
             ctx.session,
             ctx.instance,
@@ -793,13 +789,6 @@ fn resolve_runtime_navigation_edge_input(
 /// reader's drag that does not move, [`SemanticInput::long_press`]) is a long tap at its point over
 /// its duration, every other drag one swipe.
 fn runtime_input_action(input: &SemanticInput) -> CliOutcome<InputAction> {
-    if let Some((point, duration_ms)) = input.long_press() {
-        return Ok(InputAction::LongTap {
-            x: point.x,
-            y: point.y,
-            duration_ms,
-        });
-    }
     match input {
         SemanticInput::Tap { point, .. } => Ok(InputAction::Tap {
             x: point.x,

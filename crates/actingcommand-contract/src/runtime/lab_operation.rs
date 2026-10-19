@@ -48,10 +48,7 @@ impl LabOperationSelection {
                 Ok(())
             }
             Self::Coordinates {
-                action:
-                    action @ (InputAction::Tap { .. }
-                    | InputAction::LongTap { .. }
-                    | InputAction::Swipe { .. }),
+                action: action @ (InputAction::Tap { .. } | InputAction::Swipe { .. }),
             } => action.validate(),
             _ => Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidLabOperationSelection,
@@ -160,17 +157,6 @@ impl LabOperationSelection {
             Geometry::Tap { point, .. } => InputAction::Tap {
                 x: coordinate(point.x)?,
                 y: coordinate(point.y)?,
-            },
-            Geometry::Drag {
-                from_rect,
-                to_rect,
-                from,
-                to,
-                duration_ms,
-            } if from == to && from_rect == to_rect => InputAction::LongTap {
-                x: coordinate(from.x)?,
-                y: coordinate(from.y)?,
-                duration_ms,
             },
             Geometry::Drag {
                 from,

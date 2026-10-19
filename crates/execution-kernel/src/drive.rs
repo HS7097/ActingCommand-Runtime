@@ -138,17 +138,6 @@ impl DriveSemanticInput {
             // of a long press) is pressed as a long tap over its duration, as the kernel presses a
             // pack's long press; every other drag is one swipe.
             Self::Drag {
-                from_rect,
-                to_rect,
-                from,
-                to,
-                duration_ms,
-            } if from == to && from_rect == to_rect => InputAction::LongTap {
-                x: from.x,
-                y: from.y,
-                duration_ms: *duration_ms,
-            },
-            Self::Drag {
                 from,
                 to,
                 duration_ms,

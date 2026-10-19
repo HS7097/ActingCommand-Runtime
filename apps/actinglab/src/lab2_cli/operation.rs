@@ -231,9 +231,11 @@ fn recorded_click_selection(plan: &ClickPlan) -> CliOutcome<LabOperationSelectio
             x: plan.point.x,
             y: plan.point.y,
         },
-        (Some(ClickGesture::LongPress { duration_ms }), _) => InputAction::LongTap {
-            x: plan.point.x,
-            y: plan.point.y,
+        (Some(ClickGesture::LongPress { duration_ms }), _) => InputAction::Swipe {
+            x1: plan.point.x,
+            y1: plan.point.y,
+            x2: plan.point.x,
+            y2: plan.point.y,
             duration_ms,
         },
         (Some(ClickGesture::Drag { duration_ms, .. }), Some(to)) => InputAction::Swipe {
