@@ -16,13 +16,16 @@
 //! it leaves it off and reports no row; read at assembly. Workflow #398 RD-4 adds
 //! `recovery_ladder_profile` (model-398 v1.1 §6.2): the ladder profile the instance climbs by,
 //! before the section's `kind_profiles`; default `none` (no row unless the entry names it),
-//! settable, checked with the `recovery_ladder` section.
+//! settable, checked with the `recovery_ladder` section. Workflow #411 B15 R3 (model-b15 §5.2)
+//! adds `scheduling.remedy.choices`, the instance's own remedy choice rows in its entry's
+//! `scheduling` member: default the `scheduling` section's list; when set, it replaces that list
+//! as a whole; settable; its rows checked as the section's are.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder;
 use crate::scheduling::{
-    self, DELAY, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS,
+    self, DELAY, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
 };
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
@@ -119,6 +122,18 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "RD-4",
         since: "0.12.0",
     },
+    // Workflow #411 B15 R3 (model-b15 §5.2): the instance's own remedy choice rows; the section's
+    // list in effect is its default, and a list the instance sets replaces it as a whole.
+    KeyRow {
+        name: KeyName::PerInstance(REMEDY_CHOICES),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::List,
+        range: KeyRange::Any,
+        default: DefaultSource::Section(REMEDY_CHOICES),
+        settable: Settable::Yes,
+        reader: "B15-R4",
+        since: "0.12.3",
+    },
 ];
 
 /// Workflow #405: one instance's random delay member, named as the section-level key whose value
@@ -137,13 +152,16 @@ const fn random_delay_row(member: &'static str, value_type: ValueType, range: Ke
 }
 
 /// The whole-section check of one instance (§5.3): its two stuck-recovery members together form
-/// valid stuck-recovery settings, and (Workflow #405) its random delay's `min_ms` is at most its
-/// `max_ms` as both are in effect, each its own or the section's. A member the section does not
-/// carry is not checked.
+/// valid stuck-recovery settings, (Workflow #405) its random delay's `min_ms` is at most its
+/// `max_ms` as both are in effect, each its own or the section's, and (Workflow #411 B15 R3) its
+/// remedy choice rows in effect keep the rows' rules. A member the section does not carry is not
+/// checked.
 pub(crate) fn check_instance(
     instance: &str,
     value: impl Fn(&str) -> Option<FactScalar>,
 ) -> Result<(), ConfigFailure> {
+    let read = |key: &str| value(key);
+    let reader = scheduling::Reader { value: &read };
     let delay_keys = [
         RANDOM_DELAY_ENABLED,
         RANDOM_DELAY_MIN_MS,
@@ -151,12 +169,15 @@ pub(crate) fn check_instance(
     ]
     .map(|member| instance_key(instance, member));
     if delay_keys.iter().all(|key| value(key).is_some()) {
-        let read = |key: &str| value(key);
         let [enabled, min_ms, max_ms] = &delay_keys;
         scheduling::random_delay(
-            &scheduling::Reader { value: &read },
+            &reader,
             [enabled.as_str(), min_ms.as_str(), max_ms.as_str()],
         )?;
+    }
+    let choices_key = instance_key(instance, REMEDY_CHOICES);
+    if value(&choices_key).is_some() {
+        scheduling::remedy_choices(&reader, &choices_key)?;
     }
     let enabled_key = instance_key(instance, STUCK_RECOVERY);
     let cooldown_key = instance_key(instance, STUCK_RECOVERY_COOLDOWN_SECS);

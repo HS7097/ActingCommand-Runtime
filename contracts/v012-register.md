@@ -1843,6 +1843,23 @@ vocabularies are catalog entries, not rows (§7); the package members ride `pack
 | B15-10 | `task.json` mapping member `remedy {need, capabilities, default?}`; `control.json` member `provides [{capability, irreversible?, parameters?}]` | package members (`package` revision 4, §6; not ledger) | R1 | R1 | absent members serialize byte for byte as before; refusals `invalid_scheduling_outcome_declaration` (field) and `contained_task_control_invalid` (`provides_invalid`, `provides_parameters_invalid`, `provides_own_remedy`) |
 | B15-11 | the terminal's `scheduling_disposition` (`task.completed`) | read only (shape unchanged) | R4 | — | the settlement reads its `outcome_key` whatever the catalog references; a remedy key is a success: no failure identity, the streak cleared |
 
+### 1.113 Slice R3 b15c (v0.12.3): the remedy configuration keys (#411 B15; model-b15 §5.2; coordinator decisions 5 and 10 of 2026-10-19)
+
+The `scheduling` section parses, checks and defaults the three remedy keys, and the per-instance
+section each instance's own choice list (contract text by R0, §1.110 B15-8;
+[runtime-config.md](runtime-config.md)). **No persisted ledger shape** (model-b15 §10): the keys
+are rows of the existing `config.parameters.scheduling` and `config.parameters.instance` facts and
+of `host.config_overrides`; no code, key, vocabulary token or domain is added (a broken row is the
+existing `config_value_invalid` with existing `config_value_problem` tokens). `actingd-config`
+rises to revision 6, declared [5, 6] (§6): a revision-5 file is still read.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B15C-1 | `scheduling.remedy.enabled`, `.max_per_round`, `.choices` | configuration keys (§5 row; `config.parameters.scheduling` rows) | R3 | R3 (host 112) | defaults `true`, 2, `[]`, only in `actingd.defaults.json`; `max_per_round` `1..=8`; all settable; reader R4 |
+| B15C-2 | `instance.<id>.scheduling.remedy.choices` (in the file, the entry's `scheduling.remedy.choices`) | per-instance key (`config.parameters.instance` row) | R3 | R3 (host 112) | default `section:scheduling.remedy.choices`; when set (an empty list too) it replaces the section's list as a whole, never merged; settable; `EffectiveConfig::remedy(instance_id)` gives `{enabled, max_per_round, rows}` with the list in effect |
+| B15C-3 | the choice row rules (the `session.remedy.choices` shape) | rule (no shape change) | R3 | R3 (host 112) | `config_value_invalid` (`config_key`, `config_value_problem`) at load, in check-config and in `ConfigureSettings`: `wrong_type` for a row that is no object, a `row` or field missing or not a string, or a member its kind lacks; `out_of_range` for an unknown `row`, a name outside `^[a-z][a-z0-9_]{0,63}$`, `none` as a capability, or more than 256 rows; `section_check` for a row twice or a `none` with an `allow` of the same need. The failure carries the JSON pointer of the row (and member) in the key's value; it is not an outcome value, because `config_value_invalid` declares no pointer key. Whether the packages declare the names is R7's |
+| B15C-4 | `actingd-config` [5, 6] | interface revision (§6; K27) | R3 | R3 | revision 6 is revision 5 plus the optional `scheduling.remedy` object and the instance entry member `scheduling.remedy.choices`; a Runtime before v0.12.3 refuses a file that names either (the section and the entry deny unknown fields); raised once for the release |
+
 ### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
 
 A Lab recording names the backend that captured a Runtime frame, and the offline capability
@@ -1964,7 +1981,7 @@ when it takes effect.
 | `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |
 | `device_state.*` | `sample_interval_ms`, `fact_ttl_ms`, `wake_settle_ms`, `keepalive_margin_ms`, `keyguard_insecure`, `battery_min_percent`, `thermal_hold_at`, `thermal_resume_below`, `in_use_gate`, `in_use_backoff_ms` | 60 000 (5 000..=3 600 000), 180 000 (at least the sampling interval), 1 000 (100..=10 000), 60 000, `dismiss` (`dismiss` / `wait`), 15 (0..=100), `severe`, `moderate` (below `thermal_hold_at`), `false` (a dedicated handset, Alice 2026-10-13), 300 000 (10 000..=3 600 000) (model-398 §7.8); every key settable | RD-5b (built, §1.59) | RD-5b (v0.12.0) |
 | `startup_discovery.*` | `attempts`, `retry_interval_ms` | 25 (`1..=100`), 10 000 (`1000..=300000`); not settable, read once at assembly (Workflow #390 DISC-1, coordinator ruling 2 of wave 18) | DISC-1 (§1.89 DI2) | DISC-1 (v0.12.0) |
-| `scheduling.remedy.*`, and per instance `instance.<id>.scheduling.remedy.choices` (**`actingd-config` revision 6**, Workflow #411 B15; §1.110 B15-8) | `enabled`, `max_per_round`, `choices` | `true`, 2 (`1..=8`), `[]`; an instance's list replaces the section's as a whole, default the section's; every key settable; rows of the `session.remedy.choices` shape ([runtime-config.md](runtime-config.md)) | #411 B15 R3 | #411 B15 R4 (0.12.3); R7 (check-config notes) |
+| `scheduling.remedy.*`, and per instance `instance.<id>.scheduling.remedy.choices` (**`actingd-config` revision 6**, Workflow #411 B15; §1.110 B15-8) | `enabled`, `max_per_round`, `choices` | `true`, 2 (`1..=8`), `[]`; an instance's list replaces the section's as a whole, default the section's; every key settable; rows of the `session.remedy.choices` shape ([runtime-config.md](runtime-config.md)) | #411 B15 R3 (built, §1.113) | #411 B15 R4 (0.12.3); R7 (check-config notes) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A
@@ -2004,7 +2021,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 
 | Interface | v0.12.0 | Sources in this register |
 |---|---|---|
-| `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts |
+| `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read |
 | `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66 |
 | `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25) |
 | `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it |

@@ -11,7 +11,7 @@ use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
-use crate::scheduling::{FactRefreshConfig, PackAdmissionConfig, SchedulingConfig};
+use crate::scheduling::{FactRefreshConfig, PackAdmissionConfig, RemedyConfig, SchedulingConfig};
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
@@ -90,6 +90,10 @@ pub struct ConfigFailure {
     /// pointer into the configuration file) and the entry's id when it has a usable one, the
     /// values of `blackout_config_invalid`.
     blackout: Option<(String, Option<String>)>,
+    /// Workflow #411 B15 R3: the JSON pointer, into the refused key's value, of the remedy choice
+    /// row (and member) that breaks a rule. Not an outcome value: `config_value_invalid` declares
+    /// no pointer key.
+    pointer: Option<String>,
 }
 
 impl ConfigFailure {
@@ -100,7 +104,21 @@ impl ConfigFailure {
             problem: None,
             range: None,
             blackout: None,
+            pointer: None,
         }
+    }
+
+    /// Workflow #411 B15 R3: the failure with the JSON pointer, into the key's value, of the
+    /// part that breaks the rule.
+    pub fn with_pointer(mut self, pointer: impl Into<String>) -> Self {
+        self.pointer = Some(pointer.into());
+        self
+    }
+
+    /// Workflow #411 B15 R3: the JSON pointer, into the refused key's value, of the remedy choice
+    /// row (and member) that breaks a rule.
+    pub fn pointer(&self) -> Option<&str> {
+        self.pointer.as_deref()
     }
 
     /// Workflow #386 SR-1: `blackout_config_invalid` for the host blackout entry member at
@@ -470,6 +488,15 @@ impl EffectiveConfig {
     /// `check-config` and of the background after start, and the suspend codes).
     pub fn pack_admission(&self) -> Result<PackAdmissionConfig, ConfigFailure> {
         scheduling::pack_admission(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #411 B15 R3 (model-b15 §5.2): the remedy keys in effect for the instance whose
+    /// registry id is `instance_id`: `scheduling.remedy.enabled` and `.max_per_round`, and the
+    /// choice rows of `instance.<instance_id>.scheduling.remedy.choices` in effect, which is the
+    /// section's list unless the instance sets its own (that list then replaces the section's as
+    /// a whole).
+    pub fn remedy(&self, instance_id: &str) -> Result<RemedyConfig, ConfigFailure> {
+        scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
     /// The instruction value of `key`, when one is in effect.

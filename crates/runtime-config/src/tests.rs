@@ -123,9 +123,9 @@ fn d1_m2_a_file_naming_one_key_makes_it_explicit_and_leaves_the_rest_default() {
             find_row(&parameter.key).is_some_and(|(_, instance)| instance.is_some())
         })
         .count();
-    // Two instances, each with its two stuck-recovery members and (Workflow #405, parsed by #386
-    // SR-1) its three random-delay members.
-    assert_eq!(per_instance, 10, "{parameters:?}");
+    // Two instances, each with its two stuck-recovery members, (Workflow #405, parsed by #386
+    // SR-1) its three random-delay members and (Workflow #411 B15 R3) its remedy choice list.
+    assert_eq!(per_instance, 12, "{parameters:?}");
     let named = parameter(&parameters, &instance_key(INSTANCE_A, STUCK_RECOVERY));
     assert_eq!(named.value, FactScalar::Boolean(false));
     assert_eq!(named.source, ConfigParameterSource::Explicit);
