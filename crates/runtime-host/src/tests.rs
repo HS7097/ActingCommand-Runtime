@@ -116,6 +116,9 @@ mod gate_0121_a7;
 // #411 A7 task path (v0.12.2, host key 108), register §1.106: a contained task's capture failure
 // on one instance fails only that run and goes to the ladder; the Runtime goes on.
 mod gate_0122_a7t;
+// #385 P-k1b (v0.12.x, host key 110), register §1.107: the host hands each step its instance's
+// pacing factor, keeps its own deadline on the wall clock and settles on budget time.
+mod gate_0122_pk1b;
 // #411 A15 (v0.12.1-rc.2, host key 106): an unconfirmed step's terminal and receipt name the
 // page of its last frame and that frame.
 mod gate_rc2_a15;

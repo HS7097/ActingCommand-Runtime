@@ -157,7 +157,8 @@ through this gate.
 
 Beside the controller above, which it changes in nothing, the performance monitor runs the
 shadow measurement of the frozen pacing model (PERF v1.4.2 §3, §4, §4.6, §10.3). It measures,
-evaluates both views and records; it acts on nothing. `performance.pacing.mode` stays
+evaluates both views and records; the only thing read from it is the factor in effect, which
+a contained run takes at each step (Step pacing below). `performance.pacing.mode` stays
 `observe` in every release, and enabling `pace` or `full` is the person's decision
 (coordinator ruling 7 of wave 13).
 
@@ -196,9 +197,14 @@ evaluates both views and records; it acts on nothing. `performance.pacing.mode` 
   `calibration.apply = off` or with the cap at S4 it equals the normal view. Each view's
   `allowed` is the ceiling of the registered instances' shares' sum, given to the larger shares
   first, then by alias.
-- **Effect.** `observe` gives the stage S0 and the factor 1 000 to every row; `pace` would give
-  the curve's stage and factor, `full` the learning view's stage while the learning view caps
-  (P-a ends that phase). Nothing reads them yet: no dispatch, interval or deadline changes.
+- **Effect.** `observe` gives the stage S0 and the factor 1 000 to every row; `pace` gives the
+  curve's stage and factor, `full` the learning view's stage while the learning view caps (P-a
+  ends that phase) with the same factor. A contained run reads its instance's factor in effect
+  at each step (`step_pacing()`, Workflow #385 P-k): the step's waits are that many times
+  longer and its kernel limits run on a budget clock stretched by the same factor; the host's
+  deadline and lease are not stretched; a policy run is settled on its budget time. Dispatch,
+  shares and holds are unchanged (P-s, P-h). Under `observe` every factor is 1 000 and nothing
+  changes.
 - **Records.** A changed stage of a scope is one `perf.pacing_changed` whose outcome is
   `perf_stage_changed` (info): `pacing_stage_from`, `pacing_stage_to`, `responsiveness_bp`
   (`R_eff`), `factor_milli`, `pacing_cause`, `pacing_mode`, and `instance_id` (the alias) for an
@@ -221,3 +227,41 @@ evaluates both views and records; it acts on nothing. `performance.pacing.mode` 
 - **Package load (MEM-1).** A run's task timing evidence carries `package_load_ms` and
   `package_load_bytes` (register P8): how long its main package took to load and the bytes it
   holds in memory.
+
+## Step pacing (Workflow #385 P-k)
+
+Under `pace` or `full` a contained run is stretched by its instance's pacing factor, never
+paused (PERF v1.4.2 §5.1-§5.3, §5.6; register §1.107). Under `observe` every factor is 1 000
+and every wait, limit, deadline, settlement and record is the one before pacing.
+
+- **One factor per step.** Each `step_pacing()` answer (at a run's start, at each step and at
+  each entry check) hands the step `StepPacing::factor_milli`: the factor in effect for the
+  run's instance at the shadow measurement's last evaluation, read under the performance lock
+  alone. It is 1 000 under `observe`, before the first evaluation, without counters and for an
+  instance without a row. The factor holds from that answer until the next one, whatever the
+  measurement answers in between; a poisoned lock is fatal.
+- **Waits and limits.** Every wait of the kernel lasts its declared duration × f / 1000. Every
+  limit (task, step, page wait, confirmation, sampling, scan, readings, observation windows)
+  is compared on the run's budget clock, the sum over its factor segments of the segment's wall
+  time × 1000 / f; a deadline handed to code that reads the wall clock is converted to the wall
+  instant it falls on. Gesture durations, admission and preparation checks and the device
+  layer's own waits are not scaled.
+- **Host deadline and lease.** A run's host deadline (`response_deadline_ms`), its lease TTL,
+  its active checks and `contained_task_deadline_exceeded` stay wall-clock and identical at
+  every factor. A stretched run that reaches its host deadline ends
+  `contained_task_deadline_exceeded`, as before pacing; `perf_run_yielded` is not written before
+  SR-2b.
+- **Budget time and settlement.** The host keeps the run's factor segments, from one answer to
+  the next or to the end of its execution. Its budget time is its wall time less the sum over
+  its segments of the segment's wall time × (f − 1000) / f. A policy run with a segment above
+  1 000 is compared with its admitted runtime budget on its budget time, and its execution
+  record carries `wall_elapsed_ms` (the wall time, as `runtime_ms`) and `budget_elapsed_ms`
+  (register P6); a `policy_runtime_budget_exceeded` rewrite records the number compared as its
+  `runtime_ms`. The host's replay, its recovery check and the ledger's settlement check compare
+  `budget_elapsed_ms` when the record carries it, else the wall time. A run settled from its
+  terminal after a restart has no segments left and is settled on its wall time.
+- **Evidence.** A run's task timing evidence carries one `steps[]` entry (register P5) per step
+  index whose factor was above 1 000, with `pacing_factor_milli`; the attempts of one step share
+  its entry, and the entries are in step order.
+- **Not changed.** Dispatch, shares, holds and the seven-level controller do not read the mode;
+  the cost-commit gate stays unimplemented (SR-10).

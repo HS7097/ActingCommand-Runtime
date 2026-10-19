@@ -620,10 +620,8 @@ impl PolicyControlState {
         )
     }
 
-    /// The execution record a run settles to. Workflow #386 SR-2a (SCHED §4.2): `condition` is
-    /// how a run that a condition ended settled. A replay passes its record's own member, as it
-    /// passes `perf_context`, so the settlement never reads the configuration; the live
-    /// settlement passes none until SR-2b decides one.
+    /// Test builds: [`Self::preview_paced_settlement`] of a run settled on its wall time.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn preview_settlement(
         &self,
@@ -635,10 +633,44 @@ impl PolicyControlState {
         perf_context: &PerformanceContext,
         condition: Option<PolicyConditionSettlement>,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        self.preview_paced_settlement(
+            catalog,
+            intent,
+            admission,
+            timing,
+            None,
+            input,
+            perf_context,
+            condition,
+        )
+    }
+
+    /// The execution record a run settles to. Workflow #386 SR-2a (SCHED §4.2): `condition` is
+    /// how a run that a condition ended settled. A replay passes its record's own member, as it
+    /// passes `perf_context`, so the settlement never reads the configuration; the live
+    /// settlement passes none until SR-2b decides one.
+    ///
+    /// #385 P-k (PERF v1.4.2 §5.3, Tk-10): `budget_elapsed_ms` is the budget time of a run that
+    /// had a factor segment above 1000. Such a run is compared with its runtime budget on its
+    /// budget time, and a rewrite records the number compared; without one (`None`) the wall
+    /// time `timing.runtime_ms` is compared. A replay passes its record's own member.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn preview_paced_settlement(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+        timing: PolicyExecutionTiming,
+        budget_elapsed_ms: Option<u64>,
+        input: &PolicyExecutionInput,
+        perf_context: &PerformanceContext,
+        condition: Option<PolicyConditionSettlement>,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let PolicyExecutionTiming {
             observed_at_unix_ms,
             runtime_ms,
         } = timing;
+        let compared_ms = budget_elapsed_ms.unwrap_or(runtime_ms);
         let (task, _) = task_and_profile(catalog, intent)?;
         // Only a recoverable failure of a task that is not sensitive settles by a condition: its
         // record continues, and a sensitive or severe failure pauses (register S1).
@@ -660,7 +692,13 @@ impl PolicyControlState {
         // SCHED §4.2 item 4: a run a condition ended is never re-judged as over its runtime
         // budget.
         let runtime_exceeded =
-            condition.is_none() && runtime_budget_exceeded(intent, admission, runtime_ms)?;
+            condition.is_none() && runtime_budget_exceeded(intent, admission, compared_ms)?;
+        // #385 P-k: the rewrite's runtime is the number compared.
+        let runtime_ms = if runtime_exceeded {
+            compared_ms
+        } else {
+            runtime_ms
+        };
         let effective_input = if runtime_exceeded {
             PolicyExecutionInput::Failed {
                 outcome: Outcome::new(actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED),
@@ -815,12 +853,28 @@ impl PolicyControlState {
         })
     }
 
+    /// Test builds: [`Self::commit_paced_execution`] of a record settled on its wall time.
+    #[cfg(test)]
     pub(crate) fn commit_execution(
         &mut self,
         catalog: &CompiledCatalog,
         intent: &DispatchIntent,
         admission: &PolicyAdmissionRecord,
         data: &PolicyExecutionEventData,
+    ) -> RuntimeHostResult<()> {
+        self.commit_paced_execution(catalog, intent, admission, data, None)
+    }
+
+    /// Commits the execution record `data`, checked against the settlement it must be. #385 P-k
+    /// (register P6): `budget_elapsed_ms` is the budget time the record carries, which its
+    /// settlement compared; `None` for a record settled on its wall time.
+    pub(crate) fn commit_paced_execution(
+        &mut self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+        data: &PolicyExecutionEventData,
+        budget_elapsed_ms: Option<u64>,
     ) -> RuntimeHostResult<()> {
         let input = match &data.outcome {
             PolicyExecutionOutcome::Succeeded { .. } => PolicyExecutionInput::Succeeded,
@@ -847,7 +901,7 @@ impl PolicyControlState {
             PolicyExecutionOutcome::Succeeded { .. } => None,
             PolicyExecutionOutcome::Failed { failure } => failure.condition,
         };
-        let expected = self.preview_settlement(
+        let expected = self.preview_paced_settlement(
             catalog,
             intent,
             admission,
@@ -855,6 +909,7 @@ impl PolicyControlState {
                 observed_at_unix_ms: data.observed_at_unix_ms,
                 runtime_ms,
             },
+            budget_elapsed_ms,
             &input,
             &perf_context,
             condition,

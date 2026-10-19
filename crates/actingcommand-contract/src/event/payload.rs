@@ -6933,6 +6933,9 @@ struct PolicyDispatchDraft {
 
 struct PolicyExecutionDraft {
     data: PolicyExecutionEventData,
+    /// Workflow #385 P-k (register P6): the run's wall time and budget time, for a run settled
+    /// on its budget time.
+    elapsed: Option<(u64, u64)>,
     audit: AuditInput,
 }
 
@@ -7121,11 +7124,30 @@ impl PolicyDispatchDraft {
 }
 
 impl PolicyExecutionDraft {
+    /// Workflow #385 P-k (register P6): the record of a run settled on its budget time carries
+    /// its wall time `wall_elapsed_ms` and that budget time `budget_elapsed_ms`.
+    fn with_elapsed(self, wall_elapsed_ms: u64, budget_elapsed_ms: u64) -> Self {
+        Self {
+            elapsed: Some((wall_elapsed_ms, budget_elapsed_ms)),
+            ..self
+        }
+    }
+
     fn sanitize(
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<PolicyExecutionPayload, SanitizationError> {
         validate_policy_execution_data(&self.data)?;
+        // A run's budget time never exceeds its wall time (PERF §5.3: pacing only lengthens).
+        if self
+            .elapsed
+            .is_some_and(|(wall_elapsed_ms, budget_elapsed_ms)| budget_elapsed_ms > wall_elapsed_ms)
+        {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidPolicyExecutionTime,
+                "budget_elapsed_ms",
+            ));
+        }
         Ok(PolicyExecutionPayload {
             action: EventAction::PolicyExecution,
             decision_id: self.data.decision_id,
@@ -7133,8 +7155,8 @@ impl PolicyExecutionDraft {
             instance_id: self.data.instance_id,
             observed_at_unix_ms: self.data.observed_at_unix_ms,
             policy_result: self.data.outcome,
-            wall_elapsed_ms: None,
-            budget_elapsed_ms: None,
+            wall_elapsed_ms: self.elapsed.map(|(wall_elapsed_ms, _)| wall_elapsed_ms),
+            budget_elapsed_ms: self.elapsed.map(|(_, budget_elapsed_ms)| budget_elapsed_ms),
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -10668,8 +10690,28 @@ impl PolicyPayloadDraft {
     pub fn execution_recorded(data: PolicyExecutionEventData, audit: AuditInput) -> Self {
         Self(PolicyDraftKind::Execution(PolicyExecutionDraft {
             data,
+            elapsed: None,
             audit,
         }))
+    }
+
+    /// Workflow #385 P-k (register P6): the record of a run settled on its budget time, with
+    /// its wall time `wall_elapsed_ms` and that budget time `budget_elapsed_ms` (never above
+    /// the wall time).
+    pub fn execution_recorded_with_elapsed(
+        data: PolicyExecutionEventData,
+        wall_elapsed_ms: u64,
+        budget_elapsed_ms: u64,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::Execution(
+            PolicyExecutionDraft {
+                data,
+                elapsed: None,
+                audit,
+            }
+            .with_elapsed(wall_elapsed_ms, budget_elapsed_ms),
+        ))
     }
 
     pub fn planning_signal_observed(

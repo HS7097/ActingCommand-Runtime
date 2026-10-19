@@ -1289,3 +1289,15 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav3a::prq_a_prerequisite_that_meets_an_unknown_page_fails_the_run_with_its_own_code_and_starts_the_ladder",
 ]
 incident = ["#411 A16"]
+
+# #385 P-k1b (v0.12.x; register §1.107 PK1-1 to PK1-3; PERF v1.4.2 §4.6, §5.3, §5.6, §10.3, §12; Tk-5, Tk-10, Tk-13, Tm-7; Alice 2026-10-19, pending item 4): a contained run's step_pacing() hands each step its instance's pacing factor in effect (the curve's under pace, pressure floor included; 1000 under observe and before the first evaluation); a step's waits last the package's values x f / 1000 and a step above 1000 has one steps[] entry with pacing_factor_milli, none at 1000; the host's deadline and contained_task_deadline_exceeded do not move under a factor and no perf_run_yielded is written; a policy run with a segment above 1000 is compared with its runtime budget on its budget time (wall less the paced part's wall x (f - 1000) / f) and its record carries wall_elapsed_ms and budget_elapsed_ms, while the same wall time at 1000 is rewritten to policy_runtime_budget_exceeded with neither member
+[[gate]]
+key = "110"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk1b_the_step_factor_is_the_instances_factor_in_effect",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk1b_a_run_hands_each_step_its_factor_and_records_it",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk1b_the_host_deadline_does_not_move_under_a_factor",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk1b_a_stretched_policy_run_is_settled_on_its_budget_time",
+]
+incident = ["#385 P-k"]

@@ -2457,12 +2457,16 @@ impl PolicyHost {
 
     /// The record a dispatch's run settles to, or the one it already has. Workflow #386 SR-2a:
     /// `condition` is how a run that a condition ended settled; no live settlement decides one
-    /// before SR-2b, so the host's callers pass none.
+    /// before SR-2b, so the host's callers pass none. #385 P-k (Tk-10): `budget_elapsed_ms` is
+    /// the run's budget time when it had a factor segment above 1000, which the settlement
+    /// compares in place of `runtime_ms`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_execution(
         &self,
         decision_id: &str,
         observed_at_unix_ms: u64,
         runtime_ms: u64,
+        budget_elapsed_ms: Option<u64>,
         input: &PolicyExecutionInput,
         perf_context: &PerformanceContext,
         condition: Option<PolicyConditionSettlement>,
@@ -2497,7 +2501,7 @@ impl PolicyHost {
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
         let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
         self.control
-            .preview_settlement(
+            .preview_paced_settlement(
                 &catalog.compiled,
                 &intent,
                 admission,
@@ -2505,6 +2509,7 @@ impl PolicyHost {
                     observed_at_unix_ms,
                     runtime_ms,
                 },
+                budget_elapsed_ms,
                 input,
                 perf_context,
                 condition,
@@ -2512,9 +2517,12 @@ impl PolicyHost {
             .map(PolicyExecutionPreparation::New)
     }
 
+    /// Commits the record `data` of a dispatch's run; `budget_elapsed_ms` is the budget time
+    /// the record carries (#385 P-k, register P6), which its settlement compared.
     pub(crate) fn commit_execution(
         &mut self,
         data: &PolicyExecutionEventData,
+        budget_elapsed_ms: Option<u64>,
     ) -> RuntimeHostResult<()> {
         let dispatch = self
             .seen_dispatches
@@ -2546,8 +2554,13 @@ impl PolicyHost {
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
         let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
-        self.control
-            .commit_execution(&catalog.compiled, &intent, admission, data)?;
+        self.control.commit_paced_execution(
+            &catalog.compiled,
+            &intent,
+            admission,
+            data,
+            budget_elapsed_ms,
+        )?;
         dispatch.execution = Some(data.clone());
         Ok(())
     }
@@ -2807,7 +2820,14 @@ impl PolicyHost {
                     })?;
                     let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
                     let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
-                    control.commit_execution(&catalog.compiled, &intent, admission, &data)?;
+                    // #385 P-k (register P6): a record settled on its budget time replays on it.
+                    control.commit_paced_execution(
+                        &catalog.compiled,
+                        &intent,
+                        admission,
+                        &data,
+                        payload.budget_elapsed_ms(),
+                    )?;
                     dispatch.execution = Some(data);
                 }
                 // The query reads the dispatch and execution types only; the value records of

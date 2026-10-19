@@ -24,8 +24,9 @@
 //!   stage at `learning_max_stage` with a full share, and stops an instance only past the
 //!   emergency line (`learning_backstop_bp` held `pause_sustain_ms`); `allowed` is the ceiling of
 //!   the shares' sum over the registered instances, the instances with the larger shares first.
-//! - **Effect** (§10.3): `observe` gives S0 and a factor of 1 000; `pace` and `full` are computed
-//!   for the record only. Nothing here changes a dispatch, an interval or a deadline.
+//! - **Effect** (§10.3): `observe` gives S0 and a factor of 1 000; `pace` and `full` give the
+//!   curve's factor. #385 P-k: a contained run reads its instance's factor in effect at each step
+//!   ([`PacingShadow::effective_factor_milli`]); nothing here changes a dispatch or a deadline.
 //! - **Records** (§12.1, §12.2): each change of a scope's stage is one `perf_stage_changed`
 //!   outcome for `perf.pacing_changed`; `perf.summary` and the status read carry both views.
 
@@ -816,6 +817,22 @@ impl PacingShadow {
             learning_allowed,
             normal_allowed,
         }
+    }
+
+    /// #385 P-k (PERF v1.4.2 §4.6, §10.3): the factor in effect for `instance_alias` at the last
+    /// evaluation: 1 000 under `observe`, the curve's factor (pressure floor included) under
+    /// `pace` and `full`; 1 000 before the first evaluation and for an instance without a row.
+    /// It clones nothing but the number.
+    pub(crate) fn effective_factor_milli(&self, instance_alias: &str) -> u32 {
+        self.evaluated
+            .as_ref()
+            .and_then(|(_, snapshot)| {
+                snapshot
+                    .instances
+                    .iter()
+                    .find(|entry| entry.alias == instance_alias)
+            })
+            .map_or(UNIT_FACTOR_MILLI, |entry| entry.row.effective_factor_milli)
     }
 
     /// The pacing members of `perf.summary` (register P4) from the last evaluation; none before

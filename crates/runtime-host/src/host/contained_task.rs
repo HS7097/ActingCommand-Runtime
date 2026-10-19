@@ -493,6 +493,69 @@ pub(super) struct ContainedRunControl {
     /// Workflow #390 EXEC-3: set once when the host starts the run itself (a startup package,
     /// a recovery ladder rung), whose page-graph application entry runs first (R24).
     host_package: std::sync::OnceLock<()>,
+    /// #385 P-k (PERF v1.4.2 §5.3, Tk-10): set once when the run's execution ended with a factor
+    /// segment above 1000: the wall time its budget clock did not count, the sum over its
+    /// segments of wall × (f − 1000) / f. A policy run is settled on its wall time less this.
+    paced_reduction: std::sync::OnceLock<Duration>,
+}
+
+/// #385 P-k (PERF v1.4.2 §5.3, §5.6 item 2): the factor segments of one contained run. Each
+/// `step_pacing()` answer starts a segment that lasts until the next answer or the end of the
+/// run's execution; a segment's factor is the one the answer handed. Only segments above 1000
+/// are timed, on the Runtime clock, so a run whose every factor is 1000 reads no clock for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunPacing {
+    /// The factor of the latest answer; 1000 before the first.
+    factor_milli: u32,
+    /// The Runtime-clock instant the open segment started at, while its factor is above 1000.
+    open: Option<Instant>,
+    /// The sum over the closed segments above 1000 of wall × (f − 1000) / f; `None` while the
+    /// run had no segment above 1000.
+    reduction: Option<Duration>,
+}
+
+impl RunPacing {
+    const UNPACED: Self = Self {
+        factor_milli: actingcommand_contract::MIN_PACING_FACTOR_MILLI,
+        open: None,
+        reduction: None,
+    };
+
+    /// Whether an answer of `factor_milli` needs the Runtime clock's reading: it opens a segment
+    /// above 1000 or closes one.
+    fn reads_clock(self, factor_milli: u32) -> bool {
+        self.open.is_some() || factor_milli > actingcommand_contract::MIN_PACING_FACTOR_MILLI
+    }
+
+    /// A `step_pacing()` answer of `factor_milli` at `now` (read when [`Self::reads_clock`]):
+    /// the open segment closes and the answer's segment opens.
+    fn hand(&mut self, factor_milli: u32, now: Option<Instant>) {
+        if let Some(now) = now {
+            self.close(now);
+            if factor_milli > actingcommand_contract::MIN_PACING_FACTOR_MILLI {
+                self.open = Some(now);
+                self.reduction = Some(self.reduction.unwrap_or_default());
+            }
+        }
+        self.factor_milli = factor_milli;
+    }
+
+    /// Closes the open segment at `now`: its wall time less its budget time, wall × 1000 / f
+    /// as the kernel's budget clock counts it, is added to the reduction.
+    fn close(&mut self, now: Instant) {
+        if let Some(started) = self.open.take() {
+            let wall = now.saturating_duration_since(started);
+            let budget = Duration::from_nanos(
+                u64::try_from(
+                    wall.as_nanos() * u128::from(actingcommand_contract::MIN_PACING_FACTOR_MILLI)
+                        / u128::from(self.factor_milli),
+                )
+                .unwrap_or(u64::MAX),
+            );
+            let reduction = self.reduction.get_or_insert(Duration::ZERO);
+            *reduction = reduction.saturating_add(wall.saturating_sub(budget));
+        }
+    }
 }
 
 /// Workflow #336 L2d: a prepared package's `control.json` game, server and resolution, which a
@@ -548,6 +611,7 @@ impl ContainedRunControl {
             ladder_source: std::sync::OnceLock::new(),
             package_load: std::sync::OnceLock::new(),
             host_package: std::sync::OnceLock::new(),
+            paced_reduction: std::sync::OnceLock::new(),
         }
     }
 
@@ -570,6 +634,18 @@ impl ContainedRunControl {
     /// Workflow #385 MEM-1: the run's main package load, when its preparation measured it.
     pub(super) fn package_load(&self) -> Option<PackageLoad> {
         self.package_load.get().copied()
+    }
+
+    /// #385 P-k (Tk-10): the wall time the run's budget clock did not count, noted once when
+    /// its execution ended with a segment above 1000; a second note keeps the first.
+    fn note_paced_reduction(&self, reduction: Duration) {
+        let _ = self.paced_reduction.set(reduction);
+    }
+
+    /// #385 P-k (Tk-10): the wall time the run's budget clock did not count; `None` when every
+    /// factor the run was handed was 1000.
+    pub(super) fn paced_reduction(&self) -> Option<Duration> {
+        self.paced_reduction.get().copied()
     }
 
     /// Workflow #369 H-1: marks this run as a policy run whose failed lease end may hand the
@@ -1156,6 +1232,8 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// Test plan E-3 (EXEC-I3): the first failed read of the kernel's Runtime clock; the run's
     /// next capture, input or record ends the run with it.
     kernel_clock_failure: Option<RuntimeHostError>,
+    /// #385 P-k: the factor segments of the run's `step_pacing()` answers.
+    pacing: RunPacing,
 }
 
 pub(super) struct EntryRecoveryRuntime<'a, 'host> {
@@ -1530,6 +1608,12 @@ impl RuntimeContainedTask<'_> {
         let Some(context) = self.task_timing.context() else {
             return Ok(deadline);
         };
+        // #385 P-k (PERF v1.4.2 §5.3): once the run had a factor segment above 1000 the
+        // kernel's deadline lies on its budget clock, later on the Runtime clock than its
+        // reading; the run's wall ceiling, the host's deadline, bounds the read alone.
+        if self.pacing.reduction.is_some() {
+            return Ok(deadline);
+        }
         // Test plan E-3 (EXEC-I3): the kernel's deadline is an instant of the Runtime clock and
         // the geometry read compares with the process clock, so the time it leaves is carried
         // over; on the system clock the two are one clock.
@@ -3278,13 +3362,26 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
 
     /// Workflow #386 SR-1 (scheduling model §2.1 item 4): the configured base of observe-only
     /// retries (`scheduling.recognition.sample_timeout_retries`), read at each step; the pacing
-    /// curve's extra retries join with performance slice P-k.
+    /// curve's extra retries join with performance slice P-k S5.
+    ///
+    /// #385 P-k (PERF v1.4.2 §5.6 item 2, Tk-10): and the factor in effect for the run's
+    /// instance (`performance.pacing.mode`; 1000 under `observe`). The answer starts the run's
+    /// next factor segment, which its budget time and settlement read.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
             .sample_timeout_retries()
             .map_err(RequestFailure::poison_without_terminal)?;
-        Ok(StepPacing::new(retries))
+        let factor_milli = self
+            .host
+            .pacing_factor_milli(self.instance_alias)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let now = self
+            .pacing
+            .reads_clock(factor_milli)
+            .then(|| self.monotonic_now());
+        self.pacing.hand(factor_milli, now);
+        Ok(StepPacing::new(retries).with_factor_milli(factor_milli))
     }
 
     /// Workflow #373 NAV-6: the run's shared interrupt pages (`host/standard_pack.rs`).
@@ -4432,6 +4529,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         AuditInput::new(),
                     ),
                 )?;
+                // #385 P-k (PERF v1.4.2 §5.6 item 4, register P5): the factor the step started
+                // with joins the run's task timing evidence when it is above 1000.
+                self.task_timing
+                    .step_factor(step_index, self.pacing.factor_milli);
                 self.begin_diagnostic_step(step_index, *action_id.transport(), diagnostic_started)
             }
             // Workflow #308: one select attempt's decision, linked to its step and to the last
@@ -6458,6 +6559,12 @@ impl HostShared {
             Some(context.request().request_id()),
             reading_keys,
         );
+        // #385 P-k (Tk-10): a run with a factor segment above 1000 is settled on its budget
+        // time; the time its budget clock did not count stays with its dispatch's clock.
+        if let Some(reduction) = active_run.control.paced_reduction() {
+            self.note_policy_run_pacing(context.decision_id(), reduction)
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         // Slice #316-B4: a scheduled run has no client receipt; its failure returns to the
         // policy driver on this thread. Workflow #369 H-1: its ladder, if any, already holds
         // the instance: the failed lease end handed the key over.
@@ -6593,6 +6700,7 @@ impl HostShared {
             unwritten_selection_record: None,
             reading_keys,
             kernel_clock_failure: None,
+            pacing: RunPacing::UNPACED,
         };
         // Workflow #373 NAV-5 (M-373 §4.4, 「不递归」): a run the host starts itself (a startup
         // package, a ladder rung) keeps today's gate; it never navigates.
@@ -6712,6 +6820,15 @@ impl HostShared {
                 .task_failure(error.timing(), error.timing_check_position());
         }
         runtime.recheck_task_geometry(&mut execution);
+        // #385 P-k (Tk-10): the run's last factor segment ends with its execution; the time its
+        // budget clock did not count is kept for its settlement.
+        if runtime.pacing.open.is_some() {
+            let now = runtime.monotonic_now();
+            runtime.pacing.close(now);
+        }
+        if let Some(reduction) = runtime.pacing.reduction {
+            control.note_paced_reduction(reduction);
+        }
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
