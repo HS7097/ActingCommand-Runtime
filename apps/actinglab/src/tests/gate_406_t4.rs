@@ -162,8 +162,10 @@ impl Isolated {
                     "resolution": {"width": WIDTH, "height": HEIGHT},
                     "entry_task_id": "task",
                     "capture_interval_ms": 1,
-                    "step_timeout_ms": 10,
-                    "timeout_ms": 100,
+                    // The replay runs the whole route on the process's clock, so the step and
+                    // the run have the room a saved sequence needs (as `replay_frames` gives).
+                    "step_timeout_ms": 10_000,
+                    "timeout_ms": 60_000,
                     "max_steps": 2
                 }),
             ),
@@ -183,6 +185,8 @@ impl Isolated {
                     "target_page": "terminal",
                     "operations": [{
                         "id": "open_terminal",
+                        // The Lab bundle's operation requires its purpose.
+                        "purpose": "neutral fixture",
                         "from": "home",
                         "to": "terminal",
                         "click": {"kind": "rect", "x": x, "y": y, "width": width,
@@ -260,7 +264,7 @@ impl Isolated {
         fs::create_dir(&directory).unwrap();
         for (name, page) in [("0001.png", [255, 0, 0]), ("0002.png", [0, 0, 255])] {
             let path = self.frame(name, page, [0, 255, 0]);
-            fs::rename(&path, directory.join(name)).unwrap();
+            fs::rename(path, directory.join(name)).unwrap();
         }
         directory.display().to_string()
     }

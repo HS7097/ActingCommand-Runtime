@@ -10547,6 +10547,9 @@ pub(crate) fn lab_box_point(
     Ok((point, sampling.ok_or_else(sampling_invalid)?))
 }
 
+/// The two points of a Lab drag and their sampling evidence.
+pub(crate) type LabDragPoints = ((i32, i32), (i32, i32), InputSamplingEvidence);
+
 /// Workflow #406 T4: the two points the Lab drags between in the boxes `from` and `to` and their
 /// sampling evidence, drawn from `action_seed` as a run draws a drag's two regions: one
 /// centre-hotspot point each with `touch` (`center_hotspot_normal_v1`), one uniform point each
@@ -10556,7 +10559,7 @@ pub(crate) fn lab_drag_points(
     to: (i32, i32, i32, i32),
     action_seed: u64,
     touch: Option<TouchSampling>,
-) -> Result<((i32, i32), (i32, i32), InputSamplingEvidence), ContainedTaskError> {
+) -> Result<LabDragPoints, ContainedTaskError> {
     let rect = |(x, y, width, height): (i32, i32, i32, i32)| ClickRect {
         x,
         y,
