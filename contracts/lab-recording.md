@@ -410,8 +410,10 @@ Workflow #396 LAB-3. actinglab and the Lab load the OCR provider the Runtime use
 in-process `ppocr-ctc` engine over the model folders (`models\<model_ref>\`) of the vision root
 that the Runtime configuration's `vision` section names (`root`, else `vision` beside the install
 root), always on the CPU whatever `vision.execution_provider` says. actinglab reads the
-configuration its installation selects; outside an installation there is none. As in the
-Runtime, model files are read and ONNX Runtime is initialised on the first OCR request. The mark
+configuration its installation selects, or, on a single-location root
+(`runtime\BUILD-MANIFEST.json` two levels above it, no install selection; Workflow #411 A12),
+`<root>\actingd.config.json`; outside both there is none. As in the Runtime, model files are read
+and ONNX Runtime is initialised on the first OCR request. The mark
 self-test, `record stop`'s first decision and cross-check, `observe`, `recognize`, `is-visible`,
 `detect-page`, `current-page`, the guard target of `do`/`wait` and the `package dry-run` replay
 evaluate OCR targets with it.
