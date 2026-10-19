@@ -24,8 +24,9 @@ use actingcommand_contract::{
     SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
     TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
     TaskTimingStage, validate_resource_adjustments, validate_resource_readings,
-    validate_task_phases,
 };
+// #411 A20: a phased route's refusal names the refused member.
+use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::SampleRetries;
 // Workflow #373 NAV-3b: entry page sets.
@@ -7078,7 +7079,8 @@ impl TaskProgram {
             }
         }
         if let Some(phases) = &self.phases {
-            validate_task_phases(
+            validate_task_phases_located(
+                &control.game,
                 phases,
                 &self
                     .operations
@@ -7086,7 +7088,7 @@ impl TaskProgram {
                     .map(|operation| operation.id.as_str())
                     .collect::<Vec<_>>(),
             )
-            .map_err(ContainedTaskError::new)?;
+            .map_err(phase_refusal)?;
             if control.execution_mode != "navigable_route"
                 || !control.stop_on_confirmation.unwrap_or(true)
                 || self.entry_page.is_none()
@@ -7193,7 +7195,7 @@ impl TaskProgram {
                     page: self.single_entry_page().unwrap_or_default(),
                 }],
             };
-            actingcommand_contract::validate_phased_route(
+            actingcommand_contract::validate_phased_route_located(
                 &control.game,
                 &entries,
                 phases,
@@ -7201,7 +7203,7 @@ impl TaskProgram {
                 &operations,
                 self.scheduling_outcome.as_ref().unwrap(),
             )
-            .map_err(ContainedTaskError::new)?;
+            .map_err(phase_refusal)?;
         }
         self.validate_recovery(bundle)?;
         Ok(())
@@ -8497,6 +8499,25 @@ fn phase_start_invalid(
     };
     ContainedTaskError::with_detail(code.code(), detail)
         .with_values(Outcome::new(code).entry_problem(problem).page_id(page))
+}
+
+/// #411 A20: a refusal of a phased route's checks. A located refusal (`task_phases_invalid`,
+/// `task_phases_unreachable`) carries the refused member as `json_pointer` and, where it
+/// concerns one, the page (`page_id`) and the operation (`pack_operation_id`) as values, with the
+/// contract's detail; any other refusal stays its bare code.
+fn phase_refusal(refusal: TaskPhaseRefusal) -> ContainedTaskError {
+    let TaskPhaseRefusal { code, location } = refusal;
+    let Some(location) = location else {
+        return ContainedTaskError::new(code);
+    };
+    let mut outcome = Outcome::new(code).json_pointer(location.json_pointer.as_str());
+    if let Some(page) = &location.page_id {
+        outcome = outcome.page_id(page.as_str());
+    }
+    if let Some(id) = &location.pack_operation_id {
+        outcome = outcome.pack_operation_id(id.as_str());
+    }
+    ContainedTaskError::with_detail(code, location.detail()).with_values(outcome)
 }
 
 impl PageDeclaration {

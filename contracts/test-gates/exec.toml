@@ -1425,3 +1425,15 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::a17_a_source_entry_set_refusal_names_the_page_and_its_stages",
 ]
 incident = ["#411 A17"]
+
+# Workflow #411 A20 (v0.12.2; no register section, no persisted structure change; related: exec 89, A17): a refusal of a phased route's stage declarations (task_phases_invalid) or of its static walk (task_phases_unreachable) names the first refused member in declaration order as json_pointer and, where it concerns one, the page (page_id, without the game prefix) and the operation (pack_operation_id; for the walk, the operation whose destination led to the page the stage cannot leave); the developer detail adds the rule (phase_problem), the stage id and, for a stage that cannot leave a page, the start; the source build gives the same detail
+[[gate]]
+key = "94"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a20_an_unreachable_stage_names_the_stage_the_page_and_the_operation_that_led_there",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a20_a_stage_listing_an_operation_the_task_lacks_names_it",
+    "actingcommand-execution-kernel::lib::tests::gate_373_nav3b::a20_a_start_from_which_no_terminal_is_reached_names_its_stage_and_page",
+    "actingcommand-pack-containment::lib::source::tests::a20_the_source_build_names_the_stage_page_and_operation_of_an_unreachable_route",
+]
+incident = ["#411 A20"]

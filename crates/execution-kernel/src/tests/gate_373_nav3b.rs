@@ -8,6 +8,7 @@
 //! through `PreparedContainedTask::load`.
 
 use crate::{ContainedTaskCode, ContainedTaskError, ExecutionKernelCode, PreparedContainedTask};
+use actingcommand_contract::codes::TaskflowCode;
 use actingcommand_contract::outcome::Category;
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
@@ -352,4 +353,98 @@ fn phased_route_reachability_is_checked_from_every_entry_start() {
         panic!("an unreachable start was admitted");
     };
     assert_eq!(error.code().as_str(), "task_phases_unreachable", "{error}");
+}
+
+/// #411 A20 (requirements 1–4): a stage that reaches a page from which only another stage has
+/// an operation is refused `task_phases_unreachable` naming the stage (`json_pointer`), the page
+/// it cannot leave (`page_id`) and the operation whose destination led there
+/// (`pack_operation_id`); the developer detail adds the stage id and the start.
+#[test]
+fn a20_an_unreachable_stage_names_the_stage_the_page_and_the_operation_that_led_there() {
+    // `other` starts the second stage, whose only operation from it leads back to `home`,
+    // where the second stage has no operation.
+    let task = phased_task(json!(["home", "other"]), &[("stray", "other", "home", 1)]);
+    let Err(error) = admit(task) else {
+        panic!("an unreachable start was admitted");
+    };
+    assert_eq!(
+        error.code().as_str(),
+        TaskflowCode::TaskPhasesUnreachable.as_str(),
+        "{error}"
+    );
+    assert_eq!(
+        values(&error),
+        json!({"json_pointer": "/phases/1", "page_id": "home", "pack_operation_id": "stray"})
+    );
+    assert_eq!(
+        error.detail(),
+        Some(
+            "phase_problem=no_operation json_pointer=/phases/1 phase_id=business page_id=home \
+             pack_operation_id=stray entry_page=other"
+        )
+    );
+}
+
+/// #411 A20 (requirements 1, 2 and 4): a stage that lists an operation the task does not have
+/// is refused `task_phases_invalid` naming that member of the stage's operations
+/// (`json_pointer`) and the operation (`pack_operation_id`), with no page; the developer detail
+/// adds the rule and the stage id.
+#[test]
+fn a20_a_stage_listing_an_operation_the_task_lacks_names_it() {
+    let mut task = phased_task(json!("home"), &[]);
+    task["phases"][1]["operations"]
+        .as_array_mut()
+        .expect("stage operations")
+        .push(json!("missing"));
+    let Err(error) = admit(task) else {
+        panic!("a stage listing an operation the task lacks was admitted");
+    };
+    assert_eq!(
+        error.code().as_str(),
+        TaskflowCode::TaskPhasesInvalid.as_str(),
+        "{error}"
+    );
+    assert_eq!(
+        values(&error),
+        json!({"json_pointer": "/phases/1/operations/1", "pack_operation_id": "missing"})
+    );
+    assert_eq!(
+        error.detail(),
+        Some(
+            "phase_problem=operation_unknown json_pointer=/phases/1/operations/1 \
+             phase_id=business pack_operation_id=missing"
+        )
+    );
+}
+
+/// #411 A20 (requirements 1, 2 and 4): a route whose return stage loops between two pages it
+/// does not target reaches no terminal from its start; the refusal `task_phases_unreachable`
+/// names the start's stage (`json_pointer`) and its entry page (`page_id`), with no operation.
+#[test]
+fn a20_a_start_from_which_no_terminal_is_reached_names_its_stage_and_page() {
+    let mut task = phased_task(
+        json!("home"),
+        &[
+            ("back_panel", "result", "panel", 2),
+            ("reopen", "panel", "result", 2),
+        ],
+    );
+    // `back_home` stays declared, in no stage.
+    task["phases"][2]["operations"] = json!(["back_panel", "reopen"]);
+    let Err(error) = admit(task) else {
+        panic!("a route without a terminal was admitted");
+    };
+    assert_eq!(
+        error.code().as_str(),
+        TaskflowCode::TaskPhasesUnreachable.as_str(),
+        "{error}"
+    );
+    assert_eq!(
+        values(&error),
+        json!({"json_pointer": "/phases/0", "page_id": "home"})
+    );
+    assert_eq!(
+        error.detail(),
+        Some("phase_problem=no_terminal json_pointer=/phases/0 phase_id=depart page_id=home")
+    );
 }
