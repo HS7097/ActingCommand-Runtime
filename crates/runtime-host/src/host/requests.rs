@@ -513,6 +513,17 @@ impl HostShared {
                 request: task_request,
             } => {
                 self.require_physical_instance_alias(instance_alias)?;
+                // Red proof M9 (never merge): a waiting draw holds the instance.
+                if lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?
+                    .random_delay_waiting(instance_alias)
+                {
+                    return Err(RuntimeHostError::request(
+                        HostCode::DispatchRandomDelayWaiting,
+                        HostLocation::AdmitPolicyDispatch,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .into());
+                }
                 self.run_contained_task(
                     request,
                     validated,

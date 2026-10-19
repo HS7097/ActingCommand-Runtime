@@ -1617,6 +1617,14 @@ impl PolicyHost {
             .collect()
     }
 
+    /// Red proof M9 (never merge): whether a pair of `instance_alias` holds a draw.
+    pub(crate) fn random_delay_waiting(&self, instance_alias: &str) -> bool {
+        self.random_delays
+            .entries
+            .keys()
+            .any(|(_, alias)| alias == instance_alias)
+    }
+
     /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
     /// explanation for `instance` (every instance when absent), with the selected decision's
     /// dispatch state as the dispatch projection holds it now: `pending` before its intent is
