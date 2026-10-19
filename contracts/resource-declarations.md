@@ -5,8 +5,11 @@ declaration owner; see [business-identity-consensus.md](business-identity-consen
 
 `actinglab --json resource validate --repo <root> --changed-path <relative-path>`
 validates the selected program declarations. `--changed-path` is repeatable.
-`--changed-paths-file <relative-path>` accepts the NUL-terminated status/path pairs from
-native Git (git diff --name-status --no-renames -z), relative to the same repository root. An empty Git selection is
+`--changed-paths-file <path>` accepts the NUL-terminated status/path pairs from
+native Git (git diff --name-status --no-renames -z), as an absolute path, or relative to the same repository root;
+the paths inside the list stay repository-relative. The list file is not a declaration; an absolute one, wherever
+it is (for example in the Git directory of a linked worktree), is read as a bounded regular file and is not in
+`read_files`. An empty Git selection is
 reported with an empty `entries` array. Each supplied path has a result; unknown
 JSON/YAML declaration families fail rather than count as validated, except inside a directory
 the repository declares in `declaration-exclusions.json` (below).
