@@ -12,7 +12,8 @@ actingcommand_contract::outcome_codes! {
         /// says why.
         LabOcrUnavailable => "lab_ocr_unavailable": error / none,
         /// Error link. The offline tool has no Runtime configuration with a `vision` section:
-        /// it does not run from an installation, or the selected configuration has none.
+        /// it does not run from an installation or a single-location root, or the selected
+        /// configuration has none.
         LabOcrVisionUnconfigured => "lab_ocr_vision_unconfigured": error / none,
         /// Error link. The vision root's models folder holds no OCR model folder (key `path`:
         /// the models folder).

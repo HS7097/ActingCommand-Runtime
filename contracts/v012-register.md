@@ -1748,6 +1748,22 @@ rewritten, moved or deleted and is not decoded leniently.
 |---|---|---|---|---|---|
 | A10-1 | `lab.reason` of `record status` / `ac_record_status` gains the value `lab_recording_unreadable` | new value of an existing member (shape unchanged) | A10 | A10 | `lab: {status: "unavailable", reason: "lab_recording_unreadable"}` with the session's `record`, exit 0, where the answer was `record_lab_unavailable` (exit 3); step actions refuse with `record_lab_unavailable` and that reason, and `record stop` stops the session with no Lab output, both as for `lab_recording_mismatch`; a read error other than a missing file stays `record_state_io_failed`; the reason stays a Lab-crate string until B4 (exec 85) |
 
+### 1.103 Slice A12 (v0.12.1-rc.2): the Lab's OCR loader reads a single-location root's configuration (#411 A12 part 1)
+
+From v0.12.1 actinglab and the Lab, started outside an install selection from a single-location
+root (the WD-1 layout of §1.96: `runtime\BUILD-MANIFEST.json` is a file two levels above the
+executable, and that folder is no `A`/`B` slot folder), load the OCR provider over the vision
+root that `<root>\actingd.config.json` names (`vision.root`, else `<root>\vision`).
+[lab-recording.md](lab-recording.md) ("OCR in the Lab") is the contract. A12 adds no code, key,
+option, environment variable, location or shape and changes no interface revision of §6;
+`process_installation` and actingctl are unchanged, and so is which command refuses without OCR
+(part 2 of the report is a B item, coordinator decision 3 of 2026-10-19). Its catalog change is
+the text of `lab_ocr_unavailable` and `lab_ocr_vision_unconfigured` (entries, not rows, §7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A12-1 | the configuration the offline tools' OCR loader reads on a single-location root | rule (no shape change) | A12 | A12 (exec 87) | an A/B installation's selected configuration and a refused installation are unchanged; a single-location root's configuration that is missing, unreadable, no regular file or over 1 MiB is `config_read_failed`, one that does not decode `config_decode_failed`, each the cause of `lab_ocr_unavailable` and never `lab_ocr_vision_unconfigured` (coordinator decision 6 of 2026-10-19); outside both an installation and a single-location root the cause stays `lab_ocr_vision_unconfigured` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

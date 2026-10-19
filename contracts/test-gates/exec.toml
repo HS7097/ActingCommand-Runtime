@@ -1390,3 +1390,14 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a9::a9_offline_observe_of_an_unknown_scene_exits_zero_in_min",
 ]
 incident = ["#411 A9"]
+
+# Workflow #411 A12 part 1 (v0.12.1-rc.2; register §1.103; related: key 47): outside an install selection, the offline tools started from a single-location root (runtime\BUILD-MANIFEST.json two levels above the executable, no A/B slot folder) load the OCR provider over the vision root that <root>\actingd.config.json names; such a root without its configuration is config_read_failed, never lab_ocr_vision_unconfigured
+[[gate]]
+key = "87"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::ocr::gate_rc2_a12::a12_a_single_location_root_loads_the_vision_root_its_configuration_names",
+    "actingcommand-lab::lib::ocr::gate_rc2_a12::a12_a_single_location_root_without_its_configuration_is_config_read_failed",
+    "actingcommand-lab::lib::ocr::gate_rc2_a12::a12_only_a_root_with_a_build_manifest_that_is_no_slot_folder_is_a_single_location_root",
+]
+incident = ["#411 A12"]
