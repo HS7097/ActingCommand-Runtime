@@ -105,6 +105,8 @@ pub use actingcommand_execution_kernel::drive_offset_rect;
 // #411 Lab L6: the online observation's value entries, for offline `observe`, and the online
 // observation itself, which actinglab's parity test compares offline `observe` with.
 pub use actingcommand_execution_kernel::{PreparedPageObservation, observation_fields};
+// #411 Lab L7: the kernel's page check of an operation's guard, for actinglab's offline `do`.
+pub use actingcommand_execution_kernel::page_anchor_matches;
 
 pub struct Lab<P: LabPorts> {
     ports: P,

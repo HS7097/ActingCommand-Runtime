@@ -208,6 +208,64 @@ fn multi_destination_operations(
     Ok(listed)
 }
 
+/// #411 Lab L7: the guard of a click operation of a package, where the kernel checks it before the
+/// operation's input (`guard_outcome`): the frame's page must be the guard's page (`page_id`,
+/// read in its task's `game`; `any` is every page), then its target must pass.
+pub(super) struct OperationGuardPage {
+    pub task_id: String,
+    pub operation_id: String,
+    pub game: String,
+    pub page_id: String,
+}
+
+/// #411 Lab L7: the guards whose target is `target` of the click operations of every task file of
+/// `bundle`, in task-file and operation order: the operations `target` belongs to. An application
+/// effect and a select step are not clicks, and an operation without a guard (an unguarded
+/// trusted coordinate) has no target.
+pub(super) fn operation_guards(
+    bundle: &actingcommand_pack_containment::LoadedBundle,
+    target: &str,
+) -> CliOutcome<Vec<OperationGuardPage>> {
+    let prefix = format!(
+        "{}/operations/",
+        bundle.resource_root().trim_end_matches('/')
+    );
+    let mut guards = Vec::new();
+    for path in bundle
+        .entry_paths()
+        .filter(|path| path.starts_with(&prefix) && path.ends_with("/task.json"))
+    {
+        let task = bundle
+            .entry(path)
+            .map(serde_json::from_slice::<serde_json::Value>)
+            .transpose()
+            .map_err(|error| CliError::package_invalid(format!("{path}: {error}")))?
+            .ok_or_else(|| CliError::package_invalid(format!("{path} is not readable")))?;
+        let Some(operations) = task.get("operations").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for operation in operations {
+            let effect = |name: &str| operation.get(name).is_some_and(|value| !value.is_null());
+            if effect("application") || effect("select") {
+                continue;
+            }
+            let Some(guard) = operation.get("guard").filter(|guard| !guard.is_null()) else {
+                continue;
+            };
+            if guard.get("target_id").and_then(serde_json::Value::as_str) != Some(target) {
+                continue;
+            }
+            guards.push(OperationGuardPage {
+                task_id: super::required_string_field(&task, "task_id")?.to_string(),
+                operation_id: super::required_string_field(operation, "id")?.to_string(),
+                game: super::required_string_field(&task, "game")?.to_string(),
+                page_id: super::required_string_field(guard, "page_id")?.to_string(),
+            });
+        }
+    }
+    Ok(guards)
+}
+
 /// Workflow #396 LAB-3: every bundle evaluates OCR with actinglab's OCR provider, the
 /// Runtime's, when it has one.
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {

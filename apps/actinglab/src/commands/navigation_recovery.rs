@@ -1,14 +1,15 @@
 use crate::{
     CaptureBackendChoice, CaptureFreshProbeReport, CaptureFreshProbeStatus,
-    CaptureFreshnessExpectation, CliError, CliOutcome, FlagArgs, GlobalOptions, LabInputPort,
-    PackRect, PageDetector, PageEvaluation, RecognitionEvaluator, Scene, TargetEvaluation,
-    UserConfig, VecDeque, canonical_game, canonical_server, capture_diagnosis_recovery_json,
-    capture_for_command, capture_fresh_probe_report, capture_fresh_probe_report_json,
-    combine_operation_and_close, device_config, drive_cli, effective_capture_backend_choice,
-    effective_resource_root, env_detection, load_pack_from_json_str, load_page_set_from_json_str,
-    match_metric_name, open_cli_runtime_input_proxy, parse_match_metric_flag,
-    parse_optional_duration_ms, parse_optional_usize, read_user_config, readonly_cli,
-    reject_legacy_session_routing, scene_from_frame,
+    CaptureFreshnessExpectation, CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions,
+    LabInputPort, PackRect, PageDetector, PageEvaluation, RecognitionEvaluator, Scene,
+    TargetEvaluation, UserConfig, VecDeque, canonical_game, canonical_server,
+    capture_diagnosis_recovery_json, capture_for_command, capture_fresh_probe_report,
+    capture_fresh_probe_report_json, combine_operation_and_close, device_config, drive_cli,
+    effective_capture_backend_choice, effective_resource_root, env_detection,
+    load_pack_from_json_str, load_page_set_from_json_str, match_metric_name,
+    open_cli_runtime_input_proxy, parse_match_metric_flag, parse_optional_duration_ms,
+    parse_optional_usize, read_user_config, readonly_cli, reject_legacy_session_routing,
+    scene_from_frame,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -632,6 +633,11 @@ fn load_semantic_detector_with_env(
     Ok((evaluator, detector, env_resolved))
 }
 
+/// The page a frame shows. #411 Lab L7 (G12): decided as `current-page` decides it (the kernel's
+/// read-only detection), so `do`, `ensure` and `wait`, offline and in their `--capture` client
+/// forms, never take the first of several matched pages: two or more matched pages are refused
+/// with `page_recognition_conflict` (exit 2) whose details name every matched page in page order
+/// (`matched_pages`); no matched page is `standby`.
 pub(crate) fn detect_current_page(
     evaluator: &RecognitionEvaluator,
     detector: &PageDetector,
@@ -640,6 +646,20 @@ pub(crate) fn detect_current_page(
     let evaluations = detector
         .evaluate_all(evaluator, scene)
         .map_err(|err| CliError::usage(err.to_string()))?;
+    let matched_pages = evaluations
+        .iter()
+        .filter(|evaluation| evaluation.matched)
+        .map(|evaluation| evaluation.page_id.clone())
+        .collect::<Vec<_>>();
+    if matched_pages.len() > 1 {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "page_recognition_conflict",
+            format!("multiple pages matched: {}", matched_pages.join(", ")),
+            &[],
+        )
+        .with_details(json!({ "matched_pages": matched_pages })));
+    }
     if let Some(match_eval) = evaluations.iter().find(|evaluation| evaluation.matched) {
         return Ok(PageDetectionOutcome {
             page: match_eval.page_id.clone(),
