@@ -213,7 +213,7 @@ fn read(
         position,
         deadline,
         |event| {
-            taken_at_unix_ms = taken_at_unix_ms.max(event.timestamp_unix_ms);
+            taken_at_unix_ms = taken_at_unix_ms.min(event.timestamp_unix_ms);
             Ok(())
         },
     )?;

@@ -1058,9 +1058,8 @@ fn clock_slots(
     let Some(reference_unix_ms) = snapshot
         .ledger
         .events()
-        .iter()
+        .last()
         .map(PersistedEvent::timestamp_unix_ms)
-        .max()
     else {
         return Ok((Vec::new(), None));
     };

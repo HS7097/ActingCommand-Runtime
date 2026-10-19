@@ -1158,7 +1158,7 @@ fn import_dump<B: DurableStorage>(
         let captured_at = draft.timestamp_unix_ms();
         if store.indexes.contains_event_id(draft.event_id()) {
             duplicates += 1;
-            latest_verified_unix_ms = latest_verified_unix_ms.max(Some(captured_at));
+            latest_verified_unix_ms = Some(captured_at);
             continue;
         }
         let source = draft.source().copied();
@@ -1175,7 +1175,7 @@ fn import_dump<B: DurableStorage>(
         };
         store.persist_imported(event)?;
         imported += 1;
-        latest_verified_unix_ms = latest_verified_unix_ms.max(Some(captured_at));
+        latest_verified_unix_ms = Some(captured_at);
     }
     let now = unix_ms_now()?;
     let gap_end = modified_unix_ms.unwrap_or(now);
@@ -1257,10 +1257,8 @@ pub(super) fn append_tail_gap<B: DurableStorage>(
     let now = unix_ms_now()?;
     let gap_start = store
         .events
-        .iter()
-        .map(PersistedEvent::timestamp_unix_ms)
-        .max()
-        .unwrap_or(now)
+        .last()
+        .map_or(now, PersistedEvent::timestamp_unix_ms)
         .clamp(1, now);
     let draft = ledger_draft(
         LedgerPayloadDraft::dump_gap(

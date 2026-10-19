@@ -671,9 +671,8 @@ impl StabilityCounter {
             .or_default()
             .entry(item.id.clone())
             .or_default();
-        let place = window.partition_point(|counted| *counted <= record.at_unix_ms);
-        window.insert(place, record.at_unix_ms);
-        let latest_unix_ms = window.back().copied().unwrap_or(record.at_unix_ms);
+        window.push_back(record.at_unix_ms);
+        let latest_unix_ms = record.at_unix_ms;
         while window
             .front()
             .is_some_and(|first| latest_unix_ms.saturating_sub(*first) > burst.window_ms)
