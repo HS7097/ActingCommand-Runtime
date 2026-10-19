@@ -943,10 +943,8 @@ impl RandomDelayTable {
         let eligible = evaluation
             .decisions
             .iter()
-            .filter(|decision| {
-                decision.eligibility == EligibilityState::True
-                    && decision.state != SchedulingDecisionState::Blocked
-            })
+            // Red proof M6 (never merge): a false trigger no longer ends an entry.
+            .filter(|decision| decision.eligibility != EligibilityState::Unknown)
             .filter_map(|decision| {
                 Some((decision.task_id.as_str(), decision.instance_id.as_deref()?))
             })
