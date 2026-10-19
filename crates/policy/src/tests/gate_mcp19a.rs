@@ -70,14 +70,6 @@ fn mcp19a_each_decision_carries_its_own_wake() {
 #[test]
 fn mcp19a_the_decision_wake_is_not_serialized() {
     let evaluation = two_waiting_tasks();
-    assert!(
-        evaluation
-            .decisions
-            .iter()
-            .all(|decision| decision.next_wake_unix_ms.is_some()),
-        "every decision has its wake in memory: {:?}",
-        evaluation.decisions
-    );
     let serialized = serde_json::to_value(&evaluation).expect("serialized evaluation");
     let decisions = serialized["decisions"]
         .as_array()
@@ -89,4 +81,12 @@ fn mcp19a_the_decision_wake_is_not_serialized() {
             "a serialized decision carries no wake: {decision}"
         );
     }
+    assert!(
+        evaluation
+            .decisions
+            .iter()
+            .all(|decision| decision.next_wake_unix_ms.is_some()),
+        "every decision has its wake in memory: {:?}",
+        evaluation.decisions
+    );
 }
