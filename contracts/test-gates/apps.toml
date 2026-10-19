@@ -734,3 +734,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a14_ac_lab_do_with_target_tap_and_tap_is_arguments_invalid_naming_tap",
 ]
 incident = ["#411 A8", "#411 A14"]
+
+# #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, lease_id, no_wait, recovery_timeout_ms or recovery_poll_ms, nor ac_lab_observe require_fresh, so a call naming one answers arguments_invalid {argument, argument_problem: unknown} (class usage) before the install is located and before any actinglab child runs; ac_lab_do with capture true and dry_run not true setting destructive or allow_destructive answers arguments_invalid {argument, argument_problem: conflicting} equally before any child; offline (scene), with dry_run, or with both guard arguments false the call passes MCP's own checks
+[[gate]]
+key = "76"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_ac_lab_do_and_ac_lab_observe_refuse_the_removed_arguments_as_unknown",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_ac_lab_do_with_capture_refuses_the_destructive_guard_as_conflicting",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_destructive_guard_passes_offline_and_with_dry_run",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_tool_schemas_drop_the_removed_arguments",
+]
+incident = ["#411 Lab L1"]

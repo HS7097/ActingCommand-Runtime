@@ -85,6 +85,12 @@ struct Lab2CommandContract {
 
 pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    let path = if flags.bool("--capture") {
+        &OBSERVE_CAPTURE
+    } else {
+        &OBSERVE_SCENE
+    };
+    refuse_unread_flags(&flags, path, &OBSERVE_PATHS)?;
     if flags.optional_path("--with-frame").is_some() {
         crate::dry_run_gate::refuse(global, "observe --with-frame", Some("observe"), Value::Null)?;
     }
@@ -1081,6 +1087,262 @@ fn isolated_offline_error_details(
     Ok(details)
 }
 
+// #411 Lab L1 (G7; coordinator decision 11 of 2026-10-19): every path of `observe`, `do`,
+// `ensure` and `wait` names the flags it reads, and a flag the chosen path does not read is
+// refused before anything is loaded, captured or pressed, never accepted and ignored
+// (contained-lab-operation.md, actinglab-capabilities.md). Global options (`--instance`,
+// `--dry-run`, `--verbose`, ...) are taken before the verb sees its flags.
+
+/// One path of a Lab2 verb: its name in the refusal and the flags it reads besides
+/// `LAB2_EVERY_PATH_READS`. A flag a path reads only to refuse it with its own message (`--scene`
+/// with `--capture`, `--preview` or `--after-page` without an online action) counts as read.
+struct Lab2Path {
+    name: &'static str,
+    reads: &'static [&'static str],
+}
+
+/// The flags every path of the four verbs reads: the instance and the answer's projection.
+const LAB2_EVERY_PATH_READS: [&str; 4] = ["--instance", "--fields", "--pretty", "--verbose"];
+
+/// What is wrong with a refused flag, spelled as the `argument_problem` values of MCP's
+/// `arguments_invalid`.
+#[derive(Clone, Copy)]
+enum UnreadFlag {
+    /// No path of the verb reads it.
+    Unknown,
+    /// Another path of the verb reads it, not the chosen one.
+    Conflicting,
+}
+
+impl UnreadFlag {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Conflicting => "conflicting",
+        }
+    }
+}
+
+const OBSERVE_SCENE: Lab2Path = Lab2Path {
+    name: "observe --scene",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--targets",
+        "--with-frame",
+        "--preview",
+        "--test-capture-delay-ms",
+    ],
+};
+const OBSERVE_CAPTURE: Lab2Path = Lab2Path {
+    name: "observe --capture",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--targets",
+        "--with-frame",
+        "--preview",
+        "--record",
+    ],
+};
+const OBSERVE_PATHS: [&Lab2Path; 2] = [&OBSERVE_SCENE, &OBSERVE_CAPTURE];
+
+const DO_SCENE: Lab2Path = Lab2Path {
+    name: "do --scene",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--dry-run",
+        "--target",
+        "--allow-destructive",
+        "--destructive",
+        "--test-capture-delay-ms",
+        "--preview",
+        "--after-page",
+        "--after-timeout-ms",
+    ],
+};
+const DO_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
+    name: "do --capture --dry-run",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--dry-run",
+        "--target",
+        "--allow-destructive",
+        "--destructive",
+        "--preview",
+        "--after-page",
+        "--after-timeout-ms",
+    ],
+};
+/// Online `do --capture`: the element or coordinates, the hints, the arrival condition, the
+/// recording and the preview (contained-lab-operation.md); the destructive guard flags are read
+/// only by offline and dry-run planning.
+const DO_CAPTURE: Lab2Path = Lab2Path {
+    name: "do --capture",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--tap",
+        "--swipe",
+        "--projection-sequence",
+        "--projection-hash",
+        "--after-page",
+        "--after-timeout-ms",
+        "--record",
+        "--tap-rect",
+        "--preview",
+    ],
+};
+const DO_PATHS: [&Lab2Path; 3] = [&DO_SCENE, &DO_CAPTURE_DRY_RUN, &DO_CAPTURE];
+
+const ENSURE_SCENE: Lab2Path = Lab2Path {
+    name: "ensure --scene",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--dry-run",
+        "--to",
+        "--page",
+        "--allow-destructive",
+        "--test-capture-delay-ms",
+    ],
+};
+const ENSURE_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
+    name: "ensure --capture --dry-run",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--dry-run",
+        "--to",
+        "--page",
+        "--allow-destructive",
+    ],
+};
+const ENSURE_CAPTURE: Lab2Path = Lab2Path {
+    name: "ensure --capture",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--to",
+        "--page",
+        "--allow-destructive",
+        "--step-timeout-ms",
+        "--poll-ms",
+    ],
+};
+const ENSURE_PATHS: [&Lab2Path; 3] = [&ENSURE_SCENE, &ENSURE_CAPTURE_DRY_RUN, &ENSURE_CAPTURE];
+
+const WAIT_SCENE: Lab2Path = Lab2Path {
+    name: "wait --scene",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--page",
+        "--stable",
+        "--timeout-ms",
+        "--poll-ms",
+        "--test-capture-delay-ms",
+    ],
+};
+const WAIT_CAPTURE: Lab2Path = Lab2Path {
+    name: "wait --capture",
+    reads: &[
+        "--capture",
+        "--scene",
+        "--package",
+        "--zip",
+        "--page",
+        "--stable",
+        "--timeout-ms",
+        "--poll-ms",
+    ],
+};
+const WAIT_PATHS: [&Lab2Path; 2] = [&WAIT_SCENE, &WAIT_CAPTURE];
+
+impl Lab2Path {
+    fn reads_flag(&self, flag: &str) -> bool {
+        LAB2_EVERY_PATH_READS.contains(&flag) || self.reads.contains(&flag)
+    }
+}
+
+/// The path `do` takes: online with `--capture` (planned with `--dry-run`), else offline.
+fn do_path(flags: &FlagArgs, dry_run: bool) -> &'static Lab2Path {
+    match (flags.bool("--capture"), dry_run) {
+        (true, false) => &DO_CAPTURE,
+        (true, true) => &DO_CAPTURE_DRY_RUN,
+        (false, _) => &DO_SCENE,
+    }
+}
+
+/// The path `ensure` takes, as `do`'s.
+fn ensure_path(flags: &FlagArgs, dry_run: bool) -> &'static Lab2Path {
+    match (flags.bool("--capture"), dry_run) {
+        (true, false) => &ENSURE_CAPTURE,
+        (true, true) => &ENSURE_CAPTURE_DRY_RUN,
+        (false, _) => &ENSURE_SCENE,
+    }
+}
+
+/// #411 Lab L1: refuses every flag `path` does not read with `validation_failed` (exit 2). The
+/// details name the first refused flag (in name order) as `argument` with its `argument_problem`,
+/// and every refused flag in `arguments`: `unknown` when no path of the verb (`verb`) reads it,
+/// `conflicting` when another one does.
+fn refuse_unread_flags(flags: &FlagArgs, path: &Lab2Path, verb: &[&Lab2Path]) -> CliOutcome<()> {
+    let refused = flags
+        .flags
+        .keys()
+        .filter(|flag| !path.reads_flag(flag))
+        .map(|flag| {
+            let problem = if verb.iter().any(|other| other.reads_flag(flag)) {
+                UnreadFlag::Conflicting
+            } else {
+                UnreadFlag::Unknown
+            };
+            (flag.as_str(), problem)
+        })
+        .collect::<Vec<_>>();
+    let Some((first, problem)) = refused.first().copied() else {
+        return Ok(());
+    };
+    let names = refused
+        .iter()
+        .map(|(flag, _)| *flag)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(CliError::usage(format!(
+        "{} does not read {names}; an option its path does not read is refused, never ignored",
+        path.name
+    ))
+    .with_details(json!({
+        "argument": first,
+        "argument_problem": problem.as_str(),
+        "arguments": refused
+            .iter()
+            .map(|(flag, problem)| json!({"argument": flag, "argument_problem": problem.as_str()}))
+            .collect::<Vec<_>>(),
+    })))
+}
+
 fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> CliOutcome<()> {
     if flags.optional_path("--scene").is_some() {
         return Err(CliError::usage(format!(
@@ -1092,15 +1354,16 @@ fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> Cli
 
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    // #411 Lab L1: online `do --capture` does not read the destructive guard flags.
+    refuse_unread_flags(&flags, do_path(&flags, dry_run), &DO_PATHS)?;
     // Workflow #410 item 1: do's preview is of the frame after the action it performed.
-    if flags.bool("--preview")
-        && (global.dry_run || flags.bool("--dry-run") || !flags.bool("--capture"))
-    {
+    if flags.bool("--preview") && (dry_run || !flags.bool("--capture")) {
         return Err(CliError::usage(
             "do --preview previews the frame after a performed action: it requires --capture without --dry-run",
         ));
     }
-    if flags.bool("--capture") && !(global.dry_run || flags.bool("--dry-run")) {
+    if flags.bool("--capture") && !dry_run {
         return operation::run_contained_lab_do(global, &flags);
     }
     if flags.optional("--after-page").is_some() || flags.optional("--after-timeout-ms").is_some() {
@@ -1111,7 +1374,6 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     let ids = Lab2Ids::new();
     let target = target_argument(&flags, "do")?;
     let instance = lab2_instance(global, &flags);
-    let dry_run = global.dry_run || flags.bool("--dry-run");
     let allow_destructive = flags.bool("--allow-destructive");
     if flags.bool("--destructive") && !allow_destructive {
         let details = isolated_offline_error_details(
@@ -1237,9 +1499,10 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
 
 pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    refuse_unread_flags(&flags, ensure_path(&flags, dry_run), &ENSURE_PATHS)?;
     let ids = Lab2Ids::new();
     let to = ensure_target_page(&flags)?;
-    let dry_run = global.dry_run || flags.bool("--dry-run");
     let allow_destructive = flags.bool("--allow-destructive");
     if !dry_run && !flags.bool("--capture") {
         return Err(CliError::usage(
@@ -1323,6 +1586,12 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
 
 pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    let path = if flags.bool("--capture") {
+        &WAIT_CAPTURE
+    } else {
+        &WAIT_SCENE
+    };
+    refuse_unread_flags(&flags, path, &WAIT_PATHS)?;
     if flags.bool("--capture") {
         return run_runtime_wait(global, &flags);
     }
@@ -1520,7 +1789,6 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             optional: &[
                 "--targets <id,id>",
                 "--with-frame <path>",
-                "--require-fresh",
                 "--fields <field,field>",
                 "--verbose",
                 "--pretty",
@@ -1555,14 +1823,9 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--after-page <full-page-id>",
                 "--after-timeout-ms <100..10000; default 5000>",
                 "--dry-run",
-                "--allow-destructive",
-                "--destructive",
-                "--priority <normal|high>",
-                "--lease-id <id>",
+                "--allow-destructive (with --scene or --dry-run; refused by online do --capture)",
+                "--destructive (with --scene or --dry-run; refused by online do --capture)",
                 "--fields <field,field>",
-                "--no-wait",
-                "--recovery-timeout-ms <ms>",
-                "--recovery-poll-ms <ms>",
                 "--record (with --capture: click the open recording step and record it)",
                 "--tap-rect <x,y,w,h> (only with --record: declare the step click rectangle)",
                 "--preview (with --capture, not --dry-run: also preview the after frame of a known page)",
@@ -1598,12 +1861,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             optional: &[
                 "--dry-run",
                 "--allow-destructive",
-                "--lease-id <id>",
-                "--step-timeout-ms <ms>",
-                "--poll-ms <ms>",
-                "--no-wait",
-                "--recovery-timeout-ms <ms>",
-                "--recovery-poll-ms <ms>",
+                "--step-timeout-ms <ms> (with --capture, not --dry-run)",
+                "--poll-ms <ms> (with --capture, not --dry-run)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &["req_id", "state", "page", "to", "route", "steps", "ledger"],

@@ -1843,6 +1843,26 @@ vocabularies are catalog entries, not rows (§7); the package members ride `pack
 | B15-10 | `task.json` mapping member `remedy {need, capabilities, default?}`; `control.json` member `provides [{capability, irreversible?, parameters?}]` | package members (`package` revision 4, §6; not ledger) | R1 | R1 | absent members serialize byte for byte as before; refusals `invalid_scheduling_outcome_declaration` (field) and `contained_task_control_invalid` (`provides_invalid`, `provides_parameters_invalid`, `provides_own_remedy`) |
 | B15-11 | the terminal's `scheduling_disposition` (`task.completed`) | read only (shape unchanged) | R4 | — | the settlement reads its `outcome_key` whatever the catalog references; a remedy key is a success: no failure identity, the streak cleared |
 
+### 1.118 Slice Lab L1 (v0.12.x): a Lab2 verb refuses an option its path does not read (#411 Lab L1; G7; coordinator decision 11 of 2026-10-19)
+
+Each path of actinglab `observe`, `do`, `ensure` and `wait` (offline with `--scene`; online with
+`--capture`; for `do` and `ensure` also `--capture --dry-run`) reads a fixed set of options and
+refuses every other one before it loads, captures or presses anything, instead of accepting and
+ignoring it. [actinglab-capabilities.md](actinglab-capabilities.md) and
+[contained-lab-operation.md](contained-lab-operation.md) are the contract. No persisted ledger
+shape changes, and no code, key, wire, configuration or interface revision (§6): the CLI refusal
+is the existing `validation_failed` (exit 2) and MCP's the existing `arguments_invalid` with its
+`argument` / `argument_problem` values. Global options are not verb options and are unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L1-1 | the refusal: `validation_failed`, exit 2, details `{argument, argument_problem, arguments: [{argument, argument_problem}]}` | new details of an existing code (exec 96) | Lab L1 | Lab L1 | `argument` is the first refused option in name order; `argument_problem` is `unknown` when no path of the verb reads the option and `conflicting` when another path does |
+| L1-2 | online `do --capture` (not `--dry-run`) with `--destructive` or `--allow-destructive` | changed answer: refused as `conflicting` (was accepted and ignored) (exec 96) | Lab L1 | Lab L1 | before any Runtime connection; offline (`--scene`) and `--dry-run` planning read both as before; the declaration says so |
+| L1-3 | declared options: `do` loses `--no-wait`, `--recovery-timeout-ms`, `--recovery-poll-ms`, `--priority`, `--lease-id`; `ensure` loses `--no-wait`, `--recovery-timeout-ms`, `--recovery-poll-ms`, `--lease-id`; `observe` loses `--require-fresh` | removed CLI options (`schema`, `capabilities`) (exec 96) | Lab L1 | Lab L1 | no path read them; each is now refused as `unknown` on every path; `ensure --lease-id` by decision 11 (plan R2 named `--no-wait` and `--recovery-*`) |
+| L1-4 | any other option a path does not read | changed answer: refused (was accepted and ignored) (exec 96) | Lab L1 | Lab L1 | for example the loose declaration flags `--pack`, `--pack-root`, `--pages`, `--navigation` (these verbs read the package only), `--state-dir` without `--record`, `--test-capture-delay-ms` with `--capture`, `--tap` / `--swipe` / `--projection-*` without online `do --capture`, `--step-timeout-ms` / `--poll-ms` on `ensure` without online execution; a script passing one now fails with exit 2 |
+| L1-5 | MCP `ac_lab_do` without `priority`, `lease_id`, `no_wait`, `recovery_timeout_ms`, `recovery_poll_ms`; `ac_lab_observe` without `require_fresh` | removed tool arguments: `arguments_invalid {argument, argument_problem: unknown}` (class `usage`) (apps 76) | Lab L1 | Lab L1 | refused before the install is located and before any actinglab child runs (the schema's `additionalProperties: false`) |
+| L1-6 | MCP `ac_lab_do` with `capture: true`, `dry_run` not `true`, and `destructive` or `allow_destructive` `true` | changed answer: `arguments_invalid {argument, argument_problem: conflicting}` (class `usage`) (was passed to actinglab and ignored) (apps 76) | Lab L1 | Lab L1 | before any child, nothing recorded; offline, with `dry_run` or with both `false` the call goes on; any other path conflict is actinglab's refusal relayed as `lab_tool_failed` caused by `validation_failed` (the descriptions say so) |
+
 ### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
 
 A Lab recording names the backend that captured a Runtime frame, and the offline capability

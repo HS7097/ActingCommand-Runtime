@@ -24,6 +24,9 @@ mod gate_rc2_a9;
 // #411 Lab L4 (exec key 98): the capability listing names the backends the Runtime can use.
 #[path = "gate_lab_l4.rs"]
 mod gate_lab_l4;
+// #411 Lab L1 (exec key 96): a Lab2 verb refuses an option its path does not read.
+#[path = "gate_lab_l1.rs"]
+mod gate_lab_l1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
@@ -4003,27 +4006,13 @@ fn lab2_synthetic_cross_game_pack_runs_core_verbs_without_game_flag() {
     );
     let scene = temp.path().join("synthetic-home.png");
     fs::write(&scene, encode_png(1, 1, [10, 20, 30])).unwrap();
-    let pack = temp.path().join("synthetic.pack.json");
-    let pages = temp.path().join("synthetic.pages.json");
-    let navigation = temp.path().join("synthetic.navigation.json");
-    let shared = [
-        "--pack",
-        pack.to_str().unwrap(),
-        "--pack-root",
-        temp.path().to_str().unwrap(),
-        "--pages",
-        pages.to_str().unwrap(),
-        "--navigation",
-        navigation.to_str().unwrap(),
-    ];
+    // #411 Lab L1: the four verbs read their package, never the loose declaration files, so they
+    // are given the package alone (`run_semantic_cli` adds it); `--pack`, `--pack-root`,
+    // `--pages` and `--navigation` would be refused as options they do not read.
 
     let observe = run_semantic_cli(
         &temp,
-        ["--json", "observe"]
-            .into_iter()
-            .chain(shared.iter().copied())
-            .chain(["--scene", scene.to_str().unwrap()])
-            .collect::<Vec<_>>(),
+        ["--json", "observe", "--scene", scene.to_str().unwrap()],
         true,
     );
     assert_eq!(observe.exit_code(), 0, "{}", observe.envelope_json());
@@ -4045,14 +4034,6 @@ fn lab2_synthetic_cross_game_pack_runs_core_verbs_without_game_flag() {
             "--dry-run",
             "do",
             "synthetic_button",
-            "--pack",
-            pack.to_str().unwrap(),
-            "--pack-root",
-            temp.path().to_str().unwrap(),
-            "--pages",
-            pages.to_str().unwrap(),
-            "--navigation",
-            navigation.to_str().unwrap(),
             "--scene",
             scene.to_str().unwrap(),
         ],
@@ -4067,14 +4048,6 @@ fn lab2_synthetic_cross_game_pack_runs_core_verbs_without_game_flag() {
             "--dry-run",
             "ensure",
             "synthetic/target",
-            "--pack",
-            pack.to_str().unwrap(),
-            "--pack-root",
-            temp.path().to_str().unwrap(),
-            "--pages",
-            pages.to_str().unwrap(),
-            "--navigation",
-            navigation.to_str().unwrap(),
             "--scene",
             scene.to_str().unwrap(),
         ],
@@ -4089,14 +4062,6 @@ fn lab2_synthetic_cross_game_pack_runs_core_verbs_without_game_flag() {
             "wait",
             "--page",
             "synthetic/home",
-            "--pack",
-            pack.to_str().unwrap(),
-            "--pack-root",
-            temp.path().to_str().unwrap(),
-            "--pages",
-            pages.to_str().unwrap(),
-            "--navigation",
-            navigation.to_str().unwrap(),
             "--scene",
             scene.to_str().unwrap(),
             "--timeout-ms",
