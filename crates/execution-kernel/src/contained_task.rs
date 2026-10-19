@@ -4883,8 +4883,7 @@ impl PreparedContainedTask {
                                 // detail keeps `after_page`, which the failure identity reads.
                                 let mut values = Outcome::new(STEP_UNCONFIRMED)
                                     .pack_operation_id(operation_id.as_str())
-                                    .page_ids(destination_pages.iter().cloned())
-                                    .attempts(attempt);
+                                    .page_ids(destination_pages.iter().cloned());
                                 if let Some(page) = last_frame_page {
                                     values = values.page_id(page);
                                 }
@@ -6291,14 +6290,13 @@ impl PreparedContainedTask {
                         });
                     }
                     let paused = self.offer_shared_interrupt(runtime, &observation.scene)?;
-                    last_frame_page = Some(observation.page_label.clone());
+                    if last_frame_page.is_none() {
+                        last_frame_page = Some(observation.page_label.clone());
+                    }
                     last_observation = Some(observation);
                     paused
                 }
-                Err(scene) => {
-                    last_frame_page = None;
-                    self.offer_shared_interrupt(runtime, &scene)?
-                }
+                Err(scene) => self.offer_shared_interrupt(runtime, &scene)?,
             };
             missed = true;
             if let Some(paused) = paused {

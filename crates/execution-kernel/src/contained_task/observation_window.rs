@@ -445,7 +445,6 @@ impl PreparedContainedTask {
             }
             let scene = match observed {
                 Ok(observation) => {
-                    last_frame_page = Some(observation.page_label.clone());
                     let destinations =
                         operation.matching_destination_count(&self.control, &observation)?;
                     let error_page = self

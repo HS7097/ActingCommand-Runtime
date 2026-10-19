@@ -7020,7 +7020,7 @@ impl HostShared {
                     // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
                     // pin, read before the summary moves into the terminal's draft.
                     let failure_frame = if error.code().as_str()
-                        == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
+                        == ExecutionKernelCode::ContainedTaskErrorPageReached.as_str()
                     {
                         capture_summary
                             .pinned
