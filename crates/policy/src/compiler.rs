@@ -201,6 +201,7 @@ fn collect_predicate_outcome_keys(
         | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::Fact { .. }
         | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::FactTimeReached { .. }
         | PredicateSpec::DependencyCompleted { .. }
         | PredicateSpec::Outcome { .. } => {}
     }

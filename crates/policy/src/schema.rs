@@ -33,6 +33,10 @@ pub const MAX_FACT_MAX_AGE_MS: u64 = 31_536_000_000;
 /// days.
 pub const MIN_MISSED_GRACE_MS: u64 = 60_000;
 pub const MAX_MISSED_GRACE_MS: u64 = 604_800_000;
+/// Workflow #405 W1: the bounds of a `fact_time_reached` predicate's signed `offset_ms`, one day
+/// before to one day after the time its fact holds.
+pub const MIN_FACT_TIME_OFFSET_MS: i64 = -86_400_000;
+pub const MAX_FACT_TIME_OFFSET_MS: i64 = 86_400_000;
 pub const MIN_UTC_OFFSET_MINUTES: i16 = -840;
 pub const MAX_UTC_OFFSET_MINUTES: i16 = 840;
 pub const MIN_DST_OFFSET_MINUTES: i16 = -120;
@@ -399,6 +403,14 @@ fn effect_quantity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<
     u64::deserialize(deserializer).map(Some)
 }
 
+/// A member that must be present and may be null: with `deserialize_with`, an absent member is
+/// `missing field`, not `None`.
+fn required_nullable_u64<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    Option::<u64>::deserialize(deserializer)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectDirection {
@@ -454,6 +466,16 @@ pub enum PredicateSpec {
         fact_key: String,
         timestamp_field: String,
         within_ms: u64,
+        max_age_ms: Option<u64>,
+    },
+    /// Workflow #405 W1 (`actingcommand.scheduling.v2` only): true once the `timestamp_ms` value
+    /// of the fact at (`scope`, `fact_key`) plus the signed `offset_ms` has come. Every member is
+    /// required; `max_age_ms` is nullable.
+    FactTimeReached {
+        scope: ScopeSelector,
+        fact_key: String,
+        offset_ms: i64,
+        #[serde(deserialize_with = "required_nullable_u64")]
         max_age_ms: Option<u64>,
     },
     DependencyCompleted {

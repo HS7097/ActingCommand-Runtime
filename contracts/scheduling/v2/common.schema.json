@@ -408,6 +408,18 @@
         },
         {
           "type": "object",
+          "required": ["kind", "scope", "fact_key", "offset_ms", "max_age_ms"],
+          "properties": {
+            "kind": { "const": "fact_time_reached" },
+            "scope": { "$ref": "#/$defs/scope" },
+            "fact_key": { "$ref": "#/$defs/identifier" },
+            "offset_ms": { "type": "integer", "minimum": -86400000, "maximum": 86400000 },
+            "max_age_ms": { "type": ["integer", "null"], "minimum": 1, "maximum": 31536000000 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
           "required": ["kind", "task_id", "terminal_states"],
           "properties": {
             "kind": { "const": "dependency_completed" },

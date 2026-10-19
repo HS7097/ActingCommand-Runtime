@@ -181,6 +181,16 @@ actingcommand_contract::outcome_codes! {
         /// `run_parameters`; R2; the channel Workflow #411 B8 shares).
         PolicyDispatchParameters => "policy_dispatch_parameters": info / none,
         // ---- Workflow #411 B15 R0: end ----
+        // ---- Workflow #405 W1 (fact-time wake, `contracts/scheduling/README.md`, "Fact-time
+        // wake"): begin ----
+        /// Info. A `fact_time_reached` predicate is false because the time its fact holds plus
+        /// its `offset_ms` has not come yet; the evaluation wakes at that instant (keys
+        /// `fact_key`, `next_eligible_unix_ms`).
+        FactTimePending => "fact_time_pending": info / none,
+        /// Info. A `fact_time_reached` predicate is false because its fact gives no time; no
+        /// fact refresh is requested (keys `fact_key`, `fact_time_problem`).
+        FactTimeUnavailable => "fact_time_unavailable": info / none,
+        // ---- Workflow #405 W1: end ----
     }
 }
 
@@ -228,3 +238,22 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #384 D2-S4: end ----
+
+// ---- Workflow #405 W1: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a `fact_time_reached` predicate's fact gives no time (the vocabulary
+    /// `fact_time_problem`).
+    pub enum FactTimeProblem: "fact_time_problem" {
+        /// No fact with this key exists in the predicate's scope.
+        Missing => "missing",
+        /// The fact's confidence is 0.
+        LowConfidence => "low_confidence",
+        /// The fact was observed longer ago than the predicate's `max_age_ms`.
+        Stale => "stale",
+        /// The fact is past its own expiry.
+        Expired => "expired",
+        /// The fact's value is not a `timestamp_ms` value.
+        NotATime => "not_a_time",
+    }
+}
+// ---- Workflow #405 W1: end ----

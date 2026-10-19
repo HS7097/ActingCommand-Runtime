@@ -75,3 +75,13 @@ item; an empty list or more than 8 ids is `limit_exceeded` at the member; a V1
 document that names it is refused as an unknown member. Nothing is checked
 against the ledger, so an id that never ran adds nothing. A task without
 `continues_from` serializes, and hashes, exactly as before.
+
+A predicate may be `{"kind":"fact_time_reached","scope":…,"fact_key":…,"offset_ms":N,"max_age_ms":M}`
+(Workflow #405), V2 only: true once the `timestamp_ms` value of the fact plus N
+has come, false with its reason before that or when the fact gives no time
+(`../README.md`, "Fact-time wake"). All five members are required. `scope` and
+`fact_key` follow `fact`'s rules; N is a signed integer from -86400000 to
+86400000 and M is null or from 1 to 31536000000, otherwise `limit_exceeded` at
+the member. A V1 document that names the kind is refused as an unknown field at
+the predicate's `kind`. A catalog without it serializes, and hashes, exactly as
+before.

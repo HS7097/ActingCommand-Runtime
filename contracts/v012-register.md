@@ -2306,6 +2306,26 @@ executable on `PATH`, at run time, for this one command.
 | RV1-7 | the optional keys the reused codes carry: `resource_declaration_invalid` (`path`, `json_pointer`, `found_after_first`, `step`), `package_invalid` (`path`, `step`), `package_fmt_check_failed` (`path`, `unformatted`, `step`), and `step` on `validation_failed`, `standard_pack_root_invalid` and the nine `package_bundle_*` errors | optional values of pending entries (no shape) (exec 103) | RV-1 | RV-1 | `resource verify` attaches only the values the embedded catalog declares for a reused code, so another code a step relays carries no value it does not declare |
 | RV1-8 | `resource check-release` | retired command (exec 103) | RV-1 | RV-1 | refused with `resource_check_release_retired` (exit 2), whose catalog text names `resource verify`; dry run `no_effect` (retired) |
 
+### 1.134 Slice W1 (0.12.x): the catalog predicate `fact_time_reached`, true once the time a fact holds plus an offset has come; the scheduler wakes at it (#405 W1; plan-405-406 §2, §6, §8 Q1–Q5)
+
+W1: a V2 catalog predicate reads the `timestamp_ms` value of one fact and is true once that time
+plus a signed offset has come; before it the evaluation wakes at that instant, and a fact that
+gives no time makes the predicate false with its reason, never a fact refresh.
+[scheduling/README.md](scheduling/README.md) ("Fact-time wake", "Why A Candidate Does Not Run")
+and [scheduling/v2/README.md](scheduling/v2/README.md) are the contract. **No persisted ledger
+shape**: the predicate is a catalog format addition, and the ledger holds only the catalog's
+`catalog_hash`; a Runtime before W1 refuses a catalog that names the kind, so the resource side
+ships such a catalog only after W1 is deployed; the reasons are catalog codes carried by the
+evaluation's decisions and the existing dispatch decision records; no wire, configuration key or
+interface revision changes. Gate: policy key 53.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| W1-1 | predicate `{"kind": "fact_time_reached", "scope", "fact_key", "offset_ms", "max_age_ms"}` (`PredicateSpec::FactTimeReached`, `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) (policy 53) | W1 | W1 | V2 only (a V1 document naming the kind: `unknown_field` at the predicate's `/kind`); every member required, `max_age_ms` nullable; `scope` and `fact_key` checked as `fact`'s; `offset_ms` within `MIN_FACT_TIME_OFFSET_MS..=MAX_FACT_TIME_OFFSET_MS` (−86 400 000..=86 400 000) and `max_age_ms` null or `1..=MAX_FACT_MAX_AGE_MS`, else `limit_exceeded` at the member; a catalog without it compiles, serializes and hashes as before |
+| W1-2 | the predicate's truth and wake | rule (no shape) (policy 53) | W1 | W1 | true when the fact exists, confidence above 0, fresh as `fact` (`max_age_ms`, its own expiry), value `timestamp_ms` T, and now ≥ T + `offset_ms` (signed, saturating at 0); its freshness and wake are `fact`'s (freshness end, +1 for the wake); not reached: false, wake at min(T + `offset_ms`, freshness end + 1); unusable: false, no suggestion, no fact refresh, no wake; under `any`, `all` and `not` as any predicate; no counted clock, no outcome key; a template's predicate needs the report game's scope; an instance-scope read for `fact_reader_missing` |
+| W1-3 | codes `fact_time_pending` (info; `fact_key`, `next_eligible_unix_ms`), `fact_time_unavailable` (info; `fact_key`, `fact_time_problem`) | new catalog entries (no shape) (policy 53) | W1 | W1 | owner policy (registry `PolicyCode`, block `#405 W1`), `ladder_class` `none` (row 7: a scheduling decision reason, not how work on an instance ended), layer `policy`, review `pending`, since 0.12.5, full text; the prefix `fact_` already covers policy |
+| W1-4 | key `fact_time_problem` (vocabulary `fact_time_problem`: `missing`, `low_confidence`, `stale`, `expired`, `not_a_time`) | new key-table and vocabulary entries (no shape) (policy 53) | W1 | W1 | the vocabulary is built from the policy enum `FactTimeProblem` in `codes.rs` (G7) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

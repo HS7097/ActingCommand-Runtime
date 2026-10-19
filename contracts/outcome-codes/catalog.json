@@ -1966,6 +1966,10 @@
     "unformatted": {
       "type": "list<path>",
       "description": "The files of a content directory that are not in the canonical serialization, each a /-separated path relative to that directory, not an absolute path (Workflow #411 RV-1)."
+    },
+    "fact_time_problem": {
+      "type": "vocab:fact_time_problem",
+      "description": "Why a fact_time_reached predicate's fact gives no time (Workflow #405)."
     }
   },
   "vocabularies": {
@@ -6028,6 +6032,27 @@
         },
         "interfaces_differs": {
           "description": "interfaces.json does not declare what was written."
+        }
+      }
+    },
+    "fact_time_problem": {
+      "description": "Why a fact_time_reached predicate's fact gives no time (Workflow #405).",
+      "review": "pending",
+      "tokens": {
+        "missing": {
+          "description": "No fact with this key exists in the predicate's scope."
+        },
+        "low_confidence": {
+          "description": "The fact's confidence is 0."
+        },
+        "stale": {
+          "description": "The fact was observed longer ago than the predicate's max_age_ms."
+        },
+        "expired": {
+          "description": "The fact is past its own expiry."
+        },
+        "not_a_time": {
+          "description": "The fact's value is not a timestamp_ms value."
         }
       }
     }
