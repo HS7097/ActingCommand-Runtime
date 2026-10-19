@@ -212,7 +212,7 @@ scanned. An unparsable registry macro fails G1.
 | G7 | `outcome_keys!` differs from the catalog `keys`; a vocabulary enum (`outcome_vocabulary!` or a `source` enum) differs from its catalog vocabulary | A1 |
 | G8 | an entry since 0.12.0 that breaks `^[a-z][a-z0-9]*(_[a-z0-9]+)+$` (3-64 bytes); a prefix outside its owners; a reserved prefix | A1 |
 | G9 | the merged file is not the merge of the fragments; a released settled entry missing or changed (category, ladder class, key types, required set); a released retired entry active again | A1; ladder class #387 D1a |
-| G10 | a settled entry without text (`description`, and for a code `common_causes` and `handling`, empty or `TBD`); at a release `X.Y.Z`, no `released/X.Y.Z.json`, or, from v0.12.1 on, a pending entry | A8b |
+| G10 | a settled entry without text (`description`, and for a code `common_causes` and `handling`, empty or `TBD`); at a release `X.Y.Z`, no `released/X.Y.Z.json`, or, from v0.13.0 on, a pending entry (a final of the 0.12 series may carry pending entries; coordinator decision of 2026-10-19) | A8b; boundary v0.13.0 (2026-10-19) |
 
 Loading the catalog, which every check does first, refuses a code entry without a
 `ladder_class`, with a class that is not a token of the vocabulary `ladder_class`, or a

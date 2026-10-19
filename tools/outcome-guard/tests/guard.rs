@@ -692,12 +692,13 @@ fn gate_g10_reports_a_settled_entry_without_text() {
 }
 
 /// #378 A8b (model-378 §9 G10, review L14: a release tag fails without
-/// `released/<version>.json`; §5.3: v0.12.1 settles the rest, and its release gate fails while
-/// any entry is pending): releasing X.Y.Z without its own snapshot is a G10 violation; v0.12.0
-/// releases with pending entries; v0.12.1 fails while any code or location is pending and
-/// passes once every entry is settled with its text.
+/// `released/<version>.json`; §5.3 "Settlement timing" as the coordinator's decision of
+/// 2026-10-19 moves it: from v0.13.0 on the release gate fails while any entry is pending):
+/// releasing X.Y.Z without its own snapshot is a G10 violation; v0.12.0 releases with pending
+/// entries; v0.13.0 fails while any code or location is pending and passes once every entry is
+/// settled with its text.
 #[test]
-fn gate_g10_a_release_needs_its_snapshot_and_v0121_needs_every_entry_settled() {
+fn gate_g10_a_release_needs_its_snapshot_and_v0130_needs_every_entry_settled() {
     let catalog = workspace().catalog.as_ref().expect("the catalog loads");
     let snapshots = |release: &str| BTreeSet::from([release.to_owned()]);
     assert_reported(
@@ -715,20 +716,20 @@ fn gate_g10_a_release_needs_its_snapshot_and_v0121_needs_every_entry_settled() {
         &format!("G10 release 0.12.1: {RELEASED_DIR}/0.12.1.json is missing"),
     );
 
-    let code = first_with_review(&catalog.codes, "pending")
-        .expect("the v0.12.0 catalog holds pending codes");
+    let code =
+        first_with_review(&catalog.codes, "pending").expect("the 0.12 catalog holds pending codes");
     let location = first_with_review(&catalog.locations, "pending")
-        .expect("the v0.12.0 catalog holds pending locations");
-    let violations = check_release(catalog, "0.12.1", &snapshots("0.12.1"));
+        .expect("the 0.12 catalog holds pending locations");
+    let violations = check_release(catalog, "0.13.0", &snapshots("0.13.0"));
     assert_reported(
         "G10",
         &violations,
-        &format!("G10 release 0.12.1: code {code} is still pending"),
+        &format!("G10 release 0.13.0: code {code} is still pending"),
     );
     assert_reported(
         "G10",
         &violations,
-        &format!("G10 release 0.12.1: location {location} is still pending"),
+        &format!("G10 release 0.13.0: location {location} is still pending"),
     );
 
     let mut settled = catalog.clone();
@@ -756,7 +757,25 @@ fn gate_g10_a_release_needs_its_snapshot_and_v0121_needs_every_entry_settled() {
     }
     assert_none(
         "G10",
-        check_release(&settled, "0.12.1", &snapshots("0.12.1")),
+        check_release(&settled, "0.13.0", &snapshots("0.13.0")),
+    );
+}
+
+/// #378 G10 (Alice 2026-10-19: the 0.12 series releases plain Z versions, no `-rc.N`; the
+/// coordinator's decision of that day: no pending entry may reach v0.13.0, and a final of the
+/// 0.12 series may carry pending entries): a final v0.12.1 with its snapshot passes the release
+/// gate while codes and locations are still pending.
+#[test]
+fn gate_g10_a_final_v0121_release_passes_with_pending_entries() {
+    let catalog = workspace().catalog.as_ref().expect("the catalog loads");
+    assert!(
+        first_with_review(&catalog.codes, "pending").is_some()
+            && first_with_review(&catalog.locations, "pending").is_some(),
+        "the 0.12 catalog holds pending codes and locations"
+    );
+    assert_none(
+        "G10 release 0.12.1",
+        check_release(catalog, "0.12.1", &BTreeSet::from(["0.12.1".to_owned()])),
     );
 }
 

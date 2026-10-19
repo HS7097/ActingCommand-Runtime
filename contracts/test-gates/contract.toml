@@ -578,14 +578,15 @@ tests = [
 ]
 incident = ["#378 A8"]
 
-# Workflow #378 A8b (model-378 §9 G10, §5.2, §5.3, review L14): outcome guard G10. A settled catalog entry has its text written (description, and for a code common_causes and handling, never empty or TBD); the v0.12.0 release has its snapshot contracts/outcome-codes/released/0.12.0.json in the release-snapshot shape; a release X.Y.Z without released/X.Y.Z.json, and from v0.12.1 on a release with a pending entry, fails `outcome-guard release`, which the exact-SHA build runs before it publishes a release (contract key O5, the next free key of the outcome-guard rows after O4)
+# Workflow #378 A8b (model-378 §9 G10, §5.2, §5.3, review L14): outcome guard G10. A settled catalog entry has its text written (description, and for a code common_causes and handling, never empty or TBD); the v0.12.0 release has its snapshot contracts/outcome-codes/released/0.12.0.json in the release-snapshot shape; a release X.Y.Z without released/X.Y.Z.json, and from v0.13.0 on a release with a pending entry, fails `outcome-guard release`, which the exact-SHA build runs before it publishes a release; a final of the 0.12 series (v0.12.1) with its snapshot passes with pending entries (Alice 2026-10-19: the 0.12 series releases plain Z versions; the coordinator's decision of that day moves the boundary from v0.12.1 to v0.13.0) (contract key O5, the next free key of the outcome-guard rows after O4)
 [[gate]]
 key = "O5"
 coverage = "Y"
 tests = [
     "actingcommand-outcome-guard::guard::gate_g10_settled_entries_have_text_and_v0120_has_its_snapshot",
     "actingcommand-outcome-guard::guard::gate_g10_reports_a_settled_entry_without_text",
-    "actingcommand-outcome-guard::guard::gate_g10_a_release_needs_its_snapshot_and_v0121_needs_every_entry_settled",
+    "actingcommand-outcome-guard::guard::gate_g10_a_release_needs_its_snapshot_and_v0130_needs_every_entry_settled",
+    "actingcommand-outcome-guard::guard::gate_g10_a_final_v0121_release_passes_with_pending_entries",
     "actingcommand-outcome-guard::guard::gate_g10_the_release_build_runs_the_release_gate_before_it_publishes",
 ]
 incident = ["#378 A8b"]
