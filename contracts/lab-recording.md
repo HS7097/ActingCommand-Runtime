@@ -32,7 +32,9 @@ The `record` command file is never written by the Lab recording; the step action
 reads its `record_id`, `task_id`, `instance`, `status` and `started_at_unix_ms`, and
 `recording.json` stores the first four (`record_started_at_unix_ms` for the last). Every
 command compares them; a difference makes the Lab part unavailable
-(`record_lab_unavailable`, reason `lab_recording_mismatch`).
+(`record_lab_unavailable`, reason `lab_recording_mismatch`). A `recording.json` that does not
+decode is unavailable the same way, reason `lab_recording_unreadable`; the file is left as it
+is (#411 A10).
 
 Every stored frame or crop is read back only after its sha256 matches the recorded value
 (`record_frame_hash_mismatch`). Writes are atomic (temporary file, then rename); a failed

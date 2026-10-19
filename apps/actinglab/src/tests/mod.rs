@@ -12,6 +12,9 @@ mod gate_336_pkgs5;
 // Workflow #390 nine6 (exec key 81): `resource validate` warns about a pool nothing publishes.
 #[path = "gate_390_nine6.rs"]
 mod gate_390_nine6;
+// #411 A10 (exec key 85): `record status` answers its record when the Lab recording is unreadable.
+#[path = "gate_rc2_a10.rs"]
+mod gate_rc2_a10;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
