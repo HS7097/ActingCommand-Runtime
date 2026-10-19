@@ -6,8 +6,14 @@
 //!
 //! The root files are read by the contract crate's one structure check
 //! ([`read_standard_pack_root`]), which the Runtime's root reader runs too; a refused file is
-//! `standard_pack_root_invalid`. Then every package the root files name is admitted for real
-//! ([`PreparedContainedTask::describe_navigation_path`], the admission of `describe_path`) and
+//! `standard_pack_root_invalid`. Then every package of the registry (`bundle.json`) is admitted
+//! for real, once, by its directory ([`PreparedContainedTask::describe_navigation_path`], the
+//! admission of `describe_path`), with or without the navigation files `pages.json`,
+//! `interrupts.json` and `navigation.json` (Workflow #411 A25): the root is `checked` only once
+//! every package was admitted. A package the root files name is admitted first, for its part (a
+//! refusal, a missing directory too, is its `admission_failed`); every other package of the
+//! registry after them (a refusal, a missing directory too, is `package_invalid` naming its
+//! directory). Without `pages.json` no file names a package. Each package the root files name is
 //! checked for its part as the Runtime checks it when a run first uses it. Each feature package
 //! of `pages.json` is a `recognize_only` package of the game and its bundle server whose pages
 //! are exactly the listed pages (its admission checks the REC-M static budget of its page set).
@@ -231,21 +237,15 @@ pub(crate) fn cross_check(
 }
 
 /// The cross-check of the parts `pages.json`, `navigation.json` and `interrupts.json` name and
-/// the report "entry page not in the list"; nothing without `pages.json`.
+/// the report "entry page not in the list". Workflow #411 A25: with or without these files, every
+/// package of the registry is admitted, once; without `pages.json` (which the other two need)
+/// that is all, and nothing is reported.
 fn navigation_check(
     game: &str,
     root: &StandardPackRoot,
     pack_directory: &dyn Fn(&str) -> PathBuf,
     admitted: BTreeMap<String, NavigationPackageDescriptor>,
 ) -> LabResult<Vec<Outcome>> {
-    let Some(pages) = &root.pages else {
-        return Ok(Vec::new());
-    };
-    let listed = pages
-        .pages
-        .iter()
-        .map(|page| page.id.as_str())
-        .collect::<BTreeSet<_>>();
     let mut packages = Packages {
         game,
         root,
@@ -253,6 +253,17 @@ fn navigation_check(
         admitted,
         resolutions: BTreeMap::new(),
     };
+    let Some(pages) = &root.pages else {
+        for package_id in root.registry.package_ids() {
+            packages.admit_listed(package_id)?;
+        }
+        return Ok(Vec::new());
+    };
+    let listed = pages
+        .pages
+        .iter()
+        .map(|page| page.id.as_str())
+        .collect::<BTreeSet<_>>();
     for package_id in &pages.features {
         let role = NavigationRole::Features;
         let (package, server) = packages.admit(package_id, role)?;
@@ -560,7 +571,8 @@ impl Packages<'_> {
         Ok((package, server))
     }
 
-    /// A package of the registry for the report, admitted (a refusal names its directory).
+    /// A package of the registry, admitted unless it already was (a refusal names its
+    /// directory).
     fn admit_listed(&mut self, package_id: &str) -> LabResult<NavigationPackageDescriptor> {
         if let Some(package) = self.admitted.get(package_id) {
             return Ok(package.clone());
