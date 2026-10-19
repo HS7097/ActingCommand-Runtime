@@ -482,4 +482,19 @@ outcome_keys! {
     baseline_us: integer,
     limit_us: integer,
     // ---- Workflow #385 P-m: end ----
+    // ---- Workflow #411 B15 R0 (declared remedies, contracts/remedies.md): begin ----
+    need: token,
+    capability: token,
+    capabilities_allowed: list(token),
+    capabilities_declared: list(token),
+    remedy_source: vocab(remedy_source),
+    remedy_problem: vocab(remedy_problem),
+    remedy_depth: integer,
+    decision_id: id,
+    irreversible: boolean,
+    remedy_inputs_digest: hash,
+    parameter_name: token,
+    parameter_value: token,
+    run_parameters: records(parameter_name, parameter_value, remedy_source),
+    // ---- Workflow #411 B15 R0: end ----
 }

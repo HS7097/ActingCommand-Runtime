@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The vocabularies the outcome module itself needs, and the vocabulary tokens of existing
-//! contract enums. The outcome guard (G7) checks each against the catalog's `vocabularies`.
+//! The vocabularies the outcome module itself needs, the vocabularies several owner crates
+//! share, and the vocabulary tokens of existing contract enums. The outcome guard (G7) checks
+//! each against the catalog's `vocabularies`.
 
 use super::VocabularyToken;
 use crate::{
@@ -158,6 +159,53 @@ crate::outcome_vocabulary! {
         Unreadable => "unreadable",
     }
 }
+
+// ---- Workflow #411 B15 R0 (declared remedies, contracts/remedies.md): begin ----
+crate::outcome_vocabulary! {
+    /// The source that decided a remedy's allowed capabilities or a parameter's value
+    /// (vocabulary `remedy_source`), in the order the Runtime consults them. The policy crate
+    /// records it on its remedy reasons and run parameters.
+    pub enum RemedySource: "remedy_source" {
+        /// The instance's target record `session.remedy.choices`.
+        Target => "target",
+        /// The configuration rows in effect for the instance.
+        Configuration => "configuration",
+        /// The package's declared default.
+        Package => "package",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Why a remedy cannot be used, or why a blocked task stopped for a person (vocabulary
+    /// `remedy_problem`). The policy crate's stop reasons, the host's check-config notes and
+    /// resource tooling's bundle report share it.
+    pub enum RemedyProblem: "remedy_problem" {
+        /// No target record, configuration row or package default names the need.
+        NoChoice => "no_choice",
+        /// The deciding source says no remedy for the need.
+        ChoiceNone => "choice_none",
+        /// A choice names a capability the remedy does not list or leaves nothing allowed, or a
+        /// configuration row names a need or capability no bound package declares.
+        ChoiceInvalid => "choice_invalid",
+        /// A chosen parameter or value is not one the provider declares.
+        ParameterInvalid => "parameter_invalid",
+        /// No catalog task on the instance is bound to a package that provides the capability.
+        CapabilityUnbound => "capability_unbound",
+        /// The remedy's providers lie on a cycle or are already in the chain.
+        Cycle => "cycle",
+        /// Providers of one capability declare different parameters.
+        ParametersMismatch => "parameters_mismatch",
+        /// Every provider is paused, suspended or disabled for the instance.
+        ProviderUnavailable => "provider_unavailable",
+        /// A layer used its requests of the round and the block remained.
+        RoundLimit => "round_limit",
+        /// A provider at the third layer of the chain ended blocked again.
+        DepthLimit => "depth_limit",
+        /// No package of the game root provides the capability.
+        CapabilityUnprovided => "capability_unprovided",
+    }
+}
+// ---- Workflow #411 B15 R0: end ----
 
 impl IoKind {
     /// The token of a Rust error kind; a kind this vocabulary does not list is `uncategorized`.

@@ -42,6 +42,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `policy-suspension.md` — the failure identity a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task's settlement records as its `failure_identity` (beside the failure's `outcome`), which failures accumulate toward a pause, the immediate rerun, lifting a pause by a package update, and the read-only `actingd suspended` report; and, specified ahead of their code (Workflow #386), the suspension of a task package that admission refuses, condition terminations with their owed reruns, and the `scheduling.rerun.*` / `pack_admission.*` keys.
 - `scheduling-blackout.md` — scheduling blackouts (catalog `maintenance` events and host entries) and complete silence: which requesters wait, which are dropped and which pass, gradual quiet before a blackout, the safety net at its start, the order of the scheduling deferrals, the `scheduling.blackout.*` keys and codes (Workflow #386, ahead of slices SR-4a and SR-4b).
 - `cost-commit.md` — the `task.json` member `cost_commit` (entry-cost tasks): declaration, the task-to-entry-step table, ranking, the pacing-stage gate, the time check before the entry step and the `scheduling.cost_commit.*` keys (Workflow #386, ahead of slice SR-10).
+- `remedies.md` — "needs further processing": a mapped outcome key whose mapping declares a `remedy` (an opaque need and the capabilities that can serve it), the capabilities a package `provides` with their parameters, the instance's choices (`session.remedy.choices`, the configuration, the package default), the run parameters, the scheduler's hold, request, retry, chain, stop, lift and expiry, and their codes (Workflow #411 B15, ahead of slices R1–R7).
 - `lab-recording.md` — the Lab recording (`actinglab record start` / `mark` / `status` / `stop` and `--record` on the device commands): marks and their self-test, steps, intermediate states, application and optional steps, the recording lock, and the `linear_steps` package `record stop` generates, checks and writes as a content container (`package-reference.md`, "Containers") with its binding snippets.
 - `application-lifecycle.md` — the `application` effect of task packages (launch / restart / stop of the instance's assigned application), the foreground gate before every pointer input with the `application.foreground` program fact, and the startup package the host schedules after emulator `start` / `restart`.
 - `ledger-observer.md` — the ledger as an observer (Workflow #383, target of slices AO-1 to AO-9): the two memory stores, the capture interface and the four host calls with their architecture guard, the silent gates G1–G16, the direct-write exception table (W1, W2), the capture queue with three watermark tiers and spilling, flush order and revisioned sources, write failure (retry, dump, fatal, import) and the dump file, gap records, tags and the `ledger_index` table, start and shutdown order, probes and status blocks, the `ledger_observer.*` keys, the observer's outcome codes and the call-site inventory.
@@ -244,7 +245,9 @@ names the refused member as `json_pointer` (`/phases/<index>…` or
 game prefix) and the operation (`pack_operation_id`; for the walk, the
 operation that led to the page the stage cannot leave); the detail adds the
 stage id, the rule and the start. The operation and control phase
-declarations must match exactly.
+declarations must match exactly. A mapping may also declare a `remedy` and a package
+the capabilities it `provides` (Workflow #411 B15, [remedies.md](remedies.md)); the
+static walk is unchanged by either.
 
 Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed
 standard package may name shared interrupt pages (`interrupts.json`, see

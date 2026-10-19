@@ -540,17 +540,19 @@ instances is booked once.
 | priority offsets | `session.task.<task_id>.priority_offset` | instance, server or game | one per task with an offset set | existing (#308 4a-2) | *O* (usually 0–3) |
 | readings (D2 reality keys) | `resource.*`, `inventory.*` | instance | *R*: the distinct reading keys of the packages bound to the instance | existing (#335 S5b); refreshed by D2 | 44 (6 + 15 + 23: the distinct `fact_key` readings of the three resource repositories at `d41137c0`, `6dd529a1`, `dfb3729`) |
 | pack schedule | `session.pack.schedule` | instance, server, game | ≤ 3 (one per scope used) | SR-11 | ≤ 9 |
+| remedy choices | `session.remedy.choices` | instance, server, game | ≤ 3 (one per scope used) | #411 B15 R6 | ≤ 9 |
+| run parameters (overlay) | `session.dispatch.parameter.<name>` | — | 0: an overlay of a run's snapshots, never stored ("Run parameters" below) | #411 B15 R5 | 0 |
 | feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
 | instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
 | instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
 | display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | instance | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) | 12 |
 | selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
 
-- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 0 + 6 + 9 + 12 = **92 + *O***, well under
-  256.
-- **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 10 + 15
-  + 20 = **124 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances bound
-  to a device; the reading keys of new packages are the variable that matters.
+- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 9 + 0 + 6 + 9 + 12 = **101 + *O***, well
+  under 256.
+- **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 15 + 10
+  + 15 + 20 = **139 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances
+  bound to a device; the reading keys of new packages are the variable that matters.
 - DA-4's display keys (`display.logical_extent`, `display.safe_area.reported`,
   `display.safe_area.declared`, `display.map`; register §1.25 X10) have no writer on main and are
   not counted; DA-4 books them here when it adds them.
@@ -637,3 +639,90 @@ like every key of this store it is a tagged record that the start loads from the
 
 **Codes.** `pack_schedule_closed` and `pack_schedule_unknown_package` (policy),
 `session_pack_schedule_invalid` (runtime-host); none of them triggers the recovery ladder.
+
+## Remedy choice facts
+
+Workflow #411 B15 ([remedies.md](remedies.md), section 3). A person or an agent states, per
+instance, server or game, which capabilities may serve a need a package's remedy declares, and
+which values a provider's parameters take. The state is stored in this store as one record of the
+`session.` family per scope; it is the "target record" of the remedy resolution, consulted before
+the configuration and the package defaults.
+
+**Status.** Written ahead of its code (B15 R0); slice R6 implements the family, the write rule and
+the writers, slice R4 reads it. Until then a `session.remedy.choices` record is an ordinary
+`session.` record that nothing reads.
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `session.remedy.choices` | `record_list` of the rows below, all fields strings | `instance` (that instance), or `server` / `game` (every instance of that server or game) |
+
+```text
+{row: "allow", need, capability}                  this source allows capability for need
+{row: "none",  need}                              this source decides: no remedy for need
+{row: "parameter", capability, parameter, value}  this source sets a parameter's value
+```
+
+**Which record applies.** The record that applies to an instance is the most specific one
+(instance over server over game) and applies as a whole, as for the pack schedule: an instance
+record replaces the server and game records entirely.
+
+**Write rule.** Refused as the non-fatal request error `session_remedy_choices_invalid`
+(`fact_key`, `field` pointing at the row and member, and `instance_id` for a meaning error), before
+the fact write gate, with nothing appended:
+
+- shape: a `record_list`; `row` is `allow`, `none` or `parameter`, with exactly its fields; every
+  name is a token `^[a-z][a-z0-9_]{0,63}$` and `none` is never a capability; no row twice; no
+  `none` together with an `allow` of the same need; at most 256 rows (the `record_list` bound);
+  scope `instance`, `server` or `game`; no `invalidate_on` events;
+- meaning, against the remedy table ([remedies.md](remedies.md), section 7.1) of every instance
+  the scope covers: an `allow` whose need no bound remedy declares, or whose capability that need's
+  remedies do not list; a `parameter` row whose capability no bound provider declares, whose
+  parameter that capability does not declare, or whose value is not one of its options. Unknown
+  names are refused, never ignored.
+
+**Writing.** One observation writes a scope's whole list, atomically; publishing an empty list
+withdraws the scope's choices. The publisher chooses the lifetime: no `expires_at_unix_ms` never
+expires. The writers are `actingctl remedy set` (`--instance <alias|instance_id|ADB port>`, or
+`--server <id> --game <id>`, or `--game <id>`, with `--rows <file>`), `actingctl remedy get
+--instance <selector>` (the records that apply, most specific first, and the one in effect),
+`actingctl remedy lift --instance <selector>` (republishes the instance record unchanged, or an
+empty one when there is none, with a new observation: the explicit lift of a stopped remedy), the
+MCP general tools `ac_remedy_set` (`instance`, `server` or `game`, `rows`, optional `lift`) and
+`ac_remedy_get` (`instance`), both with no tier, and later the UI console. Under Workflow #389 the
+key is a family of its own, "remedy choices" (`fact_key_family`,
+[runtime-interface.md](runtime-interface.md)): an observation that mixes it with keys of another
+family is refused as `fact_origin_mixed`; until #389's slice U-6 removes the origin exception it is
+accepted like a priority offset, from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. A write
+goes through a running actingd; there is no offline writer.
+
+**Identity.** The record's `source_snapshot_id` is `remedy-choices:<sha256 hex of (scope,
+canonical rows, observed_at_unix_ms)>`, so every write, the same rows included, is a new version
+(the explicit lift relies on it). As every fact, an observation must be strictly newer. The record
+is an overlaid instance fact of the evaluation, like `session.resource_targets`, so
+`combined_policy_snapshot_id` covers it: a record written after an evaluation and before its
+admission refuses the intent as `policy_facts_stale`.
+
+**Capacity and ledger.** One active fact identity per scope that uses it (the instance, its
+server, its game), booked in the capacity ledger above. A write is an ordinary `fact.published`
+event of the publishing request, which keeps the request's source and actor; like every key of
+this store it is a tagged record that the start loads from the ledger (Workflow #383).
+
+**Codes.** `session_remedy_choices_invalid` (runtime-host); the remedy codes the record decides are
+in [remedies.md](remedies.md); none of them triggers the recovery ladder.
+
+## Run parameters (`session.dispatch.`, never stored)
+
+Workflow #411 B15 ([remedies.md](remedies.md), section 4), the channel #411 B8 shares. **Status.**
+Written ahead of its code (B15 R0); slice R5 implements it.
+
+- The prefix `session.dispatch.` is reserved for a run's read-only parameters. `PublishFact` /
+  `PublishFacts` of any record under it is refused as the non-fatal request error
+  `session_dispatch_key_reserved` (`fact_key`), from every origin, before the fact write gate,
+  with nothing appended.
+- For a policy run whose dispatch chain carries `policy_dispatch_parameters`, every instance fact
+  snapshot the host takes for that run holds, per `run_parameters` entry, the record
+  `session.dispatch.parameter.<parameter_name>` = `<parameter_value>` (a string; instance scope;
+  confidence 1000; observed at the dispatch's admission; no expiry). A run without a dispatch (a
+  direct or Lab run) holds every parameter its package declares with its declared default.
+- The overlay is never stored: it appends no record, takes no active fact identity (0 rows in the
+  capacity ledger) and is not visible to `InstanceFactSnapshot` or `ac_facts`.

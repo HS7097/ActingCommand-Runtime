@@ -282,6 +282,9 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
 | `scheduling.pack_admission.check_in_check_config`, `.check_after_start` (Workflow #386 SR-3) | boolean | `true`, `true` |
 | `scheduling.pack_admission.suspend_codes` (Workflow #386 SR-3) | list of codes, as `rerun.condition_codes` | `["recognition_sample_budget_invalid"]` |
+| `scheduling.remedy.enabled` (Workflow #411 B15) | boolean | `true` |
+| `scheduling.remedy.max_per_round` (Workflow #411 B15) | integer `1..=8` | `2` |
+| `scheduling.remedy.choices` (Workflow #411 B15) | list of remedy choice rows (objects) | `[]` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -298,6 +301,26 @@ default `section:scheduling.random_delay.<member>`. The pair in effect (each sid
 instance's own or the section's) is checked: `min_ms` above `max_ms` is `config_value_invalid`
 (`section_check`) for the instance's `min_ms` key, so a change of one side alone is checked
 against the other. No slice reads them before #405.
+
+**Remedies (Workflow #411 B15, [remedies.md](remedies.md); written ahead of slice R3, which parses
+them).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
+plain named outcome again, the package checks still run); `scheduling.remedy.max_per_round` is the
+number of remedy requests per blocked layer and round (`1..=8`); `scheduling.remedy.choices` is the
+host-wide list of remedy choice rows, objects of the shape of the instance fact
+`session.remedy.choices` (`{"row": "allow", "need", "capability"}`, `{"row": "none", "need"}`,
+`{"row": "parameter", "capability", "parameter", "value"}`; tokens `^[a-z][a-z0-9_]{0,63}$`,
+`none` never a capability, no duplicate row, no `none` with an `allow` of the same need, at most
+256 rows). Per instance, `instance.<instance id>.scheduling.remedy.choices` (in the file the
+entry's `scheduling.remedy.choices` member), default `section:scheduling.remedy.choices`: when
+set, it replaces the section's list as a whole. All four are settable; their defaults live only
+in `actingd.defaults.json`, never as code constants. A row that breaks the shape refuses the
+configuration as `config_value_invalid` (`config_key`) at load, in `check-config` and in
+`ConfigureSettings`; a row whose names the bound packages do not declare is not refused here but
+is a check-config note `policy_remedy_declaration_unusable` and, at use, a stop for a person
+(slices R4 and R7). The section rows are recorded in `config.parameters.scheduling`, the
+per-instance rows in `config.parameters.instance`. The four keys raise `actingd-config` to
+revision 6 in the release that carries them (once per release, whichever slice of the release
+needs it first). The chain depth (3) is no key.
 
 ## The `ledger_observer` section (Workflow #383 AO-1)
 

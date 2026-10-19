@@ -21725,6 +21725,100 @@
       "description": "A FactRefreshStatus read (Workflow #384 D2-S5) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "policy_remedy_round_closed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a remedy request or retry was not admitted because its round (decision_id; task_id the round's blocked task) was resolved, stopped or expired, or its layer already served, after the evaluation that chose it. The intent is refused as policy.dispatch_rejected: no lease and no run.",
+      "common_causes": "The remedy was served by another run between evaluation and admission.",
+      "handling": "None."
+    },
+    "policy_remedy_declaration_unusable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "outcome_key": "required",
+        "need": "required",
+        "remedy_problem": "required",
+        "capability": "optional",
+        "instance_id": "optional",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): an actingd check-config note: a remedy a bound package declares cannot be used as configured (remedy_problem capability_unbound: its capability has no provider task; cycle: it lies on a cycle of blocked and provider tasks; parameters_mismatch: its providers disagree on their parameters), or a configuration row names a need, capability, parameter or option the packages do not declare (choice_invalid, parameter_invalid; instance_id for a per-instance list). task_id and outcome_key name the blocked mapping, package_id the package concerned. The outcome stays check_config_passed and nothing is written.",
+      "common_causes": "A provider package missing from the catalog; a configuration written for other packages.",
+      "handling": "Bind a provider task, break the cycle, align the providers, or fix the rows. Until then a blocked task with this remedy stops for a person."
+    },
+    "session_remedy_choices_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "field": "required",
+        "instance_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/instance-fact-store.md, Remedy choice facts): a write of session.remedy.choices was refused before the fact write gate and nothing was appended: a row breaks the format (field points at the row and member: an unknown row kind, a missing or extra field, a name that is not a token, a duplicate row, none together with allow for one need, more than 256 rows, a scope other than instance, server or game, invalidate_on events), or it names a need, capability, parameter or option that the packages bound to an instance the scope covers do not declare (instance_id names that instance). Not fatal.",
+      "common_causes": "A typo; choices written for packages that are not installed.",
+      "handling": "Fix the row that field points at; the valid names are the bound packages' remedy and provides declarations."
+    },
+    "session_dispatch_key_reserved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/instance-fact-store.md, Run parameters): a client tried to publish a fact under session.dispatch. (fact_key), the prefix the Runtime uses for a run's read-only parameters; the publication is refused before the fact write gate, from every origin, and nothing is appended. Not fatal. Shared with Workflow #411 B8.",
+      "common_causes": "A script that copies a run's snapshot back.",
+      "handling": "Use another key."
     }
   },
   "locations": {

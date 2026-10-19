@@ -8,7 +8,8 @@
 
 actingcommand_contract::outcome_codes! {
     /// The scheduling policy's codes: D2 S1 registered the first three ahead of the A2 sweep
-    /// (Workflow #384); A2d registers the rest of the crate (Workflow #378).
+    /// (Workflow #384); A2d registers the rest of the crate (Workflow #378); Workflow #411 B15
+    /// R0 registers the remedy reasons at the end, ahead of the slices that emit them.
     pub enum PolicyCode {
         /// Warning. A candidate's selection document read a realistic instance fact key (one
         /// that recognition writes) whose value is unknown, and no reader can refresh it: the
@@ -141,6 +142,45 @@ actingcommand_contract::outcome_codes! {
         ResourceTargetSatisfied => "resource_target_satisfied": info / none,
         /// Info. Workflow #378 A2-P (keys `resource_target_id`).
         ResourceTargetApplied => "resource_target_applied": info / none,
+        // ---- Workflow #411 B15 R0 (declared remedies, `contracts/remedies.md`): registered
+        // ahead of the slices that emit them (R2 the evaluator's plan, R4 the host's signals);
+        // begin ----
+        /// Info. A blocked task is held until the remedy its result declares is served (keys
+        /// `task_id`, `instance_id`, `outcome_key`, `need`, `decision_id`; optional `gate_code`,
+        /// `next_eligible_unix_ms`; R2).
+        PolicyRemedyWaiting => "policy_remedy_waiting": info / none,
+        /// Info. A provider of an allowed capability is treated as triggered and promoted for a
+        /// blocked task (keys `task_id`, `instance_id`, `decision_id`, `outcome_key`, `need`,
+        /// `capability`, `capabilities_allowed`, `capabilities_declared`, `remedy_source`,
+        /// `remedy_depth`, `count`, `limit_count`, `irreversible`; R2).
+        PolicyRemedyRequested => "policy_remedy_requested": info / none,
+        /// Info. A blocked task is retried once after its remedy ran (keys `task_id`,
+        /// `instance_id`, `decision_id`, `outcome_key`, `capability`, `remedy_depth`, `count`,
+        /// `limit_count`; R2).
+        PolicyRemedyRetry => "policy_remedy_retry": info / none,
+        /// Warning. A blocked task stopped for a person: no source allows a usable remedy (keys
+        /// `task_id`, `instance_id`, `decision_id`, `outcome_key`, `need`, `remedy_problem`,
+        /// `remedy_inputs_digest`; optional `remedy_source`, `capability`; R2, R4).
+        PolicyRemedyUnchosen => "policy_remedy_unchosen": warning / none,
+        /// Error. A blocked task stopped for a person: an allowed remedy has no task that can
+        /// serve it (keys as `PolicyRemedyUnchosen`; R2, R4).
+        PolicyRemedyUnavailable => "policy_remedy_unavailable": error / none,
+        /// Warning. A blocked task stopped for a person: its remedies ran as often as the round
+        /// allows, or the chain reached three layers (keys as `PolicyRemedyUnchosen`, and
+        /// `count`, `limit_count`, `remedy_depth`; R2, R4).
+        PolicyRemedyExhausted => "policy_remedy_exhausted": warning / none,
+        /// Info. A stopped blocked task was released: its remedy inputs changed or a person
+        /// lifted it (keys `task_id`, `instance_id`, `decision_id`, `remedy_inputs_digest`; R2,
+        /// R4).
+        PolicyRemedyLifted => "policy_remedy_lifted": info / none,
+        /// Warning. A remedy round ended with its activity window before the remedy was served
+        /// (keys `task_id`, `instance_id`, `decision_id`, `outcome_key`, `need`,
+        /// `window_end_unix_ms`; optional `gate_code`; R2, R4).
+        PolicyRemedyExpired => "policy_remedy_expired": warning / none,
+        /// Info. The read-only parameters a policy dispatch hands to its run (keys
+        /// `run_parameters`; R2; the channel Workflow #411 B8 shares).
+        PolicyDispatchParameters => "policy_dispatch_parameters": info / none,
+        // ---- Workflow #411 B15 R0: end ----
     }
 }
 

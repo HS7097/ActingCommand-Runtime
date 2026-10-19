@@ -580,6 +580,37 @@ read it, and the candidate waits.
   answers it as its block `fact_refresh`
   ([runtime-interface.md](../runtime-interface.md)).
 
+## Remedies (Workflow #411 B15)
+
+Written ahead of its code (B15 R0); slices R2 (the evaluator's plan) and R4 (the host) implement
+it. [remedies.md](../remedies.md) is the contract: a policy run that succeeds on a mapped key whose
+mapping declares a `remedy` opens a remedy round for its (task, instance) pair, and the evaluation
+plans the round from the remedy table, the pair's recent runs, the recorded stops, the instance's
+target record `session.remedy.choices` (an overlaid instance fact) and the configuration rows.
+
+- **Trigger override and promotion.** Beside the immediate rerun (R22, `failure_retry_immediate`)
+  and an owed rerun (`policy_rerun_owed`), a third Runtime-made trigger override exists: an allowed
+  provider of the blocked pair's need is treated as triggered and past its cooldown and promoted
+  ahead of the instance's other candidates, with one `policy_remedy_requested` reason per blocked
+  pair it serves (at most 16); after the remedy is served, the blocked pair is treated so once,
+  with `policy_remedy_retry`. Placement, the feedback stop, the deferrals, budgets, activity
+  windows, one winner per instance and the host budget still apply. Between several requested
+  providers the ranking of "Score-Assisted Priority" decides, unchanged.
+- **Hold and stop.** While its round is open the blocked pair is deferred with
+  `policy_remedy_waiting` at position 8a of the order of deferrals
+  ([scheduling-blackout.md](../scheduling-blackout.md)); a stopped round defers it there with
+  `policy_remedy_unchosen`, `policy_remedy_unavailable` or `policy_remedy_exhausted` until the
+  stop is lifted. For the clock-slot records below, the three stop codes are persistent gates
+  (`clock_slot_refused`) and `policy_remedy_waiting` is a waiting gate (`clock_slot_deferred` only
+  once the window passed).
+- **Run parameters.** A dispatch of a task whose package declares parameters carries
+  `policy_dispatch_parameters` with the values the run reads as `session.dispatch.parameter.*`.
+- **Records.** The reasons travel in the existing dispatch reason chains; the stop, lift and expiry
+  are `goal_missed` planning signals with the `signal_id` prefix `signal:remedy:`; an intent whose
+  round closed between evaluation and admission is refused with `policy_remedy_round_closed`. The
+  evaluation's output keeps its shape, and with no remedy declared every evaluation is
+  byte-identical to one without remedies.
+
 ## Dispatch Decision Record
 
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the
@@ -758,7 +789,10 @@ The three share `observed_at_unix_ms` (the terminal timestamp),
 `activity_window_id` and `expires_at_unix_ms` (none). A value beyond the `i64`
 range fails with the fatal `policy_settlement_outcome_overflow`. Because the
 three share observation, window and expiry, the window-result and feedback-stop
-checks reach the same result as with the mapped record alone. The derived keys
+checks reach the same result as with the mapped record alone. Remedies (Workflow #411
+B15, [remedies.md](../remedies.md)) read a settled successful run's terminal
+`scheduling_disposition.outcome_key` whatever the catalog references, and leave these records
+unchanged. The derived keys
 obey the evaluator's input bounds: 128 bytes per key and 16,384 outcome
 records per evaluation, now three per settled pair. An outcome key may
 therefore be at most 107 bytes (`<outcome_key>.completed_at_unix_ms` within

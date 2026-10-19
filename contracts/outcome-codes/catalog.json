@@ -1832,6 +1832,63 @@
     "handle": {
       "type": "token",
       "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
+    },
+    "need": {
+      "type": "token",
+      "description": "An opaque need a package's remedy declares, a token ^[a-z][a-z0-9_]{0,63}$ the Runtime only compares for equality (Workflow #411 B15)."
+    },
+    "capability": {
+      "type": "token",
+      "description": "An opaque capability a package provides or a remedy names, compared for equality only (Workflow #411 B15)."
+    },
+    "capabilities_allowed": {
+      "type": "list<token>",
+      "description": "The capabilities the deciding source allows for a need, intersected with the remedy's declared capabilities (Workflow #411 B15)."
+    },
+    "capabilities_declared": {
+      "type": "list<token>",
+      "description": "The capabilities a remedy declares for its need (Workflow #411 B15)."
+    },
+    "remedy_source": {
+      "type": "vocab:remedy_source",
+      "description": "The source that decided a remedy's allowed capabilities or a parameter's value: the target record, the configuration or the package default (Workflow #411 B15)."
+    },
+    "remedy_problem": {
+      "type": "vocab:remedy_problem",
+      "description": "Why a remedy cannot be used, or why a blocked task stopped for a person (Workflow #411 B15)."
+    },
+    "remedy_depth": {
+      "type": "integer",
+      "description": "The layer of a remedy chain, 1 to 3; layer 1 is the remedy of the round's root blocked task (Workflow #411 B15)."
+    },
+    "decision_id": {
+      "type": "id",
+      "description": "A policy dispatch decision's identifier; for a remedy, the decision of the blocked run that opened the round (Workflow #411 B15)."
+    },
+    "irreversible": {
+      "type": "boolean",
+      "description": "True when a provider of the capability on the instance declares it irreversible (Workflow #411 B15)."
+    },
+    "remedy_inputs_digest": {
+      "type": "hash",
+      "description": "The SHA-256 over the inputs of a remedy decision on one instance: the versions of the target records that apply, the configuration rows in effect, the remedy table entries of the blocked mapping and of every provider of its capabilities, and the active catalog hash; a different value lifts a stop. It hashes declarations and versions, never a package's content (Workflow #411 B15)."
+    },
+    "parameter_name": {
+      "type": "token",
+      "description": "A parameter a provider package declares for a capability (Workflow #411 B15)."
+    },
+    "parameter_value": {
+      "type": "token",
+      "description": "A parameter's value: one of the options its provider package declares (Workflow #411 B15)."
+    },
+    "run_parameters": {
+      "type": "records",
+      "fields": {
+        "parameter_name": "required",
+        "parameter_value": "required",
+        "remedy_source": "required"
+      },
+      "description": "The read-only parameters a dispatch hands to its run, one record each: the name, the resolved value and the source that gave it (Workflow #411 B15)."
     }
   },
   "vocabularies": {
@@ -5651,6 +5708,60 @@
         },
         "message": {
           "description": "The host message probe."
+        }
+      }
+    },
+    "remedy_source": {
+      "description": "The source that decided a remedy's allowed capabilities or a parameter's value, in the order the Runtime consults them (Workflow #411 B15).",
+      "review": "pending",
+      "tokens": {
+        "target": {
+          "description": "The instance's target record session.remedy.choices (instance, server or game scope), written by a person or an agent."
+        },
+        "configuration": {
+          "description": "The configuration rows in effect for the instance: scheduling.remedy.choices, or the instance's own list."
+        },
+        "package": {
+          "description": "The package's declared default: the mapping's remedy default or the provider's parameter default."
+        }
+      }
+    },
+    "remedy_problem": {
+      "description": "Why a remedy cannot be used, or why a blocked task stopped for a person (Workflow #411 B15).",
+      "review": "pending",
+      "tokens": {
+        "no_choice": {
+          "description": "No target record, configuration row or package default names the need."
+        },
+        "choice_none": {
+          "description": "The deciding source says no remedy for the need (a none row)."
+        },
+        "choice_invalid": {
+          "description": "A choice names a capability the remedy does not list or leaves nothing allowed, or a configuration row names a need or capability no bound package declares."
+        },
+        "parameter_invalid": {
+          "description": "A chosen parameter is not declared by the provider, or its value is not one of the provider's options."
+        },
+        "capability_unbound": {
+          "description": "No catalog task on the instance is bound to a package that provides the capability."
+        },
+        "cycle": {
+          "description": "The remedy's providers lie on a cycle of blocked and provider tasks or packages, or are already in the chain."
+        },
+        "parameters_mismatch": {
+          "description": "Providers of one capability declare different parameters."
+        },
+        "provider_unavailable": {
+          "description": "Every provider is paused, its package suspended, or it is disabled for the instance by an override or a placement refusal."
+        },
+        "round_limit": {
+          "description": "A layer used scheduling.remedy.max_per_round requests and the block remained."
+        },
+        "depth_limit": {
+          "description": "A provider at the third layer of the chain ended blocked again."
+        },
+        "capability_unprovided": {
+          "description": "No package of the game root provides the capability (package bundle and standard-pack check)."
         }
       }
     }

@@ -698,6 +698,68 @@ twice in one step, fails the run's outcome with `contained_task_outcome_designat
 The policy inputs are unchanged: a catalog reads the mapped outcome key; the counts stay in the
 ledger.
 
+### Task schema `0.9` remedies and provided capabilities
+
+Workflow #411 B15 ([remedies.md](remedies.md)), package interface revision 4. **Status.** Written
+ahead of its code (B15 R0); slice R1 implements it. Until then both members are refused as unknown
+members.
+
+A mapping of `scheduling_outcome` may declare a `remedy`: the run that ends on its key is a
+success whose business result is not the expected one, and the opaque `need` names what may make
+it reachable; `capabilities` are the opaque capabilities that can serve it, and `default` the
+ones the package allows when no target record and no configuration decide. A package's
+`control.json` may declare what it `provides`, with the named parameters whose options and
+default state an irreversible capability's consumption scope. The Runtime compares the names for
+equality only; it never pairs a need with a capability or orders capabilities.
+
+```json
+"mappings": [
+  {"outcome_key": "blocked_k", "effect": "no_designated_effect", "terminal_pages": ["page_b"],
+   "remedy": {"need": "need_a", "capabilities": ["cap_x", "cap_y"], "default": ["cap_x"]}}
+]
+```
+
+```json
+"provides": [
+  {"capability": "cap_x"},
+  {"capability": "cap_y", "irreversible": true,
+   "parameters": [{"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}]}
+]
+```
+
+| Member (`task.json` mapping) | Rule | Refusal |
+| --- | --- | --- |
+| `remedy` | optional, at most one per mapping | `invalid_scheduling_outcome_declaration`, field `remedy` |
+| `remedy.need` | a token `^[a-z][a-z0-9_]{0,63}$` | the same, field `remedy.need` |
+| `remedy.capabilities` | 1 to 8 unique tokens of the same charset; never `none` | the same, field `remedy.capabilities` |
+| `remedy.default` | optional; unique, a subset of `capabilities`; absent or `[]` is no package default | the same, field `remedy.default` |
+
+| Member (`control.json`) | Rule | Refusal (`contained_task_control_invalid`) |
+| --- | --- | --- |
+| `provides` | optional, 1 to 8 entries, capabilities unique | `reason=provides_invalid` |
+| `provides[].capability` | the capability charset; never `none` | `reason=provides_invalid` |
+| `provides[].irreversible` | optional boolean, default `false` | `reason=provides_invalid` |
+| `provides[].parameters` | optional, 0 to 8 entries; at least one when `irreversible` | `reason=provides_parameters_invalid` |
+| `parameters[].name` | a token `^[a-z][a-z0-9_]{0,63}$`, unique across the package's whole `provides` | `reason=provides_parameters_invalid` |
+| `parameters[].options` | 1 to 16 unique tokens | `reason=provides_parameters_invalid` |
+| `parameters[].default` | one of `options` (required) | `reason=provides_parameters_invalid` |
+
+**Static rules** (the package check, kernel admission and the source parser alike; the parser's
+refusal is `resource_declaration_invalid` with the JSON pointer):
+
+1. the members parse with the rules above; unknown members stay refused;
+2. a package does not provide a capability one of its own remedies names (a one-package cycle):
+   `contained_task_control_invalid` `reason=provides_own_remedy`;
+3. parameter names are unique across the package's `provides`, so a parameter belongs to one
+   capability;
+4. the rules across the packages of a game root (every named capability provided, no cycle,
+   identical parameters per capability) are the bundle and standard-pack check's report
+   ([package-reference.md](package-reference.md)), not a refusal.
+
+A mapping without `remedy` and a `control.json` without `provides` serialize byte for byte as
+before. Every execution mode that can be a policy task may provide capabilities, and a package may
+both provide capabilities and declare remedies.
+
 Wherever another rule names a package's designated operation (a recognition package, a
 prerequisite package, a `linear_steps` task, a zero-input fields task), a designated effect set is
 refused the same way, with the same reason token (`designated_operation`).

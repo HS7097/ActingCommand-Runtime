@@ -164,16 +164,24 @@ code is the decision's reason:
    pacing stage (`policy_rerun_waiting`), or an entry-cost task waits for it
    (`policy_cost_commit_waiting`, `cost-commit.md`);
 7. a blackout is approaching (`blackout_approaching`);
+
+**8a.** a remedy round holds the task (`policy_remedy_waiting`) or stopped it for a person
+(`policy_remedy_unchosen`, `policy_remedy_unavailable`, `policy_remedy_exhausted`; Workflow #411
+B15, [remedies.md](remedies.md); written ahead of slice R4);
+
 8. availability: budgets, activity window, interval, backoff, task pause (as today).
 
 Ladders and startup packages do not pass through this evaluation; their own entry points apply
 the table of "Complete silence". Recognition-reading demands (Workflow #384) are collected only
 from candidates that passed positions 1 to 7. For the clock-slot planning records of Workflow
 #372 K2, `blackout_active`, `blackout_approaching`, `pack_schedule_closed`,
-`perf_scheduling_paused`, `perf_pacing_gap`, `policy_rerun_waiting` and
-`policy_cost_commit_waiting` are waiting gates (a slot is recorded as `clock_slot_deferred` only
-once its window has passed); `pack_admission_suspended` and `feature_locked` are persistent
-gates (`clock_slot_refused`).
+`perf_scheduling_paused`, `perf_pacing_gap`, `policy_rerun_waiting`,
+`policy_cost_commit_waiting` and `policy_remedy_waiting` are waiting gates (a slot is recorded as
+`clock_slot_deferred` only once its window has passed); `pack_admission_suspended`,
+`feature_locked`, `policy_remedy_unchosen`, `policy_remedy_unavailable` and
+`policy_remedy_exhausted` are persistent gates (`clock_slot_refused`). Position 8a's deferrals
+carry no wake of their own: a remedy round's events, a changed choice or a lift wake the
+evaluation.
 
 ## Owed occurrences and the bookkeeping day
 
