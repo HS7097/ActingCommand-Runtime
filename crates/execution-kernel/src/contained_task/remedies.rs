@@ -181,6 +181,66 @@ impl PreparedContainedTask {
             admitted_at_unix_ms: Some(admitted_at_unix_ms),
         }
     }
+
+    /// #411 Lab RP (contracts/remedies.md section 4): the parameters a Lab evaluation of this
+    /// package reads, without a dispatch: every parameter it declares with its declared default,
+    /// each `(name, value)` of `given` replacing its parameter's default, as a dispatch's chosen
+    /// value does; observed when the snapshot is taken. Without `given` it is
+    /// [`Self::default_run_parameters`]. A name the package does not declare (a package that
+    /// declares none declares no name), a value that is not one of its parameter's declared
+    /// options, and a name given twice are refused, never ignored.
+    pub fn given_run_parameters(
+        &self,
+        given: &[(String, String)],
+    ) -> Result<RunParameters, GivenParameterRefusal> {
+        let mut parameters = self.default_run_parameters();
+        let mut seen = BTreeSet::new();
+        for (name, value) in given {
+            let refused = |problem| GivenParameterRefusal {
+                name: name.clone(),
+                problem,
+            };
+            if !seen.insert(name.as_str()) {
+                return Err(refused(GivenParameterProblem::Repeated));
+            }
+            let declared = self
+                .control
+                .provides
+                .iter()
+                .flat_map(ProvidedCapability::parameters)
+                .find(|parameter| parameter.name() == name)
+                .ok_or_else(|| refused(GivenParameterProblem::Undeclared))?;
+            if !declared.options().contains(value) {
+                return Err(refused(GivenParameterProblem::NotAnOption));
+            }
+            let (_, default) = parameters
+                .values
+                .iter_mut()
+                .find(|(declared, _)| declared == name)
+                .ok_or_else(|| refused(GivenParameterProblem::Undeclared))?;
+            default.clone_from(value);
+        }
+        Ok(parameters)
+    }
+}
+
+/// #411 Lab RP: why a parameter given to a Lab evaluation is refused
+/// ([`PreparedContainedTask::given_run_parameters`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GivenParameterProblem {
+    /// The package declares no parameter of this name.
+    Undeclared,
+    /// The value is not one of the options the parameter declares.
+    NotAnOption,
+    /// The name is given more than once.
+    Repeated,
+}
+
+/// #411 Lab RP: a refused given parameter, by its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GivenParameterRefusal {
+    pub name: String,
+    pub problem: GivenParameterProblem,
 }
 
 /// The `provides` member of a control declaration, read and checked

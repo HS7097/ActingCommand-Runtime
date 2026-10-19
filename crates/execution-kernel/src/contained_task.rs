@@ -180,12 +180,18 @@ mod gate_lab_l6;
 // Workflow #406 T12 (exec key 110): centre-hotspot draws and the least-recent landing point.
 #[cfg(test)]
 mod gate_406_t12;
+// #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
+#[cfg(test)]
+mod gate_411_lab_rp;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
     ResourceReadingProblem, judge_resource_adjustment_amount, judge_resource_reading,
 };
-pub use remedies::{RUN_PARAMETERS_KEY_PREFIX, RemedyDeclarations, RunParameters};
+pub use remedies::{
+    GivenParameterProblem, GivenParameterRefusal, RUN_PARAMETERS_KEY_PREFIX, RemedyDeclarations,
+    RunParameters,
+};
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
     dry_run_scan, replay_scan,

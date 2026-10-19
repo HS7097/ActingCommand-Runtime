@@ -2448,6 +2448,32 @@ answer member and one Rust API method; the codes are existing ones: `observation
 No persisted ledger shape: no ledger record, wire shape, configuration key, interface revision
 (§6) or outcome code changes.
 
+### 1.142 Slice Lab RP (v0.12.x): the Lab's single-step select evaluations read the run parameters as a run does (#411 Lab RP; model-b15 §6; [remedies.md](remedies.md) section 4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+Lab RP closes R5's accepted deviation 3 (§1.115 B15R-3): the single-step evaluations
+`dry_run_select` and the scan replay read `session.dispatch.parameter.<name>` through R5's own
+overlay (`RunParameters::overlay`, B15R-1), the package's declared defaults as a run without a
+dispatch reads them, and the scan replay takes given values in their place.
+[remedies.md](remedies.md) section 4, [instance-fact-store.md](instance-fact-store.md) ("Run
+parameters") and [selection-graph.md](selection-graph.md) ("Offline", where `actinglab replay`
+is specified) are the contract. **No persisted ledger shape**: the overlay is never stored, and
+nothing is recorded for a Lab evaluation. No wire, configuration key, outcome code, key or
+vocabulary token: the refusals are actinglab's existing `validation_failed` (exit 2) with the
+existing `argument_problem` tokens. A package that declares no parameter evaluates as before.
+Gate: exec key 115.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RP-1 | `PreparedContainedTask::given_run_parameters(given) -> Result<RunParameters, GivenParameterRefusal>`, `GivenParameterRefusal {name, problem}`, `GivenParameterProblem` (`Undeclared`, `NotAnOption`, `Repeated`) | kernel interface (memory only, not persisted) (exec 115) | Lab RP | Lab RP | every declared parameter with its declared default, each given `(name, value)` replacing its default as a dispatch's chosen value does, observed at the snapshot's instant; without values it equals `default_run_parameters()`; a name the package does not declare (any name, on a package that declares none), a value outside the parameter's declared options and a name given twice are refused, never ignored |
+| RP-2 | `dry_run_select(task, operation_id, frame, (snapshot, now_unix_ms), run_parameters, policy_override)` | changed kernel interface (Rust API; no wire) (exec 115) | Lab RP | Lab RP | takes the instance fact snapshot (was a `SelectionFactSnapshot`) and the run parameters, overlays them, and evaluates the rows of the record lists the evaluated policy declares; no Lab verb calls it yet (the `actinglab select` tool of a later slice) |
+| RP-3 | `replay_scan(task, operation_id, scan, frames, facts, run_parameters)` | changed kernel interface (Rust API; no wire) (exec 115) | Lab RP | Lab RP | the overlay is added to the given or the empty offline snapshot before it is checked, as a run's select-step snapshot holds it |
+| RP-4 | actinglab `replay --select <operation> --scan <file> --parameter <name>=<value>` | new CLI option (repeatable, one flag per distinct name) (exec 115) | Lab RP | Lab RP | the value replaces that parameter's declared default; without `--parameter` the declared defaults; listed in help `command_options` `replay`; the answer's shape is unchanged |
+| RP-5 | the refusal of `--parameter`: `validation_failed`, exit 2, details `{argument: "--parameter", argument_problem, arguments: [{argument, argument_problem}]}` | new details of an existing code (exec 115) | Lab RP | Lab RP | before anything is read: a flag without its value `value_missing`, a value that is not `<name>=<value>` `not_recognised`, a name given twice `repeated` (#411 Lab B-2's rule, decision Q9), `--parameter` on a whole replay (without `--select`) `conflicting`; once the package is admitted and before any frame is read: a name the package does not declare (any name, on a package that declares none) or a value outside its declared options `not_recognised` |
+| RP-6 | MCP `ac_lab_observe` / `ac_lab_do` | unchanged (no shape change) | Lab RP | — | neither reaches a single-step select evaluation (offline `observe` projects candidate layouts and evaluates no selection policy), so neither gains a `parameters` member |
+
+No persisted ledger shape; Rust API and Lab CLI only; no outcome code, wire, configuration key
+or interface revision (§6) changes.
+
 ### 1.145 Slice A26 (0.12.x): a dispatch decision record says why each candidate it lists did not run, as values (#411 A26; #386 SR-6a)
 
 A26: since A2-P (Q7) a dispatch decision record persisted `decision_candidate_not_selected`

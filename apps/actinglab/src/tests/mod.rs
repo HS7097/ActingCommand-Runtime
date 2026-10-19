@@ -41,6 +41,10 @@ mod gate_rv1;
 // consensus needs.
 #[path = "gate_lab_l5c.rs"]
 mod gate_lab_l5c;
+// #411 Lab RP (exec key 115): `replay --select --scan` refuses a parameter the package does not
+// declare or an option it does not declare.
+#[path = "gate_lab_rp.rs"]
+mod gate_lab_rp;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

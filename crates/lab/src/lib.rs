@@ -102,6 +102,8 @@ pub use actingcommand_execution_kernel::{
 };
 // Workflow #308 SEL-L6b: the scan replay of `actinglab replay --frames --select --scan`.
 pub use actingcommand_execution_kernel::{ScanDeclaration, ScanDryRun, replay_scan};
+// #411 Lab RP: the run parameters a Lab evaluation reads, given with `--parameter`.
+pub use actingcommand_execution_kernel::GivenParameterProblem;
 
 pub use actingcommand_execution_kernel::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,

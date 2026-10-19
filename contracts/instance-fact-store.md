@@ -759,6 +759,9 @@ Written ahead of its code (B15 R0); slice R5 implements it.
   snapshot the host takes for that run holds, per `run_parameters` entry, the record
   `session.dispatch.parameter.<parameter_name>` = `<parameter_value>` (a string; instance scope;
   confidence 1000; observed at the dispatch's admission; no expiry). A run without a dispatch (a
-  direct or Lab run) holds every parameter its package declares with its declared default.
+  direct or Lab run) holds every parameter its package declares with its declared default. The
+  Lab's single-step select evaluations (`dry_run_select`, the scan replay) hold the same overlay,
+  each value given to the scan replay (`--parameter <name>=<value>`) in place of its default
+  (#411 Lab RP; [remedies.md](remedies.md), section 4).
 - The overlay is never stored: it appends no record, takes no active fact identity (0 rows in the
   capacity ledger) and is not visible to `InstanceFactSnapshot` or `ac_facts`.

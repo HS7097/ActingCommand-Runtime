@@ -26,8 +26,9 @@ use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
     ContainedTaskTrace, PageObservation, PointDraw, PreparedContainedTask, Resolution,
-    SampleRetries, TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram, TouchChoice,
-    drawn_tap, safe_task_local_path, sample_budget_insufficient, scene_from_frame, step_point_draw,
+    RunParameters, SampleRetries, TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram,
+    TouchChoice, drawn_tap, safe_task_local_path, sample_budget_insufficient, scene_from_frame,
+    step_point_draw,
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
@@ -1785,13 +1786,54 @@ fn single_frame_unknown_check(
 /// tool of a later slice uses it). The frame must be recognized as the step's `from` page
 /// (`select_page_mismatch` otherwise). The step's layout is projected on it and the step's
 /// sealed policy, or `policy_override` checked against the same layout, is evaluated with
-/// `facts` at `now_unix_ms`. A dry run's confirmation frame is the same frame, so it matches.
+/// `snapshot` at `now_unix_ms`. A dry run's confirmation frame is the same frame, so it matches.
+///
+/// #411 Lab RP (contracts/remedies.md section 4): the step reads `run_parameters` as a run does,
+/// overlaid on `snapshot` (the package's declared defaults, or given values replacing them,
+/// [`PreparedContainedTask::given_run_parameters`]); the policy evaluates the rows of the record
+/// lists it declares, as the select step's own evaluation does.
 pub fn dry_run_select(
     task: &PreparedContainedTask,
     operation_id: &str,
     frame: &Frame,
-    facts: &SelectionFactSnapshot,
-    now_unix_ms: u64,
+    (snapshot, now_unix_ms): (&InstanceFactSnapshot, u64),
+    run_parameters: &RunParameters,
+    policy_override: Option<&SelectionPolicy>,
+) -> Result<SelectionDryRun, ContainedTaskError> {
+    let mut snapshot = snapshot.clone();
+    run_parameters.overlay(&mut snapshot, now_unix_ms);
+    let sealed = task
+        .program
+        .operations
+        .iter()
+        .find(|operation| operation.id == operation_id)
+        .and_then(|operation| operation.prepared_select.as_deref())
+        .map(|prepared| &prepared.policy);
+    let record_lists = policy_override
+        .or(sealed)
+        .map(SelectionPolicy::record_list_keys)
+        .unwrap_or_default();
+    let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+        &snapshot,
+        now_unix_ms,
+        &record_lists,
+    );
+    dry_run_select_with_facts(
+        task,
+        operation_id,
+        frame,
+        (&facts, now_unix_ms),
+        policy_override,
+    )
+}
+
+/// [`dry_run_select`] over `facts` as they are given, with no run parameters (the step's
+/// evaluation before #411 Lab RP).
+pub(super) fn dry_run_select_with_facts(
+    task: &PreparedContainedTask,
+    operation_id: &str,
+    frame: &Frame,
+    (facts, now_unix_ms): (&SelectionFactSnapshot, u64),
     policy_override: Option<&SelectionPolicy>,
 ) -> Result<SelectionDryRun, ContainedTaskError> {
     let operation = task
@@ -2111,13 +2153,22 @@ mod tests {
         // The kernel reports the refusal under its code: a dry run checks the same document,
         // given as an override, against the step's layout.
         let task = select_task(identity_layout("readable_attributes"));
-        let facts = SelectionFactSnapshot::from_fact_records("snapshot-a", 1_000_000, &[]);
+        let snapshot = InstanceFactSnapshot {
+            snapshot_id: "snapshot-a".to_owned(),
+            ledger_position: 1,
+            context: actingcommand_contract::InstanceFactContext {
+                instance_id: "instance-a".to_owned(),
+                server_id: "test".to_owned(),
+                game_id: "neutral".to_owned(),
+            },
+            records: Vec::new(),
+        };
         let error = dry_run_select(
             &task,
             "pick",
             &home_frame(),
-            &facts,
-            1_000_000,
+            (&snapshot, 1_000_000),
+            &task.default_run_parameters(),
             Some(&policy),
         )
         .expect_err("the document does not apply to the layout");
