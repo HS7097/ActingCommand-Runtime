@@ -160,9 +160,10 @@ impl PreparedContainedTask {
     /// direct run, a run the host starts itself, a Lab run): every parameter it declares, with
     /// its declared default (contracts/remedies.md section 4).
     pub fn default_run_parameters(&self) -> RunParameters {
+        // one-off red proof, mutation (b): the declared defaults are left out.
         RunParameters {
             package_id: self.control.package_id.clone(),
-            values: self.declared_parameter_defaults(),
+            values: Vec::new(),
             admitted_at_unix_ms: None,
         }
     }

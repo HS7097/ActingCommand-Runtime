@@ -4086,6 +4086,26 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         let now_unix_ms = self.host.clock.sample().map_err(failure)?.unix_ms;
         // Workflow #411 B15 R5: the run's parameters join the snapshot it reads, never the store.
         self.run_parameters.overlay(&mut snapshot, now_unix_ms);
+        // one-off red proof, mutation (c): the overlay is published as facts.
+        let overlay = snapshot
+            .records
+            .iter()
+            .filter(|record| {
+                record
+                    .key
+                    .starts_with(actingcommand_execution_kernel::RUN_PARAMETERS_KEY_PREFIX)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !overlay.is_empty() {
+            self.host
+                .publish_facts(
+                    actingcommand_contract::FactObservation { records: overlay },
+                    None,
+                    FactPublicationPurpose::Ordinary,
+                )
+                .map_err(failure)?;
+        }
         Ok(actingcommand_execution_kernel::SelectionState::Snapshot {
             snapshot,
             now_unix_ms,
@@ -6683,10 +6703,12 @@ impl HostShared {
         // Workflow #411 B15 R5 (contracts/remedies.md section 4): a policy run reads the values
         // its dispatch carries, observed at its admission; any other run reads its package's
         // declared defaults.
+        // one-off red proof, mutation (a): a policy run skips its dispatch's values.
         let run_parameters = match dispatched_parameters {
-            Some((values, admitted_at_unix_ms)) => {
-                prepared.dispatched_run_parameters(values, admitted_at_unix_ms)
-            }
+            Some((_values, admitted_at_unix_ms)) => prepared.dispatched_run_parameters(
+                prepared.declared_parameter_defaults(),
+                admitted_at_unix_ms,
+            ),
             None => prepared.default_run_parameters(),
         };
         // Workflow #373 NAV-6: the steps the run's own layers can execute.

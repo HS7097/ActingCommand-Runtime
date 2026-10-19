@@ -244,9 +244,14 @@ pub fn evaluate(
     check_candidate_set(candidates)?;
 
     let policy_sha256 = canonical_sha256(policy)?;
+    // one-off red proof, mutation (e): the run's parameters are not in the hashed input.
+    let mut hashed = facts.clone();
+    hashed
+        .facts
+        .retain(|key, _| !key.starts_with("session.dispatch."));
     let input_sha256 = canonical_sha256(&EvaluationInput {
         candidates,
-        facts,
+        facts: &hashed,
         now_unix_ms,
     })?;
     let mut reasons = vec![
