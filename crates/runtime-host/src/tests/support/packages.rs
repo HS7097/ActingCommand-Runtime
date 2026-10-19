@@ -985,3 +985,10 @@ fn neutral_contained_task_package_with_timeout(
     }
     zip.finish().expect("finish zip").into_inner()
 }
+
+// Workflow #411 B15 R1 (host key 119): the deadline a gate test hands an admission by path. A
+// gate file reads no clock (test plan v2.2 §2.1 guard 3); this deadline only bounds the
+// admission, which never takes this long, so it decides nothing (the CD-27 D2 (a) form).
+fn admission_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60)
+}

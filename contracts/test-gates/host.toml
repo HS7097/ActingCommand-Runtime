@@ -1289,3 +1289,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav3a::prq_a_prerequisite_that_meets_an_unknown_page_fails_the_run_with_its_own_code_and_starts_the_ladder",
 ]
 incident = ["#411 A16"]
+
+# Workflow #411 B15 R1 (v0.12.3; register §1.111 R1-5; no persisted ledger shape; contracts/remedies.md sections 2.2, 2.4; key assigned by the coordinator; the kernel's own provides tests stay exec 95): a source package directory whose control.json provides two capabilities, one irreversible with two parameters, and whose mapping declares a remedy is admitted by kernel admission by path (describe_path answers its package id), and the metadata reader read_remedy_declarations reads it by path without preparing it: its package id, its remedy with the mapping's outcome key, and every provided capability with its irreversible marker and its parameters' names, options and defaults, as declared
+[[gate]]
+key = "119"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b15p_host::b15p_provides_with_parameters_is_admitted_and_read_without_preparing",
+]
+incident = ["#411 B15 R1"]
