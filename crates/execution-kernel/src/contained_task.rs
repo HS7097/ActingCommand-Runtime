@@ -182,7 +182,7 @@ pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
     ResourceReadingProblem, judge_resource_adjustment_amount, judge_resource_reading,
 };
-pub use remedies::RemedyDeclarations;
+pub use remedies::{RUN_PARAMETERS_KEY_PREFIX, RemedyDeclarations, RunParameters};
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
     dry_run_scan, replay_scan,

@@ -332,6 +332,21 @@ impl HostShared {
     ) -> RuntimeHostResult<FactPublication> {
         let result: RuntimeHostResult<FactPublication> =
             (|| {
+                // Workflow #411 B15 R5: `session.dispatch.` holds a run's read-only parameters,
+                // which exist only as an overlay of its snapshots; no origin publishes under it.
+                if let Some(record) = observation.records.iter().find(|record| {
+                    record
+                        .key
+                        .starts_with(actingcommand_execution_kernel::RUN_PARAMETERS_KEY_PREFIX)
+                }) {
+                    let fact_key = record.key.clone();
+                    return Err(RuntimeHostError::request(
+                        crate::codes::RemedyHostCode::SessionDispatchKeyReserved,
+                        ContractLocation::PublishFacts,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+                }
                 // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
                 match purpose {
                     FactPublicationPurpose::Ordinary

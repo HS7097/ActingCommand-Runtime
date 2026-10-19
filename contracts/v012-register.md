@@ -1978,6 +1978,24 @@ is added. Gate: host key 113.
 | B15H-5 | clock-slot gate classes | rule (no shape change) | R4 | R4 | `policy_remedy_unchosen`, `policy_remedy_unavailable`, `policy_remedy_exhausted` are persistent gates (`clock_slot_refused`), `policy_remedy_waiting` a waiting gate (`clock_slot_deferred` only once the window passed), as `scheduling/README.md` "Remedies" and `scheduling-blackout.md` "Order of the deferrals" state; a hold the evaluation turned into its round's stop after the allocation is traced as the stop |
 | B15H-6 | EXEC-3 and failure identities | unchanged | R4 | — | a run ending on a remedy key settles as a success (no failure identity, streak cleared); `PolicyControlState`'s failure handling is untouched |
 
+### 1.115 Slice R5 b15r (v0.12.3): a run reads its parameters as read-only facts (#411 B15; model-b15 §6; [remedies.md](remedies.md) section 4; [instance-fact-store.md](instance-fact-store.md), "Run parameters")
+
+R5 implements B15-7 of §1.110 and is the first emitter of `session_dispatch_key_reserved` (B15-1):
+the channel Workflow #411 B8 shares. **No persisted ledger shape** (model-b15 §10): the records
+`session.dispatch.parameter.<name>` are an overlay of a run's instance fact snapshots, never
+stored (§4 row; 0 rows in the capacity ledger); the chosen values are in the dispatch chain's
+`policy_dispatch_parameters` (B15-3, R2 and R4); `task.selection_evaluated` keeps its shape, its
+`input_sha256` covering the overlay; no code, key, vocabulary token, location or configuration key
+is added (the code is R0's). No code, contract, default or test names a game, a parameter or an
+option of a real package. Gate: host key 114.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B15R-1 | `RunParameters`, `PreparedContainedTask::default_run_parameters()`, `PreparedContainedTask::dispatched_run_parameters(values, admitted_at_unix_ms)`, `RunParameters::overlay(snapshot, now_unix_ms)`, `RUN_PARAMETERS_KEY_PREFIX` (`session.dispatch.`) | kernel interface (memory only, not persisted) | R5 | R5 | one record per parameter, in declaration or reason order, after the stored records: key `session.dispatch.parameter.<name>`, an inline string, the snapshot's instance as scope, confidence 1000, no expiry, `source_detector` `runtime.run-parameters`, `source_snapshot_id` `run-parameters`, `schema_version` `fact.v1`, `resource_bundle_hash` the SHA-256 of `package:<package_id>` (no package content is hashed); the snapshot keeps its id, the stored projection's; a package that declares no parameter adds nothing |
+| B15R-2 | the host's select-step snapshot (`selection_state`, a run's one in-run read of instance facts, the entry-recovery layer's included) | rule (no shape change) | R5 | R5 | a policy run holds the `(parameter_name, parameter_value)` entries of its own chain's `policy_dispatch_parameters`, read as the fact refresh reads its requested keys, observed at the dispatch's `admitted_at_unix_ms`; a run without a dispatch (a direct run, a run the host starts itself) holds the declared defaults, observed at the snapshot's instant; a policy run whose chain carries no such reason (remedies off, or a parameter that does not resolve, §1.112 B15E-5) holds the declared defaults too, so a provider package still runs with its own scope |
+| B15R-3 | the offline Lab providers (`simulate_contained_task`, `simulate_contained_task_at`, `replay_contained_task`) | rule (no shape change) | R5 | R5 | the declared defaults, observed at the run's instant, on the empty offline snapshot or the snapshot given; the single-step evaluations `dry_run_select` and the scan replay are not runs and are unchanged |
+| B15R-4 | `PublishFact` / `PublishFacts` and the Runtime's own publications of a record under `session.dispatch.` | new refusal (first emission of B15-1) | R5 | R5 | `session_dispatch_key_reserved` with `fact_key` (the first such key), a non-fatal request error (`invalid_request`, receipt `denied`) before the fact write gate and every other publication rule; the whole observation is refused and nothing is appended; a person's (`cli`, `ui`) publication of a non-offset key is refused earlier by the existing origin rule (`invalid_agent_dispatcher_origin`) |
+
 ### 1.118 Slice Lab L1 (v0.12.x): a Lab2 verb refuses an option its path does not read (#411 Lab L1; G7; coordinator decision 11 of 2026-10-19)
 
 Each path of actinglab `observe`, `do`, `ensure` and `wait` (offline with `--scene`; online with
