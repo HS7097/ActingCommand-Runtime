@@ -651,7 +651,8 @@ pub(crate) fn detect_current_page(
         .filter(|evaluation| evaluation.matched)
         .map(|evaluation| evaluation.page_id.clone())
         .collect::<Vec<_>>();
-    if matched_pages.len() > 1 {
+    // one-off red proof M1: the first of several matched pages is taken again.
+    if matched_pages.len() > evaluations.len() {
         return Err(CliError::new(
             ErrorKind::UsageValidation,
             "page_recognition_conflict",

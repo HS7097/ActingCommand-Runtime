@@ -2582,10 +2582,12 @@ fn refuse_off_guard_page(
     page: &PageDetectionOutcome,
     guards: &[super::contained_resources::OperationGuardPage],
 ) -> CliOutcome<()> {
-    if guards.is_empty()
-        || guards.iter().any(|guard| {
+    // one-off red proof: M2 every recognised page passes the page check (`||`), M3 a bare target
+    // is refused (`!guards.is_empty() &&`).
+    if !guards.is_empty()
+        && guards.iter().any(|guard| {
             page.matched
-                && actingcommand_lab::page_anchor_matches(&guard.game, &page.page, &guard.page_id)
+                || actingcommand_lab::page_anchor_matches(&guard.game, &page.page, &guard.page_id)
         })
     {
         return Ok(());
