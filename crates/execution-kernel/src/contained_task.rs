@@ -10286,16 +10286,21 @@ impl PointDraw {
     }
 }
 
+/// Workflow #406 T12: the index of the candidate a runtime's landing history chooses.
+type TouchChoiceResult<E> = Result<usize, ContainedTaskRunError<E>>;
+
 /// Workflow #406 T12: the runtime's choice among a single-region press's candidates
 /// ([`ContainedTaskRuntime::choose_touch_candidate`]), as a draw asks for it.
 type TouchChoice<'a, E> =
-    dyn FnMut(&InputSamplingRegion, &[(i32, i32)]) -> Result<usize, ContainedTaskRunError<E>> + 'a;
+    dyn FnMut(&InputSamplingRegion, &[(i32, i32)]) -> TouchChoiceResult<E> + 'a;
+
+/// Workflow #406 T12: the point a single-region press lands on and its sampling evidence.
+type DrawnPress<E> = Result<((i32, i32), Option<InputSamplingEvidence>), ContainedTaskRunError<E>>;
 
 /// Workflow #406 T12: `runtime`'s landing history as the chooser of a press's candidate.
 fn runtime_touch_choice<R: ContainedTaskRuntime>(
     runtime: &mut R,
-) -> impl FnMut(&InputSamplingRegion, &[(i32, i32)]) -> Result<usize, ContainedTaskRunError<R::Error>> + '_
-{
+) -> impl FnMut(&InputSamplingRegion, &[(i32, i32)]) -> TouchChoiceResult<R::Error> + '_ {
     move |region: &InputSamplingRegion, candidates: &[(i32, i32)]| {
         runtime
             .choose_touch_candidate(region, candidates)
@@ -10365,7 +10370,7 @@ fn drawn_press<E>(
     rect: ClickRect,
     draw: PointDraw,
     choose: &mut TouchChoice<'_, E>,
-) -> Result<((i32, i32), Option<InputSamplingEvidence>), ContainedTaskRunError<E>> {
+) -> DrawnPress<E> {
     let Some(action_seed) = draw.action_seed else {
         return Ok(((rect.x + rect.width / 2, rect.y + rect.height / 2), None));
     };
