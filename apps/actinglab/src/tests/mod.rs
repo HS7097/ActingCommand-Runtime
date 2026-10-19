@@ -37,6 +37,10 @@ mod gate_lab_b2;
 // #411 RV-1 (exec key 103): `resource verify` checks a resource repository commit as its CI does.
 #[path = "gate_rv1.rs"]
 mod gate_rv1;
+// #411 Lab L5c (exec key 114): the Lab's `--capture` client forms take the frames target
+// consensus needs.
+#[path = "gate_lab_l5c.rs"]
+mod gate_lab_l5c;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

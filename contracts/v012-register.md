@@ -2306,6 +2306,28 @@ executable on `PATH`, at run time, for this one command.
 | RV1-7 | the optional keys the reused codes carry: `resource_declaration_invalid` (`path`, `json_pointer`, `found_after_first`, `step`), `package_invalid` (`path`, `step`), `package_fmt_check_failed` (`path`, `unformatted`, `step`), and `step` on `validation_failed`, `standard_pack_root_invalid` and the nine `package_bundle_*` errors | optional values of pending entries (no shape) (exec 103) | RV-1 | RV-1 | `resource verify` attaches only the values the embedded catalog declares for a reused code, so another code a step relays carries no value it does not declare |
 | RV1-8 | `resource check-release` | retired command (exec 103) | RV-1 | RV-1 | refused with `resource_check_release_retired` (exit 2), whose catalog text names `resource verify`; dry run `no_effect` (retired) |
 
+### 1.141 Slice Lab L5c (v0.12.x): the Lab's `--capture` client forms take the frames target consensus needs (#411 Lab L5c; G8; coordinator decision Q8 (a) of the L5 plan, Q2; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+`do --capture --dry-run`, `ensure --capture` and `wait --capture` decide in the client on raw
+Runtime frames. They take the frame set a package's target consensus needs, as offline `--scene`
+(§1.131) and online observations (§1.130) do, and check the set as a keyless `observe` is
+checked. [contained-lab-operation.md](contained-lab-operation.md) and
+[business-identity-consensus.md](business-identity-consensus.md) are the contract. Rules, one
+answer member and one Rust API method; the codes are existing ones: `observation_samples_interrupted`
+(runtime-host, reused in actinglab's `details.error`), `validation_failed` with its existing
+`argument_problem` token and keys, and `device_error`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5C-1 | the frames of each observation of a `--capture` client form: do's one, ensure's start, every route guard and every arrival poll, every poll of `wait --page` and `wait --stable` | rule (no shape change) (exec 114) | Lab L5c | Lab L5c | with F = `target_sample_frames()` > 1, F read-only Runtime captures (`ObserveReadonly`, each a capture of its own), `target_sample_interval_ms()` apart (unscaled, decision Q2), oldest first, the last the current frame; page detection, every target (do's target, a route edge's target, the stable target) and the destructive regions are evaluated over the set as offline frames are (`detect_current_page_over`, `evaluate_target_over`, `destructive_frame_regions_over`), so target consensus reads its last required frames; the click, the coordinates, `frame_coordinates`, `frame_age_ms`, `backend` and the input's frame (L3-5) are the current frame's; a wait poll takes one whole set and the timeout is checked between sets, so an observation takes at most F ≤ 5 frames (decision Q5's per-observation bound); a package without target consensus takes one capture and its answers are unchanged |
+| L5C-2 | the input check of a client frame set | rule (no shape change) (exec 114) | Lab L5c | Lab L5c | the client holds no lease across its captures; after the last capture it makes two queries through `RuntimeDebugSession::query_event_page`: the first capture's `capture.requested` event (by its request ID; its sequence and instance), then one `input.intent` on that instance from that sequence to the last capture's terminal sequence, limit 1, as the host's `check_observation_sample_inputs` (L5-5); one found: the form fails `device_error` (exit 4) with `details {error: "observation_samples_interrupted", state: "failed", hint}` before anything is decided on the frames; no new code |
+| L5C-3 | frames of a client set whose sizes differ | rule (no shape change) (exec 114) | Lab L5c | Lab L5c | after the input check, as offline frames (B2-2): `validation_failed`, exit 2, details `{argument: "--capture", argument_problem: "unusable", index}`, the position (0 the oldest) of the first earlier frame whose size differs from the current frame's |
+| L5C-4 | `recognition_coverage {provided_frames, required_frames, aggregation: "production_owner"}` on the answer of `do --capture --dry-run` | new answer member (exec 114) | Lab L5c | Lab L5c | as offline `do` (B2-3): present only when the package declares target consensus, `provided_frames` = `required_frames` = F; absent otherwise, so a single-frame answer is unchanged |
+| L5C-5 | `RuntimeDebugSession::query_event_page(query, profile, page)` | Rust API method added (no wire change) (exec 114) | Lab L5c | Lab L5c | one page of the shared ledger view as `RuntimeClient::query_event_page` reads it, not bound to the session's correlation; the existing `QueryEvents` request |
+
+No persisted ledger shape: no ledger record, wire shape, configuration key, interface revision
+(§6) or outcome code changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -1661,3 +1661,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_no_list_file_is_written_into_the_repository",
 ]
 incident = ["#411 RV-1"]
+
+# #411 Lab L5c (v0.12.x; register §1.141 L5C-1 to L5C-5; no persisted ledger shape, no outcome code; coordinator decisions Q8 (a) and Q2 of the L5 plan; related: exec 100, 107, host 120): the Lab's --capture client forms take the frames target consensus needs; do --capture --dry-run, ensure --capture (its start, every route guard and every arrival poll) and wait --capture (every poll) take F = target_sample_frames() read-only Runtime captures the declared interval apart, oldest first, the last the current frame, and decide on them as on offline --scene frames, so a target consensus of k = 2 of 3 is recognised on (A, B, A) and not on (B, B, A) and do's target and click are the current frame's, with recognition_coverage {provided_frames, required_frames, aggregation: production_owner} on do's answer; each wait poll takes one whole set; an input on the instance between the first capture's request and the last capture fails the set with observation_samples_interrupted (device_error, details.error) through the client's event query, and a quiet set passes; a package without target consensus takes one capture per observation and its answers carry no recognition_coverage
+[[gate]]
+key = "114"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_do_capture_dry_run_takes_the_consensus_frames",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_ensure_and_wait_capture_sample_frame_sets",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_an_input_between_client_captures_fails_the_observation",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_a_package_without_consensus_captures_one_frame_as_before",
+]
+incident = ["#411 Lab L5c"]
