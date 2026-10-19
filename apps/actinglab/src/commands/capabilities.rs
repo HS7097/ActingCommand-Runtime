@@ -672,7 +672,6 @@ fn capture_backend_capabilities() -> Value {
         {"id": "adb", "backend": "adb_screencap", "external_tool": true, "required_assets": ["adb"]},
         {"id": "droidcast_raw", "backend": "droidcast_raw", "external_tool_env": "ACTINGCOMMAND_DROIDCAST_RAW_APK", "required_assets": ["adb", "droidcast_raw_apk"]},
         {"id": "nemu_ipc", "backend": "nemu_ipc", "external_tool_env": "ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL", "required_assets": ["nemu_ipc_library"]},
-        {"id": "scrcpy", "backend": "scrcpy", "required_assets": ["adb"], "device_kinds": ["handset"]},
         {"id": "auto", "fallback_allowed": true, "diagnostics_required": true},
         {"id": "auto-fastest", "probe_all_backends": true, "diagnostics_required": true}
     ]);
@@ -698,7 +697,7 @@ fn capture_backend_capabilities() -> Value {
 /// stays at its point.
 fn touch_backend_capabilities() -> Value {
     let mut backends = json!([
-        {"id": "nemu_ipc", "gestures": ["tap", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1"]},
+        {"id": "nemu_ipc", "gestures": ["tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1"]},
         {"id": "maatouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "key", "text"]},
         {"id": "minitouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1"]},
         {"id": "adb_shell_input", "gestures": ["tap", "long_tap", "swipe"]}

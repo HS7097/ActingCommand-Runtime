@@ -321,13 +321,7 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
                     )?),
                     // Workflow #411 Lab L4: the backend that captured the Runtime frame, named
                     // as `capture --record` names it.
-                    capture_backend: Some(
-                        runtime_capture_backend::device_backend_name(
-                            observed.frame.capture_backend(),
-                        )
-                        .as_str()
-                        .to_string(),
-                    ),
+                    capture_backend: None,
                     freshness: None,
                 },
             )?),
