@@ -510,6 +510,11 @@ fn d1_a_disabled_instance_dispatches_at_once_without_a_delay_member() {
         fixture.delays(EventType::PolicyDispatchAdmitted, TASK_A),
         [None]
     );
+    assert_eq!(
+        fixture.delays(EventType::PolicyDispatchCompleted, TASK_A),
+        [None],
+        "an instance with the delay off writes none"
+    );
     fixture.close();
 }
 
