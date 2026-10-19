@@ -16,12 +16,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::codes::{PolicyCode, SchedulingRulePolicyCode};
+use crate::remedy::ProviderView;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
     FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ManualOffset,
     MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PredicateSpec, PrioritySelection,
-    ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
+    RemedyPlan, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec, TaskTerminalState,
+    TimelineEvent,
 };
 
 mod fact_refresh;
@@ -455,7 +457,7 @@ impl PolicyEvaluationError {
         &self.message
     }
 
-    fn invalid(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self {
             code: PolicyCode::PolicyEvaluationInputInvalid.code(),
             message: message.into(),
@@ -713,6 +715,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         seed,
         immediate_retries,
         None,
+        None,
         eligibility,
     )
 }
@@ -742,6 +745,43 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         seed,
         immediate_retries,
         Some(fact_refresh),
+        None,
+        eligibility,
+    )
+}
+
+/// Workflow #411 B15 R2 (`contracts/remedies.md` sections 4, 5 and 6): `evaluate_with_fact_refresh`
+/// with the plan of [`crate::plan_remedies`]. A pair the plan requests or retries is treated as
+/// triggered and past its cooldown, as an immediate rerun is, ranks among the promoted
+/// candidates and carries the plan's reasons; a selected dispatch of a pair with run parameters
+/// carries `policy_dispatch_parameters`; a pair the plan defers is deferred with the plan's reason
+/// when the eligibility callback answered `Eligible` (the host places it at position 8a itself).
+/// Once the allocation is known, a requesting layer's hold names its provider's gate, and a layer
+/// whose every provider met a persistent gate stops its round's root. Placement, the feedback
+/// stop, budgets, the host budget and one winner per instance are unchanged; between several
+/// requested providers the existing ranking decides. With an empty plan the evaluation is the
+/// one `evaluate_with_fact_refresh` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_scheduling(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        Some(fact_refresh),
+        Some(remedies),
         eligibility,
     )
 }
@@ -755,6 +795,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     seed: u64,
     immediate_retries: &BTreeSet<(String, String)>,
     refresh_inputs: Option<&FactRefreshInputs>,
+    remedies: Option<&RemedyPlan>,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -908,6 +949,17 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                     PolicyCode::FailureRetryImmediate,
                     "the latest failure is rerun at once: its trigger and cooldown are not awaited",
                 ));
+            }
+            // Workflow #411 B15 R2: a remedy request or retry is treated as triggered and past
+            // its cooldown too, with the plan's reasons.
+            let remedy_override =
+                remedies.and_then(|plan| plan.trigger_override(&task.id, &instance.instance_id));
+            if let Some(remedy_override) = remedy_override {
+                trigger.truth = PredicateTruth::True;
+                trigger.suggestions.clear();
+                task_work
+                    .reasons
+                    .extend(remedy_override.reasons().iter().cloned());
             }
             task_work.next_wake_unix_ms = trigger.next_wake_unix_ms;
             if let Some(not_before_unix_ms) = trigger.next_wake_unix_ms {
@@ -1072,7 +1124,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                 min_wake(timeline_fresh_until, pool_fresh_until),
                             );
                             let cooldown_until = state
-                                .filter(|_| !immediate_retry)
+                                .filter(|_| !immediate_retry && remedy_override.is_none())
                                 .and_then(|state| state.last_dispatched_unix_ms)
                                 .map(|last| {
                                     last.checked_add(task.cooldown_ms).ok_or_else(|| {
@@ -1137,6 +1189,20 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         refresh_inputs.is_some(),
     )?;
     affected.extend(scored_affected);
+    // Workflow #411 B15 R2: a remedy request or retry ranks among the promoted candidates.
+    if let Some(plan) = remedies {
+        for candidate in &mut candidates {
+            if plan
+                .trigger_override(&candidate.task_id, &candidate.instance_id)
+                .is_some_and(crate::RemedyOverride::promoted)
+            {
+                candidate.promoted = true;
+                if let Some(record) = work[candidate.work_index].record.as_mut() {
+                    record.promoted = true;
+                }
+            }
+        }
+    }
     // Workflow #384 D2-S4: every instance's recognition maintenance package joins the allocation
     // for the keys its affected candidates read, unless its own gates hold it back.
     let refresh_plans = match refresh_inputs {
@@ -1244,6 +1310,12 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         );
         let reason_chain_id = format!("reason:{decision_id}");
         let mut reasons = work[candidate.work_index].reasons.clone();
+        // Workflow #411 B15 R2: the read-only parameters the run receives.
+        if let Some(parameters) = remedies
+            .and_then(|plan| plan.dispatch_parameters(&candidate.task_id, &candidate.instance_id))
+        {
+            reasons.push(parameters.clone());
+        }
         reasons.extend([
             reason(
                 PolicyCode::PlacementSelected,
@@ -1285,7 +1357,16 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             },
         };
         let (deferral, gate) = match eligibility(&intent)? {
-            CandidateEligibility::Eligible => (None, None),
+            // Workflow #411 B15 R2: the plan's hold or stop, at position 8a.
+            CandidateEligibility::Eligible => match remedies
+                .and_then(|plan| plan.deferral(&candidate.task_id, &candidate.instance_id))
+            {
+                Some(planned) => (
+                    Some((planned.reason.clone(), planned.next_wake_unix_ms)),
+                    None,
+                ),
+                None => (None, None),
+            },
             CandidateEligibility::Deferred {
                 reason,
                 next_wake_unix_ms,
@@ -1351,6 +1432,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             time,
             &mut work,
         )?;
+    }
+    if let Some(plan) = remedies.filter(|plan| plan.has_requests()) {
+        finish_remedy_holds(plan, &mut work);
     }
     append_decision_records(&mut work, &mut reason_chains, &selected, &target_policies)?;
     work.sort_by(|left, right| {
@@ -1428,6 +1512,50 @@ impl From<TaskWork> for TaskDecision {
             rank: value.rank,
             detection_suggestions: value.suggestions,
             reasons: value.reasons,
+        }
+    }
+}
+
+/// Workflow #411 B15 R2 (`contracts/remedies.md` section 5.3): once the allocation is known, a
+/// requesting layer's hold (the plan's `policy_remedy_waiting`, placed by this evaluation or by
+/// the host's callback) names the gate of the provider it waits for, and the root of a layer whose
+/// every provider met a persistent gate is stopped instead (`policy_remedy_unavailable`,
+/// `provider_unavailable`). Only a deferred decision whose last reason is the hold changes.
+fn finish_remedy_holds(plan: &RemedyPlan, work: &mut [TaskWork]) {
+    let finals = plan.finalized_reasons(|task_id, instance_id| {
+        work.iter()
+            .find(|entry| {
+                entry.task_id == task_id && entry.instance_id.as_deref() == Some(instance_id)
+            })
+            .map(|entry| ProviderView {
+                selected: entry.state == SchedulingDecisionState::Selected,
+                last_code: entry
+                    .reasons
+                    .last()
+                    .map(|reason| reason.outcome.code().clone()),
+                next_wake_unix_ms: entry.next_wake_unix_ms,
+            })
+    });
+    if finals.is_empty() {
+        return;
+    }
+    for entry in work.iter_mut() {
+        let Some(instance_id) = entry.instance_id.as_deref() else {
+            continue;
+        };
+        let Some(planned) = finals.get(&(entry.task_id.clone(), instance_id.to_owned())) else {
+            continue;
+        };
+        if entry.state != SchedulingDecisionState::Deferred {
+            continue;
+        }
+        if let Some(last) = entry
+            .reasons
+            .last_mut()
+            .filter(|last| last.outcome.is(PolicyCode::PolicyRemedyWaiting))
+        {
+            *last = planned.reason.clone();
+            entry.next_wake_unix_ms = planned.next_wake_unix_ms;
         }
     }
 }

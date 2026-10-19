@@ -585,3 +585,26 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_372k5::k5_t8_a_pause_of_the_continued_id_holds_the_task_that_continues_it",
 ]
 incident = ["#372 K5", "S-08"]
+
+# Workflow #411 B15 R2 (model-b15 §5.3, §6, §7, §8, §9.2, §11; contracts/remedies.md sections 3.3, 4, 5 and 6; register §1.112): the evaluator plans the remedies packages declare: a blocked pair is held and an allowed provider requested and promoted, allowed by the target record, else the configuration, else the package default; no usable choice, a provider only in the chain, persistent provider gates, the round limit and a fourth layer stop the round for a person, transient gates only wait; a served remedy, requested or not, retries the blocked pair once; a changed inputs digest lifts a stop; an open round expires with its window; every dispatch carries its run parameters with their sources; the existing ranking orders allowed providers; without remedies the evaluation is byte-identical
+[[gate]]
+key = "52"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_without_remedy_inputs_the_evaluation_is_byte_identical",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_blocked_pair_is_held_and_its_allowed_provider_requested_and_promoted",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_the_target_record_beats_the_configuration_which_beats_the_package_default",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_no_source_or_a_none_row_stops_unchosen_and_requests_nothing",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_choice_naming_an_undeclared_capability_or_option_stops_with_its_problem",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_served_remedy_retries_the_blocked_pair_once_and_a_clean_retry_resolves",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_provider_running_on_its_own_trigger_serves_the_remedy",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_blocked_again_at_the_limit_stops_exhausted_round_limit",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_blocked_provider_opens_the_next_layer_and_layer_four_stops_depth_limit",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_provider_in_the_chain_or_on_a_refused_edge_is_never_requested",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_persistent_gates_stop_unavailable_and_transient_gates_wait",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_changed_input_digest_lifts_a_stop_and_an_unchanged_one_keeps_it",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_a_round_still_open_at_its_window_end_expires_once",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_run_parameters_carry_each_value_with_its_source_on_every_dispatch",
+    "actingcommand-policy::lib::tests::gate_411_b15e::b15e_two_allowed_providers_are_ranked_by_the_existing_total",
+]
+incident = ["#411 B15"]

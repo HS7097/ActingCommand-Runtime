@@ -9,6 +9,7 @@ mod codes;
 mod compiler;
 mod evaluator;
 mod forward;
+mod remedy;
 mod resource_targets;
 mod schema;
 mod source;
@@ -19,6 +20,7 @@ pub use codes::{PolicyCode, RefreshLimit};
 pub use compiler::*;
 pub use evaluator::*;
 pub use forward::*;
+pub use remedy::*;
 pub use resource_targets::*;
 pub use schema::*;
 pub use source::{CatalogDocumentSource, CatalogSources, validate_catalog_declaration};
@@ -30,6 +32,8 @@ mod tests {
     // Workflow #361 R7, test row R7-T7: the S-08 day replay with and without `missed`.
     mod gate_361r7;
     mod gate_390_pool1;
+    // Workflow #411 B15 R2: the evaluator's plan of declared remedies.
+    mod gate_411_b15e;
     mod gate_d2_s1;
     mod gate_d2_s4;
     mod gate_p1;
