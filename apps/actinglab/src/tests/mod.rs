@@ -18,6 +18,9 @@ mod gate_rc2_a11;
 // #411 A10 (exec key 85): `record status` answers its record when the Lab recording is unreadable.
 #[path = "gate_rc2_a10.rs"]
 mod gate_rc2_a10;
+// #411 A9 (exec key 86): offline `observe` of an unknown scene answers `unknown` in Min.
+#[path = "gate_rc2_a9.rs"]
+mod gate_rc2_a9;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

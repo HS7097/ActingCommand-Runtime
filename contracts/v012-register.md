@@ -1722,6 +1722,20 @@ or interface revision (§6) changes: the refusals use the existing `arguments_in
 | A8-2 | the `fields` argument of `ac_lab_do` and `ac_lab_observe` | description only (no behaviour change) | A8 | A8 | the members, comma separated, that the Min answer keeps whole (never removed or shortened) when it is reduced to its byte budget; it selects nothing; on observe the named ones of the members Min leaves out (`instance`, `arbitration`, `matched`, `standby`, `frame_age_ms`, `frame_source`) are kept; still passed to actinglab as `--fields` (CLI parity) |
 | A14-1 | `ac_lab_do` with `target: "tap"` and `tap` → `arguments_invalid {argument: tap, argument_problem: conflicting}` (class `usage`) | changed answer (was `lab_tool_failed` caused by `validation_failed`) | A8 | A8 | `target` is a Runtime element id; the description says the action takes exactly one of `target`, `tap` or `swipe`; no child, nothing recorded |
 
+### 1.101 Slice A9 (v0.12.1-rc.2): offline `observe` of an unknown page answers `unknown` in Min (#411 A9)
+
+When no page matches, offline `observe`'s near-miss `candidates` are a transport member, not
+the identity, so Min cuts them to fit its hard limit instead of failing with
+`observe_identity_limit_exceeded`. [page-projection.md](page-projection.md) ("Shared input and
+output") is the contract. It adds no code, wire or ledger shape; the pending description of
+`observe_identity_limit_exceeded` says the code now means the identity itself does not fit.
+An answer that succeeds today is unchanged, and the Normal view (`--verbose`) keeps the whole
+list.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A9-1 | `candidates_truncated: true` and `candidates_omitted_count` beside `candidates` in offline `observe`'s Min answer | two optional output members (exec 86) | A9 | A9 | present only when Min removed near-miss entries: after every existing reduction (fact rows, projection entries, the identity alone) the answer is still over the hard limit, so Min removes `candidates` entries from the end (sorted by score, the lowest last) one at a time until it fits, and the suspicion's copy of the list with them; `candidates` stays an array; the count is the entries removed; both members are kept by Min like `candidates`; with every entry removed and the identity still over the limit, `observe_identity_limit_exceeded` as before |
+
 ### 1.102 Slice A10 (v0.12.1-rc.2): an undecodable Lab recording makes only the Lab part unavailable (#411 A10; coordinator decision 2 of 2026-10-19)
 
 A `recording.json` that was read and does not decode as `actingcommand.lab-recording.v1` is
