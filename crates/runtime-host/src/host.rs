@@ -3645,12 +3645,26 @@ impl RuntimeHost {
     }
 
     /// #385 P-k, test only: every step of `instance_alias`'s contained runs is handed
-    /// `factor_milli` from now on; only the factor's read (`pacing_factor_milli`) answers it.
+    /// `factor_milli` (and no extra round) from now on; only the step's read of the pacing in
+    /// effect (`effective_pacing`) answers it.
     #[cfg(test)]
     pub(crate) fn pin_pacing_factor_for_test(
         &self,
         instance_alias: &str,
         factor_milli: u32,
+    ) -> RuntimeHostResult<()> {
+        self.pin_step_pacing_for_test(instance_alias, factor_milli, 0)
+    }
+
+    /// #385 P-k2, test only: every step of `instance_alias`'s contained runs is handed
+    /// `factor_milli` and `extra_wait_rounds` from now on, as [`Self::pin_pacing_factor_for_test`]
+    /// hands a factor.
+    #[cfg(test)]
+    pub(crate) fn pin_step_pacing_for_test(
+        &self,
+        instance_alias: &str,
+        factor_milli: u32,
+        extra_wait_rounds: u32,
     ) -> RuntimeHostResult<()> {
         let shared =
             self.shared_ref(crate::codes::test_spellings::TestLocation::PinPacingFactorForTest)?;
@@ -3658,7 +3672,13 @@ impl RuntimeHost {
             &shared.pacing_factor_pins_for_test,
             crate::codes::test_spellings::TestLocation::PinPacingFactorForTest,
         )?
-        .insert(instance_alias.to_owned(), factor_milli);
+        .insert(
+            instance_alias.to_owned(),
+            crate::performance::EffectivePacing {
+                factor_milli,
+                extra_wait_rounds,
+            },
+        );
         Ok(())
     }
 
@@ -4564,10 +4584,10 @@ struct HostShared {
     // the stand-in for SR-2b's writer.
     #[cfg(test)]
     policy_condition_for_test: Mutex<Option<actingcommand_contract::PolicyConditionSettlement>>,
-    // #385 P-k, test only: the pacing factor an instance's contained runs are handed, by alias,
-    // in place of the shadow measurement's.
+    // #385 P-k, test only: the pacing factor and extra rounds an instance's contained runs are
+    // handed, by alias, in place of the shadow measurement's.
     #[cfg(test)]
-    pacing_factor_pins_for_test: Mutex<BTreeMap<String, u32>>,
+    pacing_factor_pins_for_test: Mutex<BTreeMap<String, crate::performance::EffectivePacing>>,
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,

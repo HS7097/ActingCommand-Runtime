@@ -178,7 +178,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
         "performance.pacing.pressure_floor.extra_retries",
         ValueType::Integer,
         at_least(0),
-        "P-s",
+        "P-k",
     ),
     at_start(
         "performance.pacing.tax_exempt_from_stage",
@@ -389,6 +389,9 @@ pub struct PacingSettings {
     pub pause_sustain_ms: u64,
     pub clock_jump_ms: u64,
     pub pressure_floor: PressureFloorSettings,
+    /// #385 P-k (§5.2): the base of a step's pre-input wait, `pre_input_wait_base_ms × (f −
+    /// 1000) / 1000`; no wait at the factor 1 000.
+    pub pre_input_wait_base_ms: u64,
 }
 
 /// Workflow #385 P-m: the subsection in effect; the curve passes §4.1's rules again.
@@ -462,6 +465,7 @@ pub(super) fn read(values: &Values<'_>) -> Result<PacingSettings, ConfigFailure>
             factor_milli: values.unsigned("performance.pacing.pressure_floor.factor_milli")?,
             extra_retries: values.unsigned("performance.pacing.pressure_floor.extra_retries")?,
         },
+        pre_input_wait_base_ms: values.unsigned("performance.pacing.pre_input_wait_base_ms")?,
     })
 }
 

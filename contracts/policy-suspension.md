@@ -582,8 +582,9 @@ code is listed in `scheduling.rerun.condition_codes`. The default list is
 `blackout_run_stopped` (`scheduling-blackout.md`), `perf_run_yielded` and `perf_hold_expired`
 (Workflow #385) and `cost_commit_time_insufficient` (`cost-commit.md`). A sampling timeout ends a
 run only after its observe-only retries ran out: an observation that times out is repeated
-without repeating any input, `scheduling.recognition.sample_timeout_retries` times (default 2)
-plus the pacing curve's extra retries (slice SR-1). An operator pause (`contained_task_paused`)
+without repeating any input, `scheduling.recognition.sample_timeout_retries` times (default 2;
+slice SR-1) plus the pacing curve's extra retries of the step's stage (Workflow #385 P-k). An
+operator pause (`contained_task_paused`)
 is not in the default list.
 
 **Decided once.** The live settlement decides it from the failure code, the configuration and

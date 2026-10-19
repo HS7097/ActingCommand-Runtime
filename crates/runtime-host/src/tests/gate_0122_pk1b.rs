@@ -429,14 +429,15 @@ fn pk1b_the_step_factor_is_the_instances_factor_in_effect() {
 // Test 2 (requirements 1, 5, 6): a direct run at a pinned 2 000 waits twice each step's
 // post-input delay (300 ms and 700 ms) and its evidence has one `steps[]` entry per step with
 // `pacing_factor_milli` 2 000; at 1 000 it waits the package's values and has no `steps[]`. The
-// waits of 100 ms or more are the post-input delays: every other wait of these runs is a frame
-// interval of 1 ms × f.
+// waits of 100 ms or more are the post-input delays and (#385 P-k2, PK2 requirement 5) at 2 000
+// each step's pre-input wait before its tap, the shipped base 300 ms × (2 000 − 1 000) / 1 000
+// = 300 ms: every other wait of these runs is a frame interval of 1 ms × f.
 #[test]
 fn pk1b_a_run_hands_each_step_its_factor_and_records_it() {
     for (factor_milli, delays_ms, steps) in [
         (
             2_000,
-            vec![600, 1_400],
+            vec![300, 600, 300, 1_400],
             vec![(0, Some(2_000)), (1, Some(2_000))],
         ),
         (1_000, vec![300, 700], Vec::new()),
@@ -546,10 +547,11 @@ fn pk1b_the_host_deadline_does_not_move_under_a_factor() {
 }
 
 // Test 4 (requirements 3, 4, 6; Tk-10): a scheduled run at a pinned 2 000 whose wall time (two
-// post-input delays of 3 s, waited 6 s each: 12 s) is over its task's 10 s runtime budget and
-// whose budget time is not (12 s − 12 s / 2 = 6 s) succeeds without a rewrite; its record carries
-// the wall time and the budget time, wall − the paced part's wall / 2. The same 12 s of wall time
-// at 1 000 (the 6 s of delays and 6 s before the run) is rewritten to
+// post-input delays of 3 s, waited 6 s each, and, #385 P-k2, a 300 ms pre-input wait before each
+// of its two taps: 12.6 s) is over its task's 10 s runtime budget and whose budget time is not
+// (12.6 s − 12.6 s / 2 = 6.3 s) succeeds without a rewrite; its record carries the wall time and
+// the budget time, wall − the paced part's wall / 2. 12 s of wall time at 1 000 (the 6 s of
+// delays and 6 s before the run; no pre-input wait at 1 000) is rewritten to
 // `policy_runtime_budget_exceeded`, and its record has neither member.
 #[test]
 fn pk1b_a_stretched_policy_run_is_settled_on_its_budget_time() {
@@ -632,7 +634,13 @@ fn pk1b_a_stretched_policy_run_is_settled_on_its_budget_time() {
             .collect::<Vec<_>>();
         host.close().expect("close runtime host");
 
-        assert_eq!(wall_ms, 4 * DELAY_MS, "factor {factor_milli}");
+        // #385 P-k2: the two pre-input waits of 300 ms at 2 000.
+        let pre_input_ms = if factor_milli == 2_000 { 2 * 300 } else { 0 };
+        assert_eq!(
+            wall_ms,
+            4 * DELAY_MS + pre_input_ms,
+            "factor {factor_milli}"
+        );
         assert!(wall_ms > RUNTIME_BUDGET_MS);
         let [(result, wall_elapsed_ms, budget_elapsed_ms)] = records.as_slice() else {
             panic!("one execution record: {records:?}");
@@ -662,5 +670,152 @@ fn pk1b_a_stretched_policy_run_is_settled_on_its_budget_time() {
             assert_eq!(failure.runtime_ms, wall_ms);
             assert_eq!((*wall_elapsed_ms, *budget_elapsed_ms), (None, None));
         }
+    }
+}
+
+// #385 P-k2 (host gate 111; register §1.108; PERF v1.4.2 §4.1, §4.4, §5.2, §5.4; brief PK2
+// requirements 1, 2 and 4): what a step is handed beside its factor, and the rounds it used.
+
+/// The `steps[]` of the run's task timing evidence, carried by its one terminal:
+/// `(step_index, pacing_factor_milli, extra_wait_rounds)` each.
+fn step_entries(events: &[PersistedEvent]) -> Vec<(u32, Option<u32>, Option<u32>)> {
+    let timings = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type(),
+                EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+            )
+        })
+        .filter_map(|event| event.payload().task_timing())
+        .collect::<Vec<_>>();
+    let [timing] = timings.as_slice() else {
+        panic!("one terminal with its task timing evidence: {timings:?}");
+    };
+    timing
+        .steps
+        .iter()
+        .map(|step| {
+            (
+                step.step_index,
+                step.pacing_factor_milli,
+                step.extra_wait_rounds,
+            )
+        })
+        .collect()
+}
+
+// Test 5 (requirements 1, 2): the step pacing a step is handed, from its instance's reading at the
+// shadow measurement's last evaluation and the configured bases. Under `pace` at 6 000 the default
+// curve reads S2 (factor 2 500, extra 2): 2 extra wait rounds, the configured observe-only retries
+// plus 2, and a pre-input wait of 300 ms × (2 500 − 1 000) / 1 000 = 450 ms. Under `observe` on the
+// same inputs: no round, the configured retries, no pre-input wait. Under `pace` with only a
+// pressure of a floor kind at full responsiveness: at least the floor's one round.
+#[test]
+fn pk2_the_step_pacing_carries_the_stages_extra_rounds_and_pre_input_wait() {
+    let observe = shipped();
+    let mut pace = shipped();
+    pace.pacing.mode = PerformancePacingMode::Pace;
+    let base = EffectiveConfig::default()
+        .sample_timeout_retries()
+        .expect("the shipped observe-only retries");
+    let pre_input_wait_base_ms = pace.pacing.pre_input_wait_base_ms;
+    assert_eq!(pre_input_wait_base_ms, 300, "the shipped pre-input base");
+    let handed = |pacing: actingcommand_execution_kernel::StepPacing| {
+        (
+            pacing.factor_milli,
+            pacing.extra_wait_rounds,
+            pacing.sample_timeout_retries,
+            pacing.pre_input_wait,
+        )
+    };
+
+    let paced = evaluated_at_6000(&pace).effective_pacing(ALIAS);
+    assert_eq!(
+        handed(paced.step_pacing(base, pre_input_wait_base_ms)),
+        (2_500, 2, base + 2, Duration::from_millis(450)),
+        "pace at S2"
+    );
+    let observed = evaluated_at_6000(&observe).effective_pacing(ALIAS);
+    assert_eq!(
+        handed(observed.step_pacing(base, pre_input_wait_base_ms)),
+        (1_000, 0, base, Duration::ZERO),
+        "observe"
+    );
+
+    let mut pressured = PacingShadow::default();
+    pressured.evaluate(
+        T0,
+        &pace,
+        &[ALIAS.to_owned()],
+        Some(PerformancePressureSeverity::Elevated),
+    );
+    assert_eq!(pace.pacing.pressure_floor.extra_retries, 1);
+    let floor = pressured
+        .effective_pacing(ALIAS)
+        .step_pacing(base, pre_input_wait_base_ms);
+    assert!(
+        floor.extra_wait_rounds >= pace.pacing.pressure_floor.extra_retries,
+        "the pressure floor's rounds: {floor:?}"
+    );
+    assert_eq!(floor.sample_timeout_retries, base + floor.extra_wait_rounds);
+}
+
+// Test 6 (requirement 4): a direct run of one tap from `home` to `terminal`, its confirmation a
+// frame every 1 s for 3 s (the package's capture interval and step timeout). At a pinned 2 000
+// with one extra round the device shows `terminal` from the sixth frame after the tap on: the
+// first round's frames (0, 1, 2 and 3 s) show `home`, and the second round's second frame
+// confirms the step, so the step's `steps[]` entry has `extra_wait_rounds` 1 beside its factor.
+// At 1 000 with no extra round and `terminal` on the first frame after the tap the run uses none
+// and has no `steps[]` entry.
+#[test]
+fn pk2_a_steps_used_rounds_are_recorded() {
+    let one_tap = package(
+        &[("open_terminal", "home", "terminal", None)],
+        1_000,
+        3_000,
+        60_000,
+    );
+    for (factor_milli, extra_wait_rounds, terminal_from, steps) in [
+        (2_000, 1, 6, vec![(0, Some(2_000), Some(1))]),
+        (1_000, 0, 1, Vec::new()),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let path = root.path().join("one-tap.zip");
+        fs::write(&path, &one_tap).expect("write package");
+        let state = Arc::new(FakeState::default());
+        // The device shows `home` before the tap, and after it `home` until the
+        // `terminal_from`-th frame, `terminal` from then on.
+        let first_after_tap = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+        *state.pixel_script.lock().expect("pixel script") = Some(Arc::new(
+            move |capture: usize, inputs: usize| -> Vec<(usize, [u8; 3])> {
+                let page = if inputs == 0 {
+                    HOME
+                } else {
+                    let first = first_after_tap
+                        .fetch_min(capture, Ordering::SeqCst)
+                        .min(capture);
+                    // This frame is the `nth` after the tap.
+                    let nth = capture - first + 1;
+                    if nth >= terminal_from { TERMINAL } else { HOME }
+                };
+                vec![(0, page)]
+            },
+        ));
+        let clock = Arc::new(WaitClock::new(1_000));
+        let host = direct_host(&root, &clock, &state);
+        host.pin_step_pacing_for_test(ALIAS, factor_milli, extra_wait_rounds)
+            .expect("pin the step pacing");
+
+        let (receipt, events) = run_direct(&host, &path, 60_000);
+        host.close().expect("close runtime host");
+
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "factor {factor_milli}: {receipt:?}"
+        );
+        assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+        assert_eq!(step_entries(&events), steps, "factor {factor_milli}");
     }
 }

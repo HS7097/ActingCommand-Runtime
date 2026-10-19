@@ -1325,6 +1325,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.step_pacing()
     }
 
+    /// #385 P-k: the run's extra wait rounds count in its own evidence.
+    fn observe_extra_wait_round(&mut self) {
+        self.inner.observe_extra_wait_round();
+    }
+
     fn record_candidate_evaluation(
         &mut self,
         target_id: &str,
@@ -3369,27 +3374,44 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     /// Workflow #386 SR-1 (scheduling model §2.1 item 4): the configured base of observe-only
-    /// retries (`scheduling.recognition.sample_timeout_retries`), read at each step; the pacing
-    /// curve's extra retries join with performance slice P-k S5.
+    /// retries (`scheduling.recognition.sample_timeout_retries`), read at each step, plus the
+    /// pacing curve's extra retries of the step's stage (#385 P-k, PERF v1.4.2 §5.4 item 2).
     ///
     /// #385 P-k (PERF v1.4.2 §5.6 item 2, Tk-10): and the factor in effect for the run's
     /// instance (`performance.pacing.mode`; 1000 under `observe`). The answer starts the run's
-    /// next factor segment, which its budget time and settlement read.
+    /// next factor segment, which its budget time and settlement read. With it (§5.2, §5.4): the
+    /// extra wait rounds in effect (0 under `observe`) and the pre-input wait
+    /// `pre_input_wait_base_ms × (f − 1000) / 1000`, whose base is read only for a factor above
+    /// 1000.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
             .sample_timeout_retries()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let factor_milli = self
+        let effective = self
             .host
-            .pacing_factor_milli(self.instance_alias)
+            .effective_pacing(self.instance_alias)
             .map_err(RequestFailure::poison_without_terminal)?;
+        let pre_input_wait_base_ms =
+            if effective.factor_milli > actingcommand_contract::MIN_PACING_FACTOR_MILLI {
+                self.host
+                    .pre_input_wait_base_ms()
+                    .map_err(RequestFailure::poison_without_terminal)?
+            } else {
+                0
+            };
         let now = self
             .pacing
-            .reads_clock(factor_milli)
+            .reads_clock(effective.factor_milli)
             .then(|| self.monotonic_now());
-        self.pacing.hand(factor_milli, now);
-        Ok(StepPacing::new(retries).with_factor_milli(factor_milli))
+        self.pacing.hand(effective.factor_milli, now);
+        Ok(effective.step_pacing(retries, pre_input_wait_base_ms))
+    }
+
+    /// #385 P-k (PERF v1.4.2 §5.4 item 1, register P5): a wait of the run started one more
+    /// round; it counts for the step in progress in the run's task timing evidence.
+    fn observe_extra_wait_round(&mut self) {
+        self.task_timing.extra_wait_round();
     }
 
     /// Workflow #373 NAV-6: the run's shared interrupt pages (`host/standard_pack.rs`).

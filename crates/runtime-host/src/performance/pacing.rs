@@ -25,8 +25,9 @@
 //!   emergency line (`learning_backstop_bp` held `pause_sustain_ms`); `allowed` is the ceiling of
 //!   the shares' sum over the registered instances, the instances with the larger shares first.
 //! - **Effect** (§10.3): `observe` gives S0 and a factor of 1 000; `pace` and `full` give the
-//!   curve's factor. #385 P-k: a contained run reads its instance's factor in effect at each step
-//!   ([`PacingShadow::effective_factor_milli`]); nothing here changes a dispatch or a deadline.
+//!   curve's factor. #385 P-k: a contained run reads its instance's factor and extra rounds in
+//!   effect at each step ([`PacingShadow::effective_pacing`]); nothing here changes a dispatch or
+//!   a deadline.
 //! - **Records** (§12.1, §12.2): each change of a scope's stage is one `perf_stage_changed`
 //!   outcome for `perf.pacing_changed`; `perf.summary` and the status read carry both views.
 
@@ -88,11 +89,51 @@ pub(crate) enum PacingBackendRole {
 }
 
 /// The curve read at one value (§4.1), with the stage-one floor applied: a share of 0 is S4.
+/// #385 P-k: `extra_retries` is the lower neighbour's, under both readings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CurveReading {
     stage: PerformancePacingStage,
     factor_milli: u32,
+    extra_retries: u32,
     share_milli: u16,
+}
+
+/// #385 P-k (PERF v1.4.2 §4.1, §4.4, §5.2, §5.4, §10.3): what each step of an instance's contained
+/// runs is paced by, as the shadow measurement's last evaluation left it: the factor in effect
+/// and the extra rounds in effect (0 under `observe`; the curve's, pressure floor included, under
+/// `pace` and `full`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EffectivePacing {
+    pub(crate) factor_milli: u32,
+    pub(crate) extra_wait_rounds: u32,
+}
+
+impl EffectivePacing {
+    /// The factor 1 000 and no extra round: `observe`, before the first evaluation, without
+    /// counters and for an instance without a row.
+    pub(crate) const UNPACED: Self = Self {
+        factor_milli: UNIT_FACTOR_MILLI,
+        extra_wait_rounds: 0,
+    };
+
+    /// What `step_pacing()` hands a step (§5.2, §5.4): the factor; the extra wait rounds; the
+    /// observe-only retries, the configured base `sample_timeout_base` plus the rounds (§5.4 item
+    /// 2); and the pre-input wait `pre_input_wait_base_ms × (f − 1000) / 1000`, zero at 1 000.
+    pub(crate) fn step_pacing(
+        self,
+        sample_timeout_base: u32,
+        pre_input_wait_base_ms: u64,
+    ) -> actingcommand_execution_kernel::StepPacing {
+        // base_ms × (f − 1000) / 1000 ms is exactly base_ms × (f − 1000) µs.
+        let pre_input_wait =
+            std::time::Duration::from_micros(pre_input_wait_base_ms.saturating_mul(u64::from(
+                self.factor_milli.saturating_sub(UNIT_FACTOR_MILLI),
+            )));
+        actingcommand_execution_kernel::StepPacing::new(sample_timeout_base)
+            .with_factor_milli(self.factor_milli)
+            .with_extra_wait_rounds(self.extra_wait_rounds)
+            .with_pre_input_wait(pre_input_wait)
+    }
 }
 
 /// One view of a row: its stage and its share.
@@ -112,6 +153,9 @@ struct RowReading {
     normal: RowView,
     effective_stage: PerformancePacingStage,
     effective_factor_milli: u32,
+    /// #385 P-k: the extra rounds in effect (§4.4, §10.3): 0 under `observe`, the reading's
+    /// under `pace` and `full`. Kept for the steps only; no status, summary or record carries it.
+    effective_extra_rounds: u32,
 }
 
 /// One instance's row and whether each view lets it take a new run.
@@ -822,8 +866,19 @@ impl PacingShadow {
     /// #385 P-k (PERF v1.4.2 §4.6, §10.3): the factor in effect for `instance_alias` at the last
     /// evaluation: 1 000 under `observe`, the curve's factor (pressure floor included) under
     /// `pace` and `full`; 1 000 before the first evaluation and for an instance without a row.
-    /// It clones nothing but the number.
+    /// It clones nothing but the number. Test builds only: a step reads [`Self::effective_pacing`].
+    #[cfg(test)]
     pub(crate) fn effective_factor_milli(&self, instance_alias: &str) -> u32 {
+        self.effective_pacing(instance_alias).factor_milli
+    }
+
+    /// #385 P-k (PERF v1.4.2 §4.1, §4.4, §10.3): the factor and the extra rounds in effect for
+    /// `instance_alias` at the last evaluation: 1 000 and 0 under `observe`; under `pace` and
+    /// `full` the curve's factor and the lower neighbour's `extra_retries`, each at least the
+    /// pressure floor's while a pressure of a floor kind at or above `min_severity` is active;
+    /// [`EffectivePacing::UNPACED`] before the first evaluation and for an instance without a
+    /// row. It clones nothing but the two numbers.
+    pub(crate) fn effective_pacing(&self, instance_alias: &str) -> EffectivePacing {
         self.evaluated
             .as_ref()
             .and_then(|(_, snapshot)| {
@@ -832,7 +887,10 @@ impl PacingShadow {
                     .iter()
                     .find(|entry| entry.alias == instance_alias)
             })
-            .map_or(UNIT_FACTOR_MILLI, |entry| entry.row.effective_factor_milli)
+            .map_or(EffectivePacing::UNPACED, |entry| EffectivePacing {
+                factor_milli: entry.row.effective_factor_milli,
+                extra_wait_rounds: entry.row.effective_extra_rounds,
+            })
     }
 
     /// The pacing members of `perf.summary` (register P4) from the last evaluation; none before
@@ -1054,9 +1112,13 @@ fn row_reading(
     let curve = read_curve(&pacing.curve, pacing.interpolate, r_eff);
     let mut reading = curve;
     if pressure.is_some() {
-        // The stage-one floor (§3.4): a pressure never lowers the share.
+        // The stage-one floor (§3.4): a pressure never lowers the share. #385 P-k: nor the extra
+        // rounds below the floor's.
         reading.stage = reading.stage.max(PerformancePacingStage::S1);
         reading.factor_milli = reading.factor_milli.max(pacing.pressure_floor.factor_milli);
+        reading.extra_retries = reading
+            .extra_retries
+            .max(pacing.pressure_floor.extra_retries);
     }
     let normal = RowView {
         stage: reading.stage,
@@ -1084,6 +1146,12 @@ fn row_reading(
         }
         PerformancePacingMode::Full => (reading.stage, reading.factor_milli),
     };
+    // #385 P-k (§4.4, §4.5.2 "放慢不封顶", §10.3): the extra rounds follow the mode as the factor
+    // does; the learning view caps neither.
+    let effective_extra_rounds = match pacing.mode {
+        PerformancePacingMode::Observe => 0,
+        PerformancePacingMode::Pace | PerformancePacingMode::Full => reading.extra_retries,
+    };
     RowReading {
         reading,
         curve_stage: curve.stage,
@@ -1091,12 +1159,14 @@ fn row_reading(
         normal,
         effective_stage,
         effective_factor_milli,
+        effective_extra_rounds,
     }
 }
 
 /// The curve read at `r` (§4.1): between the neighbours `p_k.r_bp > r >= p_{k+1}.r_bp` (the
-/// first segment at 10 000) the stage is `p_{k+1}`'s; the factor and the share lie between the
-/// two (`linear`) or are `p_{k+1}`'s (`step`); a share of 0 is S4.
+/// first segment at 10 000) the stage and (#385 P-k) the extra retries are `p_{k+1}`'s under
+/// both readings; the factor and the share lie between the two (`linear`) or are `p_{k+1}`'s
+/// (`step`); a share of 0 is S4.
 fn read_curve(curve: &[CurvePointSettings], interpolate: Interpolation, r: u16) -> CurveReading {
     let index = curve
         .windows(2)
@@ -1107,6 +1177,7 @@ fn read_curve(curve: &[CurvePointSettings], interpolate: Interpolation, r: u16) 
         return CurveReading {
             stage: PerformancePacingStage::S0,
             factor_milli: UNIT_FACTOR_MILLI,
+            extra_retries: 0,
             share_milli: FULL_SHARE_MILLI,
         };
     };
@@ -1143,6 +1214,7 @@ fn read_curve(curve: &[CurvePointSettings], interpolate: Interpolation, r: u16) 
             lower.stage
         },
         factor_milli: factor_milli.max(UNIT_FACTOR_MILLI),
+        extra_retries: lower.extra_retries,
         share_milli: share_milli.min(FULL_SHARE_MILLI),
     }
 }

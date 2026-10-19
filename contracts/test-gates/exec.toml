@@ -1521,3 +1521,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_411_a21::a21_a_failed_capture_observe_carries_req_id_and_the_runtime_outcome",
 ]
 incident = ["#411 A21"]
+
+# #385 P-k2 (v0.12.x; register §1.108 PK2-1..PK2-3; performance model v1.4.2 §5.2, §5.4; test rows Tk-6, Tk-7, Tk-8, Tk-12): a wait without an input that reached its limit (budget clock) without a declared failure or a terminal page starts one more full round of captures (a new limit of the same length, the same interval), at most StepPacing.extra_wait_rounds times, before it fails as before; the post-input confirmation's rounds come before the failure decision, so a destination that arrives in one needs no second input; rounds never add an input (max_attempts and every clicking retry unchanged); the observe-only resamples are the configured base plus the rounds; the pre-input wait (StepPacing.pre_input_wait, as given) lies between the step's recognition and its effect intent on the page-graph and linear_steps paths, and is absent when zero
+[[gate]]
+key = "92"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_an_extra_round_finds_a_late_target_without_a_second_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_extra_rounds_never_add_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_extra_sample_retries_resample_without_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_the_pre_input_wait_sits_between_recognition_and_the_effect_intent",
+]
+incident = ["#385 P-k"]
