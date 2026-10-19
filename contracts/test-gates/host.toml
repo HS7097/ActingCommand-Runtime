@@ -1289,3 +1289,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav3a::prq_a_prerequisite_that_meets_an_unknown_page_fails_the_run_with_its_own_code_and_starts_the_ladder",
 ]
 incident = ["#411 A16"]
+
+# #411 A23 (v0.12.x; register §1.125 A23-1; no persisted ledger shape, no code): the scheduling disposition chooses its final-page rule by the run's own package's dispatched steps, not by the run's total: a page-graph package already on its terminal page after its prerequisite layer, whose last step finished on the same screen under the prerequisite's own page id, dispatches no step and succeeds on its own recognition with its mapped outcome key; a zero-input fields package after its prerequisite records fields_recorded and its fields report; executed_steps in the receipt and the terminal stays the run's total (the prerequisite's steps included); a package that dispatches its own step after its prerequisite is judged on that step's StepFinished
+[[gate]]
+key = "118"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a23::a23_a_package_already_on_its_terminal_page_after_its_prerequisite_is_judged_on_its_own_recognition",
+    "actingcommand-runtime-host::lib::tests::gate_411_a23::a23_a_zero_input_fields_package_after_its_prerequisite_records_its_fields_outcome",
+    "actingcommand-runtime-host::lib::tests::gate_411_a23::a23_a_package_that_runs_its_own_step_after_its_prerequisite_is_judged_on_that_step",
+]
+incident = ["#411 A23"]

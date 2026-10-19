@@ -1233,17 +1233,22 @@ impl RuntimeContainedTask<'_> {
 
     /// The run's executed steps once its package ran `executed` steps: one more than the index
     /// of its last step (its offset when it ran none). Without shared interrupt pages this is the
-    /// layer's offset plus `executed`.
-    pub(super) fn layer_end(&self, executed: u32) -> Option<u32> {
+    /// layer's offset plus `executed`. Only the run's own package's layer ends here, never a
+    /// prerequisite, return-home, navigation, entry recovery or interrupt layer, so `executed` is
+    /// recorded as the run's own steps, which choose the terminal's final-page rule (Workflow
+    /// #411 A23).
+    pub(super) fn layer_end(&mut self, executed: u32) -> Option<u32> {
+        self.own_executed_steps = Some(executed);
         match executed.checked_sub(1) {
             None => self.step_index_offset.checked_add(self.step_shift),
             Some(last) => self.layer_step_index(last)?.checked_add(1),
         }
     }
 
-    /// `outcome` of the run's package with the run's executed steps ([`Self::layer_end`]).
+    /// `outcome` of the run's package with the run's executed steps ([`Self::layer_end`], which
+    /// records the package's own steps); only the run's own package's outcome comes here.
     pub(super) fn with_layer_end(
-        &self,
+        &mut self,
         mut outcome: ContainedTaskOutcome,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
         outcome.executed_steps = self.layer_end(outcome.executed_steps).ok_or_else(|| {

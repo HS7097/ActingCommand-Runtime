@@ -1860,6 +1860,19 @@ or interface revision (§6) changes. The rows are a value of an existing `record
 | L4-3 | `capabilities` `touch_backends` beside `capture_backends`: `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`, each `{id, gestures, declared_support: true, status: unverified, available: false, reason_code, execution_authority: runtime, availability_checked: false}` | output member (no persisted record) (exec 98) | Lab L4 | Lab L4 | `gestures` are the Runtime input action kinds the backend performs: `nemu_ipc` `tap` and the two segmented drags; `maatouch` also `long_tap`, `swipe`, `key`, `text`; `minitouch` `tap`, `long_tap`, `swipe` and the segmented drags; `adb_shell_input` `tap`, `long_tap`, `swipe`; `reason_code` `runtime_backend_configuration_and_assets_unverified` as the capture entries |
 | L4-4 | `schema control` `capture_backend` / `touch_backend` and `session instance registry` `capture_backends` / `touch_backends` | changed values of existing members (exec 98) | Lab L4 | Lab L4 | capture `adb`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; touch `nemu_ipc`, `maatouch`, `minitouch`, `adb_shell_input`; `auto` and `auto-fastest` are no longer listed |
 
+### 1.125 Slice A23 (v0.12.x): a run whose own package dispatched no step after other layers is judged on its own recognition (#411 A23)
+
+A23: the scheduling disposition chooses its final-page rule by the run's own package's
+dispatched steps, not by the run's total; a run that dispatched none after other layers is
+judged on its last recognition. No persisted ledger shape, no code, no wire, key or
+configuration change; `executed_steps` is unchanged. [linear-steps.md](linear-steps.md) (the
+prerequisite gate and the Ledger table's scheduling outcome row) and
+[ocr-fields.md](ocr-fields.md) (zero-input fields tasks) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A23-1 | the terminal's `scheduling_disposition` (`task.completed`) after a prerequisite, return-home, navigation, entry recovery or interrupt-handler layer | rule (no shape change) (host 118) | A23 | A23 | the run's own package's dispatched steps choose the rule: with one or more, the last attempt's `StepFinished` of step `executed_steps - 1` (the package's own last step) must name the final page, as before; with none, the last `RecognitionCompleted` with a matched page must match it, whatever steps the other layers ran; a layer's page is never compared with the run's terminal pages; `executed_steps` in `TerminalCommitted`, the receipt and the run status stays the run's total; the effect bound, the designated-effect counts, the mapping choice and every outcome code are unchanged; a run with no layer is judged as before |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

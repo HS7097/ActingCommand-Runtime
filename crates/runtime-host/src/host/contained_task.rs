@@ -187,6 +187,10 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) intent_already_recorded: bool,
     pub(super) final_page: Option<String>,
     pub(super) executed_steps: Option<u32>,
+    /// Workflow #411 A23: the steps the run's own package dispatched, without those of its
+    /// prerequisite, return-home, navigation, entry recovery and interrupt layers; they choose
+    /// the final-page rule of the scheduling outcome, `None` by the run's total. In memory only.
+    pub(super) own_executed_steps: Option<u32>,
     /// A failed or cancelled run's failure: the terminal's outcome (ledger revision 3; the
     /// terminal's severity is its category, so no separate severity is kept).
     pub(super) failure: Option<Outcome>,
@@ -1105,6 +1109,9 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     pub(super) step_index_offset: u32,
     pub(super) executed_steps: Option<u32>,
+    /// Workflow #411 A23: the steps the run's own package dispatched, recorded where its layer
+    /// ends (`layer_end`); `None` before.
+    pub(super) own_executed_steps: Option<u32>,
     /// Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation; taken
     /// out while one is handled.
     pub(super) interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
@@ -5062,11 +5069,13 @@ fn startup_package_admission_failure(mut failure: RequestFailure) -> RequestFail
     failure
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select_scheduling_disposition(
     events: &[PersistedEvent],
     outcome: TaskOutcome,
     final_page: Option<&str>,
     executed_steps: Option<u32>,
+    own_executed_steps: Option<u32>,
     contract: Option<&(String, SchedulingOutcomeDeclaration)>,
     selected_outcome_key: Option<&str>,
     designated_effect_caps: &[DesignatedEffectCap],
@@ -5162,7 +5171,13 @@ fn select_scheduling_disposition(
             Some(tallies)
         }
     };
-    if executed_steps == 0 {
+    // Workflow #411 A23: the run's own package's steps choose the rule. A run whose package
+    // dispatched none is judged on its last recognition whatever steps its prerequisite,
+    // return-home, navigation, entry recovery or interrupt layers ran: their pages are never
+    // compared with its terminal pages. With one or more, step `executed_steps - 1` is the
+    // package's own last step (its layer ends after the other layers' steps). Without its own
+    // count (`None`) the run's total decides, as before.
+    if executed_steps == 0 || own_executed_steps == Some(0) {
         let observed_page = events.iter().rev().find_map(|event| {
             let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
                 return None;
@@ -6555,6 +6570,7 @@ impl HostShared {
             step_actions: BTreeMap::new(),
             step_index_offset: 0,
             executed_steps: Some(0),
+            own_executed_steps: None,
             interrupts,
             interrupt_steps: 0,
             interrupt_configurations: 0,
@@ -6794,6 +6810,7 @@ impl HostShared {
         }
         let finalizing = runtime.finalizing;
         let executed_steps = runtime.executed_steps;
+        let own_executed_steps = runtime.own_executed_steps;
         let taken_resource_readings = std::mem::take(&mut runtime.taken_resource_readings);
         // Workflow #384 D2-S3: the plan of the run's adjustments and their confirmation frames.
         let adjustment_plan = runtime.adjustment_plan.take();
@@ -6854,6 +6871,7 @@ impl HostShared {
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
                             executed_steps,
+                            own_executed_steps: None,
                             failure: Some(failure.error.outcome()),
                             failure_severe: false,
                             scheduling_outcome: None,
@@ -6949,6 +6967,7 @@ impl HostShared {
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
                             executed_steps,
+                            own_executed_steps: None,
                             failure: Some(task_outcome),
                             failure_severe,
                             scheduling_outcome: None,
@@ -7064,6 +7083,7 @@ impl HostShared {
                         intent_already_recorded: finalizing.is_some(),
                         final_page: None,
                         executed_steps,
+                        own_executed_steps: None,
                         failure: Some(task_outcome.clone()),
                         failure_severe: false,
                         scheduling_outcome: None,
@@ -7192,6 +7212,7 @@ impl HostShared {
                 intent_already_recorded: true,
                 final_page: outcome.final_page.clone(),
                 executed_steps: Some(outcome.executed_steps),
+                own_executed_steps,
                 failure: None,
                 failure_severe: false,
                 scheduling_outcome,
@@ -8917,6 +8938,7 @@ impl HostShared {
             draft.outcome,
             draft.final_page.as_deref(),
             draft.executed_steps,
+            draft.own_executed_steps,
             draft.scheduling_outcome.as_ref(),
             draft.selected_scheduling_outcome.as_deref(),
             &draft.designated_effect_caps,
