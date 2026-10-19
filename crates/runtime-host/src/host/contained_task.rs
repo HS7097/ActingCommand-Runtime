@@ -7409,7 +7409,20 @@ impl HostShared {
         // entry cannot end on it (NAV-3b, checked again below once it ran). It is refused before
         // it runs, with no input and no `EntryRecoveryPackageAdmitted`; the failure names the
         // required entry pages, the package and, when it declares one, its final page.
-        if !configured_linear {
+        // One-off red proof (never merged): M1 a request-bound package is not compared, M2 the
+        // registry's page-graph package is not compared, M3 the registry's `linear_steps`
+        // package is compared too.
+        let m1_compare_bound = false;
+        let m2_compare_registry_graph = false;
+        let m3_compare_registry_linear = true;
+        let compared = if configured.is_none() {
+            m1_compare_bound
+        } else if configured_linear {
+            m3_compare_registry_linear
+        } else {
+            m2_compare_registry_graph
+        };
+        if compared {
             let terminals = recovery
                 .page_ids()
                 .into_iter()
