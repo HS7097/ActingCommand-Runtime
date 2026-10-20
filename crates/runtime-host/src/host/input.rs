@@ -778,7 +778,6 @@ impl HostShared {
                 // holding check (`recovery_ladder_key_lost`) instead of trying its next rung.
                 if release_after
                     && run_links.is_none()
-                    && key == ApplicationKey::Own
                     && let Err(error) =
                         self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
                 {
