@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
 mod capacity;
-pub(crate) use capacity::{CapacityPreflightConfig, CapacityRoots};
+pub(crate) use capacity::{CapacityPreflightConfig, CapacityResampler, CapacityRoots};
 // Workflow #385 P-m: the shadow measurement (PERF §3, §4, §4.6).
 mod pacing;
 pub(crate) use pacing::{

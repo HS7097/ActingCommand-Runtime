@@ -132,11 +132,34 @@ impl HostShared {
         Ok(stop_sampling)
     }
 
-    /// Called after replay resolution and immediately before authorizing new business.
+    /// Called after replay resolution and immediately before authorizing new business. #411
+    /// A34: a stale fact is re-sampled once through the monitor's own commit first.
     pub(super) fn admit_capacity(
         &self,
     ) -> RuntimeHostResult<actingcommand_contract::CapacityDecision> {
-        lock(&self.performance, HostLocation::AdmitCapacity)?.admit_capacity()
+        lock(&self.performance, HostLocation::AdmitCapacity)?
+            .admit_capacity(&self.ledger, &self.events)
+    }
+
+    /// #411 A34: the Artifact admission's re-sample of a stale fact. It holds the host weakly
+    /// and takes the performance lock as the monitor's tick does: an Artifact write never runs
+    /// under that lock (it is only taken around monitor calls, none of which writes an
+    /// Artifact), so the write's own locks come first and the monitor's order follows.
+    pub(super) fn capacity_resampler(
+        shared: &Arc<HostShared>,
+    ) -> crate::performance::CapacityResampler {
+        let owner = Arc::downgrade(shared);
+        Arc::new(move || {
+            let shared = owner.upgrade().ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::RuntimeHostClosed,
+                    HostLocation::AdmitCapacity,
+                    RuntimeErrorCode::RuntimeUnavailable,
+                )
+            })?;
+            lock(&shared.performance, HostLocation::AdmitCapacity)?
+                .resample_capacity(&shared.ledger, &shared.events)
+        })
     }
 
     pub(super) fn require_business_capacity(

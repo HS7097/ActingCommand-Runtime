@@ -1115,6 +1115,27 @@ impl CaptureEvidenceAccumulator {
     }
 }
 
+/// #411 A34: the capture summary of a run that ends failed or cancelled. A capacity refusal that
+/// left it unfinished (the run's refused frame write, or a refused pin or summary write) does
+/// not keep the run from its terminal: the run commits its terminal without a summary and keeps
+/// the refusal (`Ok(Err(refusal))`) for a `cleanup` link of its own failure. Every other failure
+/// ends the run as before, without a terminal (`Err`).
+fn summary_unless_capacity_refused(
+    summary: Result<CapturePipelineSummary, RequestFailure>,
+) -> Result<Result<CapturePipelineSummary, RuntimeHostError>, RequestFailure> {
+    match summary {
+        Ok(summary) => Ok(Ok(summary)),
+        Err(failure)
+            if !failure.poison_runtime
+                && !failure.error.is_fatal()
+                && failure.error.code() == SharedCode::CapacityAdmissionRefused.as_str() =>
+        {
+            Ok(Err(*failure.error))
+        }
+        Err(failure) => Err(failure),
+    }
+}
+
 pub(super) struct RuntimeContainedTask<'a> {
     pub(super) host: &'a HostShared,
     pub(super) request: &'a ValidatedRuntimeRequest<'a>,
@@ -7119,17 +7140,22 @@ impl HostShared {
                     } else {
                         TaskOutcome::Cancelled
                     };
-                    let capture_summary = capture_evidence
-                        .finalize(terminal_outcome, self)
-                        .map_err(|summary_failure| {
-                            self.cleanup_composite_failure_with_run_links(
-                                request,
-                                token.clone(),
-                                connection_id,
-                                run_links,
-                                summary_failure,
-                            )
-                        })?;
+                    let capture_summary = summary_unless_capacity_refused(
+                        capture_evidence.finalize(terminal_outcome, self),
+                    )
+                    .map_err(|summary_failure| {
+                        self.cleanup_composite_failure_with_run_links(
+                            request,
+                            token.clone(),
+                            connection_id,
+                            run_links,
+                            summary_failure,
+                        )
+                    })?;
+                    let (capture_summary, summary_refusal) = match capture_summary {
+                        Ok(summary) => (Some(summary), None),
+                        Err(refusal) => (None, Some(refusal)),
+                    };
                     let task_terminal = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -7146,11 +7172,18 @@ impl HostShared {
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             designated_effect_caps: Vec::new(),
-                            capture_summary: Some(capture_summary),
+                            capture_summary,
                             task_timing: Some(task_timing.clone()),
                             resource_readings: None,
                         },
                     )?;
+                    if let Some(refusal) = &summary_refusal {
+                        *failure.error = failure
+                            .error
+                            .as_ref()
+                            .clone()
+                            .with_related_failure("cleanup", refusal);
+                    }
                     if scheduled {
                         failure.terminal = Some(terminal(&task_terminal));
                         failure.task_failure = Some(TaskFailureEvidence {
@@ -7213,19 +7246,29 @@ impl HostShared {
                     linear_main,
                 );
                 if task_failure.is_some() || !scheduled && !failure.poison_runtime {
-                    let capture_summary =
-                        match capture_evidence.finalize(TaskOutcome::Failure, self) {
-                            Ok(summary) => summary,
-                            Err(summary_failure) => {
-                                return Err(self.cleanup_composite_failure_with_run_links(
-                                    request,
-                                    token,
-                                    connection_id,
-                                    run_links,
-                                    summary_failure,
-                                ));
-                            }
-                        };
+                    let capture_summary = match summary_unless_capacity_refused(
+                        capture_evidence.finalize(TaskOutcome::Failure, self),
+                    ) {
+                        Ok(Ok(summary)) => Some(summary),
+                        // #411 A34: the run's terminal still comes; the refusal is kept.
+                        Ok(Err(refusal)) => {
+                            *failure.error = failure
+                                .error
+                                .as_ref()
+                                .clone()
+                                .with_related_failure("cleanup", &refusal);
+                            None
+                        }
+                        Err(summary_failure) => {
+                            return Err(self.cleanup_composite_failure_with_run_links(
+                                request,
+                                token,
+                                connection_id,
+                                run_links,
+                                summary_failure,
+                            ));
+                        }
+                    };
                     let event = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -7242,7 +7285,7 @@ impl HostShared {
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             designated_effect_caps: Vec::new(),
-                            capture_summary: Some(capture_summary),
+                            capture_summary,
                             task_timing: Some(task_timing.clone()),
                             resource_readings: None,
                         },
@@ -7288,8 +7331,12 @@ impl HostShared {
                         pin_failure,
                     ));
                 }
-                let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure, self) {
-                    Ok(summary) => summary,
+                let (capture_summary, summary_refusal) = match summary_unless_capacity_refused(
+                    capture_evidence.finalize(TaskOutcome::Failure, self),
+                ) {
+                    Ok(Ok(summary)) => (Some(summary), None),
+                    // #411 A34: the run's terminal still comes; the refusal is kept.
+                    Ok(Err(refusal)) => (None, Some(refusal)),
                     Err(summary_failure) => {
                         return Err(self.cleanup_composite_failure_with_run_links(
                             request,
@@ -7322,8 +7369,8 @@ impl HostShared {
                         == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
                     {
                         capture_summary
-                            .pinned
                             .iter()
+                            .flat_map(|summary| &summary.pinned)
                             .find(|pin| pin.reason == PinnedFrameReason::Failure)
                             .and_then(|pin| pin.artifact.as_ref())
                             .map(|artifact| {
@@ -7358,7 +7405,7 @@ impl HostShared {
                         scheduling_outcome: None,
                         selected_scheduling_outcome: None,
                         designated_effect_caps: Vec::new(),
-                        capture_summary: Some(capture_summary),
+                        capture_summary,
                         task_timing: Some(task_timing.clone()),
                         resource_readings: None,
                     },
@@ -7396,6 +7443,13 @@ impl HostShared {
                     },
                     Some(terminal(&event)),
                 );
+                if let Some(refusal) = &summary_refusal {
+                    *failure.error = failure
+                        .error
+                        .as_ref()
+                        .clone()
+                        .with_related_failure("cleanup", refusal);
+                }
                 failure.task_failure = scheduled.then_some(TaskFailureEvidence {
                     outcome: task_outcome,
                     severe: false,
@@ -7459,18 +7513,62 @@ impl HostShared {
                 )),
             ));
         }
-        let capture_summary = match capture_evidence.finalize(outcome.outcome, self) {
-            Ok(summary) => summary,
-            Err(failure) => {
-                return Err(self.cleanup_composite_failure_with_run_links(
-                    request,
-                    token,
-                    connection_id,
-                    run_links,
-                    failure,
-                ));
-            }
-        };
+        let capture_summary =
+            match summary_unless_capacity_refused(capture_evidence.finalize(outcome.outcome, self))
+            {
+                Ok(Ok(summary)) => summary,
+                // #411 A34: a capacity refusal that left the summary unfinished fails the run,
+                // which still commits its terminal.
+                Ok(Err(refusal)) => {
+                    let event = self.append_contained_task_terminal(
+                        request,
+                        &token,
+                        ContainedTaskTerminalDraft {
+                            task_id,
+                            run_id,
+                            outcome: TaskOutcome::Failure,
+                            intent_already_recorded: true,
+                            final_page: None,
+                            executed_steps: Some(outcome.executed_steps),
+                            own_executed_steps,
+                            failure: Some(refusal.outcome()),
+                            failure_severe: false,
+                            scheduling_outcome: None,
+                            selected_scheduling_outcome: None,
+                            designated_effect_caps: Vec::new(),
+                            capture_summary: None,
+                            task_timing: Some(task_timing),
+                            resource_readings: None,
+                        },
+                    )?;
+                    let task_failure = scheduled.then(|| TaskFailureEvidence {
+                        outcome: refusal.outcome(),
+                        severe: false,
+                    });
+                    let mut failure = RequestFailure::request(
+                        refusal,
+                        RuntimeReceiptState::Failed,
+                        Some(terminal(&event)),
+                    );
+                    failure.task_failure = task_failure;
+                    return Err(self.cleanup_composite_failure_with_run_links(
+                        request,
+                        token,
+                        connection_id,
+                        run_links,
+                        failure,
+                    ));
+                }
+                Err(failure) => {
+                    return Err(self.cleanup_composite_failure_with_run_links(
+                        request,
+                        token,
+                        connection_id,
+                        run_links,
+                        failure,
+                    ));
+                }
+            };
         let task_terminal = self.append_contained_task_terminal(
             request,
             &token,
