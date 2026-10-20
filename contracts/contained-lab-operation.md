@@ -34,7 +34,11 @@ actinglab do --swipe <x1,y1,x2,y2,duration-ms> --capture --zip <package>
 
 Online `do --capture` reads only these forms' options (`--package` in place of `--zip`), the
 arrival condition above, the hints below, `--record` / `--tap-rect`, `--preview`, `--fields` and
-`--pretty`, besides the global options. Any other option, including
+`--pretty`, besides the global options, and (Workflow #406 T4) `--seed <u64>` with `--record` and
+without `--tap` / `--swipe`: the point the Lab plans in the open step's click rectangle is drawn
+from it ([resource-declarations.md](resource-declarations.md), "The Lab's draw"). The Runtime
+presses an element at its projection's point and explicit coordinates exactly, so `--seed` with
+an element, `--tap` or `--swipe` is `validation_failed` (`argument_problem` `conflicting`). Any other option, including
 `--destructive` and `--allow-destructive` (read only by offline and `--dry-run` planning), is
 refused with `validation_failed` (exit 2) before any Runtime connection; its details name each
 refused option (`argument`, `argument_problem`: `conflicting` when another path of `do` reads it,

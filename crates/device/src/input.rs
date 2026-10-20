@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{DeviceCloseAuthority, DeviceError, DeviceResourceCloseOutcome, DeviceResult};
-use actingcommand_contract::{FencedWrite, MAX_INPUT_DURATION_MS};
+use actingcommand_contract::{FencedWrite, MAX_INPUT_DURATION_MS, MAX_PATH_DRAG_POINTS};
 use serde::{Deserialize, Serialize};
 
 pub const SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS: u64 = 200;
@@ -92,36 +92,73 @@ impl DragWithPauseAndBrakeAction {
     }
 }
 
-/// The single-touch drag a prepared plan performs: the fixed vertical-brake drag, or the drag
-/// with a pause and a brake (Workflow #308 SEL-L3b). Both are one press, segments and a release,
-/// which every backend that supports the segmented swipe performs from the plan's events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Workflow #406 T3 (register §1.18 H1): one press at `points[0]` that passes through every
+/// later point in order and is released at the last. Segment `i` (from point `i` to point
+/// `i + 1`) takes `segment_duration_ms[i]`, and the touch holds `corner_hold_ms` at every inner
+/// point. The contract's `single_touch_path_drag_v1`, as a backend performs it: 2 to
+/// [`MAX_PATH_DRAG_POINTS`] points on the screen, one duration of 1 to 60 000 ms per segment and a
+/// corner hold of at most 60 000 ms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathDragAction {
+    pub points: Vec<(i32, i32)>,
+    pub segment_duration_ms: Vec<u64>,
+    pub corner_hold_ms: u64,
+}
+
+impl PathDragAction {
+    pub fn validate(&self) -> DeviceResult<()> {
+        if !(2..=MAX_PATH_DRAG_POINTS).contains(&self.points.len())
+            || self.segment_duration_ms.len() + 1 != self.points.len()
+            || self.points.iter().any(|(x, y)| *x < 0 || *y < 0)
+            || self
+                .segment_duration_ms
+                .iter()
+                .any(|duration_ms| !(1..=MAX_INPUT_DURATION_MS).contains(duration_ms))
+            || self.corner_hold_ms > MAX_INPUT_DURATION_MS
+        {
+            return Err(DeviceError::fatal(
+                "single_touch_path_drag_v1 contract is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The single-touch drag a prepared plan performs: the fixed vertical-brake drag, the drag with
+/// a pause and a brake (Workflow #308 SEL-L3b), or the path drag (Workflow #406 T3). Each is one
+/// press, segments and a release, which every backend that supports the segmented swipe
+/// performs from the plan's events.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SegmentedDragAction {
     VerticalBrake(SegmentedSwipeAction),
     PauseAndBrake(DragWithPauseAndBrakeAction),
+    PathDrag(PathDragAction),
 }
 
 impl SegmentedDragAction {
-    pub fn validate(self) -> DeviceResult<()> {
+    pub fn validate(&self) -> DeviceResult<()> {
         match self {
             Self::VerticalBrake(action) => action.validate(),
             Self::PauseAndBrake(action) => action.validate(),
+            Self::PathDrag(action) => action.validate(),
         }
     }
 
     /// The contract's name of the action.
-    pub const fn name(self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::VerticalBrake(_) => "single_touch_drag_with_vertical_brake_v1",
             Self::PauseAndBrake(_) => "single_touch_drag_with_pause_and_brake_v1",
+            Self::PathDrag(_) => "single_touch_path_drag_v1",
         }
     }
 
-    /// The press, the end of the first segment and the end of the last one.
-    pub const fn points(self) -> [(i32, i32); 3] {
+    /// The points the touch passes: the press, the end of every segment, in order.
+    pub fn points(&self) -> &[(i32, i32)] {
         match self {
-            Self::VerticalBrake(action) => action.points,
-            Self::PauseAndBrake(action) => action.points,
+            Self::VerticalBrake(action) => &action.points,
+            Self::PauseAndBrake(action) => &action.points,
+            Self::PathDrag(action) => &action.points,
         }
     }
 }
@@ -133,8 +170,8 @@ pub struct PreparedSegmentedSwipePlan {
 }
 
 impl PreparedSegmentedSwipePlan {
-    pub const fn action(&self) -> SegmentedDragAction {
-        self.action
+    pub fn action(&self) -> SegmentedDragAction {
+        self.action.clone()
     }
 
     pub fn events(&self) -> &[SegmentedSwipeEvent] {
@@ -180,6 +217,33 @@ pub fn prepare_drag_with_pause_and_brake(
     events.push(SegmentedSwipeEvent::Up);
     Ok(PreparedSegmentedSwipePlan {
         action: SegmentedDragAction::PauseAndBrake(action),
+        events,
+    })
+}
+
+/// Workflow #406 T3 (`contracts/resource-declarations.md`, "The path drag"): the plan of a path
+/// drag. The press at the first point, each segment along the same MAA 2.0 curve and frame steps
+/// as the vertical-brake drag's over its duration, the hold of `corner_hold_ms` at every inner
+/// point (none when it is 0), and one release at the last point.
+pub fn prepare_path_drag(action: PathDragAction) -> DeviceResult<PreparedSegmentedSwipePlan> {
+    action.validate()?;
+    let mut events = Vec::with_capacity(action.points.len() * 16);
+    events.push(SegmentedSwipeEvent::Down(action.points[0]));
+    let last = action.segment_duration_ms.len() - 1;
+    for (index, (segment, duration_ms)) in action
+        .points
+        .windows(2)
+        .zip(&action.segment_duration_ms)
+        .enumerate()
+    {
+        append_maa_2_0_segment(&mut events, segment[0], segment[1], *duration_ms);
+        if index < last && action.corner_hold_ms > 0 {
+            events.push(SegmentedSwipeEvent::Hold(action.corner_hold_ms));
+        }
+    }
+    events.push(SegmentedSwipeEvent::Up);
+    Ok(PreparedSegmentedSwipePlan {
+        action: SegmentedDragAction::PathDrag(action),
         events,
     })
 }
@@ -578,5 +642,107 @@ mod tests {
                 "{refused:?}"
             );
         }
+    }
+
+    // The moves of one segment from `start` to `end` over `duration_ms` along the MAA 2.0 curve,
+    // written from its definition: `steps` = ⌈duration / 16⌉ within 1..=60; move `k` reaches
+    // start + (end − start) · k · (2·steps − k) / steps² (in i128, truncating), after waiting the
+    // part of the duration from move `k − 1` to move `k` (duration · k / steps).
+    fn maa_2_0_reference(
+        start: (i32, i32),
+        end: (i32, i32),
+        duration_ms: u64,
+    ) -> Vec<SegmentedSwipeEvent> {
+        let steps = duration_ms.div_ceil(16).clamp(1, 60);
+        let square = i128::from(steps) * i128::from(steps);
+        (1..=steps)
+            .map(|step| {
+                let progress = i128::from(step) * (2 * i128::from(steps) - i128::from(step));
+                let along = |from: i32, to: i32| {
+                    i32::try_from(i128::from(from) + i128::from(to - from) * progress / square)
+                        .expect("a point on the screen")
+                };
+                SegmentedSwipeEvent::Move {
+                    point: (along(start.0, end.0), along(start.1, end.1)),
+                    delay_before_ms: duration_ms * step / steps - duration_ms * (step - 1) / steps,
+                }
+            })
+            .collect()
+    }
+
+    // Workflow #406 T3 (brief T3 requirement 3; exec key 111): a path drag's plan is one touch:
+    // the press at the first point, each segment along the MAA 2.0 curve over its own duration
+    // to its corner, the corner hold at every inner corner, and one release after the last
+    // segment. A corner hold of 0 holds nowhere.
+    #[test]
+    fn t3_the_path_plan_presses_once_moves_through_every_corner_and_releases() {
+        let points = vec![(100, 100), (400, 120), (150, 380), (420, 400)];
+        let durations = vec![300, 40, 250];
+        let plan = prepare_path_drag(PathDragAction {
+            points: points.clone(),
+            segment_duration_ms: durations.clone(),
+            corner_hold_ms: 120,
+        })
+        .expect("a valid path drag");
+        let mut expected = vec![SegmentedSwipeEvent::Down((100, 100))];
+        for (index, (segment, duration_ms)) in points.windows(2).zip(&durations).enumerate() {
+            expected.extend(maa_2_0_reference(segment[0], segment[1], *duration_ms));
+            if index + 1 < durations.len() {
+                expected.push(SegmentedSwipeEvent::Hold(120));
+            }
+        }
+        expected.push(SegmentedSwipeEvent::Up);
+        assert_eq!(plan.events(), expected.as_slice());
+        let events = plan.events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, SegmentedSwipeEvent::Down(_)))
+                .count(),
+            1,
+            "one press: {events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, SegmentedSwipeEvent::Up))
+                .count(),
+            1,
+            "one release: {events:?}"
+        );
+        assert_eq!(events.last(), Some(&SegmentedSwipeEvent::Up));
+        // Each segment ends at its corner after its own duration.
+        let segments = events[1..events.len() - 1]
+            .split(|event| matches!(event, SegmentedSwipeEvent::Hold(_)))
+            .collect::<Vec<_>>();
+        assert_eq!(segments.len(), 3, "{events:?}");
+        for ((segment, duration_ms), corner) in segments.iter().zip(&durations).zip(&points[1..]) {
+            assert_eq!(move_time(segment), *duration_ms);
+            assert_eq!(last_point(segment), Some(*corner));
+        }
+        assert_eq!(
+            plan.action(),
+            SegmentedDragAction::PathDrag(PathDragAction {
+                points: points.clone(),
+                segment_duration_ms: durations.clone(),
+                corner_hold_ms: 120,
+            })
+        );
+
+        let unheld = prepare_path_drag(PathDragAction {
+            points,
+            segment_duration_ms: durations,
+            corner_hold_ms: 0,
+        })
+        .expect("a path drag without corner holds");
+        let events = unheld.events();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SegmentedSwipeEvent::Hold(_))),
+            "{events:?}"
+        );
+        assert_eq!(move_time(events), 590);
+        assert_eq!(events.last(), Some(&SegmentedSwipeEvent::Up));
     }
 }

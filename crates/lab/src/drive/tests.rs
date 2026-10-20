@@ -215,6 +215,7 @@ impl Fixture {
             allow_destructive: false,
             dry_run,
             capture_requested: !dry_run,
+            draw: None,
         }
     }
 
@@ -227,6 +228,7 @@ impl Fixture {
             capture_requested: false,
             step_timeout: None,
             poll: None,
+            draw: None,
         }
     }
 
@@ -415,4 +417,54 @@ fn blue_scene() -> Scene {
 
 fn scene(pixel: [u8; 3]) -> Scene {
     Scene::from_pixels(1, 1, &pixel, ScenePixelFormat::Rgb8).expect("scene")
+}
+
+// Workflow #406 T4 (exec key 112; register §1.138; plan Q20; brief-T4 Requirement 2): given a seed,
+// the Lab presses a box at the hotspot point drawn from it, not at the centre. Online, through
+// the Runtime input proxy's port (the recording fake): `tap-target` with the seed 41 and the
+// touch keys (spread 250, redraws 8) presses its target's click box (10, 20, 4, 6) at the point
+// the reference draws for the command's first press labelled with the target (12, 22; the
+// centre is 12, 23), as a plain tap, and answers how it drew it.
+#[test]
+fn t4_the_lab_presses_a_box_at_its_seeded_hotspot_point() {
+    use crate::gate_406_t4::reference;
+    use actingcommand_contract::{InputSamplingEvidence, InputSamplingRegion};
+
+    let fixture = Fixture::new();
+    let mut lab = fixture.lab();
+    let mut ledger = ledger("tap-target");
+    let mut request = fixture.tap_request(red_scene(), false);
+    request.draw = Some(crate::DriveDraw {
+        seed: 41,
+        touch: Some(crate::TouchSampling {
+            sigma_ratio_milli: 250,
+            max_redraws: 8,
+            candidate_count: 4,
+        }),
+    });
+
+    let response = lab
+        .tap_target(request, &mut ledger)
+        .expect("the seeded tap");
+
+    let action_seed = reference::action_seed(41, 0, "home_button");
+    let (x, y) = reference::box_point((10, 20, 4, 6), action_seed, Some((250, 8)));
+    assert_ne!((x, y), (12, 23), "the reference point is not the centre");
+    assert_eq!(
+        fixture.actions.lock().expect("actions").as_slice(),
+        [format!("tap:{x}:{y}")]
+    );
+    assert_eq!((response.point.x, response.point.y), (x, y));
+    assert_eq!(
+        response.sampling,
+        Some(
+            InputSamplingEvidence::center_hotspot(
+                action_seed,
+                vec![InputSamplingRegion::new(10, 20, 4, 6).expect("region")],
+                250,
+                8,
+            )
+            .expect("evidence")
+        )
+    );
 }

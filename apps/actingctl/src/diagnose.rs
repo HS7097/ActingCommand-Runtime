@@ -22,13 +22,23 @@
 //! Workflow #378 A5: the CLI line also carries `outcome` (`runtime_diagnosis_reported`, or the
 //! failure alone), and the report status (`suspended_report`) carries the outcome of a report
 //! that is unavailable or failed beside its data members.
+//!
+//! Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-4; plan-mcp19 Q4, Q8): `not_run` lists the
+//! deferred rows of the latest policy evaluation (due, or waiting for a gate; not the rows blocked
+//! by their own trigger), at most `scheduling.not_run.diagnose_rows` per instance, each with its
+//! `instance_alias`, and `not_run_total` when one was left out; one ScheduleExplanation read and
+//! one RuntimeFactSnapshot read (`crate::schedule`), neither of which records anything. A read
+//! that failed, or a bound that cannot be read, is a warning (the CLI line's `warnings`, MCP's
+//! warnings) and marks the diagnosis incomplete, with no `not_run`.
 
 use crate::child::{self, Captured, ChildFailure};
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::events::{self, CursorBinding};
 use crate::instance_selector::{self, SelectorMiss};
+use crate::overview::Warning;
 use crate::packs;
+use crate::schedule::{self, NotRun};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{
     Category, CauseRelation, Code, CodeStr, Detail, Outcome, OutcomeEnvelope, RawSource,
@@ -285,6 +295,16 @@ pub(crate) fn read(
     if status.is_none() && grouped_runs.iter().any(|run| run.instance.is_some()) {
         status = Some(client.status().map_err(Failure::Runtime)?);
     }
+    // Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-4): the deferred rows of the latest
+    // policy evaluation, of the diagnosed instance or of every one, at most the configured bound
+    // per instance. They come after the reads the diagnosis needs, so that their failure leaves
+    // only a warning.
+    let mut warnings = Vec::new();
+    let not_run = schedule::not_run(
+        client.schedule_explanation(alias, true),
+        client.runtime_fact_snapshot(),
+        &mut warnings,
+    );
     let report = report.finish(
         state_root,
         selected
@@ -322,6 +342,8 @@ pub(crate) fn read(
         clock_slots_total: report.clock_slots_total,
         runs_grouped: group_runs(&grouped_runs, status.as_ref()),
         failures_grouped: group_failures(&failures),
+        not_run,
+        warnings,
     };
     Ok((diagnosis, query))
 }
@@ -785,6 +807,13 @@ pub(crate) struct Diagnosis {
     pub(crate) runs_grouped: Vec<Value>,
     /// Workflow #389 MCP-7: the non-run failures grouped, the most frequent first.
     pub(crate) failures_grouped: Vec<Value>,
+    /// Workflow #386 SR-6b, MCP-19b: the deferred rows of the latest policy evaluation, at most
+    /// the configured bound per instance, and how many there are; `None` when they could not be
+    /// read (`warnings` says why).
+    pub(crate) not_run: Option<NotRun>,
+    /// Workflow #386 SR-6b, MCP-19b: the parts that could not be read, reported beside the
+    /// diagnosis, which is then incomplete.
+    pub(crate) warnings: Vec<Warning>,
 }
 
 /// How many of each list a rendering keeps.
@@ -801,6 +830,8 @@ pub(crate) struct Kept {
     pub(crate) clock_slots: usize,
     pub(crate) runs_grouped: usize,
     pub(crate) failures_grouped: usize,
+    /// Workflow #386 SR-6b, MCP-19b.
+    pub(crate) not_run: usize,
 }
 
 impl Diagnosis {
@@ -818,6 +849,10 @@ impl Diagnosis {
             clock_slots: self.clock_slots.len(),
             runs_grouped: self.runs_grouped.len(),
             failures_grouped: self.failures_grouped.len(),
+            not_run: self
+                .not_run
+                .as_ref()
+                .map_or(0, |not_run| not_run.rows.len()),
         }
     }
 
@@ -860,6 +895,13 @@ impl Diagnosis {
                 json!(self.clock_slots_total),
             );
         }
+        // Workflow #386 SR-6b, MCP-19b: absent when the rows could not be read.
+        if let Some(not_run) = &self.not_run {
+            list_into(&mut result, "not_run", &not_run.rows, kept.not_run);
+            if kept.not_run < not_run.total {
+                result.insert("not_run_total".to_owned(), json!(not_run.total));
+            }
+        }
         let mut report_status = self.report_status.clone();
         if let (Some(outcome), Value::Object(status)) = (&self.report_outcome, &mut report_status) {
             status.insert("outcome".to_owned(), envelope(outcome));
@@ -877,7 +919,9 @@ impl Diagnosis {
             &self.failures_grouped,
             kept.failures_grouped,
         );
-        if self.incomplete {
+        // Workflow #386 SR-6b, MCP-19b: a part that could not be read leaves the diagnosis
+        // incomplete too.
+        if self.incomplete || !self.warnings.is_empty() {
             result.insert("incomplete".to_owned(), json!(true));
         }
         Value::Object(result)
@@ -1340,11 +1384,25 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
     };
     let errors_page = diagnosis.errors_page(&query, binding, diagnosis.errors.len())?;
     let detail = cli_line::detail().unwrap_or(Detail::Full);
-    Ok(
+    let mut rendered =
         diagnosis.render(&diagnosis.kept_all(), errors_page, &|outcome: &Outcome| {
             cli_line::outcome_value(outcome, detail)
-        }),
-    )
+        });
+    // Workflow #386 SR-6b, MCP-19b: what could not be read, as the line's `warnings` (D3).
+    if let Value::Object(members) = &mut rendered
+        && !diagnosis.warnings.is_empty()
+    {
+        let warnings = diagnosis
+            .warnings
+            .iter()
+            .map(|warning| match warning {
+                Warning::Outcome(outcome) => cli_line::warning(outcome),
+                Warning::Runtime(error) => cli_line::warning(&error.outcome()),
+            })
+            .collect();
+        members.insert("warnings".to_owned(), Value::Array(warnings));
+    }
+    Ok(rendered)
 }
 
 /// `--state-root` (required), `--root` and the flags of §4.8, each at most once and with a

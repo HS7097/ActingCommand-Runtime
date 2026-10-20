@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{EnvResolved, LabResult};
+use actingcommand_contract::{EnvResolved, InputSamplingEvidence, LabResult};
+use actingcommand_execution_kernel::DriveDraw;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -10,6 +11,9 @@ pub struct TapTargetRequest {
     pub allow_destructive: bool,
     pub dry_run: bool,
     pub capture_requested: bool,
+    /// Workflow #406 T4: how the point pressed in the target's click box is drawn; `None` presses
+    /// the box's centre.
+    pub draw: Option<DriveDraw>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +26,9 @@ pub struct TapTargetResponse {
     pub action_id: String,
     pub click: crate::RectResponse,
     pub point: crate::PointResponse,
+    /// Workflow #406 T4: how `point` was drawn, when the command was given a seed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<InputSamplingEvidence>,
     pub evaluation: crate::TargetEvaluationResponse,
     pub safety_gate: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,6 +45,9 @@ pub struct NavigateRequest {
     pub capture_requested: bool,
     pub step_timeout: Option<LabResult<Duration>>,
     pub poll: Option<LabResult<Duration>>,
+    /// Workflow #406 T4: how the route draws the point of each box it presses; `None` presses
+    /// each box's centre.
+    pub draw: Option<DriveDraw>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +85,9 @@ pub struct NavigationStepResponse {
     pub action_id: String,
     pub edge: NavigationEdgeResponse,
     pub resolved_input: SemanticInputResponse,
+    /// Workflow #406 T4: how the pressed points were drawn, when the route was given a seed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<InputSamplingEvidence>,
     pub recognition: Option<NavigationTargetRecognitionResponse>,
     pub device: SemanticDeviceResponse,
     pub arrived: crate::PageDetectionResponse,

@@ -709,13 +709,16 @@ fn capture_backend_capabilities() -> Value {
 /// Workflow #411 Lab L4: the input backends an actingd instance may name (`touch_backend`), with
 /// the Runtime input actions each performs. `nemu_ipc` performs them only on a frame the Runtime
 /// captured (`nemu_input_frame_required`); `adb_shell_input` performs a long tap as a swipe that
-/// stays at its point.
+/// stays at its point. Workflow #406 T4: every backend that performs segmented plans performs the
+/// path drag (`single_touch_path_drag_v1`, Workflow #406 T3), and `adb_shell_input` performs the
+/// segmented plans (both brake drags and the path drag) through `input motionevent` from the
+/// device's Android SDK level 23 (plan Q18 (a)).
 fn touch_backend_capabilities() -> Value {
     let mut backends = json!([
-        {"id": "nemu_ipc", "gestures": ["tap", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1"]},
-        {"id": "maatouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "key", "text"]},
-        {"id": "minitouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1"]},
-        {"id": "adb_shell_input", "gestures": ["tap", "long_tap", "swipe"]}
+        {"id": "nemu_ipc", "gestures": ["tap", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1"]},
+        {"id": "maatouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1", "key", "text"]},
+        {"id": "minitouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1"]},
+        {"id": "adb_shell_input", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1"]}
     ]);
     for backend in backends.as_array_mut().expect("backend declaration array") {
         declare_runtime_backend(backend);

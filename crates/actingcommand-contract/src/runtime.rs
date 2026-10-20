@@ -701,11 +701,12 @@ pub enum InputAction {
         slope_in: u8,
         slope_out: u8,
     },
-    /// Workflow #406 (register §1.18, reserved): one press that passes through `points` in order
-    /// and lifts at the last, inside the box `box_x`, `box_y`, `box_width`, `box_height`; segment
-    /// `i` (from point `i` to point `i + 1`) takes `segment_duration_ms[i]`, and the touch holds
-    /// `corner_hold_ms` at every inner point. Decodable since v0.12.0; #406 T-3 writes and
-    /// executes it, and until then every path that receives it refuses it.
+    /// Workflow #406 (register §1.18): one press that passes through `points` in order and lifts
+    /// at the last, inside the box `box_x`, `box_y`, `box_width`, `box_height`; segment `i` (from
+    /// point `i` to point `i + 1`) takes `segment_duration_ms[i]`, and the touch holds
+    /// `corner_hold_ms` at every inner point. Decodable since v0.12.0; since #406 T-3 (register
+    /// §1.137) the kernel generates it from a `single_touch_path_drag_v1` click and every backend
+    /// that performs segmented swipes performs it.
     SingleTouchPathDragV1 {
         box_x: i32,
         box_y: i32,

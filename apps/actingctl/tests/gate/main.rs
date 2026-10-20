@@ -48,6 +48,8 @@ mod mcp_pkgs4;
 // Workflow #389 MCP-6: `actingctl run evidence` ↔ `ac_run_evidence`.
 mod mcp_run_evidence_parity;
 mod mcp_runs_parity;
+// Workflow #386 SR-6b, MCP-19b: `actingctl schedule` ↔ `ac_schedule`.
+mod mcp_schedule_parity;
 mod mcp_shell;
 // Workflow #411 B15 R6: `actingctl remedy set|get|lift` ↔ `ac_remedy_set`, `ac_remedy_get`.
 mod remedy_choices;

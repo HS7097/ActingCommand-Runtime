@@ -44,6 +44,10 @@ mod gate_lab_b9;
 // #411 Lab BD (exec key 109): a Lab recording declares a brake drag and generates it.
 #[cfg(test)]
 mod gate_lab_bd;
+// Workflow #406 T4 (exec key 112): offline runs draw as the kernel; a recording declares a path
+// drag and names how the Lab pressed.
+#[cfg(test)]
+mod gate_406_t4;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
@@ -60,6 +64,8 @@ mod recording;
 mod recording_api;
 mod scheduling;
 mod state;
+// Workflow #406 T4: the touch keys of the Lab's root configuration.
+mod touch;
 
 pub use codes::LabCode;
 pub use context::*;
@@ -85,6 +91,7 @@ pub use recording::*;
 pub use recording_api::*;
 pub use scheduling::*;
 pub use state::*;
+pub use touch::LabTouch;
 
 pub use actingcommand_artifact_store::{FrameStoreControl, MemorySample, MemorySampleSource};
 pub use actingcommand_contract::{LabError, LabResult};
@@ -115,6 +122,12 @@ pub use actingcommand_execution_kernel::drive_offset_rect;
 pub use actingcommand_execution_kernel::{PreparedPageObservation, observation_fields};
 // #411 Lab L7: the kernel's page check of an operation's guard, for actinglab's offline `do`.
 pub use actingcommand_execution_kernel::page_anchor_matches;
+// Workflow #406 T4: the offline runs' and the Lab's draws, the seed derivation, the touch keys,
+// and the path drag's bounds for the Lab's readers.
+pub use actingcommand_execution_kernel::{
+    DriveDraw, OfflineDraw, TouchSampling, offline_action_seed, path_drag_bounds_hold,
+    replay_contained_task_drawn, sampling_algorithm_name, simulate_contained_task_drawn,
+};
 
 pub struct Lab<P: LabPorts> {
     ports: P,

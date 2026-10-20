@@ -839,6 +839,16 @@ records it, with every field its declaration classifies `personal` redacted (no 
 `normalized_text`, `value`, `detail` or `extraction`; `redacted` true). Each is absent when the
 run took none.
 
+Workflow #406 T4: `package dry-run` and a whole `replay` draw every box point as a run does, from
+the run's seed (`--seed <u64>`, else 0) and the touch keys of the root configuration the Lab
+reads, each step from its own action seed, without a landing history
+([resource-declarations.md](resource-declarations.md), "The Lab's draw"). The dry run's
+`would_click` and each replayed effect carry `sampling`, the draw's evidence as the ledger records
+it, when the click drew a box point, and the result carries `seed` when a click drew from it; a
+replay given the reported seed draws every point again. A decision or effect without a drawn
+point serializes as before. A scan replay (`--select`, `--scan`) does not read `--seed`, and
+refuses it (`validation_failed`, `argument_problem` `conflicting`).
+
 `actinglab replay --package <path> --frames <directory> --select <operation> --scan <file>
 [--facts <file>]` (Workflow #308 SEL-L6b) replays the scan of the select step `<operation>`
 through the kernel's own scan path (`dry_run_scan`) instead of the whole package. The frames are

@@ -137,8 +137,8 @@ fn runtime_failure(
 /// row's `run` from the last row back, then each row's `monitor` the same way, then each row's
 /// `foreground` (MCP-5b), then `install.build`. Each cut block leaves `<block>_truncated: true` where it was. The daemon, the
 /// global pause, each row's identity, `emulator_state` (Workflow #390 九处-1),
-/// `backend_selfcheck` (#411 A7), `pause`, `lease_active` and `queued`, and `incomplete` are
-/// never cut: an answer that still does not fit when nothing is left to cut is returned as it is,
+/// `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b), `pause`,
+/// `lease_active` and `queued`, and `incomplete` are never cut: an answer that still does not fit when nothing is left to cut is returned as it is,
 /// and the call answers `output_budget_exceeded` (`tools::call_result`).
 pub(super) fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
     while !fits(result) {

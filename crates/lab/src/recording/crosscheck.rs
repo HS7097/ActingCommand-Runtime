@@ -404,6 +404,44 @@ pub(crate) fn first_decision(
                     && *brake_distance_px == SEGMENTED_SWIPE_BRAKE_DISTANCE_PX
                     && *brake_duration_ms == SEGMENTED_SWIPE_BRAKE_DURATION_MS
             }
+            // Workflow #406 T4: a path drag turns inside its box, the recorded rectangle (which
+            // lies inside the frame): the kernel's path holds that box, `turns + 2` points all
+            // inside it, segment durations that sum to the declared duration, and the declared
+            // corner hold.
+            (
+                OfflineDecision::WouldClick {
+                    operation_label,
+                    action:
+                        InputAction::SingleTouchPathDragV1 {
+                            box_x,
+                            box_y,
+                            box_width,
+                            box_height,
+                            points,
+                            segment_duration_ms,
+                            corner_hold_ms,
+                        },
+                    ..
+                },
+                Some(rect),
+                Some(ClickGesture::SingleTouchPathDragV1 {
+                    turns,
+                    duration_ms,
+                    corner_hold_ms: declared_hold,
+                    ..
+                }),
+            ) => {
+                *operation_label == operation
+                    && (*box_x, *box_y, *box_width, *box_height)
+                        == (rect.x, rect.y, rect.width, rect.height)
+                    && u64::try_from(points.len()).ok() == turns.checked_add(2)
+                    && points.iter().all(|point| point_in(point.x, point.y, rect))
+                    && segment_duration_ms
+                        .iter()
+                        .try_fold(0_u64, |total, segment| total.checked_add(*segment))
+                        == Some(duration_ms)
+                    && *corner_hold_ms == declared_hold
+            }
             _ => false,
         };
         if !inside {

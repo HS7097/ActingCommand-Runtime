@@ -46815,9 +46815,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.4",
-      "description": "#411 Lab L5: an online Lab observation (actinglab observe --capture) had to take several frames for its package's target consensus, and an input reached the instance between its first and its last capture, so the frames are not one screen; nothing is recognised from them and the observation fails.",
-      "common_causes": "A scheduled task, another Lab request or a script pressed the instance while the observation was taking its frames; a read-only observation holds no lease, so it cannot keep inputs away.",
-      "handling": "Pause the instance's scheduling (actingctl pause --instance <alias>) or wait until it is idle, then observe again; do --capture holds a lease and is not affected."
+      "description": "#411 Lab L5 and L5c: a Lab observation that holds no lease across its captures had to take several frames for its package's target consensus, and an input reached the instance between its first and its last capture, so the frames are not one screen; nothing is recognised or decided from them and the observation fails. The Runtime checks an online keyless observation (actinglab observe --capture, L5a and L5b); actinglab checks its client capture forms (do --capture --dry-run, ensure --capture and wait --capture, L5c) through the Runtime's event query and answers device_error with this code in details.error.",
+      "common_causes": "A scheduled task, another Lab request or a script pressed the instance while the frames were being taken; observe --capture and the client capture forms hold no lease across their captures, so they cannot keep inputs away.",
+      "handling": "Pause the instance's scheduling (actingctl pause --instance <alias>) or wait until it is idle, then observe or run the form again; an online do --capture without --dry-run holds a lease and is not affected."
     },
     "observation_verified_artifact_mismatch": {
       "category": "error",
@@ -85082,6 +85082,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Operation of an input backend: resetting the touch state."
+    },
+    "input_sdk_level": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.6",
+      "description": "Step of the adb shell input backend's connect: reading the device's Android SDK level, which decides whether segmented plans can be sent with input motionevent (Workflow #406)."
     },
     "input_segmented_swipe_capability": {
       "owner": "device",

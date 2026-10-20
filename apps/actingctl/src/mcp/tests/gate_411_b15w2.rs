@@ -72,6 +72,9 @@ fn diagnosis(remedies: Vec<Value>) -> Diagnosis {
         clock_slots_total: 0,
         runs_grouped: Vec::new(),
         failures_grouped: Vec::new(),
+        // Workflow #386 SR-6b, MCP-19b: no deferred rows read, nothing warned.
+        not_run: None,
+        warnings: Vec::new(),
     }
 }
 

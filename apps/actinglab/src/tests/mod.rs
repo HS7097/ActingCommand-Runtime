@@ -45,6 +45,10 @@ mod gate_lab_l5c;
 // declare or an option it does not declare.
 #[path = "gate_lab_rp.rs"]
 mod gate_lab_rp;
+// Workflow #406 T4 (exec key 112): offline runs draw as the kernel from their seed, and the Lab
+// presses a box at its seeded hotspot point.
+#[path = "gate_406_t4.rs"]
+mod gate_406_t4;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

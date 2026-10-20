@@ -348,6 +348,23 @@ impl Adb {
         Ok(output.stdout.trim().to_string())
     }
 
+    /// Read-only (Workflow #406 T3): the device's Android SDK level as `getprop` prints it.
+    pub fn sdk_level(&self, serial: &str) -> DeviceResult<String> {
+        let output = self.run(&["-s", serial, "shell", "getprop", "ro.build.version.sdk"])?;
+        Ok(output.stdout.trim().to_string())
+    }
+
+    /// Workflow #406 T3 (plan Q18): one `adb shell` invocation that runs `script`, the
+    /// `input motionevent` commands and `sleep` waits of one segmented plan.
+    pub fn shell_input_motionevents(
+        &self,
+        witness: &FencedWrite,
+        serial: &str,
+        script: &str,
+    ) -> DeviceResult<CommandOutput> {
+        self.run_write(witness, &["-s", serial, "shell", script])
+    }
+
     pub fn shell_input_tap(
         &self,
         witness: &FencedWrite,

@@ -212,11 +212,11 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 <install root>\runtime\actingctl.exe mcp-serve --list-tools --format markdown
 ```
 
-**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。主线上档位仍在；0.12 系列计划取消档位（见[路线图](#路线图)）。下表列的是主线上的 37 个工具；v0.11.6 有其中 22 个，标 † 的 15 个是 v0.11.6 之后新增的。v0.12.0 起工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
+**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。主线上档位仍在；0.12 系列计划取消档位（见[路线图](#路线图)）。下表列的是主线上的 38 个工具；v0.11.6 有其中 22 个，标 † 的 16 个是 v0.11.6 之后新增的。v0.12.0 起工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
 
 | 档位 | 工具 |
 | --- | --- |
-| observer（读取、Runtime 运行中可改的设置、手机设备绑定、本地能力缺口记录与实例的补救选择，22 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_observe`†、`ac_get_run`、`ac_diagnose`、`ac_runs`†、`ac_run_evidence`†、`ac_resources_list`、`ac_targets_get`、`ac_config_set`†、`ac_packs`†、`ac_facts`†、`ac_outcome_code`†、`ac_devices`†、`ac_device_bind`†、`ac_device_unbind`†、`ac_capability_gap`†、`ac_remedy_set`†、`ac_remedy_get`†、`ac_pack_check`、`ac_catalog_check` |
+| observer（读取、Runtime 运行中可改的设置、手机设备绑定、本地能力缺口记录与实例的补救选择，23 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_observe`†、`ac_get_run`、`ac_diagnose`、`ac_runs`†、`ac_run_evidence`†、`ac_resources_list`、`ac_targets_get`、`ac_config_set`†、`ac_packs`†、`ac_facts`†、`ac_outcome_code`†、`ac_devices`†、`ac_device_bind`†、`ac_device_unbind`†、`ac_capability_gap`†、`ac_remedy_set`†、`ac_remedy_get`†、`ac_schedule`†、`ac_pack_check`、`ac_catalog_check` |
 | operator（设备、应用与调度，8 个） | `ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、`ac_emulator`、`ac_app`†、`ac_ladder_drill`†、`ac_targets_set` |
 | author（Lab 录制，7 个） | `ac_lab_observe`、`ac_lab_do`、`ac_record_start`、`ac_record_mark`、`ac_record_stop`、`ac_record_status`、`ac_binding_draft` |
 

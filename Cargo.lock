@@ -178,6 +178,7 @@ dependencies = [
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "actingcommand-resource-tooling",
+ "actingcommand-runtime-config",
  "actingcommand-vision-ffi",
  "serde",
  "serde_json",

@@ -23,23 +23,29 @@
 //! Workflow #378 A5: the CLI line carries the outcome `runtime_diagnosis_reported` beside the
 //! diagnosis, which is the rest of the line; a report status that is unavailable or failed
 //! carries its `outcome`; a tool error is `{class, outcome}`.
+//!
+//! Workflow #386 SR-6b, MCP-19b: a diagnosis also reads the latest policy evaluation's
+//! explanation (ScheduleExplanation) and the bound of its `not_run` rows (RuntimeFactSnapshot);
+//! the scripted Runtime has run no evaluation and records the bound at its default.
 
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    AuditInput, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode, DiagnosticDetailDraft,
-    EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
-    EventPayloadDraft, EventQuery, EventSeverity, EventSource, IdentifierIssuer, IssuedInstanceId,
-    LedgerView, OriginModule, OwnerEpoch, PerformanceContext, PolicyDispatchEventData,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyFailureRecord, PolicyPayloadDraft, PolicyReasonRecord, ProjectedEvent, ProjectionPayload,
-    ProjectionProfile, RUNTIME_INFO_FILE, RuntimeControlPlaneStatus, RuntimeEventQueryCursor,
-    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeInstanceStatus,
+    AuditInput, ClientPayloadDraft, CommandPayloadDraft, ConfigParameter, ConfigParameterSource,
+    DiagnosticCode, DiagnosticDetailDraft, EffectDisposition, EventAction, EventActor, EventDraft,
+    EventLinksDraft, EventOrigin, EventPayloadDraft, EventQuery, EventSeverity, EventSource,
+    FactScalar, IdentifierIssuer, IssuedInstanceId, LedgerView, OriginModule, OwnerEpoch,
+    PerformanceContext, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, PolicyPayloadDraft,
+    PolicyReasonRecord, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    RUNTIME_FACT_SCHEMA_VERSION, RUNTIME_INFO_FILE, RuntimeConfigManifest,
+    RuntimeControlPlaneStatus, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeFactSnapshot, RuntimeInfo, RuntimeInstanceStatus,
     RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult, SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
-    TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskOutcome, TaskPayloadDraft,
-    TaskSemanticFact,
+    RuntimeResult, RuntimeScheduleExplanation, SanitizationError, SecretField, SecretFingerprinter,
+    Sha256Fingerprint, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskOutcome,
+    TaskPayloadDraft, TaskSemanticFact,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -869,7 +875,9 @@ impl Drop for ScriptedRuntime {
     }
 }
 
-/// Answers one client's Health, Status and event queries until it hangs up.
+/// Answers one client's Health, Status and event queries until it hangs up, and (Workflow #386
+/// SR-6b, MCP-19b) the two reads of a diagnosis' `not_run`: no evaluation has run, and the bound
+/// `scheduling.not_run.diagnose_rows` is at its default.
 fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger) {
     while let Some(request) = next_request(&mut stream) {
         let result = match request.operation() {
@@ -890,7 +898,19 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger) {
             } => RuntimeResult::EventPage {
                 page: event_page(ledger, query, *profile, page),
             },
-            _ => panic!("the scripted Runtime answers Health, Status and QueryEvents only"),
+            RuntimeOperation::ScheduleExplanation { .. } => RuntimeResult::ScheduleExplanation {
+                explanation: Box::new(RuntimeScheduleExplanation {
+                    evaluated_at_unix_ms: None,
+                    catalog_hash: None,
+                    instances: Vec::new(),
+                }),
+            },
+            RuntimeOperation::RuntimeFactSnapshot => RuntimeResult::RuntimeFactSnapshot {
+                snapshot: scheduling_parameters(),
+            },
+            _ => panic!(
+                "the scripted Runtime answers Health, Status, QueryEvents, ScheduleExplanation and RuntimeFactSnapshot only"
+            ),
         };
         let receipt =
             RuntimeReceipt::success(&request, RuntimeReceiptState::Completed, None, result)
@@ -902,6 +922,33 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger) {
             .expect("write the receipt header");
         stream.write_all(&body).expect("write the receipt body");
         stream.flush().expect("flush the receipt");
+    }
+}
+
+/// The program facts of the scripted Runtime: the section `config.parameters.scheduling` with the
+/// row `scheduling.not_run.diagnose_rows` at its default (10), as a Runtime records it at start.
+fn scheduling_parameters() -> RuntimeFactSnapshot {
+    let manifest = RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters: vec![ConfigParameter {
+            key: "scheduling.not_run.diagnose_rows".to_owned(),
+            value: FactScalar::Integer(10),
+            source: ConfigParameterSource::Default,
+            settable: true,
+        }],
+    };
+    RuntimeFactSnapshot {
+        schema_version: RUNTIME_FACT_SCHEMA_VERSION.to_owned(),
+        ledger_position: 1,
+        taken_at_unix_ms: SINCE_UNIX_MS,
+        snapshot_id: 1,
+        part: 1,
+        parts: 1,
+        records: vec![manifest.parameter_section_fact_record(
+            "scheduling",
+            SINCE_UNIX_MS,
+            OriginModule::Runtime,
+        )],
     }
 }
 

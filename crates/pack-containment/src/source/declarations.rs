@@ -29,6 +29,9 @@ const SCAN_MEMBERS: &[&str] = &[
     "early_stop",
 ];
 
+/// Workflow #406 T3 (plan Q17): the click kind of the path drag the kernel generates in a box.
+const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
+
 /// Members of one `checks` entry (`contracts/selection-graph.md`, section Checks).
 const CHECK_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
 /// Workflow #390 EXEC-2: an operation's `observation_window`, by its `until`, with its required
@@ -236,7 +239,8 @@ impl Declaration<'_> {
             }
             Some("drag") => &["kind", "from", "to", "duration_ms"],
             // Generated task metadata preserves this supported contained-task action.
-            Some("single_touch_drag_with_vertical_brake_v1") => {
+            // Workflow #406 T3: and the path drag, with its `box_rect`.
+            Some("single_touch_drag_with_vertical_brake_v1" | "single_touch_path_drag_v1") => {
                 return self.click(value, pointer, true);
             }
             Some("long_press" | "long_tap" | "offset" | "specific_rect") => {
@@ -899,6 +903,24 @@ impl Declaration<'_> {
                 "brake_distance_px",
                 "brake_duration_ms",
             ],
+            // Workflow #406 T3 (plan Q17): the path drag, its box `box` in the task file and
+            // `box_rect` once compiled.
+            PATH_DRAG_KIND if canonical => &[
+                "kind",
+                "box_rect",
+                "turns",
+                "min_segment_px",
+                "duration_ms",
+                "corner_hold_ms",
+            ],
+            PATH_DRAG_KIND => &[
+                "kind",
+                "box",
+                "turns",
+                "min_segment_px",
+                "duration_ms",
+                "corner_hold_ms",
+            ],
             _ => {
                 return Err(self.error(
                     &child(pointer, "kind"),
@@ -932,9 +954,8 @@ impl Declaration<'_> {
             let value = self.required(object, pointer, field)?;
             let pointer = child(pointer, field);
             match *field {
-                "from" | "to" | "corner" | "from_rect" | "to_rect" | "corner_rect" | "offset" => {
-                    self.rect(value, &pointer)?
-                }
+                "from" | "to" | "corner" | "from_rect" | "to_rect" | "corner_rect" | "offset"
+                | "box" | "box_rect" => self.rect(value, &pointer)?,
                 "target_id" => self.string(value, &pointer)?,
                 "x" | "y" | "width" | "height" | "brake_distance_px" => {
                     if value.as_i64().is_none() {
@@ -942,6 +963,103 @@ impl Declaration<'_> {
                     }
                 }
                 _ => self.unsigned(value, &pointer)?,
+            }
+        }
+        if kind == PATH_DRAG_KIND {
+            self.path_drag_bounds(object, pointer, if canonical { "box_rect" } else { "box" })?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #406 T3 (plan Q17; `contracts/resource-declarations.md`, "The path drag"): a
+    /// path drag's numbers within their bounds, each refused `InvalidValue` at its member: the
+    /// box at `x`, `y` at least 0 and `width`, `height` at least 1; `turns` 1..=30 (its points,
+    /// `turns + 2`, at most `MAX_PATH_DRAG_POINTS`); `min_segment_px`
+    /// 1..=⌊(max(width, height) − 1) / 2⌋; `duration_ms` `turns + 1 ..= (turns + 1) × 60 000`;
+    /// `corner_hold_ms` at most 60 000. Its members' types are checked before.
+    fn path_drag_bounds(
+        &self,
+        object: &Map<String, Value>,
+        pointer: &str,
+        box_field: &str,
+    ) -> CliOutcome<()> {
+        let invalid = |field: &str| {
+            self.error(
+                &child(pointer, field),
+                ResourceDeclarationReason::InvalidValue,
+            )
+        };
+        let number = |field: &str| object.get(field).and_then(Value::as_u64).unwrap_or(0);
+        let box_pointer = child(pointer, box_field);
+        let rect = |field: &str| {
+            object
+                .get(box_field)
+                .and_then(|rect| rect.get(field))
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+        };
+        for (field, least) in [("x", 0), ("y", 0), ("width", 1), ("height", 1)] {
+            if rect(field) < least {
+                return Err(self.error(
+                    &child(&box_pointer, field),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+        }
+        let turns = number("turns");
+        let max_turns =
+            u64::try_from(actingcommand_contract::MAX_PATH_DRAG_POINTS - 2).unwrap_or(u64::MAX);
+        if !(1..=max_turns).contains(&turns) {
+            return Err(invalid("turns"));
+        }
+        let longest = u64::try_from(rect("width").max(rect("height"))).unwrap_or(0);
+        if !(1..=longest.saturating_sub(1) / 2).contains(&number("min_segment_px")) {
+            return Err(invalid("min_segment_px"));
+        }
+        let segments = turns + 1;
+        if !(segments..=segments * actingcommand_contract::MAX_INPUT_DURATION_MS)
+            .contains(&number("duration_ms"))
+        {
+            return Err(invalid("duration_ms"));
+        }
+        if number("corner_hold_ms") > actingcommand_contract::MAX_INPUT_DURATION_MS {
+            return Err(invalid("corner_hold_ms"));
+        }
+        Ok(())
+    }
+
+    /// Workflow #406 T3: a task operation's path drag box lies inside the task's resolution
+    /// `frame` (`coordinate_space`), refused `InvalidValue` at the box otherwise.
+    fn path_drag_in_frame(
+        &self,
+        operation: &Value,
+        pointer: &str,
+        frame: [u64; 2],
+    ) -> CliOutcome<()> {
+        let Some(click) = operation
+            .get("click")
+            .filter(|click| click.get("kind").and_then(Value::as_str) == Some(PATH_DRAG_KIND))
+        else {
+            return Ok(());
+        };
+        let click_pointer = child(pointer, "click");
+        for box_field in ["box", "box_rect"] {
+            let Some(rect) = click.get(box_field) else {
+                continue;
+            };
+            let number = |field: &str| rect.get(field).and_then(Value::as_i64).unwrap_or(0);
+            let ends = [
+                number("x").checked_add(number("width")),
+                number("y").checked_add(number("height")),
+            ];
+            let inside = ends.iter().zip(frame).all(|(end, bound)| {
+                end.is_some_and(|end| u64::try_from(end).is_ok_and(|end| end <= bound))
+            });
+            if !inside {
+                return Err(self.error(
+                    &child(&click_pointer, box_field),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
             }
         }
         Ok(())
@@ -3609,7 +3727,9 @@ impl Declaration<'_> {
                 "recovery" if !value.is_null() => self.recovery(value, &pointer)?,
                 "operations" => {
                     for (index, operation) in self.array(value, &pointer)?.iter().enumerate() {
-                        self.operation(operation, &child(&pointer, &index.to_string()), canonical)?;
+                        let pointer = child(&pointer, &index.to_string());
+                        self.operation(operation, &pointer, canonical)?;
+                        self.path_drag_in_frame(operation, &pointer, frame)?;
                     }
                 }
                 "anchors" | "verify_templates" | "color_probes" | "ocr_targets" => {

@@ -13,10 +13,30 @@ use actingcommand_lab::{
 
 pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "do")?;
+    // Workflow #406 T4: online `do --capture` reads `--seed` only for the click it records, whose
+    // point the Lab plans. The Runtime presses an element at its projection's point and explicit
+    // coordinates exactly, so `--seed` with either is refused, never ignored.
+    let seed = super::super::lab_draw::seed_flag(flags)?;
+    if seed.is_some()
+        && (!flags.bool("--record")
+            || !flags.values("--tap").is_empty()
+            || !flags.values("--swipe").is_empty())
+    {
+        return Err(super::super::lab_draw::seed_refusal(
+            "conflicting",
+            "do --capture reads --seed only with --record, for the point it plans in the open \
+             step's click rectangle; the Runtime presses an element at its projection's point, \
+             and --tap and --swipe press their coordinates",
+        ));
+    }
     // `do --capture --record`: the lock is held across the device click; the point comes from
     // the open step's rectangle, planned before anything is pressed.
     let recording = if flags.bool("--record") {
-        Some(begin_record_click(global, flags)?)
+        Some(begin_record_click(
+            global,
+            flags,
+            super::super::lab_draw::press_draw(seed)?,
+        )?)
     } else {
         None
     };
@@ -252,12 +272,21 @@ fn recorded_click_selection(plan: &ClickPlan) -> CliOutcome<LabOperationSelectio
             ));
         }
         // #411 Lab BD: the recording refuses to plan a brake drag (`record_plan_click`), so no
-        // plan carries one; a Lab operation has no input for it.
-        (Some(gesture @ ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }), _) => {
+        // plan carries one; a Lab operation has no input for it. Workflow #406 T4: nor a path
+        // drag.
+        (
+            Some(
+                gesture @ (ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }
+                | ClickGesture::SingleTouchPathDragV1 { .. }),
+            ),
+            _,
+        ) => {
             return Err(CliError::safety_blocked(
                 actingcommand_lab::LabCode::RecordGestureExecutionUnsupported.as_str(),
-                "do --capture --record: a Lab operation does not press the brake drag of the open \
-                 step",
+                format!(
+                    "do --capture --record: a Lab operation does not press the {} of the open step",
+                    gesture.kind()
+                ),
                 &["session_record"],
             )
             .with_details(json!({"step": plan.step, "gesture": gesture})));
@@ -313,10 +342,12 @@ fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {
 }
 
 /// Plans the recorded click: the instance check, the recording lock and the point inside
-/// the open step's rectangle (`--tap-rect` declares it, `--tap` picks the point).
+/// the open step's rectangle (`--tap-rect` declares it, `--tap` picks the point; Workflow #406
+/// T4: with `--seed`, `draw` draws it).
 fn begin_record_click(
     global: &GlobalOptions,
     flags: &FlagArgs,
+    draw: Option<actingcommand_lab::DriveDraw>,
 ) -> CliOutcome<(RecordingLock, ClickPlan)> {
     let instance = lab2_instance(global, flags);
     let tap_rect = match flags.values("--tap-rect").as_slice() {
@@ -388,6 +419,7 @@ fn begin_record_click(
             tap,
             tap_rect,
             swipe,
+            draw,
         },
     )?;
     Ok((lock, plan))

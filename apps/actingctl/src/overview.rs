@@ -43,6 +43,11 @@
 //! the last self-check of each backend entry, read from the program facts
 //! `backend.selfcheck.<entry>.status` and `.checked_at_unix_ms` in the RuntimeFactSnapshot the
 //! block already reads; `emulator_state` is the emulator's running state only, not its health.
+//!
+//! Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-3; scheduling model §8.2 item 4): each
+//! instance row whose instance the latest policy evaluation decided for carries `not_running`,
+//! that instance's not-running row as `actingctl schedule` prints it, from one
+//! ScheduleExplanation read without candidates (it records nothing); never cut by MCP.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -54,7 +59,7 @@ use actingcommand_contract::{
     ConfigCatalog, EventActor, EventSource, FactScalar, FactValue, InstalledProcess, InstanceId,
     RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactRefreshStatus, RuntimeFactScope,
     RuntimeFactSnapshot, RuntimeInstanceStatus, RuntimeMonitorInstanceStatus,
-    RuntimePerformanceStatus,
+    RuntimePerformanceStatus, RuntimeScheduleExplanation,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Map, Value, json};
@@ -336,7 +341,7 @@ pub(crate) fn read(
     } else {
         None
     };
-    let instances = window
+    let mut instances = window
         .filter(|_| sections.contains(Section::Instances))
         .map(|window| {
             instance_rows(
@@ -350,6 +355,16 @@ pub(crate) fn read(
                 &mut incomplete,
             )
         });
+    // Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-3): each row's not-running row, from one
+    // ScheduleExplanation read without candidates, of the selected instance or of every one.
+    if let Some(rows) = instances.as_mut() {
+        not_running_rows(
+            rows,
+            client.schedule_explanation(selected_alias, false),
+            &mut warnings,
+            &mut incomplete,
+        );
+    }
     result.insert(
         "daemon".to_owned(),
         json!({"online": true, "owner_epoch": status.owner_epoch()}),
@@ -712,6 +727,38 @@ fn instance_row(
     Value::Object(row)
 }
 
+/// Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-3; scheduling model §8.2 item 4): each
+/// instance row of `rows` whose alias has an entry in `explanation` gains that entry's
+/// `not_running` row verbatim; a row without one gains nothing (the latest evaluation since the
+/// Runtime started had no decision for its instance, or none has run). A read that failed is one
+/// warning (the client's failure) and marks the overview incomplete, and no row gains the member.
+fn not_running_rows(
+    rows: &mut Value,
+    explanation: Result<RuntimeScheduleExplanation, RuntimeClientError>,
+    warnings: &mut Vec<Warning>,
+    incomplete: &mut bool,
+) {
+    let explanation = match explanation {
+        Ok(explanation) => explanation,
+        Err(error) => {
+            warnings.push(Warning::Runtime(error));
+            *incomplete = true;
+            return;
+        }
+    };
+    let not_running = crate::schedule::not_running_by_alias(&explanation);
+    for row in rows.as_array_mut().into_iter().flatten() {
+        let found = row
+            .get("alias")
+            .and_then(Value::as_str)
+            .and_then(|alias| not_running.get(alias))
+            .cloned();
+        if let Some(found) = found {
+            row["not_running"] = found;
+        }
+    }
+}
+
 /// `{package, observed_at_unix_ms}` (Workflow #389 MCP-5b, command table §4.6, D10): the
 /// instance's program fact `application.foreground`, the package the foreground gate last saw
 /// before a pointer input and recorded when it changed; so it is the last one seen, not a live
@@ -1019,7 +1066,7 @@ mod tests {
     use actingcommand_contract::outcome::Category;
     use actingcommand_contract::{
         ApprovalDisposition, ConfigSelection, EmulatorRunningState, IdentifierIssuer, OriginModule,
-        RuntimeFactRecord,
+        RuntimeFactRecord, ScheduleExplanationInstance, ScheduleExplanationNotRunning,
     };
     use tempfile::TempDir;
 
@@ -1361,5 +1408,101 @@ mod tests {
             backend_selfcheck(&passed, instance),
             json!({"capture": {"status": "passed", "checked_at_unix_ms": 2_000}})
         );
+    }
+
+    // Workflow #386 SR-6b, MCP-19b (apps key 81; register §1.144 M19B-3; scheduling model §8.2
+    // item 4): an instance row whose instance the latest evaluation decided for shows that
+    // instance's not-running row verbatim, and a row the answer has no entry for has none. A read
+    // that failed is one warning (the client's failure), the overview is incomplete, and no row
+    // has the member.
+    #[test]
+    fn mcp19b_each_overview_row_shows_its_not_running_row() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let (first, second) = (mint_instance(&issuer), mint_instance(&issuer));
+        let rows = || {
+            Value::Array(
+                [("neutral.first", first), ("neutral.second", second)]
+                    .into_iter()
+                    .map(|(alias, instance_id)| {
+                        let status = RuntimeInstanceStatus::new(
+                            alias,
+                            instance_id,
+                            false,
+                            0,
+                            false,
+                            false,
+                            false,
+                        )
+                        .expect("instance status");
+                        instance_row(&status, None)
+                    })
+                    .collect(),
+            )
+        };
+        let held = ScheduleExplanationNotRunning {
+            task_id: Some("fixture.slot".to_owned()),
+            why: Outcome::relayed("dispatch_instance_held"),
+            next_wake_unix_ms: None,
+            since_unix_ms: 1_700_000_000_000,
+        };
+        let explanation = RuntimeScheduleExplanation {
+            evaluated_at_unix_ms: Some(1_700_000_060_000),
+            catalog_hash: Some(format!("sha256:{}", "0".repeat(64))),
+            instances: vec![ScheduleExplanationInstance {
+                instance_alias: "neutral.first".to_owned(),
+                next_wake_unix_ms: Some(1_700_003_600_000),
+                selected: None,
+                not_running: held.clone(),
+                candidates: Vec::new(),
+                candidates_total: 0,
+            }],
+        };
+
+        let mut answered = rows();
+        let (mut warnings, mut incomplete) = (Vec::new(), false);
+        not_running_rows(
+            &mut answered,
+            Ok(explanation),
+            &mut warnings,
+            &mut incomplete,
+        );
+        assert_eq!(answered[0]["not_running"], json!(held), "{answered}");
+        assert_eq!(
+            answered[1].get("not_running"),
+            None,
+            "the second instance has no entry: {answered}"
+        );
+        assert!(
+            warnings.is_empty() && !incomplete,
+            "a read that answered warns nothing"
+        );
+
+        let Err(error) = RuntimeClient::connect(RuntimeClientConfig::new(
+            "",
+            actingcommand_runtime_client::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )) else {
+            panic!("a client without a state root is refused before any I/O");
+        };
+        let mut unread = rows();
+        let (mut warnings, mut incomplete) = (Vec::new(), false);
+        not_running_rows(
+            &mut unread,
+            Err(error.clone()),
+            &mut warnings,
+            &mut incomplete,
+        );
+        assert!(incomplete, "a failed read marks the overview incomplete");
+        assert!(
+            matches!(
+                warnings.as_slice(),
+                [Warning::Runtime(warned)] if warned.outcome() == error.outcome()
+            ),
+            "one warning, the client's failure"
+        );
+        for row in unread.as_array().expect("instance rows") {
+            assert_eq!(row.get("not_running"), None, "{unread}");
+        }
     }
 }

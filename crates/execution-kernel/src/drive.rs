@@ -3,9 +3,9 @@
 //! Pure semantic-drive planning owned by the execution kernel.
 
 use crate::codes::ExecutionKernelCode;
-use actingcommand_contract::InputAction;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
+use actingcommand_contract::{InputAction, InputSamplingAlgorithm, InputSamplingEvidence};
 use actingcommand_recognition_pack::PackRect;
 use serde::Serialize;
 use serde_json::Value;
@@ -218,6 +218,29 @@ impl DriveSegmentedDrag {
     }
 }
 
+/// Workflow #406 T3: the click kind of a path drag, which the kernel generates as
+/// `InputAction::SingleTouchPathDragV1` inside its box.
+const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
+
+/// Workflow #406 T3: the members of a path drag click in the form source compilation writes it
+/// into the navigation (`box_rect` from the task file's `box`).
+const PATH_DRAG_FIELDS: [&str; 6] = [
+    "kind",
+    "box_rect",
+    "turns",
+    "min_segment_px",
+    "duration_ms",
+    "corner_hold_ms",
+];
+
+/// Workflow #406 T3: a `single_touch_path_drag_v1` click as the navigation readers take it, a
+/// segmented drag as #411 Lab L2 reads the vertical-brake drag. Its points are generated when a
+/// package run performs it, so the reader keeps the box every point lies in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrivePathDrag {
+    pub box_rect: PackRect,
+}
+
 /// #411 Lab L2: a navigation click as the readers take it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriveNavigationClick {
@@ -227,6 +250,8 @@ pub enum DriveNavigationClick {
     /// A segmented drag: the page projection lists its element without an input
     /// (`gesture_not_projectable`) and no route passes it.
     SegmentedDrag(DriveSegmentedDrag),
+    /// Workflow #406 T3: a path drag, read as a segmented drag: no input, no route.
+    PathDrag(DrivePathDrag),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,6 +518,143 @@ pub fn drive_rect_center(rect: PackRect) -> Result<DrivePoint, DriveDecisionErro
     })
 }
 
+/// Workflow #406 T4 (plan Q20; `contracts/resource-declarations.md`, "The Lab's draw"): how the
+/// Lab draws the point it presses in a box, instead of the box's centre: the seed it was given
+/// (`--seed`) and the touch keys of the root configuration it reads (`None`: a uniform draw, plan
+/// Q14). Each press of one command draws from its own action seed, derived from the seed, the
+/// press's place in the command and its label as an offline run derives a step's
+/// ([`crate::offline_action_seed`]). The Lab keeps no landing history, so a box is drawn as a
+/// run draws a single-region press with one candidate (`center_hotspot_normal_v1`) and a drag's
+/// two boxes as a run draws a drag's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriveDraw {
+    pub seed: u64,
+    pub touch: Option<crate::TouchSampling>,
+}
+
+impl DriveDraw {
+    /// The action seed of the press `press_index` (from 0) of one command, labelled `label`.
+    pub fn action_seed(&self, press_index: u32, label: &str) -> u64 {
+        crate::offline_action_seed(self.seed, press_index, label)
+    }
+
+    /// The point of the press `press_index` labelled `label` in `rect`, and how it was drawn.
+    pub fn point(
+        &self,
+        rect: PackRect,
+        press_index: u32,
+        label: &str,
+    ) -> Result<(DrivePoint, InputSamplingEvidence), DriveDecisionError> {
+        let ((x, y), sampling) = crate::contained_task::lab_box_point(
+            (rect.x, rect.y, rect.width, rect.height),
+            self.action_seed(press_index, label),
+            self.touch,
+        )
+        .map_err(draw_error)?;
+        Ok((DrivePoint { x, y }, sampling))
+    }
+
+    /// The two points of the drag `press_index` labelled `label` from `from` to `to`, and how
+    /// they were drawn.
+    pub fn drag(
+        &self,
+        from: PackRect,
+        to: PackRect,
+        press_index: u32,
+        label: &str,
+    ) -> Result<(DrivePoint, DrivePoint, InputSamplingEvidence), DriveDecisionError> {
+        let ((x1, y1), (x2, y2), sampling) = crate::contained_task::lab_drag_points(
+            (from.x, from.y, from.width, from.height),
+            (to.x, to.y, to.width, to.height),
+            self.action_seed(press_index, label),
+            self.touch,
+        )
+        .map_err(draw_error)?;
+        Ok((
+            DrivePoint { x: x1, y: y1 },
+            DrivePoint { x: x2, y: y2 },
+            sampling,
+        ))
+    }
+
+    /// `input` with its points drawn: a tap's point in its rectangle, a long press's (the drag
+    /// that does not move) in its box, a drag's two points in its two boxes; and how they were
+    /// drawn. A click that follows a target is resolved to its box before it is drawn.
+    pub fn input(
+        &self,
+        input: &DriveSemanticInput,
+        press_index: u32,
+        label: &str,
+    ) -> Result<(DriveSemanticInput, InputSamplingEvidence), DriveDecisionError> {
+        match input {
+            DriveSemanticInput::Tap { rect, .. } => {
+                let (point, sampling) = self.point(*rect, press_index, label)?;
+                Ok((DriveSemanticInput::Tap { rect: *rect, point }, sampling))
+            }
+            DriveSemanticInput::Drag {
+                from_rect,
+                to_rect,
+                from,
+                to,
+                duration_ms,
+            } if from == to && from_rect == to_rect => {
+                let (point, sampling) = self.point(*from_rect, press_index, label)?;
+                Ok((
+                    DriveSemanticInput::Drag {
+                        from_rect: *from_rect,
+                        to_rect: *to_rect,
+                        from: point,
+                        to: point,
+                        duration_ms: *duration_ms,
+                    },
+                    sampling,
+                ))
+            }
+            DriveSemanticInput::Drag {
+                from_rect,
+                to_rect,
+                duration_ms,
+                ..
+            } => {
+                let (from, to, sampling) = self.drag(*from_rect, *to_rect, press_index, label)?;
+                Ok((
+                    DriveSemanticInput::Drag {
+                        from_rect: *from_rect,
+                        to_rect: *to_rect,
+                        from,
+                        to,
+                        duration_ms: *duration_ms,
+                    },
+                    sampling,
+                ))
+            }
+            DriveSemanticInput::TargetCenter { .. } | DriveSemanticInput::TargetOffset { .. } => {
+                Err(DriveDecisionError::invalid(
+                    "a click that follows a target is resolved to its box before its point is drawn",
+                ))
+            }
+        }
+    }
+}
+
+/// Workflow #406 T4: the name of a draw's algorithm, as the sampling evidence spells it; a Lab
+/// recording's `point_rule` names how the Lab pressed by it.
+pub const fn sampling_algorithm_name(algorithm: InputSamplingAlgorithm) -> &'static str {
+    match algorithm {
+        InputSamplingAlgorithm::Xorshift64UniformRectV1 => "xorshift64_uniform_rect_v1",
+        InputSamplingAlgorithm::CenterHotspotNormalV1 => "center_hotspot_normal_v1",
+        InputSamplingAlgorithm::CenterHotspotLeastRecentV1 => "center_hotspot_least_recent_v1",
+    }
+}
+
+/// A box the kernel cannot draw a point in (an empty side, a negative place).
+fn draw_error(error: crate::ContainedTaskError) -> DriveDecisionError {
+    DriveDecisionError::invalid(format!(
+        "the box's point cannot be drawn: {}",
+        error.code().as_str()
+    ))
+}
+
 /// Workflow #390 LAB-2 item 7: the box an `offset` click presses, the top-left corner of the box
 /// its target matched plus `offset`. For a template that matched at a declared factor (REC-5 of
 /// Workflow #396) each of the four numbers is scaled by it as the kernel scales an `offset`
@@ -613,6 +775,10 @@ fn parse_destructive_area(click: &Value) -> Result<DestructiveArea, DriveDecisio
         DriveNavigationClick::SegmentedDrag(drag) => {
             return Ok(DestructiveArea::Boxes(drag.boxes()?));
         }
+        // Workflow #406 T3: a path drag's touch stays in its box.
+        DriveNavigationClick::PathDrag(drag) => {
+            return Ok(DestructiveArea::Boxes(vec![drag.box_rect]));
+        }
         DriveNavigationClick::Input(input) => input,
     };
     Ok(match input {
@@ -660,10 +826,43 @@ fn parse_navigation_edge(value: &Value) -> Result<Option<DriveNavigationEdge>, D
 pub(crate) fn parse_navigation_click(
     value: &Value,
 ) -> Result<DriveNavigationClick, DriveDecisionError> {
-    if value.get("kind").and_then(Value::as_str) == Some(SEGMENTED_DRAG_KIND) {
-        return parse_segmented_drag(value).map(DriveNavigationClick::SegmentedDrag);
+    match value.get("kind").and_then(Value::as_str) {
+        Some(SEGMENTED_DRAG_KIND) => {
+            parse_segmented_drag(value).map(DriveNavigationClick::SegmentedDrag)
+        }
+        Some(PATH_DRAG_KIND) => parse_path_drag(value).map(DriveNavigationClick::PathDrag),
+        _ => parse_navigation_input(value).map(DriveNavigationClick::Input),
     }
-    parse_navigation_input(value).map(DriveNavigationClick::Input)
+}
+
+/// Workflow #406 T3: a path drag in the shape pack containment admits: exactly its six members,
+/// `box_rect` a rectangle of four integers, unsigned `turns`, `min_segment_px`, `duration_ms` and
+/// `corner_hold_ms` within the bounds the kernel checks ([`path_drag_bounds_hold`]).
+fn parse_path_drag(value: &Value) -> Result<DrivePathDrag, DriveDecisionError> {
+    reject_unknown_members(value, "path drag click", &PATH_DRAG_FIELDS)?;
+    let unsigned = |name: &str| -> Result<u64, DriveDecisionError> {
+        required_value_field(value, name)?.as_u64().ok_or_else(|| {
+            DriveDecisionError::invalid(format!("field '{name}' must be an unsigned integer"))
+        })
+    };
+    let rect = required_value_field(value, "box_rect")?;
+    reject_unknown_members(rect, "box_rect", &["x", "y", "width", "height"])?;
+    let box_rect = parse_navigation_rect(rect)?;
+    if box_rect.x < 0
+        || box_rect.y < 0
+        || !crate::contained_task::path_drag_bounds_hold(
+            (box_rect.width, box_rect.height),
+            unsigned("turns")?,
+            unsigned("min_segment_px")?,
+            unsigned("duration_ms")?,
+            unsigned("corner_hold_ms")?,
+        )
+    {
+        return Err(DriveDecisionError::invalid(
+            "path drag click is outside its bounds",
+        ));
+    }
+    Ok(DrivePathDrag { box_rect })
 }
 
 /// #411 Lab L2: a segmented drag in the shape pack containment admits: exactly its seven

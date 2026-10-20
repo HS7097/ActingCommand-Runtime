@@ -547,14 +547,15 @@ tests = [
 ]
 incident = ["#386", "#405"]
 
-# The reserved single-touch path drag is refused before any effect (v012-register §1.18; Workflow #383 SH-1, numbered 54 on its branch, renumbered 58 by train 6)
+# The single-touch path drag (v012-register §1.18; Workflow #383 SH-1, numbered 54 on its branch, renumbered 58 by train 6): reserved until Workflow #406 T3, which retired the refusal's test h1_the_host_refuses_the_reserved_path_drag_before_any_effect (register §1.137); its replacements: a run performs the path drag on a segmented backend, and a backend that cannot perform it (adb shell input below SDK 23) refuses it with the segmented swipe capability error before any command
 [[gate]]
 key = "58"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_383_sh1::h1_the_host_refuses_the_reserved_path_drag_before_any_effect",
+    "actingcommand-runtime-host::lib::tests::gate_406_t3::t3_a_run_performs_a_path_drag_on_a_segmented_backend_and_records_its_points",
+    "actingcommand-device::lib::touch::tests::t3_adb_sends_one_shell_of_motionevents_and_refuses_below_sdk_23",
 ]
-incident = ["#383 SH-1"]
+incident = ["#383 SH-1", "#406"]
 
 # Every ledger_observer key has its contract default and AO-1's settable decision, values that break the section's rules are refused at start and through an instruction, and a forced write failure's dump stops the Runtime and is imported once by the restart and deleted (Workflow #383 AO-1; the acceptance row of additions §8.3)
 [[gate]]
@@ -1514,3 +1515,14 @@ tests = [
     "actingcommand-contract::lib::runtime::schedule_explanation::tests::mcp19a_a_not_running_row_has_no_task_exactly_when_its_why_is_due_task_missing",
 ]
 incident = ["#386 SR-6b", "MCP-19"]
+
+# Workflow #406 T3 (0.12.x; register §1.137, §1.18 H1; no persisted ledger shape: H1 first written, no sampling evidence and no plan record on it; plan-405-406 Q18 (a), Q19): a package run on a backend that performs segmented swipes performs the generated path drag as one plan through its points, and the effect intent's action and the input intent's provenance hold the same generated points (event action input.swipe), with no sampling evidence and no execution plan record, read back from the ledger; an instance whose input is nemu_ipc admits the path drag with the Runtime frame it was decided on; the vertical-brake drag and the drag with a pause and a brake run on adb shell input from SDK 23 as one adb shell of input motionevent commands with the corner hold and the pause as sleeps
+[[gate]]
+key = "124"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_406_t3::t3_a_run_performs_a_path_drag_on_a_segmented_backend_and_records_its_points",
+    "actingcommand-runtime-host::lib::tests::gate_406_t3::t3_the_nemu_input_admits_a_path_drag_with_a_frame",
+    "actingcommand-device::lib::touch::tests::t3_a_vertical_brake_drag_runs_on_adb_through_motionevents",
+]
+incident = ["#406"]
