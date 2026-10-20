@@ -2349,6 +2349,62 @@ pub(crate) mod tests {
         );
     }
 
+    // #411 A36b S1 (production 10-20 18:02:07 JST): a foreign write lands in an open stream's
+    // staging file, so the bytes its seal reads back are not the bytes its writes reported. The
+    // seal fails with `artifact_hash_mismatch` at `seal_artifact_stream`, a failure that does not
+    // stop the Runtime, with the two byte counts it compared. Nothing is published, no event is
+    // recorded and the staging file is discarded.
+    #[test]
+    fn a36b_a_stream_whose_staging_file_changed_fails_its_seal_without_stopping_the_runtime() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
+        let request = request(b"stream context");
+        let mut stream = store
+            .begin_stream(
+                ArtifactKind::DiagnosticJson,
+                request.context,
+                request.policy,
+            )
+            .expect("begin stream");
+        let written = b"{\"records\":[\n]}\n";
+        stream.append(written).expect("the stream's own bytes");
+        let staging = stream.temp_path.clone();
+        let foreign = b"a foreign line\n";
+        OpenOptions::new()
+            .append(true)
+            .open(&staging)
+            .and_then(|mut file| file.write_all(foreign))
+            .expect("a foreign write into the staging file");
+        let mut sink = RecordingSink::default();
+
+        let error = store
+            .seal_stream(stream, &mut sink)
+            .expect_err("the seal finds the foreign bytes");
+
+        assert_eq!(error.code(), StoreCode::ArtifactHashMismatch.as_str());
+        assert_eq!(
+            error.operation(),
+            StoreLocation::SealArtifactStream.as_str()
+        );
+        assert!(!error.is_fatal(), "{error}");
+        assert_eq!(
+            error.compared_bytes(),
+            Some(crate::ArtifactComparedBytes {
+                written_bytes: written.len() as u64,
+                staged_bytes: (written.len() + foreign.len()) as u64,
+            })
+        );
+        assert!(sink.event_types.is_empty());
+        assert!(!staging.exists());
+        assert!(material_files(temp.path()).is_empty());
+    }
+
     #[test]
     fn publish_collision_preserves_existing_file() {
         let temp = tempfile::tempdir().expect("tempdir");

@@ -125,6 +125,9 @@ mod gate_rc2_a15;
 // #411 A22 (v0.12.3, host key 117), register §1.124: a direct run refuses a recovery binding that
 // no path of it can use.
 mod gate_411_a22;
+// #411 A36b (0.12.x): a run whose diagnostic stream's seal finds its staged bytes changed fails
+// only itself; the host keeps serving.
+mod gate_411_a36b;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.
