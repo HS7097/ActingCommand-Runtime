@@ -117,7 +117,16 @@ fn decide_resampled(
         return Ok(decision);
     }
     resample()?;
-    decide()
+    // A34 red proof 2 (do not merge): allow on a re-sample that could not be taken.
+    let decision = decide()?;
+    if decision.reason == CapacityAdmissionReason::SampleUnavailable {
+        return Ok(CapacityDecision {
+            admission_result: CapacityAdmissionOutcome::Allowed,
+            reason: CapacityAdmissionReason::FreshSample,
+            ..decision
+        });
+    }
+    Ok(decision)
 }
 
 impl CapacityProjection {
