@@ -2535,9 +2535,9 @@ impl HostShared {
     /// `ApplicationLifecycle { Stop }` request under the ladder's causation id:
     /// `command.received` / `command.validated`, then the existing `application.intent` /
     /// `application.completed`. Workflow #369 H-3: it runs on the ladder's key (its holder and
-    /// its connection), with no lease of its own, and leaves the key with the ladder. A
-    /// non-fatal failure is recorded as a runtime lifecycle failure and returned as the rung's
-    /// reason.
+    /// its connection), with no lease of its own, and leaves the key with the ladder, a failed
+    /// command too (#411 A47), so the climb goes on to its next configured rung. A non-fatal
+    /// failure is recorded as a runtime lifecycle failure and returned as the rung's reason.
     fn stop_assigned_application(
         &self,
         pending: &PendingRecoveryLadder,
@@ -2591,7 +2591,14 @@ impl HostShared {
                 payload,
             )?;
         }
-        match self.application_control(&validated, &key.token, action, key.connection_id, None) {
+        match self.application_control(
+            &validated,
+            &key.token,
+            action,
+            key.connection_id,
+            None,
+            super::input::ApplicationKey::Ladder,
+        ) {
             Ok(_) => Ok(Ok(())),
             Err(mut failure) => {
                 // Workflow #403: an unconfirmed close fences the instance (or, when no single
