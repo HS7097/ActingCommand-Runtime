@@ -1617,6 +1617,26 @@ impl PolicyHost {
             .collect()
     }
 
+    /// T4c red proof 5 (never merge): the first pair of `instance_alias` that holds a draw: its
+    /// task id, `due_at`, delay and planned start.
+    pub(crate) fn random_delay_waiting(
+        &self,
+        instance_alias: &str,
+    ) -> Option<(String, u64, u64, u64)> {
+        self.random_delays
+            .entries
+            .iter()
+            .find(|((_, alias), _)| alias == instance_alias)
+            .map(|((task_id, _), entry)| {
+                (
+                    task_id.clone(),
+                    entry.due_at_unix_ms,
+                    entry.delay_ms,
+                    entry.planned_start_unix_ms,
+                )
+            })
+    }
+
     /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
     /// explanation for `instance` (every instance when absent), with the selected decision's
     /// dispatch state as the dispatch projection holds it now: `pending` before its intent is

@@ -513,6 +513,31 @@ impl HostShared {
                 request: task_request,
             } => {
                 self.require_physical_instance_alias(instance_alias)?;
+                // T4c red proof 5 (never merge): a waiting draw holds the instance against a
+                // direct run, refused with the gate's code and every value it requires.
+                let waiting = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?
+                    .random_delay_waiting(instance_alias);
+                if let Some((task_id, due_at_unix_ms, random_delay_ms, planned_start_unix_ms)) =
+                    waiting
+                {
+                    return Err(RequestFailure::request(
+                        RuntimeHostError::request(
+                            HostCode::DispatchRandomDelayWaiting,
+                            HostLocation::AdmitPolicyDispatch,
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                        .with_outcome_values(|outcome| {
+                            outcome
+                                .instance_id(instance_alias.as_str())
+                                .task_id(task_id.as_str())
+                                .due_at_unix_ms(due_at_unix_ms)
+                                .random_delay_ms(random_delay_ms)
+                                .next_eligible_unix_ms(planned_start_unix_ms)
+                        }),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    ));
+                }
                 self.run_contained_task(
                     request,
                     validated,
