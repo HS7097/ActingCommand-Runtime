@@ -169,6 +169,9 @@ mod gate_382_e3;
 // #411 A15 (exec key 88): an unconfirmed step names the page of its last frame.
 #[cfg(test)]
 mod gate_rc2_a15;
+// #411 A45 T2: an entry check of a package without entry pages names the missing declaration.
+#[cfg(test)]
+mod gate_411_a45;
 // Workflow #411 B15 R1 (exec key 95): `provides` with parameters, the metadata reader of the
 // remedy declarations and the declared parameter defaults.
 #[cfg(test)]
