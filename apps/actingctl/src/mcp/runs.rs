@@ -14,6 +14,7 @@ use super::tools::{
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::diagnose::{self, DiagnoseRequest, Failure};
 use crate::events::{CursorBinding, MAX_INTEGER};
+use crate::overview::Warning;
 use actingcommand_contract::{RequestId, RunId};
 use actingcommand_runtime_client::{ContainedRunState, RunKey, RunStatusMode};
 use serde_json::{Map, Value, json};
@@ -188,23 +189,41 @@ fn diagnose_error(
 
 impl Diagnosis {
     /// Renders with every list whole, then cuts until the result fits the output budget.
-    /// `errors_page` renders the errors page with its first `kept` rows.
+    /// `errors_page` renders the errors page with its first `kept` rows. The parts that could
+    /// not be read (Workflow #386 SR-6b, MCP-19b) go beside the result as its warnings.
     pub(super) fn render_within_budget(
         &self,
         errors_page: impl Fn(usize) -> Result<Value, ToolError>,
     ) -> ToolOutcome {
+        let warnings = self
+            .warnings
+            .iter()
+            .map(|warning| match warning {
+                Warning::Outcome(outcome) => tools::warning(outcome),
+                Warning::Runtime(error) => super::runtime::client_error(error).into_warning(),
+            })
+            .collect::<Vec<_>>();
         let mut kept = self.kept_all();
         loop {
             let result = self.render(&kept, errors_page(kept.errors)?, &tools::envelope);
-            if tools::fits_success(&result) {
-                return Ok(ToolSuccess::new(result));
+            // With warnings the envelope is `{ok, result, warnings}`; this wrapper is a little
+            // larger, so an answer it lets through always fits.
+            let fits = if warnings.is_empty() {
+                tools::fits_success(&result)
+            } else {
+                tools::fits_success(&json!({"result": &result, "warnings": &warnings}))
+            };
+            if fits {
+                return Ok(ToolSuccess { result, warnings });
             }
             // Workflow #389 MCP-7 (command table §4.8): the groups go first, the fewest-count
             // groups of each list first (each list is ordered by count, the most frequent
             // first): failures_grouped, then runs_grouped. Then the clock-slot rows, from the
             // end of their list (the owed rows, then the deferred and expired ones, then the
             // refused and superseded ones, each oldest first): the full list stays in actingd
-            // suspended and clock_slots_total points there (#372 K3, K4). Then what another tool can read again: the errors page
+            // suspended and clock_slots_total points there (#372 K3, K4). Then the deferred rows
+            // of the latest evaluation, from the end of their list (Workflow #386 SR-6b, MCP-19b:
+            // ac_schedule answers them all). Then what another tool can read again: the errors page
             // (ac_events), then the runs, oldest first (ac_get_run / ac_events). The other rows
             // of the actingd suspended report have no other MCP route, so they go last:
             // repeating, lift, suspended, the suspended task packages (Workflow #386 SR-3), the
@@ -215,6 +234,8 @@ impl Diagnosis {
                 kept.runs_grouped -= 1;
             } else if kept.clock_slots > 0 {
                 kept.clock_slots -= 1;
+            } else if kept.not_run > 0 {
+                kept.not_run -= 1;
             } else if kept.errors > 0 {
                 kept.errors -= 1;
             } else if kept.runs > 0 {
@@ -233,7 +254,7 @@ impl Diagnosis {
                 kept.report_warnings -= 1;
             } else {
                 // Nothing left to cut: the result answers output_budget_exceeded.
-                return Ok(ToolSuccess::new(result));
+                return Ok(ToolSuccess { result, warnings });
             }
         }
     }

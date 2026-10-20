@@ -775,3 +775,23 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_b2::b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene",
 ]
 incident = ["#411 Lab B-2"]
+
+# Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 1 and 2; register §1.144 M19B-1, M19B-2; no persisted ledger shape; plan-mcp19 §2, decisions Q4, Q9; key assigned by the coordinator): actingctl schedule [--instance <alias|instance_id|ADB port>] prints the latest policy evaluation's ScheduleExplanation with every candidate verbatim (a given --instance resolved to its alias with one status read) with runtime_schedule_reported and exit 0, and MCP ac_schedule {instance?} (observer, read-only) answers the same object without outcome; to fit the output budget ac_schedule cuts candidate rows only, from the last row of the last entry backwards, marking each entry that lost rows candidates_truncated: true, never evaluated_at_unix_ms, catalog_hash or an entry's instance_alias, next_wake_unix_ms, selected, not_running or candidates_total, and an answer whose uncut part is still over the budget is output_budget_exceeded
+[[gate]]
+key = "80"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_schedule_parity::gate_actingctl_schedule_and_ac_schedule_answer_the_same_explanation",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_ac_schedule_cuts_candidate_rows_from_the_end",
+]
+incident = ["#386 SR-6b", "MCP-19"]
+
+# Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 3 and 4; register §1.144 M19B-3, M19B-4; no persisted ledger shape; plan-mcp19 §2, decisions Q4, Q8, Q9; key assigned by the coordinator): ac_overview and actingctl overview give each instance row whose alias has an entry in one ScheduleExplanation read without candidates that entry's not_running row verbatim (no member without an entry; a failed read is one warning, incomplete, and no row has the member; never cut); ac_diagnose and actingctl diagnose list under not_run, per entry in the answer's order, the candidate rows whose state is deferred, at most the value of scheduling.not_run.diagnose_rows in the config.parameters.scheduling record of the RuntimeFactSnapshot per instance, each with its instance_alias, with not_run_total when one was left out (0 gives an empty list); a failed read or a missing row is a warning, incomplete and no not_run; MCP cuts not_run after clock_slots and before errors_page
+[[gate]]
+key = "81"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp19b_each_overview_row_shows_its_not_running_row",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_diagnose_lists_deferred_rows_up_to_the_configured_bound",
+]
+incident = ["#386 SR-6b", "MCP-19"]

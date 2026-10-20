@@ -2474,6 +2474,24 @@ Gate: exec key 115.
 No persisted ledger shape; Rust API and Lab CLI only; no outcome code, wire, configuration key
 or interface revision (§6) changes.
 
+### 1.144 Slice MCP-19b (0.12.x): a person and an agent see why each task did not run (`actingctl schedule` ↔ `ac_schedule`, overview `not_running`, diagnose `not_run`) (#386 SR-6b, MCP-19; plan-mcp19 §2, §7 Q2, Q4, Q8, Q9)
+
+MCP-19b: actingctl and MCP show MCP-19a's read `ScheduleExplanation` (§1.143, §3 W5).
+[runtime-interface.md](runtime-interface.md) (actingctl and MCP tables) and
+[runtime-config.md](runtime-config.md) (`scheduling.not_run.diagnose_rows`) are the contract.
+Output only: every read records nothing in the ledger, `actingctl status` and
+`RuntimeInstanceStatus` are unchanged (W13 stays reserved, Q2). No persisted ledger shape; no
+code, key, wire or interface revision added (the one code emitted, `runtime_schedule_reported`, is
+MCP-19a's; `config_facts_missing`, `invalid_fact_snapshot_record`, `output_budget_exceeded` and
+the selector refusals exist). Gates: apps keys 80 and 81.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| M19B-1 | `actingctl schedule [--instance <alias\|instance_id\|ADB port>] --state-root <path>` | new command (no shape) (apps 80) | MCP-19b | MCP-19b | one ScheduleExplanation read with `candidates: true`, after one status read that resolves a given `--instance` to its alias (`instance_unknown`, `instance_ambiguous` as `fact-refresh`); stdout is the answer verbatim with `outcome` `runtime_schedule_reported`, exit 0; actingd absent: the client's failure, exit 1; any other flag `actingctl_usage_invalid` |
+| M19B-2 | MCP `ac_schedule {instance?}` | new observer tool (no shape) (apps 80) | MCP-19b | MCP-19b | read-only, idempotent; the CLI's object without `outcome`; past the output budget it cuts candidate rows only, from the last row of the last entry backwards, each entry that lost rows marked `candidates_truncated: true`; `evaluated_at_unix_ms`, `catalog_hash` and each entry's `instance_alias`, `next_wake_unix_ms`, `selected`, `not_running` and `candidates_total` are never cut; still too large: `output_budget_exceeded`; another argument `arguments_invalid` |
+| M19B-3 | `not_running` on each `ac_overview` / `actingctl overview` instance row | new output member (no shape) (apps 81) | MCP-19b | MCP-19b | when `instances` is answered, one ScheduleExplanation read with `candidates: false` (the selected instance or every one); a row whose alias has an entry gains that entry's `not_running` verbatim, a row without one has no member; a failed read is one warning (the client's failure) and `incomplete`, and no row has the member; never cut; no new section |
+| M19B-4 | `not_run`, `not_run_total` of `ac_diagnose` / `actingctl diagnose` | new output members (no shape) (apps 81) | MCP-19b | MCP-19b | one ScheduleExplanation read with `candidates: true` (the diagnosed instance or every one) and one RuntimeFactSnapshot read: per entry in the answer's order, the candidate rows whose `state` is `deferred`, at most N = `scheduling.not_run.diagnose_rows` of `config.parameters.scheduling` per instance, each with `instance_alias`; `not_run_total` counts them all when one was left out (N = 0 gives an empty list); a failed read, or a section without the row (`config_facts_missing`; a value that does not read back `invalid_fact_snapshot_record`), is a warning (the CLI line's `warnings`, MCP's warnings) and `incomplete`, with no `not_run`; MCP cuts `not_run` from its end after `clock_slots` and before `errors_page` (`not_run_truncated`) |
+
 ### 1.145 Slice A26 (0.12.x): a dispatch decision record says why each candidate it lists did not run, as values (#411 A26; #386 SR-6a)
 
 A26: since A2-P (Q7) a dispatch decision record persisted `decision_candidate_not_selected`
@@ -2588,7 +2606,7 @@ when it takes effect.
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
-| `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
+| `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` MCP-19b |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 D1 (0.12.5, §1.135): the pair in effect per instance, read at every policy cycle |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 (built, §1.69 SR3-4) | SR-3 (v0.12.0) |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default value: unset, no `fact_reader_overdue` is reported; that is its declared default, coordinator ruling 9 of 2026-10-16, so R4 holds) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |

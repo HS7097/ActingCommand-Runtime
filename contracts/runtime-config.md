@@ -240,7 +240,8 @@ in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
 [cost-commit.md](cost-commit.md) (`cost_commit`) and [scheduling-blackout.md](scheduling-blackout.md)
 (`blackout`); `feature_lock.*` (how long a recorded locked feature stays valid, and the codes
 that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows` (the most rows
-`ac_diagnose` lists under `not_run`) by SR-6b. Workflow #384 D2-S2 reads
+`ac_diagnose` lists under `not_run` per instance) by MCP-19b (Workflow #386 SR-6b: actingctl and
+MCP read it from the program fact `config.parameters.scheduling` at every diagnosis). Workflow #384 D2-S2 reads
 `fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
 to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); Workflow #384
 D2-S4 reads `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and

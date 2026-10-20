@@ -212,11 +212,11 @@ A pack's coordinates are in the resolution it declares (today's standard packs u
 <install root>\runtime\actingctl.exe mcp-serve --list-tools --format markdown
 ```
 
-**Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. Main still has the tiers; the 0.12 series plans to remove them (see [Roadmap](#roadmap-planned)). The table lists the 37 tools on main; v0.11.6 has 22 of them, and the 15 marked † are new after v0.11.6. From v0.12.0 a tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
+**Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. Main still has the tiers; the 0.12 series plans to remove them (see [Roadmap](#roadmap-planned)). The table lists the 38 tools on main; v0.11.6 has 22 of them, and the 16 marked † are new after v0.11.6. From v0.12.0 a tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
 
 | Tier | Tools |
 | --- | --- |
-| observer (reads, settings the Runtime may change while running, handset device binding, the local capability-gap log and an instance's remedy choices; 22) | `ac_overview`, `ac_events`, `ac_material`, `ac_observe`†, `ac_get_run`, `ac_diagnose`, `ac_runs`†, `ac_run_evidence`†, `ac_resources_list`, `ac_targets_get`, `ac_config_set`†, `ac_packs`†, `ac_facts`†, `ac_outcome_code`†, `ac_devices`†, `ac_device_bind`†, `ac_device_unbind`†, `ac_capability_gap`†, `ac_remedy_set`†, `ac_remedy_get`†, `ac_pack_check`, `ac_catalog_check` |
+| observer (reads, settings the Runtime may change while running, handset device binding, the local capability-gap log and an instance's remedy choices; 23) | `ac_overview`, `ac_events`, `ac_material`, `ac_observe`†, `ac_get_run`, `ac_diagnose`, `ac_runs`†, `ac_run_evidence`†, `ac_resources_list`, `ac_targets_get`, `ac_config_set`†, `ac_packs`†, `ac_facts`†, `ac_outcome_code`†, `ac_devices`†, `ac_device_bind`†, `ac_device_unbind`†, `ac_capability_gap`†, `ac_remedy_set`†, `ac_remedy_get`†, `ac_schedule`†, `ac_pack_check`, `ac_catalog_check` |
 | operator (devices, applications and scheduling, 8) | `ac_run_pack`, `ac_stop_run`, `ac_pause`, `ac_resume`, `ac_emulator`, `ac_app`†, `ac_ladder_drill`†, `ac_targets_set` |
 | author (Lab recording, 7) | `ac_lab_observe`, `ac_lab_do`, `ac_record_start`, `ac_record_mark`, `ac_record_stop`, `ac_record_status`, `ac_binding_draft` |
 
