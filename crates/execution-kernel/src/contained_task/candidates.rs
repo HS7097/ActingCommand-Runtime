@@ -162,7 +162,10 @@ impl PreparedContainedTask {
     /// (`None`: the caller asks the transition again, and the page's next candidate is
     /// dispatched). A page whose candidates were all passed over on the frame ends the run with
     /// `contained_task_operation_candidates_exhausted` (`page_id`, and `count` the candidates
-    /// passed over); any other refused decision is `contained_task_state_invalid`, as before.
+    /// passed over). #411 A45: a page the package declares as an error page, from which no
+    /// operation leaves, ends the run with `contained_task_error_page_reached`, before any input
+    /// from it, as a step that reached it does. Any other refused decision is
+    /// `contained_task_state_invalid`, as before.
     pub(super) fn candidate_directive<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -180,6 +183,21 @@ impl PreparedContainedTask {
                     machine.current_page().unwrap_or_default(),
                     machine.passed_over().len(),
                     error.message(),
+                )
+                .into());
+            }
+            Err(error)
+                if error.code().as_str() == ExecutionKernelCode::RunDecisionInvalid.as_str()
+                    && machine
+                        .current_page()
+                        .is_some_and(|page| self.program.is_error_page(&self.control, page)) =>
+            {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskErrorPageReached.code(),
+                    format!(
+                        "after_page={} hit_error_page=true",
+                        machine.current_page().unwrap_or_default()
+                    ),
                 )
                 .into());
             }

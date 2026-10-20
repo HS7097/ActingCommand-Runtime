@@ -1972,7 +1972,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph step reached a declared error page and its operation decided to fail.",
+      "description": "A page-graph step reached a declared error page and its operation decided to fail; or (#411 A45) a page-graph run observed a page it declares as an error page and no operation leaves that page, so it ended there before any input from it.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

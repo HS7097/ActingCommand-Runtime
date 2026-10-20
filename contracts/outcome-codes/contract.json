@@ -16295,6 +16295,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_entry_pages_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.8",
+      "description": "A code several owners emit with one meaning (contract-owned, #411 A45): an entry check was asked of a package that declares no entry page it can check, an application entry (any, R24) or a page-graph entry page that resolves to no one page of the package. The execution kernel's prerequisite-gate and navigation entry checks and the runtime host's navigated entry gate and prerequisite gate emit it before any capture.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "procedure_manifest_entry_missing": {
       "category": "error",
       "ladder_class": "none",
