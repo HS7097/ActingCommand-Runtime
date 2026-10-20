@@ -714,18 +714,7 @@ impl HostShared {
                     // non-fatally and ends as any backend failure does; it no longer carries the
                     // fatal projection that a ladder rung returned to the instance's worker,
                     // which marked the whole Runtime fatal.
-                    UnconfirmedResources::Confirmed => {
-                        if let Some(fence) = self
-                            .fence_application_backend_failure(
-                                &error.error,
-                                token.instance_id(),
-                                failure_links,
-                            )
-                            .map_err(RequestFailure::poison_without_terminal)?
-                        {
-                            fence_action_failure(&mut error, fence);
-                        }
-                    }
+                    UnconfirmedResources::Confirmed => {}
                     UnconfirmedResources::Retained => {
                         return Err(RequestFailure {
                             state: RuntimeReceiptState::Failed,
