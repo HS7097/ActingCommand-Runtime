@@ -654,7 +654,12 @@ within `host_claims.renewal_slack_ms` of a step's bound is not renewed:
   `application_id` is force-stopped by a host-minted `ApplicationLifecycle { stop }` request
   under the ladder's causation id, on the ladder's key (`command.received`,
   `command.validated`, `application.intent`, `application.completed`); a failed stop fails the
-  rung with its code, recorded as `runtime.failed`. Then the instance's startup package is
+  rung with its code, recorded as `runtime.failed`, and leaves the ladder's key with the ladder,
+  so the climb goes on to its next configured rung (#411 A47; before, the stop's failed lease
+  end released the key and the climb ended `recovery_ladder_key_lost`). A stop failure that
+  fenced the instance (#411 A46) does not stop the climb either: the next rung's preparation
+  can lift the fence, and the instance waits for a person only when the ladder ends with the
+  fence still held. Then the instance's startup package is
   scheduled (`startup_package_scheduled` under the ladder's links, a fresh causation id) and run,
   as after `emulator start`; after the stop an unavailable entry fails the rung instead of
   skipping it. A startup package that cannot be admitted, whose prerequisite chain is refused,
