@@ -71,14 +71,13 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         // Workflow #308 SEL-L3b: the drag with a pause and a brake is a segmented plan too, which
         // the Nemu input performs as it performs the vertical-brake drag; Workflow #406 T3: and
-        // the path drag.
+        // the path drag. T4c red proof 4 (never merge): the list does not admit the path drag.
         if input_check.is_some()
             && !matches!(
                 action,
                 InputAction::Tap { .. }
                     | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
                     | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
-                    | InputAction::SingleTouchPathDragV1 { .. }
             )
         {
             return Err(RequestFailure::request(
