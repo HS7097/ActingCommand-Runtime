@@ -95,15 +95,13 @@ impl ArtifactStoreError {
     /// #411 A36b: a stream whose staged bytes do not match the bytes its writes reported, found
     /// when it is sealed, before anything is published. Only the work that owns the stream fails;
     /// the Runtime keeps running. A cleanup failure joined to it stays fatal.
-    pub(crate) fn seal_mismatch(compared: ArtifactComparedBytes) -> Self {
-        let mut error = Self::new(
+    pub(crate) fn seal_mismatch(_compared: ArtifactComparedBytes) -> Self {
+        // A36b red proof 1 (do not merge): today's always-fatal constructor.
+        Self::new(
             StoreCode::ArtifactHashMismatch.code(),
             StoreLocation::SealArtifactStream.location(),
             "staged bytes do not match the written stream",
-        );
-        error.fatal = false;
-        error.compared_bytes = Some(compared);
-        error
+        )
     }
 
     /// #411 A36b: the byte counts a failed seal compared, when this is that failure.
