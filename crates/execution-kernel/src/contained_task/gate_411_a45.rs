@@ -122,11 +122,12 @@ fn page_set() -> PageSet {
     .expect("page set")
 }
 
-// The package's task: entry `any`, the application restarted from any screen to `title`, then
-// (page graph only) a click from `title` to the terminal page `home`.
+// The package's task: entry `any`, the application restarted from any screen to `title`, then a
+// click from `title` to the terminal page `home`; `linear_steps`: one restart to `home` (R25).
 fn program(linear: bool) -> Value {
+    let restarted = if linear { "home" } else { "title" };
     let mut operations = vec![json!({
-        "id": "restart", "from": "any", "to": "title",
+        "id": "restart", "from": "any", "to": restarted,
         "application": {"action": "restart"}
     })];
     if !linear {
@@ -136,7 +137,6 @@ fn program(linear: bool) -> Value {
             "unguarded_trusted_coordinate": true
         }));
     }
-    let target = if linear { "title" } else { "home" };
     let mut task = json!({
         "schema_version": "0.9",
         "task_id": "task",
@@ -144,7 +144,7 @@ fn program(linear: bool) -> Value {
         "server_scope": ["test"],
         "coordinate_space": {"width": 2, "height": 1},
         "entry_page": "any",
-        "target_page": target,
+        "target_page": "home",
         "operations": operations
     });
     if linear {
