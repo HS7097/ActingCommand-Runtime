@@ -180,6 +180,9 @@ mod gate_lab_l6;
 // Workflow #406 T12 (exec key 110): centre-hotspot draws and the least-recent landing point.
 #[cfg(test)]
 mod gate_406_t12;
+// Workflow #406 T3 (exec key 111): the path drag the kernel generates in a box.
+#[cfg(test)]
+mod gate_406_t3;
 // #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
 #[cfg(test)]
 mod gate_411_lab_rp;
@@ -9700,6 +9703,13 @@ struct TaskClick {
     brake_distance_px: Option<i32>,
     #[serde(default)]
     brake_duration_ms: Option<u64>,
+    /// Workflow #406 T3: a path drag's box, the number of its turns and its shortest segment.
+    #[serde(default)]
+    box_rect: Option<ClickRect>,
+    #[serde(default)]
+    turns: Option<u64>,
+    #[serde(default)]
+    min_segment_px: Option<u64>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -9764,6 +9774,7 @@ impl TaskClick {
                     || self.target_id.is_some()
                     || self.offset.is_some()
                     || self.to_rect.is_some()
+                    || self.has_path_drag_members()
                     || !self.extra.is_empty()
                     || self.horizontal_duration_ms != Some(SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS)
                     || self.corner_hold_ms != Some(SEGMENTED_SWIPE_CORNER_HOLD_MS)
@@ -9797,6 +9808,12 @@ impl TaskClick {
                         ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                     ));
                 }
+            }
+            // Workflow #406 T3 (plan Q17): exactly the box, the turns, the shortest segment, the
+            // duration and the corner hold, within their bounds and the box inside the task's
+            // resolution.
+            "single_touch_path_drag_v1" => {
+                self.path_drag()?.validate(resolution)?;
             }
             "target" | "target_center" | "offset" => {
                 let guard = guard.ok_or_else(|| {
@@ -9964,6 +9981,11 @@ impl TaskClick {
                     draw,
                 )?
             }
+            "single_touch_path_drag_v1" => {
+                let path = self.path_drag()?;
+                path.validate(resolution)?;
+                (path.generate(draw)?, None)
+            }
             "target" | "target_center" | "offset" => {
                 let target = target.ok_or_else(|| {
                     ContainedTaskError::new(
@@ -10043,6 +10065,11 @@ impl TaskClick {
                 resolution.validate_point(*x2, *y2)?;
                 resolution.validate_point(*x3, *y3)?;
             }
+            InputAction::SingleTouchPathDragV1 { points, .. } => {
+                for point in points {
+                    resolution.validate_point(point.x, point.y)?;
+                }
+            }
             _ => {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::ContainedTaskPrimitiveUnsupported.code(),
@@ -10051,6 +10078,41 @@ impl TaskClick {
             }
         }
         Ok((action, sampling))
+    }
+
+    /// Workflow #406 T3: whether the click names a member only a path drag takes.
+    const fn has_path_drag_members(&self) -> bool {
+        self.box_rect.is_some() || self.turns.is_some() || self.min_segment_px.is_some()
+    }
+
+    /// Workflow #406 T3 (plan Q17): a `single_touch_path_drag_v1` click's members, exactly
+    /// `box_rect`, `turns`, `min_segment_px`, `duration_ms` and `corner_hold_ms`.
+    fn path_drag(&self) -> Result<PathDragClick, ContainedTaskError> {
+        if self.x.is_some()
+            || self.y.is_some()
+            || self.width.is_some()
+            || self.height.is_some()
+            || self.target_id.is_some()
+            || self.offset.is_some()
+            || self.from_rect.is_some()
+            || self.to_rect.is_some()
+            || self.corner_rect.is_some()
+            || self.horizontal_duration_ms.is_some()
+            || self.brake_distance_px.is_some()
+            || self.brake_duration_ms.is_some()
+            || !self.extra.is_empty()
+        {
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            ));
+        }
+        Ok(PathDragClick {
+            box_rect: required(self.box_rect)?,
+            turns: required(self.turns)?,
+            min_segment_px: required(self.min_segment_px)?,
+            duration_ms: required(self.duration_ms)?,
+            corner_hold_ms: required(self.corner_hold_ms)?,
+        })
     }
 
     /// Workflow #390 lpbox (Alice 10-09: pack taps use click boxes): a `long_press` click with
@@ -10610,6 +10672,174 @@ fn sampled_drag_with_pause_and_brake(
     ))
 }
 
+/// Workflow #406 T3 (plan Q17): the most turns a path drag takes, so that its points
+/// (`turns + 2`) stay within the contract's `MAX_PATH_DRAG_POINTS`.
+pub(crate) const MAX_PATH_DRAG_TURNS: u64 = actingcommand_contract::MAX_PATH_DRAG_POINTS as u64 - 2;
+
+/// Workflow #406 T3 (plan Q17; `contracts/resource-declarations.md`, "The path drag"): whether
+/// a path drag's numbers keep their bounds: a box of positive width and height, `turns`
+/// 1..=30, `min_segment_px` 1..=⌊(max(width, height) − 1) / 2⌋, `duration_ms`
+/// `turns + 1 ..= (turns + 1) × 60 000` and `corner_hold_ms` 0..=60 000. Where the box lies is the
+/// caller's check.
+pub(crate) fn path_drag_bounds_hold(
+    (width, height): (i32, i32),
+    turns: u64,
+    min_segment_px: u64,
+    duration_ms: u64,
+    corner_hold_ms: u64,
+) -> bool {
+    let Ok(longest) = u64::try_from(width.max(height)) else {
+        return false;
+    };
+    let segments = turns.saturating_add(1);
+    width >= 1
+        && height >= 1
+        && (1..=MAX_PATH_DRAG_TURNS).contains(&turns)
+        && (1..=longest.saturating_sub(1) / 2).contains(&min_segment_px)
+        && (segments..=segments.saturating_mul(actingcommand_contract::MAX_INPUT_DURATION_MS))
+            .contains(&duration_ms)
+        && corner_hold_ms <= actingcommand_contract::MAX_INPUT_DURATION_MS
+}
+
+/// Workflow #406 T3 (Alice 2026-10-13: 「…同时支持在特定方框里在一个拖动下拐很多弯的拖动方法」, the
+/// path generated by the kernel): a `single_touch_path_drag_v1` click as declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PathDragClick {
+    box_rect: ClickRect,
+    turns: u64,
+    min_segment_px: u64,
+    duration_ms: u64,
+    corner_hold_ms: u64,
+}
+
+impl PathDragClick {
+    /// The bounds of [`path_drag_bounds_hold`], with the box inside the task's resolution; any
+    /// other click is `contained_task_operation_invalid` (plan Q17).
+    fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
+        if self.box_rect.validate(resolution).is_err()
+            || !path_drag_bounds_hold(
+                (self.box_rect.width, self.box_rect.height),
+                self.turns,
+                self.min_segment_px,
+                self.duration_ms,
+                self.corner_hold_ms,
+            )
+        {
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Workflow #406 T3 (`contracts/resource-declarations.md`, "The path drag"; the steps a
+    /// replay from the seed repeats): the drag's `turns + 2` points and its segment durations.
+    /// The state is `xorshift64_uniform_rect_v1`'s from the step's action seed (seed 0's without
+    /// one). The first point is one draw in the box: a centre-hotspot point
+    /// ([`ClickRect::hotspot_point`]) with the touch keys, a uniform one ([`ClickRect::sample`])
+    /// without them. Each next point is the first of up to `max_redraws + 1` such draws (one
+    /// without the touch keys) whose Euclidean distance from the previous point is at least
+    /// `min_segment_px`, else the box's corner farthest from the previous point (the first in
+    /// the order top left, top right, bottom left, bottom right among equals). The durations
+    /// follow [`path_segment_durations`]. The drag carries no sampling evidence (plan Q19): its
+    /// action holds every point.
+    fn generate(&self, draw: PointDraw) -> Result<InputAction, ContainedTaskError> {
+        let rect = self.box_rect;
+        let mut state = normalized_xorshift64_state(draw.action_seed.unwrap_or(0));
+        let draw_point = |state: &mut u64| match draw.touch {
+            Some(touch) => rect.hotspot_point(state, touch),
+            None => rect.sample(state),
+        };
+        let attempts = draw
+            .touch
+            .map_or(1, |touch| u64::from(touch.max_redraws) + 1);
+        let min_squared = i128::from(self.min_segment_px) * i128::from(self.min_segment_px);
+        let mut previous = draw_point(&mut state)?;
+        let mut points = vec![previous];
+        for _ in 0..=self.turns {
+            // The farthest corner stands unless a draw is spaced.
+            let mut next = rect.farthest_corner(previous);
+            for _ in 0..attempts {
+                let candidate = draw_point(&mut state)?;
+                if squared_distance(previous, candidate) >= min_squared {
+                    next = candidate;
+                    break;
+                }
+            }
+            previous = next;
+            points.push(previous);
+        }
+        let segment_duration_ms = path_segment_durations(self.duration_ms, &points)?;
+        Ok(InputAction::SingleTouchPathDragV1 {
+            box_x: rect.x,
+            box_y: rect.y,
+            box_width: rect.width,
+            box_height: rect.height,
+            points: points
+                .into_iter()
+                .map(|(x, y)| actingcommand_contract::InputPathPoint { x, y })
+                .collect(),
+            segment_duration_ms,
+            corner_hold_ms: self.corner_hold_ms,
+        })
+    }
+}
+
+/// The squared Euclidean distance of two pixels.
+fn squared_distance(from: (i32, i32), to: (i32, i32)) -> i128 {
+    let dx = i128::from(to.0) - i128::from(from.0);
+    let dy = i128::from(to.1) - i128::from(from.1);
+    dx * dx + dy * dy
+}
+
+/// Workflow #406 T3: `duration_ms` split over the segments between `points` in proportion to
+/// their lengths in whole pixels (the integer square root of the squared Euclidean length). In
+/// order, each segment but the last takes `⌊duration_ms · length / total length⌋`, held within
+/// 1..=60 000 ms and within what leaves every later segment 1..=60 000 ms; the last takes the
+/// remainder. The durations sum to `duration_ms`.
+fn path_segment_durations(
+    duration_ms: u64,
+    points: &[(i32, i32)],
+) -> Result<Vec<u64>, ContainedTaskError> {
+    let lengths = points
+        .windows(2)
+        .map(|segment| {
+            u64::try_from(squared_distance(segment[0], segment[1]))
+                .map(u64::isqrt)
+                .map_err(|_| sampling_invalid())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let total = lengths
+        .iter()
+        .map(|length| u128::from(*length))
+        .sum::<u128>();
+    let segments = u64::try_from(lengths.len()).map_err(|_| sampling_invalid())?;
+    if total == 0 || segments == 0 {
+        return Err(sampling_invalid());
+    }
+    let mut remaining = duration_ms;
+    let mut durations = Vec::with_capacity(lengths.len());
+    for (index, length) in (0_u64..).zip(&lengths) {
+        let later = segments - index - 1;
+        if later == 0 {
+            durations.push(remaining);
+            break;
+        }
+        let share = u128::from(duration_ms) * u128::from(*length) / total;
+        let share = u64::try_from(share).unwrap_or(u64::MAX);
+        let low = remaining
+            .saturating_sub(later.saturating_mul(actingcommand_contract::MAX_INPUT_DURATION_MS))
+            .max(1);
+        let high = remaining
+            .saturating_sub(later)
+            .min(actingcommand_contract::MAX_INPUT_DURATION_MS);
+        let duration = share.max(low).min(high);
+        durations.push(duration);
+        remaining = remaining.saturating_sub(duration);
+    }
+    Ok(durations)
+}
+
 fn normalized_xorshift64_state(seed: u64) -> u64 {
     if seed == 0 {
         0x9e37_79b9_7f4a_7c15
@@ -10724,6 +10954,22 @@ impl ClickRect {
             i32::try_from(point.0).map_err(|_| sampling_invalid())?,
             i32::try_from(point.1).map_err(|_| sampling_invalid())?,
         ))
+    }
+
+    /// Workflow #406 T3 (plan Q17): the box's corner pixel farthest from `from`, the first in
+    /// the order top left, top right, bottom left, bottom right among equally far ones. Its
+    /// distance is at least ⌊(max(width, height) − 1) / 2⌋, a path drag's bound on
+    /// `min_segment_px`, so it always keeps the shortest segment.
+    fn farthest_corner(&self, from: (i32, i32)) -> (i32, i32) {
+        let right = self.x.saturating_add(self.width - 1);
+        let bottom = self.y.saturating_add(self.height - 1);
+        let mut farthest = (self.x, self.y);
+        for corner in [(right, self.y), (self.x, bottom), (right, bottom)] {
+            if squared_distance(from, corner) > squared_distance(from, farthest) {
+                farthest = corner;
+            }
+        }
+        farthest
     }
 }
 

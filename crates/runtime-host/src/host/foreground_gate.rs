@@ -51,6 +51,7 @@ impl HostShared {
                     | InputAction::Swipe { .. }
                     | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
                     | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
+                    | InputAction::SingleTouchPathDragV1 { .. }
             )
         {
             return Ok(());

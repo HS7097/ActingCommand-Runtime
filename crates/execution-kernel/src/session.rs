@@ -16,8 +16,9 @@ use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
     DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, DragWithPauseAndBrakeAction, Frame,
     InputBackend, InputExecutionContext, InputOperationCheck, NemuFrameGeometry,
-    NemuSessionBackends, PreparedSegmentedSwipePlan, SegmentedSwipeAction,
-    prepare_drag_with_pause_and_brake, prepare_segmented_swipe, segmented_swipe_capability_error,
+    NemuSessionBackends, PathDragAction, PreparedSegmentedSwipePlan, SegmentedSwipeAction,
+    prepare_drag_with_pause_and_brake, prepare_path_drag, prepare_segmented_swipe,
+    segmented_swipe_capability_error,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -180,6 +181,27 @@ impl TryFrom<InputAction> for PreparedInputAction {
                 drag_duration_ms,
                 pause_ms,
                 brake_duration_ms,
+            })
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::InputPlanPreparationFailed.code())
+            })?;
+            return Ok(Self::SegmentedSwipe(plan));
+        }
+        // Workflow #406 T3 (register §1.18 H1): the path drag is a segmented plan too: the press
+        // at its first point, each segment over its duration, the corner hold at every inner
+        // point and the release at its last point, performed by every backend that performs
+        // segmented swipes.
+        if let InputAction::SingleTouchPathDragV1 {
+            points,
+            segment_duration_ms,
+            corner_hold_ms,
+            ..
+        } = action
+        {
+            let plan = prepare_path_drag(PathDragAction {
+                points: points.iter().map(|point| (point.x, point.y)).collect(),
+                segment_duration_ms,
+                corner_hold_ms,
             })
             .map_err(|_| {
                 ExecutionKernelError::fatal(ExecutionKernelCode::InputPlanPreparationFailed.code())
@@ -1999,15 +2021,11 @@ fn execute_action(
         PreparedInputAction::Direct(InputAction::Reset) => backend.reset(witness),
         PreparedInputAction::Direct(
             InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
-            | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. },
+            | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
+            | InputAction::SingleTouchPathDragV1 { .. },
         ) => Err(DeviceError::fatal(
             "segmented input action was not prepared",
         )),
-        // Workflow #406 (register §1.18): reserved until T-3; the host refuses it first
-        // (`input_action_unsupported`), and no backend performs it.
-        PreparedInputAction::Direct(InputAction::SingleTouchPathDragV1 { .. }) => Err(
-            DeviceError::fatal("the single-touch path drag is reserved until #406 T-3"),
-        ),
     }
 }
 

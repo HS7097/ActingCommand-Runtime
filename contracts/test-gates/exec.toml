@@ -1713,3 +1713,18 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_411_lab_rp::lab_rp_a_package_without_parameters_is_unchanged",
 ]
 incident = ["#411 Lab RP"]
+
+# Workflow #406 T3 (0.12.x; register §1.137; no persisted ledger shape: H1 first written, no sampling evidence and no plan record on it; package 5; plan-405-406 Q17 to Q19; Alice 2026-10-13): the click single_touch_path_drag_v1 {box_rect, turns, min_segment_px, duration_ms, corner_hold_ms} generates from the step's action seed turns + 2 points in its box (the first one hotspot draw, uniform without touch keys, seed 0's state without a seed), each segment at least min_segment_px long, a next point with no spaced draw among max_redraws + 1 draws being the box's corner farthest from the previous point, the duration split in proportion to the segments' whole-pixel lengths (floor, the remainder to the last; 1 ms each at turns + 1, 60 000 ms each at (turns + 1) x 60 000), and no sampling evidence; 31 turns, a shortest segment above floor((max(width, height) - 1) / 2) and a box beyond the resolution are refused resource_declaration_invalid at the member in the task file (box) and compiled (box_rect) and contained_task_operation_invalid by the kernel's click check; source compilation writes box as box_rect in the operation, an edge to a page, an edge to a page set and a page operation, the kernel's drive reader reads it as a segmented drag no route passes and as a destructive page operation covering its box; the plan presses once, moves along the MAA 2.0 curve through every corner with the corner hold between segments and releases once; adb shell input from SDK 23 sends a segmented plan as one adb shell of input motionevent DOWN, MOVEs with the waits as sleeps, UP, never input swipe, and at SDK 22 or an unreadable level refuses it with the segmented swipe capability error before any command
+[[gate]]
+key = "111"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t3::t3_a_generated_path_has_turns_plus_two_points_in_the_box_with_spaced_segments",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t3::t3_segment_durations_follow_the_lengths_and_sum_to_the_declared_duration",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t3::t3_a_point_with_no_spaced_draw_takes_the_farthest_corner",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t3::t3_a_path_drag_outside_its_bounds_is_refused_at_admission",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t3::t3_the_drive_reader_and_compilation_read_the_path_drag",
+    "actingcommand-device::lib::input::tests::t3_the_path_plan_presses_once_moves_through_every_corner_and_releases",
+    "actingcommand-device::lib::touch::tests::t3_adb_sends_one_shell_of_motionevents_and_refuses_below_sdk_23",
+]
+incident = ["#406"]
