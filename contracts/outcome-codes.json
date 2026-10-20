@@ -11368,7 +11368,9 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "expected_bytes": "optional",
+        "actual_bytes": "optional"
       },
       "review": "pending",
       "status": "active",
