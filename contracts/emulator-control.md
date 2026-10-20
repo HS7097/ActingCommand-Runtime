@@ -580,6 +580,13 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   (`contracts/application-lifecycle.md`) and the ADB wait after an emulator `start` or `restart`
   ("ADB baseline" above). The work that met it fails with `instance_resources_fenced`; a rung
   that met it fails, and the ladder, which holds the instance, goes on and decides at its end.
+  A command of one instance's own application backend (an `ApplicationLifecycle` request, a
+  task's `application` effect, the `application_restart` rung's stop) that fails with a fatal
+  device error whose resources were confirmed (`application_backend_operation_failed`) fences
+  that instance the same way (#411 A46): the command or run fails with
+  `instance_resources_fenced` caused by it, a rung that met it fails, and the host and the other
+  instances go on. Before, that failure kept its fatal projection, and a ladder rung returned it
+  to the instance's worker, which marked the whole Runtime fatal.
   A fence that manual work met
   (the instance's key held by a direct task run, a client lease, an application or input command
   or a Lab operation) starts no ladder and waits for a person at once while `rules.direct_runs` is

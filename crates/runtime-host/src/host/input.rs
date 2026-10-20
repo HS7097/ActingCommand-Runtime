@@ -705,11 +705,27 @@ impl HostShared {
                     .settle_unconfirmed_resources(
                         &error.error,
                         Some(token.instance_id()),
-                        failure_links,
+                        failure_links.clone(),
                     )
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
-                    UnconfirmedResources::Confirmed => {}
+                    // #411 A46: a fatal failure of the instance's own application backend whose
+                    // resources were confirmed fences the instance too, so the command fails
+                    // non-fatally and ends as any backend failure does; it no longer carries the
+                    // fatal projection that a ladder rung returned to the instance's worker,
+                    // which marked the whole Runtime fatal.
+                    UnconfirmedResources::Confirmed => {
+                        if let Some(fence) = self
+                            .fence_application_backend_failure(
+                                &error.error,
+                                token.instance_id(),
+                                failure_links,
+                            )
+                            .map_err(RequestFailure::poison_without_terminal)?
+                        {
+                            fence_action_failure(&mut error, fence);
+                        }
+                    }
                     UnconfirmedResources::Retained => {
                         return Err(RequestFailure {
                             state: RuntimeReceiptState::Failed,

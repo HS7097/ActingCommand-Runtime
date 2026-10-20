@@ -27,11 +27,19 @@
 //! fatal): the fence would end with the process before a ladder or a person could take it, and
 //! forgetting the kernel's record of the close would drop it from the shutdown's own owner
 //! retention, so the owner journal would not say `unconfirmed`.
+//!
+//! #411 A46 (10-21 incident): a command of one registered instance's own application backend
+//! that fails with a fatal device error (`application_backend_operation_failed`), its resources
+//! not left unconfirmed, fences that instance the same way, caused by that failure
+//! (`fence_application_backend_failure`). Before, the failure kept its fatal projection, a
+//! ladder rung returned it to the instance's worker, and the worker marked the whole Runtime
+//! fatal: the host stopped, and every start that met the same instance stopped again.
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::identifier_text;
 use actingcommand_contract::InstanceResourceFence;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
 use std::collections::btree_map::Entry;
 
@@ -165,6 +173,48 @@ impl HostShared {
         if self.fatal.is_shutdown_requested() {
             return self.retain_unconfirmed_owner(error, links);
         }
+        let Some(instance_id) = self.fence_owner(error, instance_id)? else {
+            return self.retain_unconfirmed_owner(error, links);
+        };
+        self.fence_instance(instance_id, error, links)
+            .map(UnconfirmedResources::Fenced)
+    }
+
+    /// #411 A46: settles a failed command of `instance_id`'s own application backend whose
+    /// resources were not left unconfirmed (`settle_unconfirmed_resources` found it
+    /// `Confirmed`). A fatal `application_backend_operation_failed` of one registered instance
+    /// fences that instance, as an unconfirmed close does: one `runtime.failed` record of
+    /// `instance_resources_fenced` caused by the failure when it is newly fenced, its policy
+    /// availability withheld; the caller ends its work with the returned non-fatal failure
+    /// instead of the fatal one, and the fence's existing rules hand the instance on (to the
+    /// ladder that holds it, a new ladder, or a person). `None`: any other failure, a failure
+    /// that names no registered instance, or a ledger failure, which the caller ends with as
+    /// before.
+    pub(super) fn fence_application_backend_failure(
+        &self,
+        error: &RuntimeHostError,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        if !error.is_fatal()
+            || error.code() != SharedCode::ApplicationBackendOperationFailed.as_str()
+        {
+            return Ok(None);
+        }
+        let Some(instance_id) = self.fence_owner(error, Some(instance_id))? else {
+            return Ok(None);
+        };
+        self.fence_instance(instance_id, error, links).map(Some)
+    }
+
+    /// The instance a fence for `error` takes: the failure's own instance, else `instance_id`
+    /// (the instance whose work met it), when it is registered and the failure is no ledger
+    /// failure.
+    fn fence_owner(
+        &self,
+        error: &RuntimeHostError,
+        instance_id: Option<InstanceId>,
+    ) -> RuntimeHostResult<Option<InstanceId>> {
         let owner = error.lifecycle.instance_id.or(instance_id);
         let registered = match owner {
             Some(instance_id) => lock(
@@ -174,11 +224,21 @@ impl HostShared {
             .contains_key(&instance_id),
             None => false,
         };
-        let Some(instance_id) = owner
-            .filter(|_| registered && error.projection().code != RuntimeErrorCode::LedgerFailure)
-        else {
-            return self.retain_unconfirmed_owner(error, links);
-        };
+        Ok(owner
+            .filter(|_| registered && error.projection().code != RuntimeErrorCode::LedgerFailure))
+    }
+
+    /// Fences `instance_id` for `error` (Workflow #403; #411 A46): the fence entered unless one
+    /// holds already, the kernel's record of an unconfirmed close of the instance forgotten (none
+    /// is kept for a confirmed failure), and, when the instance is newly fenced, one
+    /// `runtime.failed` record of `instance_resources_fenced` caused by `error` and the
+    /// instance's policy availability withheld. Returns the fence's non-fatal failure.
+    fn fence_instance(
+        &self,
+        instance_id: InstanceId,
+        error: &RuntimeHostError,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<RuntimeHostError> {
         let since_unix_ms = self.clock.sample()?.unix_ms;
         // M387 B1: manual work that met the fence starts no ladder; its instance waits for a
         // person at once. Workflow #387 D1c (coordinator ruling 4): `rules.direct_runs` decides
@@ -214,9 +274,9 @@ impl HostShared {
         let fence = resource_fence_error(instance_id, fenced_projection_code(error))
             .with_caused_by(error.outcome());
         if newly {
-            // Workflow #387 D1c-H: the fence record enters from the unconfirmed failure's own
-            // record, so direction ① counts the two as one failure even where the fence's
-            // links name the instance alone (a failed lease end).
+            // Workflow #387 D1c-H: the fence record enters from the failure's own record, so
+            // direction ① counts the two as one failure even where the fence's links name the
+            // instance alone (a failed lease end).
             self.append_lifecycle_failure(
                 RuntimeLifecycleFailureStage::SessionClose,
                 RuntimeLifecycleFailure::Host(&fence),
@@ -225,7 +285,7 @@ impl HostShared {
             )?;
             self.withhold_policy_instance_availability(instance_id)?;
         }
-        Ok(UnconfirmedResources::Fenced(fence))
+        Ok(fence)
     }
 
     /// Workflow #387 D1c-G: settles `error`, the failure of an ADB check of `instance_id`'s own
