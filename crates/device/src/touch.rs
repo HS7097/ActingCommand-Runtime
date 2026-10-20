@@ -8,7 +8,6 @@ use crate::{
     DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     HandshakeInfo, InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend,
     MinitouchConfig, PreparedSegmentedSwipePlan, SegmentedSwipeEvent,
-    segmented_swipe_capability_error,
 };
 use actingcommand_contract::FencedWrite;
 use actingcommand_contract::outcome::Location;
@@ -1312,7 +1311,14 @@ impl AdbShellInputBackend {
     ) -> DeviceResult<()> {
         plan.action().validate()?;
         if !self.supports_segmented_swipe() {
-            return Err(segmented_swipe_capability_error());
+            // T4c red proof 3 (never merge): fall back to `input swipe` when unsupported.
+            let action = plan.action();
+            let points = action.points();
+            let (first, last) = (points[0], points[points.len() - 1]);
+            return child(
+                self.adb_config.command_timeout,
+                &format!("input swipe {} {} {} {}", first.0, first.1, last.0, last.1),
+            );
         }
         let bounds = self.bounds()?;
         let mut previous: Option<(i32, i32)> = None;
