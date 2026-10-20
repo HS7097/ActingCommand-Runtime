@@ -11368,7 +11368,9 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "expected_bytes": "optional",
+        "actual_bytes": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18277,6 +18279,26 @@
       "common_causes": "An entry page that no stage's operation leaves from, or one that operations of two stages both leave from (for example a return stage with an operation from the business stage's page); an entry set that is empty, too long, names a page twice, names any, or names a page the package does not have.",
       "handling": "phase_start_missing: add an operation from the page named by page_id to the stage the run should enter at, or drop the page from the set. phase_start_ambiguous: keep the operations from that page in one stage, or drop the page. Otherwise correct the set as entry_problem names."
     },
+    "contained_task_entry_pages_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.8",
+      "description": "A code several owners emit with one meaning (contract-owned, #411 A45): an entry check was asked of a package that declares no entry page it can check, an application entry (any, R24) or a page-graph entry page that resolves to no one page of the package. The execution kernel's prerequisite-gate and navigation entry checks and the runtime host's navigated entry gate and prerequisite gate emit it before any capture.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_error_page_reached": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
@@ -18293,7 +18315,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph step reached a declared error page and its operation decided to fail.",
+      "description": "A page-graph step reached a declared error page and its operation decided to fail; or (#411 A45) a page-graph run observed a page it declares as an error page and no operation leaves that page, so it ended there before any input from it.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
