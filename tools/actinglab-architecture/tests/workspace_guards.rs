@@ -5555,10 +5555,15 @@ const HOST_SPLIT: &[HostModule] = &[
                     // unconfirmed ADB check of an instance's own, settles here too.
                     "host/resource_fence.rs",
                 ],
-                delegates: &[
-                    "forget_unconfirmed_instance_close",
-                    "self.retain_unconfirmed_owner",
-                ],
+                delegates: &["self.fence_instance", "self.retain_unconfirmed_owner"],
+            },
+            // #411 A46: the one fence entry, shared with the fence of a confirmed
+            // application-backend failure; it forgets the kernel's record of the close.
+            HostDefinition {
+                name: "HostShared::fence_instance",
+                visibility: DeclaredVisibility::Private,
+                callers: &["host/resource_fence.rs"],
+                delegates: &["forget_unconfirmed_instance_close"],
             },
             HostDefinition {
                 name: "HostShared::hand_resource_fences_to_ladders",
