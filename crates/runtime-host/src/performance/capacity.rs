@@ -161,7 +161,9 @@ impl CapacityProjection {
             .iter()
             .any(|volume| volume.available_bytes.is_none())
         {
-            decision.reason = CapacityAdmissionReason::SampleUnavailable;
+            // A34 red proof 2b (do not merge): allow on a sample that could not be taken.
+            decision.admission_result = CapacityAdmissionOutcome::Allowed;
+            decision.reason = CapacityAdmissionReason::FreshSample;
             return Ok(decision);
         }
         if !now
