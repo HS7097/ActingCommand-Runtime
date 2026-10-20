@@ -71,7 +71,10 @@ An operation carries exactly one effect: the existing `click` object, or
   every other step). An application that does not reach the page fails the task with the
   ordinary step-timeout outcome; the effect itself failing (adb error) fails the step with the
   `application_backend_operation_failed` chain the `ApplicationLifecycle` request already
-  uses.
+  uses. When that failure is fatal and its resources were confirmed, the instance is fenced
+  (#411 A46; `contracts/emulator-control.md`, "Resource fence") and the step, the command or
+  the ladder rung fails with `instance_resources_fenced` caused by it, nonfatal: the Runtime
+  and the other instances go on.
 - An instance without an assigned application cannot run the effect:
   `application_effect_requires_assigned_application` (`invalid_request`, denied) before any
   device write. Registered device instances always carry one (`application_identity_missing`

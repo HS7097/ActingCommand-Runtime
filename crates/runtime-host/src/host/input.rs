@@ -8,6 +8,20 @@ use actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 
+/// #411 A47: whose key an application command runs on, which decides what a backend failure
+/// does to that key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ApplicationKey {
+    /// The command's own lease (an `ApplicationLifecycle` request's claim) or a run's: a backend
+    /// failure ends a command's own lease as every failed device step does; a run's lease ends
+    /// with the run.
+    Own,
+    /// A recovery ladder's key (`stop_assigned_application`, Workflow #369 H-3): it stays with
+    /// the ladder whatever the command's result, so the climb goes on to its next configured
+    /// rung and the ladder releases its key at its end.
+    Ladder,
+}
+
 impl HostShared {
     pub(super) fn input(
         &self,
@@ -481,7 +495,8 @@ impl HostShared {
 
     /// Drives the assigned application under an existing lease. `run_links` carries the task
     /// and run ids when the action is a task package's `application` effect (slice #316-B3),
-    /// so the `application.*` events sit inside the run's chain.
+    /// so the `application.*` events sit inside the run's chain. `key` says whose key `token`
+    /// is (#411 A47): a ladder's stays with the ladder when the command fails.
     pub(super) fn application_control(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -489,6 +504,7 @@ impl HostShared {
         action: ApplicationLifecycleAction,
         connection_id: ConnectionId,
         run_links: Option<RuntimeRunLinks>,
+        key: ApplicationKey,
     ) -> Result<OperationSuccess, RequestFailure> {
         self.require_physical_instance_id(token.instance_id())?;
         let (resolved, transferred) = {
@@ -705,11 +721,27 @@ impl HostShared {
                     .settle_unconfirmed_resources(
                         &error.error,
                         Some(token.instance_id()),
-                        failure_links,
+                        failure_links.clone(),
                     )
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
-                    UnconfirmedResources::Confirmed => {}
+                    // #411 A46: a fatal failure of the instance's own application backend whose
+                    // resources were confirmed fences the instance too, so the command fails
+                    // non-fatally and ends as any backend failure does; it no longer carries the
+                    // fatal projection that a ladder rung returned to the instance's worker,
+                    // which marked the whole Runtime fatal.
+                    UnconfirmedResources::Confirmed => {
+                        if let Some(fence) = self
+                            .fence_application_backend_failure(
+                                &error.error,
+                                token.instance_id(),
+                                failure_links,
+                            )
+                            .map_err(RequestFailure::poison_without_terminal)?
+                        {
+                            fence_action_failure(&mut error, fence);
+                        }
+                    }
                     UnconfirmedResources::Retained => {
                         return Err(RequestFailure {
                             state: RuntimeReceiptState::Failed,
@@ -741,8 +773,12 @@ impl HostShared {
                     poison_runtime: error.poison_runtime,
                     task_failure: error.task_failure.map(|evidence| *evidence),
                 };
+                // #411 A47: a ladder's own command leaves the ladder's key with the ladder; before,
+                // this backend-failure lease end released it, and the climb ended at its next
+                // holding check (`recovery_ladder_key_lost`) instead of trying its next rung.
                 if release_after
                     && run_links.is_none()
+                    && key == ApplicationKey::Own
                     && let Err(error) =
                         self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
                 {
@@ -1000,8 +1036,14 @@ impl HostShared {
         )?;
         let token =
             self.await_input_lifecycle_claim(original, instance_alias, holder_id, connection_id)?;
-        let executed = match self.application_control(request, &token, action, connection_id, None)
-        {
+        let executed = match self.application_control(
+            request,
+            &token,
+            action,
+            connection_id,
+            None,
+            ApplicationKey::Own,
+        ) {
             Ok(success) => success,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure(token, connection_id, failure));

@@ -4268,6 +4268,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             action,
             self.connection_id,
             Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+            super::input::ApplicationKey::Own,
         )?;
         self.ensure_active()?;
         Ok(ApplicationEffectSupport::Performed)

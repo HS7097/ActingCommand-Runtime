@@ -580,6 +580,13 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   (`contracts/application-lifecycle.md`) and the ADB wait after an emulator `start` or `restart`
   ("ADB baseline" above). The work that met it fails with `instance_resources_fenced`; a rung
   that met it fails, and the ladder, which holds the instance, goes on and decides at its end.
+  A command of one instance's own application backend (an `ApplicationLifecycle` request, a
+  task's `application` effect, the `application_restart` rung's stop) that fails with a fatal
+  device error whose resources were confirmed (`application_backend_operation_failed`) fences
+  that instance the same way (#411 A46): the command or run fails with
+  `instance_resources_fenced` caused by it, a rung that met it fails, and the host and the other
+  instances go on. Before, that failure kept its fatal projection, and a ladder rung returned it
+  to the instance's worker, which marked the whole Runtime fatal.
   A fence that manual work met
   (the instance's key held by a direct task run, a client lease, an application or input command
   or a Lab operation) starts no ladder and waits for a person at once while `rules.direct_runs` is
@@ -647,7 +654,12 @@ within `host_claims.renewal_slack_ms` of a step's bound is not renewed:
   `application_id` is force-stopped by a host-minted `ApplicationLifecycle { stop }` request
   under the ladder's causation id, on the ladder's key (`command.received`,
   `command.validated`, `application.intent`, `application.completed`); a failed stop fails the
-  rung with its code, recorded as `runtime.failed`. Then the instance's startup package is
+  rung with its code, recorded as `runtime.failed`, and leaves the ladder's key with the ladder,
+  so the climb goes on to its next configured rung (#411 A47; before, the stop's failed lease
+  end released the key and the climb ended `recovery_ladder_key_lost`). A stop failure that
+  fenced the instance (#411 A46) does not stop the climb either: the next rung's preparation
+  can lift the fence, and the instance waits for a person only when the ladder ends with the
+  fence still held. Then the instance's startup package is
   scheduled (`startup_package_scheduled` under the ladder's links, a fresh causation id) and run,
   as after `emulator start`; after the stop an unavailable entry fails the rung instead of
   skipping it. A startup package that cannot be admitted, whose prerequisite chain is refused,
