@@ -181,14 +181,23 @@ fn a36b_a_run_whose_diagnostic_seal_mismatches_fails_only_itself_and_the_host_ke
         .run_id()
         .copied()
         .expect("the terminal names its run");
-    let diagnostics = events
+    // Nothing of the mismatched stream is published. The stream never got an artifact id, so
+    // its artifacts are the run's ones with the kind and issue policy `begin_diagnostic` gives
+    // the stream (producer, retention, pending redaction). The run's effective-configuration
+    // records are separate artifacts, published before the seal (not redaction-pending).
+    let from_stream = events
         .iter()
         .flat_map(PersistedEvent::artifacts)
         .filter(|artifact| {
-            artifact.kind() == ArtifactKind::DiagnosticJson && artifact.run_id() == Some(&run_id)
+            artifact.run_id() == Some(&run_id)
+                && artifact.kind() == ArtifactKind::DiagnosticJson
+                && artifact.producer() == ArtifactProducer::ArtifactStore
+                && artifact.retention_class() == actingcommand_contract::RetentionClass::DebugFull
+                && artifact.redaction_state()
+                    == actingcommand_contract::ArtifactRedactionState::Pending
         })
         .collect::<Vec<_>>();
-    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    assert!(from_stream.is_empty(), "{from_stream:#?}");
     assert_eq!(staging_files(root.path()), Vec::<PathBuf>::new());
     let lease = terminal
         .links()
