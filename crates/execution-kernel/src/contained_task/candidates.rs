@@ -186,21 +186,6 @@ impl PreparedContainedTask {
                 )
                 .into());
             }
-            Err(error)
-                if error.code().as_str() == ExecutionKernelCode::RunDecisionInvalid.as_str()
-                    && machine
-                        .current_page()
-                        .is_some_and(|page| self.program.is_error_page(&self.control, page)) =>
-            {
-                return Err(ContainedTaskError::with_detail(
-                    ExecutionKernelCode::ContainedTaskErrorPageReached.code(),
-                    format!(
-                        "after_page={} hit_error_page=true",
-                        machine.current_page().unwrap_or_default()
-                    ),
-                )
-                .into());
-            }
             Err(_) => {
                 return Err(
                     ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into(),
