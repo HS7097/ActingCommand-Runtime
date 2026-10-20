@@ -260,6 +260,9 @@ mod gate_411_a24;
 // #411 A34: a late capacity sample is re-sampled before an admission refuses on it; a run whose
 // capture evidence meets a capacity refusal still commits its terminal.
 mod gate_411_a34;
+// #411 A46: one instance's application-backend failure fences that instance; the host, its
+// policy monitor's setup and closeout, and the other instances go on.
+mod gate_411_a46;
 // Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
 // journal, plan, admission check, stop, lift and expiry signals).
 mod gate_411_b15h;
