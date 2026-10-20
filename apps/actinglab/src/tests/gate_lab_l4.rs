@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const VERTICAL_BRAKE: &str = "single_touch_drag_with_vertical_brake_v1";
 const PAUSE_AND_BRAKE: &str = "single_touch_drag_with_pause_and_brake_v1";
+// Workflow #406 T3/T4: the path drag.
+const PATH_DRAG: &str = "single_touch_path_drag_v1";
 
 fn strings(value: &Value) -> BTreeSet<String> {
     value
@@ -95,8 +97,13 @@ fn l4_capabilities_list_the_four_touch_backends_with_the_gestures_each_performs(
     let data = offline_capabilities();
     let touch = by_id(&data["touch_backends"]);
 
+    // Workflow #406 T4 (adapted): since #406 T3 every segmented backend performs the path drag,
+    // and `adb_shell_input` performs the segmented plans through `input motionevent` (plan Q18).
     let expected = [
-        ("nemu_ipc", set(&["tap", VERTICAL_BRAKE, PAUSE_AND_BRAKE])),
+        (
+            "nemu_ipc",
+            set(&["tap", VERTICAL_BRAKE, PAUSE_AND_BRAKE, PATH_DRAG]),
+        ),
         (
             "maatouch",
             set(&[
@@ -105,15 +112,33 @@ fn l4_capabilities_list_the_four_touch_backends_with_the_gestures_each_performs(
                 "swipe",
                 VERTICAL_BRAKE,
                 PAUSE_AND_BRAKE,
+                PATH_DRAG,
                 "key",
                 "text",
             ]),
         ),
         (
             "minitouch",
-            set(&["tap", "long_tap", "swipe", VERTICAL_BRAKE, PAUSE_AND_BRAKE]),
+            set(&[
+                "tap",
+                "long_tap",
+                "swipe",
+                VERTICAL_BRAKE,
+                PAUSE_AND_BRAKE,
+                PATH_DRAG,
+            ]),
         ),
-        ("adb_shell_input", set(&["tap", "long_tap", "swipe"])),
+        (
+            "adb_shell_input",
+            set(&[
+                "tap",
+                "long_tap",
+                "swipe",
+                VERTICAL_BRAKE,
+                PAUSE_AND_BRAKE,
+                PATH_DRAG,
+            ]),
+        ),
     ];
     assert_eq!(
         touch.keys().cloned().collect::<BTreeSet<_>>(),

@@ -11,7 +11,9 @@ use crate::{
     parse_optional_usize, read_user_config, readonly_cli, reject_legacy_session_routing,
     scene_from_frame,
 };
+use actingcommand_contract::InputSamplingEvidence;
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_lab::DriveDraw;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
@@ -76,15 +78,27 @@ pub(crate) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcom
 pub(crate) fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
+    // Workflow #406 T4: `--seed` draws the point of each box a recovery route presses; a path
+    // that presses no route never reads it, so it is refused there, never ignored.
+    let seed = crate::lab_draw::seed_flag(&flags)?;
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    if seed.is_some() && (flags.bool("--stale-capture") || flags.bool("--startup-login") || dry_run)
+    {
+        return Err(crate::lab_draw::seed_refusal(
+            "conflicting",
+            "session recover reads --seed only for the route it presses (--capture without \
+             --dry-run, --stale-capture or --startup-login)",
+        ));
+    }
     if flags.bool("--stale-capture") {
         return run_session_stale_capture_recover(global, &flags);
     }
-    let dry_run = global.dry_run || flags.bool("--dry-run");
     if !dry_run && !flags.bool("--capture") {
         return Err(CliError::usage(
             "session recover real execution requires --capture; use --dry-run with --scene for offline planning",
         ));
     }
+    let draw = crate::lab_draw::press_draw(seed)?;
 
     let config = read_user_config()?;
     let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
@@ -200,6 +214,7 @@ pub(crate) fn run_session_recover(global: &GlobalOptions, args: &[String]) -> Cl
             destructive_clicks: &graph.destructive_clicks,
             step_timeout,
             poll,
+            draw,
         };
         let (mut route_steps, _) = execute_navigation_route(&execution, after_wake.page, route)?;
         steps.append(&mut route_steps);
@@ -237,6 +252,7 @@ pub(crate) fn run_session_recover(global: &GlobalOptions, args: &[String]) -> Cl
         destructive_clicks: &graph.destructive_clicks,
         step_timeout,
         poll,
+        draw,
     };
     let (steps, _) = execute_navigation_route(&execution, start.page, route)?;
     Ok(json!({
@@ -473,6 +489,30 @@ impl SegmentedDrag {
     }
 }
 
+/// Workflow #406 T4: the click kind of a path drag, which the kernel generates as
+/// `InputAction::SingleTouchPathDragV1` inside its box (Workflow #406 T3).
+const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
+
+/// Workflow #406 T4: the members of a path drag click in the form source compilation writes it
+/// into the navigation (`box_rect` from the task file's `box`).
+const PATH_DRAG_FIELDS: [&str; 6] = [
+    "kind",
+    "box_rect",
+    "turns",
+    "min_segment_px",
+    "duration_ms",
+    "corner_hold_ms",
+];
+
+/// Workflow #406 T4: a `single_touch_path_drag_v1` click as actinglab's navigation reader takes
+/// it, as the kernel's drive reader does (a segmented drag, read as #411 Lab L2 reads the
+/// vertical-brake drag). Its points are generated when a package run performs it, so the reader
+/// keeps the box every point lies in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PathDrag {
+    pub(crate) box_rect: PackRect,
+}
+
 /// #411 Lab L2: a navigation click as the reader takes it.
 #[derive(Debug, Clone)]
 pub(crate) enum NavigationClick {
@@ -482,6 +522,8 @@ pub(crate) enum NavigationClick {
     /// A segmented drag: the page projection lists its element without an input
     /// (`gesture_not_projectable`) and no route passes it.
     SegmentedDrag(SegmentedDrag),
+    /// Workflow #406 T4: a path drag, read as a segmented drag: no input, no route.
+    PathDrag(PathDrag),
 }
 
 /// #411 Lab L2: a row of the generated navigation, an operation that changes the page: its `to`
@@ -887,6 +929,8 @@ fn parse_destructive_area(click: &Value) -> CliOutcome<DestructiveArea> {
     let input = match parse_navigation_click(click)? {
         // #411 Lab L2: the boxes a segmented drag's touch stops in.
         NavigationClick::SegmentedDrag(drag) => return Ok(DestructiveArea::Boxes(drag.boxes()?)),
+        // Workflow #406 T4: a path drag's touch stays in its box.
+        NavigationClick::PathDrag(drag) => return Ok(DestructiveArea::Boxes(vec![drag.box_rect])),
         NavigationClick::Input(input) => input,
     };
     Ok(match input {
@@ -960,10 +1004,43 @@ fn parse_navigation_edge(value: &Value) -> CliOutcome<Option<NavigationEdge>> {
 /// (`single_touch_drag_with_vertical_brake_v1`) besides every input [`parse_navigation_input`]
 /// reads.
 pub(crate) fn parse_navigation_click(value: &Value) -> CliOutcome<NavigationClick> {
-    if value.get("kind").and_then(Value::as_str) == Some(SEGMENTED_DRAG_KIND) {
-        return parse_segmented_drag(value).map(NavigationClick::SegmentedDrag);
+    match value.get("kind").and_then(Value::as_str) {
+        Some(SEGMENTED_DRAG_KIND) => {
+            parse_segmented_drag(value).map(NavigationClick::SegmentedDrag)
+        }
+        // Workflow #406 T4: a path drag, as the kernel's drive reader reads it.
+        Some(PATH_DRAG_KIND) => parse_path_drag(value).map(NavigationClick::PathDrag),
+        _ => parse_navigation_input(value).map(NavigationClick::Input),
     }
-    parse_navigation_input(value).map(NavigationClick::Input)
+}
+
+/// Workflow #406 T4: a path drag in the shape pack containment admits: exactly its six members,
+/// `box_rect` a rectangle of four integers at `x`, `y` >= 0, and unsigned `turns`,
+/// `min_segment_px`, `duration_ms` and `corner_hold_ms` within the bounds the kernel checks
+/// (`path_drag_bounds_hold`).
+fn parse_path_drag(value: &Value) -> CliOutcome<PathDrag> {
+    reject_unknown_members(value, "path drag click", &PATH_DRAG_FIELDS)?;
+    let unsigned = |name: &str| -> CliOutcome<u64> {
+        required_value_field(value, name)?
+            .as_u64()
+            .ok_or_else(|| CliError::usage(format!("field '{name}' must be an unsigned integer")))
+    };
+    let rect = required_value_field(value, "box_rect")?;
+    reject_unknown_members(rect, "box_rect", &["x", "y", "width", "height"])?;
+    let box_rect = parse_navigation_rect(rect)?;
+    if box_rect.x < 0
+        || box_rect.y < 0
+        || !actingcommand_lab::path_drag_bounds_hold(
+            (box_rect.width, box_rect.height),
+            unsigned("turns")?,
+            unsigned("min_segment_px")?,
+            unsigned("duration_ms")?,
+            unsigned("corner_hold_ms")?,
+        )
+    {
+        return Err(CliError::usage("path drag click is outside its bounds"));
+    }
+    Ok(PathDrag { box_rect })
 }
 
 /// #411 Lab L2: a segmented drag in the shape pack containment admits: exactly its seven
@@ -1743,6 +1820,89 @@ pub(crate) fn rect_center(rect: PackRect) -> CliOutcome<SemanticPoint> {
     })
 }
 
+/// Workflow #406 T4 (plan Q20; `contracts/resource-declarations.md`, "The Lab's draw"): `input`
+/// with the points the Lab presses drawn by `draw` for its press `press` (from 0) of one command,
+/// labelled `label`: a tap's point in its rectangle, a long press's (the drag that does not move)
+/// in its box, a drag's two points in its two boxes; and how they were drawn. A click that follows
+/// a target is resolved to its box first.
+pub(crate) fn drawn_semantic_input(
+    input: &SemanticInput,
+    draw: &DriveDraw,
+    press: u32,
+    label: &str,
+) -> CliOutcome<(SemanticInput, InputSamplingEvidence)> {
+    let point = |rect: PackRect| -> CliOutcome<(SemanticPoint, InputSamplingEvidence)> {
+        let (point, sampling) = draw
+            .point(rect, press, label)
+            .map_err(|error| CliError::usage(error.message()))?;
+        Ok((
+            SemanticPoint {
+                x: point.x,
+                y: point.y,
+            },
+            sampling,
+        ))
+    };
+    match input {
+        SemanticInput::Tap { rect, .. } => {
+            let (drawn, sampling) = point(*rect)?;
+            Ok((
+                SemanticInput::Tap {
+                    rect: *rect,
+                    point: drawn,
+                },
+                sampling,
+            ))
+        }
+        SemanticInput::Drag {
+            from_rect,
+            to_rect,
+            duration_ms,
+            ..
+        } if input.long_press().is_some() => {
+            let (drawn, sampling) = point(*from_rect)?;
+            Ok((
+                SemanticInput::Drag {
+                    from_rect: *from_rect,
+                    to_rect: *to_rect,
+                    from: drawn,
+                    to: drawn,
+                    duration_ms: *duration_ms,
+                },
+                sampling,
+            ))
+        }
+        SemanticInput::Drag {
+            from_rect,
+            to_rect,
+            duration_ms,
+            ..
+        } => {
+            let (from, to, sampling) = draw
+                .drag(*from_rect, *to_rect, press, label)
+                .map_err(|error| CliError::usage(error.message()))?;
+            Ok((
+                SemanticInput::Drag {
+                    from_rect: *from_rect,
+                    to_rect: *to_rect,
+                    from: SemanticPoint {
+                        x: from.x,
+                        y: from.y,
+                    },
+                    to: SemanticPoint { x: to.x, y: to.y },
+                    duration_ms: *duration_ms,
+                },
+                sampling,
+            ))
+        }
+        SemanticInput::TargetCenter { .. } | SemanticInput::TargetOffset { .. } => {
+            Err(CliError::usage(
+                "a click that follows a target is resolved to its box before its point is drawn",
+            ))
+        }
+    }
+}
+
 pub(crate) fn point_json(point: SemanticPoint) -> Value {
     json!({
         "x": point.x,
@@ -1848,6 +2008,8 @@ struct NavigationExecutionContext<'a> {
     destructive_clicks: &'a [DestructiveClick],
     step_timeout: Duration,
     poll: Duration,
+    /// Workflow #406 T4: how each pressed box's point is drawn; `None` presses its centre.
+    draw: Option<DriveDraw>,
 }
 
 fn execute_navigation_route(
@@ -1857,7 +2019,7 @@ fn execute_navigation_route(
 ) -> CliOutcome<(Vec<Value>, String)> {
     let mut executed = Vec::new();
     let mut current_page = start_page;
-    for edge in route {
+    for (press, edge) in (0_u32..).zip(route) {
         if current_page != edge.from_page {
             return Err(CliError::safety_blocked(
                 "navigation_page_drift",
@@ -1869,6 +2031,15 @@ fn execute_navigation_route(
             ));
         }
         let (input, recognition) = resolve_navigation_edge_input(ctx, &edge)?;
+        // Workflow #406 T4 (plan Q20): with a seed, the point of each box the route presses is
+        // drawn, the edge's place in the route and its id naming the press.
+        let (input, sampling) = match &ctx.draw {
+            Some(draw) => {
+                let (drawn, sampling) = drawn_semantic_input(&input, draw, press, &edge.id)?;
+                (drawn, Some(sampling))
+            }
+            None => (input, None),
+        };
         // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click
         // follows a target covers the box its target matches on the current frame.
         let frame_regions =
@@ -1905,13 +2076,17 @@ fn execute_navigation_route(
             ));
         }
         current_page = arrived.page.clone();
-        executed.push(json!({
+        let mut step = json!({
             "edge": navigation_edge_json(&edge),
             "resolved_input": semantic_input_json(&input),
             "recognition": recognition,
             "device": device,
             "arrived": page_detection_json(&arrived)
-        }));
+        });
+        if let Some(sampling) = sampling {
+            step["sampling"] = json!(sampling);
+        }
+        executed.push(step);
     }
     Ok((executed, current_page))
 }

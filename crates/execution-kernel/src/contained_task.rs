@@ -10498,8 +10498,8 @@ fn sampled_tap(
     .map_err(uniform_draw_error)
 }
 
-/// Tests only: the chooser of a draw that asks no runtime (a uniform draw asks none).
-#[cfg(test)]
+/// The chooser of a draw that asks no runtime: a uniform draw asks none, and (Workflow #406 T4)
+/// neither does the Lab's draw, which has no landing history.
 fn no_touch_choice(
     _region: &InputSamplingRegion,
     _candidates: &[(i32, i32)],
@@ -10507,8 +10507,7 @@ fn no_touch_choice(
     Ok(0)
 }
 
-/// Tests only: the failure of a draw that asks no runtime.
-#[cfg(test)]
+/// The failure of a draw that asks no runtime.
 fn uniform_draw_error(
     error: ContainedTaskRunError<std::convert::Infallible>,
 ) -> ContainedTaskError {
@@ -10517,6 +10516,62 @@ fn uniform_draw_error(
         ContainedTaskRunError::Boundary(never)
         | ContainedTaskRunError::NonfatalOperation(never) => match never {},
     }
+}
+
+/// Workflow #406 T4 (plan Q20; `contracts/resource-declarations.md`, "The Lab's draw"): the
+/// point the Lab presses in the box `(x, y, width, height)` and its sampling evidence, drawn
+/// from `action_seed` as a run draws a single-region press without a landing history: one
+/// centre-hotspot point with the touch keys `touch` (`center_hotspot_normal_v1`, whatever their
+/// `candidate_count`), one uniform point without them (`xorshift64_uniform_rect_v1`, plan Q14).
+pub(crate) fn lab_box_point(
+    (x, y, width, height): (i32, i32, i32, i32),
+    action_seed: u64,
+    touch: Option<TouchSampling>,
+) -> Result<((i32, i32), InputSamplingEvidence), ContainedTaskError> {
+    let draw = PointDraw {
+        action_seed: Some(action_seed),
+        touch: touch.map(|touch| TouchSampling {
+            candidate_count: 1,
+            ..touch
+        }),
+    };
+    let rect = ClickRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let (point, sampling) =
+        drawn_press::<std::convert::Infallible>(rect, draw, &mut no_touch_choice)
+            .map_err(uniform_draw_error)?;
+    Ok((point, sampling.ok_or_else(sampling_invalid)?))
+}
+
+/// The two points of a Lab drag and their sampling evidence.
+pub(crate) type LabDragPoints = ((i32, i32), (i32, i32), InputSamplingEvidence);
+
+/// Workflow #406 T4: the two points the Lab drags between in the boxes `from` and `to` and their
+/// sampling evidence, drawn from `action_seed` as a run draws a drag's two regions: one
+/// centre-hotspot point each with `touch` (`center_hotspot_normal_v1`), one uniform point each
+/// without it.
+pub(crate) fn lab_drag_points(
+    from: (i32, i32, i32, i32),
+    to: (i32, i32, i32, i32),
+    action_seed: u64,
+    touch: Option<TouchSampling>,
+) -> Result<LabDragPoints, ContainedTaskError> {
+    let rect = |(x, y, width, height): (i32, i32, i32, i32)| ClickRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let draw = PointDraw {
+        action_seed: Some(action_seed),
+        touch,
+    };
+    let (start, end, sampling) = drawn_regions(rect(from), rect(to), draw)?;
+    Ok((start, end, sampling.ok_or_else(sampling_invalid)?))
 }
 
 /// Workflow #390 lpbox: a long press held at a point of `rect` for `duration_ms`, drawn as a
@@ -10680,8 +10735,9 @@ pub(crate) const MAX_PATH_DRAG_TURNS: u64 = actingcommand_contract::MAX_PATH_DRA
 /// a path drag's numbers keep their bounds: a box of positive width and height, `turns`
 /// 1..=30, `min_segment_px` 1..=⌊(max(width, height) − 1) / 2⌋, `duration_ms`
 /// `turns + 1 ..= (turns + 1) × 60 000` and `corner_hold_ms` 0..=60 000. Where the box lies is the
-/// caller's check.
-pub(crate) fn path_drag_bounds_hold(
+/// caller's check. Workflow #406 T4: public, so the Lab's readers check a path drag as the
+/// kernel does.
+pub fn path_drag_bounds_hold(
     (width, height): (i32, i32),
     turns: u64,
     min_segment_px: u64,

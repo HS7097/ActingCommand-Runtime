@@ -20,6 +20,8 @@ pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutc
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "tap-target", ONE_FRAME_REPEATS)?;
     let target = target_argument(&flags, "tap-target")?;
+    // Workflow #406 T4: `--seed` draws the point pressed (or planned) in the target's click box.
+    let seed = super::lab_draw::seed_flag(&flags)?;
     let mut ledger = semantic_ledger_context("tap-target", global, args);
     let result = (|| -> CliOutcome<Value> {
         let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -38,6 +40,7 @@ pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutc
             allow_destructive: flags.bool("--allow-destructive"),
             dry_run,
             capture_requested,
+            draw: super::lab_draw::press_draw(seed)?,
         };
         serialize_response(lab.tap_target(request, &mut ledger)?)
     })();
@@ -49,6 +52,15 @@ pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcom
     reject_legacy_session_routing(&flags)?;
     refuse_repeated_options(&flags, "navigate", ONE_FRAME_REPEATS)?;
     let to = flags.required("--to")?;
+    // Workflow #406 T4: `--seed` draws the point of each box the route presses; a planned route
+    // presses nothing, so it is refused there, never ignored.
+    let seed = super::lab_draw::seed_flag(&flags)?;
+    if seed.is_some() && (global.dry_run || flags.bool("--dry-run")) {
+        return Err(super::lab_draw::seed_refusal(
+            "conflicting",
+            "navigate reads --seed only for the route it presses (--capture without --dry-run)",
+        ));
+    }
     let mut ledger = semantic_ledger_context("navigate", global, args);
     let result = (|| -> CliOutcome<Value> {
         let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -70,6 +82,7 @@ pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcom
             step_timeout: (!dry_run)
                 .then(|| parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)),
             poll: (!dry_run).then(|| parse_optional_duration_ms(&flags, "--poll-ms", 500)),
+            draw: super::lab_draw::press_draw(seed)?,
         };
         serialize_response(lab.navigate(request, &mut ledger)?)
     })();

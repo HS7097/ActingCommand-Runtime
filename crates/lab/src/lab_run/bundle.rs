@@ -946,6 +946,17 @@ struct SegmentedSwipeClickFields {
     brake_duration_ms: u64,
 }
 
+/// Workflow #406 T4: the members of a compiled `single_touch_path_drag_v1` click besides `kind`
+/// and `duration_ms` (Workflow #406 T3, plan Q17).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathDragClickFields {
+    box_rect: PackRect,
+    turns: u64,
+    min_segment_px: u64,
+    corner_hold_ms: u64,
+}
+
 impl OperationClick {
     fn validate_for_schema(&self, control: &LabControl, schema_version: &str) -> CliOutcome<()> {
         match self.kind.as_str() {
@@ -1092,6 +1103,36 @@ impl OperationClick {
                 }
                 Ok(())
             }
+            // Workflow #406 T4: a path drag, read as the vertical-brake drag is: exactly its
+            // box, turns, shortest segment, duration and corner hold, the box inside the
+            // resolution and every number within the kernel's bounds.
+            "single_touch_path_drag_v1" => {
+                let fields = self.path_drag_fields()?;
+                let duration_ms = self.duration_ms.ok_or_else(|| {
+                    CliError::package_invalid("single_touch_path_drag_v1 missing duration_ms")
+                })?;
+                if self.x.is_some()
+                    || self.y.is_some()
+                    || self.width.is_some()
+                    || self.height.is_some()
+                    || self.from_rect.is_some()
+                    || self.to_rect.is_some()
+                    || self.offset.is_some()
+                    || self.target_id.is_some()
+                    || !actingcommand_execution_kernel::path_drag_bounds_hold(
+                        (fields.box_rect.width, fields.box_rect.height),
+                        fields.turns,
+                        fields.min_segment_px,
+                        duration_ms,
+                        fields.corner_hold_ms,
+                    )
+                {
+                    return Err(CliError::package_invalid(
+                        "single_touch_path_drag_v1 declaration is invalid",
+                    ));
+                }
+                validate_click_rect(fields.box_rect, &control.resolution, false)
+            }
             other => Err(CliError::package_invalid(format!(
                 "unknown operation click kind '{other}'"
             ))),
@@ -1107,6 +1148,20 @@ impl OperationClick {
         .map_err(|error| {
             CliError::package_invalid(format!(
                 "single_touch_drag_with_vertical_brake_v1 fields are invalid: {error}"
+            ))
+        })
+    }
+
+    /// Workflow #406 T4: a path drag's members besides `kind` and `duration_ms`.
+    fn path_drag_fields(&self) -> CliOutcome<PathDragClickFields> {
+        serde_json::from_value(serde_json::to_value(&self.extra).map_err(|error| {
+            CliError::package_invalid(format!(
+                "single_touch_path_drag_v1 fields are invalid: {error}"
+            ))
+        })?)
+        .map_err(|error| {
+            CliError::package_invalid(format!(
+                "single_touch_path_drag_v1 fields are invalid: {error}"
             ))
         })
     }

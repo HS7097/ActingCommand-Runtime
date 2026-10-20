@@ -31,6 +31,7 @@ fn plan(gesture: Option<ClickGesture>, to_point: Option<RecordPoint>) -> ClickPl
         declares_click: false,
         gesture,
         to_point,
+        sampling: None,
     }
 }
 

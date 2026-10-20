@@ -353,6 +353,13 @@ static DO: LabCommand = LabCommand {
             Kind::Text,
             "--tap-rect: x,y,w,h, only with record: the step's click rectangle.",
         ),
+        // Workflow #406 T4: the seed the Lab draws the pressed point from.
+        flag(
+            "seed",
+            "--seed",
+            Kind::Integer,
+            "--seed: an unsigned 64-bit integer; offline (scene), with dry_run, or with capture and record: the point pressed in the target's box (or the recorded step's rectangle) is drawn from it, as the Runtime draws a run's (center_hotspot_normal_v1 with the root configuration's touch keys, else xorshift64_uniform_rect_v1), and actual_click carries seed and sampling; without it the box's centre. The same seed draws the same point.",
+        ),
         DO_PREVIEW,
         TEST_CAPTURE_DELAY,
     ],
@@ -1717,4 +1724,7 @@ mod tests {
     // #411 Lab B-2 (apps key 78): ac_lab_observe and ac_lab_do pass sample_scenes as earlier
     // --scene frames before scene's, and refuse them without scene before any child runs.
     mod gate_lab_b2;
+    // Workflow #406 T4 (apps key 79): ac_lab_do passes seed as --seed and answers the sampling
+    // actinglab gives.
+    mod gate_406_t4;
 }

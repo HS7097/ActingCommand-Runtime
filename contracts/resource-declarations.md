@@ -105,7 +105,8 @@ comes. A `long_press` navigation click is read as a drag that does not move (one
 its `duration_ms`). #411 Lab L3: wherever the Lab presses it (online `do <element-id>`, a route
 of `ensure`, `navigate` or `session recover`), it sends `InputAction::LongTap` at that point over the duration, as
 the kernel presses a pack's long press, and every other drag one `InputAction::Swipe`; a `drag`
-whose two rectangles are the same is pressed as a long tap too. Each input of an `ensure
+whose two rectangles are the same is pressed as a long tap too. Workflow #406 T4: given a seed, a
+route of the Lab presses each box at the point drawn from it ("The Lab's draw" below). Each input of an `ensure
 --capture` route names the Runtime frame its edge's guard was decided on (the frame reference of
 that capture), as online `do` names its before frame, so the route also runs on an instance whose
 input is `nemu_ipc`, which presses only on a frame the Runtime captured.
@@ -143,8 +144,8 @@ each at least 1, and lies inside the task's resolution. The kernel holds a point
 T12: as "Touch sampling" below says), and records the seed and the box as the effect intent's
 one sampling region; without a seed it holds the box's center. A point long press holds its
 point and records no sampling. Drive navigation and actinglab's navigation tools hold a box's
-center, as they tap a `rect` click's; a guard synthesized from the click takes the box as its
-`expected_rect`. The whole box must be harmless on every frame the press can fire on: an author
+center, as they tap a `rect` click's, unless the Lab is given a seed (Workflow #406 T4, "The Lab's
+draw" below); a guard synthesized from the click takes the box as its `expected_rect`. The whole box must be harmless on every frame the press can fire on: an author
 sizes it to the pressed control, and declares a point only for a target without a stable extent.
 
 **Touch sampling** (Workflow #406 T12; Alice 2026-10-13 「…默认都是中心热点…」 and 2026-10-14
@@ -182,8 +183,52 @@ history is the Runtime's, in memory only: per instance and per box (its sampling
 a use when it is made. The policy runs and the direct runs of an instance share it; it is never
 recorded and is empty after a restart, and nothing of it is reported to the scheduler. A `point`
 click and a `target_center` click press their point, as before. A runtime without the touch
-configuration (the Lab's offline runs and its presses until #406 T4) draws each box uniformly
-with `xorshift64_uniform_rect_v1` or presses its center, as before.
+configuration (a kernel test runtime; the Lab when no root configuration names the keys, "The
+Lab's draw" below) draws each box uniformly with `xorshift64_uniform_rect_v1`, or presses its
+center without a seed, as before.
+
+**The Lab's draw** (Workflow #406 T4; plan-405-406 Q20, Q14; Alice 2026-10-19 「Lab的资源制作应当包含所有可用后端的识别以及触控」;
+[v012-register.md](v012-register.md) §1.138). The Lab draws the points of the boxes it presses
+as a package run draws them, from its own seed:
+
+- **The touch keys** are those of the root configuration the Lab reads, as its OCR loader reads
+  it (an installation's selected configuration, else a single-location root's
+  `actingd.config.json`, Workflow #411 A12): the configuration's `touch` section over the
+  defaults file the program embeds, as that root's Runtime starts with them (values an
+  instruction sets while the Runtime runs are not seen). A process outside both has none, and
+  every box is drawn uniformly (`xorshift64_uniform_rect_v1`, plan Q14); nothing is drawn with
+  built-in values. A configuration that cannot be read, does not decode, or holds a value outside
+  its key's range refuses every draw with that failure (`config_read_failed`,
+  `config_decode_failed`, `config_value_invalid`), exit 2.
+- **Seeds.** The action seed of the step `i` (from 0) with the operation `l` of a run with the
+  seed `s` is the first eight bytes, read big-endian, of SHA-256 over `ActingCommand offline
+  action seed v1`, a NUL, `s` (eight bytes, big-endian), `i` (four bytes, big-endian), the
+  length of `l` in bytes (eight bytes, big-endian) and the bytes of `l` (UTF-8). The Lab derives
+  the seed of each press the same way: `i` is the press's place in its command (0 for `do` and
+  `tap-target`, the edge's place for a route), `l` the target, element or edge id it presses (the
+  empty label for a recorded click).
+- **No landing history.** A box is drawn as a run draws a single-region press with one candidate,
+  one centre-hotspot point (`center_hotspot_normal_v1`), and a drag's two boxes as a run draws a
+  drag's.
+- **Offline runs** (`package dry-run`, `replay` of a whole package) always draw: the run's seed is
+  `--seed <u64>` when given, else 0. A decision `would_click` carries `sampling`, the evidence as
+  the ledger records an effect intent's (`algorithm`, `action_seed`, `source_regions`,
+  `parameters`), absent for a click that draws no box point; each effect of a replayed step
+  carries its `sampling` the same way; and the result carries `seed` when a click drew from it (a
+  path drag's points are generated from it too). A run given that seed draws every point again.
+  A decision without sampling serializes as before.
+- **The Lab's presses** (offline `do --scene`, `do --capture --dry-run`, `do --capture --record`,
+  `tap-target`, and the routes of `ensure --capture`, `navigate` and `session recover`) draw only
+  when given `--seed <u64>`; without it they press each box's centre, as before. A drawn press
+  answers how it was drawn: `do`'s `actual_click` carries `seed` and `sampling`, `tap-target` its
+  `sampling`, each route step its `sampling`, and a recorded click names its rule (`point_rule`
+  and `sampling`, [lab-recording.md](lab-recording.md)). The online press stays a plain input,
+  with no landing history and no evidence. Online `do <element-id>` is pressed by the Runtime at
+  its projection's point, and `--tap` / `--swipe` press their coordinates, so `--seed` with
+  either is refused (`validation_failed`, `argument_problem` `conflicting`), as it is on every
+  path that presses nothing (`ensure` without `--capture` or with `--dry-run`, a planned
+  `navigate`, `session recover --dry-run`, `--stale-capture` or `--startup-login`, a scan
+  replay). MCP `ac_lab_do` passes its `seed` as `--seed`.
 
 **The path drag** (Workflow #406 T3; Alice 2026-10-13 「…同时支持在特定方框里在一个拖动下拐很多弯的拖动方法」,
 the path generated by the kernel; plan-405-406 Q17 to Q19; [v012-register.md](v012-register.md)
@@ -251,9 +296,16 @@ The kernel's drive reader reads the click as a segmented drag, as #411 Lab L2 re
 vertical-brake drag: exactly its six members, `box_rect` a rectangle of four integers, unsigned
 numbers within the bounds above, else `drive_plan_invalid`; no route passes its edge, the online
 observation lists its element without an input (`gesture_not_projectable`) after checking its box
-lies in the coordinate space, and as a destructive page operation it covers its box. actinglab's
-reader, the Lab bundle, recording and the Lab's offline runs are #406 T4's; the online Lab does
-not perform a path drag (B-3).
+lies in the coordinate space, and as a destructive page operation it covers its box. Workflow
+#406 T4: actinglab's navigation reader and the Lab bundle read it the same way (exactly its six
+members in the compiled form, the box at `x`, `y` >= 0 inside the resolution, the numbers within
+the bounds above; anything else is refused with their existing refusals); its page-projection
+element in offline `observe` is listed without an input (`gesture_not_projectable`), so `do` on
+it is `lab_element_unavailable`; offline `observe` lists its edge in `actions` with `input:
+null`; no route of the Lab passes it; the Lab's input port refuses it before any port opens; and
+an offline run of a package that holds one reports the path the kernel generated from the run's
+seed in `would_click`'s `action` (without `sampling`). A Lab recording declares it
+([lab-recording.md](lab-recording.md)). The online Lab does not perform a path drag (B-3).
 
 Workflow #390 LAB-2 item 7: both navigation input readers, the kernel's drive reader and
 actinglab's, read an `offset` click `{"kind": "offset", "target_id", "offset": {"x", "y",

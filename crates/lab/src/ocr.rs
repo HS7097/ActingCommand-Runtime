@@ -350,6 +350,24 @@ fn with_os_cause(outcome: Outcome, cause: Option<&Outcome>) -> Outcome {
     }
 }
 
+/// Workflow #406 T4: the Runtime configuration of this process's root, read as the OCR loader
+/// reads it: an installation's selected configuration, else a single-location root's
+/// `actingd.config.json` (Workflow #411 A12); `None` outside both. A configuration that cannot be
+/// read is its failure (`config_read_failed` with its cause, or the installation's code).
+pub(crate) fn process_root_configuration() -> Result<Option<Vec<u8>>, Outcome> {
+    match actingcommand_contract::process_installation() {
+        Ok(Some(installation)) => installation
+            .config_bytes()
+            .map(Some)
+            .map_err(|error| Outcome::new(error.code())),
+        Ok(None) => match process_single_location_root()? {
+            Some(root) => read_root_configuration(&root.join(ROOT_CONFIGURATION_FILE)).map(Some),
+            None => Ok(None),
+        },
+        Err(error) => Err(Outcome::new(error.code())),
+    }
+}
+
 /// The single-location root this process runs from (Workflow #411 A12): [`single_location_root`]
 /// of the canonical executable. An executable that cannot be resolved is
 /// `install_executable_unavailable`, as `process_installation` answers it.

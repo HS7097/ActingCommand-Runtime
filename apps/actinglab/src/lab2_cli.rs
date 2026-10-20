@@ -6,7 +6,7 @@ use actingcommand_contract::{
     RuntimeDebugOperation, RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeResult,
 };
 use actingcommand_lab::{
-    AttachFrameRequest, OpaqueJson, record_attach_frame, record_frame_preflight,
+    AttachFrameRequest, DriveDraw, OpaqueJson, record_attach_frame, record_frame_preflight,
 };
 use actingcommand_ledger::{
     EvidenceStore, IdIssuer, IdKind, ProjectionRequest, ProjectionVerbosity, error_projection,
@@ -314,7 +314,8 @@ fn navigation_action_json(row: &NavigationRow, to_page: &str) -> Value {
         "to_page": to_page,
         "input": match &row.click {
             NavigationClick::Input(input) => semantic_input_json(input),
-            NavigationClick::SegmentedDrag(_) => Value::Null,
+            // Workflow #406 T4: nor does a path drag.
+            NavigationClick::SegmentedDrag(_) | NavigationClick::PathDrag(_) => Value::Null,
         },
         "source": row.source
     })
@@ -478,6 +479,7 @@ fn run_runtime_do(
     instance: &str,
     dry_run: bool,
     allow_destructive: bool,
+    draw: Option<DriveDraw>,
 ) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "do")?;
     let resources = super::contained_resources::load(flags, "do")?;
@@ -528,7 +530,8 @@ fn run_runtime_do(
                 &frames,
             )?;
         }
-        let point = rect_center(actual_click.rect)?;
+        // Workflow #406 T4: with a seed, the point is drawn in the box.
+        let (point, sampling) = do_press_point(draw.as_ref(), actual_click.rect, target)?;
         let (action_id, device) = if dry_run {
             (Value::Null, json!({"executed": false, "mode": "dry_run"}))
         } else {
@@ -596,10 +599,49 @@ fn run_runtime_do(
         if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
             payload["recognition_coverage"] = coverage;
         }
+        attach_draw(&mut payload, draw.as_ref(), sampling);
         attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
         Ok(payload)
     })();
     finish_runtime_debug_result(&session, RuntimeDebugOperation::Do, flags, result)
+}
+
+/// Workflow #406 T4 (plan Q20; `contracts/resource-declarations.md`, "The Lab's draw"): the point
+/// `do` presses in its target's box `rect` and how it was drawn: with `draw`, the command's first
+/// press, labelled with its target; without a seed, the box's centre, undrawn.
+fn do_press_point(
+    draw: Option<&DriveDraw>,
+    rect: PackRect,
+    target: &str,
+) -> CliOutcome<(
+    crate::commands::navigation_recovery::SemanticPoint,
+    Option<actingcommand_contract::InputSamplingEvidence>,
+)> {
+    let centre = rect_center(rect)?;
+    let Some(draw) = draw else {
+        return Ok((centre, None));
+    };
+    let tap = SemanticInput::Tap {
+        rect,
+        point: centre,
+    };
+    match drawn_semantic_input(&tap, draw, 0, target)? {
+        (SemanticInput::Tap { point, .. }, sampling) => Ok((point, Some(sampling))),
+        _ => Err(CliError::device("a drawn tap is no longer a tap")),
+    }
+}
+
+/// Workflow #406 T4: a drawn click's seed and sampling evidence in `actual_click`, the members
+/// an answer without a seed does not have.
+fn attach_draw(
+    payload: &mut Value,
+    draw: Option<&DriveDraw>,
+    sampling: Option<actingcommand_contract::InputSamplingEvidence>,
+) {
+    if let (Some(draw), Some(sampling)) = (draw, sampling) {
+        payload["actual_click"]["seed"] = json!(draw.seed);
+        payload["actual_click"]["sampling"] = json!(sampling);
+    }
 }
 
 fn run_runtime_ensure(
@@ -608,6 +650,7 @@ fn run_runtime_ensure(
     instance: &str,
     dry_run: bool,
     allow_destructive: bool,
+    draw: Option<DriveDraw>,
 ) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "ensure")?;
     let resources = super::contained_resources::load(flags, "ensure")?;
@@ -686,6 +729,7 @@ fn run_runtime_ensure(
             allow_destructive,
             step_timeout,
             poll,
+            draw,
         };
         let (steps, arrived) =
             execute_runtime_navigation_route(&execution, start.page.clone(), route)?;
@@ -746,6 +790,8 @@ struct RuntimeNavigationContext<'a> {
     allow_destructive: bool,
     step_timeout: Duration,
     poll: Duration,
+    /// Workflow #406 T4: how each pressed box's point is drawn; `None` presses its centre.
+    draw: Option<DriveDraw>,
 }
 
 fn execute_runtime_navigation_route(
@@ -755,7 +801,7 @@ fn execute_runtime_navigation_route(
 ) -> CliOutcome<(Vec<Value>, String)> {
     let mut executed = Vec::new();
     let mut current_page = start_page;
-    for edge in route {
+    for (press, edge) in (0_u32..).zip(route) {
         if current_page != edge.from_page {
             return Err(CliError::safety_blocked(
                 "navigation_page_drift",
@@ -783,6 +829,15 @@ fn execute_runtime_navigation_route(
         }
         let (input, recognition) =
             resolve_runtime_navigation_edge_input(ctx.evaluator, &guard_frames, &edge)?;
+        // Workflow #406 T4 (plan Q20): with a seed, the point of each box the route presses is
+        // drawn, the edge's place in the route and its id naming the press.
+        let (input, sampling) = match &ctx.draw {
+            Some(draw) => {
+                let (drawn, sampling) = drawn_semantic_input(&input, draw, press, &edge.id)?;
+                (drawn, Some(sampling))
+            }
+            None => (input, None),
+        };
         if !ctx.allow_destructive {
             // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click
             // follows a target covers the box its target matches on the guard frame.
@@ -833,7 +888,7 @@ fn execute_runtime_navigation_route(
             })));
         }
         current_page = arrived.page.clone();
-        executed.push(json!({
+        let mut step = json!({
             "edge": navigation_edge_json(&edge),
             "resolved_input": semantic_input_json(&input),
             "recognition": recognition,
@@ -844,7 +899,11 @@ fn execute_runtime_navigation_route(
                 "authority": "runtime_execution_kernel"
             },
             "arrived": page_detection_json(&arrived)
-        }));
+        });
+        if let Some(sampling) = sampling {
+            step["sampling"] = json!(sampling);
+        }
+        executed.push(step);
     }
     Ok((executed, current_page))
 }
@@ -1480,6 +1539,7 @@ const DO_SCENE: Lab2Path = Lab2Path {
         "--preview",
         "--after-page",
         "--after-timeout-ms",
+        "--seed",
     ],
     repeats: &["--scene"],
 };
@@ -1497,6 +1557,7 @@ const DO_CAPTURE_DRY_RUN: Lab2Path = Lab2Path {
         "--preview",
         "--after-page",
         "--after-timeout-ms",
+        "--seed",
     ],
     repeats: &[],
 };
@@ -1519,6 +1580,7 @@ const DO_CAPTURE: Lab2Path = Lab2Path {
         "--record",
         "--tap-rect",
         "--preview",
+        "--seed",
     ],
     repeats: &[],
 };
@@ -1565,6 +1627,7 @@ const ENSURE_CAPTURE: Lab2Path = Lab2Path {
         "--allow-destructive",
         "--step-timeout-ms",
         "--poll-ms",
+        "--seed",
     ],
     repeats: &[],
 };
@@ -1756,8 +1819,11 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             "do real execution requires --capture; use --dry-run with --scene for offline planning",
         ));
     }
+    // Workflow #406 T4 (plan Q20): with `--seed`, the point `do` plans in its target's box is
+    // drawn; without it, the box's centre.
+    let draw = super::lab_draw::press_draw(super::lab_draw::seed_flag(&flags)?)?;
     if flags.bool("--capture") {
-        return run_runtime_do(&flags, &target, &instance, dry_run, allow_destructive);
+        return run_runtime_do(&flags, &target, &instance, dry_run, allow_destructive, draw);
     }
     let result = (|| -> CliOutcome<Value> {
         let resources = super::contained_resources::load(&flags, "do")?;
@@ -1818,7 +1884,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 return Err(error.with_details(details));
             }
         }
-        let point = rect_center(actual_click.rect)?;
+        let (point, sampling) = do_press_point(draw.as_ref(), actual_click.rect, &target)?;
         let action_id = ids.issue(IdKind::Action);
         let device = json!({"executed": false, "mode": "isolated_offline"});
         let after = before;
@@ -1858,6 +1924,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
             payload["recognition_coverage"] = coverage;
         }
+        attach_draw(&mut payload, draw.as_ref(), sampling);
         attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
@@ -1878,7 +1945,9 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
     }
     let instance = lab2_instance(global, &flags);
     if flags.bool("--capture") {
-        return run_runtime_ensure(&flags, &to, &instance, dry_run, allow_destructive);
+        // Workflow #406 T4: `ensure --capture` reads `--seed` (its path is the only one that does).
+        let draw = super::lab_draw::press_draw(super::lab_draw::seed_flag(&flags)?)?;
+        return run_runtime_ensure(&flags, &to, &instance, dry_run, allow_destructive, draw);
     }
     let result = (|| -> CliOutcome<Value> {
         let resources = super::contained_resources::load(&flags, "ensure")?;
@@ -2200,6 +2269,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--record (with --capture: click the open recording step and record it)",
                 "--tap-rect <x,y,w,h> (only with --record: declare the step click rectangle)",
                 "--preview (with --capture, not --dry-run: also preview the after frame of a known page)",
+                "--seed <u64> (with --scene, --dry-run, or --capture --record: draw the point pressed in the box from this seed; without it the box's centre)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
@@ -2234,6 +2304,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--allow-destructive",
                 "--step-timeout-ms <ms> (with --capture, not --dry-run)",
                 "--poll-ms <ms> (with --capture, not --dry-run)",
+                "--seed <u64> (with --capture, not --dry-run: draw the point of each box the route presses from this seed; without it each box's centre)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &["req_id", "state", "page", "to", "route", "steps", "ledger"],

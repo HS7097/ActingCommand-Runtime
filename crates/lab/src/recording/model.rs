@@ -4,9 +4,11 @@
 //! (`actingcommand.lab-record-mark.v1`) and the outcome views the CLI prints.
 
 use actingcommand_contract::{
-    LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
-    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
+    InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
 };
+use actingcommand_execution_kernel::DriveDraw;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -592,6 +594,10 @@ pub struct ClickExecution {
     pub to_point: Option<RecordPoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// Workflow #406 T4: how the Lab drew the pressed points when it was given a seed (the
+    /// evidence of `point_rule`'s draw: its algorithm, action seed, boxes and parameters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<InputSamplingEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -645,7 +651,10 @@ pub enum ClickFollowForm {
 /// `single_touch_drag_with_vertical_brake_v1` presses a point of the step's click rectangle,
 /// moves to a point of the box `corner`, holds there and brakes 100 px up before it lifts, with
 /// the Runtime's fixed timings; the package declares it as that click, and a Lab operation does
-/// not press it.
+/// not press it. Workflow #406 T4: a `single_touch_path_drag_v1` turns `turns` times inside the
+/// step's click rectangle (its box) in one touch, each segment at least `min_segment_px` long,
+/// over `duration_ms` with `corner_hold_ms` at each inner corner; the package declares it as
+/// that click, the kernel generates its path, and a Lab operation does not press it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClickGesture {
@@ -660,6 +669,13 @@ pub enum ClickGesture {
     SingleTouchDragWithVerticalBrakeV1 {
         corner: RecordRect,
     },
+    #[serde(rename = "single_touch_path_drag_v1")]
+    SingleTouchPathDragV1 {
+        turns: u64,
+        min_segment_px: u64,
+        duration_ms: u64,
+        corner_hold_ms: u64,
+    },
 }
 
 impl ClickGesture {
@@ -672,6 +688,13 @@ impl ClickGesture {
                     + SEGMENTED_SWIPE_CORNER_HOLD_MS
                     + SEGMENTED_SWIPE_BRAKE_DURATION_MS
             }
+            // Workflow #406 T4: its segments and a hold at each of its `turns` inner corners.
+            Self::SingleTouchPathDragV1 {
+                turns,
+                duration_ms,
+                corner_hold_ms,
+                ..
+            } => duration_ms.saturating_add(turns.saturating_mul(corner_hold_ms)),
         }
     }
 
@@ -682,6 +705,7 @@ impl ClickGesture {
             Self::SingleTouchDragWithVerticalBrakeV1 { .. } => {
                 "single_touch_drag_with_vertical_brake_v1"
             }
+            Self::SingleTouchPathDragV1 { .. } => "single_touch_path_drag_v1",
         }
     }
 }
@@ -882,7 +906,8 @@ impl MarkSpec {
 /// REC-4) a template mark it follows (`follow`), alone or with a rectangle. Workflow #390 LAB-2:
 /// a drag from `region` to `drag_to`, or (Workflow #390 lpbox) a long press in the click box
 /// `long_press`, each over `duration_ms`. #411 Lab BD: a single-touch drag with a vertical brake
-/// from `region` to the corner box `brake_corner`, with the Runtime's fixed timings.
+/// from `region` to the corner box `brake_corner`, with the Runtime's fixed timings. Workflow #406
+/// T4: a path drag in the box `region` (`path_drag`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickSpec {
@@ -900,6 +925,21 @@ pub struct ClickSpec {
     pub duration_ms: Option<u64>,
     #[serde(default)]
     pub brake_corner: Option<RecordRect>,
+    #[serde(default)]
+    pub path_drag: Option<PathDragSpec>,
+}
+
+/// Workflow #406 T4 (plan Q17; `contracts/resource-declarations.md`, "The path drag"): the numbers
+/// of a path drag in the click's box: how often it turns (1..=30), its shortest segment in pixels
+/// (1..=(max(width, height) - 1) / 2), its whole duration (`turns + 1 ..= (turns + 1) * 60000`
+/// ms) and the hold at each inner corner (0..=60000 ms).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathDragSpec {
+    pub turns: u64,
+    pub min_segment_px: u64,
+    pub duration_ms: u64,
+    pub corner_hold_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1152,6 +1192,9 @@ pub struct PlanClickRequest {
     pub tap_rect: Option<RecordRect>,
     /// Workflow #390 LAB-2: `--swipe x1,y1,x2,y2,ms` on a step that declares a drag.
     pub swipe: Option<PlannedSwipe>,
+    /// Workflow #406 T4: how the planned point is drawn in the step's click rectangle when the
+    /// Lab is given a seed (`--seed`); `None` plans the rectangle's centre.
+    pub draw: Option<DriveDraw>,
 }
 
 /// Workflow #390 LAB-2: the points and duration `do --capture --record --swipe` gives.
@@ -1179,6 +1222,9 @@ pub struct ClickPlan {
     pub gesture: Option<ClickGesture>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_point: Option<RecordPoint>,
+    /// Workflow #406 T4: how the planned points were drawn, when the Lab was given a seed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<InputSamplingEvidence>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

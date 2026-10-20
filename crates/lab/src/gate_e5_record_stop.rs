@@ -127,6 +127,7 @@ impl Recorded {
                 long_press: None,
                 duration_ms: None,
                 brake_corner: None,
+                path_drag: None,
             }),
             ..MarkRequest::default()
         };

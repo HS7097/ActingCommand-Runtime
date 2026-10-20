@@ -8,7 +8,7 @@ use actingcommand_contract::{
 use actingcommand_device::{CaptureBackendName, Frame, parse_png_dimensions};
 use actingcommand_lab::{
     OfflineDecision, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
-    simulate_contained_task_at, validate_lab_package_path,
+    simulate_contained_task_drawn, validate_lab_package_path,
 };
 use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
 use serde::Serialize;
@@ -104,8 +104,12 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     })?;
     let package_label = prepared.package_label().to_owned();
     let fixture = load_fixture_sequence(&args.fixtures)?;
-    let simulation = simulate_contained_task_at(&prepared, fixture.frames, now_unix_ms)
-        .map_err(map_simulation_error)?;
+    // Workflow #406 T4: the run draws its points as the Runtime draws a run's, from the seed
+    // (`--seed`, else 0) with the touch keys of the root configuration.
+    let draw = crate::lab_draw::offline_draw(args.seed)?;
+    let simulation =
+        simulate_contained_task_drawn(&prepared, fixture.frames, Some(now_unix_ms), draw)
+            .map_err(map_simulation_error)?;
     let refusal = match &simulation.decision {
         OfflineDecision::Refused { code, detail } => Some((*code, detail.clone())),
         _ => None,
@@ -146,7 +150,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         })));
     }
 
-    Ok(json!({
+    let mut answer = json!({
         "status": "offline_simulation",
         "executed": false,
         "runtime_head": env!("ACTINGCOMMAND_RUNTIME_HEAD"),
@@ -160,7 +164,12 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         "post_admission_ocr": record.simulation.post_admission_ocr,
         "ocr": crate::offline_ocr::status(),
         "production_global_ledger_written": false
-    }))
+    });
+    // Workflow #406 T4: the seed the decision's points were drawn from, to replay them with.
+    if let Some(seed) = record.simulation.seed {
+        answer["seed"] = json!(seed);
+    }
+    Ok(answer)
 }
 
 struct PackageDryRunArgs {
@@ -168,6 +177,8 @@ struct PackageDryRunArgs {
     package: PathBuf,
     fixtures: Vec<PathBuf>,
     out: PathBuf,
+    /// Workflow #406 T4: the run's seed (`--seed`), 0 without it.
+    seed: Option<u64>,
 }
 
 impl PackageDryRunArgs {
@@ -201,7 +212,12 @@ impl PackageDryRunArgs {
         let unexpected = flags
             .flags
             .keys()
-            .filter(|name| !matches!(name.as_str(), "--package" | "--zip" | "--out" | "--fixture"))
+            .filter(|name| {
+                !matches!(
+                    name.as_str(),
+                    "--package" | "--zip" | "--out" | "--fixture" | "--seed"
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
         if !unexpected.is_empty() {
@@ -264,6 +280,7 @@ impl PackageDryRunArgs {
             package,
             fixtures,
             out,
+            seed: crate::lab_draw::seed_flag(flags)?,
         })
     }
 }

@@ -1738,6 +1738,23 @@ fn click_json(plan: &Plan, click: &StepClick) -> LabResult<Value> {
                 "brake_duration_ms": SEGMENTED_SWIPE_BRAKE_DURATION_MS
             }));
         }
+        // Workflow #406 T4: a path drag is the source form of the click, the recorded rectangle
+        // as its box (compiled to `box_rect`) with its numbers.
+        Some(ClickGesture::SingleTouchPathDragV1 {
+            turns,
+            min_segment_px,
+            duration_ms,
+            corner_hold_ms,
+        }) => {
+            return Ok(json!({
+                "kind": "single_touch_path_drag_v1",
+                "box": rect_json(click.rect),
+                "turns": turns,
+                "min_segment_px": min_segment_px,
+                "duration_ms": duration_ms,
+                "corner_hold_ms": corner_hold_ms
+            }));
+        }
         None => {}
     }
     let Some(follow) = &click.follow else {

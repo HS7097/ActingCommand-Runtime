@@ -242,6 +242,15 @@ A drag with a vertical brake (#411 Lab BD, see "Drags and long presses"):
  "replace_click":true}
 ```
 
+A path drag in a box (Workflow #406 T4, see "Drags and long presses"):
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "click":{"region":{"x":400,"y":300,"width":480,"height":240},
+          "path_drag":{"turns":4,"min_segment_px":60,"duration_ms":2000,"corner_hold_ms":50}},
+ "replace_click":true}
+```
+
 `"clear_anchor": true` (`--no-anchor`) clears the step's anchor; `remove` takes a forbidden
 mark off the page again.
 
@@ -496,9 +505,26 @@ Workflow #390 LAB-2. A step's effect may be a drag or a long press instead of a 
   `validation_failed` (exit 2); so is a corner whose `y` is less than 100 or a box outside the
   frame. Guard, retry and `--replace-click` apply as to a tap. A Lab operation does not press it
   (see "`--record` on device commands"); the package declares it as the Runtime runs it.
+- Workflow #406 T4: the request form `"click": {"region", "path_drag": {"turns",
+  "min_segment_px", "duration_ms", "corner_hold_ms"}}` declares a single-touch path drag in the
+  click rectangle, its box ([resource-declarations.md](resource-declarations.md), "The path
+  drag"): one touch that turns `turns` times inside the box, each segment at least
+  `min_segment_px` long, over `duration_ms`, holding `corner_hold_ms` at each inner corner; the
+  kernel generates its path when a package run performs it. The box lies inside the frame with
+  width and height ≥ 1, and the numbers within the path drag's bounds (`turns` 1..=30,
+  `min_segment_px` 1..=⌊(max(width, height) − 1) / 2⌋, `duration_ms`
+  `turns + 1 ..= (turns + 1) × 60000`, `corner_hold_ms` 0..=60000); it takes no `duration_ms`
+  of the click, `drag_to`, `long_press`, `brake_corner`, `from` or `follow`. Anything else is
+  `validation_failed` (exit 2, a conflicting member named as `argument` with `argument_problem`
+  `conflicting`, numbers outside their bounds `out_of_range`). The request form is the one way to
+  declare it (`record mark --request` or `--request-json`; MCP `ac_record_mark`). Guard, retry and
+  `--replace-click` apply as to a tap; it lasts `duration_ms` plus `turns × corner_hold_ms` in the
+  task timeout. A Lab operation does not press it, as the brake drag.
 - `recording.json` records `click.gesture`: `{"kind": "drag", "to", "duration_ms"}`,
-  `{"kind": "long_press", "duration_ms"}` or (#411 Lab BD) `{"kind":
-  "single_touch_drag_with_vertical_brake_v1", "corner"}`; `record status` shows it on the click.
+  `{"kind": "long_press", "duration_ms"}`, (#411 Lab BD) `{"kind":
+  "single_touch_drag_with_vertical_brake_v1", "corner"}` or (Workflow #406 T4) `{"kind":
+  "single_touch_path_drag_v1", "turns", "min_segment_px", "duration_ms", "corner_hold_ms"}`;
+  `record status` shows it on the click.
 - Workflow #390 lpbox: the generated `long_press` click declares the box, and the kernel holds a
   point it picks inside the box, as it taps a `rect` click (the `long_press` paragraph of
   [resource-declarations.md](resource-declarations.md)). Every generated click is a box.
@@ -640,13 +666,20 @@ frame attachment or recording persistence. The global parser handles the flag at
   `capture_backend` the backend that captured it, named as `capture --record` names it
   (`adb_screencap`, `droidcast_raw`, `nemu_ipc`, `scrcpy`; Workflow #411 Lab L4).
 - `do --capture --record` presses inside the open step's click rectangle: its center, or
-  `--tap x,y` when it lies inside (`record_click_outside_step_rect`). `--tap-rect x,y,w,h`
+  `--tap x,y` when it lies inside (`record_click_outside_step_rect`), or (Workflow #406 T4) with
+  `--seed <u64>` the point drawn from that seed with the root configuration's touch keys
+  ([resource-declarations.md](resource-declarations.md), "The Lab's draw"; the click is its
+  command's first press with the empty label). `--tap-rect x,y,w,h`
   declares the rectangle when the step has none, and must equal the declared one otherwise
   (`record_click_rect_conflict`). Without a rectangle the command refuses
-  (`record_step_click_missing`). The click record stores the point, its rule
-  (`rect_center`/`explicit`), the carrier package reference, the request, correlation,
-  action and lease ids, any failure and the before/after frame summaries marked
-  `informational`.
+  (`record_step_click_missing`). The click record stores the point, its rule, the carrier
+  package reference, the request, correlation, action and lease ids, any failure and the
+  before/after frame summaries marked `informational`. The rule names how the Lab pressed:
+  `rect_center` when it pressed the center, `explicit` for `--tap` or `--swipe`, and for a drawn
+  press the draw's algorithm (`center_hotspot_normal_v1` with the touch keys,
+  `xorshift64_uniform_rect_v1` without), with `sampling`, the evidence of the draw (its
+  `action_seed`, the boxes, the parameters), beside it. `--seed` with `--tap` or `--swipe`, or
+  without `--record`, is `validation_failed`.
   - Performed: recorded; the step is closed.
   - Performed with a failure: recorded, the step closed and marked `needs_review`; exit 4
     `record_click_performed_with_failure`.
@@ -669,10 +702,12 @@ frame attachment or recording persistence. The global parser handles the flag at
   a step without a declared click `record_step_click_missing` (declare the drag with `record
   mark` first). The execution also records `to_point` and `duration_ms`. Without `--record`,
   `do --capture --swipe` is unchanged.
+- Workflow #406 T4: with `--seed`, a drag's two ends and a long press's point are drawn in their
+  boxes as a run draws them, and the rule names the draw, with `sampling`.
 - #411 Lab BD: a brake drag is not pressed by a Lab operation: `do --capture --record` on its
   step is refused with `record_gesture_execution_unsupported` (exit 3, `details{step, gesture}`)
   before any Runtime connection, capture or recording change, whatever `--tap`, `--tap-rect` or
-  `--swipe` it gives, and nothing is recorded. Reach the screen after the gesture by other
+  `--swipe` it gives, and nothing is recorded. Workflow #406 T4: so is a path drag. Reach the screen after the gesture by other
   means, then close its step with an offline frame (`record mark --frame <png>`) or `record mark
   --close-step`; a device frame before that is `record_step_click_not_executed`, as for any
   declared click. The package still declares the gesture.
@@ -1034,7 +1069,11 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   #411 Lab BD: `{"kind": "single_touch_drag_with_vertical_brake_v1", "from", "corner",
   "horizontal_duration_ms": 200, "corner_hold_ms": 150, "brake_distance_px": 100,
   "brake_duration_ms": 200}` with the recorded rectangle as `from` and the corner box for a
-  brake drag; see "Drags and long presses"),
+  brake drag; Workflow #406 T4: `{"kind": "single_touch_path_drag_v1", "box", "turns",
+  "min_segment_px", "duration_ms", "corner_hold_ms"}` with the recorded rectangle as `box`,
+  compiled to `box_rect`, for a path drag, whose first decision `record stop` checks as a path
+  of `turns + 2` points inside the box, its segments summing to `duration_ms`, with the declared
+  corner hold; see "Drags and long presses"),
   `expect_after.timeout_ms` the arrival timeout T (`--arrival-timeout-ms`, default 15000),
   `interval_ms` 500, `post_delay_ms` 200, and `retryable`, `max_attempts`,
   `retry_interval_ms` only when the step declares a retry. Its guard target comes from the
