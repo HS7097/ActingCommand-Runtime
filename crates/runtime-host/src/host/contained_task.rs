@@ -1123,17 +1123,8 @@ impl CaptureEvidenceAccumulator {
 fn summary_unless_capacity_refused(
     summary: Result<CapturePipelineSummary, RequestFailure>,
 ) -> Result<Result<CapturePipelineSummary, RuntimeHostError>, RequestFailure> {
-    match summary {
-        Ok(summary) => Ok(Ok(summary)),
-        Err(failure)
-            if !failure.poison_runtime
-                && !failure.error.is_fatal()
-                && failure.error.code() == SharedCode::CapacityAdmissionRefused.as_str() =>
-        {
-            Ok(Err(*failure.error))
-        }
-        Err(failure) => Err(failure),
-    }
+    // A34 red proof 3 (do not merge): today's cleanup path, no terminal after the refusal.
+    summary.map(Ok)
 }
 
 pub(super) struct RuntimeContainedTask<'a> {
