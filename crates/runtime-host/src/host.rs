@@ -1734,6 +1734,9 @@ impl RuntimeHost {
             startup_recovery: StartupRecoveryTiming::default(),
         };
         let prepared = (|| {
+            // #411 A34: from here on an Artifact admission re-samples a stale capacity fact.
+            lock(&shared.performance, HostLocation::StartRuntimeHost)?
+                .install_capacity_resampler(HostShared::capacity_resampler(&shared))?;
             shared.synchronize_fact_store()?;
             shared.initialize_installation()?;
             if held_startup {
