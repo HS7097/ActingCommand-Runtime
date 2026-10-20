@@ -173,7 +173,7 @@ fn a36b_a_run_whose_diagnostic_seal_mismatches_fails_only_itself_and_the_host_ke
     let (written, staged) = compared_counts(outcome);
     assert_eq!(written, staged, "the foreign bytes replaced bytes in place");
     assert!(written > FOREIGN.len() as u64);
-    assert_eq!(compared_counts(&failed.outcome()), (written, staged));
+    assert_eq!(compared_counts(failed.outcome()), (written, staged));
 
     let events = all_events(&host);
     let run_id = terminal
