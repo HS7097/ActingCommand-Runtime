@@ -28,7 +28,8 @@ pub struct ArtifactStoreError {
     io_error_kind: Option<std::io::ErrorKind>,
     capacity: Option<Box<actingcommand_contract::CapacityDecision>>,
     unpublished_frame_layout: bool,
-    compared_bytes: Option<ArtifactComparedBytes>,
+    // Boxed, as `capacity` is, so the error stays below clippy's `result_large_err` size.
+    compared_bytes: Option<Box<ArtifactComparedBytes>>,
 }
 
 /// #411 A36b: the byte counts a stream's seal compared when the staged bytes it read back did
@@ -102,13 +103,13 @@ impl ArtifactStoreError {
             "staged bytes do not match the written stream",
         );
         error.fatal = false;
-        error.compared_bytes = Some(compared);
+        error.compared_bytes = Some(Box::new(compared));
         error
     }
 
     /// #411 A36b: the byte counts a failed seal compared, when this is that failure.
-    pub const fn compared_bytes(&self) -> Option<ArtifactComparedBytes> {
-        self.compared_bytes
+    pub fn compared_bytes(&self) -> Option<ArtifactComparedBytes> {
+        self.compared_bytes.as_deref().copied()
     }
 
     pub(crate) fn frame_workspace_refused() -> Self {
