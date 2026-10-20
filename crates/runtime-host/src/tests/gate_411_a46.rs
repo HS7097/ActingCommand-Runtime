@@ -20,7 +20,8 @@
 //! X is the policy fixture's instance with its startup package (so its ladder has an
 //! application-restart rung) and an admitted scheduled run whose captures stay unknown, so the run
 //! fails and hands X to its ladder; every application command of X's fails with a fatal device
-//! error and no unconfirmed resource. Y is a second instance with a direct-run package.
+//! error and no unconfirmed resource. Y is a second instance with a direct-run package. Both are
+//! the policy's configured identities (the registered aliases); only X is available to it.
 //!
 //! Existing tests missed this because none failed one instance's application backend while the
 //! host and another instance ran: the #403 gates (`gate_403.rs`) fail an application command only
@@ -33,7 +34,7 @@
 
 use super::gate_403::{assert_fence, fence_records, status_fence};
 use super::instance_workers::{
-    admit_ladder_run, all_events, closed_ledger_events, ladder_finished, ladder_setup, phases,
+    all_events, closed_ledger_events, ladder_finished, ladder_setup, phases,
 };
 use super::*;
 use actingcommand_contract::RuntimeLifecyclePhase;
@@ -67,8 +68,15 @@ fn two_instances() -> TwoInstances {
     let other_state = Arc::new(FakeState::default());
     let other_package = super::gate_369s5::direct_run_package(&root, &other_state);
     let failing = instance_id();
+    // The policy's configured identities are the registered aliases (both instances); only X is
+    // available to the policy.
+    let mut facts = policy_facts();
+    let mut other_identity = facts.instances[0].clone();
+    other_identity.instance_id = OTHER_ALIAS.to_owned();
+    other_identity.available = false;
+    facts.instances.push(other_identity);
     let host = RuntimeHost::start(
-        host_config,
+        host_config.with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources())),
         Arc::new(FakeProvider::from_entries([
             (
                 FAILING_ALIAS.to_owned(),
@@ -79,7 +87,45 @@ fn two_instances() -> TwoInstances {
         ])),
     )
     .expect("runtime host");
-    let context = admit_ladder_run(&host, &request);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate policy dispatch");
+    let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == FAILING_ALIAS)
+        .expect("X's dispatch intent")
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("dispatch reason chain")
+        .clone();
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_scheduled_policy_dispatch(
+            &intent,
+            &reasons,
+            &policy_context(&host, &intent),
+            &request,
+        )
+        .expect("policy admission")
+    else {
+        panic!("expected a policy run context")
+    };
     failing_state.unknown_capture.store(true, Ordering::Release);
     failing_state
         .fail_application
