@@ -418,6 +418,14 @@ impl RuntimeHostError {
             )
         };
         result = result.with_native_failure_detail(error.native_detail());
+        // #411 A36b: a failed seal names the byte counts it compared.
+        if let Some(compared) = error.compared_bytes() {
+            result = result.with_outcome_values(|outcome| {
+                outcome
+                    .expected_bytes(compared.written_bytes)
+                    .actual_bytes(compared.staged_bytes)
+            });
+        }
         result.lifecycle.capacity = error.capacity().cloned();
         result.lifecycle.raw_os_error = error.raw_os_error();
         result
