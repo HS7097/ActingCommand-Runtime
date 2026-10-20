@@ -10815,6 +10815,20 @@ impl PathDragClick {
         for _ in 0..=self.turns {
             // The farthest corner stands unless a draw is spaced.
             let mut next = rect.farthest_corner(previous);
+            // T4c red proof 2 (never merge): the last spaced corner (in the order top left, top
+            // right, bottom left, bottom right) stands instead of the farthest one.
+            let right = rect.x.saturating_add(rect.width - 1);
+            let bottom = rect.y.saturating_add(rect.height - 1);
+            for corner in [
+                (rect.x, rect.y),
+                (right, rect.y),
+                (rect.x, bottom),
+                (right, bottom),
+            ] {
+                if squared_distance(previous, corner) >= min_squared {
+                    next = corner;
+                }
+            }
             for _ in 0..attempts {
                 let candidate = draw_point(&mut state)?;
                 if squared_distance(previous, candidate) >= min_squared {
