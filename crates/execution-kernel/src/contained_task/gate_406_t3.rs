@@ -301,40 +301,58 @@ fn t3_segment_durations_follow_the_lengths_and_sum_to_the_declared_duration() {
 
 // Requirement 2 and plan Q17: a next point whose `max_redraws + 1` draws all stay closer than
 // `min_segment_px` to the previous point is the box's corner farthest from it. With a spread of
-// 1 ‰ every hotspot draw of the 100 × 60 box is its centre (250, 130), so after the centre the
-// next point is the corner farthest from the centre, the top left (200, 100); from the corner the
-// centre is far enough again.
+// 50 ‰ and no redraw every hotspot draw of the 100 × 60 box lands a few pixels from its centre
+// (250, 130). The seed is the first whose first draw lies above and left of the box's middle
+// (249.5, 129.5), so that the corner farthest from it is the bottom right (299, 159) and not the
+// top left, and whose second draw stays closer than 40 px to the first: the second point is that
+// corner. The third draw is far enough from the corner and is the last point.
 #[test]
 fn t3_a_point_with_no_spaced_draw_takes_the_farthest_corner() {
     let rect = (200, 100, 100, 60);
-    let narrow = TouchSampling {
-        sigma_ratio_milli: 1,
+    let near = TouchSampling {
+        sigma_ratio_milli: 50,
         max_redraws: 0,
         candidate_count: 1,
     };
-    // The corner farthest from the centre, by the rule: of the four corner pixels the farthest,
-    // the first in the order top left, top right, bottom left, bottom right.
-    let centre = (250, 130);
+    let min_segment_px: u64 = 40;
+    let least = i64::try_from(min_segment_px * min_segment_px).expect("square");
+    let bottom_right = (299, 159);
+    let (seed, [first, second, third]) = (0..64)
+        .map(|index| {
+            let seed = mixed_seed(index);
+            let mut reference = Reference::new(seed);
+            let draws: [(i32, i32); 3] = std::array::from_fn(|_| {
+                reference.hotspot_point(rect, near.sigma_ratio_milli, near.max_redraws)
+            });
+            (seed, draws)
+        })
+        .find(|(_, [first, second, third])| {
+            2 * first.0 < 200 + 299
+                && 2 * first.1 < 100 + 159
+                && squared(*first, *second) < least
+                && squared(bottom_right, *third) >= least
+        })
+        .expect("a seed whose first draw lies above and left of the middle");
+    // The corner farthest from the first draw, by the rule: of the four corner pixels the
+    // farthest, the first in the order top left, top right, bottom left, bottom right.
     let corners = [(200, 100), (299, 100), (200, 159), (299, 159)];
     let farthest = corners.iter().copied().fold(corners[0], |best, corner| {
-        if squared(centre, corner) > squared(centre, best) {
+        if squared(first, corner) > squared(first, best) {
             corner
         } else {
             best
         }
     });
-    assert_eq!(farthest, (200, 100));
-    for index in 0..4 {
-        let path = generate(
-            &path_click(rect, 4, 49, 2_000, 50),
-            touch_draw(mixed_seed(index), narrow),
-        );
-        assert_eq!(
-            path.points,
-            [centre, farthest, centre, farthest, centre, farthest],
-            "seed {index}"
-        );
-    }
+    assert_eq!(farthest, bottom_right, "first draw {first:?}");
+    let path = generate(
+        &path_click(rect, 1, min_segment_px, 2_000, 50),
+        touch_draw(seed, near),
+    );
+    let case = format!("draws {first:?}, {second:?}, {third:?}: {:?}", path.points);
+    assert_eq!(path.points.len(), 3, "{case}");
+    assert_eq!(path.points[0], first, "{case}");
+    assert_eq!(path.points[1], bottom_right, "{case}");
+    assert_eq!(path.points[2], third, "{case}");
 }
 
 // The control declaration of a neutral 16 × 9 package.
