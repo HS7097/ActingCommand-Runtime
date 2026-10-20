@@ -112,11 +112,8 @@ fn decide_resampled(
     decide: impl Fn() -> RuntimeHostResult<CapacityDecision>,
     resample: impl FnOnce() -> RuntimeHostResult<()>,
 ) -> RuntimeHostResult<CapacityDecision> {
-    let decision = decide()?;
-    if decision.reason != CapacityAdmissionReason::OutsideFreshness {
-        return Ok(decision);
-    }
-    resample()?;
+    // A34 red proof 1 (do not merge): no re-sample.
+    let _ = resample;
     decide()
 }
 
