@@ -28,6 +28,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// #411 A34: takes one fresh capacity sample and records it through the monitor's own commit
+/// (`PerformanceMonitor::resample_capacity`). The host installs it once its shared state exists.
+pub(crate) type CapacityResampler = Arc<dyn Fn() -> RuntimeHostResult<()> + Send + Sync>;
+
 pub(crate) struct CapacityPreflightConfig {
     pub(crate) performance: Option<PerformanceMonitorConfig>,
     pub(crate) thresholds: CapacityThresholds,
@@ -89,12 +93,31 @@ struct CommittedCapacity {
     reference: CapacityFactReference,
 }
 
-/// A projection of one B3 commit, never an independent sampler or source of facts.
+/// A projection of one B3 commit, never an independent sampler or source of facts: a stale
+/// fact is re-sampled only through the monitor's own commit (#411 A34).
 struct CapacityProjection {
     owner_epoch: OwnerEpoch,
     targets: Vec<(CapacityPurpose, CapacityTarget)>,
     clock: Arc<dyn RuntimeClock>,
     committed: Mutex<Option<CommittedCapacity>>,
+    /// #411 A34: the Artifact admission's re-sample, absent until the host installs it.
+    resample: Mutex<Option<CapacityResampler>>,
+}
+
+/// #411 A34: an admission whose committed sample is outside freshness (and only that one) takes
+/// one fresh sample through `resample`, the periodic sampler's own commit, and decides on it. A
+/// re-sample that cannot be taken leaves its own refusal (an Unknown volume and its cause, or
+/// no recorded fact); one that cannot be committed returns its error. Never more than one.
+fn decide_resampled(
+    decide: impl Fn() -> RuntimeHostResult<CapacityDecision>,
+    resample: impl FnOnce() -> RuntimeHostResult<()>,
+) -> RuntimeHostResult<CapacityDecision> {
+    let decision = decide()?;
+    if decision.reason != CapacityAdmissionReason::OutsideFreshness {
+        return Ok(decision);
+    }
+    resample()?;
+    decide()
 }
 
 impl CapacityProjection {
@@ -241,7 +264,18 @@ impl CapacityProjection {
 
 impl ArtifactCapacityAdmission for CapacityProjection {
     fn decide(&self, path: &Path, bytes: u64) -> ArtifactStoreResult<CapacityDecision> {
-        self.decide(Some(path), bytes).map_err(|error| {
+        decide_resampled(
+            || self.decide(Some(path), bytes),
+            || {
+                let resample = self
+                    .resample
+                    .lock()
+                    .map_err(|_| failure(HostCode::CapacityProjectionPoisoned))?
+                    .clone();
+                resample.map_or(Ok(()), |resample| resample())
+            },
+        )
+        .map_err(|error| {
             ArtifactStoreError::fatal(error.code(), error.operation(), error.to_string())
         })
     }
@@ -289,6 +323,7 @@ impl PerformanceMonitor {
             targets: roots.targets,
             clock,
             committed: Mutex::new(None),
+            resample: Mutex::new(None),
         });
         monitor.capacity = Some(CapacityMonitor {
             interval,
@@ -303,8 +338,24 @@ impl PerformanceMonitor {
         artifacts
             .install_capacity_admission(projection)
             .map_err(RuntimeHostError::artifact)?;
-        monitor.admit_capacity()?;
+        monitor.admit_capacity(ledger, events)?;
         Ok(monitor)
+    }
+
+    /// #411 A34: installs the Artifact admission's re-sample (host start).
+    pub(crate) fn install_capacity_resampler(
+        &self,
+        resample: CapacityResampler,
+    ) -> RuntimeHostResult<()> {
+        *self
+            .capacity
+            .as_ref()
+            .ok_or_else(|| failure(SharedCode::CapacityOwnerMissing))?
+            .projection
+            .resample
+            .lock()
+            .map_err(|_| failure(HostCode::CapacityProjectionPoisoned))? = Some(resample);
+        Ok(())
     }
 
     pub(crate) fn capacity_enabled(&self) -> bool {
@@ -315,12 +366,21 @@ impl PerformanceMonitor {
         self.config.is_some()
     }
 
-    pub(crate) fn admit_capacity(&self) -> RuntimeHostResult<CapacityDecision> {
+    pub(crate) fn admit_capacity(
+        &mut self,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+    ) -> RuntimeHostResult<CapacityDecision> {
         let capacity = self
             .capacity
             .as_ref()
             .ok_or_else(|| failure(SharedCode::CapacityOwnerMissing))?;
-        let decision = capacity.projection.decide(None, 0)?;
+        let projection = Arc::clone(&capacity.projection);
+        // #411 A34: a stale fact is re-sampled once, under this monitor's lock.
+        let decision = decide_resampled(
+            || projection.decide(None, 0),
+            || self.resample_capacity(ledger, events),
+        )?;
         if !decision.admission_result.allows() {
             let mut error = RuntimeHostError::request(
                 SharedCode::CapacityAdmissionRefused,
@@ -337,6 +397,26 @@ impl PerformanceMonitor {
         &mut self,
         ledger: &GlobalLedger,
         events: &RuntimeEvents,
+    ) -> RuntimeHostResult<()> {
+        self.record_capacity_sample(ledger, events, false)
+    }
+
+    /// #411 A34: an admission's re-sample of a stale fact: the periodic sampler's own commit
+    /// (same sample, validation, `perf.summary` and transitions), its summary recorded at once,
+    /// so the admission's fact reference names the sample it decides on.
+    pub(crate) fn resample_capacity(
+        &mut self,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+    ) -> RuntimeHostResult<()> {
+        self.record_capacity_sample(ledger, events, true)
+    }
+
+    fn record_capacity_sample(
+        &mut self,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+        record_now: bool,
     ) -> RuntimeHostResult<()> {
         let Some(capacity) = self.capacity.as_mut() else {
             return Ok(());
@@ -423,7 +503,7 @@ impl PerformanceMonitor {
         } else {
             EventSeverity::Info
         };
-        if !self.summary_due(now.unix_ms, Some(&sample))? {
+        if !record_now && !self.summary_due(now.unix_ms, Some(&sample))? {
             // Freshness follows the live sample; the reference stays on the last recorded fact.
             let capacity = self
                 .capacity

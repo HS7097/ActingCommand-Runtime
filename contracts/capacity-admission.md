@@ -51,6 +51,15 @@ returns its error. Missing, failed, stale, future, changed-binding or
 cross-owner facts refuse new work. Old summaries without capacity do not authorize
 capacity admission.
 
+An admission whose fact is stale (`outside_freshness`), and only such an admission,
+first samples capacity once more through the same `perf.summary` producer, the
+summary recorded at once whatever the summary-due rules say, and decides on that
+fact (#411 A34): a late periodic sample under host load does not refuse by itself.
+This holds for business admission and Artifact byte admission alike, at most once
+per admission. A re-sample that cannot be taken records its Unknown volume and
+cause and refuses; one that cannot be recorded returns its error. Thresholds,
+owner and binding checks are unchanged.
+
 For each required volume, `free < hard` refuses and `hard <= free < soft` warns.
 Known new Artifact bytes require `free >= hard + bytes`, using checked addition.
 All relevant volumes must pass, including the actual target of a future shard or

@@ -26,7 +26,8 @@ pub trait ArtifactEventSink {
     fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()>;
 }
 
-/// Runtime injects its committed B3 projection. This boundary never samples or writes a ledger.
+/// Runtime injects its committed B3 projection. This boundary never samples or writes a ledger;
+/// the Runtime's owner may re-sample a stale fact through its own monitor (#411 A34).
 pub trait ArtifactCapacityAdmission: Send + Sync {
     fn decide(
         &self,

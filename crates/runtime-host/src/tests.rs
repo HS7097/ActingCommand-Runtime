@@ -260,6 +260,9 @@ mod gate_411_a23;
 // #411 A24 (host key 125), register §1.139: `actingd suspended` judges clock slots against the
 // ledger's latest time, the maximum timestamp.
 mod gate_411_a24;
+// #411 A34: a late capacity sample is re-sampled before an admission refuses on it; a run whose
+// capture evidence meets a capacity refusal still commits its terminal.
+mod gate_411_a34;
 // Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
 // journal, plan, admission check, stop, lift and expiry signals).
 mod gate_411_b15h;
