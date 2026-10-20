@@ -8901,7 +8901,7 @@ enum EntryPageDeclaration {
 /// that declares no entry page it can check: an application entry (`any`, R24), or a page-graph
 /// entry page that resolves to no one page of the package. Nothing is captured.
 fn entry_pages_missing() -> ContainedTaskError {
-    ContainedTaskError::new(SharedCode::ContainedTaskEntryPagesMissing.code())
+    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
 }
 
 /// Workflow #373 NAV-3b: the admission refusal of an entry page set, with its `entry_problem`
