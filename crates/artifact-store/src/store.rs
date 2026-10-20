@@ -683,10 +683,12 @@ impl ArtifactStore {
         .map_err(|error| stream.fail(error))?;
         let written = std::mem::take(&mut stream.material).finish();
         if material.byte_count() != written.byte_count() || material.sha256() != written.sha256() {
-            return Err(stream.fail(ArtifactStoreError::new(
-                StoreCode::ArtifactHashMismatch.code(),
-                StoreLocation::SealArtifactStream.location(),
-                "staged bytes do not match the written stream",
+            // #411 A36b: nothing is published yet, so only the stream's owner fails.
+            return Err(stream.fail(ArtifactStoreError::seal_mismatch(
+                crate::ArtifactComparedBytes {
+                    written_bytes: written.byte_count(),
+                    staged_bytes: material.byte_count(),
+                },
             )));
         }
         let issued = self

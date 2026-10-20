@@ -28,6 +28,17 @@ pub struct ArtifactStoreError {
     io_error_kind: Option<std::io::ErrorKind>,
     capacity: Option<Box<actingcommand_contract::CapacityDecision>>,
     unpublished_frame_layout: bool,
+    compared_bytes: Option<ArtifactComparedBytes>,
+}
+
+/// #411 A36b: the byte counts a stream's seal compared when the staged bytes it read back did
+/// not match the bytes its writes reported (`artifact_hash_mismatch` at `seal_artifact_stream`).
+/// The failure's outcome carries them as `expected_bytes` (the written stream) and
+/// `actual_bytes` (the staged file).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactComparedBytes {
+    pub written_bytes: u64,
+    pub staged_bytes: u64,
 }
 
 impl ArtifactStoreError {
@@ -50,6 +61,7 @@ impl ArtifactStoreError {
             io_error_kind: None,
             capacity: None,
             unpublished_frame_layout: false,
+            compared_bytes: None,
         }
     }
 
@@ -78,6 +90,25 @@ impl ArtifactStoreError {
         error.fatal = false;
         error.capacity = Some(Box::new(decision));
         error
+    }
+
+    /// #411 A36b: a stream whose staged bytes do not match the bytes its writes reported, found
+    /// when it is sealed, before anything is published. Only the work that owns the stream fails;
+    /// the Runtime keeps running. A cleanup failure joined to it stays fatal.
+    pub(crate) fn seal_mismatch(compared: ArtifactComparedBytes) -> Self {
+        let mut error = Self::new(
+            StoreCode::ArtifactHashMismatch.code(),
+            StoreLocation::SealArtifactStream.location(),
+            "staged bytes do not match the written stream",
+        );
+        error.fatal = false;
+        error.compared_bytes = Some(compared);
+        error
+    }
+
+    /// #411 A36b: the byte counts a failed seal compared, when this is that failure.
+    pub const fn compared_bytes(&self) -> Option<ArtifactComparedBytes> {
+        self.compared_bytes
     }
 
     pub(crate) fn frame_workspace_refused() -> Self {
