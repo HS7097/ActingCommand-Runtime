@@ -32,6 +32,9 @@ pub mod signatures;
 mod write_fault;
 #[cfg(any(test, feature = "test-hooks"))]
 mod writer_stall;
+// #411 A51: the read hold of a state root's writer, for tests in other crates.
+#[cfg(any(test, feature = "test-hooks"))]
+mod read_hold;
 pub use codes::{LedgerCode, LedgerLocation};
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
@@ -39,6 +42,8 @@ pub use global::*;
 #[cfg(test)]
 pub use read_count::{LedgerReadCounter, LedgerReadCounts, LedgerTableReads};
 // Workflow #383 AO-1: the write faults of a state root, for tests in other crates.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use read_hold::WriterReadHoldGate;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use write_fault::LedgerWriteFaultGate;
 #[cfg(any(test, feature = "test-hooks"))]

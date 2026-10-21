@@ -46,7 +46,7 @@ use actingcommand_policy::{
     MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot, TaskTerminalState,
-    activity_window_at, compile_catalog, evaluate_with_remedies, plan_remedies,
+    activity_window_at, compile_catalog, evaluate_with_chain_handovers, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -269,6 +269,8 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// Workflow #405 D1: the random delay in effect for each instance of the snapshot, by alias,
     /// as the cycle starts.
     pub(crate) random_delay: &'a BTreeMap<String, actingcommand_runtime_config::RandomDelay>,
+    /// Workflow #411 B41: the page each instance rests on as the cycle starts.
+    pub(crate) chain_handover: &'a actingcommand_policy::ChainHandoverInputs,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -1675,6 +1677,7 @@ impl PolicyHost {
             fact_refresh,
             remedy,
             random_delay,
+            chain_handover,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -1740,7 +1743,7 @@ impl PolicyHost {
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_remedies::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_chain_handovers::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -1749,6 +1752,16 @@ impl PolicyHost {
             &immediate_retries,
             &refresh_inputs,
             &remedy_plan,
+            // Workflow #411 B41: a chain step that hands over on its page goes first; the entry
+            // of its package is read only for a candidate that follows its predecessor there.
+            chain_handover,
+            |task, _instance_id, page_id| {
+                Ok(crate::host::chain_entry_holds_page(
+                    procedure_manifest,
+                    task,
+                    page_id,
+                ))
+            },
             deferrals.capture(|intent| {
                 // Workflow #384 D2-S4: a fact refresh's deferrals name their gate and class.
                 let refresh = intent.task_id == FACT_REFRESH_TASK_ID;

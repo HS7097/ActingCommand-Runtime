@@ -31,7 +31,7 @@ mod content_dir;
 pub mod source;
 mod source_pack;
 
-pub use codes::PackContainmentCode;
+pub use codes::{ExpectedShape, PackContainmentCode};
 pub use container::{CONTENT_JSON_V1, ContentContainer, expand_content_container};
 
 pub type ContainmentResult<T> = Result<T, ContainmentError>;

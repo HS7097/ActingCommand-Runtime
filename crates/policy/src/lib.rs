@@ -48,4 +48,8 @@ mod tests {
     mod gate_p2a;
     mod gate_p2b;
     mod selection_catalog;
+
+    // Workflow #411 B41 (policy keys 60 to 63): a chain step that hands over on its page goes
+    // first.
+    mod gate_411_b41;
 }

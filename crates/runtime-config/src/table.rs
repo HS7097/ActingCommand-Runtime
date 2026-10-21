@@ -6,8 +6,9 @@
 //! fixes the format; each section adds its rows in its own file (§5.1).
 
 use crate::{
-    device_link, device_state, existing, host_claims, instance, lab_module, ledger_observer,
-    performance, recovery_ladder, scheduling, standard_packs, startup_discovery, touch,
+    device_link, device_state, emulator_control, existing, host_claims, instance, lab_module,
+    ledger_observer, performance, recovery_ladder, scheduling, standard_packs, startup_discovery,
+    touch,
 };
 
 /// The type of a key's value (§5.5 `type`). A decimal, a list and an object are reported in
@@ -158,7 +159,7 @@ pub fn assembly_rows() -> &'static [KeyRow] {
 /// The rows of the sections this crate resolves and renders (§5.1), one file each: their file
 /// layer, defaults file and section defaults. The section-level keys come before the
 /// per-instance section whose defaults they are.
-fn mechanism_sections() -> [&'static [KeyRow]; 15] {
+fn mechanism_sections() -> [&'static [KeyRow]; 16] {
     let [monitor, responsiveness, pacing, calibration] = performance::sections();
     [
         recovery_ladder::ROWS,
@@ -175,6 +176,7 @@ fn mechanism_sections() -> [&'static [KeyRow]; 15] {
         device_state::ROWS,
         startup_discovery::ROWS,
         touch::ROWS,
+        emulator_control::ROWS,
         instance::ROWS,
     ]
 }
@@ -185,7 +187,7 @@ fn mechanism_sections() -> [&'static [KeyRow]; 15] {
 /// `ledger_observer` section (Workflow #383 AO-1), the two Lab options (Workflow #389 U-2), the
 /// `device_link` section (Workflow #398 RD-2), the `device_state` section (Workflow #398 RD-5b),
 /// the `startup_discovery` section (Workflow #390 DISC-1), the `touch` section (Workflow #406
-/// T12), then the per-instance section (D1b).
+/// T12), the `emulator_control` section (#411 A50), then the per-instance section (D1b).
 pub fn mechanism_rows() -> Vec<KeyRow> {
     mechanism_sections()
         .into_iter()

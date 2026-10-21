@@ -803,11 +803,7 @@ impl HostShared {
                 request_id: Some(request.request_id()),
                 ..EventQuery::default()
             })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::RecoverSafeReset,
-                ))
-            })?;
+            .map_err(|error| ledger_read_failure(&error, HostLocation::RecoverSafeReset))?;
         if events.is_empty() {
             return Ok(None);
         }
@@ -949,10 +945,8 @@ impl HostShared {
                 request_id: Some(request.request_id()),
                 ..EventQuery::default()
             })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::RecoverApplicationLifecycle,
-                ))
+            .map_err(|error| {
+                ledger_read_failure(&error, HostLocation::RecoverApplicationLifecycle)
             })?;
         if events.is_empty() {
             return Ok(None);

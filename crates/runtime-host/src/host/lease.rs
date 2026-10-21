@@ -1446,11 +1446,7 @@ impl HostShared {
                 lease_id: Some(lease_id),
                 ..EventQuery::default()
             })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::QueryLeaseTerminal,
-                ))
-            })?;
+            .map_err(|error| ledger_read_failure(&error, HostLocation::QueryLeaseTerminal))?;
         match events.as_slice() {
             [event] => Ok(terminal(event)),
             [] => Err(RequestFailure::poison_without_terminal(
@@ -1499,11 +1495,7 @@ impl HostShared {
                 lease_id,
                 ..EventQuery::default()
             })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::QueryRequestTerminal,
-                ))
-            })?;
+            .map_err(|error| ledger_read_failure(&error, HostLocation::QueryRequestTerminal))?;
         match events.as_slice() {
             [] => Ok(None),
             [event] => Ok(Some(terminal(event))),

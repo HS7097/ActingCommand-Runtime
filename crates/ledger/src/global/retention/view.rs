@@ -587,6 +587,7 @@ impl RetentionIndex {
         indexes: &EventIndexes,
         now: u64,
         switches: FrameRetentionSwitches,
+        work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<FrameRetentionView> {
         // A poisoned cache only loses its cached value, which is built again below.
         let mut cache = self
@@ -598,7 +599,7 @@ impl RetentionIndex {
         }) {
             return Ok(cached.classified.at(self.through_sequence, now));
         }
-        let frames = self.view_frames(events, indexes)?;
+        let frames = self.view_frames(events, indexes, work)?;
         let classified = classify(
             &self.frame_facts,
             &self.frames,
@@ -626,9 +627,16 @@ impl RetentionIndex {
         &self,
         events: &[E],
         indexes: &EventIndexes,
+        work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<Vec<ViewFrame>> {
         let mut frames = Vec::new();
         for object in self.objects.values() {
+            // #411 A51 (R2): every object counts against the read's budget.
+            if !work.visit() {
+                return Err(crate::global::read_work::ReadWork::exceeded(
+                    LedgerLocation::FrameRetentionView.location(),
+                ));
+            }
             let Some(identity) = object.identity.as_ref() else {
                 continue;
             };
@@ -1089,13 +1097,16 @@ fn local_date(unix_ms: u64, local: LocalOffsetMs) -> Option<String> {
 
 impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore<B> {
     /// Workflow #375 R5d: the frame view at the writer's head.
+    /// #411 A51 (R2): a rebuild of the view stops where `work`'s budget runs out, with
+    /// `ledger_read_budget_exceeded`; the cleaner reads it again at its next round.
     pub(in crate::global) fn frame_retention_view(
         &self,
         now_unix_ms: u64,
         switches: FrameRetentionSwitches,
+        work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<FrameRetentionView> {
         self.retention
-            .frame_view(&self.events, &self.indexes, now_unix_ms, switches)
+            .frame_view(&self.events, &self.indexes, now_unix_ms, switches, work)
     }
 }
 
@@ -1148,7 +1159,13 @@ impl super::super::GlobalLedgerEvidence {
                 self.frame_index.get_or_init(|| built)
             }
         };
-        retention.frame_view(events, indexes, now_unix_ms, switches)
+        retention.frame_view(
+            events,
+            indexes,
+            now_unix_ms,
+            switches,
+            &crate::global::read_work::ReadWork::unbounded(),
+        )
     }
 }
 

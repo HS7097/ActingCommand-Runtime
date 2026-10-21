@@ -66,8 +66,8 @@ fn runtime_verdict(package: &Path) -> Verdict {
 }
 
 /// The verdict `actinglab --json package check --package <package>` answers, after checking the
-/// answer's form: exit 0 with exactly `{status: "admitted", package_id, entry_task_id}`, or
-/// exit 2 with `package_invalid` and `details.code`.
+/// answer's form: exit 0 with exactly `{status: "admitted", package_id, entry_task_id}` and
+/// (Workflow #411 B34) `warnings`, or exit 2 with `package_invalid` and `details.code`.
 fn check_verdict(label: &str, package: &Path) -> Verdict {
     let result = crate::run_cli(
         [
@@ -89,9 +89,10 @@ fn check_verdict(label: &str, package: &Path) -> Verdict {
                 .keys()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>();
+            // Workflow #411 B34 (slice E4): the answer also lists its warnings.
             assert_eq!(
                 members,
-                BTreeSet::from(["entry_task_id", "package_id", "status"]),
+                BTreeSet::from(["entry_task_id", "package_id", "status", "warnings"]),
                 "{label}: {envelope}"
             );
             assert_eq!(data["status"], "admitted", "{label}: {envelope}");
