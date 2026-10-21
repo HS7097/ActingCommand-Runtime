@@ -345,8 +345,9 @@ fn gate_layer(
     };
     // Workflow #373 NAV-3a: a linear package's entry is its first step's page; a page-graph
     // package's is its entry page or its entry page set (M-373 §4.2).
+    // #411 A45: a layer that declares no entry page it can check has its own code.
     let required_pages = package.gate_entry_pages().ok_or_else(|| {
-        ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
+        ContainedTaskRunError::task(SharedCode::ContainedTaskEntryPagesMissing.as_str())
     })?;
     let initial = package
         .recognize_gate_entry(runtime)

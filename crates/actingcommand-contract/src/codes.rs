@@ -285,6 +285,10 @@ crate::outcome_codes! {
         ConfigDecodeFailed => "config_decode_failed": error / none,
         ConfigReadFailed => "config_read_failed": error / none,
         ConsecutiveUnchangedThresholdReached => "consecutive_unchanged_threshold_reached": info / none,
+        /// Error (#411 A45). An entry check was asked of a package that declares no entry page
+        /// it can check (an application entry, `any`, R24): the kernel's gate and navigation
+        /// entry checks and the runtime host's navigated entry gate and prerequisite gate.
+        ContainedTaskEntryPagesMissing => "contained_task_entry_pages_missing": error / declaration_error,
         ContainedTaskGuardEvaluationFailed => "contained_task_guard_evaluation_failed": error / pack_logic_mismatch,
         ContainedTaskHomeEntryNotMatched => "contained_task_home_entry_not_matched": error / pack_logic_mismatch,
         ContainedTaskHomeRecoveryPackageIncompatible => "contained_task_home_recovery_package_incompatible": error / declaration_error,

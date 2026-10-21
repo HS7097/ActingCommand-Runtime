@@ -263,6 +263,9 @@ mod gate_411_a24;
 // #411 A34: a late capacity sample is re-sampled before an admission refuses on it; a run whose
 // capture evidence meets a capacity refusal still commits its terminal.
 mod gate_411_a34;
+// #411 A45: an application entry return-home layer that meets its declared error page ends with
+// `contained_task_error_page_reached`, never `contained_task_state_invalid`.
+mod gate_411_a45;
 // #411 A46: one instance's application-backend failure fences that instance; the host, its
 // policy monitor's setup and closeout, and the other instances go on.
 mod gate_411_a46;

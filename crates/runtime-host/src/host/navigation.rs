@@ -247,6 +247,11 @@ fn state_invalid() -> ContainedTaskRunError<RequestFailure> {
     ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
 }
 
+/// #411 A45: the gate's entry asked of a package that declares no entry page it can check.
+fn entry_pages_missing() -> ContainedTaskRunError<RequestFailure> {
+    ContainedTaskRunError::task(SharedCode::ContainedTaskEntryPagesMissing.as_str())
+}
+
 fn step_limit() -> ContainedTaskRunError<RequestFailure> {
     ContainedTaskRunError::task(SharedCode::ContainedTaskPrerequisiteStepLimit.as_str())
 }
@@ -286,7 +291,7 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
         let required_pages = prepared
             .navigation_entry_pages()
-            .ok_or_else(state_invalid)?;
+            .ok_or_else(entry_pages_missing)?;
         self.retain_entry_scene = true;
         let initial = prepared.recognize_navigation_entry(self);
         self.retain_entry_scene = false;
@@ -907,7 +912,7 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), ContainedTaskRunError<RequestFailure>> {
         let required_pages = prepared
             .navigation_entry_pages()
-            .ok_or_else(state_invalid)?;
+            .ok_or_else(entry_pages_missing)?;
         let budget = Duration::from_millis(prepared.effective_timing().step_timeout.milliseconds);
         let waited = prepared.await_navigation_entry(self, budget, TaskTimingBudgetOrigin::Task)?;
         self.record_entry_fact(TaskSemanticFact::EntryRecognition {

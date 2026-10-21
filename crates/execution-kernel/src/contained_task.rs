@@ -169,6 +169,9 @@ mod gate_382_e3;
 // #411 A15 (exec key 88): an unconfirmed step names the page of its last frame.
 #[cfg(test)]
 mod gate_rc2_a15;
+// #411 A45 T2: an entry check of a package without entry pages names the missing declaration.
+#[cfg(test)]
+mod gate_411_a45;
 // Workflow #411 B15 R1 (exec key 95): `provides` with parameters, the metadata reader of the
 // remedy declarations and the declared parameter defaults.
 #[cfg(test)]
@@ -3412,15 +3415,11 @@ impl PreparedContainedTask {
         runtime: &mut R,
     ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
         if self.control.execution_mode != linear::LINEAR_STEPS {
-            let pages = self.gate_entry_pages().ok_or_else(|| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-            })?;
+            let pages = self.gate_entry_pages().ok_or_else(entry_pages_missing)?;
             let pages = pages.iter().map(String::as_str).collect::<Vec<_>>();
             return self.recognize_entry_window(runtime, &pages);
         }
-        let page = self
-            .linear_entry_page()
-            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        let page = self.linear_entry_page().ok_or_else(entry_pages_missing)?;
         let window = Duration::from_millis(
             self.control
                 .step_timeout()
@@ -3469,7 +3468,7 @@ impl PreparedContainedTask {
         }
         let pages = self
             .navigation_entry_pages()
-            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .ok_or_else(entry_pages_missing)?;
         let pages = pages.iter().map(String::as_str).collect::<Vec<_>>();
         self.recognize_entry_window(runtime, &pages)
     }
@@ -3491,9 +3490,7 @@ impl PreparedContainedTask {
         layer: usize,
         return_home: Option<&str>,
     ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
-        let entry = self
-            .gate_entry_pages()
-            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        let entry = self.gate_entry_pages().ok_or_else(entry_pages_missing)?;
         self.await_entry_pages(runtime, &entry, budget, origin, layer, return_home)
     }
 
@@ -3510,7 +3507,7 @@ impl PreparedContainedTask {
     ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
         let entry = self
             .navigation_entry_pages()
-            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+            .ok_or_else(entry_pages_missing)?;
         self.await_entry_pages(runtime, &entry, budget, origin, 0, None)
     }
 
@@ -8898,6 +8895,13 @@ enum PageDeclaration {
 enum EntryPageDeclaration {
     Page(String),
     Set(Vec<String>),
+}
+
+/// #411 A45: an entry check (a prerequisite gate's, or the navigated entry gate's) of a package
+/// that declares no entry page it can check: an application entry (`any`, R24), or a page-graph
+/// entry page that resolves to no one page of the package. Nothing is captured.
+fn entry_pages_missing() -> ContainedTaskError {
+    ContainedTaskError::new(SharedCode::ContainedTaskEntryPagesMissing.code())
 }
 
 /// Workflow #373 NAV-3b: the admission refusal of an entry page set, with its `entry_problem`
