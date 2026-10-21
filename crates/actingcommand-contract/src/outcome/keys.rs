@@ -543,4 +543,13 @@ outcome_keys! {
     last_daily_slot: boolean,
     daily_remaining: integer,
     // ---- Workflow #411 B8: end ----
+    // ---- Workflow #411 E4 (B27, B28, B34, B39 A part: refusals and warnings that say what is wrong): begin ----
+    argument_value: name,
+    expected_shape: vocab(expected_shape),
+    box_x: integer,
+    box_y: integer,
+    box_width: integer,
+    box_height: integer,
+    layer_outcome_key: name,
+    // ---- Workflow #411 E4: end ----
 }

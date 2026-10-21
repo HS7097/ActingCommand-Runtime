@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{CliError, CliOutcome, FlagArgs, GlobalOptions, attach_package_event};
-use actingcommand_contract::outcome::Detail;
+use crate::codes::ActinglabCode;
+use actingcommand_contract::outcome::{Detail, Outcome, OutcomeEnvelope};
 use actingcommand_lab::{PackageValidateRequest, PackageValidationResponse};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -25,6 +26,10 @@ struct PackageCheckResponse {
     status: &'static str,
     package_id: String,
     entry_task_id: String,
+    /// Workflow #411 B34: one `package_check_click_box_single_point` warning per click whose
+    /// declared box is one point, in declaration order; empty when there is none. The package
+    /// still passes.
+    warnings: Vec<OutcomeEnvelope>,
 }
 
 /// Workflow #411 A5 (M-PKG §3.2, S5-T4: "`package check` 只做结构准入"): `package check
@@ -51,25 +56,54 @@ pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
     let deadline = Instant::now()
         .checked_add(CHECK_BUDGET)
         .ok_or_else(|| CliError::package_invalid("package admission deadline overflow"))?;
-    let descriptor =
-        actingcommand_lab::PreparedContainedTask::describe_path(CHECK_LABEL, &package, deadline)
-            .map_err(|error| {
-                CliError::package_invalid(format!(
-                    "{}: {}",
-                    error.code(),
-                    error.detail().unwrap_or("package admission failed")
-                ))
-                .with_details(json!({
-                    "code": error.code().as_str(),
-                    "declaration": error.declaration_issue(),
-                    // Workflow #411 A39: the admission's outcome with the values it carries.
-                    "outcome": error.outcome().envelope(Detail::Full),
-                }))
-            })?;
+    let (descriptor, single_point_clicks) =
+        actingcommand_lab::PreparedContainedTask::describe_path_with_single_point_clicks(
+            CHECK_LABEL,
+            &package,
+            deadline,
+        )
+        .map_err(|error| {
+            CliError::package_invalid(format!(
+                "{}: {}",
+                error.code(),
+                error.detail().unwrap_or("package admission failed")
+            ))
+            .with_details(json!({
+                "code": error.code().as_str(),
+                "declaration": error.declaration_issue(),
+                // Workflow #411 A39: the admission's outcome with the values it carries.
+                "outcome": error.outcome().envelope(Detail::Full),
+            }))
+        })?;
+    // Workflow #411 B34: a click box of one point is a warning; the package still passes.
+    let warnings: Vec<OutcomeEnvelope> = single_point_clicks
+        .iter()
+        .map(|click| {
+            let code = ActinglabCode::PackageCheckClickBoxSinglePoint;
+            // The developer line beside the answer's warning.
+            eprintln!(
+                "WARN actinglab: {} pack_operation_id={} box={},{} {}x{}",
+                code.as_str(),
+                click.operation_id,
+                click.x,
+                click.y,
+                click.width,
+                click.height
+            );
+            Outcome::new(code)
+                .pack_operation_id(click.operation_id.as_str())
+                .box_x(click.x)
+                .box_y(click.y)
+                .box_width(click.width)
+                .box_height(click.height)
+                .envelope(Detail::Full)
+        })
+        .collect();
     serialize_response(PackageCheckResponse {
         status: "admitted",
         package_id: descriptor.package_id().to_owned(),
         entry_task_id: descriptor.entry_task_id().to_owned(),
+        warnings,
     })
 }
 

@@ -216,9 +216,12 @@ impl ArgumentProblem {
 #[derive(Debug)]
 pub(crate) enum EventsError {
     /// An argument or flag is unknown, repeated, of the wrong type or out of its range.
+    /// Workflow #411 B27: `value` is the text an event type argument was given that names no
+    /// event type (for a list, the element), when it is a word a name may hold.
     Argument {
         field: String,
         problem: ArgumentProblem,
+        value: Option<String>,
     },
     /// The instance selector names no single instance.
     Selector {
@@ -242,6 +245,20 @@ impl EventsError {
         Self::Argument {
             field: field.to_owned(),
             problem,
+            value: None,
+        }
+    }
+
+    /// Workflow #411 B27: `text`, given to the event type argument `field`, names no event type;
+    /// the refusal keeps the text when it is a word a name may hold (at most 256 bytes, no
+    /// control character).
+    fn unknown_event_type(field: &str, problem: ArgumentProblem, text: &str) -> Self {
+        let value =
+            (text.len() <= 256 && !text.chars().any(char::is_control)).then(|| text.to_owned());
+        Self::Argument {
+            field: field.to_owned(),
+            problem,
+            value,
         }
     }
 
@@ -250,7 +267,7 @@ impl EventsError {
     /// `range_min` and `range_max`; MCP answers `arguments_invalid` with the same values.
     pub(crate) fn outcome(&self) -> Outcome {
         match self {
-            Self::Argument { field, problem } => {
+            Self::Argument { field, problem, .. } => {
                 let outcome = Outcome::new(ActingctlCode::ActingctlUsageInvalid)
                     .argument(field.as_str())
                     .argument_problem(problem.token());
@@ -278,7 +295,9 @@ impl EventsError {
 impl std::fmt::Display for EventsError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Argument { field, problem } => write!(formatter, "argument {field} {problem}"),
+            Self::Argument { field, problem, .. } => {
+                write!(formatter, "argument {field} {problem}")
+            }
             other => write!(formatter, "{}", other.outcome()),
         }
     }
@@ -336,7 +355,7 @@ pub(crate) fn parse(
         from_timestamp_unix_ms: integer(arguments, "since_unix_ms", 0, MAX_INTEGER)?,
         to_timestamp_unix_ms: integer(arguments, "until_unix_ms", 0, MAX_INTEGER)?,
         to_sequence: integer(arguments, "through_sequence", 0, MAX_INTEGER)?,
-        event_type: typed::<EventType>(arguments, "event_type", "an event type")?,
+        event_type: event_type(arguments, "event_type")?,
         // Workflow #389 MCP-2: the union of types and the fact key, checked below with the
         // rest by the Runtime's rule.
         event_types: event_types(arguments, "event_types")?,
@@ -375,20 +394,29 @@ fn text<'a>(arguments: &'a Map<String, Value>, key: &str) -> Result<Option<&'a s
     }
 }
 
-/// A list of event types: an array in MCP, a comma-separated value on the CLI.
+/// One event type. Workflow #411 B27: text that names no event type is refused with the text.
+fn event_type(arguments: &Map<String, Value>, key: &str) -> Result<Option<EventType>, EventsError> {
+    const PROBLEM: ArgumentProblem = ArgumentProblem::NotA("an event type");
+    text(arguments, key)?
+        .map(|text| parsed(text).ok_or_else(|| EventsError::unknown_event_type(key, PROBLEM, text)))
+        .transpose()
+}
+
+/// A list of event types: an array in MCP, a comma-separated value on the CLI. Workflow #411
+/// B27: an element that is text naming no event type is refused with that text.
 fn event_types(arguments: &Map<String, Value>, key: &str) -> Result<Vec<EventType>, EventsError> {
+    const PROBLEM: ArgumentProblem = ArgumentProblem::NotEventTypes;
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(types)) => types
             .iter()
-            .map(|event_type| {
-                event_type
-                    .as_str()
-                    .and_then(parsed::<EventType>)
-                    .ok_or_else(|| EventsError::argument(key, ArgumentProblem::NotEventTypes))
+            .map(|event_type| match event_type.as_str() {
+                Some(text) => parsed::<EventType>(text)
+                    .ok_or_else(|| EventsError::unknown_event_type(key, PROBLEM, text)),
+                None => Err(EventsError::argument(key, PROBLEM)),
             })
             .collect(),
-        Some(_) => Err(EventsError::argument(key, ArgumentProblem::NotEventTypes)),
+        Some(_) => Err(EventsError::argument(key, PROBLEM)),
     }
 }
 

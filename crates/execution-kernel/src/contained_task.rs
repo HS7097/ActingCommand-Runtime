@@ -374,6 +374,32 @@ impl ContainedTaskError {
         self
     }
 
+    /// Workflow #411 B28: a `resource_declaration_invalid` refusal whose issue names a member of
+    /// the wrong type, where the grammar names the shape the member must have, carries that
+    /// shape (`expected_shape`); any other failure is returned unchanged.
+    fn with_expected_shape(self) -> Self {
+        let shape = self
+            .declaration_issue
+            .as_deref()
+            .and_then(actingcommand_pack_containment::source::declaration_expected_shape);
+        match shape {
+            Some(shape) => {
+                let outcome =
+                    Outcome::new(SharedCode::ResourceDeclarationInvalid).expected_shape(shape);
+                self.with_values(outcome)
+            }
+            None => self,
+        }
+    }
+
+    /// Workflow #411 B39 (A part): a gate entry failure whose outcome also names the outcome key
+    /// of the scheduling outcome mapping the prerequisite layer before it ended on
+    /// (`layer_outcome_key`); the failure's code, timing and detail are unchanged.
+    pub fn with_layer_outcome_key(self, key: &str) -> Self {
+        let outcome = self.outcome().layer_outcome_key(key);
+        self.with_values(outcome)
+    }
+
     /// Workflow #386 SR-1: whether the kernel attached the values the code declares.
     pub fn has_values(&self) -> bool {
         self.values.is_some()
@@ -2575,6 +2601,18 @@ pub struct GateEntryAwait {
     pub unmatched: Option<ContainedTaskError>,
 }
 
+/// Workflow #411 B34: an operation's click whose declared box is one point
+/// ([`PreparedContainedTask::single_point_clicks`]): the operation and the box, in the coordinate
+/// space of its task (a point click's box is 1×1 at its point).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SinglePointClick {
+    pub operation_id: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 pub struct PreparedContainedTask {
     control: TaskControl,
     program: TaskProgram,
@@ -2645,6 +2683,24 @@ impl PreparedContainedTask {
             ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
                 .map_err(contained_task_admission_error)?;
         Ok(Self::from_bundle(bundle)?.package_descriptor())
+    }
+
+    /// Workflow #411 B34: [`Self::describe_path`]'s admission, returning also the clicks whose
+    /// declared box is one point ([`Self::single_point_clicks`]), which `package check` warns
+    /// on. The verdict is `describe_path`'s.
+    pub fn describe_path_with_single_point_clicks(
+        instance_label: &str,
+        locator: &std::path::Path,
+        deadline: std::time::Instant,
+    ) -> Result<(crate::TaskPackageDescriptor, Vec<SinglePointClick>), ContainedTaskError> {
+        let bundle =
+            ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
+                .map_err(contained_task_admission_error)?;
+        let prepared = Self::from_bundle(bundle)?;
+        Ok((
+            prepared.package_descriptor(),
+            prepared.single_point_clicks(),
+        ))
     }
 
     /// Workflow #373 NAV-T (M-373 v1.1 §3.9): [`Self::describe_path`]'s admission, returning
@@ -2983,6 +3039,37 @@ impl PreparedContainedTask {
             self.has_resource_adjustments()
                 .then_some("resource_adjustments")
         }
+    }
+
+    /// Workflow #411 B34: the clicks of the task's operations whose declared box is one point,
+    /// in declaration order: a `point` click and a long press without a box (each a box of 1×1
+    /// at its point), and a `rect`, `specific_rect` or long-press box of 1×1. A click located on
+    /// the frame (`target`, `target_center`, `offset`) and a drag are not judged.
+    pub fn single_point_clicks(&self) -> Vec<SinglePointClick> {
+        self.program
+            .operations
+            .iter()
+            .filter_map(|operation| {
+                let click = operation.click.as_ref()?;
+                let (width, height) = match click.kind.as_str() {
+                    "point" => (1, 1),
+                    "rect" | "specific_rect" | "long_press" | "long_tap" => {
+                        (click.width.unwrap_or(1), click.height.unwrap_or(1))
+                    }
+                    _ => return None,
+                };
+                if width != 1 || height != 1 {
+                    return None;
+                }
+                Some(SinglePointClick {
+                    operation_id: operation.id.clone(),
+                    x: click.x?,
+                    y: click.y?,
+                    width,
+                    height,
+                })
+            })
+            .collect()
     }
 
     /// Whether the task has a select step (Workflow #308).
@@ -10297,7 +10384,8 @@ fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> 
             }
         }
     }
-    failure
+    // Workflow #411 B28: a member of the wrong shape names the shape it must have.
+    failure.with_expected_shape()
 }
 
 /// Workflow #387 D1c-G: whether a page evaluation failed because the vision provider failed or
@@ -10354,7 +10442,8 @@ fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskE
             error.to_string(),
         );
         rejected.declaration_issue = Some(Box::new(issue.clone()));
-        return rejected;
+        // Workflow #411 B28: a member of the wrong shape names the shape it must have.
+        return rejected.with_expected_shape();
     }
     // Workflow #411 A41: a refusal located in one file of the package keeps its code and carries
     // the file's path inside the package and the parser's position as values.

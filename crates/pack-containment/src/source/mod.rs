@@ -35,9 +35,9 @@ const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 mod declarations;
 pub(crate) use declarations::validate_loaded_declarations;
 pub use declarations::{
-    declaration_file_requests, validate_bundle_declarations, validate_contained_declarations,
-    validate_control_declarations, validate_navigation_declarations,
-    validate_resource_declarations,
+    declaration_expected_shape, declaration_file_requests, validate_bundle_declarations,
+    validate_contained_declarations, validate_control_declarations,
+    validate_navigation_declarations, validate_resource_declarations,
 };
 
 /// File data needed by parsing; metadata-only templates are not decoded.

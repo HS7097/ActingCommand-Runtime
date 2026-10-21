@@ -431,6 +431,11 @@ digest), `ocr_targets` (OCR) and `checks` (named checks). A page with an anchor 
 rule replaces) and adds the rule's targets. Every generated page needs a `required` target or
 an `any_of` group; the page detector refuses one without.
 
+A page rule's `any_of` is an array of groups, each an array of target ids. Workflow #411 B28: an
+`any_of` that is no array, or an entry of it that is no array, is refused as before
+(`resource_declaration_invalid`, `invalid_type` at that member), and the refusal's outcome names
+the shape `any_of` must have: `expected_shape` `array_of_arrays`.
+
 A check that combines backends is either one page rule requiring one target per backend,
 usually over the same region, or a named check of the `checks` family (below) that a page
 rule or an operation guard references as one target. The page matches only when every
