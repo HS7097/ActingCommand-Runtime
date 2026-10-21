@@ -355,7 +355,7 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
                 executed_steps: Some(steps),
                 outcome: Some(outcome),
                 ..
-            }) if *steps == max_steps && outcome.code().as_str() == "contained_task_requires_scheduler"
+            }) if *steps == max_steps && outcome.code().as_str() == "contained_task_step_budget_exhausted"
         ));
         let streams = events
             .iter()

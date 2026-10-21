@@ -250,7 +250,29 @@ For a blocked pair whose key K declares `need` N and `capabilities` C:
   from every origin, nothing appended).
 - **Selection record.** The select step's `task.selection_evaluated` keeps its `input_sha256` over
   the snapshot, overlay included, so two runs that differ only in a value differ in that hash.
-- Workflow #411 B8 adds its own typed values to the same reason and the same overlay.
+- **Schedule values (Workflow #411 B8).** A V2 catalog task may opt in with
+  `dispatch_parameters: true` ([scheduling/v2/README.md](scheduling/v2/README.md)); absent, the
+  catalog's bytes and hash are unchanged and nothing below applies. Every selected policy dispatch
+  of such a task carries, with or without remedies, typed values on the same
+  `policy_dispatch_parameters` reason (a reason of these values alone when the dispatch carries
+  no `run_parameters`; such a reason leaves the package's parameters at their declared defaults),
+  each only when it is known:
+
+  | Key | Type | Value |
+  |---|---|---|
+  | `next_occurrence_unix_ms` | `unix_ms` | the least next occurrence after the evaluation of the clocks the task's trigger counts for its clock slots (every `clock` through `all` and `any`, none under `not`); absent without such a clock (or with an interval shorter than one hour) and when none occurs again |
+  | `window_end_unix_ms` | `unix_ms` | the end of the instance's activity window at the evaluation (the profile the dispatch is admitted under) |
+  | `last_in_window` | boolean | "the last round of the window": no such clock occurs again before `window_end_unix_ms`; absent when either is unknown |
+  | `daily_remaining` | integer | "how many runs remain today": the runs the task's daily budget (`loop_budget.daily_limit`, its accounting group) and its activity profile's `daily_budget` still allow in the activity day after this dispatch, the fewer of the two, as the Runtime's admission preview counts them |
+  | `last_daily_slot` | boolean | "the last of today's budget": `daily_remaining` is 0 |
+
+  The host overlays each as the record `session.dispatch.schedule.<key>` with its type
+  (`timestamp_ms`, `boolean` or `integer`; instance scope; confidence 1000; observed at the
+  dispatch's admission; no expiry) on every instance fact snapshot it takes for that run, beside
+  the parameters, never stored. A run without a dispatch (direct, Lab online or offline, the
+  Lab's single-step evaluations) and a dispatch of a task that does not opt in hold none: a
+  package policy that reads one meets an unknown fact and its `on_unknown` decides. No package
+  format changes; a package declares nothing to read them.
 
 ## 5 Scheduler flow
 
@@ -519,7 +541,7 @@ the expected one is the key's remedy declaration. No third effect value is neede
 | `policy_remedy_exhausted` | policy | warning | as `policy_remedy_unchosen`, and `count`, `limit_count`, `remedy_depth` | R2, R4 |
 | `policy_remedy_lifted` | policy | info | `task_id`, `instance_id`, `decision_id`, `remedy_inputs_digest` | R2, R4 |
 | `policy_remedy_expired` | policy | warning | `task_id`, `instance_id`, `decision_id`, `outcome_key`, `need`, `window_end_unix_ms` (`gate_code`) | R2, R4 |
-| `policy_dispatch_parameters` | policy | info | `run_parameters` | R2 (B8 adds its values) |
+| `policy_dispatch_parameters` | policy | info | (`run_parameters`, and Workflow #411 B8's `next_occurrence_unix_ms`, `window_end_unix_ms`, `last_in_window`, `last_daily_slot`, `daily_remaining`) | R2, B8 |
 | `policy_remedy_round_closed` | runtime-host | info | `task_id`, `instance_id`, `decision_id` | R4 |
 | `policy_remedy_declaration_unusable` | runtime-host | warning | `remedy_problem` (`task_id`, `outcome_key`, `need`, `capability`, `instance_id`, `package_id`: a finding on a blocked mapping names all of `task_id`, `outcome_key` and `need`; a configuration row with an unknown need names `need` only of the three; a `parameter` row names none of them, and the developer detail names the row) | R7 |
 | `session_remedy_choices_invalid` | runtime-host | error | `fact_key`, `field` (`instance_id`) | R6 |
@@ -535,3 +557,7 @@ New keys: `need`, `capability`, `parameter_name`, `parameter_value` (tokens),
 pending`, `ladder_class` `none`, since 0.12.3. None of them triggers the recovery ladder; the
 package format's refusals reuse `invalid_scheduling_outcome_declaration` (with the field) and
 `contained_task_control_invalid` (with `reason`), as their siblings do.
+
+Workflow #411 B8 adds the keys `last_in_window`, `last_daily_slot` (booleans) and
+`daily_remaining` (integer), and makes `run_parameters` optional on `policy_dispatch_parameters`
+(a pending entry); its other two values reuse `next_occurrence_unix_ms` and `window_end_unix_ms`.

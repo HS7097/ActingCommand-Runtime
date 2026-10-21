@@ -122,7 +122,7 @@ A task source (`task.json`, task schema `0.6` through `0.9`) declares a digest a
 - `algorithm`, `columns`, `rows`, `cells` and `max_mean_milli` are required; `exclude_cells`
   and `max_cell` are optional. Nothing has a default.
 - A color probe declares exactly one of `expected` and `digest`, and a digest entry has no
-  `max_distance`. An optional `provenance` object is kept as before.
+  `max_distance` and no `alternatives`. An optional `provenance` object is kept as before.
 - The digest ID shares the target namespace (`resource-declarations.md`, section Pack schema
   `0.7` declarations).
 
@@ -154,7 +154,7 @@ of the field, below `/color_probes/<i>`:
 | Pointer | Refused when | Reason |
 | --- | --- | --- |
 | `/digest` | declared together with `expected`; or the task schema is below `0.6` | `InvalidValue`; `UnconsumedField` |
-| `/max_distance` | declared on a digest entry | `UnconsumedField` |
+| `/max_distance`, `/alternatives` | declared on a digest entry | `UnconsumedField` |
 | `/region/mode` | not `rect` or `full_frame` | `InvalidValue` |
 | `/region/rect/x`, `/y`, `/width`, `/height` | not an integer; a negative origin; a size below 1 | `InvalidType`; `InvalidValue` |
 | `/region/rect` | the rectangle leaves the coordinate space | `InvalidValue` |

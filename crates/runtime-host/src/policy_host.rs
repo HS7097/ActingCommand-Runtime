@@ -1032,6 +1032,19 @@ fn draw_random_delay(
     })
 }
 
+/// Workflow #411 B8: the runs the daily budgets still allow a pair after the dispatch `budget`
+/// previews (its counts include that dispatch): the fewer of the task's and its activity
+/// profile's remaining runs in the activity day.
+fn daily_remaining(budget: &actingcommand_contract::PolicyBudgetReceipt) -> u32 {
+    let task = budget
+        .task_daily_limit
+        .saturating_sub(budget.task_daily_used);
+    let activity = budget
+        .activity_daily_limit
+        .saturating_sub(budget.activity_daily_used);
+    task.min(activity)
+}
+
 /// Per instance, the highest `effective_milli` and the longest `aging_ms` over the ranked
 /// Eligible or Selected decisions of one evaluation; an instance without one is absent.
 fn instance_arbitration_ranks(
@@ -1774,14 +1787,26 @@ impl PolicyHost {
                 ) {
                     // Workflow #405 D1 (`scheduling-blackout.md`, "Order of the deferrals",
                     // position 9): an instance with the random delay on waits its pair's delay.
-                    Ok(_) => self.random_delays.gate(
-                        intent,
-                        random_delay.get(&intent.instance_id),
-                        seed,
-                        &active.compiled.catalog().activity.profiles,
-                        time.unix_ms,
-                        refresh,
-                    ),
+                    // Workflow #411 B8: an eligible candidate carries the runs its daily budgets
+                    // still allow after this dispatch, as the admission preview counted them.
+                    Ok(admission) => self
+                        .random_delays
+                        .gate(
+                            intent,
+                            random_delay.get(&intent.instance_id),
+                            seed,
+                            &active.compiled.catalog().activity.profiles,
+                            time.unix_ms,
+                            refresh,
+                        )
+                        .map(|eligibility| match eligibility {
+                            CandidateEligibility::Eligible => {
+                                CandidateEligibility::EligibleWithDailyRemaining {
+                                    daily_remaining: daily_remaining(&admission.budget),
+                                }
+                            }
+                            other => other,
+                        }),
                     Err(error) if is_availability_denial(&error) => {
                         let rejection = error.policy_rejection();
                         deferrals.note_budget(&rejection);

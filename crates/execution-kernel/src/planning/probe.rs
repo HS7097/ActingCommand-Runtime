@@ -1481,6 +1481,7 @@ mod tests {
                     expected: [255, 0, 0],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "fixture/other_anchor".to_string(),
@@ -1488,6 +1489,7 @@ mod tests {
                     expected: [0, 255, 0],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
                 RecognitionTarget::ClickOnly(ClickOnlyTarget {
                     id: "fixture/click".to_string(),

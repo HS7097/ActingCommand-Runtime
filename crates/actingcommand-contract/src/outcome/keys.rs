@@ -534,4 +534,13 @@ outcome_keys! {
     // ---- Workflow #411 A39 (which rule of a task program refused it): begin ----
     program_problem: vocab(program_problem),
     // ---- Workflow #411 A39: end ----
+    // ---- Workflow #411 A37 (a Lab operation's target of the wrong type): begin ----
+    expected_target_type: vocab(lab_target_type),
+    received_target_type: vocab(lab_target_type),
+    // ---- Workflow #411 A37: end ----
+    // ---- Workflow #411 B8 (a dispatch's schedule values, contracts/remedies.md section 4): begin ----
+    last_in_window: boolean,
+    last_daily_slot: boolean,
+    daily_remaining: integer,
+    // ---- Workflow #411 B8: end ----
 }
