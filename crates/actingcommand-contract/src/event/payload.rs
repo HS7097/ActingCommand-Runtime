@@ -4735,9 +4735,11 @@ impl SchedulingOutcomeDeclaration {
             }
             // #411 B37 (A35-S1; coordinator decision Q11): `busy` only on a
             // `no_designated_effect` mapping, and never with `remedy`.
+            // RED PROOF 6 (do not merge): the busy exclusivity rules are missing.
             if mapping.busy
                 && (mapping.effect != SchedulingEffectCondition::NoDesignatedEffect
                     || mapping.remedy.is_some())
+                && mapping.outcome_key.is_empty()
             {
                 return Err(SanitizationError::new(
                     SanitizationCode::InvalidSchedulingOutcomeDeclaration,
