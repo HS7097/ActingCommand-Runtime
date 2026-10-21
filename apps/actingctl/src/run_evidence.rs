@@ -257,7 +257,8 @@ impl Evidence {
         let rows = self.steps[start..end]
             .iter()
             .map(|step| match (self.detail, omit) {
-                (StepDetail::Summary, _) => step.summary_row(),
+                // A42 red proof 2 (do not merge): summary mode answers the full payloads.
+                (StepDetail::Summary, _) => step.full_row(),
                 (StepDetail::Full, None) => step.full_row(),
                 (StepDetail::Full, Some(omit)) => step.referenced_row(omit),
             })
