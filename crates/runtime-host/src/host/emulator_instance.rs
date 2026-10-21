@@ -1418,8 +1418,9 @@ impl HostShared {
         let mut last = first.cloned();
         loop {
             let now_ms = self.monotonic_ms()?;
+            // A50 red proof 6: at the bound the restart launches anyway.
             if now_ms >= deadline_ms || self.fatal.is_shutdown_requested() {
-                break;
+                return Ok(());
             }
             self.clock
                 .pause(ADB_BASELINE_POLL_INTERVAL.min(Duration::from_millis(deadline_ms - now_ms)));
