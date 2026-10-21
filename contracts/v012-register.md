@@ -2579,6 +2579,23 @@ Record", "Why A Candidate Does Not Run") is the contract.
 | A26-3 | keys `why` (code), `decision_state`, `eligibility` (vocabularies of the same names), `omitted_why` (records of `why`, `count`) | new key-table and vocabulary entries (no shape) (policy 57) | A26 | A26 | the vocabularies are built from the policy crate's enums in `codes.rs` (G7), review `pending`; the two codes keep `since` 0.12.0, their text names 0.12.5 |
 | A26-4 | the developer detail of the decision record's reasons | contract text (no shape change) | A26 | A26 | unchanged; it is kept only in the in-memory decision. The sentence that it goes to a developer log is removed: no such log line exists |
 
+### 1.146 Slice BT-B2 (0.12.x): two values compared in a selection policy; `ocr_integer` reads the current or the capacity of `a/b` (#411 B2; b-plan §2.2)
+
+B2: a selection policy may compare two integer values with the predicate `integer_compare`, and
+an `ocr_integer` candidate feature may read the right-hand part of a `current_capacity` text. Both
+are package members of `package` revision 6, which BT-PK6 declares at the end of the B train;
+until then this Runtime admits them by code and the declaration stays [3, 5]. No persisted ledger
+shape, no code, no wire, key or configuration change: validation uses existing
+`SelectionErrorCode`s and the existing layout refusals. B1's dictionary on `ocr_integer` (b-plan
+D1) is not part of this slice. [selection-policy.md](selection-policy.md) ("Two values compared",
+"Upper bound") and [business-identity-consensus.md](business-identity-consensus.md) are the
+contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B2-1 | selection-policy document predicate `integer_compare {left, op, right, mul?, add?}`, `op` one of `eq`, `ne`, `lt`, `le`, `gt`, `ge` | new predicate (resource file format, not a ledger shape) (policy 58) | BT-B2 | resource side | holds when `left op right × mul + add`, compared in 128 bits as a value test compares; both sides declared `integer` values (`type_mismatch` otherwise); `mul` 1..=1000000, default 1, and `add` within ±(2^53 − 1), default 0 (`integer_out_of_range` otherwise); an unknown side leaves the predicate unknown and the gate's `on_unknown` decides, the left side's reason first; the collect option lists each unknown side; the upper bound compares the sides' ranges; a document that leaves `mul` and `add` out is serialised without them, and one without `integer_compare` keeps its canonical bytes, `policy_sha256` and `input_sha256` (so the scheduling consumer's `catalog_hash` too); a reader before B2 refuses it (unknown predicate kind); `package` revision 6 |
+| B2-2 | candidate layout feature `ocr_integer`: `integer.part` (`current` or `capacity`) | new optional member (resource file format, not a ledger shape) (exec 116) | BT-B2 | resource side | only with `format` `current_capacity` (otherwise the layout is refused, `InvalidValue`, at parse and pack load); `capacity` reads the right-hand part of `a/b`, `current` and no `part` the left-hand part as before; the range applies to the part read, so a scan's field domain stays `min..=max`; the derived pack copies `integer` as declared; a reader before B2 refuses it (`integer` denies unknown members); `package` revision 6 |
+
 ### 1.146 Slice BT-B8 (0.12.x): the scheduler passes a run its schedule values (#411 B8; plan `rd-1021/train-0129/b-plan/plan.md` §2.8, Q12, D7; [remedies.md](remedies.md) section 4)
 
 B8 adds its typed values to the channel B15 R5 opened (§1.115). **No persisted ledger shape**:

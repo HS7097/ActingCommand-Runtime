@@ -128,6 +128,9 @@ mod gate_411_a22;
 // #411 A36b (0.12.x): a run whose diagnostic stream's seal finds its staged bytes changed fails
 // only itself; the host keeps serving.
 mod gate_411_a36b;
+// #411 A36c (0.12.9): a PP-OCR diagnostic archive whose seal finds its staged report changed
+// fails only the work that owns it, which records its terminal; the host keeps serving.
+mod gate_411_a36c;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.
@@ -271,6 +274,9 @@ mod gate_411_a45;
 mod gate_411_a46;
 // #411 A47: a ladder whose application stop fails keeps its key and climbs to its next rung.
 mod gate_411_a47;
+// #411 A49: a read-only observe between a run's recognition and its input does not displace the
+// run's frame; the observe still captures a frame of its own.
+mod gate_411_a49;
 // Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
 // journal, plan, admission check, stop, lift and expiry signals).
 mod gate_411_b15h;
