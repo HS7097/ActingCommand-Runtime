@@ -1578,7 +1578,7 @@ impl PreparedContainedTask {
                         ));
                     }
                 };
-                if decision_sha256 != evaluated {
+                if candidate_set_sha256 != projection.candidate_set_sha256() {
                     return Ok((
                         TaskSelectionConfirmation::DecisionMismatched {
                             candidate_set_sha256,
