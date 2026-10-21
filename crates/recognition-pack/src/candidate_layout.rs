@@ -1088,6 +1088,7 @@ impl SceneEvaluation<'_> {
                         score: matched.score,
                         threshold,
                         scale_milli: None,
+                        luma: None,
                     })
                     .collect(),
             ),
@@ -1250,6 +1251,7 @@ impl SceneEvaluation<'_> {
                         score: row.normalized_score,
                         threshold: row.threshold,
                         scale_milli: None,
+                        luma: None,
                     }),
                     color: row.color,
                     ocr: None,

@@ -813,6 +813,54 @@ probe or check without `alternatives` evaluates exactly as before. The member be
 interface revision 6, declared at the end of the 0.12.x B train; until then it is admitted by
 code.
 
+### Task schema `0.9` brightness and contrast floors
+
+Workflow #411 B13 (B-train plan §2.10 with D9). Task schema `0.9` accepts
+`"luma_floor": {"mean_ratio_milli"?, "contrast_ratio_milli"?}` on `anchors[]` and
+`verify_templates[]` entries; an older task schema refuses it with `UnconsumedField`, and
+operations do not take it. The declaration gate refuses, at `…/luma_floor`, a value that is no
+object with `InvalidType` and another member with `UnknownField`, and a member that is no
+non-negative integer with `InvalidType` at that member. It passes to the derived template
+target as declared, and a source that uses it derives pack schema `0.7`; a source that does not
+derives every document byte for byte as before. In the recognition pack, schema `0.7` template
+targets accept it; an older pack schema refuses it with `UnconsumedField` at
+`/targets/<i>/luma_floor`, and at a member refuses an integer outside 0..=4294967295 with
+`InvalidValue` and another value with `InvalidType`.
+Either member may be left out (no floor on that ratio); with both left out the target sets no
+floor and still records its ratios.
+
+```json
+{"id": "button/confirm", "template": "assets/confirm.png", "region": {"x": 880, "y": 600, "width": 300, "height": 120},
+ "threshold": 0.9, "luma_floor": {"mean_ratio_milli": 800, "contrast_ratio_milli": 600}}
+```
+
+The window a candidate matched is read on the gray images every search reads, over the
+template's scored pixels: every pixel, or the pixels its mask selects (section Task schema `0.9`
+template masks), of the template as searched (resampled by its factor, section Task schema
+`0.9` multi-scale templates). The mean ratio is the window's mean over the template's own, the
+contrast ratio the window's standard deviation over the template's own, each times 1000 and
+rounded down (exact integer sums; a ratio above 4294967295 counts as 4294967295). A candidate
+qualifies only when each declared ratio is at least its floor. This is part of the one joint
+acceptance of the template search (`template-relative-color.md`): a target that declares
+`luma_floor` is searched with it on the exact score map, as one with a relative color check is;
+a candidate must meet the threshold, its relative color check when it declares one, and the
+floor, and with `unique` a second place counts only when it qualifies too. An absolute color
+check holds for every candidate alike and decides beside it. A target whose candidates all fall
+below the floor does not pass, with a developer message that says so and no outcome code of
+its own; the best template remains the evidence. A template whose scored pixels are all black
+or all of one value has no brightness or contrast to compare with, and evaluating its floor is
+a recognition error. The floor is not a frame-change measure (`color-digest.md` keeps the one
+frame-change measure).
+
+The evaluation and the task diagnostic `target` row carry the chosen candidate's ratios as the
+template's `luma` `{mean_ratio_milli, contrast_ratio_milli}` (ledger revision 4,
+[v012-register.md](v012-register.md) §1.153 LR-2): the accepted candidate's, else the best
+template's. A target without `luma_floor` evaluates exactly as before and carries no `luma`.
+A target that declares the floor is refused when the evaluator is built as a `repeated_anchor`
+anchor or as a candidate layout feature read at an offset (neither checks it), and
+template-region batch evaluation refuses it too. The member belongs to package interface
+revision 6, declared at the end of the 0.12.x B train; until then it is admitted by code.
+
 ### Task schema `0.9` observation windows and input rechecks
 
 Workflow #390 EXEC-2 (forced-compromises mapping, rows E-05 and E-06). An operation of a

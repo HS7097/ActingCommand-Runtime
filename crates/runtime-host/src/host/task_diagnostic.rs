@@ -126,8 +126,9 @@ fn target_payload(
             score: value.score,
             threshold: value.threshold,
             scale_milli: value.scale_milli,
-            // Ledger revision 4 (register §1.153 LR-2): written from BT-B13 on.
-            luma: None,
+            // Ledger revision 4 (register §1.153 LR-2, Workflow #411 B13): present only for a
+            // target that declares `luma_floor`.
+            luma: value.luma,
         }),
         color: target.color.map(|value| TaskDiagnosticColorData {
             distance: value.distance,
@@ -1261,6 +1262,7 @@ mod tests {
                 score: 1.0,
                 threshold: 0.9,
                 scale_milli: None,
+                luma: None,
             }),
             color: None,
             ocr: None,
