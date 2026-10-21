@@ -11,6 +11,7 @@ use actingcommand_ledger::FrameRetentionFrame;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
+mod gate_411_e3;
 mod gate_h5g13;
 mod gate_h5g14;
 

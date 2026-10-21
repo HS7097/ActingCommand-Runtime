@@ -62,7 +62,8 @@ pub struct PackageBundleResponse {
     pub out: String,
     pub index: BundleIndex,
     /// Workflow #384 D2-S2: one `recognition_pack_undeclared` per pack that reads like a
-    /// recognition maintenance package but is not declared one; Workflow #373 NAV-T: with
+    /// recognition maintenance package of a server that declares none (Workflow #411 A32: only
+    /// the one a server declares counts); Workflow #373 NAV-T: with
     /// `--pages`, one `package_bundle_entry_page_unlisted` per pack whose entry pages the page
     /// list does not all list; Workflow #411 B15: with any root file, one
     /// `package_bundle_remedy_invalid` per remedy finding. Absent when there is none.

@@ -101,8 +101,14 @@ reach (game-qualified, in name order) instead of one `to_page`. An edge names ex
 `to_pages`, an empty set `InvalidValue`, neither `MissingField` at `to_page`. Such an edge is a
 navigation element of the page projection like any other, and no route passes it (the drive
 graph and actinglab's navigation tools leave it out), since its click does not decide which page
-comes. A `long_press` navigation click is read as a drag that does not move (one point held for
-its `duration_ms`). #411 Lab L3: wherever the Lab presses it (online `do <element-id>`, a route
+comes. Offline `observe` lists such an operation of the observed page in `actions` as `{"id",
+"task_id", "from_page", "to_pages", "click", "input"}` (Workflow #308 SEL-L6a), `click` as its
+task file declares it; #411 A13 B part: `input` is built from its row of the generated navigation
+as an edge's `input` is, so it equals the `input` of an edge with the same click (a tap of a box
+or a point at its centre, a drag with its two boxes and their centres, a target click by its
+target), with no coordinate resolved on the frame, and `null` for a segmented or path drag, as an
+edge's, or when the navigation holds no row for the operation. A `long_press` navigation click
+is read as a drag that does not move (one point held for its `duration_ms`). #411 Lab L3: wherever the Lab presses it (online `do <element-id>`, a route
 of `ensure`, `navigate` or `session recover`), it sends `InputAction::LongTap` at that point over the duration, as
 the kernel presses a pack's long press, and every other drag one `InputAction::Swipe`; a `drag`
 whose two rectangles are the same is pressed as a long tap too. Workflow #406 T4: given a seed, a

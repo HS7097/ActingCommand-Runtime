@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use actingcommand_contract::ValueTestOp;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,11 @@ pub const MAX_ENUM_VALUES: usize = 1_024;
 /// Upper bound on the declared value columns of one record list: the fact contract's 64 fields
 /// per row, less the key column.
 pub const MAX_RECORD_LIST_COLUMNS: usize = 63;
+/// The largest `mul` of an `integer_compare` predicate, as a value test's (Workflow #411 B2).
+pub const MAX_INTEGER_COMPARE_MUL: u64 = 1_000_000;
+/// The largest `add` magnitude of an `integer_compare` predicate, 2^53 - 1, as a value test's
+/// (Workflow #411 B2).
+pub const MAX_INTEGER_COMPARE_ADD: u64 = (1 << 53) - 1;
 
 /// Whether `id` can name a hard gate or a scoring term. A selection reason carries the id as
 /// its outcome value `rule_id` (Workflow #378 A2-P), whose key type is `token`: lowercase ASCII
@@ -318,6 +324,34 @@ pub enum GateUnknownHandling {
     SubstituteVerdict { passes: bool },
 }
 
+/// The comparison of an `integer_compare` predicate (Workflow #411 B2): a value test's
+/// comparisons, without `parses`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegerCompareOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl IntegerCompareOp {
+    /// Whether `left op right` holds, decided as a value test decides it.
+    pub fn holds(self, left: i128, right: i128) -> bool {
+        let op = match self {
+            Self::Eq => ValueTestOp::Eq,
+            Self::Ne => ValueTestOp::Ne,
+            Self::Lt => ValueTestOp::Lt,
+            Self::Le => ValueTestOp::Le,
+            Self::Gt => ValueTestOp::Gt,
+            Self::Ge => ValueTestOp::Ge,
+        };
+        op.holds(left, right)
+    }
+}
+
 /// Three-valued predicate vocabulary over declared fields and facts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -342,6 +376,19 @@ pub enum Predicate {
         value: ValueRef,
         allowed: Vec<String>,
     },
+    /// Workflow #411 B2: `left op right × mul + add` over two integer values, compared in 128
+    /// bits as a value test compares. A side that is unknown leaves the predicate unknown. `mul`
+    /// (1 to 1,000,000) defaults to 1 and `add` (within ±(2^53 - 1)) to 0; neither is written
+    /// when the document leaves it out.
+    IntegerCompare {
+        left: ValueRef,
+        op: IntegerCompareOp,
+        right: ValueRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mul: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        add: Option<i64>,
+    },
     All {
         of: Vec<Predicate>,
     },
@@ -362,6 +409,10 @@ impl Predicate {
             | Self::IntegerEquals { value, .. }
             | Self::BooleanEquals { value, .. }
             | Self::StringIn { value, .. } => values.push(value),
+            Self::IntegerCompare { left, right, .. } => {
+                values.push(left);
+                values.push(right);
+            }
             Self::All { of } | Self::Any { of } => {
                 for inner in of {
                     inner.collect_values(values);
@@ -846,6 +897,28 @@ fn check_predicate(
         | Predicate::IntegerAtMost { value, .. }
         | Predicate::IntegerEquals { value, .. } => expect(value, "integer")?,
         Predicate::BooleanEquals { value, .. } => expect(value, "boolean")?,
+        Predicate::IntegerCompare {
+            left,
+            right,
+            mul,
+            add,
+            ..
+        } => {
+            expect(left, "integer")?;
+            expect(right, "integer")?;
+            if mul.is_some_and(|mul| !(1..=MAX_INTEGER_COMPARE_MUL).contains(&mul)) {
+                return Err(SelectionError::new(
+                    SelectionErrorCode::IntegerOutOfRange,
+                    format!("gate={owner} integer_compare=mul"),
+                ));
+            }
+            if add.is_some_and(|add| add.unsigned_abs() > MAX_INTEGER_COMPARE_ADD) {
+                return Err(SelectionError::new(
+                    SelectionErrorCode::IntegerOutOfRange,
+                    format!("gate={owner} integer_compare=add"),
+                ));
+            }
+        }
         Predicate::StringIn { value, allowed } => {
             expect(value, "string")?;
             check_limit(allowed.len(), MAX_ENUM_VALUES, owner)?;
