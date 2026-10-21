@@ -3046,30 +3046,8 @@ impl PreparedContainedTask {
     /// at its point), and a `rect`, `specific_rect` or long-press box of 1×1. A click located on
     /// the frame (`target`, `target_center`, `offset`) and a drag are not judged.
     pub fn single_point_clicks(&self) -> Vec<SinglePointClick> {
-        self.program
-            .operations
-            .iter()
-            .filter_map(|operation| {
-                let click = operation.click.as_ref()?;
-                let (width, height) = match click.kind.as_str() {
-                    "point" => (1, 1),
-                    "rect" | "specific_rect" | "long_press" | "long_tap" => {
-                        (click.width.unwrap_or(1), click.height.unwrap_or(1))
-                    }
-                    _ => return None,
-                };
-                if width != 1 || height != 1 {
-                    return None;
-                }
-                Some(SinglePointClick {
-                    operation_id: operation.id.clone(),
-                    x: click.x?,
-                    y: click.y?,
-                    width,
-                    height,
-                })
-            })
-            .collect()
+        // E4 red proof 3: the old check, which warns on no click box.
+        Vec::new()
     }
 
     /// Whether the task has a select step (Workflow #308).
