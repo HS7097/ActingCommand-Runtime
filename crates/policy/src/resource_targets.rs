@@ -32,7 +32,7 @@ use crate::{
     CatalogDiagnostic, CatalogDiagnosticCode, CompiledCatalog, DecisionReason, EvaluationFacts,
     EvaluationTime, FactScalar, FactValue, InstanceSnapshot, MAX_ID_BYTES, ObservationRef,
     ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec, PoolValueSnapshot,
-    PoolValueSource, SchedulingDocumentKind, ScopeSelector, TaskSpec,
+    PoolValueSource, SchedulingDocumentKind, ScopeSelector, TaskRuntimeSnapshot, TaskSpec,
 };
 
 pub const RESOURCE_TARGETS_SCHEMA_VERSION: &str = "actingcommand.resource-targets.v1";
@@ -3043,3 +3043,291 @@ fn rejected(
         reason,
     }))
 }
+
+// ---- Workflow #411 B16 part 2 (task reserves, `contracts/scheduling/README.md`, "Task
+// Reserves"): begin ----
+
+/// One reserve of a candidate, in the pool's real inventory units: what a run of its task leaves
+/// in the pool against the least amount the task declares the pool must keep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReserveView {
+    pub(crate) pool_id: String,
+    pub(crate) at_least: u64,
+    /// The task's declared consumption of the pool: the sum of its `consumes` amounts for it, 0
+    /// when it declares none.
+    pub(crate) consumes: u64,
+    /// The pool's projected amount less `consumes`; `None` while the projected amount is
+    /// unknown.
+    pub(crate) after: Option<i64>,
+    /// The next instant the projected amount of a regenerating pool changes.
+    pub(crate) next_change_unix_ms: Option<u64>,
+}
+
+impl ReserveView {
+    /// The selection document's candidate fields of this reserve: `task.consumes.<pool>`
+    /// always; `task.after.<pool>` and `task.reserve_gap.<pool>` (`after − at_least`) while the
+    /// pool's amount is known.
+    pub(crate) fn fields(&self) -> PolicyEvaluationResult<Vec<(String, i64)>> {
+        let consumes = i64::try_from(self.consumes).map_err(|_| {
+            PolicyEvaluationError::overflow(format!(
+                "the consumption of pool '{}' exceeds the scoring range",
+                self.pool_id
+            ))
+        })?;
+        let mut fields = vec![(format!("task.consumes.{}", self.pool_id), consumes)];
+        if let Some(after) = self.after {
+            let gap = i64::try_from(self.at_least)
+                .ok()
+                .and_then(|at_least| after.checked_sub(at_least))
+                .ok_or_else(|| {
+                    PolicyEvaluationError::overflow(format!(
+                        "the reserve gap of pool '{}' exceeds the scoring range",
+                        self.pool_id
+                    ))
+                })?;
+            fields.push((format!("task.after.{}", self.pool_id), after));
+            fields.push((format!("task.reserve_gap.{}", self.pool_id), gap));
+        }
+        Ok(fields)
+    }
+}
+
+/// A task's declared consumption of one pool in real units: the sum of its `consumes` amounts
+/// for the pool (the compiler admits only `amount` on a consumption).
+pub(crate) fn declared_consumption(task: &TaskSpec, pool_id: &str) -> PolicyEvaluationResult<u64> {
+    task.consumes
+        .iter()
+        .filter(|effect| effect.pool_id == pool_id)
+        .try_fold(0_u64, |sum, effect| {
+            sum.checked_add(effect.amount.unwrap_or(0))
+        })
+        .ok_or_else(|| {
+            PolicyEvaluationError::overflow(format!(
+                "task '{}' declares a consumption of pool '{pool_id}' beyond the integer range",
+                task.id
+            ))
+        })
+}
+
+/// The reserve views of a task, in the order it declares its reserves; `None` when it declares
+/// none. `projected` answers a pool's projected amount at the evaluation and the next instant it
+/// changes, or `None` while the amount is unknown.
+pub(crate) fn reserve_views(
+    task: &TaskSpec,
+    mut projected: impl FnMut(&str) -> PolicyEvaluationResult<Option<(u64, Option<u64>)>>,
+) -> PolicyEvaluationResult<Option<Vec<ReserveView>>> {
+    let Some(reserves) = &task.reserves else {
+        return Ok(None);
+    };
+    let mut views = Vec::with_capacity(reserves.len());
+    for reserve in reserves {
+        let consumes = declared_consumption(task, &reserve.pool_id)?;
+        let pool = projected(&reserve.pool_id)?;
+        let after = pool
+            .map(|(amount, _)| {
+                i64::try_from(i128::from(amount) - i128::from(consumes)).map_err(|_| {
+                    PolicyEvaluationError::overflow(format!(
+                        "what task '{}' leaves in pool '{}' exceeds the integer range",
+                        task.id, reserve.pool_id
+                    ))
+                })
+            })
+            .transpose()?;
+        views.push(ReserveView {
+            pool_id: reserve.pool_id.clone(),
+            at_least: reserve.at_least,
+            consumes,
+            after,
+            next_change_unix_ms: pool.and_then(|(_, next)| next),
+        });
+    }
+    Ok(Some(views))
+}
+
+/// Per (instance, pool): the tasks whose consumption the pool's latest reading does not show yet,
+/// with that consumption, in task id order.
+pub(crate) type UnshownConsumption<'a> = BTreeMap<(&'a str, &'a str), Vec<(&'a str, u64)>>;
+
+/// The consumption a pool's latest reading does not show yet, per (instance, pool) of `pools`:
+/// each task of the catalog that consumes the pool and whose latest dispatch on the instance is
+/// at or after the pool's observation (`observed_at`), with its declared consumption, in task id
+/// order. A pool without an observation has none.
+pub(crate) fn unshown_consumption<'a>(
+    tasks: &'a [TaskSpec],
+    states: &'a [TaskRuntimeSnapshot],
+    pools: &BTreeSet<&'a str>,
+    observed_at: impl Fn(&str) -> Option<u64>,
+) -> PolicyEvaluationResult<UnshownConsumption<'a>> {
+    let mut unshown = UnshownConsumption::new();
+    for state in states {
+        let Some(dispatched) = state.last_dispatched_unix_ms else {
+            continue;
+        };
+        let Some(task) = tasks.iter().find(|task| task.id == state.task_id) else {
+            continue;
+        };
+        for &pool_id in pools {
+            if observed_at(pool_id).is_none_or(|observed| dispatched < observed) {
+                continue;
+            }
+            let consumes = declared_consumption(task, pool_id)?;
+            if consumes > 0 {
+                unshown
+                    .entry((state.instance_id.as_str(), pool_id))
+                    .or_default()
+                    .push((task.id.as_str(), consumes));
+            }
+        }
+    }
+    for entries in unshown.values_mut() {
+        entries.sort_unstable();
+    }
+    Ok(unshown)
+}
+
+/// One candidate the reserve gate judges.
+pub(crate) struct ReserveCandidate<'a> {
+    pub(crate) task: &'a TaskSpec,
+    pub(crate) instance_id: &'a str,
+    pub(crate) effective_milli: i64,
+    /// `None` when the task declares no reserves.
+    pub(crate) views: Option<&'a [ReserveView]>,
+}
+
+/// A candidate the reserve gate holds this round: its `resource_reserve_insufficient` reason, and
+/// the next step of a regenerating pool, when the evaluation should look again.
+#[derive(Debug)]
+pub(crate) struct ReserveHold {
+    pub(crate) reason: DecisionReason,
+    pub(crate) wake_unix_ms: Option<u64>,
+}
+
+/// The reserve gate over one round's ranked candidates, given in allocation order; the answer is
+/// aligned with them. On each instance the candidates are taken by `effective_milli`, the higher
+/// first (a tie in allocation order), and a candidate with reserves is held when, for one of its
+/// pools, in this order:
+/// 1. the pool's amount is unknown (no `amount_after`);
+/// 2. what it leaves, `after = projected − consumes`, is below `at_least`;
+/// 3. `after` less the consumption the pool's reading does not show yet (`unshown`, other tasks
+///    only) is below `at_least` (`task_id` the first such task);
+/// 4. that amount less the consumption of a candidate of the instance taken before it and not
+///    held is below `at_least` (`task_id` that candidate's task): of two tasks that fit alone but
+///    not together, the higher score runs this round.
+///
+/// A candidate without reserves is never held; its consumption still counts against the others.
+pub(crate) fn hold_reserves(
+    candidates: &[ReserveCandidate<'_>],
+    unshown: &UnshownConsumption<'_>,
+) -> PolicyEvaluationResult<Vec<Option<ReserveHold>>> {
+    let mut order = (0..candidates.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        let (left, right) = (&candidates[*left], &candidates[*right]);
+        left.instance_id
+            .cmp(right.instance_id)
+            .then_with(|| right.effective_milli.cmp(&left.effective_milli))
+    });
+    let mut holds = (0..candidates.len()).map(|_| None).collect::<Vec<_>>();
+    let mut kept: Vec<usize> = Vec::new();
+    for index in order {
+        let candidate = &candidates[index];
+        kept.retain(|kept| candidates[*kept].instance_id == candidate.instance_id);
+        let hold = match candidate.views {
+            None => None,
+            Some(views) => reserve_hold(candidate, views, &kept, candidates, unshown)?,
+        };
+        match hold {
+            Some(hold) => holds[index] = Some(hold),
+            None => kept.push(index),
+        }
+    }
+    Ok(holds)
+}
+
+/// The hold of one candidate with reserves, by the first of its pools that fails a step of
+/// [`hold_reserves`].
+fn reserve_hold(
+    candidate: &ReserveCandidate<'_>,
+    views: &[ReserveView],
+    kept: &[usize],
+    candidates: &[ReserveCandidate<'_>],
+    unshown: &UnshownConsumption<'_>,
+) -> PolicyEvaluationResult<Option<ReserveHold>> {
+    for view in views {
+        let Some(after) = view.after else {
+            return Ok(Some(reserve_insufficient(view, None, None)));
+        };
+        let at_least = i128::from(view.at_least);
+        let mut left = i128::from(after);
+        let mut first = None;
+        for (task_id, consumes) in unshown
+            .get(&(candidate.instance_id, view.pool_id.as_str()))
+            .into_iter()
+            .flatten()
+            .filter(|(task_id, _)| *task_id != candidate.task.id)
+        {
+            left -= i128::from(*consumes);
+            first = first.or(Some(*task_id));
+        }
+        if left < at_least
+            && let Some(first) = first
+        {
+            return Ok(Some(reserve_insufficient(
+                view,
+                Some(amount_after(view, left)?),
+                Some(first),
+            )));
+        }
+        for &other in kept {
+            let other = candidates[other].task;
+            let consumes = declared_consumption(other, &view.pool_id)?;
+            let both = left - i128::from(consumes);
+            if consumes > 0 && both < at_least {
+                return Ok(Some(reserve_insufficient(
+                    view,
+                    Some(amount_after(view, both)?),
+                    Some(other.id.as_str()),
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn amount_after(view: &ReserveView, amount: i128) -> PolicyEvaluationResult<i64> {
+    i64::try_from(amount).map_err(|_| {
+        PolicyEvaluationError::overflow(format!(
+            "what pool '{}' would hold exceeds the integer range",
+            view.pool_id
+        ))
+    })
+}
+
+fn reserve_insufficient(
+    view: &ReserveView,
+    after: Option<i64>,
+    first: Option<&str>,
+) -> ReserveHold {
+    let mut outcome = Outcome::new(PolicyCode::ResourceReserveInsufficient)
+        .pool_id(view.pool_id.as_str())
+        .reserve_at_least(view.at_least);
+    if let Some(after) = after {
+        outcome = outcome.amount_after(after);
+    }
+    if let Some(first) = first {
+        outcome = outcome.task_id(first);
+    }
+    ReserveHold {
+        reason: DecisionReason {
+            outcome,
+            detail: format!(
+                "pool={} at_least={} after={} first={}",
+                view.pool_id,
+                view.at_least,
+                after.map_or_else(|| "unknown".to_owned(), |after| after.to_string()),
+                first.unwrap_or("-")
+            ),
+        },
+        wake_unix_ms: after.and(view.next_change_unix_ms),
+    }
+}
+// ---- Workflow #411 B16 part 2: end ----

@@ -334,9 +334,13 @@ chooser:
 - Candidates are the eligible (task, instance) pairs of one evaluation,
   identified as `<task_id>@<instance_id>`, with the fields `task.priority`,
   `task.strategic_weight_milli`, `task.urgency_milli`, `task.aging_ms`,
-  `task.load_cost_milli`, `instance.affinity`, plus the instance's scalar facts
-  that have not expired at the evaluation instant, under their own keys. A
-  document declares whichever of these it reads.
+  `task.load_cost_milli`, `instance.affinity`, for a task with catalog
+  `reserves` (Workflow #411 B16 part 2) `task.consumes.<pool>`,
+  `task.after.<pool>` and `task.reserve_gap.<pool>` per reserved pool (the last
+  two while the pool's amount is known; the scheduling contract's "Task
+  Reserves"), plus the instance's scalar facts that have not expired at the
+  evaluation instant, under their own keys. A document declares whichever of
+  these it reads.
 - The fact snapshot is the instance's own projection of the evaluation's facts,
   built the same way `from_fact_records` builds one: most specific scope per key,
   record lists unusable, timestamps and durations as integer milliseconds. The

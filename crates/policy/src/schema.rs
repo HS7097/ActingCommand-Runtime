@@ -324,6 +324,21 @@ pub struct TaskSpec {
     /// serializes as nothing at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_parameters: Option<bool>,
+    /// Workflow #411 B16 part 2 (`actingcommand.scheduling.v2` only): the amount each named pool
+    /// must still hold after a run of this task. A candidate that would leave a pool below its
+    /// reserve is not admitted (`resource_reserve_insufficient`). Absent, the task has none, and
+    /// the member serializes as nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserves: Option<Vec<ReserveSpec>>,
+}
+
+/// Workflow #411 B16 part 2: one reserve of a task, in the pool's real inventory units.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReserveSpec {
+    pub pool_id: String,
+    /// The least amount the pool must hold after a run of the task: `0..=capacity`.
+    pub at_least: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

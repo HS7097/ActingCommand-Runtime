@@ -162,6 +162,7 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         value_milli: None,
         continues_from: None,
         dispatch_parameters: None,
+        reserves: None,
     })
 }
 
