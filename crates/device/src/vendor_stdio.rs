@@ -6,6 +6,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod gate_411_a36a;
 #[cfg(windows)]
 mod native_facts;
 
