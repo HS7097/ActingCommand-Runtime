@@ -741,33 +741,6 @@ impl HostShared {
     /// self-check claim on its instance's queue. Only a failure the Runtime does not survive is
     /// returned; a claim the queue refuses is recorded and ends that recheck as failed.
     pub(super) fn recheck_resource_fences(&self) -> RuntimeHostResult<()> {
-        if self.fatal.is_shutdown_requested() {
-            return Ok(());
-        }
-        let config = self.fence_recheck_config()?;
-        let now = self.runtime_clock_sample()?;
-        let due = {
-            let mut fences = lock(
-                &self.resource_fences,
-                HostLocation::QueueResourceFenceRechecks,
-            )?;
-            fences
-                .iter_mut()
-                .filter_map(|(instance_id, fence)| {
-                    let wait = fence.person_wait.as_mut()?;
-                    let next = wait.next_due(config)?;
-                    if now.monotonic_ms < next.monotonic_ms {
-                        return None;
-                    }
-                    wait.attempts = wait.attempts.saturating_add(1);
-                    wait.recheck = Recheck::Queued;
-                    Some((*instance_id, wait.attempts))
-                })
-                .collect::<Vec<_>>()
-        };
-        for (instance_id, attempt) in due {
-            self.queue_fence_recheck(instance_id, attempt)?;
-        }
         Ok(())
     }
 
