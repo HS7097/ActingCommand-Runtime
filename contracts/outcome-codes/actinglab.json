@@ -581,6 +581,26 @@
       "description": "actinglab resource check-release is retired: it answered checked whenever --repo was a directory, without checking anything. It is refused (exit 2) and writes nothing (Workflow #411 RV-1).",
       "common_causes": "A script written for the retired stub.",
       "handling": "Run actinglab resource verify, which checks a resource repository's commit as its CI does and writes a report."
+    },
+    "package_check_click_box_single_point": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "box_x": "required",
+        "box_y": "required",
+        "box_width": "required",
+        "box_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 B34: actinglab package check admitted the package, and an operation's click declares a box of one point: a point click, a long press without a box, or a rect, specific_rect or long-press box of 1x1. pack_operation_id names the operation; box_x, box_y, box_width and box_height the box in the coordinate space of its task (a point click's box is 1x1 at its point). A click located on the frame (target, target_center, offset) and a drag are not judged. The package still passes; one warning per such click.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

@@ -17,7 +17,8 @@
 //!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15); the two Lab
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
 //!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8);
-//!   `startup_discovery` (Workflow #390 DISC-1); `touch` (Workflow #406 T12).
+//!   `startup_discovery` (Workflow #390 DISC-1); `touch` (Workflow #406 T12);
+//!   `emulator_control` (#411 A50).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -29,6 +30,7 @@ mod defaults;
 pub mod device_link;
 pub mod device_state;
 mod effective;
+pub mod emulator_control;
 mod existing;
 mod host_claims;
 mod instance;
@@ -56,6 +58,10 @@ pub use effective::{
     OVERRIDE_CONFIG_KEY, OVERRIDE_REQUEST_ID, OVERRIDE_SET_IN_OWNER_EPOCH, OVERRIDE_SET_UNIX_MS,
     OVERRIDE_VALUE_JSON, OverridesInvalid, RestoreNote,
 };
+pub use emulator_control::{
+    EmulatorControlFile, RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
+    RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
+};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
 pub use instance::{
     DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR,
@@ -64,10 +70,10 @@ pub use instance::{
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;
 pub use recovery_ladder::{
-    AlreadyRunning, BurstWindow, CodePattern, CooldownOpensOn, DirectRuns, EntryUnavailable,
-    FenceRecheckConfig, HoldConfig, LadderConfig, LadderProfile, LadderRules, MatchedBy,
-    PreparationSuperseded, RecoveryLadderFile, RungConfig, StartBeyondProfile, TriggerItem,
-    TriggerVerdict, ladder_class_of,
+    AlreadyRunning, BurstWindow, BusyConfig, BusyOutcomeConfig, CodePattern, CooldownOpensOn,
+    DirectRuns, EntryUnavailable, FenceRecheckConfig, HoldConfig, LadderConfig, LadderProfile,
+    LadderRules, MatchedBy, OnExhausted, PreparationSuperseded, RecoveryLadderFile, RungConfig,
+    StartBeyondProfile, TriggerItem, TriggerVerdict, ladder_class_of,
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
@@ -122,3 +128,7 @@ mod tests;
 // Workflow #406 T12.
 #[cfg(test)]
 mod touch_tests;
+
+// #411 B37 (A35-S1, host key 137): the busy hold's configuration keys.
+#[cfg(test)]
+mod gate_411_b37;

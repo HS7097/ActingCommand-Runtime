@@ -33,7 +33,8 @@ impl HostShared {
                 from_sequence: (index.through != 0).then_some(index.through + 1),
                 ..EventQuery::default()
             })
-            .map_err(|_| ledger_error(operation))?;
+            // #411 A51 (R3): a read the writer did not answer in time fails only the request.
+            .map_err(|error| ledger_read_error(&error, operation))?;
         for event in &events {
             index.references.extend(
                 event
@@ -492,7 +493,8 @@ impl HostShared {
                     .map(|reference| proposal_report_is_verified(verified, reference))
                     .collect::<Vec<_>>()
             })
-            .map_err(RequestFailure::poison_without_terminal)?;
+            // #411 A51 (R3): only a fatal failure poisons the Runtime.
+            .map_err(request_failure)?;
         for (reference, verified) in proposal.report_refs().iter().zip(verified) {
             if !verified {
                 return Err(proposal_request_failure(RuntimeHostError::request(

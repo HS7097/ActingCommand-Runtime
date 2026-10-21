@@ -804,3 +804,21 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_diagnose_lists_deferred_rows_up_to_the_configured_bound",
 ]
 incident = ["#386 SR-6b", "MCP-19"]
+
+# Workflow #411 B27 (slice E4, 0.12.x; register §1.156 E4-1, E4-5; no persisted ledger shape; B-train plan §6, Q15): ac_events given an event_type, or an element of event_types or exclude_event_types, that names no event type is refused as before, arguments_invalid (class usage) with the argument and argument_problem not_recognised, before any Runtime read, and names the value it received as argument_value
+[[gate]]
+key = "87"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_e4::e4_t1_ac_events_names_the_event_type_it_does_not_know",
+]
+incident = ["#411 B27"]
+
+# Workflow #411 B34 (slice E4, 0.12.x; register §1.156 E4-3, E4-5; no persisted ledger shape; B-train plan §6, Q15): actinglab package check answers warnings, one package_check_click_box_single_point warning per operation click whose declared box is one point (a point click, a rect box of 1x1), naming the operation (pack_operation_id) and the box (box_x, box_y, box_width, box_height), and none for a larger box; the package still passes (exit 0, status admitted)
+[[gate]]
+key = "88"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t3_a_click_box_of_one_point_is_a_warning_and_the_package_still_passes",
+]
+incident = ["#411 B34"]

@@ -558,7 +558,13 @@ preflight` and `ac_binding_draft`, which runs preflight, are unchanged. Workflow
 refusal of `package check`, and a `package preflight` refused at task preparation, also carry
 `details.outcome`, the admission's outcome with the values it names (a
 `contained_task_program_invalid` that names its rule: `program_problem`, the task declaration's
-`path` inside the package and `json_pointer`).
+`path` inside the package and `json_pointer`). Workflow #411 B34: the answer also lists
+`warnings`, the outcome of each `package_check_click_box_single_point` warning, in declaration
+order (empty when there is none): an operation's click whose declared box is one point, a
+`point` click or a long press without a box (each a box of 1×1 at its point) or a `rect`,
+`specific_rect` or long-press box of 1×1, with `pack_operation_id` and the box (`box_x`,
+`box_y`, `box_width`, `box_height`). A click located on the frame (`target`, `target_center`,
+`offset`) and a drag are not judged. The package still passes (exit 0).
 A procedure binding's `scheduled_execution.package_path` may equally name a directory or a
 container file. Evidence replay continues to
 use its independent evidence ZIP hash (`lab replay-evidence --expected-sha256`).
