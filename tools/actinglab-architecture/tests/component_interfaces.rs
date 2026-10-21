@@ -136,3 +136,4 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 // CI-RED red proof 1: throwaway draft marker, push 1 (do not merge).
+// CI-RED red proof 1: throwaway draft marker, push 2 (do not merge).
