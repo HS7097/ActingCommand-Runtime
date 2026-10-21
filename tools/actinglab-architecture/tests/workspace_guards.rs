@@ -5414,6 +5414,8 @@ const HOST_SPLIT: &[HostModule] = &[
     },
     host_module("installation", &["HostShared"]),
     host_module("lab_operation", &["HostShared"]),
+    // Workflow #411 A35-S5: a holding recovery ladder's status member (in memory only).
+    host_module("ladder_busy_hold", &["HostShared"]),
     host_module("lease", &["HostShared"]),
     host_module("lifecycle", &["HostShared", "RuntimeLifecycleFailureStage"]),
     host_module("material_read", &["HostShared"]),
