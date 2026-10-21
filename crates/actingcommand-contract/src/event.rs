@@ -399,7 +399,6 @@ pub enum EventType {
     TaskEffectCompleted,
     /// Ledger revision 4 (Workflow #411 B18, register §1.153 LR-3; writer BT-B18): a refusal
     /// marker showed after the step's effect completed, so the effect counts as not done.
-    #[serde(rename = "task.effect_refused")]
     TaskEffectRefused,
     /// Ledger revision 4 (Workflow #411 B16 part 1, register §1.153 LR-7; writer BT-KEY): an
     /// operation reached its per-run cap.
