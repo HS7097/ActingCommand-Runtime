@@ -663,6 +663,14 @@ pub fn evaluate(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CandidateEligibility {
     Eligible,
+    /// Workflow #411 B8: eligible, with the runs the Runtime's daily budgets (the task's and its
+    /// activity profile's, in the activity day the admission counts) still allow the pair after
+    /// this dispatch, as its admission preview counts them. A selected dispatch of a task that
+    /// opts in to `dispatch_parameters` carries it as `daily_remaining`; otherwise it is
+    /// `Eligible`.
+    EligibleWithDailyRemaining {
+        daily_remaining: u32,
+    },
     Deferred {
         reason: DecisionReason,
         next_wake_unix_ms: Option<u64>,
@@ -1316,26 +1324,6 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             seed,
         );
         let reason_chain_id = format!("reason:{decision_id}");
-        let mut reasons = work[candidate.work_index].reasons.clone();
-        // Workflow #411 B15 R2: the read-only parameters the run receives.
-        if let Some(parameters) = remedies
-            .and_then(|plan| plan.dispatch_parameters(&candidate.task_id, &candidate.instance_id))
-        {
-            reasons.push(parameters.clone());
-        }
-        reasons.extend([
-            reason(
-                PolicyCode::PlacementSelected,
-                format!(
-                    "instance '{}' satisfies scope, capability, affinity, and host budget",
-                    candidate.instance_id
-                ),
-            ),
-            reason(
-                PolicyCode::RankAssigned,
-                format!("deterministic total score {}", candidate.rank.total_score),
-            ),
-        ]);
         let intent = DispatchIntent {
             decision_id,
             task_id: candidate.task_id.clone(),
@@ -1363,9 +1351,20 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 urgency_milli: candidate.rank.urgency_milli,
             },
         };
-        let (deferral, gate) = match eligibility(&intent)? {
+        let answer = eligibility(&intent)?;
+        // Workflow #411 B8: the daily budgets' remaining runs the admission preview counted.
+        let daily_remaining = match &answer {
+            CandidateEligibility::EligibleWithDailyRemaining { daily_remaining } => {
+                Some(*daily_remaining)
+            }
+            CandidateEligibility::Eligible
+            | CandidateEligibility::Deferred { .. }
+            | CandidateEligibility::Refresh { .. } => None,
+        };
+        let (deferral, gate) = match answer {
             // Workflow #411 B15 R2: the plan's hold or stop, at position 8a.
-            CandidateEligibility::Eligible => match remedies
+            CandidateEligibility::Eligible
+            | CandidateEligibility::EligibleWithDailyRemaining { .. } => match remedies
                 .and_then(|plan| plan.deferral(&candidate.task_id, &candidate.instance_id))
             {
                 Some(planned) => (
@@ -1414,6 +1413,48 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             }
             continue;
         }
+        let mut reasons = work[candidate.work_index].reasons.clone();
+        // Workflow #411 B15 R2: the read-only parameters the run receives; Workflow #411 B8: a
+        // task that opts in adds its schedule values to the same reason, with or without one.
+        let remedy_parameters = remedies
+            .and_then(|plan| plan.dispatch_parameters(&candidate.task_id, &candidate.instance_id));
+        let schedule = catalog_bundle
+            .tasks
+            .tasks
+            .iter()
+            .find(|task| task.id == candidate.task_id && task.dispatch_parameters == Some(true))
+            .map(|task| {
+                dispatch_schedule(
+                    task,
+                    task_states
+                        .get(&(candidate.task_id.as_str(), candidate.instance_id.as_str()))
+                        .copied(),
+                    catalog_bundle
+                        .activity
+                        .profiles
+                        .iter()
+                        .find(|profile| profile.id == intent.prerequisites.activity_profile_id),
+                    time,
+                    daily_remaining,
+                )
+            })
+            .transpose()?;
+        if let Some(parameters) = dispatch_parameters_reason(remedy_parameters, schedule) {
+            reasons.push(parameters);
+        }
+        reasons.extend([
+            reason(
+                PolicyCode::PlacementSelected,
+                format!(
+                    "instance '{}' satisfies scope, capability, affinity, and host budget",
+                    candidate.instance_id
+                ),
+            ),
+            reason(
+                PolicyCode::RankAssigned,
+                format!("deterministic total score {}", candidate.rank.total_score),
+            ),
+        ]);
         host.consume(candidate.load);
         selected_instances.insert(candidate.instance_id.clone());
         selected.push((reason_chains.len(), candidate.work_index));
@@ -1566,6 +1607,95 @@ fn finish_remedy_holds(plan: &RemedyPlan, work: &mut [TaskWork]) {
             entry.next_wake_unix_ms = planned.next_wake_unix_ms;
         }
     }
+}
+
+/// Workflow #411 B8 (`contracts/remedies.md` section 4; `contracts/scheduling/v2/README.md`):
+/// the schedule values one selected dispatch of a task that opts in to `dispatch_parameters`
+/// hands its run. A value that cannot be known is absent, so the run's policy reads it as
+/// unknown and its `on_unknown` decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DispatchSchedule {
+    /// The least next occurrence of the task's counted clocks (as `clock_slot_view` counts
+    /// them); absent without a counted clock or when none occurs again.
+    next_occurrence_unix_ms: Option<u64>,
+    /// The end of the instance's activity window at the evaluation.
+    window_end_unix_ms: Option<u64>,
+    /// The last round of the window: no counted clock occurs again before the window ends.
+    last_in_window: Option<bool>,
+    /// The last of today's budget: the daily budgets allow no further run today.
+    last_daily_slot: Option<bool>,
+    /// The runs the daily budgets still allow today after this one.
+    daily_remaining: Option<u32>,
+}
+
+/// The [`DispatchSchedule`] of a selected dispatch of `task` at `time`, `profile` the activity
+/// profile its intent names and `daily_remaining` what the eligibility callback counted (none
+/// when it counted nothing).
+fn dispatch_schedule(
+    task: &TaskSpec,
+    state: Option<&TaskRuntimeSnapshot>,
+    profile: Option<&ActivityProfile>,
+    time: EvaluationTime,
+    daily_remaining: Option<u32>,
+) -> PolicyEvaluationResult<DispatchSchedule> {
+    // `None` without a counted clock; `Some(None)` when no counted clock occurs again.
+    let next_occurrence = clock_slot_view(task, state, time)?.map(|view| view.next_occurrence);
+    let window_end = profile
+        .map(|profile| activity_window_at(profile, time.unix_ms))
+        .transpose()?
+        .flatten()
+        .map(|window| window.until_unix_ms);
+    let last_in_window = next_occurrence
+        .zip(window_end)
+        .map(|(next, end)| next.is_none_or(|next| next >= end));
+    Ok(DispatchSchedule {
+        next_occurrence_unix_ms: next_occurrence.flatten(),
+        window_end_unix_ms: window_end,
+        last_in_window,
+        last_daily_slot: daily_remaining.map(|remaining| remaining == 0),
+        daily_remaining,
+    })
+}
+
+/// The `policy_dispatch_parameters` reason of a selected dispatch: the remedy plan's (Workflow
+/// #411 B15 R2) with the schedule values of Workflow #411 B8 added, or a reason of the schedule
+/// values alone when the plan gives none. A schedule with no known value adds nothing.
+fn dispatch_parameters_reason(
+    parameters: Option<&DecisionReason>,
+    schedule: Option<DispatchSchedule>,
+) -> Option<DecisionReason> {
+    let Some(schedule) = schedule.filter(|schedule| {
+        schedule.next_occurrence_unix_ms.is_some()
+            || schedule.window_end_unix_ms.is_some()
+            || schedule.last_in_window.is_some()
+            || schedule.last_daily_slot.is_some()
+            || schedule.daily_remaining.is_some()
+    }) else {
+        return parameters.cloned();
+    };
+    let mut outcome = parameters.map_or_else(
+        || Outcome::new(PolicyCode::PolicyDispatchParameters),
+        |parameters| parameters.outcome.clone(),
+    );
+    if let Some(next) = schedule.next_occurrence_unix_ms {
+        outcome = outcome.next_occurrence_unix_ms(next);
+    }
+    if let Some(end) = schedule.window_end_unix_ms {
+        outcome = outcome.window_end_unix_ms(end);
+    }
+    if let Some(last) = schedule.last_in_window {
+        outcome = outcome.last_in_window(last);
+    }
+    if let Some(last) = schedule.last_daily_slot {
+        outcome = outcome.last_daily_slot(last);
+    }
+    if let Some(remaining) = schedule.daily_remaining {
+        outcome = outcome.daily_remaining(remaining);
+    }
+    Some(DecisionReason {
+        detail: outcome.to_string(),
+        outcome,
+    })
 }
 
 /// How one candidate's `total_score` was put together (Workflow #308 RT-S1c). Written when the

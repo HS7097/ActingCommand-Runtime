@@ -531,4 +531,9 @@ outcome_keys! {
     eligibility: vocab(eligibility),
     omitted_why: records(why, count),
     // ---- Workflow #411 A26: end ----
+    // ---- Workflow #411 B8 (a dispatch's schedule values, contracts/remedies.md section 4): begin ----
+    last_in_window: boolean,
+    last_daily_slot: boolean,
+    daily_remaining: integer,
+    // ---- Workflow #411 B8: end ----
 }

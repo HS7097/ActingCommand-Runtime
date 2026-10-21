@@ -1998,6 +1998,18 @@
         "count": "required"
       },
       "description": "The candidates of the same instance that a dispatch decision record does not list, counted by why: one record per code, in ascending code order (Workflow #411 A26)."
+    },
+    "last_in_window": {
+      "type": "boolean",
+      "description": "The dispatch is the last round of its activity window: no clock of its task's trigger occurs again before the window ends (Workflow #411 B8)."
+    },
+    "last_daily_slot": {
+      "type": "boolean",
+      "description": "The dispatch is the last of today's budget: the daily budgets of its task and activity profile allow no further run in the activity day (Workflow #411 B8)."
+    },
+    "daily_remaining": {
+      "type": "integer",
+      "description": "The runs the daily budgets of a task and its activity profile still allow in the activity day after this dispatch (Workflow #411 B8)."
     }
   },
   "vocabularies": {

@@ -351,6 +351,18 @@ fn validate_tasks(
             descriptor,
             diagnostics,
         );
+        // Workflow #411 B8: `dispatch_parameters` is a V2 member; a V1 document that names it is
+        // refused as an unknown member.
+        if task.dispatch_parameters.is_some()
+            && map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::UnknownField,
+                format!("{path}/dispatch_parameters"),
+                "dispatch_parameters requires actingcommand.scheduling.v2",
+                descriptor,
+            ));
+        }
     }
     validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
 }

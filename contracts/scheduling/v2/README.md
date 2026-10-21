@@ -76,6 +76,17 @@ document that names it is refused as an unknown member. Nothing is checked
 against the ledger, so an id that never ran adds nothing. A task without
 `continues_from` serializes, and hashes, exactly as before.
 
+A task may carry `dispatch_parameters` (Workflow #411 B8), V2 only: a boolean.
+With `true`, every selected policy dispatch of the task, with or without
+remedies, carries its schedule values on `policy_dispatch_parameters`
+(`next_occurrence_unix_ms`, `window_end_unix_ms`, `last_in_window`,
+`last_daily_slot`, `daily_remaining`, each when known), and its run reads them
+as the read-only facts `session.dispatch.schedule.<key>`
+(`../../remedies.md`, section 4). With `false` the task carries none, as
+without the member. A V1 document that names it is refused as an unknown
+member. A task without `dispatch_parameters` serializes, and hashes, exactly as
+before.
+
 A predicate may be `{"kind":"fact_time_reached","scope":…,"fact_key":…,"offset_ms":N,"max_age_ms":M}`
 (Workflow #405), V2 only: true once the `timestamp_ms` value of the fact plus N
 has come, false with its reason before that or when the fact gives no time

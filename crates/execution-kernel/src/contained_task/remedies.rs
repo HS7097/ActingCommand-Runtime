@@ -25,6 +25,9 @@ use sha2::{Digest, Sha256};
 pub const RUN_PARAMETERS_KEY_PREFIX: &str = "session.dispatch.";
 /// The key of one parameter's record is this prefix followed by the parameter's name.
 const RUN_PARAMETER_KEY_PREFIX: &str = "session.dispatch.parameter.";
+/// Workflow #411 B8 (contracts/remedies.md section 4): the key of one schedule value's record is
+/// this prefix followed by the value's key in `policy_dispatch_parameters`.
+const DISPATCH_SCHEDULE_KEY_PREFIX: &str = "session.dispatch.schedule.";
 /// `source_detector`, `source_snapshot_id` and `schema_version` of an overlay record.
 const RUN_PARAMETER_DETECTOR: &str = "runtime.run-parameters";
 const RUN_PARAMETER_SNAPSHOT: &str = "run-parameters";
@@ -40,19 +43,44 @@ pub struct RunParameters {
     package_id: String,
     values: Vec<(String, String)>,
     admitted_at_unix_ms: Option<u64>,
+    /// Workflow #411 B8: the schedule values a policy dispatch carries, `(key, value)` each, with
+    /// the dispatch's admission instant; `None` for a run without them.
+    schedule: Option<(Vec<(String, FactValue)>, u64)>,
 }
 
 impl RunParameters {
     /// Adds one record per parameter to `snapshot`, after the records it holds: the key
     /// `session.dispatch.parameter.<name>`, the value as a string, the snapshot's instance as its
     /// scope, confidence 1000, no expiry, observed at the dispatch's admission or, for a run
-    /// without a dispatch, at `now_unix_ms`. The snapshot keeps its identity, the stored
-    /// projection's; a select step's `input_sha256` covers the records added.
+    /// without a dispatch, at `now_unix_ms`. Then, Workflow #411 B8, one record per schedule
+    /// value of the dispatch: the key `session.dispatch.schedule.<key>`, the value typed, the
+    /// same scope, confidence and expiry, observed at the dispatch's admission. The snapshot
+    /// keeps its identity, the stored projection's; a select step's `input_sha256` covers the
+    /// records added.
     pub fn overlay(&self, snapshot: &mut InstanceFactSnapshot, now_unix_ms: u64) {
-        if self.values.is_empty() {
+        let schedule = self
+            .schedule
+            .iter()
+            .flat_map(|(values, admitted_at_unix_ms)| {
+                values.iter().map(move |(key, value)| {
+                    (
+                        format!("{DISPATCH_SCHEDULE_KEY_PREFIX}{key}"),
+                        value.clone(),
+                        *admitted_at_unix_ms,
+                    )
+                })
+            });
+        let parameters = self.values.iter().map(|(name, value)| {
+            (
+                format!("{RUN_PARAMETER_KEY_PREFIX}{name}"),
+                FactValue::String(value.clone()),
+                self.admitted_at_unix_ms.unwrap_or(now_unix_ms),
+            )
+        });
+        let records = parameters.chain(schedule).collect::<Vec<_>>();
+        if records.is_empty() {
             return;
         }
-        let observed_at_unix_ms = self.admitted_at_unix_ms.unwrap_or(now_unix_ms);
         let bundle_hash = format!(
             "{:x}",
             Sha256::digest(format!("package:{}", self.package_id).as_bytes())
@@ -60,13 +88,11 @@ impl RunParameters {
         let scope = FactScope::Instance {
             instance_id: snapshot.context.instance_id.clone(),
         };
-        for (name, value) in &self.values {
+        for (key, value, observed_at_unix_ms) in records {
             snapshot.records.push(FactRecord {
                 scope: scope.clone(),
-                key: format!("{RUN_PARAMETER_KEY_PREFIX}{name}"),
-                content: FactContent::Inline {
-                    value: FactValue::String(value.clone()),
-                },
+                key,
+                content: FactContent::Inline { value },
                 observed_at_unix_ms,
                 expires_at_unix_ms: None,
                 ttl_policy: None,
@@ -78,6 +104,21 @@ impl RunParameters {
                 invalidate_on: Vec::new(),
             });
         }
+    }
+
+    /// Workflow #411 B8 (contracts/remedies.md section 4): these parameters with the schedule
+    /// values a policy dispatch carries, `(key, value)` each, observed at the dispatch's
+    /// admission `admitted_at_unix_ms`; with none, the parameters are unchanged.
+    #[must_use]
+    pub fn with_dispatch_schedule(
+        mut self,
+        values: Vec<(String, FactValue)>,
+        admitted_at_unix_ms: u64,
+    ) -> Self {
+        if !values.is_empty() {
+            self.schedule = Some((values, admitted_at_unix_ms));
+        }
+        self
     }
 }
 
@@ -164,6 +205,7 @@ impl PreparedContainedTask {
             package_id: self.control.package_id.clone(),
             values: self.declared_parameter_defaults(),
             admitted_at_unix_ms: None,
+            schedule: None,
         }
     }
 
@@ -179,6 +221,7 @@ impl PreparedContainedTask {
             package_id: self.control.package_id.clone(),
             values,
             admitted_at_unix_ms: Some(admitted_at_unix_ms),
+            schedule: None,
         }
     }
 

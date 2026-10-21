@@ -6768,16 +6768,21 @@ impl HostShared {
         control: Arc<ContainedRunControl>,
         admission_request_id: Option<RequestId>,
         reading_keys: Option<BTreeSet<String>>,
-        dispatched_parameters: Option<(Vec<(String, String)>, u64)>,
+        dispatched_parameters: Option<crate::fact_refresh::DispatchedParameters>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
         // Workflow #411 B15 R5 (contracts/remedies.md section 4): a policy run reads the values
         // its dispatch carries, observed at its admission; any other run reads its package's
-        // declared defaults.
+        // declared defaults. Workflow #411 B8: a policy run also reads the schedule values its
+        // dispatch carries, observed at its admission; any other run reads none.
         let run_parameters = match dispatched_parameters {
-            Some((values, admitted_at_unix_ms)) => {
-                prepared.dispatched_run_parameters(values, admitted_at_unix_ms)
+            Some(dispatched) => match dispatched.values {
+                Some(values) => {
+                    prepared.dispatched_run_parameters(values, dispatched.admitted_at_unix_ms)
+                }
+                None => prepared.default_run_parameters(),
             }
+            .with_dispatch_schedule(dispatched.schedule, dispatched.admitted_at_unix_ms),
             None => prepared.default_run_parameters(),
         };
         // Workflow #373 NAV-6: the steps the run's own layers can execute.

@@ -14,8 +14,8 @@
 
 use crate::codes::HostCode;
 use crate::policy_host::{InstanceOccupancy, PolicyRunContext};
-use actingcommand_contract::PolicyBudgetDimension;
 use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::{FactValue, PolicyBudgetDimension};
 use actingcommand_execution_kernel::PreparedContainedTask;
 use actingcommand_policy::{
     CandidateEligibility, DecisionReason, FACT_REFRESH_TASK_ID, InstanceHold, PolicyCode,
@@ -83,15 +83,43 @@ pub(crate) fn requested_keys(context: &PolicyRunContext) -> Option<BTreeSet<Stri
     })
 }
 
+/// What a policy run reads from its own dispatch's `policy_dispatch_parameters`
+/// ([`dispatch_parameters`]), with the dispatch's admission instant.
+pub(crate) struct DispatchedParameters {
+    /// Workflow #411 B15 R5: each `(parameter_name, parameter_value)` of `run_parameters`, in its
+    /// order; `None` when the reason carries no `run_parameters` (a reason of Workflow #411 B8's
+    /// values alone), so the run reads its package's declared defaults.
+    pub(crate) values: Option<Vec<(String, String)>>,
+    /// Workflow #411 B8: each schedule value the reason carries, `(key, value)`, typed.
+    pub(crate) schedule: Vec<(String, FactValue)>,
+    pub(crate) admitted_at_unix_ms: u64,
+}
+
+/// Workflow #411 B8: the keys of `policy_dispatch_parameters` a run reads as
+/// `session.dispatch.schedule.<key>` (contracts/remedies.md section 4), with their fact types.
+const DISPATCH_SCHEDULE_KEYS: [(&str, ScheduleValueKind); 5] = [
+    ("next_occurrence_unix_ms", ScheduleValueKind::Timestamp),
+    ("window_end_unix_ms", ScheduleValueKind::Timestamp),
+    ("last_in_window", ScheduleValueKind::Boolean),
+    ("last_daily_slot", ScheduleValueKind::Boolean),
+    ("daily_remaining", ScheduleValueKind::Integer),
+];
+
+#[derive(Clone, Copy)]
+enum ScheduleValueKind {
+    Timestamp,
+    Boolean,
+    Integer,
+}
+
 /// Workflow #411 B15 R5 (contracts/remedies.md section 4): the run parameters a policy run reads
 /// from its own dispatch reason chain, as a fact refresh reads its requested keys: each
 /// `(parameter_name, parameter_value)` of the chain's `policy_dispatch_parameters`, in its order,
-/// with the dispatch's admission instant; `None` when the chain carries none. An entry that is
-/// not a pair of strings gives no parameter, so a package policy that reads it meets an unknown
-/// fact and decides by its own `on_unknown`.
-pub(crate) fn dispatch_parameters(
-    context: &PolicyRunContext,
-) -> Option<(Vec<(String, String)>, u64)> {
+/// and (Workflow #411 B8) each schedule value it carries, with the dispatch's admission instant;
+/// `None` when the chain carries none. An entry that is not a pair of strings, or a schedule value
+/// of another type, gives nothing, so a package policy that reads it meets an unknown fact and
+/// decides by its own `on_unknown`.
+pub(crate) fn dispatch_parameters(context: &PolicyRunContext) -> Option<DispatchedParameters> {
     let reason = context
         .reason_chain()
         .reasons
@@ -101,17 +129,35 @@ pub(crate) fn dispatch_parameters(
         .outcome
         .value("run_parameters")
         .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            let text = |key: &str| entry.get(key).and_then(serde_json::Value::as_str);
-            Some((
-                text("parameter_name")?.to_owned(),
-                text("parameter_value")?.to_owned(),
-            ))
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let text = |key: &str| entry.get(key).and_then(serde_json::Value::as_str);
+                    Some((
+                        text("parameter_name")?.to_owned(),
+                        text("parameter_value")?.to_owned(),
+                    ))
+                })
+                .collect()
+        });
+    let schedule = DISPATCH_SCHEDULE_KEYS
+        .iter()
+        .filter_map(|(key, kind)| {
+            let value = reason.outcome.value(key)?;
+            let value = match kind {
+                ScheduleValueKind::Timestamp => FactValue::TimestampMs(value.as_u64()?),
+                ScheduleValueKind::Boolean => FactValue::Boolean(value.as_bool()?),
+                ScheduleValueKind::Integer => FactValue::Integer(value.as_i64()?),
+            };
+            Some(((*key).to_owned(), value))
         })
         .collect();
-    Some((values, context.admission().activity.admitted_at_unix_ms))
+    Some(DispatchedParameters {
+        values,
+        schedule,
+        admitted_at_unix_ms: context.admission().activity.admitted_at_unix_ms,
+    })
 }
 
 /// What the closure's positions 1-2 hold an instance with: an operator scheduling pause (no

@@ -605,6 +605,10 @@ target record `session.remedy.choices` (an overlaid instance fact) and the confi
   once the window passed).
 - **Run parameters.** A dispatch of a task whose package declares parameters carries
   `policy_dispatch_parameters` with the values the run reads as `session.dispatch.parameter.*`.
+  Workflow #411 B8: a dispatch of a V2 task with `dispatch_parameters: true` carries, on the same
+  reason and whether or not remedies are on, its schedule values (`next_occurrence_unix_ms`,
+  `window_end_unix_ms`, `last_in_window`, `last_daily_slot`, `daily_remaining`), which the run
+  reads as `session.dispatch.schedule.*` ([remedies.md](../remedies.md), section 4).
 - **Records.** The reasons travel in the existing dispatch reason chains; the stop, lift and expiry
   are `goal_missed` planning signals with the `signal_id` prefix `signal:remedy:`; an intent whose
   round closed between evaluation and admission is refused with `policy_remedy_round_closed`. The

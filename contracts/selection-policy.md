@@ -355,7 +355,11 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   declared default for a run without a dispatch. The records are an overlay, never stored. A
   document reads one as an `enum_string` field with the declared options and should use
   `on_unknown: abort_evaluation`; `input_sha256` covers the overlay, so two runs that differ only
-  in a value differ in that hash.
+  in a value differ in that hash. Workflow #411 B8: a policy run of a catalog task that opts in
+  (`dispatch_parameters: true`) also holds its dispatch's schedule values in the same overlay,
+  `session.dispatch.schedule.<key>` (`next_occurrence_unix_ms` and `window_end_unix_ms` read as
+  `integer`, `last_in_window` and `last_daily_slot` as `boolean`, `daily_remaining` as `integer`);
+  any other run holds none, and the document's `on_unknown` decides.
 - A document that declares a record list needs a layout whose `unknown_identity` is
   `reject`, so the evaluator never meets an unknown key; admission and the parser refuse it
   otherwise (`contained_task_select_policy_mismatch`, `resource_declaration_invalid`).
