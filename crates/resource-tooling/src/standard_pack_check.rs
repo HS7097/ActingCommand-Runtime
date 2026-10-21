@@ -52,12 +52,12 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
 use actingcommand_contract::{
     InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem, NavigationRole,
-    ProvidedCapability, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    ProvidedCapability, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, StandardPackProblem, StandardPackRoot,
     StandardPackRootBytes, StandardPackRootIssue, read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{
-    NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
+    ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -195,6 +195,7 @@ pub fn check_standard_pack_root(
         },
         &game,
     )
+    // E1 red proof 2 (do not merge): today's error for an empty pack table.
     .map_err(|issue| root_invalid(&game, &root.join(issue.file), &issue))?;
     // A directory that holds none of the root files is no game root: its bundle is missing.
     let checked = checked.ok_or_else(|| {
@@ -586,7 +587,7 @@ impl Packages<'_> {
             &path,
             Instant::now() + PACK_DEADLINE,
         )
-        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
+        .map_err(|error| package_refused(&entry.directory, &path, &error))?;
         self.admitted.insert(package_id.to_owned(), package.clone());
         Ok(package)
     }
@@ -653,6 +654,18 @@ fn navigation_package_invalid(
         &[],
     )
     .with_details(json!({"outcome": outcome.envelope(Detail::Full)}))
+}
+
+/// `package_invalid` for a package of the registry whose admission refused it (Workflow #411
+/// A25: the developer message names its directory `path`). Workflow #411 A41: its outcome names
+/// the directory below the game root (`path`), caused by the admission's own outcome, which
+/// names the refused file inside the package and the parser's position where it gives them.
+fn package_refused(directory: &str, path: &Path, error: &ContainedTaskError) -> LabError {
+    let outcome = Outcome::new(RuntimeErrorCode::PackageInvalid)
+        .path(directory)
+        .caused_by(error.outcome());
+    LabError::package_invalid(format!("{}: {error}", path.display()))
+        .with_details(json!({"outcome": outcome.envelope(Detail::Full)}))
 }
 
 /// `standard_pack_root_invalid`: the root file at `path` breaks its shape, a limit or a

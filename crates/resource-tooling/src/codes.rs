@@ -83,6 +83,11 @@ actingcommand_contract::outcome_codes! {
         PackageBundleMaintenanceInvalid => "package_bundle_maintenance_invalid": error / none,
         PackageBundleIndexInvalid => "package_bundle_index_invalid": error / none,
         PackageBundlePacksRootInvalid => "package_bundle_packs_root_invalid": error / none,
+        /// Workflow #411 A40: the pack table holds no pack: `package bundle`'s `--packs-root` holds
+        /// no pack directory, or the `bundle.json` `actinglab standard-pack check` reads lists no
+        /// pack (key `path`, where it looked, relative to the standard package; `json_pointer`
+        /// inside `bundle.json`).
+        PackageBundlePacksEmpty => "package_bundle_packs_empty": error / none,
         PackageBundleWriteFailed => "package_bundle_write_failed": error / none,
         /// Workflow #373 NAV-T (M-373 v1.1 §3.9): a package a standard-pack root file names
         /// cannot play its part, as the Runtime would refuse it (keys `package_id`,
