@@ -1727,4 +1727,7 @@ mod tests {
     // Workflow #406 T4 (apps key 79): ac_lab_do passes seed as --seed and answers the sampling
     // actinglab gives.
     mod gate_406_t4;
+
+    // Workflow #411 E4 tail (apps key 97): the ac_pack_check result schema names its warnings.
+    mod gate_411_e4_tail;
 }
