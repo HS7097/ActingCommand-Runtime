@@ -477,6 +477,8 @@ impl Declaration<'_> {
                 "input_recheck",
                 "when",
                 "on_guard_refused",
+                "max_runs",
+                "on_max_runs",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -662,10 +664,54 @@ impl Declaration<'_> {
                 "on_guard_refused" if !value.is_null() => {
                     self.on_guard_refused(value, &pointer)?;
                 }
+                "max_runs" if !value.is_null() => self.max_runs(value, &pointer)?,
+                "on_max_runs" if !value.is_null() => self.on_max_runs(value, &pointer)?,
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    /// #411 B16 part 1: an operation's `max_runs`, task schema `0.9` only (`UnconsumedField`
+    /// before it): an unsigned integer. Runtime admission checks 1..=1000 and that `on_max_runs`
+    /// comes with it.
+    fn max_runs(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        self.unsigned(value, pointer)
+    }
+
+    /// #411 B16 part 1: an operation's `on_max_runs`, task schema `0.9` only (`UnconsumedField`
+    /// before it): the string `next_candidate` or `{"outcome_key": "<key>"}`, nothing else.
+    fn on_max_runs(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        self.keyed_end(value, pointer, &["outcome_key"])
+    }
+
+    /// #411 B16 part 1 and B22: the string `next_candidate`, or an object with a string
+    /// `outcome_key` and, among `members`, other optional string members.
+    fn keyed_end(&self, value: &Value, pointer: &str, members: &[&str]) -> CliOutcome<()> {
+        match value {
+            Value::String(text) if text == GUARD_REFUSAL_NEXT_CANDIDATE => Ok(()),
+            Value::String(_) => Err(self.error(pointer, ResourceDeclarationReason::InvalidValue)),
+            Value::Object(_) => {
+                let object = self.object(value, pointer, members)?;
+                self.string(
+                    self.required(object, pointer, "outcome_key")?,
+                    &child(pointer, "outcome_key"),
+                )?;
+                for member in members.iter().filter(|member| **member != "outcome_key") {
+                    if let Some(value) = object.get(*member).filter(|value| !value.is_null()) {
+                        self.string(value, &child(pointer, member))?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(self.error(pointer, ResourceDeclarationReason::InvalidType)),
+        }
     }
 
     /// An optional operation (Workflow #339, `linear_steps` only): `{"settle_ms"}`, nothing
@@ -758,16 +804,14 @@ impl Declaration<'_> {
     }
 
     /// Workflow #390 EXEC-1: an operation's `on_guard_refused`, task schema `0.9` only
-    /// (`UnconsumedField` before it): the string `next_candidate`.
+    /// (`UnconsumedField` before it): the string `next_candidate`, or (#411 B22) its keyed form
+    /// `{"outcome_key": "<key>", "failed"?: "<target>"}`, nothing else. Runtime admission checks
+    /// the guard and the target.
     fn on_guard_refused(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         if self.schema != Some("0.9") {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
-        match value.as_str() {
-            Some(GUARD_REFUSAL_NEXT_CANDIDATE) => Ok(()),
-            Some(_) => Err(self.error(pointer, ResourceDeclarationReason::InvalidValue)),
-            None => Err(self.error(pointer, ResourceDeclarationReason::InvalidType)),
-        }
+        self.keyed_end(value, pointer, &["outcome_key", "failed"])
     }
 
     /// An operation's intermediate state (Workflow #336, `linear_steps` only):
