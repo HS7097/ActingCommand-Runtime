@@ -57,14 +57,16 @@ pub(crate) const INSTALL_ORDER: [StdTarget; 4] = [
 
 /// The restore order: both descriptors first, so that each Win32 slot can then take the handle
 /// its restored descriptor owns.
+// A36a red proof 1: today's order, the Win32 slots before the descriptors.
 pub(crate) const RESTORE_ORDER: [StdTarget; 4] = [
-    StdTarget::Descriptor(StdStream::Stdout),
-    StdTarget::Descriptor(StdStream::Stderr),
     StdTarget::Table(StdStream::Stdout),
     StdTarget::Table(StdStream::Stderr),
+    StdTarget::Descriptor(StdStream::Stdout),
+    StdTarget::Descriptor(StdStream::Stderr),
 ];
 
 /// Where the restore takes a Win32 standard handle from; decided once at acquisition.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableSource {
     /// The slot held the handle this standard descriptor owned. The install closes that number,
@@ -84,23 +86,7 @@ pub(crate) fn table_source(
     stdout_owned: isize,
     stderr_owned: isize,
 ) -> TableSource {
-    // NULL, INVALID_HANDLE_VALUE and the CRT's no-console value name no open handle.
-    let owns_slot = |owned: isize| owned == slot && !matches!(owned, 0 | -1 | -2);
-    let (own, other) = match stream {
-        StdStream::Stdout => (
-            (StdStream::Stdout, stdout_owned),
-            (StdStream::Stderr, stderr_owned),
-        ),
-        StdStream::Stderr => (
-            (StdStream::Stderr, stderr_owned),
-            (StdStream::Stdout, stdout_owned),
-        ),
-    };
-    if owns_slot(own.1) {
-        TableSource::Descriptor(own.0)
-    } else if owns_slot(other.1) {
-        TableSource::Descriptor(other.0)
-    } else {
-        TableSource::Unowned(slot)
-    }
+    // A36a red proof 1: today's restore writes the slot's saved value back.
+    let _ = (stream, stdout_owned, stderr_owned);
+    TableSource::Unowned(slot)
 }
