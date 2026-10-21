@@ -152,12 +152,13 @@ fn ao1_keys_every_ledger_observer_key_has_its_contract_default() {
         assert_eq!(parameter.source, ConfigParameterSource::Default, "{key}");
         assert!(!parameter.settable, "{key}");
     }
+    // The 21 keys of §15 and #411 A51's `read_budget_ms` and `close_timeout_ms`.
     assert_eq!(
         parameters
             .iter()
             .filter(|parameter| parameter.key.starts_with("ledger_observer."))
             .count(),
-        21
+        23
     );
 
     let config = from_file(json!({}));

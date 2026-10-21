@@ -914,6 +914,8 @@ impl HostShared {
         // Workflow #405 D1: each instance's random delay in effect as this cycle starts.
         let random_delay_context =
             self.random_delay_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        // Workflow #411 B41: the page each instance rests on as this cycle starts.
+        let chain_handover = self.chain_handover_inputs(&facts.instances)?;
         let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
@@ -939,6 +941,7 @@ impl HostShared {
                     },
                     remedy: &remedy_context,
                     random_delay: &random_delay_context,
+                    chain_handover: &chain_handover,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

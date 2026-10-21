@@ -431,6 +431,11 @@ digest), `ocr_targets` (OCR) and `checks` (named checks). A page with an anchor 
 rule replaces) and adds the rule's targets. Every generated page needs a `required` target or
 an `any_of` group; the page detector refuses one without.
 
+A page rule's `any_of` is an array of groups, each an array of target ids. Workflow #411 B28: an
+`any_of` that is no array, or an entry of it that is no array, is refused as before
+(`resource_declaration_invalid`, `invalid_type` at that member), and the refusal's outcome names
+the shape `any_of` must have: `expected_shape` `array_of_arrays`.
+
 A check that combines backends is either one page rule requiring one target per backend,
 usually over the same region, or a named check of the `checks` family (below) that a page
 rule or an operation guard references as one target. The page matches only when every
@@ -812,22 +817,30 @@ code.
 
 Workflow #390 EXEC-2 (forced-compromises mapping, rows E-05 and E-06). An operation of a
 page-graph task may declare an observation window, and a click may declare an input recheck.
-An older task schema refuses either with `UnconsumedField`; a `linear_steps` task refuses either
-at admission (`contained_task_linear_invalid`, `reason=observation_window` or
-`reason=input_recheck`, [Linear steps](linear-steps.md)). A task that declares neither runs as
-before.
+An older task schema refuses either with `UnconsumedField`; a `linear_steps` task refuses an
+observation window at admission (`contained_task_linear_invalid`, `reason=observation_window`,
+[Linear steps](linear-steps.md)). Workflow #411 B12: a click of a `linear_steps` task may declare
+an input recheck of any kind, and the kind `still_frames` waits for a still screen. A task that
+declares neither runs as before.
 
 ```json
 "observation_window": {"until": "window_end", "window_ms": 60000}
 "observation_window": {"until": "stable", "window_ms": 10000, "frames": 3}
 "input_recheck": {"kind": "fresh_frame"}
 "input_recheck": {"kind": "stable_frames", "frames": 3}
+"input_recheck": {"kind": "still_frames", "frames": 3}
+"input_recheck": {"kind": "still_frames", "frames": 3,
+                  "region": {"x": 0, "y": 600, "width": 1280, "height": 120},
+                  "max_distance_milli": 500}
 ```
 
 | Member | Declaration gate | Runtime admission (`contained_task_operation_invalid`) |
 | --- | --- | --- |
 | `observation_window` | `until` is `window_end` (members `until`, `window_ms`) or `stable` (members `until`, `window_ms`, `frames`); every member is required (`MissingField`), `window_ms` and `frames` are unsigned integers (`InvalidType`), another member is `UnknownField` and another `until` `InvalidValue` | `window_ms` from 1 to 60,000; `frames` from 2 to 32, and `frames - 1` confirmation intervals (`expect_after.interval_ms`, else the control capture interval) fit in `window_ms`; the operation declares a destination (`to` or `expect_after`) |
-| `input_recheck` | `kind` is `fresh_frame` (member `kind`) or `stable_frames` (members `kind`, `frames`), with the same refusals | the operation's effect is a click (not an `application` effect, not a select step, which confirms its candidate on a fresh frame already); `frames` from 2 to 32, and `frames - 1` control capture intervals fit in the control step timeout |
+| `input_recheck` | `kind` is `fresh_frame` (member `kind`), `stable_frames` (members `kind`, `frames`) or `still_frames` (members `kind`, `frames`, and the optional `region` and `max_distance_milli`), with the same refusals; `region` is an object of the integers `x`, `y`, `width` and `height` (`InvalidType`, another member `UnknownField`) and `max_distance_milli` an unsigned integer (`InvalidType`) | the operation's effect is a click (not an `application` effect, not a select step, which confirms its candidate on a fresh frame already); `frames` from 2 to 32, and `frames - 1` control capture intervals fit in the control step timeout; a `region` has a positive size and lies in the coordinate space |
+
+`still_frames` joins `package` revision 6, which is declared at the end of the 0.12.x B train;
+until then it, and an input recheck under `linear_steps`, are admitted by code.
 
 The post-input delay keeps its bound of 5,000 ms.
 
@@ -866,6 +879,19 @@ SR-1).
   the start of the wait, ends first, the input is refused with
   `contained_task_input_stability_unconfirmed` (`pack_operation_id`, and `timeout_ms` the step
   timeout), through the operation's failure decision.
+- `still_frames` (Workflow #411 B12): as `stable_frames`, and each frame is also compared with the
+  frame before it, whatever that frame showed, by the Runtime's one frame-change measure
+  ([color-digest.md](color-digest.md), section Frame change) over `region` (the whole frame when
+  absent). A frame whose change exceeds `max_distance_milli` (the measure's default threshold,
+  1500, when absent) and on which the guard passes starts the count again at one. The input is
+  drawn from and bound to the last frame. When the control step timeout ends first, the input is
+  refused with `contained_task_input_still_unconfirmed` (`pack_operation_id`, and `timeout_ms`
+  the step timeout), through the operation's failure decision.
+
+Under `linear_steps` (Workflow #411 B12) the recheck follows the guard on the step's frame as on
+the page-graph path, and each fresh frame is evaluated against the step's page only, as a linear
+task observes; a refusal of the recheck ends the run with its code, as a guard refusal does there,
+with no input and no retry ([Linear steps](linear-steps.md)).
 
 Each fresh frame is an observation before the input: it feeds no collector, and a sampling
 timeout of it takes the step's observe-only retries ([Business identity, consensus and catalog
@@ -996,6 +1022,34 @@ both provide capabilities and declare remedies.
 Wherever another rule names a package's designated operation (a recognition package, a
 prerequisite package, a `linear_steps` task, a zero-input fields task), a designated effect set is
 refused the same way, with the same reason token (`designated_operation`).
+
+### Busy outcome mappings
+
+#411 B37 (slice A35-S1, [v012-register.md](v012-register.md) §1.152; coordinator decision Q11 of
+2026-10-21). A mapping of `scheduling_outcome` may declare `"busy": true`: a run that ends on its
+key ended on a page that shows an activity still in progress (one that ends by itself), and the
+expected end page has not been reached. For scheduling the run is a success with that key, as
+any mapped run; the recovery ladder never counts it as recovered, holds and runs its return-home
+rung again ([emulator-control.md](emulator-control.md), "Busy ends"). A return-home package maps
+the activity page it recognises to such a key.
+
+```json
+"mappings": [
+  {"outcome_key": "returned", "effect": "no_designated_effect", "terminal_pages": ["home"]},
+  {"outcome_key": "still_running", "effect": "no_designated_effect",
+   "terminal_pages": ["page_a"], "busy": true}
+]
+```
+
+| Member (`task.json` mapping) | Rule | Refusal |
+| --- | --- | --- |
+| `busy` | optional boolean, default `false`; only on a `no_designated_effect` mapping, never together with `remedy` | `invalid_scheduling_outcome_declaration`, field `busy` (the source parser: `resource_declaration_invalid`, `InvalidType` at `…/busy` for no boolean, `InvalidValue` at the declaration for a broken rule) |
+
+A mapping without `busy` serializes byte for byte as before; `"busy": false` is the same as
+leaving it out. The member joins
+package revision 6, which the closing slice of the release declares; until then the Runtime
+admits it by code. No persisted record carries it: the ladder's records name the busy run's key
+as a value of `recovery_rung_busy_outcome`.
 
 ### Task schema `0.9` candidate operations
 

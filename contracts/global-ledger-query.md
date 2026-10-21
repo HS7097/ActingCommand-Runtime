@@ -156,6 +156,18 @@ cannot skip facts. An empty match can exhaust the requested snapshot even when
 the source itself is incomplete. The existing 256-row and 768-KiB response limits
 remain in force, and a single oversized result is rejected.
 
+#411 A51: a Runtime read on the writer has a work budget
+(`ledger_observer.read_budget_ms`). A page whose read the budget stopped answers
+the rows it decided with the limit `read_budget`, `read_complete` false,
+`has_more` true and the `scanned_through_position` its read reached, below the
+snapshot; it may hold no row. Its cursor goes on after that position (after the
+last row when the event-count or byte limit cut the page too), at the same
+snapshot, so the next page continues where the read stopped and every row before
+it was decided. A Runtime page of any view selects its rows in memory from the
+writer's indexes; the Lab view's link groups are facts the writer keeps per run,
+request and correlation, so its cost follows the candidates, not candidates times
+anchors. The stored SQL views (their DDL unchanged) serve the offline readers.
+
 The Host delegates an event page to one `GlobalLedger::project_view_page` call,
 so the writer's read branch freezes the position and derives the page together.
 Subscriptions retain their receive limits and resume cursor. A Lab-filtered

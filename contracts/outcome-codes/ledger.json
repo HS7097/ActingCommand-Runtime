@@ -1994,6 +1994,29 @@
       "common_causes": "The flush thread cannot keep up, usually because the disk is slow or busy.",
       "handling": "Check the disk that holds the state root if it recurs."
     },
+    "ledger_close_timeout": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "timeout_ms": "required",
+        "stage": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "The close of the ledger waited ledger_observer.close_timeout_ms (timeout_ms) for the writer to answer its shutdown and end, and the writer was still busy: stage is the operation of the writer command in progress and elapsed_ms how long it had run. The writer is left behind, so the Runtime's close ends and the process exits, which releases the owner lock (#411 A51).",
+      "common_causes": "A writer command that does not end: a read or a flush much slower than usual, or a hung storage device.",
+      "handling": "None: the watchdog starts the Runtime again. When it recurs, report the stage with the daemon log."
+    },
     "ledger_database_root_mismatch": {
       "category": "error",
       "ladder_class": "none",

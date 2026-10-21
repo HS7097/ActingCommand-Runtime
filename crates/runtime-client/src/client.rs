@@ -88,8 +88,10 @@ const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(235);
 /// Receipt wait for a `ControlEmulatorInstance` restart (Workflow #381 B F1′, coordinator
 /// answer D3): a Stop phase (at most 210 s) and then a Start phase (at most 220 s), plus the IO
 /// margin: 210 + 220 + 10 = 440 s; the restart is one emulator-control claim, whose wait for
-/// its turn (at most 5 s, Workflow #369 Q-2, W-3, S5 D1) is added once: 440 + 5 = 445 s.
-const EMULATOR_RESTART_RESPONSE_TIMEOUT: Duration = Duration::from_secs(445);
+/// its turn (at most 5 s, Workflow #369 Q-2, W-3, S5 D1) is added once: 440 + 5 = 445 s. #411
+/// A50: between the two phases a restart may wait for its old VM to exit, at most
+/// `emulator_control.restart_exit_wait_ms`, whose largest value is 300 s: 445 + 300 = 745 s.
+const EMULATOR_RESTART_RESPONSE_TIMEOUT: Duration = Duration::from_secs(745);
 
 /// The receipt wait of one `ControlEmulatorInstance` action (Workflow #381 B, test plan C-3).
 pub(crate) fn emulator_control_response_timeout(action: EmulatorInstanceAction) -> Duration {
@@ -2822,8 +2824,9 @@ impl RuntimeClient {
                 )
             })?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
-            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
-            {
+            // #411 A51: a page the Runtime's read budget cut goes on after the position its
+            // read reached, at or after its last row.
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(RuntimeClientError::fatal(
                     ClientCode::RuntimeEventQueryPaginationInvalid,
                     ContractLocation::QueryRuntimeEvents.location(),
@@ -2892,8 +2895,10 @@ impl RuntimeClient {
                 .next_cursor()
                 .cloned()
                 .ok_or_else(|| failure(ClientCode::RuntimeEventQueryPaginationInvalid))?;
-            // A page that has more always holds a record, so every next page starts later.
-            if next.after_sequence() != last_sequence {
+            // Every next page starts later: after the page's last record, or (#411 A51) after
+            // the position a read the Runtime's budget cut reached, which may hold no record.
+            let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(failure(ClientCode::RuntimeEventQueryPaginationInvalid));
             }
             cursor = Some(next);
@@ -2985,8 +2990,9 @@ impl RuntimeClient {
                 )
             })?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
-            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
-            {
+            // #411 A51: a page the Runtime's read budget cut goes on after the position its
+            // read reached, at or after its last row.
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(RuntimeClientError::fatal(
                     ClientCode::RunSummaryPaginationInvalid,
                     ClientLocation::SummarizeRun.location(),

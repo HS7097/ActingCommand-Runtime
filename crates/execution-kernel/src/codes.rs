@@ -131,6 +131,9 @@ actingcommand_contract::outcome_codes! {
         // Workflow #390 EXEC-2: a declared stability wait ended before its frames held (keys
         // `pack_operation_id`, `timeout_ms`).
         ContainedTaskInputStabilityUnconfirmed => "contained_task_input_stability_unconfirmed": error / pack_logic_mismatch,
+        // Workflow #411 B12: a declared `still_frames` recheck ended before its frames held and
+        // stayed still (keys `pack_operation_id`, `timeout_ms`).
+        ContainedTaskInputStillUnconfirmed => "contained_task_input_still_unconfirmed": error / pack_logic_mismatch,
         ContainedTaskObservationStabilityUnconfirmed => "contained_task_observation_stability_unconfirmed": error / pack_logic_mismatch,
         PageConfirmationFailed => "page_confirmation_failed": error / pack_logic_mismatch,
         /// Warning (Workflow #384 D2-S2): a reading mark gave no reading; the run goes on (keys

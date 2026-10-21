@@ -427,8 +427,8 @@ impl HostShared {
                 1,
             )
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(
-                    ledger_error(HostLocation::CheckObservationSampleInputs)
+                request_failure(
+                    ledger_read_error(&error, HostLocation::CheckObservationSampleInputs)
                         .with_native_detail(error.to_string()),
                 )
             })?;

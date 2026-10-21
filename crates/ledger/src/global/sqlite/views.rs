@@ -164,6 +164,8 @@ pub(super) fn deploy(connection: &Connection) -> GlobalLedgerResult<()> {
     Ok(())
 }
 
+/// The selected sequences and the SQLite virtual-machine steps their statement took (#411 A51:
+/// the selection's work, which a page read observes).
 pub(super) fn select_sequences(
     connection: &Connection,
     events: &[LedgerEventMetadata],
@@ -172,7 +174,7 @@ pub(super) fn select_sequences(
     snapshot: u64,
     limit: usize,
     budget: ReadBudget,
-) -> GlobalLedgerResult<Vec<u64>> {
+) -> GlobalLedgerResult<(Vec<u64>, u64)> {
     let view = query.view.unwrap_or(LedgerView::Events);
     let view_name = name(view)?;
     // Supported pre-view offline roots remain read-only and use the same definition.
@@ -362,6 +364,8 @@ pub(super) fn select_sequences(
             sql_error(error, LedgerLocation::ReadLedgerViewSequence.location())
         })?));
     }
+    drop(rows);
+    let steps = u64::try_from(statement.get_status(rusqlite::StatementStatus::VmStep)).unwrap_or(0);
     check_read_budget(budget, 0, events.len())?;
-    Ok(sequences)
+    Ok((sequences, steps))
 }

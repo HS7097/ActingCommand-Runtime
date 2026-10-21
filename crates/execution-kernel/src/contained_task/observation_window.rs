@@ -14,21 +14,30 @@
 //! - **Input recheck.** At the place of the one sampling deadline check before the effect intent
 //!   (Workflow #386 SR-1), the click's decision is checked again on one fresh frame
 //!   (`fresh_frame`), or on fresh frames until it held on a number of consecutive frames
-//!   (`stable_frames`); the input is drawn from and bound to the last of them. Each fresh frame
-//!   is an observation before the input: its sampling timeouts take SR-1's observe-only retries.
+//!   (`stable_frames`), or until it held on a number of consecutive frames that also stayed still
+//!   (`still_frames`, Workflow #411 B12); the input is drawn from and bound to the last of them.
+//!   Each fresh frame is an observation before the input: its sampling timeouts take SR-1's
+//!   observe-only retries. A `linear_steps` task rechecks its clicks too (#411 B12), evaluating
+//!   only the step's page on each fresh frame.
 
 use super::{
-    ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
+    ClickRect, ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ExtraRounds,
-    PageObservation, PostAdmissionOcrCollector, PostconditionResolution, PreparedContainedTask,
-    SampleRetries, TaskControl, TaskOperation, budget_now, budget_observation_now, sample_retry,
+    FreshFrameObservation, PageCandidates, PageObservation, PostAdmissionOcrCollector,
+    PostconditionResolution, PreparedContainedTask, SampleRetries, Scene, TaskControl,
+    TaskOperation, budget_now, budget_observation_now, sample_retry,
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{RunFailureStage, RunOperationFailureDecision, RunOperationPolicy, RunStateMachine};
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     TaskTimingBoundary, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
     TaskTimingStage,
+};
+use actingcommand_recognition::Rect;
+use actingcommand_recognition::color_digest::{
+    ColorDigest, ColorDigestError, FRAME_CHANGE_MAX_MILLI, frame_change_digest, frame_change_milli,
 };
 use actingcommand_recognition_pack::TargetEvaluation;
 use serde::Deserialize;
@@ -69,13 +78,59 @@ pub(super) enum TaskInputRecheck {
     /// Fresh frames until `frames` consecutive ones, the step's own frame included, showed the
     /// step's page with its guard passing.
     StableFrames { frames: u32 },
+    /// Workflow #411 B12: fresh frames until `frames` consecutive ones, the step's own frame
+    /// included, showed the step's page with its guard passing, each changed by at most
+    /// `max_distance_milli` (the frame-change default when absent) from the frame before it in
+    /// `region` (the whole frame when absent), by the Runtime's one frame-change measure.
+    StillFrames {
+        frames: u32,
+        #[serde(default)]
+        region: Option<ClickRect>,
+        #[serde(default)]
+        max_distance_milli: Option<u32>,
+    },
+}
+
+/// Workflow #411 B12: what a `still_frames` recheck compares between consecutive frames.
+#[derive(Debug, Clone, Copy)]
+struct StillScreen {
+    region: Option<Rect>,
+    max_milli: u32,
+}
+
+impl StillScreen {
+    /// The frame-change digest of `scene`'s region; a region the frame does not hold (admission
+    /// keeps it in the coordinate space) is `contained_task_recognition_failed`, caused by the
+    /// digest's refusal.
+    fn digest(self, scene: &Scene) -> Result<ColorDigest, ContainedTaskError> {
+        frame_change_digest(scene, self.region).map_err(recognition_failed)
+    }
+
+    /// Whether `current` changed by more than the threshold since `previous`.
+    fn moved(
+        self,
+        previous: &ColorDigest,
+        current: &ColorDigest,
+    ) -> Result<bool, ContainedTaskError> {
+        frame_change_milli(previous, current)
+            .map(|milli| milli > self.max_milli)
+            .map_err(recognition_failed)
+    }
+}
+
+fn recognition_failed(error: ColorDigestError) -> ContainedTaskError {
+    ContainedTaskError::valued(
+        SharedCode::ContainedTaskRecognitionFailed.code(),
+        |outcome| outcome.caused_by(Outcome::new(error.code().code())),
+    )
 }
 
 /// Admission of an operation's observation window and input recheck
 /// (`contained_task_operation_invalid`): task schema `0.9`; a window of 1 to 60,000 ms on an
 /// operation with a destination; a recheck on a click; a stability wait of 2 to 32 frames whose
 /// frames, one interval apart, fit in its window (the operation's confirmation interval in the
-/// observation window, the control capture interval within the control step timeout).
+/// observation window, the control capture interval within the control step timeout); a
+/// `still_frames` region inside the coordinate space (Workflow #411 B12).
 pub(super) fn validate_operation(
     operation: &TaskOperation,
     control: &TaskControl,
@@ -118,6 +173,13 @@ pub(super) fn validate_operation(
                     control.capture_interval().milliseconds,
                     control.step_timeout().milliseconds,
                 ),
+                TaskInputRecheck::StillFrames { frames, region, .. } => {
+                    fits(
+                        frames,
+                        control.capture_interval().milliseconds,
+                        control.step_timeout().milliseconds,
+                    ) && region.is_none_or(|region| region.validate(&control.resolution).is_ok())
+                }
             };
         if !valid {
             return Err(invalid("input_recheck"));
@@ -182,29 +244,43 @@ impl PreparedContainedTask {
         }
     }
 
-    /// The click's decision on the step's frame (a page of `decision_page`) checked again on
-    /// fresh frames, each made in a new window of `window` within the run's `timing`
-    /// (`observation`): one fresh frame, or fresh frames one control capture interval apart until
-    /// the decision held on the declared number of consecutive frames. A fresh frame with no page
-    /// of the package is `contained_task_page_unknown` for `fresh_frame` and a frame that did not
-    /// hold for `stable_frames`; a guard that does not pass refuses the input for `fresh_frame`
-    /// and is a frame that did not hold for `stable_frames`. A stability wait that does not hold
-    /// within `window` of its start refuses the input with
-    /// `contained_task_input_stability_unconfirmed`.
+    /// The click's decision on the step's frame (`decision`) checked again on fresh frames, each
+    /// made in a new window of `window` within the run's `timing` (`observation`): one fresh
+    /// frame, or fresh frames one control capture interval apart until the decision held on the
+    /// declared number of consecutive frames. A fresh frame with no page of the package is
+    /// `contained_task_page_unknown` for `fresh_frame` and a frame that did not hold for
+    /// `stable_frames` and `still_frames`; a guard that does not pass refuses the input for
+    /// `fresh_frame` and is a frame that did not hold for the others. Workflow #411 B12: for
+    /// `still_frames` a frame whose region changed by more than the threshold since the frame
+    /// before it starts the count again at one. A wait that does not hold within `window` of its
+    /// start refuses the input with `contained_task_input_stability_unconfirmed`
+    /// (`stable_frames`) or `contained_task_input_still_unconfirmed` (`still_frames`). With
+    /// `linear`, a fresh frame is evaluated against the step's page only (the page of
+    /// `decision`), as a `linear_steps` task observes.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn recheck_before_input<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         operation: &TaskOperation,
         recheck: TaskInputRecheck,
-        decision_page: &str,
+        decision: &PageObservation,
+        linear: bool,
         observation: (ContainedTaskTimingContext, Duration),
         retries: &mut SampleRetries,
     ) -> Result<InputRecheck, ContainedTaskRunError<R::Error>> {
         let (timing, window) = observation;
-        let frames = match recheck {
+        let step_page = [decision.page_label.as_str()];
+        let pages = linear.then_some(step_page.as_slice());
+        let (frames, still) = match recheck {
             TaskInputRecheck::FreshFrame => loop {
                 let (fresh, step_timing) =
-                    self.observe_before_input(runtime, timing, window, retries)?;
+                    self.recheck_frame(runtime, pages, timing, window, retries)?;
+                let Ok(fresh) = fresh else {
+                    return Err(ContainedTaskError::new(
+                        SharedCode::ContainedTaskPageUnknown.code(),
+                    )
+                    .into());
+                };
                 match operation.guard_outcome(
                     &self.control,
                     &fresh,
@@ -232,7 +308,27 @@ impl PreparedContainedTask {
                     Err(failure) => return Err(failure),
                 }
             },
-            TaskInputRecheck::StableFrames { frames } => frames,
+            TaskInputRecheck::StableFrames { frames } => (frames, None),
+            TaskInputRecheck::StillFrames {
+                frames,
+                region,
+                max_distance_milli,
+            } => (
+                frames,
+                Some(StillScreen {
+                    region: region.map(|region| Rect {
+                        x: region.x,
+                        y: region.y,
+                        width: region.width,
+                        height: region.height,
+                    }),
+                    max_milli: max_distance_milli.unwrap_or(FRAME_CHANGE_MAX_MILLI),
+                }),
+            ),
+        };
+        let unconfirmed = match still {
+            None => ExecutionKernelCode::ContainedTaskInputStabilityUnconfirmed,
+            Some(_) => ExecutionKernelCode::ContainedTaskInputStillUnconfirmed,
         };
         let task_deadline = timing.deadline();
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
@@ -240,19 +336,20 @@ impl PreparedContainedTask {
         let pace = timing.pace();
         let deadline = budget_observation_now(runtime, pace) + window;
         let mut held = 1_u32;
-        let mut after_page = Some(decision_page.to_owned());
+        let mut after_page = Some(decision.page_label.clone());
+        // Workflow #411 B12: the frame-change digest of the latest frame, the step's own first.
+        let mut previous = still
+            .map(|still| still.digest(&decision.scene))
+            .transpose()?;
         loop {
             let now = budget_observation_now(runtime, pace);
             if now >= deadline {
                 return Ok(InputRecheck::Refused {
-                    error: ContainedTaskError::valued(
-                        ExecutionKernelCode::ContainedTaskInputStabilityUnconfirmed.code(),
-                        |outcome| {
-                            outcome
-                                .pack_operation_id(operation.id.as_str())
-                                .timeout_ms(window)
-                        },
-                    ),
+                    error: ContainedTaskError::valued(unconfirmed.code(), |outcome| {
+                        outcome
+                            .pack_operation_id(operation.id.as_str())
+                            .timeout_ms(window)
+                    }),
                     after_page,
                 });
             }
@@ -277,7 +374,19 @@ impl PreparedContainedTask {
                     .into());
             }
             let (fresh, step_timing) =
-                self.observe_fresh_frame(runtime, timing, window, retries)?;
+                self.recheck_frame(runtime, pages, timing, window, retries)?;
+            // Workflow #411 B12: whether the region changed by more than the threshold since the
+            // frame before this one, whatever that frame showed.
+            let mut moved = false;
+            if let (Some(still), Some(previous)) = (still, previous.as_mut()) {
+                let scene = match &fresh {
+                    Ok(observation) => &observation.scene,
+                    Err(scene) => scene,
+                };
+                let digest = still.digest(scene)?;
+                moved = still.moved(previous, &digest)?;
+                *previous = digest;
+            }
             let Ok(fresh) = fresh else {
                 held = 0;
                 after_page = None;
@@ -291,7 +400,8 @@ impl PreparedContainedTask {
                 Some(step_timing),
             ) {
                 Ok((guard, target)) => {
-                    held += 1;
+                    // A frame that moved starts the count again: it is the first still frame.
+                    held = if moved { 1 } else { held + 1 };
                     if held >= frames {
                         return Ok(InputRecheck::Held(Box::new(RecheckedInput {
                             observation: fresh,
@@ -320,6 +430,38 @@ impl PreparedContainedTask {
                     });
                 }
                 Err(failure) => return Err(failure),
+            }
+        }
+    }
+
+    /// A fresh frame of an input recheck, made in a new window of `window` within the run's
+    /// `timing`: recognized against every page of the package, or with `pages` against those only
+    /// (a `linear_steps` step's page, Workflow #411 B12). A frame without a passing page returns
+    /// its scene; a sampling timeout uses up another of `retries`.
+    fn recheck_frame<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        pages: Option<&[&str]>,
+        timing: ContainedTaskTimingContext,
+        window: Duration,
+        retries: &mut SampleRetries,
+    ) -> Result<FreshFrameObservation, ContainedTaskRunError<R::Error>> {
+        let Some(pages) = pages else {
+            return self.observe_fresh_frame(runtime, timing, window, retries);
+        };
+        loop {
+            let step_timing =
+                timing.with_deadline(budget_observation_now(runtime, timing.pace()) + window);
+            match self.capture_frame_scene(
+                runtime,
+                None,
+                None,
+                step_timing,
+                Some(PageCandidates::Ordered(pages)),
+                None,
+            ) {
+                Ok(observed) => return Ok((observed, step_timing)),
+                Err(failure) => retries.retry(failure, window)?,
             }
         }
     }
