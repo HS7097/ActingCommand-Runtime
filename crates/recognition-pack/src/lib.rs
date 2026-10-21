@@ -985,7 +985,7 @@ pub struct TemplateEvaluation {
     /// Workflow #411 B13 (ledger revision 4, register §1.153 LR-2): the brightness and contrast
     /// of the match's window relative to the template, for a target that declares `luma_floor`;
     /// absent otherwise.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Red proof 3 mutation: the member is always written (`null` without a floor).
     pub luma: Option<actingcommand_contract::TaskDiagnosticLumaData>,
 }
 
