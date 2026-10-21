@@ -313,22 +313,17 @@ pub(crate) fn undeclared_recognition_packs(
     maintenance: &[BundleMaintenance],
     descriptors: &[TaskPackageDescriptor],
 ) -> Vec<Outcome> {
-    let recognition = maintenance
+    // E3 red proof 2 (do not merge): today's count, every qualifying pack not itself declared.
+    let declared = maintenance
         .iter()
-        .filter(|entry| entry.uses.contains(&MaintenanceUse::Recognition));
-    let declared = recognition
-        .clone()
+        .filter(|entry| entry.uses.contains(&MaintenanceUse::Recognition))
         .map(|entry| entry.package_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let declaring_servers = recognition
-        .map(|entry| entry.server.as_str())
         .collect::<BTreeSet<_>>();
     descriptors
         .iter()
         .filter(|descriptor| {
             descriptor.recognition_problem().is_none()
                 && !declared.contains(descriptor.package_id())
-                && !declaring_servers.contains(descriptor.server())
         })
         .map(|descriptor| {
             Outcome::new(ResourceToolingCode::RecognitionPackUndeclared)
