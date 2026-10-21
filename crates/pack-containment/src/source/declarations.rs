@@ -3006,7 +3006,7 @@ impl Declaration<'_> {
             let mapping = self.object(
                 mapping,
                 &pointer,
-                &["outcome_key", "effect", "terminal_pages", "remedy"],
+                &["outcome_key", "effect", "terminal_pages", "remedy", "busy"],
             )?;
             for field in ["outcome_key", "effect"] {
                 self.string(
@@ -3020,6 +3020,11 @@ impl Declaration<'_> {
             )?;
             if let Some(remedy) = mapping.get("remedy") {
                 self.remedy(remedy, &child(&pointer, "remedy"))?;
+            }
+            // #411 B37 (A35-S1): a boolean; its rules (only `no_designated_effect`, never with
+            // `remedy`) are the declaration's own check below.
+            if let Some(busy) = mapping.get("busy") {
+                self.boolean(busy, &child(&pointer, "busy"))?;
             }
         }
         let declaration: actingcommand_contract::SchedulingOutcomeDeclaration =

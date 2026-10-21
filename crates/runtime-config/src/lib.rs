@@ -64,10 +64,10 @@ pub use instance::{
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;
 pub use recovery_ladder::{
-    AlreadyRunning, BurstWindow, CodePattern, CooldownOpensOn, DirectRuns, EntryUnavailable,
-    FenceRecheckConfig, HoldConfig, LadderConfig, LadderProfile, LadderRules, MatchedBy,
-    PreparationSuperseded, RecoveryLadderFile, RungConfig, StartBeyondProfile, TriggerItem,
-    TriggerVerdict, ladder_class_of,
+    AlreadyRunning, BurstWindow, BusyConfig, BusyOutcomeConfig, CodePattern, CooldownOpensOn,
+    DirectRuns, EntryUnavailable, FenceRecheckConfig, HoldConfig, LadderConfig, LadderProfile,
+    LadderRules, MatchedBy, OnExhausted, PreparationSuperseded, RecoveryLadderFile, RungConfig,
+    StartBeyondProfile, TriggerItem, TriggerVerdict, ladder_class_of,
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
@@ -122,3 +122,7 @@ mod tests;
 // Workflow #406 T12.
 #[cfg(test)]
 mod touch_tests;
+
+// #411 B37 (A35-S1, host key 137): the busy hold's configuration keys.
+#[cfg(test)]
+mod gate_411_b37;

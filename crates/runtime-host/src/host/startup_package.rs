@@ -36,6 +36,7 @@
 //! The stuck-recovery ladder (`recovery_ladder`) runs its rung packages through the same
 //! runner on its own key.
 
+use super::contained_task::BusyEnd;
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
 use super::recovery_ladder::PendingRecoveryLadder;
@@ -317,12 +318,14 @@ impl HostShared {
     /// ladder's rung (`ladder`) the ladder's continuation is queued just before the run, so the
     /// run's release hands the key back; `key` then holds the continuation's token. A
     /// non-fatal failure is recorded here and returned as its code; a fatal one is the error.
+    /// #411 B37 (A35-S1): a completed run comes with its busy end, when its terminal selected a
+    /// mapping its package marks `busy` (read from the run's control after the run).
     pub(super) fn run_package_on_key(
         &self,
         pending: &PendingStartupPackage,
         key: &mut HostKey,
         ladder: Option<&PendingRecoveryLadder>,
-    ) -> RuntimeHostResult<Result<OperationSuccess, &'static str>> {
+    ) -> RuntimeHostResult<Result<(OperationSuccess, Option<BusyEnd>), &'static str>> {
         let run = match self.prepare_package_run(pending, key.token.holder_id()) {
             Ok(run) => run,
             Err(failure) => return self.host_package_failure(pending, failure).map(Err),
@@ -344,6 +347,7 @@ impl HostShared {
             },
             None => None,
         };
+        let control = run.control();
         let executed = self.run_prepared_package(
             run,
             super::contained_task::HeldPackageLease {
@@ -355,7 +359,7 @@ impl HostShared {
             self.take_ladder_continuation(key, continuation)?;
         }
         match executed {
-            Ok(success) => Ok(Ok(success)),
+            Ok(success) => Ok(Ok((success, control.busy_end()))),
             Err(failure) => self.host_package_failure(pending, failure).map(Err),
         }
     }

@@ -87,6 +87,14 @@
       "interval_ms": 300000,
       "max_attempts": 12
     },
+    "busy": {
+      "poll_ms": 500,
+      "outcome": {
+        "recheck_ms": 60000,
+        "max_wait_ms": 3600000,
+        "on_exhausted": "stop"
+      }
+    },
     "profiles": {
       "handset": {
         "rungs": [{"action": "return_home"}, {"action": "application_restart"}]

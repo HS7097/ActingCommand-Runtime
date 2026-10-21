@@ -121,6 +121,10 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.kind_profiles` | object, device kind (`emulator`, `handset`) to profile name (Workflow #398 RD-4) | `handset` → `handset` |
 | `recovery_ladder.fence_recheck.interval_ms` | milliseconds 10000..=86400000 (#411 A38) | `300000` |
 | `recovery_ladder.fence_recheck.max_attempts` | integer 0..=1000 (#411 A38); `0` turns the recheck off | `12` |
+| `recovery_ladder.busy.poll_ms` | milliseconds 100..=`busy.outcome.recheck_ms` (#411 B37) | `500` |
+| `recovery_ladder.busy.outcome.recheck_ms` | milliseconds; plus `hold.margin_ms` within the longest renewal (#411 B37) | `60000` |
+| `recovery_ladder.busy.outcome.max_wait_ms` | milliseconds 0..=86400000 (#411 B37); `0` holds nothing | `3600000` |
+| `recovery_ladder.busy.outcome.on_exhausted` | `stop` \| `escalate` (#411 B37) | `stop` |
 
 The whole-section check (`recovery_ladder_config_invalid`, `config_key` and
 `config_value_problem`): trigger ids are tokens and unique (`duplicate_id`); an item names one or
@@ -151,6 +155,22 @@ change through an instruction (`ac_config_set`) applies from the next tick; `Sta
 device that came back by itself, such as a capture channel that could not open for a moment, run
 again within minutes, without a self-check every few seconds while a device is really away; after
 the last one a person is needed, as before.
+
+#411 B37 (slice A35-S1; `actingd-config` revision 8, extended; coordinator decision Q3 of
+2026-10-21): `busy` is the ladder's hold after a rung run that ended on a mapping its package
+marks `busy` ([emulator-control.md](emulator-control.md), "Busy ends"). After such an end the
+ladder holds its key for `outcome.recheck_ms` and runs the return-home rung again, as long as the
+climb has held less than `outcome.max_wait_ms` since its first busy end (each hold no longer than
+what is left); at that limit `outcome.on_exhausted` either ends the ladder without a restart
+(`stop`, `recovery_ladder_hold_exhausted`) or goes on to the next rung (`escalate`). While it
+holds, the ladder makes its holding check every `poll_ms`. The check adds: `poll_ms` from 100 to
+`outcome.recheck_ms` and `outcome.max_wait_ms` within a day (`bound_out_of_range`), and
+`outcome.recheck_ms` plus `hold.margin_ms` within the longest renewal, the renewal a hold makes
+before it waits (`renewal_cap_exceeded`); `on_exhausted` is one of its two words (`out_of_range`,
+like the section's other rules). All four keys are settable and part of the section's digest; a
+ladder holds by the values it was admitted with. The defaults (recheck every minute, at most one
+hour, then stop) bring an instance home within a minute of an activity's end and never restart
+the game while its package says it is busy; they are recalibrated after the real-device check.
 
 Workflow #398 RD-4 (model-398 v1.1 §6.2, §6.6; [emulator-control.md](emulator-control.md),
 "Ladder profiles") adds to the check: a profile name is a token (1 to 64 bytes of lowercase

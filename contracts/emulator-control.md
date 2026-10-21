@@ -757,17 +757,47 @@ capture nor input before its application action, and neither does a page-graph a
 entry, which a rung runs first (Workflow #390 EXEC-3, [Application
 lifecycle](application-lifecycle.md)). A page entry still needs capture for its
 entry/prerequisite gate. Missing/unknown channel observations are attempted through the normal
-provider path. Input unavailability never establishes ADB unavailability. A rung is tried at
-most once.
+provider path. Input unavailability never establishes ADB unavailability. A rung is escalated
+past at most once; the return-home rung runs again after a busy hold (#411 B37, below), and
+`rungs_tried` counts distinct rungs.
 
-A rung recovers when its package run completes `success` (its target page reached); any other
-end fails it, with the failure code as its `outcome` (`recovery_rung_target_not_reached` for a
-run that completed without reaching its target; a holding interruption such as
-`recovery_ladder_shutdown_requested` when the host is shutting down is the `caused_by` link of
-`recovery_ladder_interrupted`). The first successful application rung ends the ladder
-`recovered`; a successful cold environment without a package ends it `environment_ready`. When
-every rung failed or was skipped it ends `exhausted`. No result replays an uncertain business
-operation.
+A rung recovers when its package run completes `success` (its target page reached) on a mapping
+that is not `busy`; any other end fails it, with the failure code as its `outcome`
+(`recovery_rung_target_not_reached` for a run that completed without reaching its target; a
+holding interruption such as `recovery_ladder_shutdown_requested` when the host is shutting down
+is the `caused_by` link of `recovery_ladder_interrupted`). The first successful application rung
+ends the ladder `recovered`; a successful cold environment without a package ends it
+`environment_ready`. When every rung failed or was skipped it ends `exhausted`. No result replays
+an uncertain business operation.
+
+**Busy ends (#411 B37, slice A35-S1; coordinator decisions Q1 to Q3 of 2026-10-21).** A rung's
+package run that completes `success` on a `scheduling_outcome` mapping its package marks `busy`
+([resource-declarations.md](resource-declarations.md), "Busy outcome mappings") ended on a page
+that shows an activity still in progress: it does not recover the instance. The rung is recorded
+`failed` with `recovery_rung_busy_outcome` (info; `outcome_key`, `page_id` the final page,
+`held_ms` the time since the climb's first busy end, `limit_ms` the configured
+`recovery_ladder.busy.outcome.max_wait_ms`, and `retry_after_ms` while the ladder holds). While
+the climb has a return-home package (the return-home rung of the rungs it climbs, with a recovery
+package it can run; never on a resource fence's ladder) and `held_ms` is below `limit_ms`, the
+ladder holds its key, doing nothing, for `busy.outcome.recheck_ms`, no longer than what is left of
+the limit (`retry_after_ms`), and then runs the return-home rung again: a busy end of the
+application restart's or the emulator restart's startup package is held and re-checked the same
+way, by the return-home package. Before the hold the key is renewed to the hold plus
+`hold.margin_ms`; during it the ladder makes its holding check every `busy.poll_ms`, so a
+shutdown, an install drain, a scheduling pause, a capacity refusal, a lost key or device link
+ends the climb at the next poll (the return-home rung it was about to run again is recorded
+failed with that interruption). The hold and the reruns repeat until a run ends:
+
+- not busy: as above (recovered, or a failure the climb handles as before, going on to the next
+  rung);
+- busy at the limit, or busy without a return-home package: `busy.outcome.on_exhausted`
+  decides. `stop` (the default) ends the ladder `exhausted` with `recovery_ladder_hold_exhausted`
+  (warning; `held_ms`, `limit_ms`; caused by the last `recovery_rung_busy_outcome`): no
+  application or emulator restart runs, the instance is not fenced, and the next trigger may
+  start a new ladder once the cool-down allows. `escalate` goes on to the next rung, the last
+  busy record carrying `held_ms` at least `limit_ms`. A climb without a return-home package
+  always goes on as under `escalate`. `max_wait_ms` 0 holds nothing: `on_exhausted` applies at
+  the first busy end.
 
 ### Ladder profiles (Workflow #398 RD-4)
 
@@ -828,7 +858,8 @@ the ladder's own preparation never does; shutdown and an install drain refuse a 
 a climb; a lost key ends a climb; a capacity refusal and a scheduling pause refuse a trigger and
 end a climb; an interrupted climb ends `exhausted` at warning and one whose rungs failed on their
 own at error. Once a ladder holds the key (Workflow #369 H-3, ruling Q8), every rung boundary,
-every control step and every readiness poll checks that it still holds the key and that no
+every control step, every readiness poll and every busy-hold poll (#411 B37) checks that it
+still holds the key and that no
 scheduling pause or capacity refusal (`recovery_admission_denied`), install drain
 (`recovery_ladder_drain_requested`) or shutdown (`recovery_ladder_shutdown_requested`)
 intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
@@ -893,8 +924,8 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 | `recovery_ladder_started` | `trigger { stage, run_id?, task_id?, preparation?, failure_code, rule?, matched?, start }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (one to three, in the configured order, no action twice; `reason` exactly when skipped), `config_digest` (64 lowercase hexadecimal digits: the SHA-256 of the section's values the ladder climbs by), `profile?` (the name of the ladder profile the instance climbs by, Workflow #398 RD-4; absent when it climbs the section's `rungs`) | info |
 | `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
-| `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info), `environment?` | its outcome's category when it has one; otherwise info |
-| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
+| `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info; a busy end is `failed` with the busy run's `run_id` and `recovery_rung_busy_outcome`, info, #411 B37); `environment?`. One rung may have several records in one ladder: the return-home rung's, once per run after a busy hold | its outcome's category when it has one; otherwise info |
+| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (distinct rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, `recovery_ladder_interrupted`, caused by the holding interruption, or `recovery_ladder_hold_exhausted`, caused by the last busy rung's outcome, #411 B37); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`, `recovery_ladder_hold_exhausted`) |
 | `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied" \| "blackout"` (`blackout`: a trigger inside a blackout, `until_unix_ms` its end; written from SR-4a on, read from v0.12.0 on, [scheduling-blackout.md](scheduling-blackout.md)), `until_unix_ms`, `rule?` (the trigger item that matched; absent for a fence's ladder) | admission denial warning; otherwise info |
 
 Ledger revision 3 (Workflow #378 A3): a phase's severity is its `outcome`'s category, else
