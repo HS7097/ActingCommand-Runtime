@@ -25452,6 +25452,31 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "emulator_device_unrecognized": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "process_started": "required",
+        "android_started": "required",
+        "adb_port_present": "required",
+        "adb_port": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A self-check (actingctl selfcheck, SelfCheckInstance, and an instance resume's reconnect; #411 A48) read the emulator status first (MuMuManager info, a status read that starts nothing) and found the emulator process running, but its device could not be recognized, so nothing was opened. stage names the step: read_instance_state when the read reported Android not started or no ADB port; probe_adb_baseline when the reported port was bound (the Runtime had held the instance stopped or unrecognized) and adbd did not answer through the 30 s ADB baseline wait, the last probe's failure being the caused_by link (an adb child the probe left unconfirmed fences the instance, and the fence is the link). process_started, android_started, adb_port_present and adb_port are the status read; elapsed_ms is the time from the read to the failure. Recorded once as a connection-preparation runtime.failed record (its stage the step) under the self-check's links, before the preparation's instance_preparation_finished; the self-check reports the code as its failure_code and the instance stays unavailable.",
+      "common_causes": "The emulator was started outside the Runtime and is still booting; adbd of a running emulator does not answer (a hung Android, an adb server problem).",
+      "handling": "Wait until the emulator has finished booting and run actingctl selfcheck again; if adbd stays silent, restart the emulator through the Runtime (actingctl emulator restart)."
+    },
     "emulator_restart_start_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -25508,6 +25533,26 @@
       "since": "0.12.0",
       "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the host's stop-result table gives the stage no token.",
       "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
+      "handling": "TBD"
+    },
+    "emulator_state_read_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links.",
+      "common_causes": "MuMuManager did not answer within its bound or printed an answer of an unknown shape.",
       "handling": "TBD"
     },
     "emulator_stop_process_unverified": {
