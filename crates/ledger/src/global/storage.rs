@@ -618,7 +618,7 @@ impl<B: DurableStorage> EventStore<B> {
         let EventPayload::Task(TaskPayload::Semantic(semantic)) = draft.payload() else {
             return Ok(());
         };
-        if !semantic.fact().has_run_rules() {
+        if semantic.fact().has_run_rules() {
             return Ok(());
         }
         let earlier = draft
