@@ -91,6 +91,19 @@ actingcommand_contract::outcome_codes! {
     }
 }
 
+// Workflow #411 A36a: the vendor stdio redirect's process-wide gate (begin).
+actingcommand_contract::outcome_codes! {
+    /// Workflow #411 A36a: the process-wide gate around the stdio redirect of a vendor library
+    /// call (`crate::vendor_stdio`). Until B5 types the device layer, a device error carries the
+    /// spelling as its message, as the stream capture codes do. Every entry is pending.
+    pub enum VendorStdioCode {
+        /// Another vendor library call held the process's stdio redirect for longer than the
+        /// bounded wait; this call redirects nothing and is not made.
+        VendorStdioRedirectBusy => "vendor_stdio_redirect_busy": error / environment_fault,
+    }
+}
+// Workflow #411 A36a (end).
+
 actingcommand_contract::outcome_locations! {
     /// The device layer's own operations and steps that a device error's diagnostic context or
     /// developer text names: the adb shell input backend's connect steps, the Nemu capture
