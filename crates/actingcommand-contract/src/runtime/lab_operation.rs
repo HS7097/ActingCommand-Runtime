@@ -365,7 +365,7 @@ pub struct LabOperationPrepared {
     pub selection: LabOperationSelection,
     /// LR-10 (#412 B-3): present exactly when the selection is `operation`, except in the record
     /// of a request that failed before any input.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub operation: Option<LabDeclaredOperation>,
     pub projection_hint: LabProjectionHint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
