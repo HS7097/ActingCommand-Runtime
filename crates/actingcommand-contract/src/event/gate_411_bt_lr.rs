@@ -747,10 +747,29 @@ fn bt_lr_t1_every_revision_4_shape_reads_back_as_registered() {
     );
 }
 
-// T2: the readers refuse what no writer writes, each row at its own check.
+// The fact's own validation, as a writer's draft runs it: the stored reader keeps no inner cause
+// (register X8), so this names the rule that refused a stored fact.
+fn own_refusal(stored: &Value) -> SanitizationError {
+    let fact: TaskSemanticFact = serde_json::from_value(
+        stored
+            .pointer("/payload/data/fact")
+            .cloned()
+            .expect("the stored fact"),
+    )
+    .expect("the fact decodes");
+    EventPayloadDraft::from(TaskPayloadDraft::semantic(fact, AuditInput::new()))
+        .sanitize(&SpyFingerprinter::new())
+        .expect_err("the fact's own validation refuses it")
+}
+
+// T2: the readers refuse what no writer writes, each row at its own check. The stored reader
+// refuses every row of the table as `invalid_task_semantic_payload` at `task_semantic_fact`
+// and keeps no inner cause (register X8), so each row also shows its own rule through the fact's
+// own validation: the code and member its register row names (§1.153).
 #[test]
 fn bt_lr_t2_the_readers_refuse_what_no_writer_writes() {
     let selection_invalid = SanitizationCode::InvalidTaskSelectionRecord.code();
+    let reader_invalid = SanitizationCode::InvalidTaskSemanticPayload.code();
     let seventeen = candidate_pages(17);
     let mut sixteen_scores = vec![score("page_00", true)];
     sixteen_scores.extend(seventeen[1..16].iter().map(|page| score(page, false)));
@@ -859,8 +878,19 @@ fn bt_lr_t2_the_readers_refuse_what_no_writer_writes() {
             }
             other => panic!("no member to break for {other}"),
         }
-        let error = refused(stored);
-        assert_eq!(error.code(), code, "{label}: the refusal");
+        let error = refused(stored.clone());
+        assert_eq!(
+            error.code(),
+            reader_invalid,
+            "{label}: the reader's refusal"
+        );
+        assert_eq!(
+            error.field(),
+            "task_semantic_fact",
+            "{label}: the reader's refused member"
+        );
+        let error = own_refusal(&stored);
+        assert_eq!(error.code(), code, "{label}: the fact's own refusal");
         assert_eq!(error.field(), field, "{label}: the refused member");
     }
 
