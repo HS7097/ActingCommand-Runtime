@@ -375,10 +375,10 @@ impl HostShared {
         let state = sample()?;
         // #411 A51 (R3): a head the writer did not answer in time fails only this read; the
         // next status reads it again.
-        let ledger_committed_head = self
-            .ledger
-            .latest_sequence()
-            .map_err(|error| ledger_read_failure(&error, HostLocation::RuntimeStateSource))?;
+        // A51 red proof 3 (do not merge): today's mapping of the head read to the fatal state.
+        let ledger_committed_head = self.ledger.latest_sequence().map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error(HostLocation::RuntimeStateSource))
+        })?;
         let sampled_completed_at_unix_ms = self
             .clock
             .sample()
