@@ -95,6 +95,13 @@ For the projection above the hashed text is
 
 and its hash is `e45f4db1262ff314e6ffd40c588bfc02bbf4be76d9eb626434c7158488719e37`.
 
+A select step confirms its choice on a second frame by this hash. Because it covers every
+feature value, one that declares `confirm: "decision"` (Workflow #411 B4) compares the two
+frames' decision hashes instead, which cover the actionable candidates' IDs, click rectangles
+and verdict statuses, the selected IDs and the outcome key, and no feature value
+([selection-graph.md](selection-graph.md), section Confirming by the decision). The
+candidate-set hash itself is unchanged.
+
 ## Budgets
 
 Every budget is a contract constant. Exceeding one is an error that names the item; nothing

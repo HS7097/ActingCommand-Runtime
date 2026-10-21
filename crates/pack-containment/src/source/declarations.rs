@@ -833,7 +833,8 @@ impl Declaration<'_> {
     /// still carry is ignored, Workflow #336 PKG-S2). The step is guarded and confirmed: it
     /// declares its `guard` and its `expect_after`, and is never an unguarded trusted
     /// coordinate. Whether the layout and the policy fit the task is checked with the policy
-    /// document (`select_policy`).
+    /// document (`select_policy`). It may also declare `scan`, `on_empty` and (Workflow #411 B4)
+    /// `confirm`.
     fn select_step(
         &self,
         operation: &Map<String, Value>,
@@ -844,7 +845,7 @@ impl Declaration<'_> {
         let select = self.object(
             value,
             &select_pointer,
-            &["layout_id", "policy", "scan", "on_empty"],
+            &["layout_id", "policy", "scan", "on_empty", "confirm"],
         )?;
         let layout_pointer = child(&select_pointer, "layout_id");
         let layout_id = self.required(select, &select_pointer, "layout_id")?;
@@ -899,6 +900,16 @@ impl Declaration<'_> {
                 self.required(on_empty, &on_empty_pointer, "outcome_key")?,
                 &child(&on_empty_pointer, "outcome_key"),
             )?;
+        }
+        // Workflow #411 B4 (b-plan §2.4; package revision 6): how a single-frame select
+        // confirms, `candidate_set` (the default) or `decision`; Runtime admission refuses
+        // `decision` beside `scan` (D3).
+        if let Some(confirm) = select.get("confirm").filter(|value| !value.is_null()) {
+            let confirm_pointer = child(&select_pointer, "confirm");
+            self.string(confirm, &confirm_pointer)?;
+            if !matches!(confirm.as_str(), Some("candidate_set" | "decision")) {
+                return Err(self.error(&confirm_pointer, ResourceDeclarationReason::InvalidValue));
+            }
         }
         Ok(())
     }
