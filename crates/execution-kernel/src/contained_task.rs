@@ -378,18 +378,8 @@ impl ContainedTaskError {
     /// the wrong type, where the grammar names the shape the member must have, carries that
     /// shape (`expected_shape`); any other failure is returned unchanged.
     fn with_expected_shape(self) -> Self {
-        let shape = self
-            .declaration_issue
-            .as_deref()
-            .and_then(actingcommand_pack_containment::source::declaration_expected_shape);
-        match shape {
-            Some(shape) => {
-                let outcome =
-                    Outcome::new(SharedCode::ResourceDeclarationInvalid).expected_shape(shape);
-                self.with_values(outcome)
-            }
-            None => self,
-        }
+        // E4 red proof 2: the old refusal, without the shape the member must have.
+        self
     }
 
     /// Workflow #411 B39 (A part): a gate entry failure whose outcome also names the outcome key
