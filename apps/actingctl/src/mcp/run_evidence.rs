@@ -80,13 +80,9 @@ fn within_budget(evidence: &Evidence) -> ToolSuccess {
         }
         kept -= 1;
     }
-    // The page's first step alone is over the budget: its frames referenced, else its targets
-    // too.
-    let frames_referenced = evidence.render_referenced(Omit::Frames);
-    if tools::fits_success(&frames_referenced) {
-        return ToolSuccess::new(frames_referenced);
-    }
-    ToolSuccess::new(evidence.render_referenced(Omit::FramesAndTargets))
+    // A42 red proof 1 (do not merge): the page's first step alone is over the budget and is
+    // answered whole, an unbounded page.
+    ToolSuccess::new(evidence.render(1))
 }
 
 /// The CLI's failure as a tool error: an argument is `arguments_invalid` here, with the CLI's
