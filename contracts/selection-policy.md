@@ -163,6 +163,31 @@ any member is unknown and none is false, true otherwise. `any` is true if any
 member is true, unknown if any member is unknown and none is true, false
 otherwise. `not` negates true and false and leaves unknown alone.
 
+### Two values compared
+
+Workflow #411 B2. A gate predicate may compare two integer values:
+
+```json
+{"kind": "integer_compare",
+ "left": {"source": "field", "field": "cost"}, "op": "le",
+ "right": {"source": "field", "field": "funds"}, "mul": 1, "add": -2000}
+```
+
+- `left` and `right` each read a declared value (`field`, `fact` or `keyed_fact`) of type
+  `integer`; another type is a `type_mismatch` validation error.
+- `op` is `eq`, `ne`, `lt`, `le`, `gt` or `ge`. The predicate holds when
+  `left op right × mul + add`, computed and compared in 128 bits, exactly as a value test
+  compares its sides ([resource-declarations.md](resource-declarations.md), value tests).
+- `mul` is optional, 1 to 1,000,000, default 1; `add` is optional, within ±(2^53 − 1), default
+  0. A value outside is an `integer_out_of_range` validation error. Neither is written into the
+  canonical form when the document leaves it out.
+- A side that is unknown leaves the predicate unknown, so the gate's `on_unknown` decides; when
+  both are unknown, the left side's reason is the one reported. Under the collect option each
+  unknown side is listed. A side that reads `keyed_fact` makes the gate fail-closed, as below.
+- A document that does not use `integer_compare` keeps its canonical bytes, its
+  `policy_sha256` and its `input_sha256`. A reader before B2 refuses a document that uses it
+  (an unknown predicate kind). In a package it belongs to `package` revision 6.
+
 ## Record lists and `keyed_fact`
 
 An in-task document may read a record-list fact one row at a time. The list is
@@ -267,6 +292,10 @@ largest score a candidate that was not read could reach: `NoneEligible`,
   whenever the input is ranged or unknown. An exact input that is unknown drops
   the identity under `drop_candidate` and gives `Unbounded` under
   `abort_evaluation`.
+- An `integer_compare` gate compares the ranges of its two sides, the right one
+  scaled by `mul` and `add`: `lt`, `le`, `gt` and `ge` exactly, `eq` and `ne` as
+  if every integer between the scaled ends could occur. A side that is unknown
+  leaves it unknown.
 - `NoneEligible` means no identity can be ranked. Leaving the 64-bit range, or
   a declared list that cannot be read, gives `Unbounded`.
 

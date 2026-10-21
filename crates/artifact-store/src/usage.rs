@@ -175,6 +175,16 @@ fn open_lock(
     reference: &ProjectedArtifactReference,
     create: bool,
 ) -> ArtifactStoreResult<Option<File>> {
+    Ok(open_lock_file(root, reference, create)?.map(|(lock, _)| lock))
+}
+
+/// [`open_lock`] with the lock's path, for the frame cleaner, which deletes the lock once the
+/// frame is gone from its object key (Workflow #411 A29).
+fn open_lock_file(
+    root: &Path,
+    reference: &ProjectedArtifactReference,
+    create: bool,
+) -> ArtifactStoreResult<Option<(File, PathBuf)>> {
     reference
         .validate()
         .map_err(|error| failure(SharedCode::ArtifactReferenceInvalid.code(), error))?;
@@ -224,9 +234,9 @@ fn open_lock(
         .write(create)
         .create(create)
         .truncate(false)
-        .open(path)
+        .open(&path)
     {
-        Ok(file) => Ok(Some(file)),
+        Ok(file) => Ok(Some((file, path))),
         Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(io_failure(StoreCode::ArtifactUseLockFailed.code(), error)),
     }
@@ -262,15 +272,38 @@ fn is_busy_io(error: &std::io::Error) -> bool {
 /// Workflow #375 R5d: what the frame cleaner did with one frame at its object key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameFileOutcome {
-    /// The file was deleted.
+    /// The file was deleted, and its use lock with it.
     Removed,
-    /// The file was renamed into its kept folder.
+    /// The file was renamed into its kept folder, and its use lock was deleted.
     Moved,
+    /// Workflow #411 A29: the file was deleted, but its use lock could not be.
+    RemovedLockLeft(FrameLockLeft),
+    /// Workflow #411 A29: the file was renamed into its kept folder, but its use lock could not
+    /// be deleted.
+    MovedLockLeft(FrameLockLeft),
     /// No file at the object key: deleted by hand, removed or moved before, or never there.
     Absent,
     /// The file or its use lock is held right now (os error 32 or 33, or a held lock); the
     /// cleaner tries again in its next sweep.
     Busy,
+}
+
+impl FrameFileOutcome {
+    /// Workflow #411 A29: the use lock a removal or a move left behind, if any.
+    pub const fn lock_left(self) -> Option<FrameLockLeft> {
+        match self {
+            Self::RemovedLockLeft(left) | Self::MovedLockLeft(left) => Some(left),
+            Self::Removed | Self::Moved | Self::Absent | Self::Busy => None,
+        }
+    }
+}
+
+/// Workflow #411 A29: why the use lock `artifact-use-locks\<name>.lock` of a removed or moved
+/// frame could not be deleted. The frame's own outcome stands; the lock stays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameLockLeft {
+    pub io_kind: ErrorKind,
+    pub os_error: Option<i32>,
 }
 
 /// The cleaner's hold on one frame: its use lock, then the file opened for deletion only and
@@ -280,6 +313,26 @@ pub(crate) struct FrameHold {
     path: PathBuf,
     _file: File,
     _lock: File,
+    /// Workflow #411 A29: the use lock's path, deleted once the frame left its object key.
+    lock_path: PathBuf,
+}
+
+impl FrameHold {
+    /// Workflow #411 A29: ends the hold of a frame that was removed or moved. Its use lock is
+    /// deleted while the hold still has it, so no reader or writer holds it then; a lock that
+    /// is already gone is fine. Returns why a lock that could not be deleted stays.
+    fn release_done(self) -> Option<FrameLockLeft> {
+        let deleted = fs::remove_file(&self.lock_path);
+        drop(self);
+        match deleted {
+            Ok(()) => None,
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => Some(FrameLockLeft {
+                io_kind: error.kind(),
+                os_error: error.raw_os_error(),
+            }),
+        }
+    }
 }
 
 pub(crate) enum Held {
@@ -310,7 +363,7 @@ pub(crate) fn hold_frame(
             return Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal());
         }
     }
-    let lock = open_lock(root, reference, true)
+    let (lock, lock_path) = open_lock_file(root, reference, true)
         .map_err(ArtifactStoreError::non_fatal)?
         .ok_or_else(|| {
             failure(
@@ -332,6 +385,7 @@ pub(crate) fn hold_frame(
             path,
             _file: file,
             _lock: lock,
+            lock_path,
         })),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(Held::Absent),
         Err(error) if is_busy_io(&error) => Ok(Held::Busy),
@@ -367,7 +421,8 @@ fn canonical_root(root: &Path) -> ArtifactStoreResult<PathBuf> {
 
 /// Workflow #375 R5d: the frame cleaner deletes the frame at `<root>\<object key>`, and never
 /// anywhere else. Absent and busy are outcomes; any other failure is a non-fatal error that
-/// carries its I/O kind and os error.
+/// carries its I/O kind and os error. Workflow #411 A29: a deleted frame's use lock is deleted
+/// with it; a lock that could not be is `RemovedLockLeft`.
 pub fn remove_frame_file(
     root: impl AsRef<Path>,
     reference: &ProjectedArtifactReference,
@@ -379,7 +434,12 @@ pub fn remove_frame_file(
         Held::Busy => return Ok(FrameFileOutcome::Busy),
     };
     let outcome = match fs::remove_file(&hold.path) {
-        Ok(()) => Ok(FrameFileOutcome::Removed),
+        Ok(()) => {
+            return Ok(match hold.release_done() {
+                None => FrameFileOutcome::Removed,
+                Some(left) => FrameFileOutcome::RemovedLockLeft(left),
+            });
+        }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(FrameFileOutcome::Absent),
         Err(error) if is_busy_io(&error) => Ok(FrameFileOutcome::Busy),
         Err(error) => Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal()),
@@ -393,7 +453,8 @@ pub fn remove_frame_file(
 /// into this process's kept map before the rename and comes out again if the rename fails, so
 /// a read here never misses it. When the rename finds no folder (a leaf deleted by hand right
 /// after its creation) and the frame is still there, the folder is created again and the
-/// rename tried once more. The caller bumps `kept\.moves` after a move.
+/// rename tried once more. The caller bumps `kept\.moves` after a move. Workflow #411 A29: a
+/// moved frame's use lock is deleted; a lock that could not be is `MovedLockLeft`.
 pub fn move_frame_file(
     root: impl AsRef<Path>,
     reference: &ProjectedArtifactReference,
@@ -471,7 +532,12 @@ pub(crate) fn move_frame_file_with(
             .and_then(|()| fs::rename(&hold.path, destination.as_path()));
     }
     let outcome = match renamed {
-        Ok(()) => Ok(FrameFileOutcome::Moved),
+        Ok(()) => {
+            return Ok(match hold.release_done() {
+                None => FrameFileOutcome::Moved,
+                Some(left) => FrameFileOutcome::MovedLockLeft(left),
+            });
+        }
         Err(error) => {
             kept::forget(&root, object_file);
             if error.kind() == ErrorKind::NotFound {

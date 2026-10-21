@@ -1998,6 +1998,18 @@
         "count": "required"
       },
       "description": "The candidates of the same instance that a dispatch decision record does not list, counted by why: one record per code, in ascending code order (Workflow #411 A26)."
+    },
+    "last_in_window": {
+      "type": "boolean",
+      "description": "The dispatch is the last round of its activity window: no clock of its task's trigger occurs again before the window ends (Workflow #411 B8)."
+    },
+    "last_daily_slot": {
+      "type": "boolean",
+      "description": "The dispatch is the last of today's budget: the daily budgets of its task and activity profile allow no further run in the activity day (Workflow #411 B8)."
+    },
+    "daily_remaining": {
+      "type": "integer",
+      "description": "The runs the daily budgets of a task and its activity profile still allow in the activity day after this dispatch (Workflow #411 B8)."
     }
   },
   "vocabularies": {
@@ -29477,6 +29489,29 @@
       "common_causes": "A folder or a read-only file where kept/.moves should be; access to the kept folder denied.",
       "handling": "Remove whatever occupies kept/.moves so that a file can be written there; the next move writes the counter again."
     },
+    "frame_retention_lock_remove_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "io_kind": "optional",
+        "os_error": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 A29: the frame cleaner removed a due frame or moved an error or Lab frame into its kept folder, but could not delete the frame's use lock artifact-use-locks/<name>.lock in the state root. The frame counts as removed or moved; the lock file stays. Reported once per object per process.",
+      "common_causes": "Another program (a backup or indexing tool, security software) holds the lock file open without delete sharing; access to the state root's artifact-use-locks folder denied.",
+      "handling": "Close or exclude whatever holds the state root's artifact-use-locks folder; a lock file left there is harmless."
+    },
     "frame_retention_move_failed": {
       "category": "warning",
       "ladder_class": "none",
@@ -52067,7 +52102,12 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "run_parameters": "required",
+        "run_parameters": "optional",
+        "next_occurrence_unix_ms": "optional",
+        "window_end_unix_ms": "optional",
+        "last_in_window": "optional",
+        "last_daily_slot": "optional",
+        "daily_remaining": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -52077,7 +52117,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.3",
-      "description": "Workflow #411 B15 (contracts/remedies.md, section 4): the read-only parameters this policy dispatch hands to its run: run_parameters holds one record per parameter the task's package declares, with the value resolved from the target record, the configuration or the package default and the source that gave it. The run reads each as the instance fact session.dispatch.parameter.<parameter_name> in its snapshots, an overlay that is never stored. Shared with Workflow #411 B8, which adds its own values to this reason.",
+      "description": "Workflow #411 B15 (contracts/remedies.md, section 4): the read-only parameters this policy dispatch hands to its run: run_parameters holds one record per parameter the task's package declares, with the value resolved from the target record, the configuration or the package default and the source that gave it. The run reads each as the instance fact session.dispatch.parameter.<parameter_name> in its snapshots, an overlay that is never stored. Workflow #411 B8: a dispatch of a task that opts in to dispatch_parameters also carries its schedule values, each when known: next_occurrence_unix_ms (the next occurrence of its trigger's clocks), window_end_unix_ms (the end of its activity window), last_in_window (no clock occurs again before that end), daily_remaining (the runs its daily budgets still allow today after this one) and last_daily_slot (none remains); the run reads each as session.dispatch.schedule.<key>, typed, in the same overlay. run_parameters is absent from a reason that carries only these values.",
       "common_causes": "The task's package declares parameters (or a catalog opts in to Workflow #411 B8's values).",
       "handling": "None."
     },
@@ -58978,9 +59018,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package) but the declarations do not name it for recognition. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
-      "common_causes": "A reading pack of the standard package is not declared in maintenance.json.",
-      "handling": "Declare the standard package's one recognition maintenance package with the use recognition, and merge other reading packs into it."
+      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package), and the declarations name no recognition package for its server (variant). Workflow #411 A32: only the one package a server declares counts, so the other qualifying packs of a server that declares one raise nothing. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
+      "common_causes": "A server of the standard package declares no recognition maintenance package in maintenance.json.",
+      "handling": "Declare, for each server, its one recognition maintenance package with the use recognition."
     },
     "recognition_regression_evidence_invalid": {
       "category": "error",
@@ -84768,6 +84808,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Stage of a frame retention warning: writing the move counter failed."
+    },
+    "frame_retention_lock_remove": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Stage of a frame retention warning (Workflow #411 A29): deleting the use lock of a removed or moved frame failed."
     },
     "frame_retention_move": {
       "owner": "runtime-host",

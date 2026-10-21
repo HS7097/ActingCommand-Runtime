@@ -38,7 +38,7 @@ mod tests {
     mod gate_411_a26;
     // Workflow #411 B15 R2: the evaluator's plan of declared remedies.
     mod gate_411_b15e;
-    // Workflow #411 B8 (policy key 58): a dispatch's schedule values for a task that opts in.
+    // Workflow #411 B8 (policy key 59): a dispatch's schedule values for a task that opts in.
     mod gate_411_b8;
     mod gate_d2_s1;
     mod gate_d2_s4;
