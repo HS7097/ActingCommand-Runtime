@@ -895,14 +895,6 @@ impl RuntimeContainedTask<'_> {
                 HostCode::ContainedTaskPrerequisiteFinalPageMissing.as_str(),
             ));
         };
-        // #411 B37 (A35-S4, design §2.2 "Entry extension"): a recovery chain step that completed
-        // on a `busy` mapping ends the run: the instance shows an activity still in progress, so
-        // the run does not locate again and the chain's next step is neither admitted nor run.
-        let busy = if matches!(role, Some(TaskEntryRecoveryRole::RecoveryChain)) {
-            super::contained_task::entry_busy_outcome(package, &final_page)
-        } else {
-            None
-        };
         self.record_entry_fact(TaskSemanticFact::EntryRecoveryCompleted {
             package_label,
             final_page,
@@ -911,12 +903,6 @@ impl RuntimeContainedTask<'_> {
             package_version: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
-        if let Some(busy) = busy {
-            return Err(ContainedTaskRunError::task_with_outcome(
-                HostCode::ContainedTaskEntryBusy,
-                busy,
-            ));
-        }
         Ok(outcome.executed_steps)
     }
 
