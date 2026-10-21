@@ -160,7 +160,7 @@ pub(super) fn result_schema() -> Value {
         "properties": {"x": integer, "y": integer, "width": integer, "height": integer},
         "required": ["x", "y", "width", "height"],
     });
-    json!({
+    let mut result = json!({
         "type": "object",
         "properties": {
             "request_id": text,
@@ -220,7 +220,6 @@ pub(super) fn result_schema() -> Value {
                         "duration_ms": integer,
                         "frame_sequence": integer,
                         "finished": {"type": "boolean"},
-                        "failure_code": text,
                     },
                     "required": ["step_index", "page"],
                 },
@@ -234,7 +233,11 @@ pub(super) fn result_schema() -> Value {
             "truncated": {"type": "boolean"},
         },
         "required": ["request_id", "steps", "final"],
-    })
+    });
+    // #411 A42, detail summary: the run's terminal failure code, a member of the step summary
+    // like page (as ac_runs adds a row's failure_code).
+    result["properties"]["steps"]["items"]["properties"]["failure_code"] = text;
+    result
 }
 
 // Test-only: Workflow #389 MCP-6, the output budget of ac_run_evidence (command table §2.2).
