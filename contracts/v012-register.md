@@ -2856,6 +2856,19 @@ No ledger change. Gates: host keys 144 to 147 (148 to 151 unused).
 | A50-7 | `prepare_recovery_connection` (a ladder's readiness wait, the application restart rung's preparation, a fence's recheck) reads the emulator status first, as A48's self-check does | rule (no shape change; A48's codes and records) (host 147) | A50 | A50 | a running emulator the Runtime holds stopped or on another port is recognized again (port bound, `runtime.instance_bound`, the ADB baseline awaited, `device.connected`) before the opens; a stopped one is `instance_not_running`; a failed read is `emulator_state_read_failed` and the check goes on from the Runtime's own state |
 | A50-8 | the client's receipt wait of a restart: 745 s (was 445 s) | client constant (no shape) | A50 | A50 | 445 s plus the largest `restart_exit_wait_ms` (300 s); start and stop keep 235 s |
 
+### 1.160 Slice A43b (0.12.x): a wait that sees a still screen it cannot recognise is not stretched by the pacing factor (#411 A43; coordinator 10-21, Q8 of 10-21 20:2x)
+
+The production run of 10-21 00:2x waited for a page that never came at the pressure floor's
+factor 1250 with its extra round; the factor only made the empty wait longer. The rule uses the
+one frame-change measure of §1.155 B12-5 at its default; it adds no captured frame.
+[performance-control.md](performance-control.md) ("Step pacing") is the contract. **No persisted
+ledger shape**: no code, key, vocabulary token, configuration key, location or package member.
+Gates: exec keys 133 to 135.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A43b-1 | a page wait (`capture_until_page`) or a step's confirmation (`await_postcondition`) on a still, unrecognised screen | rule (no shape change) (exec 133 to 135) | A43b | A43b | "still and unrecognised" holds while the wait's latest two frames are unchanged by the frame-change measure (the whole frame, still at most 1500 milli) and neither matched a page the wait accepts (any page of the package for the page wait, the step's destination for the confirmation); a wait's frame is the frame its observation recognised; while it holds, the rest of the wait is counted at the factor 1000 (its pauses last their declared length and its wall time counts in full against its limit), otherwise it is paced as before; a page it accepts or a changed frame returns to the step's pacing at once; a handled shared interrupt page or a failed observation clears it; the run's budget clock, the task deadline, the extra wait rounds and the outcome of a wait that runs out (its code, `elapsed_ms` as the wait counted it, `limit_ms`) are unchanged; at the factor 1000 nothing changes |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
