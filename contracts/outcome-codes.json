@@ -2054,6 +2054,18 @@
     "layer_outcome_key": {
       "type": "name",
       "description": "The outcome key of the scheduling outcome mapping a prerequisite layer's run ended on, as the layer's package declares it (Workflow #411 B39)."
+    },
+    "pool_id": {
+      "type": "name",
+      "description": "The id of a resource pool of the scheduling catalog (Workflow #411 B16)."
+    },
+    "reserve_at_least": {
+      "type": "integer",
+      "description": "The least amount, in the pool's real units, that a task's catalog reserve says the pool must still hold after a run of the task (Workflow #411 B16)."
+    },
+    "amount_after": {
+      "type": "integer",
+      "description": "The amount, in the pool's real units, that the pool would hold after a run of the task: its projected amount less the task's declared consumption and less any consumption that goes first; negative when the consumption exceeds the amount (Workflow #411 B16)."
     }
   },
   "vocabularies": {
@@ -64764,6 +64776,30 @@
       "description": "A task flow declaration was refused: resource readings count invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "resource_reserve_insufficient": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "reserve_at_least": "required",
+        "amount_after": "optional",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "Scheduling decision reason (Workflow #411 B16 part 2, contracts/scheduling/README.md \"Task Reserves\"): the candidate is not admitted this round because running it would leave a pool below the reserve its catalog task declares (pool_id, reserve_at_least). amount_after is what the pool would hold after the run: the pool's projected amount less the task's declared consumption, and less the consumption that goes first when task_id names a task: a candidate of the same instance with a higher effective score this round, or a task dispatched on the instance since the pool's latest reading, which the reading does not show yet. Without amount_after the pool's amount is unknown, so the reserve cannot be shown to hold. The candidate is scored again at the next evaluation; a pool that regenerates wakes the evaluation at its next step.",
+      "common_causes": "The pool holds too little for the task's declared consumption and its reserve; or two tasks that each fit alone do not fit together, and the one with the higher score runs first; or the pool has not been read since a task that consumes it was dispatched.",
+      "handling": "None. The task runs when the pool holds enough, or after a reading taken since the other task ran shows enough; lower the reserve in the catalog if it is too high."
     },
     "resource_target_applied": {
       "category": "info",
