@@ -1036,7 +1036,7 @@ impl SceneEvaluation<'_> {
                                 scene,
                                 region,
                                 check.expected,
-                                check.alternatives.as_deref(),
+                                None,
                                 check.max_distance,
                             )?;
                             Ok(color.distance <= color.max_distance)
