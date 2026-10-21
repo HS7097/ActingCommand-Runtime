@@ -89,6 +89,11 @@ pub(super) struct FakeState {
     // Workflow #369 (verify-666 L6): opens report a passed native open, so a preparation's
     // self-check passes (`fake_opened_backend`).
     observed_open: AtomicBool,
+    // #411 A48: with `refuse_pending_opens`, an emulator-controlled fake whose binding is pending
+    // (its emulator stopped as far as the Runtime knows) refuses every input and capture open
+    // before any attempt, as the device registry does (`require_bound`: no adb runs against a
+    // pending endpoint); once the Runtime binds a port, its opens are answered as before.
+    refuse_pending_opens: AtomicBool,
     // #398 R1 RD-3i: with `stream_capture` every frame carries a stream stamp whose sequence is
     // its capture number; each capture records the floor it was given, and each completed input
     // records when it completed and how many captures came before it. A capture after an input
@@ -973,6 +978,24 @@ impl FakeProvider {
     }
 }
 
+/// #411 A48: the device registry's refusal of an open on a pending endpoint (`require_bound`),
+/// for a fake with `refuse_pending_opens` whose emulator binding is pending.
+fn refuse_pending_open(state: &FakeState) -> DeviceResult<()> {
+    if state.refuse_pending_opens.load(Ordering::Acquire)
+        && state.emulator_control.load(Ordering::Acquire)
+        && state.emulator.bound_port().is_none()
+    {
+        return Err(DeviceError::fatal(
+            "adb endpoint pending: the discovered instance was stopped and has reported no ADB port",
+        )
+        .with_diagnostic(
+            DeviceErrorCategory::Protocol,
+            crate::codes::HostLocation::AdbEndpointPending,
+        ));
+    }
+    Ok(())
+}
+
 /// Workflow #369 (verify-666 L6): an opened fake backend with an unobserved report, or with a
 /// passed native one (capture `adb_screencap` 1280x720; input `adb_shell_input` with its
 /// geometry), so a preparation's self-check passes.
@@ -1072,6 +1095,7 @@ impl ExecutionBackendProvider for FakeProvider {
                 .entries
                 .get(instance_alias)
                 .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
+            refuse_pending_open(&entry.state)?;
             entry.state.open_count.fetch_add(1, Ordering::AcqRel);
             if let Some(error) = entry
                 .state
@@ -1108,6 +1132,7 @@ impl ExecutionBackendProvider for FakeProvider {
                 .entries
                 .get(instance_alias)
                 .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
+            refuse_pending_open(&entry.state)?;
             entry
                 .state
                 .capture_open_count
