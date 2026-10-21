@@ -1177,7 +1177,8 @@ fn busy(
             ConfigValueProblem::RenewalCapExceeded,
         ));
     }
-    if outcome.max_wait_ms > MAX_BUSY_WAIT_MS {
+    // RED PROOF 5 (do not merge): the max_wait_ms range rule is missing (two days pass).
+    if outcome.max_wait_ms > MAX_BUSY_WAIT_MS.saturating_mul(2) {
         return Err(failure(
             BUSY_OUTCOME_MAX_WAIT_MS,
             ConfigValueProblem::BoundOutOfRange,
