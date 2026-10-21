@@ -502,7 +502,7 @@ impl HostShared {
                     cause: fence.cause.clone(),
                     since_unix_ms: fence.since_unix_ms,
                     awaiting_person: fence.stage == FenceStage::Person,
-                    person_wait: fence.person_wait.as_ref().map(|wait| wait.status(recheck)),
+                    person_wait: None,
                 },
             )
         })
