@@ -74037,6 +74037,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_decision_mismatch": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "The confirmation frame of a select step that confirms by its decision (select.confirm decision) led to a different decision than the frame it was chosen on: the actionable candidates' IDs, click boxes or statuses, the selected candidate or the outcome key differ. No input was made.",
+      "common_causes": "The list moved or changed between the two frames.",
+      "handling": "Retry on the next frame; if it repeats, the layout's rows are unstable."
+    },
     "selection_empty": {
       "category": "info",
       "ladder_class": "none",
