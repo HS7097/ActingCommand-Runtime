@@ -134,16 +134,10 @@ impl HostShared {
         }
         let Some(adb_port) = state.adb_port.filter(|port| *port != 0 && state.running()) else {
             self.note_emulator_reading(instance_id, false)?;
-            return self.end_selfcheck(
-                unrecognized(
-                    instance_id,
-                    &state,
-                    ContractLocation::ReadInstanceState,
-                    started,
-                    None,
-                ),
-                links,
-            );
+            // A48 red proof 3 (T3's mutation, do not merge): today's behaviour, a running
+            // emulator whose device cannot be recognized is not reported; the opens go on as
+            // before A48.
+            return Ok(None);
         };
         let recognized = matches!(record.emulator_state, EmulatorRunningState::On { .. })
             && record
