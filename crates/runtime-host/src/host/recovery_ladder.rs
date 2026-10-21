@@ -2473,7 +2473,11 @@ impl HostShared {
             None,
         )?;
         let Some((deadline_ms, wait_ms)) = rerun else {
-            if hold.return_home_deadline_ms.is_some() && config.on_exhausted == OnExhausted::Stop {
+            // RED PROOF 3 (do not merge): `on_exhausted` ignored, always escalate.
+            if hold.return_home_deadline_ms.is_some()
+                && config.on_exhausted == OnExhausted::Stop
+                && hold.since_ms.is_none()
+            {
                 self.append_recovery_ladder_fact(
                     pending,
                     EventSeverity::Warning,
