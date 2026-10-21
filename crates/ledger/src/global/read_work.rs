@@ -46,7 +46,8 @@ impl ReadWork {
         started_ms: u64,
         budget: Option<Duration>,
     ) -> Self {
-        let Some(budget) = budget else {
+        // A51 red proof 2 (do not merge): no read has a budget.
+        let Some(budget) = budget.filter(|_| false) else {
             return Self::unbounded();
         };
         Self {
