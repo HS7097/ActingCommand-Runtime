@@ -1295,15 +1295,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     });
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
     // is allocated before the candidates that ranked ahead of it.
+    // B41 red proof 1 (mutation): today's order, no handover is ever planned.
     let mut handovers = match chain {
-        Some((inputs, entry_holds)) => chain_handover::plan(
-            inputs,
-            entry_holds,
-            &catalog_bundle.tasks.tasks,
-            &task_states,
-            &mut candidates,
-        )?,
-        None => BTreeMap::new(),
+        Some(_) | None => BTreeMap::<String, chain_handover::Handover>::new(),
     };
 
     let mut remaining = host_resources;
