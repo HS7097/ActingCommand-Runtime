@@ -222,7 +222,10 @@ fn agreed_readings(
     if frames.len() != agreement.frame_count()
         || k_of_n_value(values, agreement.required()).is_none()
     {
-        return Err(ResourceReadingProblem::NoAgreement);
+        return frames
+            .into_iter()
+            .next_back()
+            .unwrap_or(Err(ResourceReadingProblem::NoAgreement));
     }
     let confidence_milli = frames
         .iter()
