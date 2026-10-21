@@ -5,19 +5,24 @@
 //! `ac_get_run`) and its result is the CLI's stdout JSON (`crate::run_evidence`), cut from its
 //! last step to the output budget: `truncated`, with `next_step` after the last step kept
 //! (§2.2). Before U-3 an observer tool, after it a general read (command table §3).
+//!
+//! #411 A42: `detail` (`full` or `summary`) is the CLI's `--detail`; the records are read within
+//! the call's budget; and a page whose first step alone is over the output budget answers that
+//! step with its frames, and then its targets too, referenced instead of inlined, so every page
+//! fits and holds a step, and `next_step` always moves on.
 
 use super::runtime::Connected;
 use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
 use crate::codes::ArgumentProblem;
-use crate::run_evidence::{self, Evidence, EvidenceRequest, Failure};
+use crate::run_evidence::{self, Evidence, EvidenceRequest, Failure, Omit, StepDetail};
 use actingcommand_runtime_client::RunKey;
 use serde_json::{Map, Value, json};
 
-pub(super) const DESCRIPTION: &str = "What one contained run did, step by step, as actingctl run evidence answers it, read from the run's own ledger events (QueryEvents, which records nothing). Name the run by handle (its Runtime request_id, as ac_run_pack returns it) or by run_id; give exactly one. Returns {request_id, run_id, task_id, steps, final, next_step, overlay}. Each step, in the order the run started them: step_index; page, the page it started from; targets, the targets of the recognition it decided on, each {target, matched, box} as the recognition fact records it (the fact keeps no score); action, its first input {kind, point, rect}: point where a tap or long tap lands, rect the one box the point was drawn in (no action when the step made no input); frames, [{ref}] of the frame it decided on and of every frame captured while it ran. final is {page, frame_ref}: the terminal's page and the run's last frame. overlay {ref} is the run's task diagnostic stream, the JSON with every evaluated target's box and score per frame. Every ref is a materials ref for ac_material, which exports a large one whole. from_step (default 0) is the position of the first step answered, counted from 0; limit defaults to 20 (at most 100); next_step is present while steps remain after the page: pass it as from_step to read on. truncated true means the page was cut to the output budget and next_step continues after its last step. A run nobody has answers run_unknown.";
+pub(super) const DESCRIPTION: &str = "What one contained run did, step by step, as actingctl run evidence answers it, read from the run's own ledger events (QueryEvents, which records nothing). Name the run by handle (its Runtime request_id, as ac_run_pack returns it) or by run_id; give exactly one. Returns {request_id, run_id, task_id, steps, final, next_step, overlay}. Each step, in the order the run started them: step_index; page, the page it started from; targets, the targets of the recognition it decided on, each {target, matched, box} as the recognition fact records it (the fact keeps no score); action, its first input {kind, point, rect}: point where a tap or long tap lands, rect the one box the point was drawn in (no action when the step made no input); frames, [{ref}] of the frame it decided on and of every frame captured while it ran. final is {page, frame_ref}: the terminal's page and the run's last frame. overlay {ref} is the run's task diagnostic stream, the JSON with every evaluated target's box and score per frame. Every ref is a materials ref for ac_material, which exports a large one whole. detail summary answers each step as a summary without targets and frames: {step_index, page, kind (its first input's kind), started_unix_ms, duration_ms (once it finished), frames_total, frame_sequence (the ledger sequence of the frame it decided on), finished false when it never finished, failure_code: the run's terminal failure on the step the run ended in}; read a step whole with from_step and limit 1. from_step (default 0) is the position of the first step answered, counted from 0; limit defaults to 20 (100 with detail summary, at most 100); next_step is present while steps remain after the page: pass it as from_step to read on. truncated true means the page was cut to the output budget and next_step continues after its last step. A step that alone is over the output budget is answered with its frames, and then its targets too, left out: omitted names them, frames_total and targets_total count them, and ledger_range {after_sequence, through_sequence} is the stretch of the run's ledger that holds them (ac_events with this request_id). A run nobody has answers run_unknown.";
 
-const ARGUMENTS: [&str; 4] = ["handle", "run_id", "from_step", "limit"];
+const ARGUMENTS: [&str; 5] = ["handle", "run_id", "from_step", "limit", "detail"];
 
 pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &ARGUMENTS)?;
@@ -36,6 +41,12 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         }
         (None, None) => return Err(invalid_argument("handle", ArgumentProblem::Required)),
     };
+    // #411 A42: whole steps or step summaries, as `--detail`.
+    let detail = match arguments.string("detail")? {
+        None => StepDetail::Full,
+        Some(text) => StepDetail::parse(text)
+            .ok_or_else(|| invalid_argument("detail", ArgumentProblem::NotRecognised))?,
+    };
     let request = EvidenceRequest {
         run,
         from_step: arguments
@@ -43,25 +54,39 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
             .unwrap_or(0),
         limit: arguments
             .integer("limit", 1, run_evidence::MAX_LIMIT)?
-            .unwrap_or(run_evidence::DEFAULT_LIMIT),
+            .unwrap_or(detail.default_limit()),
+        detail,
     };
     let connected = context.runtime.connect()?;
-    let evidence = run_evidence::read(&connected.client, &request)
+    let evidence = run_evidence::read(&connected.client, &request, context.deadline)
         .map_err(|failure| tool_error(context, &connected, failure))?;
     Ok(within_budget(&evidence))
 }
 
 /// The page with as many of its steps, from the first, as the output budget lets through.
+/// #411 A42: when the page's first step alone does not fit, it is answered with its frames left
+/// out and referenced, and then its targets too; a page that does not fit even so answers
+/// output_budget_exceeded.
 fn within_budget(evidence: &Evidence) -> ToolSuccess {
     let mut kept = evidence.page_len();
     loop {
         let result = evidence.render(kept);
-        // A result that does not fit even without steps answers output_budget_exceeded.
-        if kept == 0 || tools::fits_success(&result) {
+        if tools::fits_success(&result) || kept == 0 {
+            // A result that does not fit even without steps answers output_budget_exceeded.
             return ToolSuccess::new(result);
+        }
+        if kept == 1 {
+            break;
         }
         kept -= 1;
     }
+    // The page's first step alone is over the budget: its frames referenced, else its targets
+    // too.
+    let frames_referenced = evidence.render_referenced(Omit::Frames);
+    if tools::fits_success(&frames_referenced) {
+        return ToolSuccess::new(frames_referenced);
+    }
+    ToolSuccess::new(evidence.render_referenced(Omit::FramesAndTargets))
 }
 
 /// The CLI's failure as a tool error: an argument is `arguments_invalid` here, with the CLI's
@@ -108,6 +133,14 @@ pub(super) fn input_schema() -> Value {
                 "minimum": 1,
                 "maximum": run_evidence::MAX_LIMIT,
                 "default": run_evidence::DEFAULT_LIMIT,
+                "description": "Steps per page; 20 by default, 100 with detail summary.",
+            },
+            // #411 A42.
+            "detail": {
+                "type": "string",
+                "enum": ["full", "summary"],
+                "default": "full",
+                "description": "full answers each step whole; summary answers step summaries without targets and frames, so a whole run fits in one page or a few.",
             },
         },
         "additionalProperties": false,
@@ -166,8 +199,30 @@ pub(super) fn result_schema() -> Value {
                             "required": ["kind"],
                         },
                         "frames": {"type": "array", "items": reference},
+                        // #411 A42: a step that alone is over the output budget.
+                        "omitted": {
+                            "type": "array",
+                            "items": {"enum": ["frames", "targets"]},
+                        },
+                        "frames_total": integer,
+                        "targets_total": integer,
+                        "ledger_range": {
+                            "type": "object",
+                            "properties": {
+                                "after_sequence": integer,
+                                "through_sequence": integer,
+                            },
+                            "required": ["after_sequence", "through_sequence"],
+                        },
+                        // #411 A42: detail summary.
+                        "kind": text,
+                        "started_unix_ms": integer,
+                        "duration_ms": integer,
+                        "frame_sequence": integer,
+                        "finished": {"type": "boolean"},
+                        "failure_code": text,
                     },
-                    "required": ["step_index", "page", "targets", "frames"],
+                    "required": ["step_index", "page"],
                 },
             },
             "final": {
@@ -186,8 +241,10 @@ pub(super) fn result_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::run_evidence::StepEvidence;
 
     // A run of 40 steps, each with one frame ref of about 700 bytes: far over the budget whole.
+    // #411 A42: the steps are built as the evidence holds them; each answers the same row.
     fn evidence(from_step: usize, limit: usize) -> Evidence {
         let mut identity = Map::new();
         identity.insert(
@@ -195,13 +252,18 @@ mod tests {
             json!("request_0123456789abcdef0123456789abcdef"),
         );
         let steps = (0..40_u32)
-            .map(|index| {
-                json!({
-                    "step_index": index,
-                    "page": "neutral/page",
-                    "targets": [],
-                    "frames": [{"ref": format!("{index}:{}", "f".repeat(700))}],
-                })
+            .map(|index| StepEvidence {
+                step_index: index,
+                page: "neutral/page".to_owned(),
+                targets: Vec::new(),
+                action: None,
+                frames: vec![(u64::from(index) + 1, format!("{index}:{}", "f".repeat(700)))],
+                decided_frame: false,
+                first_sequence: u64::from(index) + 1,
+                last_sequence: u64::from(index) + 1,
+                started_unix_ms: 1,
+                finished_unix_ms: None,
+                failure: None,
             })
             .collect();
         Evidence {
@@ -211,6 +273,7 @@ mod tests {
             overlay: None,
             from_step,
             limit,
+            detail: StepDetail::Full,
         }
     }
 
@@ -227,11 +290,11 @@ mod tests {
         );
         assert!(tools::fits_success(&first), "the cut page does not fit");
         assert_eq!(first["truncated"], json!(true));
-        assert_eq!(first["steps"][0], whole.steps[0]);
+        assert_eq!(first["steps"][0], whole.steps[0].full_row());
         // §4.7: next_step continues after the last step kept, and the next page starts there.
         assert_eq!(first["next_step"], json!(kept));
         let second = within_budget(&evidence(kept, 20)).result;
-        assert_eq!(second["steps"][0], whole.steps[kept]);
+        assert_eq!(second["steps"][0], whole.steps[kept].full_row());
 
         // A page inside the budget is answered whole, without truncated.
         let small = within_budget(&evidence(0, 2)).result;
