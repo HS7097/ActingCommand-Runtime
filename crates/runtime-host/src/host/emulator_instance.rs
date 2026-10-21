@@ -1164,7 +1164,8 @@ impl HostShared {
                     }
                     // #411 A50: a restart starts after a Stop whose readiness wait expired only
                     // once the old VM has exited; still running at the bound, it fails here.
-                    if action == EmulatorInstanceAction::Stop
+                    // A50 red proof 5: no wait for the old VM (launch at once).
+                    if action == EmulatorInstanceAction::Restart
                         && mode.restarts()
                         && error.code() == EMULATOR_CONTROL_WAIT_TIMEOUT
                     {
