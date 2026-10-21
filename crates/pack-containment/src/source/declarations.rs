@@ -2166,9 +2166,6 @@ impl Declaration<'_> {
         }
         let colors = self.array(value, pointer)?;
         let invalid = || self.error(pointer, ResourceDeclarationReason::InvalidValue);
-        if !(1..=actingcommand_recognition_pack::MAX_COLOR_ALTERNATIVES).contains(&colors.len()) {
-            return Err(invalid());
-        }
         for (position, color) in colors.iter().enumerate() {
             self.color(color, pointer).map_err(|_| invalid())?;
             if Some(color) == expected || colors[..position].contains(color) {
