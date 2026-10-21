@@ -2071,7 +2071,10 @@ impl SqliteViewSnapshot {
             read_complete: true,
             limits: Vec::new(),
         };
-        if self.source == LedgerReadSource::Runtime {
+        // A51 red proof 1 (do not merge): Runtime Lab reads use the correlated SQL view again.
+        if self.source == LedgerReadSource::Runtime
+            && query.view != Some(actingcommand_contract::LedgerView::Lab)
+        {
             let page = indexes.project_view_page(
                 events,
                 query,
