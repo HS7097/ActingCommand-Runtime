@@ -49,18 +49,11 @@ impl VendorStdioSession {
     /// Workflow #411 A36a: takes the process-wide redirect gate, waiting at most `bound`, before
     /// anything is redirected; a longer wait fails with `vendor_stdio_redirect_busy`.
     fn start_within(bound: std::time::Duration) -> DeviceResult<Self> {
-        let lock = stdio_gate().enter(bound)?;
-        let guard = match imp::RedirectGuard::new() {
-            Ok(guard) => guard,
-            Err(error) => {
-                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
-                    std::mem::forget(lock);
-                }
-                return Err(error);
-            }
-        };
+        // A36a red proof 2: the redirect runs without holding the process-wide gate.
+        drop(stdio_gate().enter(bound)?);
+        let guard = imp::RedirectGuard::new()?;
         Ok(Self {
-            lock: Some(lock),
+            lock: None,
             guard: Some(guard),
             close_result: None,
         })
@@ -103,12 +96,9 @@ impl VendorStdioSession {
         if self.lock.is_some() {
             return guard.resume();
         }
-        let lock = stdio_gate().enter(bound)?;
-        let result = guard.resume();
-        if !guard.is_suspended() {
-            self.lock = Some(lock);
-        }
-        result
+        // A36a red proof 2: the redirect runs without holding the process-wide gate.
+        drop(stdio_gate().enter(bound)?);
+        guard.resume()
     }
 
     pub(crate) fn finish(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
