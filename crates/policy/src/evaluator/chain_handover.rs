@@ -156,6 +156,35 @@ pub(super) fn plan<E>(
             },
         );
     }
+    // B41 red proof 2 (mutation): the deferral applies unconditionally, also when the successor
+    // is no candidate because it reads the key the fact refresh reads.
+    for (instance_id, page) in &inputs.resting_pages {
+        if handovers.contains_key(instance_id) {
+            continue;
+        }
+        for task in tasks {
+            if follows_on_page(task, instance_id, page, task_states)
+                && entry_holds(task, instance_id, &page.page_id)?
+            {
+                let ahead = candidates
+                    .iter()
+                    .filter(|candidate| candidate.instance_id == *instance_id)
+                    .map(|candidate| candidate.work_index)
+                    .collect();
+                handovers.insert(
+                    instance_id.clone(),
+                    Handover {
+                        successor_work_index: usize::MAX,
+                        successor_task_id: task.id.clone(),
+                        page_id: page.page_id.clone(),
+                        ahead,
+                        allocation: Allocation::Pending,
+                    },
+                );
+                break;
+            }
+        }
+    }
     for handover in handovers.values() {
         let first = candidates
             .iter()
