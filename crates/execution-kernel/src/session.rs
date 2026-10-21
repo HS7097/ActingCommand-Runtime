@@ -61,6 +61,59 @@ impl InputFrameContext {
     }
 }
 
+/// #411 A49: whose input frame a capture makes. The instance's lease holder and its keyless
+/// observers keep their pending and committed frames apart on the session, so an observer's
+/// capture never replaces or invalidates the frame a run in flight decided on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameOwner {
+    /// The instance's lease holder (a run, a Lab operation): its capture drops every input frame
+    /// of the session, as every capture did before.
+    Lease,
+    /// A keyless observer (a read-only observe, a monitor probe): its capture drops and replaces
+    /// only the observers' frame.
+    Observer,
+}
+
+/// One owner's input frames: the frame it captured last, and the one the Host committed.
+#[derive(Default)]
+struct OwnedInputFrames {
+    pending: Option<InputFrameContext>,
+    committed: Option<InputFrameContext>,
+}
+
+/// #411 A49: the session's input frames, the lease holder's apart from the observers'.
+#[derive(Default)]
+struct InputFrames {
+    lease: OwnedInputFrames,
+    observer: OwnedInputFrames,
+}
+
+impl InputFrames {
+    fn owned(&mut self, owner: FrameOwner) -> &mut OwnedInputFrames {
+        match owner {
+            FrameOwner::Lease => &mut self.lease,
+            FrameOwner::Observer => &mut self.observer,
+        }
+    }
+
+    /// A capture of `owner` starts: the lease holder's drops every frame, an observer's only the
+    /// observers'.
+    fn capture_started(&mut self, owner: FrameOwner) {
+        match owner {
+            FrameOwner::Lease => *self = Self::default(),
+            FrameOwner::Observer => self.observer = OwnedInputFrames::default(),
+        }
+    }
+
+    /// The committed frame `reference` names, whichever owner committed it.
+    fn committed(&self, reference: InputFrameReference) -> Option<&InputFrameContext> {
+        [&self.lease.committed, &self.observer.committed]
+            .into_iter()
+            .flatten()
+            .find(|frame| frame.reference == reference)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct ObservedFrame {
     pub frame: Frame,
@@ -255,6 +308,8 @@ enum SessionCommand {
     },
     Capture {
         frame_id: Option<FrameId>,
+        /// #411 A49: whose input frame the capture makes.
+        owner: FrameOwner,
         memory: Option<actingcommand_device::FrameMemoryBudget>,
         /// #398 R1 §5.2 (RD-3i): the floor the captured frame must meet.
         floor: Option<actingcommand_device::CaptureFloor>,
@@ -268,6 +323,8 @@ enum SessionCommand {
     },
     CommitFrame {
         reference: InputFrameReference,
+        /// #411 A49: the owner whose capture made the frame.
+        owner: FrameOwner,
         response: SyncSender<ExecutionKernelResult<InputFrameContext>>,
     },
     ResolveFrame {
@@ -559,12 +616,13 @@ impl ExecutionSession {
     }
 
     pub(crate) fn capture_retained(&self) -> ExecutionKernelResult<Frame> {
-        self.capture_frame_retained(None, None, None)
+        self.capture_frame_retained(None, FrameOwner::Lease, None, None)
     }
 
     pub(crate) fn capture_frame_retained(
         &self,
         frame_id: Option<FrameId>,
+        owner: FrameOwner,
         memory: Option<actingcommand_device::FrameMemoryBudget>,
         floor: Option<actingcommand_device::CaptureFloor>,
     ) -> ExecutionKernelResult<Frame> {
@@ -580,6 +638,7 @@ impl ExecutionSession {
             })?
             .send(SessionCommand::Capture {
                 frame_id,
+                owner,
                 memory,
                 floor,
                 response,
@@ -642,13 +701,16 @@ impl ExecutionSession {
         }
     }
 
-    /// Host calls this only after the original capture fact has committed.
+    /// Host calls this only after the original capture fact has committed; `owner` is the owner
+    /// of that capture (#411 A49).
     pub(crate) fn commit_input_frame(
         &self,
         reference: InputFrameReference,
+        owner: FrameOwner,
     ) -> ExecutionKernelResult<InputFrameContext> {
         self.frame_request(|response| SessionCommand::CommitFrame {
             reference,
+            owner,
             response,
         })
     }
@@ -1046,8 +1108,7 @@ fn run_session(
     generation: u64,
     needs_close: &AtomicBool,
 ) -> ExecutionKernelResult<()> {
-    let mut pending_frame: Option<InputFrameContext> = None;
-    let mut committed_frame: Option<InputFrameContext> = None;
+    let mut input_frames = InputFrames::default();
     while let Ok(command) = receiver.recv() {
         match command {
             SessionCommand::Input {
@@ -1063,7 +1124,7 @@ fn run_session(
                     backends,
                     action,
                     frame,
-                    committed_frame.as_ref(),
+                    frame.and_then(|reference| input_frames.committed(reference)),
                     check,
                     &step,
                 );
@@ -1116,12 +1177,12 @@ fn run_session(
             }
             SessionCommand::Capture {
                 frame_id,
+                owner,
                 memory,
                 floor,
                 response,
             } => {
-                pending_frame = None;
-                committed_frame = None;
+                input_frames.capture_started(owner);
                 let result = execute_capture(
                     provider.as_ref(),
                     &instance_alias,
@@ -1137,7 +1198,8 @@ fn run_session(
                 })
                 .map_err(|error| error.with_backend_session_generation(generation));
                 if let (Some(frame_id), Ok(frame)) = (frame_id, &result) {
-                    pending_frame = Some(InputFrameContext::captured(frame_id, frame));
+                    input_frames.owned(owner).pending =
+                        Some(InputFrameContext::captured(frame_id, frame));
                 }
                 match result {
                     Ok(frame) => response.send(Ok(frame)).map_err(|_| {
@@ -1186,8 +1248,7 @@ fn run_session(
                     SessionBackends::Pending | SessionBackends::Independent { capture: None, .. }
                 );
                 if capture_opens {
-                    pending_frame = None;
-                    committed_frame = None;
+                    input_frames = InputFrames::default();
                 }
                 let result = open_backends(
                     provider.as_ref(),
@@ -1242,16 +1303,19 @@ fn run_session(
             }
             SessionCommand::CommitFrame {
                 reference,
+                owner,
                 response,
             } => {
-                let result = if let Some(frame) = pending_frame
+                let owned = input_frames.owned(owner);
+                let result = if let Some(frame) = owned
+                    .pending
                     .take()
                     .filter(|frame| frame.reference == reference)
                 {
-                    committed_frame = Some(frame.clone());
+                    owned.committed = Some(frame.clone());
                     Ok(frame)
                 } else {
-                    committed_frame = None;
+                    owned.committed = None;
                     Err(ExecutionKernelError::fatal(
                         ExecutionKernelCode::InputFrameCaptureMismatch.code(),
                     ))
@@ -1271,15 +1335,9 @@ fn run_session(
                 reference,
                 response,
             } => {
-                let result = committed_frame
-                    .as_ref()
-                    .filter(|frame| frame.reference == reference)
-                    .cloned()
-                    .ok_or_else(|| {
-                        ExecutionKernelError::fatal(
-                            ExecutionKernelCode::InputFrameNotCommitted.code(),
-                        )
-                    });
+                let result = input_frames.committed(reference).cloned().ok_or_else(|| {
+                    ExecutionKernelError::fatal(ExecutionKernelCode::InputFrameNotCommitted.code())
+                });
                 if response.send(result).is_err() {
                     return Err(close_after_failure(
                         backends.take(),
@@ -1292,8 +1350,7 @@ fn run_session(
                 }
             }
             SessionCommand::ForgetInputFrames { response } => {
-                pending_frame = None;
-                committed_frame = None;
+                input_frames = InputFrames::default();
                 if response.send(Ok(())).is_err() {
                     return Err(close_after_failure(
                         backends.take(),
@@ -1360,8 +1417,7 @@ fn run_session(
                 input_check,
                 response,
             } => {
-                pending_frame = None;
-                committed_frame = None;
+                input_frames = InputFrames::default();
                 // This call drops every witness/check reference before the response; Host
                 // must finish ResourceClose before it can issue the Business step.
                 let result = prepare_application_backends(backends, authority, input_check);
@@ -1408,8 +1464,7 @@ fn run_session(
                 step,
                 response,
             } => {
-                pending_frame = None;
-                committed_frame = None;
+                input_frames = InputFrames::default();
                 let invalidation = match backends {
                     SessionBackends::Nemu(pair) => {
                         pair.owner.invalidate_display().map_err(|error| {
