@@ -2528,10 +2528,8 @@ impl HostShared {
             return Ok(Some(reason));
         }
         let poll = Duration::from_millis(pending.config.busy.poll_ms);
+        // RED PROOF 4 (do not merge): the hold waits to its end without holding checks.
         loop {
-            if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
-                return Ok(Some(reason));
-            }
             let now_ms = self.monotonic_ms()?;
             if now_ms >= until_ms {
                 return Ok(None);
