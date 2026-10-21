@@ -997,6 +997,34 @@ Wherever another rule names a package's designated operation (a recognition pack
 prerequisite package, a `linear_steps` task, a zero-input fields task), a designated effect set is
 refused the same way, with the same reason token (`designated_operation`).
 
+### Busy outcome mappings
+
+#411 B37 (slice A35-S1, [v012-register.md](v012-register.md) §1.152; coordinator decision Q11 of
+2026-10-21). A mapping of `scheduling_outcome` may declare `"busy": true`: a run that ends on its
+key ended on a page that shows an activity still in progress (one that ends by itself), and the
+expected end page has not been reached. For scheduling the run is a success with that key, as
+any mapped run; the recovery ladder never counts it as recovered, holds and runs its return-home
+rung again ([emulator-control.md](emulator-control.md), "Busy ends"). A return-home package maps
+the activity page it recognises to such a key.
+
+```json
+"mappings": [
+  {"outcome_key": "returned", "effect": "no_designated_effect", "terminal_pages": ["home"]},
+  {"outcome_key": "still_running", "effect": "no_designated_effect",
+   "terminal_pages": ["page_a"], "busy": true}
+]
+```
+
+| Member (`task.json` mapping) | Rule | Refusal |
+| --- | --- | --- |
+| `busy` | optional boolean, default `false`; only on a `no_designated_effect` mapping, never together with `remedy` | `invalid_scheduling_outcome_declaration`, field `busy` (the source parser: `resource_declaration_invalid`, `InvalidType` at `…/busy` for no boolean, `InvalidValue` at the declaration for a broken rule) |
+
+A mapping without `busy` serializes byte for byte as before; `"busy": false` is the same as
+leaving it out. The member joins
+package revision 6, which the closing slice of the release declares; until then the Runtime
+admits it by code. No persisted record carries it: the ladder's records name the busy run's key
+as a value of `recovery_rung_busy_outcome`.
+
 ### Task schema `0.9` candidate operations
 
 Workflow #390 EXEC-1 (forced-compromises mapping, rows E-04 and E-13). One page of a page-graph
