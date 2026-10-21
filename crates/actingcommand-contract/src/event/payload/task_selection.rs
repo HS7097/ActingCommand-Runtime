@@ -1169,9 +1169,7 @@ impl TaskSelectionRecord {
             } => (candidate_set_sha256, decision_sha256, projection),
             _ => return Err(invalid("confirmation")),
         };
-        if !is_candidate_set_sha256(candidate_set_sha256)
-            || !is_candidate_set_sha256(decision_sha256)
-        {
+        if !is_candidate_set_sha256(candidate_set_sha256) || decision_sha256.is_empty() {
             return Err(invalid("confirmation"));
         }
         if let Some(projection) = projection {
