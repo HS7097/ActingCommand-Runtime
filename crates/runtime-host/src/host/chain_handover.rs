@@ -10,7 +10,7 @@
 
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
 use super::*;
-use crate::codes::HostLocation;
+use crate::codes::{HostCode, HostLocation};
 use crate::{ProcedureBinding, ProcedureManifest};
 use actingcommand_contract::FactValue;
 use actingcommand_execution_kernel::{PreparedContainedTask, canonical_page_anchor};
@@ -27,7 +27,8 @@ const ENTRY_READ_LABEL: &str = "chain-handover";
 
 impl HostShared {
     /// The page each instance of `instances` rests on: its `task.page` runtime fact, when it has
-    /// one.
+    /// one. A successor waiting for its random delay (`dispatch_random_delay_waiting`, position 9
+    /// of the order of deferrals) still goes first: the delay is part of its dispatch.
     pub(super) fn chain_handover_inputs(
         &self,
         instances: &[InstanceSnapshot],
@@ -60,7 +61,10 @@ impl HostShared {
                 );
             }
         }
-        Ok(ChainHandoverInputs { resting_pages })
+        Ok(ChainHandoverInputs {
+            resting_pages,
+            successor_wait_codes: vec![HostCode::DispatchRandomDelayWaiting.code()],
+        })
     }
 }
 

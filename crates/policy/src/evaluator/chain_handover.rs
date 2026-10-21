@@ -17,13 +17,15 @@
 //!   package ends, so every one of them waits.
 //! - The waiting work keeps its own due time. It runs after the chain step, or in the same round
 //!   when the successor is not dispatched (an admission gate or the host budget defers it), and
-//!   from the round the successor is no longer a candidate.
+//!   from the round the successor is no longer a candidate. A successor that only waits for its
+//!   dispatch, under a code the Runtime names (its random delay, coordinator ruling 10-21), is
+//!   still going first: the candidates it went before keep waiting.
 //! - A successor whose own trigger or selection document reads a key the fact refresh reads is
 //!   deferred for that key and is no candidate (item 4): the refresh goes first, as before.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Code, Outcome};
 
 use super::{DecisionReason, PlacementCandidate, TaskRuntimeSnapshot, reason_with};
 use crate::codes::PolicyCode;
@@ -45,6 +47,10 @@ pub struct RestingPage {
 pub struct ChainHandoverInputs {
     /// Per instance alias, the page it rests on; an instance without one has no handover.
     pub resting_pages: BTreeMap<String, RestingPage>,
+    /// The deferral codes under which a successor still goes first: its dispatch only waits (the
+    /// Runtime's random delay). Any other deferral of the successor lets the candidates it went
+    /// before take their turn.
+    pub successor_wait_codes: Vec<Code>,
 }
 
 /// The Runtime's answer whether the entry page set of a task's package holds a page, given the
@@ -58,6 +64,8 @@ enum Allocation {
     Pending,
     /// The successor was dispatched this round.
     Dispatched,
+    /// The successor waits for its dispatch (its random delay): it still goes first.
+    Waiting,
     /// The successor was not dispatched this round: the candidates it went before take their
     /// turn.
     NotDispatched,
@@ -81,9 +89,15 @@ impl Handover {
     }
 
     /// Whether the candidate `work_index` waits for the successor now: it ranked ahead of it, and
-    /// the successor was dispatched or is still to be allocated.
+    /// the successor was dispatched, waits for its dispatch or is still to be allocated.
     pub(super) fn holds(&self, work_index: usize) -> bool {
         self.ahead.contains(&work_index) && self.allocation != Allocation::NotDispatched
+    }
+
+    /// Records that the successor waits for its dispatch: the candidates it went before keep
+    /// waiting.
+    pub(super) fn wait(&mut self) {
+        self.allocation = Allocation::Waiting;
     }
 
     /// Records whether the allocation dispatched the successor.

@@ -1294,7 +1294,11 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             .then_with(|| left.instance_id.cmp(&right.instance_id))
     });
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
-    // is allocated before the candidates that ranked ahead of it.
+    // is allocated before the candidates that ranked ahead of it. A deferral under one of
+    // `successor_waits` (the Runtime's random delay) is part of the successor's dispatch.
+    let successor_waits = chain
+        .as_ref()
+        .map_or_else(Vec::new, |(inputs, _)| inputs.successor_wait_codes.clone());
     let mut handovers = match chain {
         Some((inputs, entry_holds)) => chain_handover::plan(
             inputs,
@@ -1483,6 +1487,15 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             ),
         };
         if let Some((reason, next_wake_unix_ms)) = deferral {
+            // Workflow #411 B41: a successor that only waits for its dispatch (its random delay)
+            // still goes first; any other deferral lets the candidates it went before run.
+            if let Some(handover) = handovers
+                .get_mut(candidate.instance_id.as_str())
+                .filter(|handover| handover.is_successor(candidate.work_index))
+                && successor_waits.iter().any(|code| reason.outcome.is(*code))
+            {
+                handover.wait();
+            }
             let task_work = &mut work[candidate.work_index];
             task_work.state = SchedulingDecisionState::Deferred;
             task_work.reasons.push(reason);

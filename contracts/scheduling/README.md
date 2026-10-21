@@ -640,11 +640,13 @@ A chain step that hands over on its page goes first (coordinator triage Q15; reg
   so every candidate that ranked ahead waits, not only those whose entry or prerequisite layer
   goes home. The candidates ranked behind the successor lose to it with
   `instance_already_selected` as before.
-- **The waiting work keeps its own due time.** It runs after the chain step. When the successor is
-  not dispatched in the round (an admission gate defers it, at any position of the order of
-  deferrals, the random delay included, or the host budget does), the candidates it went before
-  take their turn in the same round, in rank order. When the successor is no longer a candidate
-  (withdrawn, refused, no longer due) there is no handover.
+- **The waiting work keeps its own due time.** It runs after the chain step. The successor's
+  random delay (`dispatch_random_delay_waiting`, position 9 of the order of deferrals) is part of
+  its dispatch: while the successor waits for its planned start the candidates it went before keep
+  waiting with `policy_chain_handover_waiting` (coordinator ruling 10-21). When any other gate
+  defers the successor in the round (an admission gate at positions 1 to 8a, or the host budget),
+  the candidates it went before take their turn in the same round, in rank order. When the
+  successor is no longer a candidate (withdrawn, refused, no longer due) there is no handover.
 - **Exception.** A successor whose own trigger or selection document reads a key the fact refresh
   reads is deferred for that key and is no candidate: the refresh goes first, as before. Its run
   then starts wherever the refresh left the instance, and its entry recovery decides as before.

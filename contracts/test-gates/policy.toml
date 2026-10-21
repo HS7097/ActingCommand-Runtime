@@ -691,11 +691,12 @@ tests = [
 ]
 incident = ["#411 B41"]
 
-# Workflow #411 B41 (brief T4, model items 3 and 5; register §1.157): the round of a handover records the reading's deferral (its decision ends with policy_chain_handover_waiting and the successor's dispatch decision record lists it with that why); when the successor's dispatch is withdrawn and the next round's admission defers it, that round runs the deferred reading
+# Workflow #411 B41 (brief T4, model items 3 and 5; T5, model item 3 and the coordinator ruling 10-21 on the random delay; register §1.157): the round of a handover records the reading's deferral (its decision ends with policy_chain_handover_waiting and the successor's dispatch decision record lists it with that why); when the successor's dispatch is withdrawn and the next round's admission defers it, that round runs the deferred reading; while the successor waits for its random delay the reading stays deferred and nothing runs on the instance, the successor is dispatched at its planned start and the reading runs after it
 [[gate]]
 key = "63"
 coverage = "Y"
 tests = [
     "actingcommand-policy::lib::tests::gate_411_b41::b41_t4_when_the_chain_breaks_the_deferred_refresh_runs_at_the_next_evaluation",
+    "actingcommand-policy::lib::tests::gate_411_b41::b41_t5_a_successor_waiting_for_its_random_delay_keeps_the_refresh_deferred",
 ]
 incident = ["#411 B41"]
