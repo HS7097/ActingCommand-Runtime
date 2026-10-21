@@ -147,10 +147,10 @@ pub(super) struct TaskSelect {
 #[serde(rename_all = "snake_case")]
 pub(super) enum SelectConfirm {
     /// F2's candidate set hashes like the evaluated one (`matched` / `mismatched`).
-    #[default]
     CandidateSet,
     /// F2 is projected and decided again with the same fact snapshot and instant, and its
     /// decision hash equals the decision's (`decision_matched` / `decision_mismatched`).
+    #[default]
     Decision,
 }
 
