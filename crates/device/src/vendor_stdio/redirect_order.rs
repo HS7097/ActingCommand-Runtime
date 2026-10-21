@@ -85,7 +85,7 @@ pub(crate) fn table_source(
     stderr_owned: isize,
 ) -> TableSource {
     // NULL, INVALID_HANDLE_VALUE and the CRT's no-console value name no open handle.
-    let owns_slot = |owned: isize| owned == slot && !matches!(owned, 0 | -1 | -2);
+    let owns_slot = |owned: isize| owned == slot && !matches!(owned, -2..=0);
     let (own, other) = match stream {
         StdStream::Stdout => (
             (StdStream::Stdout, stdout_owned),
