@@ -2317,9 +2317,13 @@ impl HostShared {
                         // listed class is probed before the climb goes on; while the screen
                         // still changes, the ladder holds instead of climbing.
                         let gate = match busy_hold.return_home_deadline_ms {
+                            // RED PROOF 1 (do not merge): no gate; a listed return-home
+                            // failure climbs on at once, as before A35-S2 (no verdict ever
+                            // sets `since_ms`).
                             Some(deadline_ms)
                                 if rung == RecoveryRung::ReturnHome
-                                    && last_interruption.is_none() =>
+                                    && last_interruption.is_none()
+                                    && screen_hold.since_ms.is_some() =>
                             {
                                 self.climb_screen_gate(
                                     pending,
