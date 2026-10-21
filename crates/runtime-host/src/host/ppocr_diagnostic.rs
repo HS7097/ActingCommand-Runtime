@@ -229,6 +229,13 @@ impl HostShared {
                 continue;
             }
             let result = (|| {
+                // #411 A36c, test only: runs between this report's writes and its seal.
+                #[cfg(test)]
+                let before_seal = lock(
+                    &self.ppocr_seal_hook_for_test,
+                    crate::codes::test_spellings::TestLocation::ConsumePpocrSealTestHook,
+                )?
+                .take();
                 report.validate().map_err(|message| {
                     RuntimeHostError::fatal(
                         HostCode::PpocrDiagnosticInvalid,
@@ -301,6 +308,10 @@ impl HostShared {
                             ppocr_artifact_error(cleanup),
                         ),
                     });
+                }
+                #[cfg(test)]
+                if let Some(action) = before_seal {
+                    action();
                 }
                 let mut sink = online_observation::ObservationArtifactSink {
                     ledger: &self.ledger,
