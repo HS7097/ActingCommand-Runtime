@@ -411,16 +411,7 @@ impl RuntimeContainedTask<'_> {
                 // #411 A36c: an archive failure that leaves the Runtime running ends only this
                 // run, which records its terminal with it (a scheduled run through its task
                 // failure); a fatal one poisons the Runtime as before.
-                if error.is_fatal() {
-                    return RequestFailure::poison_without_terminal(error);
-                }
-                let evidence = TaskFailureEvidence {
-                    outcome: error.outcome(),
-                    severe: false,
-                };
-                let mut failure = RequestFailure::request(error, RuntimeReceiptState::Failed, None);
-                failure.task_failure = Some(evidence);
-                failure
+                RequestFailure::poison_without_terminal(error)
             })
     }
 }
