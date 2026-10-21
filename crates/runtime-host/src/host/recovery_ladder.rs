@@ -48,6 +48,14 @@
 //! entry channel skips it or fails it (B5). A trigger item may start the climb at a later rung;
 //! the rungs before it are skipped (`before_start_rung`). The original task is never re-run.
 //!
+//! #411 B37 (A35-S1): a rung run that completes on a mapping its package marks `busy` (the
+//! instance still shows an activity in progress) does not recover the instance. The ladder holds
+//! its key for `recovery_ladder.busy.outcome.recheck_ms` and runs the return-home rung again,
+//! within `busy.outcome.max_wait_ms` of the climb's first busy end; at that limit
+//! `busy.outcome.on_exhausted` ends the ladder without a restart (`stop`) or goes on to the next
+//! rung (`escalate`). A rung is escalated past at most once; the return-home rung runs again
+//! after a busy hold, and `rungs_tried` counts distinct rungs.
+//!
 //! One ladder per instance per cool-down window: a trigger while a ladder holds or waits for
 //! the instance (read from the scheduler) is suppressed or queued behind it (B3); one inside the
 //! window (opened when a ladder got the key, or at every matched trigger, B4) is suppressed
@@ -56,7 +64,7 @@
 //! causation ids; the `return_home` run carries that causation id, the startup package runs the
 //! one of their scheduling event.
 
-use super::contained_task::{ConfiguredReturnHome, FailedTaskTerminal, PackageIdentity};
+use super::contained_task::{BusyEnd, ConfiguredReturnHome, FailedTaskTerminal, PackageIdentity};
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::{ClaimGrantSlot, HostClaim, HostClaimAdmission};
 use super::resource_fence::manual_claim;
@@ -79,8 +87,8 @@ use actingcommand_contract::{
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_runtime_config::{
     AlreadyRunning, ConfigCode, CooldownOpensOn, DeviceBounds, DirectRuns, EntryUnavailable,
-    LadderConfig, LadderProfile, LadderRules, MatchedBy, PreparationSuperseded, RungConfig,
-    TriggerItem, TriggerVerdict, ladder_class_of,
+    LadderConfig, LadderProfile, LadderRules, MatchedBy, OnExhausted, PreparationSuperseded,
+    RungConfig, TriggerItem, TriggerVerdict, ladder_class_of,
 };
 
 const LADDER_OPERATION: HostLocation = HostLocation::RunRecoveryLadder;
@@ -460,6 +468,55 @@ enum RungAttempt {
         run_id: Option<RunId>,
         reason: &'static str,
     },
+    /// #411 B37 (A35-S1, design §2.2): the rung's package run completed on a mapping its
+    /// package marks `busy`; it did not recover the instance.
+    Busy {
+        run_id: RunId,
+        busy: BusyEnd,
+    },
+}
+
+/// #411 B37 (A35-S1; coordinator decision Q2): the distinct rungs a climb executed, its
+/// `rungs_tried`. A rung skipped at its entry is not executed, and a return-home run after a
+/// busy hold counts once with the return-home rung.
+#[derive(Default)]
+struct RungsTried(Vec<RecoveryRung>);
+
+impl RungsTried {
+    fn note(&mut self, rung: RecoveryRung) {
+        if !self.0.contains(&rung) {
+            self.0.push(rung);
+        }
+    }
+
+    fn count(&self) -> u8 {
+        u8::try_from(self.0.len()).unwrap_or(u8::MAX)
+    }
+}
+
+/// #411 B37 (A35-S1, design §4.3): one climb's busy hold.
+struct BusyHold {
+    /// The deadline of the return-home rung a hold runs again: the climb's own rung, while the
+    /// climb has a return-home package it can run; `None` otherwise (a busy end then goes on to
+    /// the next rung, as under `on_exhausted = escalate`).
+    return_home_deadline_ms: Option<u64>,
+    /// When the climb's first busy end came, on the Runtime clock (monotonic milliseconds).
+    since_ms: Option<u64>,
+}
+
+/// #411 B37 (A35-S1): what the climb does after a rung run that ended busy.
+enum BusyStep {
+    /// The hold ended and the return-home rung ran again, with this attempt; `failure` is the
+    /// busy rung's recorded outcome.
+    Rerun {
+        failure: Outcome,
+        attempt: RungAttempt,
+    },
+    /// The climb goes on to its next rung.
+    Escalate { failure: Outcome },
+    /// The climb ended (stopped at the limit, or interrupted during the hold), its records
+    /// written.
+    Ended,
 }
 
 /// Rung 3's bounds from the ladder's configuration (§4.2).
@@ -2047,14 +2104,33 @@ impl HostShared {
                 profile: pending.profile.as_ref().map(|profile| profile.name.clone()),
             },
         )?;
-        let mut rungs_tried = 0_u8;
+        // #411 B37 (A35-S1; coordinator decision Q2): the distinct rungs executed.
+        let mut tried = RungsTried::default();
         // Review L6 (#666): the holding interruption that ended the last rung that ran, if one
         // did; a rung that ran and failed on its own clears it.
         let mut last_interruption = None;
         // The outcome of the last rung that ran and failed: what an exhausted climb ends on.
         let mut last_failure = None;
+        // #411 B37 (A35-S1, design §2.2, §4.3): the climb's busy hold. A hold runs the climb's
+        // own return-home rung again, while the climb has a return-home package it can run.
+        let mut busy_hold = BusyHold {
+            return_home_deadline_ms: configured
+                .iter()
+                .find_map(|rung| match rung {
+                    RungConfig::ReturnHome {
+                        configured_package_deadline_ms,
+                    } => Some(*configured_package_deadline_ms),
+                    _ => None,
+                })
+                .filter(|_| {
+                    !fence_ladder
+                        && pending.recovery.is_some()
+                        && recovery_resolution_error.is_none()
+                }),
+            since_ms: None,
+        };
         for (rung_config, skipped) in plan {
-            let rung = rung_config.action();
+            let mut rung = rung_config.action();
             // Workflow #369 H-3: the holding check before every rung (so after every rung run
             // but the last one, whose own failure decides the outcome; review L6).
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
@@ -2063,7 +2139,7 @@ impl HostShared {
                     key,
                     Some(rung),
                     reason,
-                    rungs_tried,
+                    tried.count(),
                 );
             }
             if let Some(reason) = skipped {
@@ -2090,8 +2166,7 @@ impl HostShared {
                 )?;
                 continue;
             }
-            rungs_tried += 1;
-            let attempt = match rung_config {
+            let mut attempt = match rung_config {
                 RungConfig::ReturnHome {
                     configured_package_deadline_ms,
                 } => match recovery_resolution_error {
@@ -2131,68 +2206,102 @@ impl HostShared {
                     key,
                 )?,
             };
-            match attempt {
-                RungAttempt::Recovered { run_id } => {
-                    self.append_recovery_rung_finished(
-                        pending,
-                        rung,
-                        RecoveryRungOutcome::Recovered,
-                        Some(run_id),
-                        None,
-                        None,
-                    )?;
-                    return self.append_recovery_ladder_fact(
-                        pending,
-                        EventSeverity::Info,
-                        RuntimeLifecyclePhase::RecoveryLadderFinished {
-                            ladder_result: RecoveryLadderOutcome::Recovered,
-                            rungs_tried,
-                            outcome: None,
-                        },
-                    );
+            // #411 B37 (A35-S1): a busy end may run the return-home rung again after a hold;
+            // each run's attempt is handled here, until one that is not busy.
+            loop {
+                if !matches!(attempt, RungAttempt::Skipped { .. }) {
+                    tried.note(rung);
                 }
-                RungAttempt::EnvironmentReady { event } => {
-                    self.append_recovery_rung_finished(
-                        pending,
-                        rung,
-                        RecoveryRungOutcome::EnvironmentReady,
-                        None,
-                        None,
-                        Some(event),
-                    )?;
-                    return self.append_recovery_ladder_fact(
-                        pending,
-                        EventSeverity::Info,
-                        RuntimeLifecyclePhase::RecoveryLadderFinished {
-                            ladder_result: RecoveryLadderOutcome::EnvironmentReady,
-                            rungs_tried,
-                            outcome: None,
-                        },
-                    );
-                }
-                RungAttempt::Skipped { reason } => {
-                    rungs_tried -= 1;
-                    self.append_recovery_rung_finished(
-                        pending,
-                        rung,
-                        RecoveryRungOutcome::Skipped,
-                        None,
-                        Some(rung_skip_outcome(reason)),
-                        None,
-                    )?;
-                }
-                RungAttempt::Failed { run_id, reason } => {
-                    last_interruption = is_hold_interruption(reason).then_some(reason);
-                    let failure = rung_failure_outcome(pending, key, reason);
-                    last_failure = Some(failure.clone());
-                    self.append_recovery_rung_finished(
-                        pending,
-                        rung,
-                        RecoveryRungOutcome::Failed,
-                        run_id,
-                        Some(failure),
-                        None,
-                    )?;
+                match attempt {
+                    RungAttempt::Recovered { run_id } => {
+                        self.append_recovery_rung_finished(
+                            pending,
+                            rung,
+                            RecoveryRungOutcome::Recovered,
+                            Some(run_id),
+                            None,
+                            None,
+                        )?;
+                        return self.append_recovery_ladder_fact(
+                            pending,
+                            EventSeverity::Info,
+                            RuntimeLifecyclePhase::RecoveryLadderFinished {
+                                ladder_result: RecoveryLadderOutcome::Recovered,
+                                rungs_tried: tried.count(),
+                                outcome: None,
+                            },
+                        );
+                    }
+                    RungAttempt::EnvironmentReady { event } => {
+                        self.append_recovery_rung_finished(
+                            pending,
+                            rung,
+                            RecoveryRungOutcome::EnvironmentReady,
+                            None,
+                            None,
+                            Some(event),
+                        )?;
+                        return self.append_recovery_ladder_fact(
+                            pending,
+                            EventSeverity::Info,
+                            RuntimeLifecyclePhase::RecoveryLadderFinished {
+                                ladder_result: RecoveryLadderOutcome::EnvironmentReady,
+                                rungs_tried: tried.count(),
+                                outcome: None,
+                            },
+                        );
+                    }
+                    RungAttempt::Skipped { reason } => {
+                        self.append_recovery_rung_finished(
+                            pending,
+                            rung,
+                            RecoveryRungOutcome::Skipped,
+                            None,
+                            Some(rung_skip_outcome(reason)),
+                            None,
+                        )?;
+                        break;
+                    }
+                    RungAttempt::Failed { run_id, reason } => {
+                        last_interruption = is_hold_interruption(reason).then_some(reason);
+                        let failure = rung_failure_outcome(pending, key, reason);
+                        last_failure = Some(failure.clone());
+                        self.append_recovery_rung_finished(
+                            pending,
+                            rung,
+                            RecoveryRungOutcome::Failed,
+                            run_id,
+                            Some(failure),
+                            None,
+                        )?;
+                        break;
+                    }
+                    // #411 B37 (A35-S1, design §4.3): a busy end is no recovery: the ladder
+                    // holds and runs the return-home rung again, or `on_exhausted` decides.
+                    RungAttempt::Busy { run_id, busy } => {
+                        last_interruption = None;
+                        match self.climb_busy_end(
+                            pending,
+                            key,
+                            (rung, run_id, &busy),
+                            &mut busy_hold,
+                            tried.count(),
+                        )? {
+                            BusyStep::Rerun {
+                                failure,
+                                attempt: rerun,
+                            } => {
+                                last_failure = Some(failure);
+                                rung = RecoveryRung::ReturnHome;
+                                attempt = rerun;
+                            }
+                            BusyStep::Escalate { failure } => {
+                                last_failure = Some(failure);
+                                break;
+                            }
+                            BusyStep::Ended => return Ok(()),
+                        }
+                    }
                 }
             }
         }
@@ -2200,7 +2309,7 @@ impl HostShared {
         // rungs that ran failed on their own, whatever holds at this moment; it ends at Warning
         // only when the last rung that ran was itself ended by a holding interruption.
         if let Some(reason) = last_interruption {
-            return self.finish_interrupted_ladder(pending, key, None, reason, rungs_tried);
+            return self.finish_interrupted_ladder(pending, key, None, reason, tried.count());
         }
         // Workflow #390 DRILL-1: a plan drill's climb tried no rung; it ends `planned`, no
         // failure.
@@ -2210,7 +2319,7 @@ impl HostShared {
                 EventSeverity::Info,
                 RuntimeLifecyclePhase::RecoveryLadderFinished {
                     ladder_result: RecoveryLadderOutcome::Planned,
-                    rungs_tried,
+                    rungs_tried: tried.count(),
                     outcome: None,
                 },
             );
@@ -2223,7 +2332,7 @@ impl HostShared {
             ladder_exhausted_severity(false),
             RuntimeLifecyclePhase::RecoveryLadderFinished {
                 ladder_result: RecoveryLadderOutcome::Exhausted,
-                rungs_tried,
+                rungs_tried: tried.count(),
                 outcome: Some(match last_failure {
                     Some(failure) => exhausted.caused_by(failure),
                     None => exhausted,
@@ -2314,6 +2423,120 @@ impl HostShared {
                 run_id: None,
                 reason: failure.error.code(),
             })),
+        }
+    }
+
+    /// #411 B37 (A35-S1, design §2.2, §4.3; coordinator decisions Q1 to Q3): a rung's package
+    /// run that completed on a mapping its package marks `busy`. The rung is recorded `failed`
+    /// with `recovery_rung_busy_outcome`: it did not recover the instance. While the climb has a
+    /// return-home package (`hold`) and has held less than `busy.outcome.max_wait_ms` since its
+    /// first busy end, the ladder holds `busy.outcome.recheck_ms`, no longer than what is left
+    /// (`ladder_hold_until`), and runs the return-home rung again (`Rerun`). At the limit
+    /// `busy.outcome.on_exhausted` decides: `stop` ends the ladder `exhausted` with
+    /// `recovery_ladder_hold_exhausted` and no restart (`Ended`), `escalate` goes on to the next
+    /// rung (`Escalate`); a climb without a return-home package goes on as under `escalate`. A
+    /// holding interruption during the hold ends the climb as at every rung boundary, the
+    /// return-home rung it was about to run recorded failed with it (`Ended`).
+    fn climb_busy_end(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &mut HostKey,
+        (rung, run_id, busy): (RecoveryRung, RunId, &BusyEnd),
+        hold: &mut BusyHold,
+        rungs_tried: u8,
+    ) -> RuntimeHostResult<BusyStep> {
+        let config = pending.config.busy.outcome;
+        // Read before the busy record is written, so a hold's end counts from before it.
+        let now_ms = self.monotonic_ms()?;
+        let held_ms = now_ms.saturating_sub(*hold.since_ms.get_or_insert(now_ms));
+        let rerun = hold
+            .return_home_deadline_ms
+            .filter(|_| held_ms < config.max_wait_ms)
+            .map(|deadline_ms| {
+                (
+                    deadline_ms,
+                    config.recheck_ms.min(config.max_wait_ms - held_ms),
+                )
+            });
+        let failure = busy_rung_outcome(
+            busy,
+            held_ms,
+            config.max_wait_ms,
+            rerun.map(|(_, wait_ms)| wait_ms),
+        );
+        self.append_recovery_rung_finished(
+            pending,
+            rung,
+            RecoveryRungOutcome::Failed,
+            Some(run_id),
+            Some(failure.clone()),
+            None,
+        )?;
+        let Some((deadline_ms, wait_ms)) = rerun else {
+            if hold.return_home_deadline_ms.is_some() && config.on_exhausted == OnExhausted::Stop {
+                self.append_recovery_ladder_fact(
+                    pending,
+                    EventSeverity::Warning,
+                    RuntimeLifecyclePhase::RecoveryLadderFinished {
+                        ladder_result: RecoveryLadderOutcome::Exhausted,
+                        rungs_tried,
+                        outcome: Some(
+                            Outcome::new(HostCode::RecoveryLadderHoldExhausted)
+                                .held_ms(held_ms)
+                                .limit_ms(config.max_wait_ms)
+                                .caused_by(failure),
+                        ),
+                    },
+                )?;
+                return Ok(BusyStep::Ended);
+            }
+            return Ok(BusyStep::Escalate { failure });
+        };
+        if let Some(reason) =
+            self.ladder_hold_until(pending, key, now_ms.saturating_add(wait_ms))?
+        {
+            self.finish_interrupted_ladder(
+                pending,
+                key,
+                Some(RecoveryRung::ReturnHome),
+                reason,
+                rungs_tried,
+            )?;
+            return Ok(BusyStep::Ended);
+        }
+        let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
+        Ok(BusyStep::Rerun { failure, attempt })
+    }
+
+    /// #411 B37 (A35-S1, design §4.3): the ladder holds its key, doing nothing, until `until_ms`
+    /// on the Runtime clock (HOST-I2), as `await_recovery_retry`'s wait does. The key is renewed
+    /// first to what is left plus `hold.margin_ms` (`ladder_step_renewal`); then the ladder makes
+    /// its holding check (`ladder_hold_interrupted`) every `busy.poll_ms` and reads the clock
+    /// when it wakes. `Some(reason)` ends the hold: a holding interruption (shutdown, an install
+    /// drain, a scheduling pause, a capacity refusal, a lost key or device link) or a renewal the
+    /// scheduler refused. S2's screen hold shares it.
+    fn ladder_hold_until(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &mut HostKey,
+        until_ms: u64,
+    ) -> RuntimeHostResult<Option<&'static str>> {
+        let left_ms = until_ms.saturating_sub(self.monotonic_ms()?);
+        if let Some(RungAttempt::Failed { reason, .. }) =
+            self.ladder_step_renewal(key, left_ms.saturating_add(pending.config.hold.margin_ms))?
+        {
+            return Ok(Some(reason));
+        }
+        let poll = Duration::from_millis(pending.config.busy.poll_ms);
+        loop {
+            if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
+                return Ok(Some(reason));
+            }
+            let now_ms = self.monotonic_ms()?;
+            if now_ms >= until_ms {
+                return Ok(None);
+            }
+            thread::sleep(poll.min(Duration::from_millis(until_ms - now_ms)));
         }
     }
 
@@ -3010,7 +3233,8 @@ impl HostShared {
     /// already recorded by the runner. An unavailable entry channel or ADB skips the rung, or
     /// fails it under `rules.entry_unavailable = fail` (B5); after a destructive action (the
     /// emulator restart, Workflow #369-1; the application stop, Workflow #369-2) it always
-    /// fails it, so `rungs_tried` counts the action that ran.
+    /// fails it, so `rungs_tried` counts the action that ran. #411 B37 (A35-S1, design §2.2): a
+    /// success on a mapping its package marks `busy` is no recovery (`Busy`).
     fn run_recovery_rung_package(
         &self,
         run: &PendingStartupPackage,
@@ -3019,24 +3243,25 @@ impl HostShared {
         key: &mut HostKey,
     ) -> RuntimeHostResult<RungAttempt> {
         Ok(match self.run_package_on_key(run, key, Some(pending))? {
-            Ok(OperationSuccess {
-                result:
-                    RuntimeResult::ContainedTaskCompleted {
-                        run_id,
-                        task_result: outcome,
-                        ..
-                    },
-                ..
-            }) => {
-                if outcome == TaskOutcome::Success {
-                    RungAttempt::Recovered { run_id }
-                } else {
-                    RungAttempt::Failed {
-                        run_id: Some(run_id),
-                        reason: HostCode::RecoveryRungTargetNotReached.as_str(),
-                    }
-                }
-            }
+            Ok((
+                OperationSuccess {
+                    result:
+                        RuntimeResult::ContainedTaskCompleted {
+                            run_id,
+                            task_result: outcome,
+                            ..
+                        },
+                    ..
+                },
+                busy,
+            )) => match (outcome, busy) {
+                (TaskOutcome::Success, Some(busy)) => RungAttempt::Busy { run_id, busy },
+                (TaskOutcome::Success, None) => RungAttempt::Recovered { run_id },
+                _ => RungAttempt::Failed {
+                    run_id: Some(run_id),
+                    reason: HostCode::RecoveryRungTargetNotReached.as_str(),
+                },
+            },
             Ok(_) => {
                 return Err(ladder_invariant(HostCode::RecoveryRungResultInvalid));
             }
@@ -3190,6 +3415,28 @@ fn rung_failure_outcome(
     } else {
         outcome
     }
+}
+
+/// #411 B37 (A35-S1, design §5.3): the outcome of a rung whose run ended busy: the mapping's
+/// key and the final page, the time held since the climb's first busy end and the configured
+/// limit, and the wait before the return-home rung runs again (absent when the hold ends).
+fn busy_rung_outcome(
+    busy: &BusyEnd,
+    held_ms: u64,
+    limit_ms: u64,
+    retry_after_ms: Option<u64>,
+) -> Outcome {
+    let mut outcome = Outcome::new(HostCode::RecoveryRungBusyOutcome)
+        .outcome_key(busy.outcome_key.as_str())
+        .held_ms(held_ms)
+        .limit_ms(limit_ms);
+    if let Some(page_id) = &busy.page_id {
+        outcome = outcome.page_id(page_id.as_str());
+    }
+    if let Some(retry_after_ms) = retry_after_ms {
+        outcome = outcome.retry_after_ms(retry_after_ms);
+    }
+    outcome
 }
 
 /// `recovery_ladder_interrupted` caused by the holding interruption `cause`.

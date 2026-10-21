@@ -19808,6 +19808,53 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "recovery_rung_busy_outcome": {
+      "category": "info",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "outcome_key": "required",
+        "held_ms": "required",
+        "limit_ms": "required",
+        "page_id": "optional",
+        "retry_after_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A stuck-recovery ladder rung's package run completed on a scheduling outcome mapping that its package marks busy (#411 B37): the instance still shows an activity in progress and the expected end page was not reached, so the rung did not recover it. The outcome of that rung's recovery_rung_finished record (rung_result failed, with the run's run_id). outcome_key is the mapping's key and page_id the run's final page; held_ms is the time since the climb's first busy end and limit_ms is recovery_ladder.busy.outcome.max_wait_ms. While the climb has a return-home package and the limit is not reached, the ladder holds its key for retry_after_ms (recovery_ladder.busy.outcome.recheck_ms, no longer than what is left) and runs the return-home rung again; retry_after_ms is absent when the hold ends, and recovery_ladder.busy.outcome.on_exhausted then decides.",
+      "common_causes": "The instance runs a long activity that ends by itself, and the return-home package recognised its page.",
+      "handling": "Nothing to do: the ladder brings the instance home when the activity ends. When the hold is too short or too long for the activity, change recovery_ladder.busy.outcome.recheck_ms or max_wait_ms."
+    },
+    "recovery_ladder_hold_exhausted": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "held_ms": "required",
+        "limit_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A stuck-recovery ladder's busy hold reached its limit (#411 B37): held_ms since the climb's first busy end is at least limit_ms (recovery_ladder.busy.outcome.max_wait_ms), and recovery_ladder.busy.outcome.on_exhausted is stop, so the ladder ended without restarting the application or the emulator. The outcome of the recovery_ladder_finished record (ladder_result exhausted), caused by the last busy rung's recovery_rung_busy_outcome. The instance is not fenced; the next trigger may start a new ladder once the cool-down allows.",
+      "common_causes": "The activity the return-home package recognised lasted longer than recovery_ladder.busy.outcome.max_wait_ms.",
+      "handling": "Nothing to do when the activity ends by itself; otherwise bring the instance home by hand, or raise max_wait_ms or set on_exhausted to escalate."
+    },
     "channel_binding_missing": {
       "category": "error",
       "ladder_class": "none",

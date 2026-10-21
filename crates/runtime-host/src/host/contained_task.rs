@@ -503,6 +503,8 @@ pub(super) struct ContainedRunControl {
     /// segment above 1000: the wall time its budget clock did not count, the sum over its
     /// segments of wall × (f − 1000) / f. A policy run is settled on its wall time less this.
     paced_reduction: std::sync::OnceLock<Duration>,
+    /// #411 B37 (A35-S1): set once when the run's committed terminal selected a `busy` mapping.
+    busy_end: std::sync::OnceLock<BusyEnd>,
 }
 
 /// #385 P-k (PERF v1.4.2 §5.3, §5.6 item 2): the factor segments of one contained run. Each
@@ -599,6 +601,37 @@ pub(super) struct FailedTaskTerminal {
     pub(super) failure_code: CodeStr,
 }
 
+/// #411 B37 (A35-S1, design §2.2): a committed successful terminal whose scheduling disposition
+/// selected a mapping its package marks `busy`: the run ended on a page that shows an activity
+/// still in progress. Memory only; the recovery ladder reads it after its rung run and never
+/// counts the run as recovered.
+#[derive(Clone, Debug)]
+pub(super) struct BusyEnd {
+    /// The selected mapping's outcome key.
+    pub(super) outcome_key: String,
+    /// The run's final page.
+    pub(super) page_id: Option<String>,
+}
+
+/// #411 B37 (A35-S1): the busy end of a terminal whose disposition selected the mapping of
+/// `disposition`'s outcome key (keys are unique in a declaration), when that mapping is `busy`.
+fn busy_end_of(
+    contract: Option<&(String, SchedulingOutcomeDeclaration)>,
+    disposition: &SchedulingDisposition,
+    final_page: Option<&str>,
+) -> Option<BusyEnd> {
+    let (_, declaration) = contract?;
+    declaration
+        .mappings()
+        .iter()
+        .find(|mapping| mapping.outcome_key() == disposition.outcome_key())
+        .filter(|mapping| mapping.busy())
+        .map(|mapping| BusyEnd {
+            outcome_key: mapping.outcome_key().to_owned(),
+            page_id: final_page.map(str::to_owned),
+        })
+}
+
 impl ContainedRunControl {
     const NONE: u8 = 0;
     const CLIENT_REQUESTED: u8 = 1;
@@ -618,7 +651,19 @@ impl ContainedRunControl {
             package_load: std::sync::OnceLock::new(),
             host_package: std::sync::OnceLock::new(),
             paced_reduction: std::sync::OnceLock::new(),
+            busy_end: std::sync::OnceLock::new(),
         }
+    }
+
+    /// #411 B37 (A35-S1): notes the run's busy end, once; a second note keeps the first.
+    fn note_busy_end(&self, end: BusyEnd) {
+        let _ = self.busy_end.set(end);
+    }
+
+    /// #411 B37 (A35-S1): the run's busy end, when its committed terminal selected a `busy`
+    /// mapping; `None` for every other run.
+    pub(super) fn busy_end(&self) -> Option<BusyEnd> {
+        self.busy_end.get().cloned()
     }
 
     /// Workflow #390 EXEC-3: marks the run as one the host starts itself, before it executes.
@@ -893,6 +938,14 @@ pub(super) struct PreparedPackageRun<'a> {
 impl ActiveContainedRun<'_> {
     fn control(&self) -> Arc<ContainedRunControl> {
         Arc::clone(&self.control)
+    }
+}
+
+impl PreparedPackageRun<'_> {
+    /// #411 B37 (A35-S1): the run's control, which keeps what its terminal notes (its busy end)
+    /// after the run released it.
+    pub(super) fn control(&self) -> Arc<ContainedRunControl> {
+        self.active_run.control()
     }
 }
 
@@ -8980,6 +9033,25 @@ impl HostShared {
         Ok(())
     }
 
+    /// #411 B37 (A35-S1): keeps a committed terminal's busy end on the control of the run that
+    /// is still active under `request_id`, as `note_failed_task_terminal` keeps a failure.
+    fn note_busy_task_terminal(
+        &self,
+        request_id: RequestId,
+        busy_end: BusyEnd,
+    ) -> RuntimeHostResult<()> {
+        let control = lock(
+            &self.contained_runs,
+            HostLocation::AppendContainedTaskTerminal,
+        )?
+        .get(&request_id)
+        .cloned();
+        if let Some(control) = control {
+            control.note_busy_end(busy_end);
+        }
+        Ok(())
+    }
+
     pub(super) fn append_contained_task_terminal(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -9121,6 +9193,15 @@ impl HostShared {
                     ),
                 ));
             }
+            // #411 B37 (A35-S1, design §2.2): a successful terminal on a mapping its package marks
+            // `busy` is noted on the run's control once it is committed.
+            let busy_end = scheduling_disposition.as_ref().and_then(|disposition| {
+                busy_end_of(
+                    draft.scheduling_outcome.as_ref(),
+                    disposition,
+                    draft.final_page.as_deref(),
+                )
+            });
             let terminal_event = self
                 .append_event_under_fact_gate(
                     severity,
@@ -9164,6 +9245,10 @@ impl HostShared {
                     },
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
+            }
+            if let Some(busy_end) = busy_end {
+                self.note_busy_task_terminal(request.request_id(), busy_end)
+                    .map_err(RequestFailure::poison_without_terminal)?;
             }
             if let Some(mut failure) = projection_failure {
                 failure.terminal = Some(terminal(&terminal_event));
