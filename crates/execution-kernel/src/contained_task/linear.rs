@@ -610,6 +610,9 @@ impl TaskProgram {
             if operation.observation_window.is_some() {
                 return Err(invalid("observation_window", Some(operation)));
             }
+            if operation.input_recheck.is_some() {
+                return Err(invalid("input_recheck", Some(operation)));
+            }
             // Workflow #390 EXEC-1: candidate operations are page-graph declarations.
             if operation.when.is_some() {
                 return Err(invalid("when", Some(operation)));
