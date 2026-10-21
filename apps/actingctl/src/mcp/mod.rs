@@ -476,11 +476,14 @@ fn write_text(output: &mut impl Write, text: &str) -> io::Result<()> {
 // Workflow #386 SR-3: ac_diagnose's suspended task packages.
 // Workflow #411 B15 R7: ac_diagnose's stopped remedy rounds.
 // Workflow #386 SR-6b, MCP-19b: ac_schedule's cut and ac_diagnose's deferred rows.
+// #411 A42: ac_run_evidence's pages bounded by size and its step summaries; the overview's run
+// lookup.
 #[cfg(test)]
 mod tests {
     mod clock_slots;
     mod gate_386_sr3;
     mod gate_387_d1b;
+    mod gate_411_a42;
     mod gate_411_b15w2;
     mod gate_mcp19b;
     mod gate_mcp8;

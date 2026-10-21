@@ -1623,6 +1623,8 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
             "--run-id",
             "--from-step",
             "--limit",
+            // #411 A42: whole steps or step summaries.
+            "--detail",
         ],
         "agent-publish-facts" => &["--state-root", "--record-file"],
         "agent-apply-resource-targets" => &["--state-root", "--policy-file"],
