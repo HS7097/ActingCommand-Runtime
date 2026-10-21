@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! #411 B37 (slice A35-S1; design `rd-1021/train-0129/a35-design.md` §2.2 option B37-a, §5.1
-//! S1 T6; coordinator decision Q11 of 10-21): a `scheduling_outcome` mapping may declare
-//! `"busy": true`. It reads back and serializes as declared; it is refused together with a
-//! `remedy` and on a `designated_effect_completed` mapping (`invalid_scheduling_outcome_declaration`,
-//! field `busy`); a mapping without it serializes byte for byte as before.
+// #411 B37 (slice A35-S1; design `rd-1021/train-0129/a35-design.md` §2.2 option B37-a, §5.1
+// S1 T6; coordinator decision Q11 of 10-21): a `scheduling_outcome` mapping may declare
+// `"busy": true`. It reads back and serializes as declared; it is refused together with a
+// `remedy` and on a `designated_effect_completed` mapping (`invalid_scheduling_outcome_declaration`,
+// field `busy`); a mapping without it serializes byte for byte as before.
 
 use super::*;
 use crate::outcome::Code;
