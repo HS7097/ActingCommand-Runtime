@@ -1775,6 +1775,51 @@ tests = [
 ]
 incident = ["#411 B3"]
 
+# #411 B5 (slice BT-B5, 0.12.x B train; register §1.154 B5-1; B-train plan §2.5 point 1, test row T1 of §5.3; no persisted ledger shape, no outcome code; package revision 6, declared by BT-PK6): a page an operation of a stage confirms that is one of the stage's end_pages ends the run Completed on that page, the stage not completed, with no further operation; the run's key is the one mapping of that page under its effect condition
+[[gate]]
+key = "120"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t1_a_stage_that_confirms_its_end_page_ends_the_run_there",
+]
+incident = ["#411 B5"]
+
+# #411 B14 (slice BT-B5; register §1.154 B14-1; B-train plan §2.5 point 2 and D4, test row T3 of §5.3; package revision 6, declared by BT-PK6): a page of the task's entry page set that a stage lists in entry_pages starts that stage, where no operation's from infers one; the run enters there and its first step is that stage's
+[[gate]]
+key = "121"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t3_an_entry_page_a_stage_lists_starts_that_stage",
+]
+incident = ["#411 B14"]
+
+# #411 B20 and B38 (slice BT-B5; register §1.154 B20-1; B-train plan §2.5 points 3 and 5 (D5), test row T4 of §5.3; no persisted ledger shape, no outcome code): an entry page a stage lists in its end_pages is a start of that stage on which the run ends before any step, Completed with 0 steps and no designated effect on that page; a page that is both an end page and an operation's from has two starts and admission refuses the entry page set with contained_task_entry_pages_invalid, entry_problem phase_start_ambiguous, at that page
+[[gate]]
+key = "122"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t4_an_entry_page_in_end_pages_ends_the_run_before_any_step",
+]
+incident = ["#411 B20", "#411 B38"]
+
+# #411 B24 (slice BT-B5; register §1.154 B5-1; B-train plan §2.5 point 1, test row T5 of §5.3): B24's shape, neutral: the first stage's operation reaches a page of the first stage's end_pages, and the run ends Completed there after that one step
+[[gate]]
+key = "123"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t5_the_first_stage_ends_on_its_reached_end_page",
+]
+incident = ["#411 B24"]
+
+# #411 B5 (slice BT-B5; register §1.154 B5-3; B-train plan §2.5 point 4, test row T6 of §5.3): a package with a stage that lists end_pages is no prerequisite package and no return-home package, reason phase_end_pages for both uses; a phased package without end pages and without another reason is either
+[[gate]]
+key = "124"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t6_a_package_with_end_pages_is_no_prerequisite_or_return_home_layer",
+]
+incident = ["#411 B5"]
+
 # Workflow #411 B12 (0.12.x; register §1.155; no persisted ledger shape; B-train plan §2.9 with D8 and Q7, Q9, test rows BT-B12 T1 to T3; package revision 6, declared by BT-PK6): a click's input_recheck still_frames waits until the guard passed on that many consecutive frames each changed by at most the threshold from the frame before it, by the one frame-change measure of contracts/color-digest.md (the region, else the whole frame on a 16x9 grid; max_distance_milli, else 1500); a frame that moved restarts the count and the input binds to the last frame; a screen that never stills within the step timeout refuses the input with contained_task_input_still_unconfirmed; a linear_steps package admits and runs an input recheck of every kind
 [[gate]]
 key = "126"

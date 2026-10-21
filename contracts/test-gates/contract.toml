@@ -609,3 +609,12 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_0121_a6b::a6_the_run_id_reversal_reads_only_projected_types",
 ]
 incident = ["#411 A6"]
+
+# #411 B5 (slice BT-B5, 0.12.x B train; register §1.154 B5-2; B-train plan §2.5 point 1, test row T2 of §5.3; the contract key of the slice's block): in the static walk of a phased route, a page a stage's operation confirms that is one of the stage's end_pages is a terminal that needs exactly one mapping of its effect condition and page, task_phases_outcome_incomplete otherwise; an end page that is also a target page of its stage is refused task_phases_invalid at /phases/<index>/end_pages/<member>, naming the page
+[[gate]]
+key = "K37"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::gate_411_bt_b5::bt_b5_t2_an_end_page_needs_one_mapping_and_is_no_target_page_of_its_stage",
+]
+incident = ["#411 B5"]

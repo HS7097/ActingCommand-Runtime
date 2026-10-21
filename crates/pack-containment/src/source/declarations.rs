@@ -3890,7 +3890,18 @@ impl Declaration<'_> {
     fn phases(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         for (index, phase) in self.array(value, pointer)?.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
-            let phase = self.object(phase, &pointer, &["id", "operations", "target_pages"])?;
+            // #411 B5/B14: a stage may also list its end pages and its entry pages.
+            let phase = self.object(
+                phase,
+                &pointer,
+                &[
+                    "id",
+                    "operations",
+                    "target_pages",
+                    "end_pages",
+                    "entry_pages",
+                ],
+            )?;
             self.string(
                 self.required(phase, &pointer, "id")?,
                 &child(&pointer, "id"),
@@ -3900,6 +3911,11 @@ impl Declaration<'_> {
                     self.required(phase, &pointer, field)?,
                     &child(&pointer, field),
                 )?;
+            }
+            for field in ["end_pages", "entry_pages"] {
+                if let Some(pages) = phase.get(field) {
+                    self.strings(pages, &child(&pointer, field))?;
+                }
             }
         }
         Ok(())
