@@ -1797,10 +1797,12 @@ impl Declaration<'_> {
                     &value_test_pointer,
                     &["left", "op", "right"],
                 )?;
+                // Workflow #411 B1: a side may declare an `agreement` (its rules are the derived
+                // pack's, as for every value).
                 self.object(
                     self.required(test, &value_test_pointer, "left")?,
                     &child(&value_test_pointer, "left"),
-                    &["target_id", "trim", "value", "part"],
+                    &["target_id", "trim", "value", "part", "agreement"],
                 )?;
                 self.string(
                     self.required(test, &value_test_pointer, "op")?,
@@ -1810,7 +1812,16 @@ impl Declaration<'_> {
                     self.object(
                         right,
                         &child(&value_test_pointer, "right"),
-                        &["const", "target_id", "trim", "value", "part", "mul", "add"],
+                        &[
+                            "const",
+                            "target_id",
+                            "trim",
+                            "value",
+                            "part",
+                            "mul",
+                            "add",
+                            "agreement",
+                        ],
                     )?;
                 }
                 continue;
@@ -3317,6 +3328,7 @@ impl Declaration<'_> {
             "valid_for_ms",
         ];
         // Workflow #390 READ-1: the optional second reading key of a `current_capacity` mark.
+        // Workflow #411 B1: the optional agreement of a mark.
         let members = [
             "id",
             "fact_key",
@@ -3327,6 +3339,7 @@ impl Declaration<'_> {
             "value",
             "minimum_confidence_milli",
             "valid_for_ms",
+            "agreement",
         ];
         let mut ids = BTreeSet::new();
         let mut fact_keys = BTreeSet::new();
@@ -3356,7 +3369,7 @@ impl Declaration<'_> {
             let value_type = self.object(
                 &object["value"],
                 &value_pointer,
-                &["type", "min", "max", "format"],
+                &["type", "min", "max", "format", "dictionary"],
             )?;
             let kind = self.required(value_type, &value_pointer, "type")?;
             self.string(kind, &child(&value_pointer, "type"))?;
@@ -3384,6 +3397,26 @@ impl Declaration<'_> {
                         self.error(&format_pointer, ResourceDeclarationReason::InvalidValue)
                     );
                 }
+            }
+            // Workflow #411 B1: a dictionary and an agreement, refused at the member their rules
+            // name (`integer_dictionary_refusal`, `integer_agreement_refusal`); a mark writes a
+            // fact, so its agreement's `k` is its `frames`.
+            if let Some(dictionary) = value_type.get("dictionary")
+                && let Some((member, reason)) =
+                    actingcommand_contract::integer_dictionary_refusal(dictionary)
+            {
+                return Err(self.error(
+                    &format!("{}{member}", child(&value_pointer, "dictionary")),
+                    reason,
+                ));
+            }
+            if let Some(agreement) = object.get("agreement")
+                && let Some((member, reason)) =
+                    actingcommand_contract::integer_agreement_refusal(agreement, true)
+            {
+                return Err(
+                    self.error(&format!("{}{member}", child(&pointer, "agreement")), reason)
+                );
             }
             for field in ["minimum_confidence_milli", "valid_for_ms"] {
                 self.unsigned(&object[field], &child(&pointer, field))?;

@@ -114,6 +114,19 @@ including composite members, and OCR per-frame template anchors use raw recognit
 Raw OCR observation explicitly refuses
 predicate consensus; authors use a separate raw reading target for inventory fields.
 
+Workflow #411 B1 (register §1.163). A value test whose side declares an `agreement`
+([resource-declarations.md](resource-declarations.md), value tests) is sampled as a target
+under `target_consensus` is, though it declares none (a declared `target_consensus` on a value
+test is refused as before): the evaluator holds for it an entry of one unperturbed sample on each
+of its frames, the current frame last, at the agreement's `interval_ms`, so every observation of
+the task takes its frames and the budgets below count them (its provider time is its sides'
+timeouts on each frame). Its interval is the pack's one interval like every multi-frame
+declaration's. The agreement, not the entry's `k`, decides each side's value: the one value read
+on at least `k` of the side's frames (the `k_of_n` rule of `ocr_integer` below), otherwise
+`no_agreement`. Each frame's evaluation of the test is recorded as a sample with the guard
+phase `agreement_sample` (`contracts/v012-register.md` §1.153 LR-6), the others' as
+`candidate_sample`; a provider failure on a frame fails the evaluation without a sample row.
+
 Each feature may declare `consensus: {samples, aggregate}`. `samples` has 1..=5 entries:
 
 ```json

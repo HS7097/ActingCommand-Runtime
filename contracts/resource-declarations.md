@@ -530,6 +530,8 @@ before.
 | a side (`left`, an operand `right`) | `target_id` names an OCR target of the pack without `locate` and without `target_consensus`; `trim` is `whitespace_v1` (both ends, as `str::trim`) or `whitespace_all_v1` (every Unicode whitespace character: `1 / 3` reads `1/3`); `value` is `{"type": "unsigned_integer", "min", "max", "format"?}` with `min <= max` and a format of the shared parser (`ocr-fields.md`, default `ascii_decimal`); `part` (`current` or `capacity`) is required with `current_capacity` and refused with any other format |
 | `op` | `eq`, `ne`, `lt`, `le`, `gt`, `ge` or `parses`; `parses` has no `right` (`UnconsumedField`), every other `op` requires one (`MissingField`) |
 | `right` | `{"const": n}` with `0 <= n <= 2^53-1`, or another side with `mul` (1 to 1,000,000) and `add` (`-(2^53-1)` to `2^53-1`), both required; `mul` and `add` are refused on `left` |
+| a side's `value.dictionary` | optional (Workflow #411 B1): the number's dictionary ([ocr-fields.md](ocr-fields.md), the paragraph of Workflow #411 B1), `InvalidValue` at the refused member below `…/value/dictionary` |
+| a side's `agreement` | optional (Workflow #411 B1): `{"frames", "interval_ms", "k"?}` with `frames` 2 to 5, `interval_ms` 1 to 1000, equal to the interval of every other agreement and multi-frame `target_consensus` declaration of the pack, and `k` 1 to `frames` (`frames` when absent); `InvalidValue` at `…/agreement/frames`, `…/agreement/k` or `…/agreement/interval_ms` |
 
 Each side reads its OCR target once per request and frame, within the text read budget of its
 consumer (`ocr-fields.md`, section Located text), trims the text and parses it with the shared
@@ -546,6 +548,23 @@ the right side as `{"kind": "const", "const"}` or `{"kind": "operand", "operand"
 and `passed`) on its evaluation and on the task diagnostic target row; a projection treats a
 value test, and a check holding one, as personal when a side's OCR target is personal, and
 redacts that evidence.
+
+Workflow #411 B1 (register §1.163). A side's dictionary is applied after the trim and before
+the parser; `raw_text` stays as read and `value` shows the substitution. A test whose side
+declares an `agreement` is read on each of its last `frames` frames (the most any of its sides
+declares), oldest first, both sides on each, and each such evaluation is recorded in the task
+diagnostic stream as a sample of the test with the guard phase `agreement_sample` (register
+§1.153 LR-6). A side with an agreement then has the one value read on at least `k` of its last
+`frames` frames; otherwise it is unread with `value_problem` `no_agreement` (LR-5; the side's
+evidence carries that problem, the frames' evidence their texts), so a page rule that requires
+the test does not match and a guard on it refuses its input (`contained_task_guard_refused`,
+`cause=value_test_unresolved`). A side without an agreement has its read on the current frame.
+The test is sampled as a target under target consensus is
+([business-identity-consensus.md](business-identity-consensus.md), "Finite consensus"): every
+observation of the task takes its frames, and like such a target it is not a `when` target. A
+provider failure on any frame is an evaluation error, as on one frame. Without a dictionary and
+an agreement a value test is evaluated, and its evidence recorded, as before. Both members join
+`package` revision 6, declared at the end of the B train.
 
 A value test may stand in a page rule's `required`, `any_of` and `optional`, as a member of a
 check, and as an operation's `guard.check` (directly or through a check); a guard whose value

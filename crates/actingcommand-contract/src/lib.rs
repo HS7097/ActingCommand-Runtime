@@ -282,6 +282,7 @@ mod tests {
                 min: 0,
                 max: 9999,
                 format: OcrUnsignedIntegerFormat::TimesPrefixed,
+                dictionary: None,
             }
         );
     }

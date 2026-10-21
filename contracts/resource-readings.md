@@ -46,8 +46,10 @@ file. The following is the member only, not a complete task:
 | `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the frame handed to recognition is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
 | `value` | `type` `unsigned_integer` only; `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`, `times_prefixed`, `clock_hms`; `min <= max <= 2^53-1` | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`) |
+| `value.dictionary` | optional (Workflow #411 B1): the number's dictionary, applied after the trim and before the parser ([ocr-fields.md](ocr-fields.md), the paragraph of Workflow #411 B1) | `InvalidValue` @ `…/value/dictionary/<member>` as listed there |
 | `minimum_confidence_milli` | `1..=1000` | `InvalidValue` @ `…/minimum_confidence_milli` |
 | `valid_for_ms` | `1..=31_536_000_000` | `InvalidValue` @ `…/valid_for_ms` |
+| `agreement` | optional (Workflow #411 B1): `{"frames", "interval_ms", "k"?}`, `frames` `2..=5`, `interval_ms` `1..=1000`, and `k`, when present, equal to `frames`: a mark writes a fact, so every frame must read its value ("Kernel reading" below) | `InvalidValue` @ `…/agreement/frames`, `…/agreement/k`, `…/agreement/interval_ms`; `MissingField`, `InvalidType` and `UnknownField` at their member |
 | any other member | none | `UnknownField` @ `…/<member>` |
 
 Wrong JSON types are `InvalidType` and absent members `MissingField` at their own pointer. The
@@ -112,6 +114,9 @@ sealed ZIP and a content directory both pass the same declaration gate, which re
 older than Workflow #390 READ-1 refuses a mark that declares `capacity_fact_key`, with
 `UnknownField` @ `/resource_readings/<i>/capacity_fact_key`. Both are part of `package`
 revision 3, which Runtime v0.12.0 declares once ([component-interfaces.md](component-interfaces.md)).
+Workflow #411 B1's `agreement` and `value.dictionary` join `package` revision 6, which the B
+train declares at its end (register §1.163); until then they are admitted by code, and a
+Runtime before them refuses them with `UnknownField` at the member.
 
 ### Two uses, one declaration
 
@@ -160,8 +165,23 @@ the frames it reaches their pages on:
   its value then its capacity); per mark that gave no reading the declaration and its
   `reading_problem` (`empty`, `invalid_integer`, `overflow`, `out_of_range`,
   `region_unresolved`, `provider_failed`, `confidence_missing`, `low_confidence`, and
-  `join_timeout` for a recognition that had not returned when the join timeout ended). The
-  traces are never serialized.
+  `join_timeout` for a recognition that had not returned when the join timeout ended, and
+  Workflow #411 B1's `no_agreement` below). The traces are never serialized.
+- **Agreement** (Workflow #411 B1, register §1.163). On a pass of a page whose wanted marks
+  declare an `agreement`, the kernel captures after the frame it hands off as many more frames
+  as the largest agreement needs (`frames - 1`), each the largest declared `interval_ms` after
+  the one before (paced as every wait), records each as a capture and as a
+  `ResourceReadingFrame`, and hands each to recognition for the marks whose agreement reads it.
+  A mark with an agreement reads the handed-off frame and the next `frames - 1`. It holds only
+  when each of them gives the same readings (its value and, with a second reading key, its
+  capacity); its readings are then the handed-off frame's, at the lowest confidence of its
+  frames. A frame whose recognition failed or had not returned gives the mark `provider_failed`
+  or `join_timeout`; any other difference is the miss `no_agreement`, and the mark writes no
+  fact: no default, no last value. Each later frame's evaluations are recorded on that frame,
+  and the frame is joined after the handed-off one, with no readings of its own. A runtime that
+  does not sample refuses the pass with `recognition_sampling_runtime_unsupported`, and a
+  capture failure or a cancellation between these captures ends the run, as during target
+  consensus sampling. Without an agreement a pass hands off its one frame, as before.
 - **A miss never fails the run.** Each mark that gave no reading is the warning
   `contained_task_resource_reading_unresolved` (`reading_id`, `fact_key`, `reading_problem`;
   [Host](#host) writes it), the run settles as it would without the mark, and an earlier fact of

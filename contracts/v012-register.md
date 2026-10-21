@@ -2856,6 +2856,41 @@ No ledger change. Gates: host keys 144 to 147 (148 to 151 unused).
 | A50-7 | `prepare_recovery_connection` (a ladder's readiness wait, the application restart rung's preparation, a fence's recheck) reads the emulator status first, as A48's self-check does | rule (no shape change; A48's codes and records) (host 147) | A50 | A50 | a running emulator the Runtime holds stopped or on another port is recognized again (port bound, `runtime.instance_bound`, the ADB baseline awaited, `device.connected`) before the opens; a stopped one is `instance_not_running`; a failed read is `emulator_state_read_failed` and the check goes on from the Runtime's own state |
 | A50-8 | the client's receipt wait of a restart: 745 s (was 445 s) | client constant (no shape) | A50 | A50 | 445 s plus the largest `restart_exit_wait_ms` (300 s); start and stop keep 235 s |
 
+### 1.163 Slice BT-B1 (0.12.x): a number's dictionary and multi-frame agreement; a value the frames do not agree on is no value (#411 B1, B40; B-train plan `rd-1021/train-0129/b-plan/plan.md` §2.1 and §6 B40; coordinator decisions Q6 and Q8 D1 of 2026-10-21)
+
+A value-test side and a reading mark read their number with a dictionary of their own and may
+require several frames to read one value. This slice is the first writer of ledger revision 4
+(§1.153): LR-5 (`no_agreement` in a value-test side's `problem`) and LR-6 (the guard phase
+`agreement_sample`, one row per agreement frame), as registered there; it adds no other persisted
+member. No code, location, key or configuration key is added; the vocabulary `reading_problem`
+gains `no_agreement` with its text (`value_problem` `no_agreement` came with BT-LR). Declaration
+refusals reuse `resource_declaration_invalid` (the declaration gate, the recognition pack) and
+`contained_task_resource_reading_invalid` (Runtime admission of a mark, detail
+`resource_declaration_invalid`). A side its frames do not agree on is unread:
+`value_test_unresolved` with `value_problem` `no_agreement`, so a page that requires the test
+does not match and a guard on it refuses (`contained_task_guard_refused`,
+`cause=value_test_unresolved`); a mark writes no fact and records the warning
+`contained_task_resource_reading_unresolved` with `reading_problem` `no_agreement`. No default
+value and no last value is ever used. Both members join `package` revision 6, which BT-PK6
+declares at the end of the B train; until then they are admitted by code. Without a dictionary
+and an agreement, behaviour and records are byte for byte as before. Not covered (D1): the
+`ocr_integer` candidate feature's dictionary (a follow-up) and operation `0.8` fields. B40 is
+covered by the per-field confusions (plan §6) and has no test of its own. The contract:
+[ocr-fields.md](ocr-fields.md) (the Workflow #411 B1 paragraph),
+[resource-declarations.md](resource-declarations.md) (value tests),
+[resource-readings.md](resource-readings.md) (Declaration, Kernel reading),
+[business-identity-consensus.md](business-identity-consensus.md) (Finite consensus). Gates: exec
+keys 144 to 146 and host keys 340 and 341 (the host family is not in the slice's row: 300 + 10 × 4,
+wave-3 frame); contract keys 43 to 46, exec keys 147 to 151 and apps keys 93 and 94 unused.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B1-1 | `dictionary` `{confusions?, affix?, digits?}` on the `unsigned_integer` `value` of a value-test side and of a reading mark (`IntegerDictionary`) | new optional member (resource file format, not a ledger shape) (exec 144, 145) | BT-B1 | resource side | `confusions` 1..=32 `[from, to]` pairs (`from` one character named once, `to` one ASCII digit), `prefix` and `suffix` 1..=64 bytes, `1 <= digits.min <= digits.max <= 20`; after the trim and before the parser the affixes are stripped when present, the confusions mapped and the digit count checked (else `invalid` / `invalid_integer`); `raw_text` stays verbatim and the value shows the substitution; `IntegerDictionary::apply` is the one implementation; no global table |
+| B1-2 | `agreement` `{frames, interval_ms, k?}` on a value-test side and on a reading mark (`IntegerAgreement`) | new optional member (resource file format) (exec 145, 146) | BT-B1 | resource side | `frames` 2..=5, `interval_ms` 1..=1000, `k` 1..=`frames` (`frames` when absent); a mark's `k` is its `frames`, refused otherwise at `…/agreement/k`; a value test's agreements share the pack's one frame interval with its multi-frame target consensus (refused at `…/agreement/interval_ms`) |
+| B1-3 | a value test with an agreement | rule (writes LR-5 and LR-6) (host 340) | BT-B1 | BT-B1 | sampled as a target under target consensus is, through an entry the evaluator holds (one unperturbed sample on each of its frames, never declared; a declared `target_consensus` on a value test stays refused), so each observation takes its frames; read on its last F frames (F the largest `frames` of its sides), both sides on each, each frame's evaluation recorded as a sample with the guard phase `agreement_sample`; a side with an agreement has the one value read on at least `k` of its frames (`k_of_n_value`, the `k_of_n` rule of candidate features), else `problem` `no_agreement`; a side without one has its current-frame read; not a `when` target |
+| B1-4 | a reading mark with an agreement | rule (no ledger shape) (host 341) | BT-B1 | BT-B1 | after the frame its page was reached on, `frames - 1` more captures (the largest of the page's marks), each the largest declared interval after the one before, each recorded as a capture and a frame handed to recognition and joined after it with no readings of its own; the mark holds only when each of its frames gives the same readings, at their lowest confidence, else the warning with `no_agreement` and no fact; a frame's provider failure or join timeout keeps that problem; a runtime that does not sample refuses with `recognition_sampling_runtime_unsupported` |
+| B1-5 | `reading_problem` `no_agreement` | new vocabulary token (catalog text) | BT-B1 | BT-B1 | the frames of the mark's agreement did not all read the same value; the mark writes no fact |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

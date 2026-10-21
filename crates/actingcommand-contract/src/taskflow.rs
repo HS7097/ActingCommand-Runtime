@@ -1193,6 +1193,293 @@ impl OcrValueTrim {
     }
 }
 
+/// Workflow #411 B1 (register §1.163): the most confusion pairs one dictionary declares.
+pub const MAX_INTEGER_CONFUSIONS: usize = 32;
+/// Workflow #411 B1: the longest `prefix` or `suffix` of a dictionary, in bytes.
+pub const MAX_INTEGER_AFFIX_BYTES: usize = 64;
+/// Workflow #411 B1: the most ASCII digits a dictionary's `digits` names (`u64::MAX` has 20).
+pub const MAX_INTEGER_DIGITS: u64 = 20;
+/// Workflow #411 B1: the fewest and the most frames of one agreement.
+pub const MIN_AGREEMENT_FRAMES: u64 = 2;
+pub const MAX_AGREEMENT_FRAMES: u64 = 5;
+/// Workflow #411 B1: the longest interval between two frames of one agreement.
+pub const MAX_AGREEMENT_INTERVAL_MS: u64 = 1_000;
+
+/// Workflow #411 B1 (B-train plan §2.1 item 1, register §1.163): the dictionary of one number
+/// read from text, declared on the `value` object of one value-test side or one reading mark and
+/// never shared between them. After the trim and before the format's parser, a declared `prefix`
+/// and `suffix` are stripped when the text carries them, each `confusions` character becomes its
+/// ASCII digit, and the text must then hold `digits.min..=digits.max` ASCII digits (else the text
+/// is not an integer). The read text stays verbatim in evidence; the parsed value shows the
+/// substitution. There is no global table. Absent, the text is parsed as before.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegerDictionary {
+    /// `[from, to]` pairs: `from` one character, `to` one ASCII digit, no `from` twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confusions: Option<Vec<(String, String)>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affix: Option<IntegerAffix>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digits: Option<IntegerDigits>,
+}
+
+/// Workflow #411 B1: the text a dictionary strips before and after the number, when present.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegerAffix {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+}
+
+/// Workflow #411 B1: how many ASCII digits the text holds after the substitution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegerDigits {
+    pub min: u64,
+    pub max: u64,
+}
+
+impl IntegerDictionary {
+    /// The member the declaration rules refuse, as a JSON pointer below the dictionary, or
+    /// `None` when every rule holds: `confusions` 1..=32 pairs (`/confusions`), each `from` one
+    /// character not declared before (`/confusions/<i>/0`), each `to` one ASCII digit
+    /// (`/confusions/<i>/1`); a `prefix` or `suffix` of 1..=64 bytes (`/affix/prefix`,
+    /// `/affix/suffix`); `digits.min` in 1..=20 (`/digits/min`) and `digits.max` in
+    /// `min..=20` (`/digits/max`).
+    pub fn refused_member(&self) -> Option<String> {
+        if let Some(confusions) = &self.confusions {
+            if !(1..=MAX_INTEGER_CONFUSIONS).contains(&confusions.len()) {
+                return Some("/confusions".to_owned());
+            }
+            for (index, (from, to)) in confusions.iter().enumerate() {
+                if from.chars().count() != 1
+                    || confusions[..index]
+                        .iter()
+                        .any(|(earlier, _)| earlier == from)
+                {
+                    return Some(format!("/confusions/{index}/0"));
+                }
+                if to.len() != 1 || !to.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Some(format!("/confusions/{index}/1"));
+                }
+            }
+        }
+        if let Some(affix) = &self.affix {
+            for (member, value) in [("prefix", &affix.prefix), ("suffix", &affix.suffix)] {
+                if value
+                    .as_ref()
+                    .is_some_and(|value| !(1..=MAX_INTEGER_AFFIX_BYTES).contains(&value.len()))
+                {
+                    return Some(format!("/affix/{member}"));
+                }
+            }
+        }
+        if let Some(digits) = self.digits {
+            if !(1..=MAX_INTEGER_DIGITS).contains(&digits.min) {
+                return Some("/digits/min".to_owned());
+            }
+            if !(digits.min..=MAX_INTEGER_DIGITS).contains(&digits.max) {
+                return Some("/digits/max".to_owned());
+            }
+        }
+        None
+    }
+
+    /// Applies the dictionary to one trimmed text: strips the declared `prefix` and `suffix`
+    /// when the text carries them, turns each `confusions` character into its digit, then
+    /// checks the declared digit count (`InvalidInteger` outside it). The result goes to the
+    /// format's parser; the caller keeps the read text as it was.
+    pub fn apply<'a>(&self, text: &'a str) -> Result<std::borrow::Cow<'a, str>, OcrFieldReason> {
+        let mut text = text;
+        if let Some(affix) = &self.affix {
+            if let Some(prefix) = affix.prefix.as_deref() {
+                text = text.strip_prefix(prefix).unwrap_or(text);
+            }
+            if let Some(suffix) = affix.suffix.as_deref() {
+                text = text.strip_suffix(suffix).unwrap_or(text);
+            }
+        }
+        let text = match &self.confusions {
+            None => std::borrow::Cow::Borrowed(text),
+            Some(confusions) => std::borrow::Cow::Owned(
+                text.chars()
+                    .map(|character| {
+                        confusions
+                            .iter()
+                            .find(|(from, _)| from.chars().next() == Some(character))
+                            .and_then(|(_, to)| to.chars().next())
+                            .unwrap_or(character)
+                    })
+                    .collect(),
+            ),
+        };
+        if let Some(digits) = self.digits {
+            let count = text.bytes().filter(u8::is_ascii_digit).count() as u64;
+            if !(digits.min..=digits.max).contains(&count) {
+                return Err(OcrFieldReason::InvalidInteger);
+            }
+        }
+        Ok(text)
+    }
+}
+
+/// Workflow #411 B1 (B-train plan §2.1 item 2, register §1.163): the frames that must read one
+/// value before it counts as read, declared on one value-test side or one reading mark: `frames`
+/// (2..=5) frames `interval_ms` (1..=1000) apart, of which `k` (1..=`frames`, `frames` when
+/// absent) must read the same value. A reading writes a fact, so its `k` is `frames`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegerAgreement {
+    pub frames: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<u64>,
+    pub interval_ms: u64,
+}
+
+impl IntegerAgreement {
+    /// The member the declaration rules refuse, as a JSON pointer below the agreement, or
+    /// `None` when every rule holds: `/frames` outside 2..=5, `/k` outside 1..=`frames` or, for a
+    /// reading (`reading`), other than `frames`, and `/interval_ms` outside 1..=1000.
+    pub fn refused_member(&self, reading: bool) -> Option<&'static str> {
+        if !(MIN_AGREEMENT_FRAMES..=MAX_AGREEMENT_FRAMES).contains(&self.frames) {
+            return Some("/frames");
+        }
+        if let Some(k) = self.k
+            && (!(1..=self.frames).contains(&k) || (reading && k != self.frames))
+        {
+            return Some("/k");
+        }
+        if !(1..=MAX_AGREEMENT_INTERVAL_MS).contains(&self.interval_ms) {
+            return Some("/interval_ms");
+        }
+        None
+    }
+
+    /// The number of frames, for an admitted agreement.
+    pub fn frame_count(&self) -> usize {
+        usize::try_from(self.frames).unwrap_or(usize::MAX)
+    }
+
+    /// How many frames must read the same value: `k`, or every frame.
+    pub fn required(&self) -> usize {
+        usize::try_from(self.k.unwrap_or(self.frames)).unwrap_or(usize::MAX)
+    }
+}
+
+/// Workflow #411 B1: the refusal of one declared `dictionary` (a JSON value): the member it
+/// refuses, as a JSON pointer below the dictionary (empty for the dictionary itself), and why;
+/// `None` when it reads as an [`IntegerDictionary`] whose rules hold. The shape first (an object
+/// of `confusions`, `affix` and `digits`; pairs of two strings; string affixes; unsigned digit
+/// bounds), then [`IntegerDictionary::refused_member`].
+pub fn integer_dictionary_refusal(
+    value: &serde_json::Value,
+) -> Option<(String, crate::ResourceDeclarationReason)> {
+    use crate::ResourceDeclarationReason::{InvalidType, InvalidValue, MissingField, UnknownField};
+    let Some(object) = value.as_object() else {
+        return Some((String::new(), InvalidType));
+    };
+    if let Some(member) = object
+        .keys()
+        .find(|member| !matches!(member.as_str(), "confusions" | "affix" | "digits"))
+    {
+        return Some((format!("/{member}"), UnknownField));
+    }
+    if let Some(confusions) = object.get("confusions") {
+        let Some(pairs) = confusions.as_array() else {
+            return Some(("/confusions".to_owned(), InvalidType));
+        };
+        for (index, pair) in pairs.iter().enumerate() {
+            let Some(pair) = pair.as_array() else {
+                return Some((format!("/confusions/{index}"), InvalidType));
+            };
+            if pair.len() != 2 {
+                return Some((format!("/confusions/{index}"), InvalidValue));
+            }
+            if let Some(side) = pair.iter().position(|member| !member.is_string()) {
+                return Some((format!("/confusions/{index}/{side}"), InvalidType));
+            }
+        }
+    }
+    if let Some(affix) = object.get("affix") {
+        let Some(affix) = affix.as_object() else {
+            return Some(("/affix".to_owned(), InvalidType));
+        };
+        for (member, value) in affix {
+            if !matches!(member.as_str(), "prefix" | "suffix") {
+                return Some((format!("/affix/{member}"), UnknownField));
+            }
+            if !value.is_string() {
+                return Some((format!("/affix/{member}"), InvalidType));
+            }
+        }
+    }
+    if let Some(digits) = object.get("digits") {
+        let Some(digits) = digits.as_object() else {
+            return Some(("/digits".to_owned(), InvalidType));
+        };
+        if let Some(member) = digits
+            .keys()
+            .find(|member| !matches!(member.as_str(), "min" | "max"))
+        {
+            return Some((format!("/digits/{member}"), UnknownField));
+        }
+        for member in ["min", "max"] {
+            match digits.get(member) {
+                None => return Some((format!("/digits/{member}"), MissingField)),
+                Some(bound) if !bound.is_u64() => {
+                    return Some((format!("/digits/{member}"), InvalidType));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    match serde_json::from_value::<IntegerDictionary>(value.clone()) {
+        Ok(dictionary) => dictionary
+            .refused_member()
+            .map(|member| (member, InvalidValue)),
+        Err(_) => Some((String::new(), InvalidValue)),
+    }
+}
+
+/// Workflow #411 B1: the refusal of one declared `agreement` (a JSON value) of a value-test side
+/// or, with `reading`, of a reading mark: the member it refuses, as a JSON pointer below the
+/// agreement (empty for the agreement itself), and why; `None` when it reads as an
+/// [`IntegerAgreement`] whose rules hold. The shape first (an object of the unsigned integers
+/// `frames`, `k` and `interval_ms`, `frames` and `interval_ms` required), then
+/// [`IntegerAgreement::refused_member`].
+pub fn integer_agreement_refusal(
+    value: &serde_json::Value,
+    reading: bool,
+) -> Option<(String, crate::ResourceDeclarationReason)> {
+    use crate::ResourceDeclarationReason::{InvalidType, InvalidValue, MissingField, UnknownField};
+    let Some(object) = value.as_object() else {
+        return Some((String::new(), InvalidType));
+    };
+    if let Some(member) = object
+        .keys()
+        .find(|member| !matches!(member.as_str(), "frames" | "k" | "interval_ms"))
+    {
+        return Some((format!("/{member}"), UnknownField));
+    }
+    for member in ["frames", "interval_ms"] {
+        if !object.contains_key(member) {
+            return Some((format!("/{member}"), MissingField));
+        }
+    }
+    if let Some((member, _)) = object.iter().find(|(_, value)| !value.is_u64()) {
+        return Some((format!("/{member}"), InvalidType));
+    }
+    match serde_json::from_value::<IntegerAgreement>(value.clone()) {
+        Ok(agreement) => agreement
+            .refused_member(reading)
+            .map(|member| (member.to_owned(), InvalidValue)),
+        Err(_) => Some((String::new(), InvalidValue)),
+    }
+}
+
 /// The comparison of a value test (Workflow #396 REC-6): `parses` needs only the left side to
 /// read; the others compare the left value with the right one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1287,10 +1574,16 @@ pub struct ResourceReadingDeclaration {
     pub value: ResourceReadingType,
     pub minimum_confidence_milli: u16,
     pub valid_for_ms: u64,
+    /// Workflow #411 B1 (register §1.163): the frames that must all read the same value before
+    /// the mark writes its fact: the frame its page was reached on and the next `frames - 1`
+    /// captures, `interval_ms` apart (`k` is `frames`). Absent, the mark reads the frame its page
+    /// was reached on, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agreement: Option<IntegerAgreement>,
 }
 
 /// The closed set of reading value types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceReadingType {
     UnsignedInteger {
@@ -1301,6 +1594,9 @@ pub enum ResourceReadingType {
             skip_serializing_if = "OcrUnsignedIntegerFormat::is_ascii_decimal"
         )]
         format: OcrUnsignedIntegerFormat,
+        /// Workflow #411 B1: the number's dictionary; absent, the text is parsed as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dictionary: Option<IntegerDictionary>,
     },
 }
 
@@ -1326,8 +1622,8 @@ impl ResourceReadingDeclaration {
         // Workflow #390 READ-1: only a `current_capacity` mark has a capacity to write, under a
         // key of the mark key rule.
         if let Some(capacity_fact_key) = &self.capacity_fact_key {
-            let ResourceReadingType::UnsignedInteger { format, .. } = self.value;
-            if format != OcrUnsignedIntegerFormat::CurrentCapacity
+            let ResourceReadingType::UnsignedInteger { format, .. } = &self.value;
+            if *format != OcrUnsignedIntegerFormat::CurrentCapacity
                 || !resource_fact_key(capacity_fact_key)
             {
                 return Err(TaskflowCode::ResourceReadingCapacityFactKeyInvalid.code());
@@ -1339,8 +1635,13 @@ impl ResourceReadingDeclaration {
         if !identifier(&self.target_id) {
             return Err(TaskflowCode::ResourceReadingTargetIdInvalid.code());
         }
-        let ResourceReadingType::UnsignedInteger { min, max, .. } = self.value;
-        if max > MAX_RESOURCE_READING_VALUE {
+        let ResourceReadingType::UnsignedInteger {
+            min,
+            max,
+            dictionary,
+            ..
+        } = &self.value;
+        if *max > MAX_RESOURCE_READING_VALUE {
             return Err(TaskflowCode::ResourceReadingValueMaxInvalid.code());
         }
         if min > max {
@@ -1351,6 +1652,18 @@ impl ResourceReadingDeclaration {
         }
         if !(crate::MIN_FACT_TTL_MS..=crate::MAX_FACT_TTL_MS).contains(&self.valid_for_ms) {
             return Err(TaskflowCode::ResourceReadingValidForInvalid.code());
+        }
+        // Workflow #411 B1: a dictionary and an agreement follow their declaration rules; a mark
+        // writes a fact, so every frame of its agreement must read the value. No code of their
+        // own (register §1.163): the declaration gate names the refused member.
+        if dictionary
+            .as_ref()
+            .is_some_and(|dictionary| dictionary.refused_member().is_some())
+            || self
+                .agreement
+                .is_some_and(|agreement| agreement.refused_member(true).is_some())
+        {
+            return Err(SharedCode::ResourceDeclarationInvalid.code());
         }
         Ok(())
     }
@@ -1368,9 +1681,19 @@ impl ResourceReadingDeclaration {
         let text = match self.trim {
             OcrFieldTrim::WhitespaceV1 => text.trim(),
         };
-        let ResourceReadingType::UnsignedInteger { min, max, format } = self.value;
-        let parts = format.parse_parts(text)?;
-        if parts.value < min || parts.value > max {
+        let ResourceReadingType::UnsignedInteger {
+            min,
+            max,
+            format,
+            dictionary,
+        } = &self.value;
+        // Workflow #411 B1: the mark's dictionary, after the trim and before the parser.
+        let text = match dictionary {
+            Some(dictionary) => dictionary.apply(text)?,
+            None => std::borrow::Cow::Borrowed(text),
+        };
+        let parts = format.parse_parts(&text)?;
+        if parts.value < *min || parts.value > *max {
             return Err(OcrFieldReason::OutOfRange);
         }
         let capacity = match (&self.capacity_fact_key, parts.capacity) {

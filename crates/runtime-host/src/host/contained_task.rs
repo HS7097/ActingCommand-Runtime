@@ -1418,10 +1418,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
         self.inner.task_timing.record_evaluation(timing, None, None);
+        // Workflow #411 B1: a value test's agreement frame is an `agreement_sample`.
         self.inner.diagnostic_guard(
             Some(target_id),
             Some(result),
-            ContainedTaskGuardEvaluation::CandidateSample,
+            ContainedTaskGuardEvaluation::of_sample(result),
         )?;
         self.inner.ensure_active()
     }
@@ -3566,10 +3567,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
         self.task_timing.record_evaluation(timing, None, None);
+        // Workflow #411 B1: a value test's agreement frame is an `agreement_sample`.
         self.diagnostic_guard(
             Some(target_id),
             Some(result),
-            ContainedTaskGuardEvaluation::CandidateSample,
+            ContainedTaskGuardEvaluation::of_sample(result),
         )?;
         self.ensure_active()
     }

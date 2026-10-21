@@ -2104,6 +2104,9 @@ pub enum ContainedTaskGuardEvaluation {
     PageMismatch,
     /// Workflow #390 EXEC-1: the target of a candidate operation's `when` was evaluated.
     When,
+    /// Workflow #411 B1 (register §1.153 LR-6): one frame of a value test whose side declares
+    /// an agreement was evaluated.
+    AgreementSample,
 }
 
 impl ContainedTaskGuardEvaluation {
@@ -2113,6 +2116,20 @@ impl ContainedTaskGuardEvaluation {
             Self::CandidateSample => "candidate_sample",
             Self::Evaluated | Self::TrustedCoordinate | Self::PageMismatch => "guard",
             Self::When => "when",
+            Self::AgreementSample => actingcommand_contract::TASK_DIAGNOSTIC_PHASE_AGREEMENT_SAMPLE,
+        }
+    }
+
+    /// Workflow #411 B1 (register §1.153 LR-6): how one sample of a sampled evaluation is
+    /// recorded: a value test's evaluation on one frame of its agreement as an
+    /// [`Self::AgreementSample`], every other sample (target consensus, candidate layouts) as a
+    /// [`Self::CandidateSample`].
+    pub fn of_sample(
+        result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
+    ) -> Self {
+        match result {
+            Ok(evaluation) if evaluation.kind == TargetKind::ValueTest => Self::AgreementSample,
+            _ => Self::CandidateSample,
         }
     }
 
@@ -2120,7 +2137,7 @@ impl ContainedTaskGuardEvaluation {
     /// target, `None` for those that evaluate one.
     pub const fn unexecuted_code(self) -> Option<Code> {
         match self {
-            Self::CandidateSample | Self::Evaluated | Self::When => None,
+            Self::CandidateSample | Self::Evaluated | Self::When | Self::AgreementSample => None,
             Self::TrustedCoordinate => Some(ExecutionKernelCode::ContainedTaskGuardSkipped.code()),
             Self::PageMismatch => Some(ExecutionKernelCode::ContainedTaskGuardPageMismatch.code()),
         }
@@ -2451,10 +2468,11 @@ pub trait ContainedTaskRuntime {
         result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
         _timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
+        // Workflow #411 B1: a value test's agreement frame is an `agreement_sample`.
         self.record_guard_evaluation(
             Some(target_id),
             Some(result),
-            ContainedTaskGuardEvaluation::CandidateSample,
+            ContainedTaskGuardEvaluation::of_sample(result),
         )
     }
 
@@ -6672,6 +6690,7 @@ impl PreparedContainedTask {
             // Workflow #384 D2-S2 (model §3.5): a frame on which the run reaches a page it reads
             // marks on goes to recognition; the run does not wait for it. Workflow #396 REC-6:
             // the page gate's observations of its marks' targets on this frame go with it.
+            // Workflow #411 B1: the frames its marks' agreements read follow it at `pace`.
             self.hand_off_reading_frame(
                 runtime,
                 ocr_collector,
@@ -6679,6 +6698,7 @@ impl PreparedContainedTask {
                 &scene,
                 frame.captured_at,
                 remembered_ocr,
+                pace,
             )?;
             Ok(Ok(PageObservation {
                 page_label,

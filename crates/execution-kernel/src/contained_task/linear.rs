@@ -925,6 +925,7 @@ impl PreparedContainedTask {
                 &observed.scene,
                 observed.captured_at,
                 RememberedOcrObservations::default(),
+                run.timing.pace(),
             )?;
         }
         // Workflow #384 D2-S2 (model §3.4): with a requested key set, a segment that reaches no
@@ -983,6 +984,7 @@ impl PreparedContainedTask {
                 &reached.scene,
                 reached.captured_at,
                 RememberedOcrObservations::default(),
+                run.timing.pace(),
             )?;
             // Workflow #384 D2-S3 (model §3.6): the step's operation is confirmed on the frame
             // it arrived on.

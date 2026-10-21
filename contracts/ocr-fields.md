@@ -230,6 +230,28 @@ non-ASCII digits are invalid in every format. Group separators are exclusive to 
 formats fail declaration admission. A pack that declares `times_prefixed` needs Runtime
 v0.11.3 or later; an older Runtime refuses its program at admission.
 
+Workflow #411 B1 (register §1.163). A value-test side's `value` and a reading mark's `value`
+(not an operation `0.8` field's) may declare a `dictionary`, the number's own confusion table;
+there is no global one:
+
+```json
+{ "type": "unsigned_integer", "min": 0, "max": 999,
+  "dictionary": { "confusions": [["O", "0"], ["l", "1"]], "affix": { "suffix": "pt" },
+                  "digits": { "min": 1, "max": 3 } } }
+```
+
+After the trim and before the format's parser, the `prefix` and the `suffix` are stripped when
+the text starts or ends with them, each character a `confusions` pair names becomes its digit,
+and the text must then hold `digits.min..=digits.max` ASCII digits, else it is not an integer
+(`invalid`, `invalid_integer`). Each member is optional: `confusions` holds 1 to 32 pairs, each
+`from` one character named once and each `to` one ASCII digit; `prefix` and `suffix` hold 1 to
+64 bytes; `1 <= digits.min <= digits.max <= 20`. A refused member is `InvalidValue` at its
+pointer (`…/dictionary/confusions`, `…/confusions/<j>/0` or `/1`, `…/affix/prefix`,
+`…/affix/suffix`, `…/digits/min`, `…/digits/max`), a wrong JSON type `InvalidType`, another
+member `UnknownField`. The read text stays verbatim in evidence (`raw_text` `1O0`); the parsed
+value shows the substitution (`100`). `IntegerDictionary::apply` is the one implementation;
+without a dictionary the text is parsed as before.
+
 The contract owner's pure `OcrUnsignedIntegerFormat::parse` entry is shared by execution
 and official client value verification. Its `parse_parts` (Workflow #396 REC-6) returns both
 parts without a range check: the value, and for `current_capacity` the capacity, which a value
