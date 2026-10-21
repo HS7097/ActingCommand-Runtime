@@ -1070,7 +1070,7 @@ schema refuses either with `UnconsumedField`; a `linear_steps` task refuses eith
 | Member | Declaration gate | Runtime admission (`contained_task_operation_invalid`) |
 | --- | --- | --- |
 | `when` | an object with exactly one member, `present` or `absent`, naming a target (a string, `InvalidType` otherwise); no member is `MissingField` at `when`, both are `InvalidValue` at `when`, another member `UnknownField` | the target is a target of the recognition package that is judged on one frame: not a `click_only` target and not one under target consensus; not declared on the entry application (the first operation, an `application` effect from `any`, which runs before any page is known); its text reads, one consumer, stay within the static budget of a guard's ([OCR fields](ocr-fields.md)), refused otherwise as a guard's are at `/operations/<i>/when` |
-| `on_guard_refused` | the string `next_candidate` (`InvalidValue` otherwise) | the operation is a click with a declared guard (not an `unguarded_trusted_coordinate` click, not an `application` effect, not a select step) |
+| `on_guard_refused` | the string `next_candidate` (`InvalidValue` for another string), or (#411 B22) the keyed form of section [Per-run operation caps and keyed guard refusals](#per-run-operation-caps-and-keyed-guard-refusals) | the operation is a click with a declared guard (not an `unguarded_trusted_coordinate` click, not an `application` effect, not a select step) |
 
 **Candidates.** The candidates of a page are the operations chosen as before, in order: those
 whose `from` names the page in the task's operation order, then those from `any`; within the
@@ -1105,3 +1105,64 @@ check follow every candidate that may run: after a candidate that declares `when
 needs its mapping. A page left without a candidate after such candidates only ends that path (the
 run's `contained_task_operation_candidates_exhausted`); a page left without one once a member of a
 designated effect set may have reached its cap is refused as before.
+
+### Per-run operation caps and keyed guard refusals
+
+#411 B16 part 1 and B22 (B-train plan §2.11; register §1.164). An operation of a task schema
+`0.9` page-graph task may cap how often one run dispatches it, and a guard refusal may end the run
+on a named key. An older task schema refuses the new members with `UnconsumedField`, a
+`linear_steps` task refuses `max_runs` and `on_max_runs` at admission
+(`contained_task_linear_invalid`, `reason=max_runs`) and the keyed `on_guard_refused` as it
+refuses every `on_guard_refused`. A task that declares none runs as before. The members join
+package revision 6, which the closing slice of the B train declares; until then the Runtime
+admits them by code.
+
+```json
+"max_runs": 3,
+"on_max_runs": "next_candidate"
+"on_max_runs": {"outcome_key": "key_a"}
+"on_guard_refused": {"outcome_key": "key_b"}
+"on_guard_refused": {"outcome_key": "key_b", "failed": "check/member_a"}
+```
+
+| Member | Declaration gate | Runtime admission (`contained_task_operation_invalid` at the member) |
+| --- | --- | --- |
+| `max_runs` | an unsigned integer (`InvalidType` otherwise) | 1..=1000, declared together with `on_max_runs`; never on a designated operation or a member of a designated effect set, which have their own cap (`max_repeats`): the phased route check refuses it `task_phases_designated_effect_invalid`, the page-graph check `contained_task_outcome_declaration_invalid` |
+| `on_max_runs` | the string `next_candidate` (`InvalidValue` for another string) or an object with the string member `outcome_key` (`MissingField`, `InvalidType`, `UnknownField` otherwise) | declared together with `max_runs`; a keyed one names a key and the task declares a `scheduling_outcome` |
+| `on_guard_refused` (keyed) | an object with the string member `outcome_key` and the optional string member `failed` (`MissingField`, `InvalidType`, `UnknownField` otherwise) | as every `on_guard_refused`; it names a key, the task declares a `scheduling_outcome`, and `failed`, when declared, is the guard target itself or one member of it (a composite) |
+
+- **`max_runs`.** The run counts, per operation, the dispatches that started a step: a guard
+  pass-over (`on_guard_refused: next_candidate`) counts, a withdrawal by `when` does not (D10).
+  Once the run dispatched the operation `max_runs` times, `on_max_runs: next_candidate` passes it
+  over like a capped member of a designated effect set: the page's next operation is dispatched.
+  With `on_max_runs: {"outcome_key": K}`, when the capped operation is the one the page would
+  dispatch, no step starts and the run ends Completed on the current page with K as its
+  scheduling outcome. It records one `task.operation_capped` (ledger revision 4, register §1.153
+  LR-7: the step index the dispatch would have taken, the operation, `count` its dispatches,
+  `limit_count` its cap) whose outcome is `contained_task_operation_runs_capped` (info, values
+  `pack_operation_id`, `count`, `limit_count`, `page_id`, `outcome_key`).
+- **A keyed `on_guard_refused`.** When the click's guard refuses (`contained_task_guard_refused`)
+  on its step's frame at the step's first attempt, before any input, and the named target
+  (`failed`, else the guard target) was evaluated with a definite fail, the step finishes on the
+  frame's page without an input (a `StepFinished` with no `EffectIntent`, as a pass-over does) and
+  the run ends Completed there with K. A definite fail is "read, and not met": the target did not
+  pass, either as a value test whose comparison does not hold (`value_test_not_met`) or with no
+  registered reason (a plain miss); a composite fails definitely when its members' definite fails
+  decide it (one of `all_of`, every one of `any_of`). A page mismatch, `value_test_unresolved` and
+  every other registered reason, a guard that could not be evaluated
+  (`contained_task_guard_evaluation_failed`), a sampling timeout, a refusal on a later attempt or
+  by an input recheck, and another member failing alone keep the operation's failure decision.
+  The failing member is read from the guard target's evaluation, never from a developer detail.
+  It adds no code and no record.
+- **The one keyed-terminal rule.** `on_empty` (Workflow #308 SEL-L4b), a keyed `on_max_runs` and a
+  keyed `on_guard_refused` (and later B23 and B18) are keyed ends: in the static checks, the
+  operation's state (its page and whether a designated effect completed on the way) is a terminal
+  that needs exactly one mapping with that effect condition listing the page, and that mapping's
+  key is K (`task_phases_outcome_incomplete` in a phased route,
+  `contained_task_outcome_declaration_incomplete` in a page graph). A state reachable under both
+  effect conditions would need two mappings with the one key, which unique keys forbid, so it is
+  refused. The walk goes on past the operation, which may also run.
+- **No layer.** A package with a keyed `on_max_runs` or a keyed `on_guard_refused` ends short of
+  its target pages, so it is neither a prerequisite package nor a return-home package
+  (`contained_task_prerequisite_incompatible`, `reason=max_runs_end` or `reason=guard_refused_end`).
+  A `busy` mapping (#411 B37) is no keyed end.

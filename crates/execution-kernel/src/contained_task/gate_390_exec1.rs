@@ -687,6 +687,8 @@ fn exec1_admission_follows_every_candidate_that_may_run() {
             retryable: false,
             may_be_passed_over,
             on_empty_key: None,
+            max_runs: None,
+            on_guard_refused_key: None,
         };
         actingcommand_contract::validate_phased_route(
             "neutral",
