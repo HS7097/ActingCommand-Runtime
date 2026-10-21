@@ -16,6 +16,11 @@ const MAX_RECENT_RUNS: usize = 10;
 /// The most runs one page of a run list holds (Workflow #389 MCP-3).
 const MAX_RUN_LIST: usize = 100;
 const RECENT_RUNS_BUDGET: Duration = Duration::from_secs(20);
+/// `latest_runs` (Workflow #411 A42) reads the ledger from its tail back in windows of ledger
+/// sequences: the first this long, each next one, further back, twice as long as the one before
+/// it, up to `MAX_TAIL_WINDOW`.
+const FIRST_TAIL_WINDOW: u64 = 4_096;
+const MAX_TAIL_WINDOW: u64 = 1 << 20;
 /// The facts a run is listed by (Workflow #391 item 3): its main admission, its entry facts and
 /// its terminal. A run without an entry check starts with its main admission, a run with one
 /// records an entry fact once that check is done, and a run whose first check fails ends with
@@ -362,6 +367,148 @@ impl RuntimeClient {
             incomplete,
             snapshot_ledger_position: listing.snapshot,
         })
+    }
+
+    /// The newest `limit` (1-10) contained runs first recorded on `instance` since
+    /// `since_unix_ms`, newest first, each in brief mode, read from the ledger's tail back
+    /// (Workflow #411 A42). Each window of ledger sequences, the first `FIRST_TAIL_WINDOW` long
+    /// and each next one twice as long, is listed by run as `recent_runs` lists a window, the
+    /// listing bounded by the window's sequences; its runs are read newest first. The walk ends
+    /// once `limit` runs are kept, or once a window starts with a record from before
+    /// `since_unix_ms` (or at the ledger's first record), so what is read is bounded by the
+    /// window and never by the history before it: an instance without a run since
+    /// `since_unix_ms` answers no run, complete. `deadline` is checked between reads; reaching it
+    /// ends the read `incomplete`. Read-only.
+    pub fn latest_runs(
+        &self,
+        instance: InstanceId,
+        since_unix_ms: u64,
+        limit: usize,
+        deadline: Instant,
+    ) -> RuntimeClientResult<RecentContainedRuns> {
+        if limit == 0 || limit > MAX_RECENT_RUNS {
+            return Err(RuntimeClientError::fatal(
+                ClientCode::RecentRunsLimitInvalid,
+                RECENT_RUNS_OPERATION,
+            ));
+        }
+        let snapshot = self.ledger_tail()?;
+        let mut latest = RecentContainedRuns {
+            runs: Vec::with_capacity(limit),
+            incomplete: false,
+            snapshot_ledger_position: snapshot,
+        };
+        // A run listed in a later window by a later fact is not read again further back.
+        let mut read = BTreeSet::<RequestId>::new();
+        let mut through = snapshot;
+        let mut window = FIRST_TAIL_WINDOW;
+        while through > 0 {
+            if Instant::now() >= deadline {
+                latest.incomplete = true;
+                return Ok(latest);
+            }
+            let from = through.saturating_sub(window - 1).max(1);
+            let listing = self.list_runs(
+                &EventQuery {
+                    instance_id: Some(instance),
+                    from_timestamp_unix_ms: Some(since_unix_ms),
+                    from_sequence: Some(from),
+                    to_sequence: Some(through),
+                    ..EventQuery::default()
+                },
+                Some(snapshot),
+                Some(deadline),
+            )?;
+            if !listing.complete {
+                latest.incomplete = true;
+                return Ok(latest);
+            }
+            for listed in listing.runs.iter().rev() {
+                if !read.insert(listed.identity.request_id) {
+                    continue;
+                }
+                if Instant::now() >= deadline {
+                    latest.incomplete = true;
+                    return Ok(latest);
+                }
+                let Some(status) = self.read_contained_run_status(
+                    RunKey::RequestId(listed.identity.request_id),
+                    RunStatusMode::Brief,
+                    Some(snapshot),
+                    Some(deadline),
+                )?
+                else {
+                    latest.incomplete = true;
+                    return Ok(latest);
+                };
+                // A later fact inside the window does not make an older run recent.
+                if status
+                    .first_fact_timestamp_unix_ms
+                    .is_some_and(|first| first >= since_unix_ms)
+                {
+                    latest.runs.push(status.status);
+                    if latest.runs.len() == limit {
+                        return Ok(latest);
+                    }
+                }
+            }
+            if from == 1 || self.recorded_before(from, since_unix_ms, snapshot)? {
+                return Ok(latest);
+            }
+            through = from - 1;
+            window = window.saturating_mul(2).min(MAX_TAIL_WINDOW);
+        }
+        Ok(latest)
+    }
+
+    /// The ledger's current snapshot position (Workflow #411 A42), from one bounded read of at
+    /// most one record without its payload.
+    fn ledger_tail(&self) -> RuntimeClientResult<u64> {
+        let request = RuntimeEventQueryPageRequest::new(1, None).map_err(|_| {
+            RuntimeClientError::fatal(
+                ClientCode::RunStatusPageRequestInvalid,
+                RECENT_RUNS_OPERATION,
+            )
+        })?;
+        let page = self.query_event_page(
+            EventQuery {
+                event_type: Some(EventType::RuntimeStarted),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Concise,
+            request,
+        )?;
+        Ok(page.snapshot_ledger_position())
+    }
+
+    /// Whether the first record at or after `sequence`, at `snapshot`, was recorded before
+    /// `since_unix_ms`, or there is none (Workflow #411 A42): one bounded read of one record
+    /// without its payload.
+    fn recorded_before(
+        &self,
+        sequence: u64,
+        since_unix_ms: u64,
+        snapshot: u64,
+    ) -> RuntimeClientResult<bool> {
+        let invalid = |code| RuntimeClientError::fatal(code, RECENT_RUNS_OPERATION);
+        let request = RuntimeEventQueryPageRequest::new(1, None)
+            .and_then(|request| request.at_snapshot(snapshot))
+            .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
+        let page = self.query_event_page(
+            EventQuery {
+                from_sequence: Some(sequence),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Concise,
+            request,
+        )?;
+        if page.snapshot_ledger_position() != snapshot {
+            return Err(invalid(ClientCode::RunStatusSnapshotChanged));
+        }
+        Ok(page
+            .events()
+            .first()
+            .is_none_or(|event| event.timestamp_unix_ms < since_unix_ms))
     }
 
     /// One page of the contained runs first recorded from `since_unix_ms` to `until_unix_ms`

@@ -1670,6 +1670,8 @@ impl RuntimeHost {
             worker_panic_for_test: AtomicBool::new(false),
             #[cfg(test)]
             frame_extent_fault_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            ppocr_seal_hook_for_test: Mutex::new(None),
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
@@ -3402,6 +3404,23 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// #411 A36c: runs `action` once, after the next PP-OCR diagnostic stream has written its
+    /// report and before its seal reads the staged bytes back. Nothing else runs between the two,
+    /// so only this hook reaches that point.
+    #[cfg(test)]
+    pub(crate) fn before_next_ppocr_seal_for_test<F>(&self, action: F) -> RuntimeHostResult<()>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::InstallPpocrSealTestHook)?;
+        *lock(
+            &shared.ppocr_seal_hook_for_test,
+            crate::codes::test_spellings::TestLocation::InstallPpocrSealTestHook,
+        )? = Some(Box::new(action));
+        Ok(())
+    }
+
     /// Workflow #369: the instance's holder kind and its waiting claims' kinds, in grant order.
     /// Read under the instance's queue-order lock, as `holds_key` reads a key: a lease
     /// transition changes the scheduler before its outcome record is durable (a release's
@@ -4440,6 +4459,10 @@ impl std::ops::Deref for HostWork<'_> {
     }
 }
 
+/// #411 A36c, test only: what runs between a PP-OCR diagnostic stream's writes and its seal.
+#[cfg(test)]
+type PpocrSealTestHook = Box<dyn FnOnce() + Send>;
+
 struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     shutdown_target: actingcommand_contract::RuntimeShutdownTarget,
@@ -4578,6 +4601,10 @@ struct HostShared {
     // Workflow #387 D1c-G, test only: the next task frame's geometry reads a zero width.
     #[cfg(test)]
     frame_extent_fault_for_test: AtomicBool,
+    // #411 A36c, test only: runs once between the writes of the next PP-OCR diagnostic stream
+    // and its seal.
+    #[cfg(test)]
+    ppocr_seal_hook_for_test: Mutex<Option<PpocrSealTestHook>>,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the

@@ -450,6 +450,7 @@ fn assert_daemon(side: &str, answer: &Value) {
 // run were set up, so neither is there. Workflow #390 九处-1: and its emulator_state, unknown,
 // since the fake Runtime's instance is not discovery-bound and the Runtime holds no reading.
 // #411 A7: and its backend_selfcheck, an object, since the program facts were read.
+// #411 A42: and run_none_in_window, since the instance has no run in the window.
 #[track_caller]
 fn assert_rows(side: &str, answer: &Value) {
     let rows = answer["instances"].as_array().cloned().unwrap_or_default();
@@ -464,7 +465,8 @@ fn assert_rows(side: &str, answer: &Value) {
             "instance_id",
             "lease_active",
             "pause",
-            "queued"
+            "queued",
+            "run_none_in_window"
         ]),
         "{side}: {answer}"
     );
@@ -484,11 +486,26 @@ fn assert_rows(side: &str, answer: &Value) {
 }
 
 // The answer without the start of the run window and the time of the performance read (Workflow
-// #385 P-m): each read takes them from its own clock.
+// #385 P-m): each read takes them from its own clock. #411 A42: so does each row's window with
+// no run in it.
 fn without_window_start(answer: &Value) -> Value {
     let mut answer = answer.clone();
     if let Some(window) = answer.get_mut("run_window").and_then(Value::as_object_mut) {
         window.remove("since_unix_ms");
+    }
+    for row in answer
+        .get_mut("instances")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(window) = row
+            .get_mut("run_none_in_window")
+            .and_then(Value::as_object_mut)
+        {
+            window.remove("since_unix_ms");
+            window.remove("until_unix_ms");
+        }
     }
     if let Some(performance) = answer.get_mut("performance").and_then(Value::as_object_mut) {
         performance.remove("observed_at_unix_ms");

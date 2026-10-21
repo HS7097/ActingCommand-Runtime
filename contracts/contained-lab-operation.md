@@ -120,8 +120,10 @@ lease TTL.
 
 With an arrival condition, input is still performed exactly once. The same
 request/correlation/lease captures and projects up to 20 after observations,
-each a transaction, with a 500 ms interval bounded by the remaining RuntimeClock
-deadline. The first
+each a transaction. #411 A18 option ④: the samples start every 500 ms, start to
+start; after a sample's capture and evaluation the request waits on the
+RuntimeClock for what is left of the 500 ms since that sample started (no wait
+when they took longer), never past the remaining RuntimeClock deadline. The first
 sample can be immediate. Each capture is fenced before and after; target
 recognition also requires a still-valid token after projection. Only a unique,
 complete match of the requested page before the deadline is `reached`.
