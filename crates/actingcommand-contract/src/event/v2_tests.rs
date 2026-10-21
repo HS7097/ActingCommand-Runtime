@@ -2144,6 +2144,7 @@ fn task_semantic_payload_preserves_recognition_basis_and_v3_schema() {
                 frame_width: 1280,
                 frame_height: 720,
                 targets: Vec::new(),
+                candidate_scores: None,
             },
             AuditInput::new(),
         )
@@ -2430,6 +2431,7 @@ fn task_semantic_payload_rejects_invalid_facts() {
             frame_width: 1280,
             frame_height: 720,
             targets: Vec::new(),
+            candidate_scores: None,
         },
         TaskSemanticFact::TerminalCommitted {
             task_result: TaskOutcome::Success,

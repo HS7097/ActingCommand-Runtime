@@ -72,6 +72,12 @@ impl EventIndexes {
         self.event_ids.get(event_id).copied()
     }
 
+    /// Ledger revision 4 (register §1.153 LR-3, LR-7): the positions of a run's records in the
+    /// store's memory, in record order.
+    pub(super) fn run_positions(&self, run_id: &RunId) -> impl Iterator<Item = usize> + '_ {
+        self.run_ids.get(run_id).into_iter().flatten().copied()
+    }
+
     pub(super) fn insert<E: LedgerEventRead>(&mut self, event: &E, position: usize) {
         self.event_ids.insert(*event.event_id(), position);
         self.event_types

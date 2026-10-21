@@ -126,6 +126,8 @@ fn target_payload(
             score: value.score,
             threshold: value.threshold,
             scale_milli: value.scale_milli,
+            // Ledger revision 4 (register §1.153 LR-2): written from BT-B13 on.
+            luma: None,
         }),
         color: target.color.map(|value| TaskDiagnosticColorData {
             distance: value.distance,

@@ -1020,6 +1020,9 @@ pub enum ValueTestProblem {
     OutOfRange,
     RegionUnresolved,
     LowConfidence,
+    /// Ledger revision 4 (Workflow #411 B1, register §1.153 LR-5; writer BT-B1): the frames of
+    /// a declared agreement did not read one value often enough.
+    NoAgreement,
 }
 
 /// A dictionary a field reads, by its task-local path. Workflow #336 PKG-S2 (option 丙, M-PKG

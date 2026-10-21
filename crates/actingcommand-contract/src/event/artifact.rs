@@ -23,6 +23,12 @@ pub const TASK_DIAGNOSTIC_SCHEMA: &str = "actingcommand.runtime.task-diagnostic.
 pub const TASK_DIAGNOSTIC_SCHEMA_V2: &str = "actingcommand.runtime.task-diagnostic.v2";
 pub const MAX_TASK_DIAGNOSTIC_RECORD_BYTES: usize = 1_048_576;
 pub const MAX_TASK_DIAGNOSTIC_PAGE_RECORDS: usize = 64;
+/// Ledger revision 4 (Workflow #411 B18, register §1.153 LR-4; writer BT-B18): the guard phase
+/// of a refusal marker's evaluation, in `target` and `error` rows.
+pub const TASK_DIAGNOSTIC_PHASE_REFUSAL: &str = "refusal";
+/// Ledger revision 4 (Workflow #411 B1, register §1.153 LR-6; writer BT-B1): the guard phase of
+/// each agreement frame's value-test evaluation, in `target` and `error` rows.
+pub const TASK_DIAGNOSTIC_PHASE_AGREEMENT_SAMPLE: &str = "agreement_sample";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -407,6 +413,19 @@ pub struct TaskDiagnosticTemplateData {
     /// otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale_milli: Option<u32>,
+    /// Ledger revision 4 (Workflow #411 B13, register §1.153 LR-2; writer BT-B13): the measured
+    /// brightness and contrast of a target that declares `luma_floor`; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub luma: Option<TaskDiagnosticLumaData>,
+}
+
+/// Ledger revision 4 (register §1.153 LR-2): the window's mean and its standard deviation over
+/// the scored pixels, each divided by the template's own and times 1000.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticLumaData {
+    pub mean_ratio_milli: u32,
+    pub contrast_ratio_milli: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -581,6 +581,7 @@ impl Run {
                 TaskSemanticFact::EntryRecoveryPackageAdmitted {
                     package_label,
                     role,
+                    ..
                 } => Some((package_label.clone(), *role)),
                 _ => None,
             })
@@ -1053,6 +1054,7 @@ fn n5_6_a_frame_of_two_pages_is_ambiguous_and_goes_to_the_chain() {
             TaskSemanticFact::EntryRecoveryPackageAdmitted {
                 package_label,
                 role,
+                ..
             } => Some((package_label.clone(), *role)),
             TaskSemanticFact::NavigationRoutePlanned { .. } => {
                 panic!("no route after an ambiguous frame")

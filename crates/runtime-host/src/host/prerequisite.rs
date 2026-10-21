@@ -379,6 +379,7 @@ fn gate_layer(
         .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_label: package_label.clone(),
             role: Some(role),
+            package_version: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     gate.open.push((package_label.clone(), role));
@@ -438,6 +439,7 @@ fn gate_layer(
             final_page,
             executed_steps: outcome.executed_steps,
             role: Some(role),
+            package_version: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     gate.open.pop();

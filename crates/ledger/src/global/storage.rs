@@ -607,7 +607,33 @@ impl<B: DurableStorage> EventStore<B> {
                 LedgerLocation::AppendEvent.location(),
             ));
         }
-        Ok(())
+        self.validate_run_rules(draft)
+    }
+
+    /// Ledger revision 4 (Workflow #411 B train, register §1.153 LR-3, LR-7): a task fact bound
+    /// to its run's earlier facts is admitted only after them (`TaskSemanticFact::validate_in_run`
+    /// over the run's records this store holds, staged ones included). Other records are not
+    /// looked at.
+    fn validate_run_rules(&self, draft: &SanitizedEventDraft) -> GlobalLedgerResult<()> {
+        let EventPayload::Task(TaskPayload::Semantic(semantic)) = draft.payload() else {
+            return Ok(());
+        };
+        if !semantic.fact().has_run_rules() {
+            return Ok(());
+        }
+        let earlier = draft
+            .links()
+            .run_id()
+            .into_iter()
+            .flat_map(|run_id| self.indexes.run_positions(run_id))
+            .filter_map(|position| self.events.get(position))
+            .filter_map(|event| match event.payload() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+                _ => None,
+            });
+        semantic.fact().validate_in_run(earlier).map_err(|error| {
+            GlobalLedgerError::request(error.code(), LedgerLocation::AppendEvent.location())
+        })
     }
 
     /// The only ledger-owned continuation for a persisted scheduled policy settlement.

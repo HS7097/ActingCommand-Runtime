@@ -146,6 +146,10 @@ pub(crate) fn commit_sync(payload: &EventPayload) -> CommitSync {
         | EventType::TaskSelectionEvaluated
         | EventType::TaskEffectIntent
         | EventType::TaskEffectCompleted
+        // Ledger revision 4 (register §1.153 LR-3, LR-7): a refused effect and a capped
+        // operation decide the run's disposition.
+        | EventType::TaskEffectRefused
+        | EventType::TaskOperationCapped
         | EventType::TaskStepFinished
         | EventType::TaskCompleted
         | EventType::TaskFailed

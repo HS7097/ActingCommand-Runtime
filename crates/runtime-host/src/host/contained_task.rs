@@ -4589,6 +4589,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 frame_width: width,
                                 frame_height: height,
                                 targets,
+                                candidate_scores: None,
                             },
                             AuditInput::new(),
                         ),
@@ -7877,6 +7878,7 @@ impl HostShared {
             .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
                 package_label: recovery_label.clone(),
                 role,
+                package_version: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         // Workflow #373 NAV-6: the recovery package's steps follow those of the interrupt
@@ -8008,6 +8010,7 @@ impl HostShared {
                 final_page: final_page.clone(),
                 executed_steps: recovery_outcome.executed_steps,
                 role,
+                package_version: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry
@@ -8212,6 +8215,7 @@ impl HostShared {
                 TaskSemanticFact::EntryRecoveryPackageAdmitted {
                     package_label,
                     role,
+                    ..
                 } if !matches!(
                     role,
                     Some(

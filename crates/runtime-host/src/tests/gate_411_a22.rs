@@ -205,6 +205,7 @@ fn a22_a_checked_entry_still_uses_its_recovery_binding() {
             TaskSemanticFact::EntryRecoveryPackageAdmitted {
                 package_label,
                 role,
+                ..
             } => Some((package_label.clone(), *role)),
             _ => None,
         })

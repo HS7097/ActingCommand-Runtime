@@ -55,12 +55,14 @@ fn s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest() {
         semantic(TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_label: "neutral.outer".to_owned(),
             role: None,
+            package_version: None,
         }),
         semantic(TaskSemanticFact::EntryRecoveryCompleted {
             package_label: "neutral.outer".to_owned(),
             final_page: "home".to_owned(),
             executed_steps: 1,
             role: None,
+            package_version: None,
         }),
         semantic(TaskSemanticFact::EntryRecoveryFailed {
             package_label: Some("neutral.inner".to_owned()),

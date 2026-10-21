@@ -386,6 +386,7 @@ impl RunLedger {
                             region: None,
                         },
                     ],
+                    candidate_scores: None,
                 },
             );
             ledger.fact(

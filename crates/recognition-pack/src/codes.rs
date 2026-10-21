@@ -143,6 +143,8 @@ actingcommand_contract::outcome_vocabulary! {
         RegionUnresolved => "region_unresolved",
         /// The read's confidence is missing or below the OCR target's `minimum_confidence`.
         LowConfidence => "low_confidence",
+        /// The frames of a declared agreement did not read one value often enough.
+        NoAgreement => "no_agreement",
     }
 }
 

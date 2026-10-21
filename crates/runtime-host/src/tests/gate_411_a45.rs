@@ -315,6 +315,7 @@ fn a45_an_application_entry_return_home_layer_runs_and_never_ends_state_invalid(
                 TaskSemanticFact::EntryRecoveryPackageAdmitted {
                     package_label,
                     role,
+                    ..
                 } => Some((package_label.clone(), *role)),
                 _ => None,
             })

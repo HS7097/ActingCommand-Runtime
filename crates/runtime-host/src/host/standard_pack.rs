@@ -1097,6 +1097,7 @@ impl RuntimeContainedTask<'_> {
         self.record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_label: package_label.clone(),
             role,
+            package_version: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
         if self.configuration_records > 0 && interrupts.configured.insert(package_id.to_owned()) {
@@ -1160,6 +1161,7 @@ impl RuntimeContainedTask<'_> {
             final_page,
             executed_steps: outcome.executed_steps,
             role,
+            package_version: None,
         })
         .map_err(ContainedTaskRunError::Boundary)
     }
