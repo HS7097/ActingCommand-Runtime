@@ -5861,9 +5861,6 @@ fn validate_task_candidate_scores(
         return Err(invalid());
     }
     for (score, page) in scores.pages.iter().zip(candidate_pages) {
-        if score.page_id != *page {
-            return Err(invalid());
-        }
         let matched = matched_page == Some(page.as_str());
         if (matched && !score.passed)
             || (matched_page.is_none() && score.passed)
