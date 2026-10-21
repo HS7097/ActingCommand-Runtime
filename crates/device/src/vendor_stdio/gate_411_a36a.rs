@@ -311,9 +311,9 @@ fn a36a_t1_restore_returns_the_original_objects_and_never_writes_a_file_that_too
 }
 
 /// How long the test waits for a caller to arrive at the gate or to come back from it. Each wait
-/// ends as soon as its condition holds.
+/// ends as soon as its condition holds; `GATE_WAIT` only bounds a broken run.
 #[cfg(windows)]
-const OBSERVE: Duration = Duration::from_secs(10);
+const GATE_WAIT: Duration = Duration::from_secs(10);
 
 /// T3's bound.
 #[cfg(windows)]
@@ -362,7 +362,7 @@ fn a36a_t2_two_redirect_callers_are_strictly_serialized_by_the_process_wide_gate
         held
     });
     assert!(
-        stdio_gate().wait_for_waiters(1, OBSERVE),
+        stdio_gate().wait_for_waiters(1, GATE_WAIT),
         "the second caller never waited at the gate"
     );
     assert!(
@@ -371,7 +371,7 @@ fn a36a_t2_two_redirect_callers_are_strictly_serialized_by_the_process_wide_gate
     );
     drop(first);
     installed_rx
-        .recv_timeout(OBSERVE)
+        .recv_timeout(GATE_WAIT)
         .expect("the second caller installs once the first left");
     assert!(
         second.join().expect("second caller"),
@@ -396,7 +396,7 @@ fn a36a_t3_a_redirect_wait_past_its_bound_fails_with_the_registered_code_and_red
         let _ = started_tx.send(started);
     });
     let started = started_rx
-        .recv_timeout(OBSERVE)
+        .recv_timeout(GATE_WAIT)
         .expect("a start waiting at a held gate ends at its bound");
     drop(holder);
     starter.join().expect("starter");
@@ -422,14 +422,14 @@ fn a36a_t3_a_redirect_wait_past_its_bound_fails_with_the_registered_code_and_red
         session.finish().expect("close the session");
     });
     ready_rx
-        .recv_timeout(OBSERVE)
+        .recv_timeout(GATE_WAIT)
         .expect("the session restored after its first call");
     let holder = stdio_gate()
         .enter(VENDOR_STDIO_REDIRECT_WAIT)
         .expect("another caller holds the gate");
     go_tx.send(()).expect("go");
     let (resumed, suspended) = resumed_rx
-        .recv_timeout(OBSERVE)
+        .recv_timeout(GATE_WAIT)
         .expect("a resume waiting at a held gate ends at its bound");
     drop(holder);
     caller.join().expect("caller");

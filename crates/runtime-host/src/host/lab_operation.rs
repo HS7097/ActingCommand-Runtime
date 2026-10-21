@@ -17,7 +17,7 @@ use actingcommand_contract::{
     LabOperationRecord, LabOperationStage, MAX_LAB_ARRIVAL_FRAMES, ONLINE_OBSERVATION_SCHEMA,
     PageObservationStatus,
 };
-use actingcommand_execution_kernel::{ObservationMode, PreparedPageObservation};
+use actingcommand_execution_kernel::{FrameOwner, ObservationMode, PreparedPageObservation};
 
 impl HostShared {
     pub(super) fn run_contained_lab_operation(
@@ -323,11 +323,15 @@ impl HostShared {
                     };
                     for index in 0..captures {
                         stage = LabOperationStage::AfterFrame;
+                        // #411 A18 option ④: the instant this arrival sample starts.
+                        let mut sample_started = None;
                         if let Some(deadline) = deadline {
                             self.validate_lab_arrival_token(request, held, connection_id)?;
-                            if self.monotonic_ms()? >= deadline {
+                            let now = self.monotonic_ms()?;
+                            if now >= deadline {
                                 break;
                             }
+                            sample_started = Some(now);
                         }
                         // Re-fence the original token, including any safe-boundary transfer.
                         // #411 Lab L5: each after observation is one transaction.
@@ -419,10 +423,16 @@ impl HostShared {
                         if now >= deadline || index + 1 == captures {
                             break;
                         }
+                        // #411 A18 option ④: the samples start one interval apart, start to
+                        // start: the wait is what is left of the interval after this sample's
+                        // capture and evaluation (none when they took longer), never past the
+                        // deadline, on the Runtime clock as the transaction's own interval.
+                        let next_start = sample_started
+                            .expect("an arrival sample starts on the clock")
+                            .saturating_add(LAB_ARRIVAL_INTERVAL_MS)
+                            .min(deadline);
                         // No owner/instance lock is held while waiting on the request thread.
-                        thread::sleep(Duration::from_millis(
-                            LAB_ARRIVAL_INTERVAL_MS.min(deadline - now),
-                        ));
+                        self.kernel_pause(Duration::from_millis(next_start.saturating_sub(now)));
                     }
                     stage = LabOperationStage::Arrival;
                     let arrival = record.arrival.as_mut().expect("bounded arrival ended");
@@ -737,11 +747,13 @@ impl HostShared {
             links = run_links.apply(links);
             artifact_links = artifact_links.with_run_id(run_links.run_id);
         }
+        // #411 A49: the operation captures under its lease, as the lease holder.
         let completed = self.capture_observation_with_links(
             request,
             &instance.instance_alias,
             links,
             artifact_links,
+            FrameOwner::Lease,
             &admission,
         )?;
         let fence = self

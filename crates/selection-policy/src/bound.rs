@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use crate::evaluator::{ListIndex, read_lists, transform};
 use crate::facts::{ScalarValue, SelectionFactSnapshot};
 use crate::schema::{
-    FactDeclaration, LookupKey, Predicate, ScoringTerm, SelectionError, SelectionErrorCode,
-    SelectionPolicy, TermUnknownHandling, Transform, ValueRef, ValueType,
+    FactDeclaration, IntegerCompareOp, LookupKey, Predicate, ScoringTerm, SelectionError,
+    SelectionErrorCode, SelectionPolicy, TermUnknownHandling, Transform, ValueRef, ValueType,
 };
 
 /// What one candidate field can hold on a candidate that was not read. The document types a
@@ -260,6 +260,16 @@ impl Hypothesis<'_> {
         }
     }
 
+    /// The integers a reference can read: one exact value, or every value of a range; `None`
+    /// when it is unknown or not an integer.
+    fn integer_range(&self, value: &ValueRef) -> Option<(i64, i64)> {
+        match self.read(value) {
+            Reading::Exact(Some(ScalarValue::Integer(value))) => Some((value, value)),
+            Reading::Range(min, max) => Some((min, max)),
+            Reading::Exact(_) | Reading::AnyBoolean => None,
+        }
+    }
+
     fn possible(&self, predicate: &Predicate) -> Possible {
         match predicate {
             Predicate::IntegerAtLeast { value, threshold } => self.integer_possible(
@@ -299,6 +309,42 @@ impl Hypothesis<'_> {
                 }
                 _ => Possible::UNKNOWN,
             },
+            Predicate::IntegerCompare {
+                left,
+                op,
+                right,
+                mul,
+                add,
+            } => {
+                let (Some((left_min, left_max)), Some((right_min, right_max))) =
+                    (self.integer_range(left), self.integer_range(right))
+                else {
+                    return Possible::UNKNOWN;
+                };
+                // `mul` is at least one, so the right side's range keeps its order.
+                let scale = |value: i64| {
+                    i128::from(value) * i128::from(mul.unwrap_or(1)) + i128::from(add.unwrap_or(0))
+                };
+                let (a, b) = (i128::from(left_min), i128::from(left_max));
+                let (c, d) = (scale(right_min), scale(right_max));
+                // Equality may hold wherever the ranges meet, and fail unless both sides are
+                // one and the same value.
+                let meet = a <= d && c <= b;
+                let single = a == b && c == d && a == c;
+                let (truth, falsity) = match op {
+                    IntegerCompareOp::Eq => (meet, !single),
+                    IntegerCompareOp::Ne => (!single, meet),
+                    IntegerCompareOp::Lt => (a < d, b >= c),
+                    IntegerCompareOp::Le => (a <= d, b > c),
+                    IntegerCompareOp::Gt => (b > c, a <= d),
+                    IntegerCompareOp::Ge => (b >= c, a < d),
+                };
+                Possible {
+                    truth,
+                    falsity,
+                    unknown: false,
+                }
+            }
             Predicate::All { of } => {
                 let members: Vec<Possible> = of.iter().map(|inner| self.possible(inner)).collect();
                 Possible {
