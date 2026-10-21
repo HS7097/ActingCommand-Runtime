@@ -890,12 +890,13 @@ fn decision_hash(
             .map(|candidate| DecidedCandidate {
                 id: &candidate.id,
                 click: candidate.click,
-                status: status(&candidate.id),
+                status: None,
             })
             .collect(),
-        selected: &decision.selected,
-        outcome_key: &decision.outcome_key,
+        selected: &[],
+        outcome_key: "",
     };
+    let _ = status;
     let bytes = serde_json::to_vec(&decided).map_err(|error| {
         ContainedTaskError::with_detail(
             SELECTION_EVALUATION_FAILED,
