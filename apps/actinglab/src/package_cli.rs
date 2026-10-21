@@ -75,6 +75,12 @@ pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
 #[path = "tests/gate_0121_pkgcheck.rs"]
 mod gate_0121_pkgcheck;
 
+// Workflow #411 slice E1 (train 0.12.9), T1 (A39): `package check` and `package preflight` name
+// the rule that refused a package and where.
+#[cfg(test)]
+#[path = "tests/gate_411_e1.rs"]
+mod gate_411_e1;
+
 pub(super) fn is_offline_command(args: &[String]) -> bool {
     matches!(args, [group, command, ..] if group == "package" && matches!(command.as_str(), "dry-run" | "preflight"))
 }

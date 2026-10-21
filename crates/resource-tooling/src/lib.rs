@@ -27,6 +27,10 @@ mod gate_411_a25;
 // check.
 #[cfg(test)]
 mod gate_411_b15b;
+// Workflow #411 slice E1 (train 0.12.9; A40, A41): `package bundle` and `standard-pack check` say
+// why they refuse: a pack table that holds no pack, and the file of a package that does not parse.
+#[cfg(test)]
+mod gate_411_e1;
 // Test plan v2.2 E-1 G10 (exec key 33): package bundle and the business catalog.
 #[cfg(test)]
 mod gate_e1;
