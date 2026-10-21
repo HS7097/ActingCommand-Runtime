@@ -5,6 +5,8 @@ use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_execution_kernel::FrameOwner;
+// #411 A35 (A35-S2): the Runtime's one frame-change measure (#411 B12), through the kernel.
+use actingcommand_execution_kernel::{ColorDigest, Scene, frame_change_digest};
 
 /// Workflow #375 R5c: an observe frame is compared only with the previous observe frame of
 /// its instance and origin, and only when that one was captured less than 50 s earlier, so
@@ -64,6 +66,36 @@ pub(super) struct CompletedReadonlyObservation {
     pub(super) verified: TerminalEvent,
     pub(super) links: EventLinksDraft,
     pub(super) artifact_links: ArtifactLinksDraft,
+    /// #411 A35 (A35-S2): the frame's digest by the Runtime's one frame-change measure (#411
+    /// B12; the whole frame), in memory only: the recovery ladder's settle probe compares
+    /// consecutive frames by it.
+    pub(super) change_digest: ColorDigest,
+}
+
+/// #411 A35 (A35-S2): the frame-change digest of a captured frame (`frame_change_digest` of
+/// #411 B12, the whole frame). A frame that is no image, or that the measure refuses, is not a
+/// usable capture: `capture_frame_invalid`, caused by the measure's refusal when it gave one.
+fn frame_change_digest_of(
+    frame: &actingcommand_device::Frame,
+) -> Result<ColorDigest, RuntimeHostError> {
+    let invalid = || {
+        RuntimeHostError::request(
+            SharedCode::CaptureFrameInvalid,
+            ContractLocation::ObserveReadonly,
+            RuntimeErrorCode::CaptureFailed,
+        )
+    };
+    let scene = match frame.pixel_format {
+        actingcommand_device::PixelFormat::Rgb8 => {
+            Scene::from_rgb8(frame.width, frame.height, &frame.pixels)
+        }
+        actingcommand_device::PixelFormat::Rgba8 => {
+            Scene::from_rgba8(frame.width, frame.height, &frame.pixels)
+        }
+    }
+    .map_err(|_| invalid())?;
+    frame_change_digest(&scene, None)
+        .map_err(|refused| invalid().with_caused_by(Outcome::new(refused.code().code())))
 }
 
 fn runtime_capture_backend(
@@ -269,6 +301,18 @@ impl HostShared {
             RuntimeErrorCode::CaptureFailed,
         )
         .with_native_failure_detail(error.native_detail());
+        self.readonly_frame_invalid(runtime, links)
+    }
+
+    /// A captured frame the observation cannot use (`runtime`, `capture_frame_invalid`): the
+    /// capture's failure, its required failure record and the recognition's failure, then the
+    /// request's failure with the last as its terminal. #411 A35 (A35-S2): also a frame without
+    /// a frame-change digest.
+    fn readonly_frame_invalid(
+        &self,
+        runtime: RuntimeHostError,
+        links: EventLinksDraft,
+    ) -> RequestFailure {
         let recorded = (|| {
             let failed = self.append_event_raw(
                 EventSeverity::Error,
@@ -450,6 +494,12 @@ impl HostShared {
                 ));
             }
         };
+        // #411 A35 (A35-S2): the frame-change digest, taken before the frame moves into the
+        // pipeline and kept in memory with the observation.
+        let change_digest = match frame_change_digest_of(&frame) {
+            Ok(digest) => digest,
+            Err(invalid) => return Err(self.readonly_frame_invalid(invalid, links)),
+        };
         let write_context = ArtifactWriteContext::new(
             artifact_links.clone(),
             links.clone(),
@@ -608,6 +658,7 @@ impl HostShared {
             verified,
             links,
             artifact_links,
+            change_digest,
         })
     }
 

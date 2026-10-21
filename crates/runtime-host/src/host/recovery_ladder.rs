@@ -75,6 +75,7 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::error::spelled;
 use crate::failure_identity::identifier_text;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, CodeStr, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, ContainedTaskRecoveryBinding,
@@ -85,6 +86,8 @@ use actingcommand_contract::{
     RecoveryTriggerMatch, RecoveryTriggerStage, RecoveryTriggerStart, SchedulingResumeSelfCheck,
 };
 use actingcommand_device::DeviceResourceQuiescence;
+// #411 A35 (A35-S2): the Runtime's one frame-change measure (#411 B12), through the kernel.
+use actingcommand_execution_kernel::{ColorDigest, frame_change_milli};
 use actingcommand_runtime_config::{
     AlreadyRunning, ConfigCode, CooldownOpensOn, DeviceBounds, DirectRuns, EntryUnavailable,
     LadderConfig, LadderProfile, LadderRules, MatchedBy, OnExhausted, PreparationSuperseded,
@@ -517,6 +520,48 @@ enum BusyStep {
     /// The climb ended (stopped at the limit, or interrupted during the hold), its records
     /// written.
     Ended,
+}
+
+/// #411 A35 (A35-S2, design §4.3): one climb's screen hold.
+struct ScreenHold {
+    /// When the climb's first "changing" verdict came, on the Runtime clock (monotonic
+    /// milliseconds).
+    since_ms: Option<u64>,
+}
+
+/// #411 A35 (A35-S2): what the climb does after a return-home failure, by the settle gate.
+enum ScreenStep {
+    /// The gate does not apply, or its first probe found the screen settled or could not be
+    /// made: the failure is recorded and the climb goes on, as before the gate. `interruption`
+    /// is a holding interruption (or a refused renewal) met before the probe, which ends the
+    /// climb at its next holding check.
+    AsToday { interruption: Option<&'static str> },
+    /// The screen settled after a hold and the return-home rung ran again, with this attempt;
+    /// `failure` is the last recorded `recovery_rung_screen_changing`.
+    Rerun {
+        failure: Outcome,
+        attempt: RungAttempt,
+    },
+    /// The climb goes on to its next rung after a hold: its limit under `on_exhausted =
+    /// escalate`, or a later probe that could not be made.
+    Escalate { failure: Outcome },
+    /// The climb ended (stopped at the limit, or interrupted), its records written.
+    Ended,
+}
+
+/// #411 A35 (A35-S2, design §4.3 "the probe"): what one probe of the screen found.
+enum ScreenProbe {
+    /// Every two consecutive frames changed by at most `busy.screen.change_max_milli`.
+    Settled,
+    /// Two consecutive frames changed by more: `count` frames probed, `score_milli` the largest
+    /// change between two consecutive ones.
+    Changing { count: usize, score_milli: u32 },
+    /// The probe's capture failed or was refused (the capture path recorded why), or its frames
+    /// could not be compared (recorded by the probe).
+    Unavailable,
+    /// The key's renewal before the probe was refused (`lease_expired`, `lease_missing`): no
+    /// probe was made, and the refusal ends the climb.
+    Refused { interruption: &'static str },
 }
 
 /// Rung 3's bounds from the ladder's configuration (§4.2).
@@ -2129,6 +2174,9 @@ impl HostShared {
                 }),
             since_ms: None,
         };
+        // #411 A35 (A35-S2, design §4.3): the climb's screen hold, its budget counted from the
+        // first "changing" verdict.
+        let mut screen_hold = ScreenHold { since_ms: None };
         for (rung_config, skipped) in plan {
             let mut rung = rung_config.action();
             // Workflow #369 H-3: the holding check before every rung (so after every rung run
@@ -2265,16 +2313,54 @@ impl HostShared {
                     RungAttempt::Failed { run_id, reason } => {
                         last_interruption = is_hold_interruption(reason).then_some(reason);
                         let failure = rung_failure_outcome(pending, key, reason);
-                        last_failure = Some(failure.clone());
-                        self.append_recovery_rung_finished(
-                            pending,
-                            rung,
-                            RecoveryRungOutcome::Failed,
-                            run_id,
-                            Some(failure),
-                            None,
-                        )?;
-                        break;
+                        // #411 A35 (A35-S2, design §2.1, §4.3): a return-home failure of a
+                        // listed class is probed before the climb goes on; while the screen
+                        // still changes, the ladder holds instead of climbing.
+                        let gate = match busy_hold.return_home_deadline_ms {
+                            Some(deadline_ms)
+                                if rung == RecoveryRung::ReturnHome
+                                    && last_interruption.is_none() =>
+                            {
+                                self.climb_screen_gate(
+                                    pending,
+                                    key,
+                                    &resolved,
+                                    (run_id, &failure, deadline_ms),
+                                    &mut screen_hold,
+                                    tried.count(),
+                                )?
+                            }
+                            _ => ScreenStep::AsToday { interruption: None },
+                        };
+                        match gate {
+                            ScreenStep::AsToday { interruption } => {
+                                if interruption.is_some() {
+                                    last_interruption = interruption;
+                                }
+                                last_failure = Some(failure.clone());
+                                self.append_recovery_rung_finished(
+                                    pending,
+                                    rung,
+                                    RecoveryRungOutcome::Failed,
+                                    run_id,
+                                    Some(failure),
+                                    None,
+                                )?;
+                                break;
+                            }
+                            ScreenStep::Rerun {
+                                failure,
+                                attempt: rerun,
+                            } => {
+                                last_failure = Some(failure);
+                                attempt = rerun;
+                            }
+                            ScreenStep::Escalate { failure } => {
+                                last_failure = Some(failure);
+                                break;
+                            }
+                            ScreenStep::Ended => return Ok(()),
+                        }
                     }
                     // #411 B37 (A35-S1, design §4.3): a busy end is no recovery: the ladder
                     // holds and runs the return-home rung again, or `on_exhausted` decides.
@@ -2538,6 +2624,250 @@ impl HostShared {
             }
             thread::sleep(poll.min(Duration::from_millis(until_ms - now_ms)));
         }
+    }
+
+    /// #411 A35 (A35-S2, design §2.1, §4.3; decision Q8 of 2026-10-21: the colour-digest
+    /// distance): the settle gate after a return-home failure (`run_id`, and `failure`, the
+    /// outcome of its code). A failure whose ladder class `busy.screen.classes` does not list
+    /// goes on as before (`AsToday`); so does one whose first probe finds the screen settled or
+    /// cannot be made (a refused capture is recorded by the capture path), and one that meets a
+    /// holding interruption or a refused renewal before its probe, which then ends the climb at
+    /// its next holding check. On a changing screen the rung is recorded `failed` with
+    /// `recovery_rung_screen_changing`, caused by `failure`. While the climb has held less than
+    /// `busy.screen.max_wait_ms` since its first "changing" verdict, the ladder holds
+    /// `busy.screen.recheck_ms`, no longer than what is left (S1's hold,
+    /// `ladder_hold_until`), and probes again: settled, it runs the return-home rung again with
+    /// `deadline_ms` (`Rerun`); changing, it holds again; a probe that cannot be made goes on to
+    /// the next rung (`Escalate`). At the limit `busy.screen.on_exhausted` decides: `stop` ends
+    /// the ladder `exhausted` with `recovery_ladder_hold_exhausted` and no restart (`Ended`),
+    /// `escalate` goes on to the next rung (`Escalate`). A holding interruption during a hold,
+    /// or a renewal refused before a later probe, ends the climb as at every rung boundary, the
+    /// return-home rung recorded failed with it (`Ended`).
+    fn climb_screen_gate(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &mut HostKey,
+        resolved: &RegisteredInstance,
+        (run_id, failure, deadline_ms): (Option<RunId>, &Outcome, u64),
+        hold: &mut ScreenHold,
+        rungs_tried: u8,
+    ) -> RuntimeHostResult<ScreenStep> {
+        let config = &pending.config.busy_screen;
+        if !ladder_class_of(failure.code().as_str())
+            .is_some_and(|class| config.classes.contains(&class))
+        {
+            return Ok(ScreenStep::AsToday { interruption: None });
+        }
+        // The probe runs between rung runs, on the ladder's key: the holding check first.
+        if let Some(interruption) = self.ladder_hold_interrupted(pending, key)? {
+            return Ok(ScreenStep::AsToday {
+                interruption: Some(interruption),
+            });
+        }
+        // The last `recovery_rung_screen_changing` recorded, once the ladder has held.
+        let mut held: Option<Outcome> = None;
+        loop {
+            let probe = self.probe_screen(pending, resolved, key)?;
+            let (count, score_milli) = match (probe, held.take()) {
+                (ScreenProbe::Changing { count, score_milli }, _) => (count, score_milli),
+                (ScreenProbe::Refused { interruption }, None) => {
+                    return Ok(ScreenStep::AsToday {
+                        interruption: Some(interruption),
+                    });
+                }
+                (ScreenProbe::Refused { interruption }, Some(_)) => {
+                    self.finish_interrupted_ladder(
+                        pending,
+                        key,
+                        Some(RecoveryRung::ReturnHome),
+                        interruption,
+                        rungs_tried,
+                    )?;
+                    return Ok(ScreenStep::Ended);
+                }
+                (ScreenProbe::Settled | ScreenProbe::Unavailable, None) => {
+                    return Ok(ScreenStep::AsToday { interruption: None });
+                }
+                (ScreenProbe::Settled, Some(failure)) => {
+                    let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
+                    return Ok(ScreenStep::Rerun { failure, attempt });
+                }
+                (ScreenProbe::Unavailable, Some(failure)) => {
+                    return Ok(ScreenStep::Escalate { failure });
+                }
+            };
+            // Read before the record is written, so a hold's end counts from before it.
+            let now_ms = self.monotonic_ms()?;
+            let held_ms = now_ms.saturating_sub(*hold.since_ms.get_or_insert(now_ms));
+            let wait_ms = (held_ms < config.max_wait_ms)
+                .then(|| config.recheck_ms.min(config.max_wait_ms - held_ms));
+            let changing =
+                screen_changing_outcome((count, score_milli), held_ms, config.max_wait_ms, wait_ms)
+                    .caused_by(failure.clone());
+            self.append_recovery_rung_finished(
+                pending,
+                RecoveryRung::ReturnHome,
+                RecoveryRungOutcome::Failed,
+                run_id,
+                Some(changing.clone()),
+                None,
+            )?;
+            let Some(wait_ms) = wait_ms else {
+                if config.on_exhausted == OnExhausted::Stop {
+                    self.append_recovery_ladder_fact(
+                        pending,
+                        EventSeverity::Warning,
+                        RuntimeLifecyclePhase::RecoveryLadderFinished {
+                            ladder_result: RecoveryLadderOutcome::Exhausted,
+                            rungs_tried,
+                            outcome: Some(
+                                Outcome::new(HostCode::RecoveryLadderHoldExhausted)
+                                    .held_ms(held_ms)
+                                    .limit_ms(config.max_wait_ms)
+                                    .caused_by(changing),
+                            ),
+                        },
+                    )?;
+                    return Ok(ScreenStep::Ended);
+                }
+                return Ok(ScreenStep::Escalate { failure: changing });
+            };
+            if let Some(interruption) =
+                self.ladder_hold_until(pending, key, now_ms.saturating_add(wait_ms))?
+            {
+                self.finish_interrupted_ladder(
+                    pending,
+                    key,
+                    Some(RecoveryRung::ReturnHome),
+                    interruption,
+                    rungs_tried,
+                )?;
+                return Ok(ScreenStep::Ended);
+            }
+            held = Some(changing);
+        }
+    }
+
+    /// #411 A35 (A35-S2, design §4.3 "the probe"; decision Q8): `busy.screen.probe_frames`
+    /// read-only frames of the ladder's instance, `probe_interval_ms` apart, as one keyless
+    /// observation transaction (`capture_readonly_transaction`: an observer's frames, #411 A49,
+    /// the admission lock taken per frame), under one host-minted `ObserveReadonly` request with
+    /// the ladder's causation id (`command.received` / `command.validated`, the pattern of
+    /// `stop_assigned_application`). Each frame is an ordinary read-only capture with its own
+    /// records, and carries its frame-change digest in memory. The key is renewed first to the
+    /// probe's span plus `hold.margin_ms`; a refused renewal is `Refused`, the probe not made. Two
+    /// consecutive frames are unchanged when the Runtime's one frame-change measure between them
+    /// (`frame_change_milli`, #411 B12) is at most `busy.screen.change_max_milli`, B12's own
+    /// comparison. A capture that fails or is refused makes the probe `Unavailable` (the capture
+    /// path recorded why); so does a pair of frames the measure cannot compare, recorded here as
+    /// `capture_frame_invalid` caused by the measure's refusal.
+    fn probe_screen(
+        &self,
+        pending: &PendingRecoveryLadder,
+        resolved: &RegisteredInstance,
+        key: &mut HostKey,
+    ) -> RuntimeHostResult<ScreenProbe> {
+        let config = &pending.config.busy_screen;
+        let earlier = u64::try_from(config.probe.frames().saturating_sub(1)).unwrap_or(u64::MAX);
+        let span_ms = config.probe.interval_ms().saturating_mul(earlier);
+        if let Some(RungAttempt::Failed { reason, .. }) =
+            self.ladder_step_renewal(key, span_ms.saturating_add(pending.config.hold.margin_ms))?
+        {
+            return Ok(ScreenProbe::Refused {
+                interruption: reason,
+            });
+        }
+        let instance_alias = resolved.instance_alias.as_str();
+        let issuer = self.events.issuer();
+        let request_id = issuer
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let correlation_id = issuer
+            .mint_correlation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let (actor, source) = scheduled_request_transport_origin(resolved.provenance());
+        let message = RuntimeRequest::new(
+            request_id,
+            correlation_id,
+            Some(pending.causation_id),
+            actor,
+            source,
+            unix_ms_now()?,
+            RuntimeOperation::ObserveReadonly {
+                instance_alias: instance_alias.to_owned(),
+            },
+        )
+        .map_err(|_| ladder_invariant(HostCode::SyntheticRequestInvalid))?;
+        let validated = message
+            .validate()
+            .map_err(|_| ladder_invariant(HostCode::SyntheticRequestInvalid))?;
+        let links = self
+            .events
+            .request_links(&validated, Some(pending.instance_id), None, None);
+        let action = EventAction::RuntimeReadonlyObserve;
+        for payload in [
+            CommandPayloadDraft::received(action, AuditInput::new()),
+            CommandPayloadDraft::validated(
+                action,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        ] {
+            self.append_event_raw(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links.clone(),
+                payload,
+            )?;
+        }
+        let digests = match self.capture_readonly_transaction(
+            &validated,
+            instance_alias,
+            pending.instance_id,
+            config.probe,
+        ) {
+            Ok((samples, current)) => samples
+                .into_iter()
+                .chain(std::iter::once(current))
+                .map(|frame| frame.change_digest)
+                .collect::<Vec<ColorDigest>>(),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                return Err(*failure.error);
+            }
+            // The capture path recorded why.
+            Err(_) => return Ok(ScreenProbe::Unavailable),
+        };
+        let mut score_milli = 0;
+        for (previous, current) in digests.iter().zip(digests.iter().skip(1)) {
+            match frame_change_milli(previous, current) {
+                Ok(milli) => score_milli = score_milli.max(milli),
+                Err(refused) => {
+                    let invalid = RuntimeHostError::request(
+                        SharedCode::CaptureFrameInvalid,
+                        LADDER_OPERATION,
+                        RuntimeErrorCode::CaptureFailed,
+                    )
+                    .with_caused_by(Outcome::new(refused.code().code()));
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::OperationCleanup,
+                        RuntimeLifecycleFailure::Host(&invalid),
+                        links,
+                        None,
+                    )?;
+                    return Ok(ScreenProbe::Unavailable);
+                }
+            }
+        }
+        Ok(if score_milli <= config.change_max_milli {
+            ScreenProbe::Settled
+        } else {
+            ScreenProbe::Changing {
+                count: digests.len(),
+                score_milli,
+            }
+        })
     }
 
     /// R1: the failed run's bound recovery package (or the configured return-home package,
@@ -3437,6 +3767,28 @@ fn busy_rung_outcome(
         outcome = outcome.retry_after_ms(retry_after_ms);
     }
     outcome
+}
+
+/// #411 A35 (A35-S2, design §5.3): the outcome of a return-home rung whose failure the settle
+/// gate met on a changing screen: the frames probed (`count`) and the largest frame change
+/// between two consecutive ones (`score_milli`), the time held since the climb's first
+/// "changing" verdict and the configured limit, and the wait before the next probe (absent when
+/// the hold ends).
+fn screen_changing_outcome(
+    (count, score_milli): (usize, u32),
+    held_ms: u64,
+    limit_ms: u64,
+    retry_after_ms: Option<u64>,
+) -> Outcome {
+    let outcome = Outcome::new(HostCode::RecoveryRungScreenChanging)
+        .count(count)
+        .score_milli(score_milli)
+        .held_ms(held_ms)
+        .limit_ms(limit_ms);
+    match retry_after_ms {
+        Some(retry_after_ms) => outcome.retry_after_ms(retry_after_ms),
+        None => outcome,
+    }
 }
 
 /// `recovery_ladder_interrupted` caused by the holding interruption `cause`.

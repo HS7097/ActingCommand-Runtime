@@ -278,9 +278,21 @@ actingcommand_contract::outcome_codes! {
         /// Warning (#411 B37). A climb's busy hold reached `recovery_ladder.busy.outcome.max_wait_ms`
         /// under `on_exhausted = stop`: the ladder ended without a restart (the
         /// `recovery_ladder_finished` outcome, `exhausted`; keys `held_ms`, `limit_ms`; caused by
-        /// the last busy rung's outcome).
+        /// the last busy rung's outcome). #411 A35 (A35-S2): the screen hold's limit,
+        /// `busy.screen.max_wait_ms` under `busy.screen.on_exhausted = stop`, ends the same way,
+        /// caused by the last `recovery_rung_screen_changing`.
         RecoveryLadderHoldExhausted => "recovery_ladder_hold_exhausted": warning / planned_stop,
         // #411 B37 (A35-S1) end
+        // #411 A35 (A35-S2) begin: the settle gate after a return-home failure.
+        /// Info (#411 A35). A return-home rung failed with a code whose ladder class
+        /// `recovery_ladder.busy.screen.classes` lists, and the ladder's read-only probe found the
+        /// screen still changing, so the ladder holds instead of climbing on (the rung's
+        /// `recovery_rung_finished` outcome, `failed`; keys `count` the frames probed,
+        /// `score_milli` the largest frame change between two consecutive ones, `held_ms` since
+        /// the climb's first "changing" verdict, `limit_ms` the configured hold, `retry_after_ms`
+        /// the wait before the next probe, absent when the hold ends; caused by the run's code).
+        RecoveryRungScreenChanging => "recovery_rung_screen_changing": info / planned_stop,
+        // #411 A35 (A35-S2) end
         // Workflow #390 DRILL-1 begin: a person's drill of an instance's ladder.
         /// Info. The trigger of a drill's ladder: a person asked for it (`DrillRecoveryLadder`);
         /// its `recovery_ladder_started` names it as the trigger's `failure_code`, stage `drill`.
