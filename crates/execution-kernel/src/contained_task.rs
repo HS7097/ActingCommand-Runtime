@@ -122,6 +122,10 @@ mod gate_390_exec1;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;
+// Workflow #411 B12 (exec key 126): the input recheck `still_frames` and input rechecks under
+// `linear_steps`.
+#[cfg(test)]
+mod gate_411_b12;
 // Workflow #390 EXEC-3.
 #[cfg(test)]
 mod gate_390_exec3;

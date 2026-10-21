@@ -726,13 +726,13 @@ tests = [
 ]
 incident = ["#384"]
 
-# Workflow #390 EXEC-2 (FCM E-05, E-06): a page-graph operation's observation window (at most 60 s; the post-input delay keeps its bound) ends on a late popup that is a destination, watches to its end otherwise, offers a frame without a destination to the shared interrupt pages, and in stable mode ends once one destination held or fails with contained_task_observation_stability_unconfirmed; a click's recheck guards one fresh frame before the effect intent, or waits until the guard held on consecutive frames and otherwise refuses with contained_task_input_stability_unconfirmed, a recheck frame taking SR-1's observe-only retries; both are task schema 0.9 page-graph declarations
+# Workflow #390 EXEC-2 (FCM E-05, E-06): a page-graph operation's observation window (at most 60 s; the post-input delay keeps its bound) ends on a late popup that is a destination, watches to its end otherwise, offers a frame without a destination to the shared interrupt pages, and in stable mode ends once one destination held or fails with contained_task_observation_stability_unconfirmed; a click's recheck guards one fresh frame before the effect intent, or waits until the guard held on consecutive frames and otherwise refuses with contained_task_input_stability_unconfirmed, a recheck frame taking SR-1's observe-only retries; both are task schema 0.9 declarations, and a linear task refuses the window (it admits the recheck from #411 B12, key 126)
 [[gate]]
 key = "54"
 coverage = "Y"
 tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_admission_bounds_the_window_at_60_s_and_keeps_the_post_delay_bound",
-    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_linear_task_refuses_the_window_and_the_recheck",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_linear_task_refuses_the_window",
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_late_popup_inside_the_window_is_where_the_step_arrives",
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_the_window_watches_to_its_end_and_hands_a_frame_without_a_page_to_the_interrupts",
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_stable_window_ends_once_one_destination_held_and_fails_when_it_never_does",
@@ -1774,3 +1774,14 @@ tests = [
     "actingcommand-pack-containment::lib::source::gate_411_b3::b3_t4_eight_repeated_or_out_of_range_alternatives_are_refused_at_the_member",
 ]
 incident = ["#411 B3"]
+
+# Workflow #411 B12 (0.12.x; register §1.155; no persisted ledger shape; B-train plan §2.9 with D8 and Q7, Q9, test rows BT-B12 T1 to T3; package revision 6, declared by BT-PK6): a click's input_recheck still_frames waits until the guard passed on that many consecutive frames each changed by at most the threshold from the frame before it, by the one frame-change measure of contracts/color-digest.md (the region, else the whole frame on a 16x9 grid; max_distance_milli, else 1500); a frame that moved restarts the count and the input binds to the last frame; a screen that never stills within the step timeout refuses the input with contained_task_input_still_unconfirmed; a linear_steps package admits and runs an input recheck of every kind
+[[gate]]
+key = "126"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b12::b12_t1_a_frame_that_moved_restarts_the_count_and_the_input_binds_the_last_still_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b12::b12_t2_a_screen_that_never_stills_refuses_the_input_with_the_still_code",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b12::b12_t3_a_linear_package_admits_and_runs_every_input_recheck",
+]
+incident = ["#411 B12"]
