@@ -960,7 +960,8 @@ impl HostShared {
                 token: &key.token,
                 connection_id: key.connection_id,
             },
-            EmulatorStatusRead::First,
+            // A50 red proof 7: no status read first (before A50).
+            EmulatorStatusRead::Skip,
         )
         .map(|prepared| (prepared.selfcheck, prepared.event, prepared.recoverable))
     }
