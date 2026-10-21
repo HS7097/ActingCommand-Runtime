@@ -128,6 +128,9 @@ mod gate_411_a22;
 // #411 A36b (0.12.x): a run whose diagnostic stream's seal finds its staged bytes changed fails
 // only itself; the host keeps serving.
 mod gate_411_a36b;
+// #411 A36c (0.12.9): a PP-OCR diagnostic archive whose seal finds its staged report changed
+// fails only the work that owns it, which records its terminal; the host keeps serving.
+mod gate_411_a36c;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.
@@ -275,6 +278,9 @@ mod gate_411_a47;
 // stopped is recognized again, a stopped one is `instance_not_running`, an unrecognized device
 // says why.
 mod gate_411_a48;
+// #411 A49: a read-only observe between a run's recognition and its input does not displace the
+// run's frame; the observe still captures a frame of its own.
+mod gate_411_a49;
 // Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
 // journal, plan, admission check, stop, lift and expiry signals).
 mod gate_411_b15h;
@@ -296,6 +302,9 @@ mod gate_411_lab_l5;
 // #411 Lab L5b (host key 121), register §1.130: `observe --capture` projects a multi-frame
 // candidate layout over its own series.
 mod gate_411_lab_l5b;
+// #411 A18 option ④ (host key 128), register §1.147: online `do`'s arrival samples start every
+// 500 ms, start to start.
+mod gate_411_bt_l18;
 // Workflow #406 T12 (host key 123), register §1.136: the touch keys in effect and the landing
 // history of single-region presses.
 mod gate_406_t12;
