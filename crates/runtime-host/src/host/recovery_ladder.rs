@@ -2492,9 +2492,15 @@ impl HostShared {
             }
             return Ok(BusyStep::Escalate { failure });
         };
-        if let Some(reason) =
-            self.ladder_hold_until(pending, key, now_ms.saturating_add(wait_ms))?
-        {
+        // #411 A35-S5: the status shows the hold while it waits (kind, time held, limit).
+        let shown = super::ladder_busy_hold::LadderBusyHoldState::new(
+            actingcommand_contract::LadderBusyHoldKind::BusyOutcome,
+            now_ms.saturating_sub(held_ms),
+            config.max_wait_ms,
+        );
+        if let Some(reason) = self.show_ladder_busy_hold(pending.instance_id, shown, || {
+            self.ladder_hold_until(pending, key, now_ms.saturating_add(wait_ms))
+        })? {
             self.finish_interrupted_ladder(
                 pending,
                 key,
