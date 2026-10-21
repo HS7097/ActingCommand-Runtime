@@ -992,7 +992,8 @@ impl VocabularyToken for CaptureOpenCauseToken {
     fn token(self) -> &'static str {
         match self.0 {
             Some(actingcommand_device::CaptureOpenCause::DisplayMissing) => "display_missing",
-            Some(actingcommand_device::CaptureOpenCause::ConnectionFailed) => "connection_failed",
+            // A50 red proof 2: one cause for both.
+            Some(actingcommand_device::CaptureOpenCause::ConnectionFailed) => "display_missing",
             None => "other",
         }
     }
