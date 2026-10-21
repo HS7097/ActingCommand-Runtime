@@ -19,7 +19,7 @@
 //! (a restored pause included), the claim waits queued as a gated routine entry, the key is
 //! released, and the resume's reconnect runs before the startup run (M-3). A new startup claim
 //! cancels one still queued for the same instance, and so does an emulator control whose hold
-//! hands no startup claim over (a stop, a failed preparation). Once granted, the package runs
+//! hands no startup claim over (a stop, a paused instance's start). Once granted, the package runs
 //! on the instance's worker (`host_claims`) under the claim's key, as an ordinary contained
 //! task with a self-minted request and correlation id, the claim's holder and synthesized
 //! connection, the same causation id, structural admission and the complete `task.*` event chain
@@ -29,13 +29,15 @@
 //! attached as related failure). Failures are recorded as `runtime.failed` under the instance
 //! and the causation id; a fatal one poisons the host like any other.
 //!
-//! A configured package is scheduled after `start` / `restart` when connection preparation
-//! succeeds; an instance without one has no package scheduled. A daemon already running at
-//! startup schedules nothing: only the two control actions do.
+//! A configured package is scheduled after `start` / `restart` (#411 A50: whether or not the
+//! connection preparation passed, unless a scheduling pause holds the instance;
+//! `emulator_instance`); an instance without one has no package scheduled. A daemon already
+//! running at startup schedules nothing: only the two control actions do.
 //!
 //! The stuck-recovery ladder (`recovery_ladder`) runs its rung packages through the same
 //! runner on its own key.
 
+use super::contained_task::BusyEnd;
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
 use super::recovery_ladder::PendingRecoveryLadder;
@@ -239,7 +241,7 @@ impl HostShared {
 
     /// H-6: one startup claim per instance: a still-queued one is cancelled
     /// (`scheduler.denied lease.queue_cancelled`, its request links only, Warning). An emulator
-    /// control whose hold hands no startup claim over (a stop, a failed preparation) cancels it
+    /// control whose hold hands no startup claim over (a stop, a paused instance's start) cancels it
     /// too (coordinator ruling on review #716), and so does a resume's reconnect or a self-check
     /// whose preparation failed and admitted no ladder (Workflow #369 S6c review low (b)).
     pub(super) fn cancel_queued_startup_claims(
@@ -317,12 +319,14 @@ impl HostShared {
     /// ladder's rung (`ladder`) the ladder's continuation is queued just before the run, so the
     /// run's release hands the key back; `key` then holds the continuation's token. A
     /// non-fatal failure is recorded here and returned as its code; a fatal one is the error.
+    /// #411 B37 (A35-S1): a completed run comes with its busy end, when its terminal selected a
+    /// mapping its package marks `busy` (read from the run's control after the run).
     pub(super) fn run_package_on_key(
         &self,
         pending: &PendingStartupPackage,
         key: &mut HostKey,
         ladder: Option<&PendingRecoveryLadder>,
-    ) -> RuntimeHostResult<Result<OperationSuccess, &'static str>> {
+    ) -> RuntimeHostResult<Result<(OperationSuccess, Option<BusyEnd>), &'static str>> {
         let run = match self.prepare_package_run(pending, key.token.holder_id()) {
             Ok(run) => run,
             Err(failure) => return self.host_package_failure(pending, failure).map(Err),
@@ -344,6 +348,7 @@ impl HostShared {
             },
             None => None,
         };
+        let control = run.control();
         let executed = self.run_prepared_package(
             run,
             super::contained_task::HeldPackageLease {
@@ -355,7 +360,7 @@ impl HostShared {
             self.take_ladder_continuation(key, continuation)?;
         }
         match executed {
-            Ok(success) => Ok(Ok(success)),
+            Ok(success) => Ok(Ok((success, control.busy_end()))),
             Err(failure) => self.host_package_failure(pending, failure).map(Err),
         }
     }

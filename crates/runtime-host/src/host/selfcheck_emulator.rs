@@ -8,10 +8,11 @@
 //! `input_backend_open_failed` with an unobserved provider and no attempt, as if adb were broken.
 //!
 //! Now a self-check of a discovery-bound instance (`SelfCheckInstance` and an instance resume's
-//! reconnect: the preparation on an operator claim, `prepare_on_operator_claim`) reads the
-//! emulator's status once (`MuMuManager info`, bounded; a status read that never starts
-//! anything) under the instance's admission guard, after the preparation closed any retained
-//! session and before its opens:
+//! reconnect: the preparation on an operator claim, `prepare_on_operator_claim`; #411 A50: and
+//! the Runtime's own recovery preparation, `prepare_recovery_connection`, which a ladder's
+//! readiness wait and a fence's recheck run) reads the emulator's status once (`MuMuManager
+//! info`, bounded; a status read that never starts anything) under the instance's admission
+//! guard, after the preparation closed any retained session and before its opens:
 //!
 //! - **Stopped** (no emulator process): `instance_not_running` at stage `read_instance_state`;
 //!   nothing opens and nothing is started.
@@ -39,9 +40,9 @@
 //! preparation's own `instance_preparation_finished`, and the self-check reports the code as its
 //! `failure_code`. An instance without a discovery binding (an explicit HOST:PORT
 //! instance, a handset, a fixture) has no emulator status to read and is checked as before;
-//! every other preparation (the daemon start's, an emulator control's, a ladder's, a handset's
-//! restore) reads none either. No emulator is started or stopped, and the ladder and its
-//! configuration are unchanged.
+//! every other preparation (the daemon start's, an emulator control's, a handset's restore)
+//! reads none either. No emulator is started or stopped, and the ladder and its configuration
+//! are unchanged.
 
 use super::emulator_instance::{
     ADB_BASELINE_POLL_INTERVAL, ADB_BASELINE_WAIT, DEVICE_CONNECTED_FACT_KEY,
@@ -59,10 +60,11 @@ const OPERATION: HostLocation = HostLocation::PrepareInstanceConnection;
 /// #411 A48: whether a preparation first reads the emulator status.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum EmulatorStatusRead {
-    /// A self-check: `SelfCheckInstance` and an instance resume's reconnect.
+    /// A self-check: `SelfCheckInstance` and an instance resume's reconnect; #411 A50: and the
+    /// Runtime's own recovery preparation (a ladder's, a fence's recheck).
     First,
     /// Every other preparation: the daemon start's (its discovery has just read the emulators),
-    /// an emulator control's and a ladder's (each follows its own start), a handset's restore.
+    /// an emulator control's (it follows its own start), a handset's restore.
     Skip,
 }
 

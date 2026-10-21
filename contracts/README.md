@@ -250,6 +250,27 @@ declarations must match exactly. A mapping may also declare a `remedy` and a pac
 the capabilities it `provides` (Workflow #411 B15, [remedies.md](remedies.md)); the
 static walk is unchanged by either.
 
+Stage end pages and entry pages (Workflow #411 B5, B14, B20, B24). A stage may list
+`end_pages`, 1–16 pages of the package, none of them a target page of the stage, `any`
+or an error page (`task_phases_invalid` at the end page). A page an operation of the
+stage confirms that is one of them ends the run Completed on that page: no further
+operation runs, the stage does not complete, and the run's scheduling outcome is the
+one mapping of that page under the run's effect condition. The static walk treats such
+a state as a terminal that needs exactly one mapping for its effect condition and page
+(`task_phases_outcome_incomplete` otherwise), and the path ends there. A stage entered
+by advancing does not test its own end pages on the frame it advanced on, and no page
+ends a run only because it is mapped: only a listed end page does. A stage may also
+list `entry_pages`, 1–16 pages of the task's entry page set that start it where no
+operation's `from` infers the stage; each must be a page of the task's entry that
+starts that stage (`task_phases_invalid` otherwise; a single entry page starts the
+first stage). A page of the entry page set that a stage lists in its `end_pages`
+starts that stage and ends the run before any step: Completed on that page with 0
+steps and no designated effect, which the host judges on the run's last recognition
+(#411 A23); the walk checks its one mapping under `no_designated_effect`. A package
+with end pages is no prerequisite or return-home layer
+(`contained_task_prerequisite_incompatible`, `reason=phase_end_pages`). Both members
+join `package` revision 6, which the B train's closing slice declares.
+
 Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed
 standard package may name shared interrupt pages (`interrupts.json`, see
 [package-reference.md](package-reference.md), "Standard package root"). A run looks
@@ -292,7 +313,9 @@ before it runs, with no input and no `EntryRecoveryPackageAdmitted`, as
 its declared final page when it declares one; Workflow #411 A16); the registry's
 `linear_steps` return-home package is not compared.
 The recheck accepts any page of the set. In a phased task each page of the set
-starts the one stage that lists an operation whose `from` is that page, and the run
+starts the one stage that lists an operation whose `from` is that page or (Workflow
+#411 B14) lists the page in its `entry_pages`; a stage that lists the page in its
+`end_pages` (B20) is a start of its own, on which the run ends at once. The run
 enters at the stage of the page it
 matched; static reachability is checked from every such start. A single entry page
 still starts the first stage. Admission refuses a set with

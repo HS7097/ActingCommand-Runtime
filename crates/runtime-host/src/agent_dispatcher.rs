@@ -473,7 +473,11 @@ impl AgentDispatcherState {
                     },
                     ProjectionProfile::Normal,
                 )
-                .map_err(|_| ledger_error(HostLocation::ProjectAgentContext))?;
+                // #411 A51 (R3): a read the writer did not answer in time fails only the
+                // request.
+                .map_err(|error| {
+                    crate::host::ledger_read_error(&error, HostLocation::ProjectAgentContext)
+                })?;
             projection.append(&mut events);
         }
         projection.sort_by_key(|event| event.sequence);

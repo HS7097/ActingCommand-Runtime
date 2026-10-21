@@ -676,6 +676,8 @@ fn exec1_admission_follows_every_candidate_that_may_run() {
         id: "stage".to_owned(),
         operations: vec!["claim".to_owned(), "skip".to_owned()],
         target_pages: vec!["terminal".to_owned(), "other".to_owned()],
+        end_pages: None,
+        entry_pages: None,
     }];
     let phased = |claim_conditional: bool, skip_conditional: bool, outcome: &Value| {
         let operation = |id, to: &str, may_be_passed_over| TaskPhaseOperation {

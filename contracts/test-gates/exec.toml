@@ -726,13 +726,13 @@ tests = [
 ]
 incident = ["#384"]
 
-# Workflow #390 EXEC-2 (FCM E-05, E-06): a page-graph operation's observation window (at most 60 s; the post-input delay keeps its bound) ends on a late popup that is a destination, watches to its end otherwise, offers a frame without a destination to the shared interrupt pages, and in stable mode ends once one destination held or fails with contained_task_observation_stability_unconfirmed; a click's recheck guards one fresh frame before the effect intent, or waits until the guard held on consecutive frames and otherwise refuses with contained_task_input_stability_unconfirmed, a recheck frame taking SR-1's observe-only retries; both are task schema 0.9 page-graph declarations
+# Workflow #390 EXEC-2 (FCM E-05, E-06): a page-graph operation's observation window (at most 60 s; the post-input delay keeps its bound) ends on a late popup that is a destination, watches to its end otherwise, offers a frame without a destination to the shared interrupt pages, and in stable mode ends once one destination held or fails with contained_task_observation_stability_unconfirmed; a click's recheck guards one fresh frame before the effect intent, or waits until the guard held on consecutive frames and otherwise refuses with contained_task_input_stability_unconfirmed, a recheck frame taking SR-1's observe-only retries; both are task schema 0.9 declarations, and a linear task refuses the window (it admits the recheck from #411 B12, key 126)
 [[gate]]
 key = "54"
 coverage = "Y"
 tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_admission_bounds_the_window_at_60_s_and_keeps_the_post_delay_bound",
-    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_linear_task_refuses_the_window_and_the_recheck",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_linear_task_refuses_the_window",
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_late_popup_inside_the_window_is_where_the_step_arrives",
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_the_window_watches_to_its_end_and_hands_a_frame_without_a_page_to_the_interrupts",
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_stable_window_ends_once_one_destination_held_and_fails_when_it_never_does",
@@ -1774,3 +1774,68 @@ tests = [
     "actingcommand-pack-containment::lib::source::gate_411_b3::b3_t4_eight_repeated_or_out_of_range_alternatives_are_refused_at_the_member",
 ]
 incident = ["#411 B3"]
+
+# #411 B5 (slice BT-B5, 0.12.x B train; register §1.154 B5-1; B-train plan §2.5 point 1, test row T1 of §5.3; no persisted ledger shape, no outcome code; package revision 6, declared by BT-PK6): a page an operation of a stage confirms that is one of the stage's end_pages ends the run Completed on that page, the stage not completed, with no further operation; the run's key is the one mapping of that page under its effect condition
+[[gate]]
+key = "120"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t1_a_stage_that_confirms_its_end_page_ends_the_run_there",
+]
+incident = ["#411 B5"]
+
+# #411 B14 (slice BT-B5; register §1.154 B14-1; B-train plan §2.5 point 2 and D4, test row T3 of §5.3; package revision 6, declared by BT-PK6): a page of the task's entry page set that a stage lists in entry_pages starts that stage, where no operation's from infers one; the run enters there and its first step is that stage's
+[[gate]]
+key = "121"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t3_an_entry_page_a_stage_lists_starts_that_stage",
+]
+incident = ["#411 B14"]
+
+# #411 B20 and B38 (slice BT-B5; register §1.154 B20-1; B-train plan §2.5 points 3 and 5 (D5), test row T4 of §5.3; no persisted ledger shape, no outcome code): an entry page a stage lists in its end_pages is a start of that stage on which the run ends before any step, Completed with 0 steps and no designated effect on that page; a page that is both an end page and an operation's from has two starts and admission refuses the entry page set with contained_task_entry_pages_invalid, entry_problem phase_start_ambiguous, at that page
+[[gate]]
+key = "122"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t4_an_entry_page_in_end_pages_ends_the_run_before_any_step",
+]
+incident = ["#411 B20", "#411 B38"]
+
+# #411 B24 (slice BT-B5; register §1.154 B5-1; B-train plan §2.5 point 1, test row T5 of §5.3): B24's shape, neutral: the first stage's operation reaches a page of the first stage's end_pages, and the run ends Completed there after that one step
+[[gate]]
+key = "123"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t5_the_first_stage_ends_on_its_reached_end_page",
+]
+incident = ["#411 B24"]
+
+# #411 B5 (slice BT-B5; register §1.154 B5-3; B-train plan §2.5 point 4, test row T6 of §5.3): a package with a stage that lists end_pages is no prerequisite package and no return-home package, reason phase_end_pages for both uses; a phased package without end pages and without another reason is either
+[[gate]]
+key = "124"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b5::bt_b5_t6_a_package_with_end_pages_is_no_prerequisite_or_return_home_layer",
+]
+incident = ["#411 B5"]
+
+# Workflow #411 B12 (0.12.x; register §1.155; no persisted ledger shape; B-train plan §2.9 with D8 and Q7, Q9, test rows BT-B12 T1 to T3; package revision 6, declared by BT-PK6): a click's input_recheck still_frames waits until the guard passed on that many consecutive frames each changed by at most the threshold from the frame before it, by the one frame-change measure of contracts/color-digest.md (the region, else the whole frame on a 16x9 grid; max_distance_milli, else 1500); a frame that moved restarts the count and the input binds to the last frame; a screen that never stills within the step timeout refuses the input with contained_task_input_still_unconfirmed; a linear_steps package admits and runs an input recheck of every kind
+[[gate]]
+key = "126"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b12::b12_t1_a_frame_that_moved_restarts_the_count_and_the_input_binds_the_last_still_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b12::b12_t2_a_screen_that_never_stills_refuses_the_input_with_the_still_code",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b12::b12_t3_a_linear_package_admits_and_runs_every_input_recheck",
+]
+incident = ["#411 B12"]
+
+# Workflow #411 B28 (slice E4, 0.12.x; register §1.156 E4-2, E4-5; no persisted ledger shape; B-train plan §6, Q15): a page rule's any_of that is no array, or an entry of it that is no array, is refused as before (package check: package_invalid, exit 2, details.code resource_declaration_invalid, invalid_type at that member), and the refusal's outcome names the shape any_of must have, expected_shape array_of_arrays
+[[gate]]
+key = "131"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t2_an_any_of_of_the_wrong_shape_is_refused_naming_the_shape_it_must_have",
+]
+incident = ["#411 B28"]

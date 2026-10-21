@@ -179,11 +179,19 @@ pub(super) fn export_json(page: &Value) -> Result<Value, ToolError> {
 
 /// A failure that is not the Runtime read's, as the tool answers it: an argument is
 /// `arguments_invalid` with the CLI's values; every other failure keeps the CLI's outcome.
+/// Workflow #411 B27: an event type argument that names no event type also names the value it
+/// was given (`argument_value`).
 fn tool_error(error: EventsError) -> ToolError {
     match error {
-        EventsError::Argument { field, problem } => match problem.range() {
-            Some((minimum, maximum)) => tools::out_of_range(&field, minimum, maximum),
-            None => tools::invalid_argument(&field, problem.token()),
+        EventsError::Argument {
+            field,
+            problem,
+            value,
+        } => match (problem.range(), value) {
+            (Some((minimum, maximum)), _) => tools::out_of_range(&field, minimum, maximum),
+            (None, Some(value)) => tools::invalid_argument(&field, problem.token())
+                .with(|outcome| outcome.argument_value(value)),
+            (None, None) => tools::invalid_argument(&field, problem.token()),
         },
         EventsError::Runtime(error) => super::runtime::client_error(&error),
         EventsError::CursorEncode(_) => ToolError::outcome("runtime", error.outcome()),
