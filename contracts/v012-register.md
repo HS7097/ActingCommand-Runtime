@@ -2672,6 +2672,23 @@ package format change. Gates: policy key 59, host key 129.
 | B8-4 | `RunParameters::with_dispatch_schedule(values, admitted_at_unix_ms)` and the overlay's `session.dispatch.schedule.<key>` records | kernel interface (memory only, not persisted) (host 129) | BT-B8 | BT-B8 | after the parameter records: the key under `session.dispatch.schedule.` (D7), the value typed (`timestamp_ms` for the two instants, `boolean`, `integer`), the other members as B15R-1's, observed at the dispatch's admission; a run without a dispatch (direct, Lab, the Lab's single-step evaluations) and a dispatch without the values hold none, so a policy that reads one meets an unknown fact and its `on_unknown` decides; a reason without `run_parameters` leaves the parameters at their declared defaults (B15R-2 unchanged) |
 | B8-5 | keys `last_in_window`, `last_daily_slot` (boolean), `daily_remaining` (integer) | new key-table entries (no shape) (policy 59) | BT-B8 | BT-B8 | review of the code stays `pending`; no new code, vocabulary token, location or configuration key |
 
+### 1.157 Slice B41 (0.12.x): a chain step that hands over on its page goes first (#411 B41; coordinator triage Q15; [scheduling/README.md](scheduling/README.md), "Chain Handover")
+
+The 10-20 incident: a chain's predecessor ended on a result page that is its successor's entry
+page; a fact refresh reading ranked ahead of the successor ran first, its return-home
+prerequisite layer left the page, and the successor failed with
+`contained_task_home_recovery_terminal_outside_entry`. **No persisted ledger shape**: the new
+reason travels in the existing decisions and dispatch reason chains (`PolicyReasonRecord` is
+`#[serde(transparent)]` over `Outcome`), and a dispatch decision record lists a waiting candidate
+with it as `why` (§1.145). No catalog or package format change, no key, vocabulary token,
+location or configuration key. Gates: policy keys 60 to 63 (host keys 141 to 143 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B41-1 | `policy_chain_handover_waiting` (info, `none`; `instance_id`, `task_id` the successor, `page_id` the page) | new code of existing decision reasons (policy 60 to 63) | B41 | B41 | the last reason of each candidate that ranked ahead of a dispatched successor on its instance, a fact refresh reading included (its decision deferred, no wake); the affected candidates of that reading carry it as `fact_refresh_pending`'s `gate_code`; review `pending` |
+| B41-2 | `evaluate_with_chain_handovers` with `ChainHandoverInputs { resting_pages }` (`RestingPage { page_id, observed_at_unix_ms }` per instance alias) and the entry answer `(task, instance alias, page id) -> bool` | policy interface (memory only) (policy 60 to 63) | B41 | B41 | the host passes each instance's `task.page` runtime fact and answers from the successor's package (its declared entry page or set, or its entry gate's pages, without the game prefix; a package it cannot read holds no page); none of it enters a snapshot or a decision identity |
+| B41-3 | the allocation order on a handover instance | rule (no shape change) (policy 60 to 63) | B41 | B41 | the successor moves ahead of the candidates that ranked ahead of it; they wait while it is dispatched and take their turn in rank order when it is not (an admission gate, the random delay included, or the host budget defers it); a successor that reads a key the fact refresh reads is no candidate, so the refresh goes first (model item 4) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

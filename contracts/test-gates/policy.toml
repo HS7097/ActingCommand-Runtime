@@ -663,3 +663,39 @@ tests = [
     "actingcommand-policy::lib::tests::gate_411_b8::b8_t3_a_catalog_without_the_opt_in_keeps_its_hash_and_its_chains",
 ]
 incident = ["#411 B8"]
+
+# Workflow #411 B41 (brief rd-1021/train-0129/brief-b41.md T1, model items 1 to 3; contracts/scheduling/README.md, "Chain Handover"; register §1.157; no persisted ledger shape): a chain's predecessor ended on the successor's entry page and a higher-ranked fact refresh reading is due for a key only another task reads; the successor is dispatched first, the reading waits with policy_chain_handover_waiting (instance_id, task_id, page_id) and its affected task names that gate, and the reading runs in the round after the chain step ran
+[[gate]]
+key = "60"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_b41::b41_t1_the_successor_goes_before_the_refresh_and_the_refresh_runs_after_it",
+]
+incident = ["#411 B41"]
+
+# Workflow #411 B41 (brief T2, model item 4; register §1.157): a successor whose own trigger reads the expired key the fact refresh reads is no candidate; the reading goes first as before and nothing waits with policy_chain_handover_waiting
+[[gate]]
+key = "61"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_b41::b41_t2_a_successor_that_needs_the_expired_fact_lets_the_refresh_go_first",
+]
+incident = ["#411 B41"]
+
+# Workflow #411 B41 (brief T3, model item 1; register §1.157): a predecessor that ended on a page outside the successor's entry page set hands nothing over; the ranked order dispatches the reading and nothing waits with policy_chain_handover_waiting
+[[gate]]
+key = "62"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_b41::b41_t3_a_predecessor_that_ended_outside_the_entry_page_set_hands_nothing_over",
+]
+incident = ["#411 B41"]
+
+# Workflow #411 B41 (brief T4, model items 3 and 5; register §1.157): the round of a handover records the reading's deferral (its decision ends with policy_chain_handover_waiting and the successor's dispatch decision record lists it with that why); when the successor's dispatch is withdrawn and the next round's admission defers it, that round runs the deferred reading
+[[gate]]
+key = "63"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_b41::b41_t4_when_the_chain_breaks_the_deferred_refresh_runs_at_the_next_evaluation",
+]
+incident = ["#411 B41"]
