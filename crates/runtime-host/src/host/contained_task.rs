@@ -6770,16 +6770,21 @@ impl HostShared {
         control: Arc<ContainedRunControl>,
         admission_request_id: Option<RequestId>,
         reading_keys: Option<BTreeSet<String>>,
-        dispatched_parameters: Option<(Vec<(String, String)>, u64)>,
+        dispatched_parameters: Option<crate::fact_refresh::DispatchedParameters>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
         // Workflow #411 B15 R5 (contracts/remedies.md section 4): a policy run reads the values
         // its dispatch carries, observed at its admission; any other run reads its package's
-        // declared defaults.
+        // declared defaults. Workflow #411 B8: a policy run also reads the schedule values its
+        // dispatch carries, observed at its admission; any other run reads none.
         let run_parameters = match dispatched_parameters {
-            Some((values, admitted_at_unix_ms)) => {
-                prepared.dispatched_run_parameters(values, admitted_at_unix_ms)
+            Some(dispatched) => match dispatched.values {
+                Some(values) => {
+                    prepared.dispatched_run_parameters(values, dispatched.admitted_at_unix_ms)
+                }
+                None => prepared.default_run_parameters(),
             }
+            .with_dispatch_schedule(dispatched.schedule, dispatched.admitted_at_unix_ms),
             None => prepared.default_run_parameters(),
         };
         // Workflow #373 NAV-6: the steps the run's own layers can execute.
@@ -7367,21 +7372,30 @@ impl HostShared {
                 if error.has_values() {
                     let values = error.outcome();
                     // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
-                    // pin, read before the summary moves into the terminal's draft.
-                    let failure_frame = if error.code().as_str()
+                    // pin; #411 A30: a guard refusal names the frame the guard judged on, its
+                    // `GuardRejection` pin. Each is read before the summary moves into the
+                    // terminal's draft.
+                    let frame_pin = if error.code().as_str()
                         == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
                     {
+                        Some(PinnedFrameReason::Failure)
+                    } else if error.code().as_str()
+                        == ExecutionKernelCode::ContainedTaskGuardRefused.as_str()
+                    {
+                        Some(PinnedFrameReason::GuardRejection)
+                    } else {
+                        None
+                    };
+                    let failure_frame = frame_pin.and_then(|reason| {
                         capture_summary
                             .iter()
                             .flat_map(|summary| &summary.pinned)
-                            .find(|pin| pin.reason == PinnedFrameReason::Failure)
+                            .find(|pin| pin.reason == reason)
                             .and_then(|pin| pin.artifact.as_ref())
                             .map(|artifact| {
                                 crate::failure_identity::identifier_text(artifact.artifact_id())
                             })
-                    } else {
-                        None
-                    };
+                    });
                     task_error = task_error.with_outcome_values(|_| {
                         let values = values.operation(ContractLocation::RunContainedTask);
                         match failure_frame {

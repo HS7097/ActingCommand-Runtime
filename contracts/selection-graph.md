@@ -50,8 +50,8 @@ Each check derives one recognition target of type `composite`:
 
 Only `pack.json` is written at schema `0.7`, and only when it uses a construct of that
 version: a `composite` target, a `color_digest` target (see `color-digest.md`), a
-per-target color `max_distance` (on a `color` target or a template's `color_check`), or a
-candidate layout (section Candidate layouts). Every
+per-target color `max_distance` or (Workflow #411 B3) color `alternatives` (on a `color`
+target or a template's `color_check`), or a candidate layout (section Candidate layouts). Every
 other derived document, including the page set, stays at `0.6`. Packs of schema `0.1` and
 `0.3` through `0.6` load and judge exactly as before. A reader that accepts only `0.1`
 through `0.6` rejects a `0.7` pack explicitly, and a `0.7` construct in an older pack is
@@ -215,7 +215,9 @@ relative to the match's top-left corner:
   `order` other than `top_to_bottom` or `left_to_right`, and a feature `value` this runtime
   does not know.
 - The anchor's `region` is the search region, and its threshold and a `template_relative`
-  `color_check` apply at every position. `order` numbers the matches: `top_to_bottom` by
+  `color_check` apply at every position; with `alternatives`, any declared color within the
+  check's distance qualifies a position (Workflow #411 B3, `resource-declarations.md`, section
+  Task schema `0.9` several expected colors). `order` numbers the matches: `top_to_bottom` by
   (`y`, `x`), `left_to_right` by (`x`, `y`). Matches above `max_instances` fail the
   projection, and a search that runs out of its 5 s limit fails with
   `candidate_search_incomplete` ([candidate-projection.md](candidate-projection.md), section

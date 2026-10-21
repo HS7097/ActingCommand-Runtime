@@ -340,6 +340,11 @@ crate::outcome_codes! {
         InvalidRuntimeFactSnapshot => "invalid_runtime_fact_snapshot": error / none,
         InvalidTimestamp => "invalid_timestamp": error / none,
         LabArrivalTimeout => "lab_arrival_timeout": error / budget_or_permission,
+        /// Error. A Lab operation's element selection names one of the package's recognition
+        /// target ids where the element id of an observation belongs (keys
+        /// `expected_target_type`, `received_target_type`; #411 A37). The Runtime refuses it at
+        /// selection and actinglab answers it.
+        LabTargetTypeMismatch => "lab_target_type_mismatch": error / none,
         LeaseQueueConnectionMismatch => "lease_queue_connection_mismatch": error / none,
         LeaseQueueExpired => "lease_queue_expired": error / none,
         LedgerMigrationRequired => "ledger_migration_required": error / none,

@@ -318,6 +318,12 @@ pub struct TaskSpec {
     /// serializes as nothing at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continues_from: Option<Vec<String>>,
+    /// Workflow #411 B8 (`actingcommand.scheduling.v2` only): `true` hands every policy run of
+    /// this task the schedule values of its dispatch (`policy_dispatch_parameters`, read by the
+    /// run as `session.dispatch.schedule.<name>`). Absent, the task carries none, and the member
+    /// serializes as nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_parameters: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

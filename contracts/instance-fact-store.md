@@ -762,6 +762,14 @@ Written ahead of its code (B15 R0); slice R5 implements it.
   direct or Lab run) holds every parameter its package declares with its declared default. The
   Lab's single-step select evaluations (`dry_run_select`, the scan replay) hold the same overlay,
   each value given to the scan replay (`--parameter <name>=<value>`) in place of its default
-  (#411 Lab RP; [remedies.md](remedies.md), section 4).
+  (#411 Lab RP; [remedies.md](remedies.md), section 4). A reason without `run_parameters` (one
+  that carries only Workflow #411 B8's values) leaves the parameters at their declared defaults.
+- Workflow #411 B8: for a policy run whose `policy_dispatch_parameters` carries schedule values
+  (a task that opts in with `dispatch_parameters: true`), the same snapshots also hold, per value,
+  the record `session.dispatch.schedule.<key>` with its type: `next_occurrence_unix_ms` and
+  `window_end_unix_ms` as `timestamp_ms`, `last_in_window` and `last_daily_slot` as `boolean`,
+  `daily_remaining` as `integer` (instance scope; confidence 1000; observed at the dispatch's
+  admission; no expiry). A run without a dispatch holds none of them, so a policy that reads one
+  meets an unknown fact and its `on_unknown` decides ([remedies.md](remedies.md), section 4).
 - The overlay is never stored: it appends no record, takes no active fact identity (0 rows in the
   capacity ledger) and is not visible to `InstanceFactSnapshot` or `ac_facts`.

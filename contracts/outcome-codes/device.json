@@ -828,6 +828,26 @@
       "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. The code covers \"locked, and a person is needed\", whether because of a secure lock or the wait policy. Nothing is sent; the Runtime never enters a credential.",
       "common_causes": "The phone locked itself after its screen timeout.",
       "handling": "Unlock the phone."
+    },
+    "vendor_stdio_redirect_busy": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 A36a: a vendor library call (the Nemu capture library's load, connect, capture, input or disconnect) waited for the process's stdio redirect longer than its bounded wait (3 s) while another call held it. At most one vendor stdio redirect is active in the process; this call redirects nothing and is not made, except the release calls (disconnect, finger up), which are made anyway and report this failure. Until B5 types the device layer, the device error carries the spelling as its message.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
