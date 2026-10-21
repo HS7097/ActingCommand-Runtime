@@ -440,7 +440,11 @@ R(k)   = min(sum of T(k,p) + floor(sum of F(k,p)), 1_000_000) ("capped" at the b
 A pool takes part for `k` when `r(k,p) > 0` and it declares a valuation or a target covering
 `k` names it. `W` belongs to the resource; a target's scope only decides who gets the
 shortfall part. Only `produces` count: `consumes` still drives urgency alone. `Γ`, `W`, `T` and
-`R` never fall as the gap grows; at `g = 0` the base weight stays.
+`R` never fall as the gap grows; at `g = 0` the base weight stays. A task's catalog `reserves`
+(Workflow #411 B16 part 2) are a separate hard gate after the score stage, not a term of `R`:
+of two candidates whose consumption fits a reserve alone but not together, the one with the
+higher `effective_milli`, which includes this term, runs first ([scheduling/README.md](scheduling/README.md),
+"Task Reserves").
 
 Integer-only resources keep their established per-resource floor. Resources with explicit
 expected quantities aggregate all their effects before weighting and retain exact rational
