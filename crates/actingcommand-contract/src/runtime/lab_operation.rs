@@ -703,8 +703,6 @@ impl ContainedLabOperationResult {
             || record.arrival.is_some()
             || operation.destination_pages.len() > MAX_LAB_DECLARED_DESTINATION_PAGES
             || operation.max_attempts == 0
-            || usize::try_from(operation.max_attempts)
-                .is_ok_and(|max_attempts| result.attempts.len() > max_attempts)
             || result.frames.len() > MAX_LAB_DECLARED_OPERATION_FRAMES
             || result.frames.windows(2).any(|pair| {
                 pair[0].frame.verified.sequence >= pair[1].frame.verified.sequence
