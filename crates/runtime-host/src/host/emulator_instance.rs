@@ -1313,8 +1313,9 @@ impl HostShared {
                 ladder: None,
             });
         };
-        let ladder = if prepares {
-            let (_, ladder) = self
+        // A50 red proof 3: the startup package only after a passing preparation (before A50).
+        let (preparation_failed, ladder) = if prepares {
+            let (check, ladder) = self
                 .prepare_instance_connection(
                     &rebound.instance_alias,
                     instance_id,
@@ -1324,9 +1325,12 @@ impl HostShared {
                     key.connection_id,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
-            ladder
+            (
+                !check.capture.ok || !check.touch.ok || check.failure_code.is_some(),
+                ladder,
+            )
         } else {
-            None
+            (false, None)
         };
         // #411 A50: the startup package is queued whether or not the preparation passed (the
         // game it starts is what a capture by package needs), unless a scheduling pause holds
@@ -1336,12 +1340,14 @@ impl HostShared {
         } else {
             self.startup_package_withheld(&rebound)?
         };
-        let startup_package =
-            if action == EmulatorInstanceAction::Stop || startup_withheld.is_some() {
-                None
-            } else {
-                self.prepare_startup_package(&rebound, links, control_request_id)?
-            };
+        let startup_package = if action == EmulatorInstanceAction::Stop
+            || startup_withheld.is_some()
+            || preparation_failed
+        {
+            None
+        } else {
+            self.prepare_startup_package(&rebound, links, control_request_id)?
+        };
         Ok(EmulatorControlDriven {
             outcome,
             adb_wait_ms,
