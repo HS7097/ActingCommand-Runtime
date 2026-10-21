@@ -1422,7 +1422,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             .tasks
             .tasks
             .iter()
-            .find(|task| task.id == candidate.task_id && task.dispatch_parameters == Some(true))
+            .find(|task| task.id == candidate.task_id)
             .map(|task| {
                 dispatch_schedule(
                     task,
