@@ -226,15 +226,6 @@ fn operation_failure_error(failure: &LabOperationFailure, details: Value) -> Cli
             "the selected element is not resolvable in the current Runtime projection",
             &[],
         )
-    } else if failure.code == SharedCode::LabTargetTypeMismatch.as_str() {
-        // #411 A37: a recognition target id where the element id belongs.
-        CliError::new(
-            ErrorKind::UsageValidation,
-            SharedCode::LabTargetTypeMismatch.as_str(),
-            "do --capture takes the element id of an observation; the target is a recognition \
-             target id of the package",
-            &["target"],
-        )
     } else {
         CliError::device(format!(
             "contained Lab operation failed at {:?}: {}",

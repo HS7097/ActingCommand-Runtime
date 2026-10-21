@@ -6,16 +6,16 @@ use super::online_observation::{
 };
 use super::*;
 use crate::codes::{HostCode, HostLocation};
-use actingcommand_contract::codes::{RuntimeContractCode, SharedCode};
-use actingcommand_contract::outcome::{Code, Outcome};
-use actingcommand_contract::page_projection::{FrameIdentity, FrameKind, PageProjection};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::page_projection::{FrameIdentity, FrameKind};
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, ContainedObservationEvidence,
     ContainedPageObservation, LAB_ARRIVAL_INTERVAL_MS, LAB_OPERATION_PREPARED_SCHEMA,
     LAB_OPERATION_TERMINAL_SCHEMA, LabArrivalResult, LabArrivalSample, LabArrivalStatus,
     LabEvidenceReference, LabOperationFailure, LabOperationFrame, LabOperationPrepared,
-    LabOperationRecord, LabOperationSelection, LabOperationStage, LabTargetType,
-    MAX_LAB_ARRIVAL_FRAMES, ONLINE_OBSERVATION_SCHEMA, PageObservationStatus,
+    LabOperationRecord, LabOperationStage, MAX_LAB_ARRIVAL_FRAMES, ONLINE_OBSERVATION_SCHEMA,
+    PageObservationStatus,
 };
 use actingcommand_execution_kernel::{ObservationMode, PreparedPageObservation};
 
@@ -167,7 +167,11 @@ impl HostShared {
                 .projection;
             let selected = input.selection.resolve(projection).map_err(|error| {
                 RequestFailure::request(
-                    selection_failure(&input.selection, error.code(), projection, &observer),
+                    RuntimeHostError::request(
+                        error.code(),
+                        HostLocation::ResolveCurrentLabOperation,
+                        RuntimeErrorCode::RecognitionFailed,
+                    ),
                     RuntimeReceiptState::Denied,
                     None,
                 )
@@ -903,44 +907,6 @@ struct LabObservationTransaction {
     samples: Vec<CompletedReadonlyObservation>,
     frame: CompletedReadonlyObservation,
     fence: Result<(), RequestFailure>,
-}
-
-/// The failure of a selection the before projection does not resolve. #411 A37: an element id
-/// that no element of the projection has and that is one of the package's recognition target ids
-/// is a target of the wrong type, `lab_target_type_mismatch` with the expected and the received
-/// type; any other selection keeps the contract's code.
-fn selection_failure(
-    selection: &LabOperationSelection,
-    code: Code,
-    projection: &PageProjection,
-    observer: &PreparedPageObservation,
-) -> RuntimeHostError {
-    match selection {
-        LabOperationSelection::Element { id }
-            if code == RuntimeContractCode::LabElementUnavailable.code()
-                && !projection
-                    .elements
-                    .iter()
-                    .any(|element| element["id"].as_str() == Some(id.as_str()))
-                && observer.declares_target(id) =>
-        {
-            RuntimeHostError::request(
-                SharedCode::LabTargetTypeMismatch,
-                HostLocation::ResolveCurrentLabOperation,
-                RuntimeErrorCode::RecognitionFailed,
-            )
-            .with_outcome_values(|outcome| {
-                outcome
-                    .expected_target_type(LabTargetType::ElementId)
-                    .received_target_type(LabTargetType::TargetId)
-            })
-        }
-        _ => RuntimeHostError::request(
-            code,
-            HostLocation::ResolveCurrentLabOperation,
-            RuntimeErrorCode::RecognitionFailed,
-        ),
-    }
 }
 
 /// A failed stage of a Lab operation: its record entry, and the host's failure as the receipt
