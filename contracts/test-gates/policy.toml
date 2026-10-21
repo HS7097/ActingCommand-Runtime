@@ -643,3 +643,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_411_a26::a26_an_earlier_reader_accepts_the_new_values",
 ]
 incident = ["#411 A26", "#386 SR-6a"]
+
+# Workflow #411 B2 (b-plan §2.2, BT-B2 tests T1 and T3; contracts/selection-policy.md, section Predicates; register §1.146 B2-1; no persisted ledger shape): the predicate integer_compare {left, op, right, mul?, add?} compares left with right x mul + add as a value test does, so a gate cost le funds x 1 + (-2000) keeps the candidate within its funds less the reserve and rejects the other; a document without the new members keeps its canonical bytes and policy_sha256, and an integer_compare without mul and add serialises neither
+[[gate]]
+key = "58"
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::gate_411_b2::b2_t1_integer_compare_keeps_the_candidate_within_its_funds_less_the_reserve",
+    "actingcommand-selection-policy::lib::gate_411_b2::b2_t3_a_document_without_the_new_members_keeps_its_canonical_bytes_and_policy_sha256",
+]
+incident = ["#411 B2"]

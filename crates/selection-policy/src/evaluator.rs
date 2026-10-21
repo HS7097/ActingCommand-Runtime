@@ -1143,6 +1143,26 @@ fn truth(
                 _ => None,
             })
         }
+        Predicate::IntegerCompare {
+            left,
+            op,
+            right,
+            mul,
+            add,
+        } => {
+            // Both sides are read, so the collect option lists each one that is unknown; the
+            // left side's reason comes first, as a value test reports it.
+            let left = integer_side(left, candidate, resolver, reads);
+            let right = integer_side(right, candidate, resolver, reads);
+            match (left, right) {
+                (Err(reason), _) | (Ok(_), Err(reason)) => Truth::Unknown(reason),
+                (Ok(left), Ok(right)) => {
+                    let right = i128::from(right) * i128::from(mul.unwrap_or(1))
+                        + i128::from(add.unwrap_or(0));
+                    bool_truth(op.holds(i128::from(left), right))
+                }
+            }
+        }
         Predicate::All { of } => {
             let start = reads.unknown.len();
             let mut unknown = None;
@@ -1203,6 +1223,27 @@ fn leaf(
             Truth::Unknown(reason)
         }
     }
+}
+
+/// Reads one side of an `integer_compare`: an integer value, or the reason it is unknown (any
+/// other type is a type mismatch).
+fn integer_side(
+    reference: &ValueRef,
+    candidate: &Candidate,
+    resolver: &Resolver<'_>,
+    reads: &mut Reads,
+) -> Result<i64, UnknownReason> {
+    let read = resolver
+        .read(reference, candidate)
+        .and_then(|value| match value {
+            ScalarValue::Integer(value) => Ok(value),
+            _ => Err(UnknownReason::TypeMismatch),
+        });
+    match read {
+        Ok(_) => reads.record_known(resolver, reference),
+        Err(reason) => reads.record_unknown(reference, reason),
+    }
+    read
 }
 
 fn bool_truth(value: bool) -> Truth {

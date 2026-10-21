@@ -7,6 +7,9 @@ use crate::page_projection::{Geometry, PageProjection, Point, Rect};
 pub const LAB_OPERATION_PREPARED_SCHEMA: &str = "actingcommand.runtime.lab-operation-prepared.v1";
 pub const LAB_OPERATION_TERMINAL_SCHEMA: &str = "actingcommand.runtime.lab-operation-terminal.v1";
 pub const MAX_LAB_ARRIVAL_FRAMES: usize = 20;
+/// #411 A18 option ④: arrival samples start this far apart, start to start; the wait after a
+/// sample is what is left of it after the sample's capture and evaluation, bounded by the
+/// deadline.
 pub const LAB_ARRIVAL_INTERVAL_MS: u64 = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

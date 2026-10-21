@@ -314,11 +314,14 @@ pub(crate) fn read(
         ),
         None => None,
     };
-    let window = if sections.contains(Section::Instances) || sections.contains(Section::RunWindow) {
-        Some(now_unix_ms()?.saturating_sub(RUN_WINDOW_MS))
-    } else {
-        None
-    };
+    // #411 A42: the window's end is kept beside its start, for a row with no run in it.
+    let (window, window_end) =
+        if sections.contains(Section::Instances) || sections.contains(Section::RunWindow) {
+            let now = now_unix_ms()?;
+            (Some(now.saturating_sub(RUN_WINDOW_MS)), now)
+        } else {
+            (None, 0)
+        };
     let mut incomplete = false;
     // The program facts (Workflow #389 MCP-5b, MCP-9a): read once when a block needs them;
     // RuntimeFactSnapshot records nothing.
@@ -348,7 +351,10 @@ pub(crate) fn read(
                 client,
                 &status,
                 selected_alias,
-                window,
+                RunWindow {
+                    since_unix_ms: window,
+                    until_unix_ms: window_end,
+                },
                 deadline,
                 facts.as_ref(),
                 &mut warnings,
@@ -607,7 +613,7 @@ fn instance_rows(
     client: &RuntimeClient,
     status: &RuntimeControlPlaneStatus,
     selected: Option<&str>,
-    window: u64,
+    window: RunWindow,
     deadline: Instant,
     facts: Option<&RuntimeFactSnapshot>,
     warnings: &mut Vec<Warning>,
@@ -644,36 +650,70 @@ fn instance_rows(
         if let Some(facts) = facts {
             row["backend_selfcheck"] = backend_selfcheck(facts, instance.instance_id());
         }
-        // At most one brief run status per instance: its newest admitted run in the window,
-        // which is the open one when a run is open.
-        if Instant::now() + READ_RESERVE >= deadline {
-            // The call budget left no time to read the runs of this instance.
-            *incomplete = true;
-            row["run_incomplete"] = json!(true);
-            warnings.push(Warning::Outcome(
-                Outcome::new(ActingctlCode::CallBudgetExhausted).alias(instance.instance_alias()),
-            ));
-        } else {
-            match client.recent_runs(instance.instance_id(), window, 1) {
-                Ok(latest) => {
-                    if latest.incomplete {
-                        *incomplete = true;
-                        row["run_incomplete"] = json!(true);
-                    }
-                    if let Some(run) = latest.runs.first() {
-                        row["run"] = json!(run);
-                    }
-                }
-                Err(error) => {
-                    *incomplete = true;
-                    row["run_incomplete"] = json!(true);
-                    warnings.push(Warning::Runtime(error));
-                }
-            }
-        }
+        run_block(
+            client, instance, window, deadline, &mut row, warnings, incomplete,
+        );
         rows.push(row);
     }
     Value::Array(rows)
+}
+
+/// The run window of one overview (#411 A42): from 24 h before the read (`since_unix_ms`, the
+/// `run_window` block's start) to the read (`until_unix_ms`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RunWindow {
+    pub(crate) since_unix_ms: u64,
+    pub(crate) until_unix_ms: u64,
+}
+
+/// One instance row's run members. `run` is at most one brief run status: the instance's newest
+/// run admitted in `window`, the open one when a run is open. #411 A42: it is found from the
+/// ledger's tail back (runtime-client `latest_runs`), so the read is bounded by the window and
+/// never scans the instance's history before it, and it ends by `deadline` less the reserve.
+/// When the read finished without a run, the row says so: `run_none_in_window {since_unix_ms,
+/// until_unix_ms}`, the window's bounds. A read the call budget left no time to start
+/// (`call_budget_exhausted` naming the instance), one the deadline stopped, and one that failed
+/// (its warning) each mark the row `run_incomplete` and the overview incomplete.
+pub(crate) fn run_block(
+    client: &RuntimeClient,
+    instance: &RuntimeInstanceStatus,
+    window: RunWindow,
+    deadline: Instant,
+    row: &mut Value,
+    warnings: &mut Vec<Warning>,
+    incomplete: &mut bool,
+) {
+    if Instant::now() + READ_RESERVE >= deadline {
+        // The call budget left no time to read the runs of this instance.
+        *incomplete = true;
+        row["run_incomplete"] = json!(true);
+        warnings.push(Warning::Outcome(
+            Outcome::new(ActingctlCode::CallBudgetExhausted).alias(instance.instance_alias()),
+        ));
+        return;
+    }
+    let read_until = deadline.checked_sub(READ_RESERVE).unwrap_or(deadline);
+    match client.latest_runs(instance.instance_id(), window.since_unix_ms, 1, read_until) {
+        Ok(latest) => {
+            if let Some(run) = latest.runs.first() {
+                row["run"] = json!(run);
+            } else if !latest.incomplete {
+                row["run_none_in_window"] = json!({
+                    "since_unix_ms": window.since_unix_ms,
+                    "until_unix_ms": window.until_unix_ms,
+                });
+            }
+            if latest.incomplete {
+                *incomplete = true;
+                row["run_incomplete"] = json!(true);
+            }
+        }
+        Err(error) => {
+            *incomplete = true;
+            row["run_incomplete"] = json!(true);
+            warnings.push(Warning::Runtime(error));
+        }
+    }
 }
 
 fn instance_row(
