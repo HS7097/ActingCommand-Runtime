@@ -322,7 +322,11 @@ impl FrameHold {
     /// deleted while the hold still has it, so no reader or writer holds it then; a lock that
     /// is already gone is fine. Returns why a lock that could not be deleted stays.
     fn release_done(self) -> Option<FrameLockLeft> {
-        let deleted = fs::remove_file(&self.lock_path);
+        // E3 red proof 1 (do not merge): today's cleaner never deletes the use lock.
+        let deleted: std::io::Result<()> = {
+            let _never_deleted = &self.lock_path;
+            Ok(())
+        };
         drop(self);
         match deleted {
             Ok(()) => None,
