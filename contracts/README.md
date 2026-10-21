@@ -260,7 +260,13 @@ package matched; a linear step's entry, transition, arrival or retry-decision pa
 a page-graph operation's destination). The hooked kernel loops are
 `recognize_required_entry`, `recognize_linear_entry`, `await_linear_entry`,
 `await_ordinary_home_entry` (entry verdicts) and `capture_until_page`,
-`await_postcondition`, `linear_wait`, `linear_wait_set` (waits, per frame). An
+`await_postcondition`, `linear_wait`, `linear_wait_set` (waits, per frame). The
+initial frame of a page-graph application entry (`entry_page` `"any"` and a first
+`from: "any"` application effect, as start-up and return-home packages declare) is
+neither: in an ordinary run it is taken once, without a wait, and when it shows no page
+of the package the application effect runs without offering the frame to the shared
+interrupt pages (Workflow #411 A31). A `linear_steps` application entry, and a
+page-graph one in a run the host starts itself, take no frame before the effect. An
 interrupt page the running package declares itself is the package's own. One
 matched page is handled by its handler package as a layer of the run, and the wait
 resumes with its budget paused for the handling; an entry check starts again.

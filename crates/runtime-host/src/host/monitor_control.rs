@@ -4,6 +4,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_execution_kernel::FrameOwner;
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -259,8 +260,11 @@ impl HostShared {
         .map_err(RuntimeHostError::artifact)?;
         let memory = frame_store.memory_budget();
         let registration = self.mark_resources_in_use()?;
+        // #411 A49: a monitor probe is a keyless observer; it leaves the frame of a run in flight
+        // on the instance in place.
         let captured = self.execution()?.capture_retained_with_registration_guard(
             &probe.instance_alias,
+            FrameOwner::Observer,
             registration,
             memory.clone(),
         );

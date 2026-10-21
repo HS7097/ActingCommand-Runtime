@@ -44,11 +44,16 @@ pub use facts::{
     Candidate, RecordRow, ScalarValue, SelectionFactEntry, SelectionFactSnapshot, UnknownReason,
 };
 pub use schema::{
-    AppliesTo, FactDeclaration, FieldDeclaration, GateUnknownHandling, HardGate, LookupEntry,
-    LookupKey, MAX_CANDIDATES, MAX_ENUM_VALUES, MAX_FACTS, MAX_FIELDS, MAX_GATES, MAX_ID_BYTES,
-    MAX_LOOKUP_ENTRIES, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_RECORD_LIST_COLUMNS,
-    MAX_SCORING_TERMS, MAX_TIE_BREAK_KEYS, OutcomeKeys, Predicate, RowFilter,
-    SELECTION_POLICY_SCHEMA_VERSION, ScoringTerm, SelectionError, SelectionErrorCode,
-    SelectionMode, SelectionPolicy, SelectionRequirement, SortDirection, TermUnknownHandling,
-    TieBreakKey, Transform, ValueRef, ValueType, is_rule_id,
+    AppliesTo, FactDeclaration, FieldDeclaration, GateUnknownHandling, HardGate, IntegerCompareOp,
+    LookupEntry, LookupKey, MAX_CANDIDATES, MAX_ENUM_VALUES, MAX_FACTS, MAX_FIELDS, MAX_GATES,
+    MAX_ID_BYTES, MAX_INTEGER_COMPARE_ADD, MAX_INTEGER_COMPARE_MUL, MAX_LOOKUP_ENTRIES,
+    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_RECORD_LIST_COLUMNS, MAX_SCORING_TERMS,
+    MAX_TIE_BREAK_KEYS, OutcomeKeys, Predicate, RowFilter, SELECTION_POLICY_SCHEMA_VERSION,
+    ScoringTerm, SelectionError, SelectionErrorCode, SelectionMode, SelectionPolicy,
+    SelectionRequirement, SortDirection, TermUnknownHandling, TieBreakKey, Transform, ValueRef,
+    ValueType, is_rule_id,
 };
+
+// Workflow #411 B2.
+#[cfg(test)]
+mod gate_411_b2;

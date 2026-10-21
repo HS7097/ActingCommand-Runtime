@@ -3,8 +3,8 @@
 use crate::codes::ExecutionKernelCode;
 use crate::{
     ExecutionBackendProvider, ExecutionInputOutcome, ExecutionKernelError, ExecutionKernelResult,
-    ExecutionResourceCloseOutcome, ExecutionSession, InputFrameContext, PreparedInputAction,
-    ResolvedExecutionInstance,
+    ExecutionResourceCloseOutcome, ExecutionSession, FrameOwner, InputFrameContext,
+    PreparedInputAction, ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
     ApplicationLifecycleAction, CaptureGeometryObservation, EmulatorInstanceAction, FencedWrite,
@@ -160,15 +160,18 @@ impl ExecutionKernel {
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
     }
 
+    /// A capture of `owner` without an input frame (#411 A49: a monitor probe is an observer's).
     pub fn capture_retained_with_registration_guard<G>(
         &self,
         instance_alias: &str,
+        owner: FrameOwner,
         registration_guard: G,
         memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<Frame> {
-        self.capture_frame_retained_with_geometry_session_and_registration_guard(
+        self.capture_owned_frame(
             instance_alias,
             None,
+            owner,
             None,
             registration_guard,
             memory,
@@ -176,16 +179,20 @@ impl ExecutionKernel {
         .map(|(frame, _)| frame)
     }
 
+    /// A capture of `owner` whose frame `frame_id` becomes `owner`'s pending input frame (#411
+    /// A49: a read-only observe is an observer's, a Lab operation the lease holder's).
     pub fn capture_frame_retained_with_registration_guard<G>(
         &self,
         instance_alias: &str,
         frame_id: Option<FrameId>,
+        owner: FrameOwner,
         registration_guard: G,
         memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<Frame> {
-        self.capture_frame_retained_with_geometry_session_and_registration_guard(
+        self.capture_owned_frame(
             instance_alias,
             frame_id,
+            owner,
             None,
             registration_guard,
             memory,
@@ -211,7 +218,8 @@ impl ExecutionKernel {
 
     /// Carries the producing session and the pending input frame identity together. `floor`
     /// (#398 R1 §5.2, RD-3i) is the bound the frame must meet: after an input, that input's
-    /// completion; while polling, the sequence of the frame delivered last.
+    /// completion; while polling, the sequence of the frame delivered last. The capture is the
+    /// lease holder's (#411 A49), a run's.
     pub fn capture_frame_retained_with_geometry_session_and_registration_guard<G>(
         &self,
         instance_alias: &str,
@@ -220,10 +228,29 @@ impl ExecutionKernel {
         registration_guard: G,
         memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
+        self.capture_owned_frame(
+            instance_alias,
+            frame_id,
+            FrameOwner::Lease,
+            floor,
+            registration_guard,
+            memory,
+        )
+    }
+
+    fn capture_owned_frame<G>(
+        &self,
+        instance_alias: &str,
+        frame_id: Option<FrameId>,
+        owner: FrameOwner,
+        floor: Option<actingcommand_device::CaptureFloor>,
+        registration_guard: G,
+        memory: actingcommand_device::FrameMemoryBudget,
+    ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         let frame = session
-            .capture_frame_retained(frame_id, Some(memory), floor)
+            .capture_frame_retained(frame_id, owner, Some(memory), floor)
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))?;
         let reference = CaptureGeometrySessionRef {
             instance_id: session.resolved().instance_id(),
@@ -276,14 +303,16 @@ impl ExecutionKernel {
         }
     }
 
-    /// Called by the Runtime after its original capture event has committed.
+    /// Called by the Runtime after its original capture event has committed; `owner` is the
+    /// owner of that capture (#411 A49).
     pub fn commit_input_frame(
         &self,
         alias: &str,
         reference: InputFrameReference,
+        owner: FrameOwner,
     ) -> ExecutionKernelResult<InputFrameContext> {
         self.existing_frame_session(alias)?
-            .commit_input_frame(reference)
+            .commit_input_frame(reference, owner)
     }
 
     pub fn resolve_input_frame(
