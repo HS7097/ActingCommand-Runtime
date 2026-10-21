@@ -89,20 +89,16 @@ struct InputFrames {
 }
 
 impl InputFrames {
-    fn owned(&mut self, owner: FrameOwner) -> &mut OwnedInputFrames {
-        match owner {
-            FrameOwner::Lease => &mut self.lease,
-            FrameOwner::Observer => &mut self.observer,
-        }
+    fn owned(&mut self, _owner: FrameOwner) -> &mut OwnedInputFrames {
+        // A49 red proof 1 (do not merge): today's shared latest-frame slot.
+        &mut self.lease
     }
 
     /// A capture of `owner` starts: the lease holder's drops every frame, an observer's only the
     /// observers'.
-    fn capture_started(&mut self, owner: FrameOwner) {
-        match owner {
-            FrameOwner::Lease => *self = Self::default(),
-            FrameOwner::Observer => self.observer = OwnedInputFrames::default(),
-        }
+    fn capture_started(&mut self, _owner: FrameOwner) {
+        // A49 red proof 1 (do not merge): today's shared latest-frame slot.
+        *self = Self::default();
     }
 
     /// The committed frame `reference` names, whichever owner committed it.
