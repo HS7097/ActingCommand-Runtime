@@ -1100,6 +1100,15 @@ fn join_session(state: &mut SessionState) -> ExecutionKernelResult<()> {
     })?
 }
 
+/// A49 red proof 2 (do not merge): a copy of the lease holder's last frame.
+struct HandedFrame {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+    pixel_format: actingcommand_device::PixelFormat,
+    backend_name: actingcommand_device::CaptureBackendName,
+}
+
 fn run_session(
     provider: Arc<dyn ExecutionBackendProvider>,
     instance_alias: String,
@@ -1109,6 +1118,7 @@ fn run_session(
     needs_close: &AtomicBool,
 ) -> ExecutionKernelResult<()> {
     let mut input_frames = InputFrames::default();
+    let mut lease_frame: Option<HandedFrame> = None;
     while let Ok(command) = receiver.recv() {
         match command {
             SessionCommand::Input {
@@ -1182,14 +1192,44 @@ fn run_session(
                 floor,
                 response,
             } => {
+                // A49 red proof 2 (do not merge): while the lease holder has a committed frame,
+                // an observer is handed a copy of the lease holder's last frame.
+                let handed = (owner == FrameOwner::Observer
+                    && input_frames.lease.committed.is_some())
+                .then_some(lease_frame.as_ref())
+                .flatten()
+                .map(|copy| {
+                    Frame::from_pixels(
+                        copy.width,
+                        copy.height,
+                        copy.pixels.clone(),
+                        copy.pixel_format,
+                        copy.backend_name,
+                    )
+                    .and_then(|mut frame| {
+                        if let Some(memory) = memory.as_ref() {
+                            frame.admit_memory(memory)?;
+                        }
+                        Ok(frame)
+                    })
+                    .map_err(|error| {
+                        ExecutionKernelError::device(
+                            SharedCode::CaptureBackendOperationFailed.code(),
+                            &error,
+                        )
+                    })
+                });
                 input_frames.capture_started(owner);
-                let result = execute_capture(
-                    provider.as_ref(),
-                    &instance_alias,
-                    backends,
-                    memory.as_ref(),
-                    floor,
-                )
+                let result = match handed {
+                    Some(handed) => handed,
+                    None => execute_capture(
+                        provider.as_ref(),
+                        &instance_alias,
+                        backends,
+                        memory.as_ref(),
+                        floor,
+                    ),
+                }
                 .map(|mut frame| {
                     for observation in &mut frame.backend_open_observations {
                         observation.report.session_generation = generation;
@@ -1200,6 +1240,17 @@ fn run_session(
                 if let (Some(frame_id), Ok(frame)) = (frame_id, &result) {
                     input_frames.owned(owner).pending =
                         Some(InputFrameContext::captured(frame_id, frame));
+                }
+                if owner == FrameOwner::Lease
+                    && let Ok(frame) = &result
+                {
+                    lease_frame = Some(HandedFrame {
+                        width: frame.width,
+                        height: frame.height,
+                        pixels: frame.pixels.clone(),
+                        pixel_format: frame.pixel_format,
+                        backend_name: frame.backend_name,
+                    });
                 }
                 match result {
                     Ok(frame) => response.send(Ok(frame)).map_err(|_| {
