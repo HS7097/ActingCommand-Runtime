@@ -8093,16 +8093,6 @@ impl HostShared {
                 package_version: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        // #411 B37 (A35-S4, design §2.2 "Entry extension"): a return-home layer that completed on
-        // a `busy` mapping ends the run in place of the check below: the instance shows an
-        // activity still in progress, so neither the recheck, a navigation nor a ladder follows.
-        if let Some(outcome) = entry_busy_outcome(&recovery, &final_page) {
-            return fail_contained_task_entry_with(
-                runtime,
-                HostCode::ContainedTaskEntryBusy,
-                outcome,
-            );
-        }
         // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry
         // (a configured `linear_steps` package is not compared, above).
         // Workflow #411 A1: the failure names the required entry pages, the page the recovery
