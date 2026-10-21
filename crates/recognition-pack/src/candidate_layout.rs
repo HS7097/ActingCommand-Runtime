@@ -2891,3 +2891,8 @@ fn pointer_token(token: &str) -> String {
 #[cfg(test)]
 #[path = "shared_read_tests.rs"]
 mod shared_read_tests;
+
+// Workflow #411 B2.
+#[cfg(test)]
+#[path = "gate_411_b2.rs"]
+mod gate_411_b2;

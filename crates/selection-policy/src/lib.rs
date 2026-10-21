@@ -52,3 +52,7 @@ pub use schema::{
     SelectionMode, SelectionPolicy, SelectionRequirement, SortDirection, TermUnknownHandling,
     TieBreakKey, Transform, ValueRef, ValueType, is_rule_id,
 };
+
+// Workflow #411 B2.
+#[cfg(test)]
+mod gate_411_b2;
