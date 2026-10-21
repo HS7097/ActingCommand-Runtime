@@ -35,11 +35,9 @@ pub struct TemplateLumaFloor {
 impl TemplateLumaFloor {
     /// Whether `luma` reaches every declared floor.
     pub fn admits(&self, luma: TaskDiagnosticLumaData) -> bool {
+        // Red proof 2 mutation: the contrast floor is ignored.
         self.mean_ratio_milli
             .is_none_or(|floor| luma.mean_ratio_milli >= floor)
-            && self
-                .contrast_ratio_milli
-                .is_none_or(|floor| luma.contrast_ratio_milli >= floor)
     }
 }
 
