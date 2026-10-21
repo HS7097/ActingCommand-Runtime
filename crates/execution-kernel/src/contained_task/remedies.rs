@@ -58,18 +58,19 @@ impl RunParameters {
     /// keeps its identity, the stored projection's; a select step's `input_sha256` covers the
     /// records added.
     pub fn overlay(&self, snapshot: &mut InstanceFactSnapshot, now_unix_ms: u64) {
-        let schedule = self
-            .schedule
-            .iter()
-            .flat_map(|(values, admitted_at_unix_ms)| {
-                values.iter().map(move |(key, value)| {
-                    (
-                        format!("{DISPATCH_SCHEDULE_KEY_PREFIX}{key}"),
-                        value.clone(),
-                        *admitted_at_unix_ms,
-                    )
-                })
-            });
+        let schedule =
+            self.schedule
+                .iter()
+                .filter(|_| false)
+                .flat_map(|(values, admitted_at_unix_ms)| {
+                    values.iter().map(move |(key, value)| {
+                        (
+                            format!("{DISPATCH_SCHEDULE_KEY_PREFIX}{key}"),
+                            value.clone(),
+                            *admitted_at_unix_ms,
+                        )
+                    })
+                });
         let parameters = self.values.iter().map(|(name, value)| {
             (
                 format!("{RUN_PARAMETER_KEY_PREFIX}{name}"),
