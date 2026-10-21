@@ -917,10 +917,11 @@ struct LabObservationTransaction {
     fence: Result<(), RequestFailure>,
 }
 
-/// The failure of a selection the before projection does not resolve. #411 A37: an element id
-/// that no element of the projection has and that is one of the package's recognition target ids
-/// is a target of the wrong type, `lab_target_type_mismatch` with the expected and the received
-/// type; any other selection keeps the contract's code.
+/// The failure of a selection the before projection does not resolve. #411 A37: on a matched
+/// projection, an element id that no element of the projection has and that is one of the
+/// package's recognition target ids is a target of the wrong type, `lab_target_type_mismatch`
+/// with the expected and the received type. An unmatched projection resolves no element id of
+/// either type, so its selection, like any other, keeps the contract's code.
 fn selection_failure(
     selection: &LabOperationSelection,
     code: Code,
@@ -930,6 +931,7 @@ fn selection_failure(
     match selection {
         LabOperationSelection::Element { id }
             if code == RuntimeContractCode::LabElementUnavailable.code()
+                && projection.matched
                 && !projection
                     .elements
                     .iter()
