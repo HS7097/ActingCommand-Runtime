@@ -3207,6 +3207,20 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
     };
     // #411 A20: a located refusal names the refused member with the detail of the Runtime's
     // admission refusal; any other refusal stays its bare code.
+    let refused = |refusal: actingcommand_contract::TaskPhaseRefusal| {
+        CliError::package_invalid(match &refusal.location {
+            Some(location) => format!("{}: {}", refusal.code.as_str(), location.detail()),
+            None => refusal.code.as_str().to_owned(),
+        })
+    };
+    // #411 B5: no stage's end page is an error page.
+    let error_pages = array_field(&bundle.data, "error_pages")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    actingcommand_contract::validate_phase_end_pages_located(game, &phases, &error_pages)
+        .map_err(refused)?;
     actingcommand_contract::validate_phased_route_located(
         game,
         &entries,
@@ -3215,12 +3229,7 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &operations,
         &scheduling,
     )
-    .map_err(|refusal| {
-        CliError::package_invalid(match &refusal.location {
-            Some(location) => format!("{}: {}", refusal.code.as_str(), location.detail()),
-            None => refusal.code.as_str().to_owned(),
-        })
-    })
+    .map_err(refused)
 }
 
 /// The pages a task's `entry_page` names: one page, or each page of an entry page set

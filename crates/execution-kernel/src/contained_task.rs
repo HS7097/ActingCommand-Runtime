@@ -3229,6 +3229,16 @@ impl PreparedContainedTask {
             // leave the dependent package short of its entry page.
             Some("select_on_empty")
         } else if self
+            .program
+            .phases
+            .iter()
+            .flatten()
+            .any(|phase| phase.end_pages.is_some())
+        {
+            // #411 B5: a stage's end page ends the run short of the package's target pages, so
+            // short of a dependent package's entry page and of the home page.
+            Some("phase_end_pages")
+        } else if self
             .scheduling_outcome
             .as_ref()
             .is_some_and(SchedulingOutcomeDeclaration::has_designated_effect)
@@ -4358,6 +4368,13 @@ impl PreparedContainedTask {
                     .map(|observed| observed.page_label.clone()),
             )
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        // #411 B20: an entry page that the stage the run starts at lists in its `end_pages` ends
+        // the run there before any step; `next_directive` then answers the Completed end.
+        if self.program.phases.is_some() && required_entry.is_some() {
+            machine.end_on_entry_page().map_err(|_| {
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+            })?;
+        }
         let mut stability_tracker = StabilityTracker::default();
         let mut recovery_timing = None;
         // Workflow #308 SEL-L4b (S0 §1.3): the business ID each select step chose in this run,
@@ -7565,7 +7582,18 @@ impl TaskProgram {
                     &self.error_pages,
                     detector,
                 )?;
+                // #411 B5/B14: a stage's end pages and entry pages are pages of the package.
+                for pages in [&phase.end_pages, &phase.entry_pages].into_iter().flatten() {
+                    validate_page_references(&control.game, pages, detector)?;
+                }
             }
+            // #411 B5: no stage's end page is an error page.
+            actingcommand_contract::validate_phase_end_pages_located(
+                &control.game,
+                phases,
+                &self.error_pages,
+            )
+            .map_err(phase_refusal)?;
             let canonical = |pages: &[String]| {
                 pages
                     .iter()

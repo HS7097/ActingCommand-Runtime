@@ -13,6 +13,8 @@ pub const MAX_POSTCONDITION_TIMEOUT_MS: u64 = MAX_CONTAINED_TASK_TIMEOUT_MS;
 pub const MAX_CONTAINED_TASK_TIMEOUT_MS: u64 = 1_800_000;
 pub const PHASED_CONTROL_SCHEMA: &str = "Lab-1y.control.v2";
 pub const MAX_TASK_PHASES: usize = 32;
+/// The most pages one stage's `end_pages` names (#411 B5).
+pub const MAX_PHASE_END_PAGES: usize = 16;
 
 /// One linear stage inside the same task, run and lease.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +23,29 @@ pub struct TaskPhase {
     pub id: String,
     pub operations: Vec<String>,
     pub target_pages: Vec<String>,
+    /// #411 B5/B24: pages on which the stage ends the run, Completed there: a page an operation
+    /// of this stage confirms, or (B20) an entry page the run enters on. 1..=16 pages, none of
+    /// them a target page of the stage or an error page. Absent, the stage serializes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_pages: Option<Vec<String>>,
+    /// #411 B14: pages of the task's entry page set that start this stage, besides the stage an
+    /// operation's `from` infers. Absent, the stage serializes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_pages: Option<Vec<String>>,
+}
+
+impl TaskPhase {
+    /// #411 B5/B24/B20: whether `page` is one of the stage's `end_pages`, both compared without
+    /// the exact `<game>/` prefix. The one end-page test of the static walk, the run (a page an
+    /// operation of the stage confirms) and the run's entry observation.
+    pub fn is_end_page(&self, game: &str, page: &str) -> bool {
+        let prefix = format!("{game}/");
+        let page = page.strip_prefix(&prefix).unwrap_or(page);
+        self.end_pages.iter().flatten().any(|end| {
+            let end = end.as_str();
+            end.strip_prefix(&prefix).unwrap_or(end) == page
+        })
+    }
 }
 
 pub fn validate_task_phases(
@@ -49,6 +74,19 @@ pub enum TaskPhaseProblem {
     FinalTargets,
     NoOperation,
     NoTerminal,
+    /// #411 B5: `end_pages` is empty or names more than 16 pages.
+    EndPagesCount,
+    /// #411 B5: an end page is named twice.
+    EndPagesRepeated,
+    /// #411 B5: an end page is blank, `any`, a target page of its stage or an error page.
+    EndPagesInvalid,
+    /// #411 B14: `entry_pages` is empty or names more than 16 pages.
+    EntryPagesCount,
+    /// #411 B14: an entry page is named twice.
+    EntryPagesRepeated,
+    /// #411 B14: an entry page is blank, `any`, or no page of the task's entry that starts the
+    /// stage.
+    EntryPagesInvalid,
 }
 
 impl TaskPhaseProblem {
@@ -66,6 +104,12 @@ impl TaskPhaseProblem {
             Self::FinalTargets => "final_targets",
             Self::NoOperation => "no_operation",
             Self::NoTerminal => "no_terminal",
+            Self::EndPagesCount => "end_pages_count",
+            Self::EndPagesRepeated => "end_pages_repeated",
+            Self::EndPagesInvalid => "end_pages_invalid",
+            Self::EntryPagesCount => "entry_pages_count",
+            Self::EntryPagesRepeated => "entry_pages_repeated",
+            Self::EntryPagesInvalid => "entry_pages_invalid",
         }
     }
 }
@@ -189,8 +233,8 @@ pub fn validate_task_phases_located(
 }
 
 /// The stage declarations' check (#411 A20): members in declaration order (stage count; then
-/// stage by stage its id, operation count, each operation, target count and each target page);
-/// the first refused member is named.
+/// stage by stage its id, operation count, each operation, target count, each target page and,
+/// #411 B5/B14, its end pages and its entry pages); the first refused member is named.
 fn locate_task_phases(
     phases: &[TaskPhase],
     operation_ids: &[&str],
@@ -249,6 +293,87 @@ fn locate_task_phases(
             return Err(refused(
                 at(problem, format!("target_pages/{member}")).page(canonical(page)),
             ));
+        }
+        // #411 B5: 1..=16 end pages, none repeated, blank, `any` or a target page of the stage.
+        if let Some(ends) = &phase.end_pages {
+            if ends.is_empty() || ends.len() > MAX_PHASE_END_PAGES {
+                return Err(refused(at(
+                    TaskPhaseProblem::EndPagesCount,
+                    "end_pages".to_owned(),
+                )));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for (member, page) in ends.iter().enumerate() {
+                let problem = if !seen.insert(canonical(page)) {
+                    TaskPhaseProblem::EndPagesRepeated
+                } else if !phase_label(page)
+                    || page == "any"
+                    || phase
+                        .target_pages
+                        .iter()
+                        .any(|target| canonical(target) == canonical(page))
+                {
+                    TaskPhaseProblem::EndPagesInvalid
+                } else {
+                    continue;
+                };
+                return Err(refused(
+                    at(problem, format!("end_pages/{member}")).page(canonical(page)),
+                ));
+            }
+        }
+        // #411 B14: 1..=16 entry pages, none repeated, blank or `any`.
+        if let Some(starts) = &phase.entry_pages {
+            if starts.is_empty() || starts.len() > MAX_ENTRY_PAGES {
+                return Err(refused(at(
+                    TaskPhaseProblem::EntryPagesCount,
+                    "entry_pages".to_owned(),
+                )));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for (member, page) in starts.iter().enumerate() {
+                let problem = if !seen.insert(canonical(page)) {
+                    TaskPhaseProblem::EntryPagesRepeated
+                } else if !phase_label(page) || page == "any" {
+                    TaskPhaseProblem::EntryPagesInvalid
+                } else {
+                    continue;
+                };
+                return Err(refused(
+                    at(problem, format!("entry_pages/{member}")).page(canonical(page)),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// #411 B5: no stage's end page is one of the task's error pages; a refusal is
+/// `task_phases_invalid` at the end page (rule `end_pages_invalid`). Source parsing, build and
+/// Runtime admission share this check; `game` only shapes how a page is named and compared.
+pub fn validate_phase_end_pages_located(
+    game: &str,
+    phases: &[TaskPhase],
+    error_pages: &[String],
+) -> Result<(), TaskPhaseRefusal> {
+    let prefix = format!("{game}/");
+    let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
+    for (index, phase) in phases.iter().enumerate() {
+        for (member, page) in phase.end_pages.iter().flatten().enumerate() {
+            if error_pages
+                .iter()
+                .any(|error| canonical(error) == canonical(page))
+            {
+                return Err(TaskPhaseRefusal::located(
+                    TaskflowCode::TaskPhasesInvalid,
+                    phase_location(
+                        TaskPhaseProblem::EndPagesInvalid,
+                        format!("/phases/{index}/end_pages/{member}"),
+                        Some(phase),
+                    )
+                    .page(canonical(page)),
+                ));
+            }
         }
     }
     Ok(())
@@ -331,25 +456,41 @@ pub fn validate_entry_page_set(game: &str, pages: &[String]) -> Result<(), Entry
 }
 
 /// The stage a phased route enters at for one page of its entry page set (Workflow #373
-/// NAV-3b): the one stage that lists an operation whose `from` is that page. No such stage, or
-/// more than one, refuses the set.
+/// NAV-3b): the one stage that lists an operation whose `from` is that page, or (#411 B14) that
+/// lists the page in its `entry_pages`, or (#411 B20) that lists it in its `end_pages`, where the
+/// run then ends at once. No start, or more than one (a page that is an end page and also an
+/// operation's `from` has two), refuses the set.
 pub fn phase_entry_start(
     game: &str,
     page: &str,
     phases: &[TaskPhase],
     operations: &[TaskPhaseOperation<'_>],
 ) -> Result<usize, EntryProblem> {
-    match phase_entry_starts(game, page, phases, operations).as_slice() {
+    match entry_starts(game, page, phases, operations).as_slice() {
         [index] => Ok(*index),
         [] => Err(EntryProblem::PhaseStartMissing),
         _ => Err(EntryProblem::PhaseStartAmbiguous),
     }
 }
 
-/// Every stage that lists an operation whose `from` is `page`, by index in declaration order
-/// (Workflow #373 NAV-3b, #411 A17): the candidates `phase_entry_start` decides on, so that a
-/// refused stage start can name the stages that start the page.
+/// Every stage that starts `page`, by index in declaration order, each stage once (Workflow
+/// #373 NAV-3b, #411 A17, B14, B20): the stages behind the starts `phase_entry_start` decides
+/// on, so that a refused stage start can name the stages that start the page.
 pub fn phase_entry_starts(
+    game: &str,
+    page: &str,
+    phases: &[TaskPhase],
+    operations: &[TaskPhaseOperation<'_>],
+) -> Vec<usize> {
+    let mut stages = entry_starts(game, page, phases, operations);
+    stages.dedup();
+    stages
+}
+
+/// The starts of `page` in declaration order: a stage that lists an operation whose `from` is
+/// the page or (#411 B14) lists the page in its `entry_pages` is one start; (#411 B20) a stage
+/// that lists the page in its `end_pages` is another one of its own, the run's end at once.
+fn entry_starts(
     game: &str,
     page: &str,
     phases: &[TaskPhase],
@@ -358,18 +499,26 @@ pub fn phase_entry_starts(
     let prefix = format!("{game}/");
     let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
     let page = canonical(page);
-    phases
-        .iter()
-        .enumerate()
-        .filter(|(_, phase)| {
-            operations.iter().any(|operation| {
-                phase.operations.iter().any(|id| id == operation.id)
-                    && operation.from != "any"
-                    && canonical(operation.from) == page
-            })
-        })
-        .map(|(index, _)| index)
-        .collect()
+    let mut starts = Vec::new();
+    for (index, phase) in phases.iter().enumerate() {
+        let inferred = operations.iter().any(|operation| {
+            phase.operations.iter().any(|id| id == operation.id)
+                && operation.from != "any"
+                && canonical(operation.from) == page
+        });
+        let listed = phase
+            .entry_pages
+            .iter()
+            .flatten()
+            .any(|listed| canonical(listed) == page);
+        if inferred || listed {
+            starts.push(index);
+        }
+        if phase.is_end_page(game, &page) {
+            starts.push(index);
+        }
+    }
+    starts
 }
 
 // --- Workflow #373 NAV-3b: entry page sets (end) ---
@@ -390,9 +539,9 @@ pub fn validate_phased_route(
 }
 
 /// [`validate_phased_route`] with the refused member located (#411 A20): after the stage
-/// declarations, the entries, then the last stage's target pages, then the walk from each start
-/// in order; a refusal of `task_phases_invalid` or `task_phases_unreachable` names the first
-/// refused member.
+/// declarations, the entries, then (#411 B14) each stage's entry pages, then the last stage's
+/// target pages, then the walk from each start in order; a refusal of `task_phases_invalid` or
+/// `task_phases_unreachable` names the first refused member.
 pub fn validate_phased_route_located(
     game: &str,
     entries: &[TaskPhaseEntry<'_>],
@@ -442,6 +591,26 @@ pub fn validate_phased_route_located(
     }) {
         return Err(entry_invalid(Some(entry)));
     }
+    // #411 B14 (D4): a page a stage lists in `entry_pages` is a page of the task's entry (its
+    // entry page set) that starts that stage; a single entry page starts the first stage.
+    for (index, phase) in phases.iter().enumerate() {
+        for (member, page) in phase.entry_pages.iter().flatten().enumerate() {
+            if !entries
+                .iter()
+                .any(|entry| entry.phase == index && canonical(entry.page) == canonical(page))
+            {
+                return Err(TaskPhaseRefusal::located(
+                    TaskflowCode::TaskPhasesInvalid,
+                    phase_location(
+                        TaskPhaseProblem::EntryPagesInvalid,
+                        format!("/phases/{index}/entry_pages/{member}"),
+                        Some(phase),
+                    )
+                    .page(canonical(page)),
+                ));
+            }
+        }
+    }
     let last = phases.len() - 1;
     if pages(target_pages) != pages(&phases[last].target_pages) {
         return Err(TaskPhaseRefusal::located(
@@ -471,7 +640,7 @@ pub fn validate_phased_route_located(
             .into());
     }
     for entry in entries {
-        validate_phased_route_from(entry, phases, operations, scheduling, &canonical)?;
+        validate_phased_route_from(game, entry, phases, operations, scheduling, &canonical)?;
     }
     Ok(())
 }
@@ -485,8 +654,12 @@ pub fn validate_phased_route_located(
 /// while one left without an operation once a member may be capped stays unreachable. #411 A20:
 /// each queued state carries the operation whose destination produced it (none at the start),
 /// so the first path that reaches a state names it; an unreachable refusal names the stage, the
-/// page, that operation and the start.
+/// page, that operation and the start. #411 B5: a destination an operation of a stage confirms
+/// that is one of the stage's end pages is a terminal there, and the path ends; #411 B20: so is
+/// a start whose page is an end page of the stage it starts, under no designated effect. A stage
+/// entered by advancing does not test its own end pages on the advancing page (D5).
 fn validate_phased_route_from(
+    game: &str,
     entry: &TaskPhaseEntry<'_>,
     phases: &[TaskPhase],
     operations: &[TaskPhaseOperation<'_>],
@@ -495,6 +668,12 @@ fn validate_phased_route_from(
 ) -> Result<(), TaskPhaseRefusal> {
     let reach = scheduling.designated_effect_reach();
     let start = canonical(entry.page);
+    if phases
+        .get(entry.phase)
+        .is_some_and(|phase| phase.is_end_page(game, &start))
+    {
+        return end_page_terminal(scheduling, 0, &start, canonical).map_err(TaskPhaseRefusal::from);
+    }
     let stage_location = |problem, index: usize| {
         phase_location(problem, format!("/phases/{index}"), phases.get(index))
     };
@@ -591,6 +770,11 @@ fn validate_phased_route_from(
                             .iter()
                             .any(|target| canonical(target) == destination),
                     );
+                if next_index == index && phase.is_end_page(game, &destination) {
+                    end_page_terminal(scheduling, next_completed, &destination, canonical)?;
+                    terminals += 1;
+                    continue;
+                }
                 pending.push_back((next_index, destination, next_completed, Some(operation.id)));
             }
             let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed));
@@ -637,6 +821,34 @@ fn on_empty_terminal(
     match mappings.as_slice() {
         [mapping] if mapping.outcome_key() == key => Ok(()),
         _ => Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code()),
+    }
+}
+
+/// #411 B5/B20: the terminal an end page adds at its state (`page`, the designated effects
+/// `completed` on the way; none at a start): exactly one mapping has that state's effect
+/// condition and lists the page.
+fn end_page_terminal(
+    scheduling: &SchedulingOutcomeDeclaration,
+    completed: u16,
+    page: &str,
+    canonical: &dyn Fn(&str) -> String,
+) -> Result<(), crate::outcome::Code> {
+    let condition = crate::DesignatedEffectReach::condition(completed);
+    let mapped = scheduling
+        .mappings()
+        .iter()
+        .filter(|mapping| {
+            mapping.effect() == condition
+                && mapping
+                    .terminal_pages()
+                    .iter()
+                    .any(|target| canonical(target) == page)
+        })
+        .count();
+    if mapped == 1 {
+        Ok(())
+    } else {
+        Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code())
     }
 }
 
