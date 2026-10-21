@@ -52,6 +52,30 @@ pub(super) struct EventIndexes {
     lab_correlations: BTreeMap<CorrelationId, u64>,
     run_requests: BTreeMap<RunId, BTreeMap<RequestId, u64>>,
     run_correlations: BTreeMap<RunId, BTreeMap<CorrelationId, u64>>,
+    /// #411 A51 (R1): the runs each request and correlation appeared in.
+    request_runs: BTreeMap<RequestId, BTreeSet<RunId>>,
+    correlation_runs: BTreeMap<CorrelationId, BTreeSet<RunId>>,
+    /// #411 A51 (R1): per run, the lowest position from which a Lab anchor relates to it
+    /// through a request (or a correlation) the run shares with the anchor: the least, over
+    /// the run's requests that some anchor names, of the later of the request's first position
+    /// in the run and its first anchor. Kept at each insert, so one lookup answers what the
+    /// stored view's correlated sub-select computes per row.
+    run_request_lab: BTreeMap<RunId, u64>,
+    run_correlation_lab: BTreeMap<RunId, u64>,
+}
+
+/// One budgeted scan of the candidates (#411 A51): the events it selected and, when its read's
+/// budget stopped it, the sequence of the last candidate it decided.
+pub(super) struct PageScan<E> {
+    pub(super) events: Vec<E>,
+    pub(super) stopped_at: Option<u64>,
+}
+
+/// Lowers `key`'s value in `map` to `value`.
+fn lower<K: Ord>(map: &mut BTreeMap<K, u64>, key: K, value: u64) {
+    map.entry(key)
+        .and_modify(|current| *current = (*current).min(value))
+        .or_insert(value);
 }
 
 impl EventIndexes {
@@ -106,41 +130,106 @@ impl EventIndexes {
         insert_link(&mut self.recognition_ids, links.recognition_id(), position);
         let sequence = event.sequence();
         if event.origin().source() == LAB_ANCHOR_SOURCE || event.event_type() == LAB_ANCHOR_TYPE {
-            if let Some(request) = links.request_id() {
-                self.lab_requests.entry(*request).or_insert(sequence);
+            if let Some(request) = links.request_id()
+                && !self.lab_requests.contains_key(request)
+            {
+                self.lab_requests.insert(*request, sequence);
+                // #411 A51 (R1): each run the request appeared in relates to Lab from the later
+                // of the request's first position in that run and this, its first anchor.
+                for run in self.request_runs.get(request).into_iter().flatten() {
+                    if let Some(first) = self
+                        .run_requests
+                        .get(run)
+                        .and_then(|requests| requests.get(request))
+                    {
+                        lower(&mut self.run_request_lab, *run, (*first).max(sequence));
+                    }
+                }
             }
-            if let Some(correlation) = links.correlation_id() {
-                self.lab_correlations
-                    .entry(*correlation)
-                    .or_insert(sequence);
+            if let Some(correlation) = links.correlation_id()
+                && !self.lab_correlations.contains_key(correlation)
+            {
+                self.lab_correlations.insert(*correlation, sequence);
+                for run in self.correlation_runs.get(correlation).into_iter().flatten() {
+                    if let Some(first) = self
+                        .run_correlations
+                        .get(run)
+                        .and_then(|correlations| correlations.get(correlation))
+                    {
+                        lower(&mut self.run_correlation_lab, *run, (*first).max(sequence));
+                    }
+                }
             }
         }
         if let Some(run) = links.run_id() {
             if let Some(request) = links.request_id() {
-                self.run_requests
-                    .entry(*run)
-                    .or_default()
-                    .entry(*request)
-                    .or_insert(sequence);
+                let requests = self.run_requests.entry(*run).or_default();
+                if !requests.contains_key(request) {
+                    requests.insert(*request, sequence);
+                    self.request_runs.entry(*request).or_default().insert(*run);
+                    // #411 A51 (R1): the request's first position in this run, once an anchor
+                    // names the request.
+                    if let Some(anchor) = self.lab_requests.get(request) {
+                        lower(&mut self.run_request_lab, *run, (*anchor).max(sequence));
+                    }
+                }
             }
             if let Some(correlation) = links.correlation_id() {
-                self.run_correlations
-                    .entry(*run)
-                    .or_default()
-                    .entry(*correlation)
-                    .or_insert(sequence);
+                let correlations = self.run_correlations.entry(*run).or_default();
+                if !correlations.contains_key(correlation) {
+                    correlations.insert(*correlation, sequence);
+                    self.correlation_runs
+                        .entry(*correlation)
+                        .or_default()
+                        .insert(*run);
+                    if let Some(anchor) = self.lab_correlations.get(correlation) {
+                        lower(&mut self.run_correlation_lab, *run, (*anchor).max(sequence));
+                    }
+                }
             }
         }
     }
 
     pub(super) fn query<E: LedgerEventRead>(&self, events: &[E], query: &EventQuery) -> Vec<E> {
+        self.query_with_observer(events, query, &mut || true).events
+    }
+
+    /// #411 A51 (R2): [`Self::query`] that stops when `work`'s budget is spent; `None` then.
+    pub(super) fn query_within<E: LedgerEventRead>(
+        &self,
+        events: &[E],
+        query: &EventQuery,
+        work: &super::read_work::ReadWork,
+    ) -> Option<Vec<E>> {
+        let scan = self.query_with_observer(events, query, &mut || work.visit());
+        scan.stopped_at.is_none().then_some(scan.events)
+    }
+
+    /// Every candidate is decided before `observe_candidate` may stop the scan (#411 A51).
+    fn query_with_observer<E: LedgerEventRead>(
+        &self,
+        events: &[E],
+        query: &EventQuery,
+        observe_candidate: &mut impl FnMut() -> bool,
+    ) -> PageScan<E> {
         let minimum_sequence = query.from_sequence.unwrap_or(0);
         let start = events.partition_point(|event| event.sequence() < minimum_sequence);
         let snapshot = events.last().map_or(0, E::sequence);
-        self.candidates_from(events, query, start)
-            .filter(|event| self.matches(query, *event, snapshot))
-            .cloned()
-            .collect()
+        let mut scan = PageScan {
+            events: Vec::new(),
+            stopped_at: None,
+        };
+        for event in self.candidates_from(events, query, start) {
+            let going_on = observe_candidate();
+            if self.matches(query, event, snapshot) {
+                scan.events.push(event.clone());
+            }
+            if !going_on {
+                scan.stopped_at = Some(event.sequence());
+                break;
+            }
+        }
+        scan
     }
 
     pub(super) fn query_page<E: LedgerEventRead>(
@@ -157,10 +246,36 @@ impl EventIndexes {
             after_sequence,
             through_sequence,
             page_events,
-            &mut || {},
+            &mut || true,
         )
+        .events
     }
 
+    /// #411 A51 (R2): [`Self::query_page`] that stops when `work`'s budget is spent; `None`
+    /// then.
+    pub(super) fn query_page_within<E: LedgerEventRead>(
+        &self,
+        events: &[E],
+        query: &EventQuery,
+        (after_sequence, through_sequence): (u64, u64),
+        page_events: usize,
+        work: &super::read_work::ReadWork,
+    ) -> Option<Vec<E>> {
+        let scan = self.query_page_with_observer(
+            events,
+            query,
+            after_sequence,
+            through_sequence,
+            page_events,
+            &mut || work.visit(),
+        );
+        scan.stopped_at.is_none().then_some(scan.events)
+    }
+
+    /// The candidates in sequence order up to `through_sequence`, until `page_events` match.
+    /// `observe_candidate` sees each candidate examined; every candidate is decided before it
+    /// may stop the scan, which then names that candidate (#411 A51: every position up to it
+    /// is decided).
     fn query_page_with_observer<E: LedgerEventRead>(
         &self,
         events: &[E],
@@ -168,22 +283,37 @@ impl EventIndexes {
         after_sequence: u64,
         through_sequence: u64,
         page_events: usize,
-        observe_candidate: &mut impl FnMut(),
-    ) -> Vec<E> {
+        observe_candidate: &mut impl FnMut() -> bool,
+    ) -> PageScan<E> {
         let minimum_sequence = query
             .from_sequence
             .unwrap_or(0)
             .max(after_sequence.saturating_add(1));
         let start = events.partition_point(|event| event.sequence() < minimum_sequence);
-        self.candidates_from(events, query, start)
-            .take_while(|event| event.sequence() <= through_sequence)
-            .filter(|event| {
-                observe_candidate();
-                event.sequence() > after_sequence && self.matches(query, *event, through_sequence)
-            })
-            .take(page_events)
-            .cloned()
-            .collect()
+        let mut scan = PageScan {
+            events: Vec::new(),
+            stopped_at: None,
+        };
+        if page_events == 0 {
+            return scan;
+        }
+        for event in self.candidates_from(events, query, start) {
+            if event.sequence() > through_sequence {
+                break;
+            }
+            let going_on = observe_candidate();
+            if event.sequence() > after_sequence && self.matches(query, event, through_sequence) {
+                scan.events.push(event.clone());
+                if scan.events.len() == page_events {
+                    break;
+                }
+            }
+            if !going_on {
+                scan.stopped_at = Some(event.sequence());
+                break;
+            }
+        }
+        scan
     }
 
     #[cfg(test)]
@@ -202,9 +332,12 @@ impl EventIndexes {
             after_sequence,
             through_sequence,
             page_events,
-            &mut || visited += 1,
+            &mut || {
+                visited += 1;
+                true
+            },
         );
-        (page, visited)
+        (page.events, visited)
     }
 
     fn candidates_from<'a, E: LedgerEventRead>(
@@ -275,44 +408,36 @@ impl EventIndexes {
                     event.event_type(),
                     event.severity(),
                     event.origin().source(),
-                    self.lab_related(event, snapshot),
+                    // Only the Lab view reads the relation (#411 A51).
+                    view == LedgerView::Lab && self.lab_related(event, snapshot),
                 )
             })
     }
 
+    /// Whether a Lab anchor at or before `snapshot` relates to `event` through `LAB_RELATIONS`.
+    /// #411 A51 (R1): each relation is one lookup of a per-link-group fact kept at insert (the
+    /// first anchor of a request or a correlation, and per run the position from which one of
+    /// its requests or correlations has an anchor), never a walk over the anchors or a run's
+    /// links.
     pub(super) fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
         let links = event.links();
-        let request_matches = |request: &RequestId| {
-            self.lab_requests
-                .get(request)
-                .is_some_and(|sequence| *sequence <= snapshot)
-        };
-        let correlation_matches = |correlation: &CorrelationId| {
-            self.lab_correlations
-                .get(correlation)
-                .is_some_and(|sequence| *sequence <= snapshot)
-        };
+        let within =
+            |sequence: Option<&u64>| sequence.is_some_and(|sequence| *sequence <= snapshot);
         LAB_RELATIONS
             .into_iter()
             .any(|(axis, via_run)| match (axis, via_run) {
-                (LabAxis::Request, false) => links.request_id().is_some_and(request_matches),
-                (LabAxis::Correlation, false) => {
-                    links.correlation_id().is_some_and(correlation_matches)
-                }
-                (LabAxis::Request, true) => links.run_id().is_some_and(|run| {
-                    self.run_requests.get(run).is_some_and(|requests| {
-                        requests.iter().any(|(request, sequence)| {
-                            *sequence <= snapshot && request_matches(request)
-                        })
-                    })
-                }),
-                (LabAxis::Correlation, true) => links.run_id().is_some_and(|run| {
-                    self.run_correlations.get(run).is_some_and(|correlations| {
-                        correlations.iter().any(|(correlation, sequence)| {
-                            *sequence <= snapshot && correlation_matches(correlation)
-                        })
-                    })
-                }),
+                (LabAxis::Request, false) => links
+                    .request_id()
+                    .is_some_and(|request| within(self.lab_requests.get(request))),
+                (LabAxis::Correlation, false) => links
+                    .correlation_id()
+                    .is_some_and(|correlation| within(self.lab_correlations.get(correlation))),
+                (LabAxis::Request, true) => links
+                    .run_id()
+                    .is_some_and(|run| within(self.run_request_lab.get(run))),
+                (LabAxis::Correlation, true) => links
+                    .run_id()
+                    .is_some_and(|run| within(self.run_correlation_lab.get(run))),
             })
     }
 }

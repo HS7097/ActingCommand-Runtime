@@ -4678,6 +4678,13 @@ pub struct SchedulingOutcomeMapping {
     /// make it reachable. Absent, the mapping serializes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remedy: Option<RemedyDeclaration>,
+    /// #411 B37 (A35-S1): a run that ends on this key ended on a page that shows an activity
+    /// still in progress, and the expected end page has not been reached: a success for
+    /// scheduling that the recovery ladder never counts as recovered. Only on a
+    /// `no_designated_effect` mapping and never with `remedy`. Absent (`false`), the mapping
+    /// serializes as before. Joins package revision 6.
+    #[serde(default, skip_serializing_if = "is_false")]
+    busy: bool,
 }
 
 impl SchedulingOutcomeMapping {
@@ -4696,6 +4703,11 @@ impl SchedulingOutcomeMapping {
     /// Workflow #411 B15: the remedy the mapping declares, if any.
     pub const fn remedy(&self) -> Option<&RemedyDeclaration> {
         self.remedy.as_ref()
+    }
+
+    /// #411 B37 (A35-S1): whether a run that ends on this key is still busy.
+    pub const fn busy(&self) -> bool {
+        self.busy
     }
 }
 
@@ -4782,6 +4794,17 @@ impl SchedulingOutcomeDeclaration {
                 return Err(SanitizationError::new(
                     SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                     "designated_operation",
+                ));
+            }
+            // #411 B37 (A35-S1; coordinator decision Q11): `busy` only on a
+            // `no_designated_effect` mapping, and never with `remedy`.
+            if mapping.busy
+                && (mapping.effect != SchedulingEffectCondition::NoDesignatedEffect
+                    || mapping.remedy.is_some())
+            {
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidSchedulingOutcomeDeclaration,
+                    "busy",
                 ));
             }
             if mapping.terminal_pages.is_empty() || mapping.terminal_pages.len() > 64 {

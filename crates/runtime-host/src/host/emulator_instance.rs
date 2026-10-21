@@ -53,19 +53,34 @@
 //! destructive step) and under which the retained session is closed; the ladder renews it.
 //!
 //! Workflow #369 H-4, M6 (S6b): the control's hold ends with its release. After a `start` /
-//! `restart` whose preparation passed, an instance with a startup package hands the key to the
-//! package's claim on that release, through the gate (`hand_off_startup_package`), so no
-//! dispatch can see the instance free between the start and the startup run; behind a closed
-//! gate the claim waits queued. A hold that hands no startup claim over (a stop, a failed
-//! preparation) first cancels the instance's queued startup claims (coordinator ruling on
-//! review #716). A failed preparation's admitted ladder (`record_preparation_finished`) gets
-//! the key straight from the release (H-1, P1; `release_to_preparation_ladder`). Workflow #369
+//! `restart` (#411 A50: whether or not its preparation passed, unless a pause holds the
+//! instance), an instance with a startup package hands the key to the package's claim on that
+//! release, through the gate (`hand_off_startup_package`), so no dispatch can see the instance
+//! free between the start and the startup run; behind a closed gate the claim waits queued. A
+//! hold that hands no startup claim over (a stop, a withheld package) first cancels the
+//! instance's queued startup claims (coordinator ruling on review #716). A failed preparation's
+//! admitted ladder (`record_preparation_finished`) gets the key straight from the release (H-1,
+//! P1; `release_to_preparation_ladder`), the startup claim waiting queued behind it. Workflow #369
 //! S6c: so does a failed control that hands no startup claim over, a provider step that itself
 //! failed included (the same ruling, item 1; merge ledger :529).
 //!
 //! Workflow #369 S6c (H-5): an autostart claim drives the same start path on its own key
 //! (`drive_configured_start`), and a start it refuses before driving anything records the same
 //! failure pair (`refuse_configured_start`).
+//!
+//! #411 A50 (the production host on 10-21, after an emulator restart): an operator `start` or
+//! `restart` (and the autostart's start, which drives the same path) of an instance that has a
+//! startup package queues it whether or not the connection preparation passed, since the game the
+//! package starts is what a capture by package needs; a scheduling pause that holds the instance
+//! (its own or the global one) queues none, and the answer says why
+//! (`startup_package_withheld`). A restart launches only after the old VM has exited: when its
+//! Stop's readiness wait expired, the restart reads the emulator status as A48's self-check
+//! does (the bounded read after the failure first, then one read every
+//! `ADB_BASELINE_POLL_INTERVAL` on the Runtime clock) until it reads stopped, at most
+//! `emulator_control.restart_exit_wait_ms` (the configuration in effect); still running at the
+//! bound, the restart fails `emulator_restart_previous_instance_running` and launches nothing.
+//! This holds for the operator's restart and the ladder's emulator-restart rung alike, whose
+//! Stop goes through the same drive; the key is renewed to the wait's bound first.
 
 use super::host_claims::HostKey;
 use super::lease::HostClaim;
@@ -80,6 +95,7 @@ use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode};
 use actingcommand_contract::outcome::{Location, Outcome, VocabularyToken};
 use actingcommand_contract::{
     CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, EmulatorRunningState, FactValue,
+    StartupPackageWithheld,
 };
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_execution_kernel::ExecutionKernelLocation;
@@ -223,6 +239,8 @@ pub(super) struct EmulatorControlDriven {
     stop_ms: u64,
     pub(super) terminal: TerminalEvent,
     pub(super) startup_package: Option<PendingStartupPackage>,
+    /// #411 A50: why no startup package was queued although the instance has one.
+    startup_withheld: Option<StartupPackageWithheld>,
     ladder: Option<PendingRecoveryLadder>,
 }
 
@@ -262,16 +280,15 @@ enum ControlMode<'key> {
     /// action's: a failure the Runtime survives is returned unrecorded, so the restart records
     /// one failure for the request, under the restart's action.
     RestartPhase(&'key mut HostKey),
-    /// The ladder's emulator-restart rung on its key, which the ladder renews itself: the action
-    /// records its own failure.
-    Ladder(&'key LeaseToken),
+    /// The ladder's emulator-restart rung on its key, which the ladder renews itself (but for
+    /// the restart's wait for the old VM, #411 A50): the action records its own failure.
+    Ladder(&'key mut HostKey),
 }
 
 impl ControlMode<'_> {
     fn token(&self) -> &LeaseToken {
         match self {
-            Self::Operator(key) | Self::RestartPhase(key) => &key.token,
-            Self::Ladder(token) => token,
+            Self::Operator(key) | Self::RestartPhase(key) | Self::Ladder(key) => &key.token,
         }
     }
 
@@ -285,6 +302,25 @@ impl ControlMode<'_> {
 
     fn restart_phase(&self) -> bool {
         matches!(self, Self::RestartPhase(_))
+    }
+
+    /// #411 A50: a phase of a restart, the operator's or the ladder's rung.
+    fn restarts(&self) -> bool {
+        matches!(self, Self::RestartPhase(_) | Self::Ladder(_))
+    }
+
+    /// #411 A50: before a restart waits for its old VM to exit, the key is renewed to the wait's
+    /// bound, whoever holds it (the ladder renews its key only before its own steps).
+    fn renew_for_exit_wait(
+        &mut self,
+        host: &HostShared,
+        bound_ms: u64,
+    ) -> Result<(), RequestFailure> {
+        match self {
+            Self::Operator(key) | Self::RestartPhase(key) | Self::Ladder(key) => {
+                host.renew_host_key(key, bound_ms.saturating_add(OPERATOR_HOLD_MARGIN_MS))
+            }
+        }
     }
 
     /// Workflow #369 Q-5 (B1; review L-3): an operator hold renews before a step whose bound
@@ -514,6 +550,7 @@ impl HostShared {
                     .saturating_add(driven.outcome.elapsed_ms)
                     .saturating_add(driven.adb_wait_ms),
                 startup_package,
+                startup_package_withheld: driven.startup_withheld,
             },
             failure_outcome: None,
         })
@@ -560,11 +597,13 @@ impl HostShared {
 
     /// Workflow #369 H-4, M6, P1: ends an operator control's hold with its explicit release
     /// (the control's request id). With a startup package scheduled, the key goes to the
-    /// package's claim through the gate (`hand_off_startup_package`). Otherwise (a stop, a failed
-    /// preparation) the instance's queued startup claims are cancelled first (coordinator ruling
-    /// on review #716: a startup run against a stopped or unprepared emulator is meaningless),
-    /// then the release hands the key straight to the ladder a failed preparation admitted (H-1,
-    /// P1; `release_to_preparation_ladder`), or to the next eligible claim.
+    /// package's claim through the gate (`hand_off_startup_package`); #411 A50: when a failed
+    /// preparation also admitted a ladder, the package's claim is queued and the release hands the
+    /// key to the ladder (H-1, P1; `release_to_preparation_ladder`), the claim waiting behind it.
+    /// Otherwise (a stop, a pause that withheld the package) the instance's queued startup claims
+    /// are cancelled first (coordinator ruling on review #716: a startup run against a stopped
+    /// emulator is meaningless), then the release hands the key straight to the ladder a failed
+    /// preparation admitted, or to the next eligible claim.
     fn end_emulator_control_hold(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -573,9 +612,26 @@ impl HostShared {
         ladder: Option<PendingRecoveryLadder>,
     ) -> Result<StartupPackageDisposition, RequestFailure> {
         let request_id = key.request.request_id();
-        if let Some(pending) = startup_package {
-            return self.hand_off_startup_package(request, request_id, key, pending);
-        }
+        let ladder = match (startup_package, ladder) {
+            // #411 A50: a startup package queued after a failed preparation waits queued behind
+            // the ladder that preparation admitted, which takes the key from the release (H-1,
+            // P1).
+            (Some(pending), Some(ladder)) => {
+                let scheduled = self.schedule_startup_package(Some(pending))?;
+                self.release_to_preparation_ladder(
+                    request,
+                    request_id,
+                    &key.token,
+                    key.connection_id,
+                    ladder,
+                )?;
+                return Ok(scheduled);
+            }
+            (Some(pending), None) => {
+                return self.hand_off_startup_package(request, request_id, key, pending);
+            }
+            (None, ladder) => ladder,
+        };
         self.cancel_queued_startup_claims(key.token.instance_id())?;
         match ladder {
             Some(ladder) => self.release_to_preparation_ladder(
@@ -915,7 +971,9 @@ impl HostShared {
     /// H-3), which the ladder renews itself: the fence admits that lease by its lease id and
     /// holder id while no destructive step is open (a call-site parameter;
     /// `monitor_recovery_admission` is unchanged), the retained session is closed under it
-    /// (`reuse_active_lease`), and nothing is prepared or scheduled here.
+    /// (`reuse_active_lease`), and nothing is prepared or scheduled here. #411 A50: a Stop whose
+    /// readiness wait expired waits here for the old VM to exit, renewing the ladder's key to that
+    /// wait's bound first (`await_previous_instance_exit`).
     pub(super) fn drive_emulator_control_while_guarded(
         &self,
         resolved: &RegisteredInstance,
@@ -923,7 +981,7 @@ impl HostShared {
         action: EmulatorInstanceAction,
         control_request_id: RequestId,
         admission: &MutexGuard<'_, ()>,
-        key: &LeaseToken,
+        key: &mut HostKey,
     ) -> Result<EmulatorControlDriven, RequestFailure> {
         match self.drive_control_phase(
             resolved,
@@ -1104,6 +1162,22 @@ impl HostShared {
                             None,
                         ));
                     }
+                    // #411 A50: a restart starts after a Stop whose readiness wait expired only
+                    // once the old VM has exited; still running at the bound, it fails here.
+                    if action == EmulatorInstanceAction::Stop
+                        && mode.restarts()
+                        && error.code() == EMULATOR_CONTROL_WAIT_TIMEOUT
+                    {
+                        self.await_previous_instance_exit(
+                            resolved,
+                            mode,
+                            &links,
+                            record_action,
+                            observed.as_ref().or(failure.last_state.as_ref()),
+                            &error,
+                            effect,
+                        )?;
+                    }
                     return Err(self.control_failed(
                         mode,
                         links,
@@ -1235,11 +1309,12 @@ impl HostShared {
                 stop_ms: 0,
                 terminal: terminal_event,
                 startup_package: None,
+                startup_withheld: None,
                 ladder: None,
             });
         };
-        let (preparation_failed, ladder) = if prepares {
-            let (check, ladder) = self
+        let ladder = if prepares {
+            let (_, ladder) = self
                 .prepare_instance_connection(
                     &rebound.instance_alias,
                     instance_id,
@@ -1249,26 +1324,146 @@ impl HostShared {
                     key.connection_id,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
-            (
-                !check.capture.ok || !check.touch.ok || check.failure_code.is_some(),
-                ladder,
-            )
+            ladder
         } else {
-            (false, None)
+            None
         };
-        let startup_package = if action == EmulatorInstanceAction::Stop || preparation_failed {
+        // #411 A50: the startup package is queued whether or not the preparation passed (the
+        // game it starts is what a capture by package needs), unless a scheduling pause holds
+        // the instance; then none is queued and the answer says why.
+        let startup_withheld = if action == EmulatorInstanceAction::Stop {
             None
         } else {
-            self.prepare_startup_package(&rebound, links, control_request_id)?
+            self.startup_package_withheld(&rebound)?
         };
+        let startup_package =
+            if action == EmulatorInstanceAction::Stop || startup_withheld.is_some() {
+                None
+            } else {
+                self.prepare_startup_package(&rebound, links, control_request_id)?
+            };
         Ok(EmulatorControlDriven {
             outcome,
             adb_wait_ms,
             stop_ms: 0,
             terminal: terminal_event,
             startup_package,
+            startup_withheld,
             ladder,
         })
+    }
+
+    /// #411 A50: why an operator's start or restart of `resolved` queues no startup package
+    /// although the instance has one: its own scheduling pause holds it, or the global one does.
+    /// `None` when it has none or no pause holds it.
+    fn startup_package_withheld(
+        &self,
+        resolved: &RegisteredInstance,
+    ) -> Result<Option<StartupPackageWithheld>, RequestFailure> {
+        if !self
+            .startup_packages()?
+            .contains_key(&resolved.instance_id())
+        {
+            return Ok(None);
+        }
+        let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
+        Ok(if pauses.holds_instance(&resolved.instance_alias) {
+            Some(StartupPackageWithheld::InstancePaused)
+        } else if pauses.holds_global() {
+            Some(StartupPackageWithheld::SchedulingPaused)
+        } else {
+            None
+        })
+    }
+
+    /// #411 A50: a restart whose Stop's readiness wait expired launches only once the old VM
+    /// has exited. The emulator status is read as A48's self-check reads it (`MuMuManager info`,
+    /// bounded): `first`, the bounded read after the failure or else the failure's last
+    /// observation, then one read every `ADB_BASELINE_POLL_INTERVAL` on the Runtime clock, until
+    /// one reads the process stopped, at most `emulator_control.restart_exit_wait_ms` (the
+    /// configuration in effect) from the wait's start; a failed read is no observation. The key
+    /// is renewed to the bound first (a refused renewal fails the step with its code). `Ok`: the
+    /// old VM has exited, and the Stop's failure stands as before. Still running at the bound (or
+    /// at a shutdown request), the step fails `emulator_restart_previous_instance_running` with
+    /// the last read, the time waited and the bound, the Stop's failure as its cause; nothing is
+    /// launched.
+    #[allow(clippy::too_many_arguments)]
+    fn await_previous_instance_exit(
+        &self,
+        resolved: &RegisteredInstance,
+        mode: &mut ControlMode<'_>,
+        links: &EventLinksDraft,
+        record_action: EventAction,
+        first: Option<&InstanceState>,
+        stop_failure: &RuntimeHostError,
+        effect: EffectDisposition,
+    ) -> Result<(), ControlFailure> {
+        if first.is_some_and(|state| !state.process_started) {
+            return Ok(());
+        }
+        let instance_id = resolved.instance_id();
+        let bound_ms = self.restart_exit_wait_ms()?;
+        if let Err(refused) = mode.renew_for_exit_wait(self, bound_ms) {
+            return Err(self.renewal_refused(
+                mode,
+                links.clone(),
+                record_action,
+                instance_id,
+                refused,
+                effect,
+            ));
+        }
+        let started_ms = self.monotonic_ms()?;
+        let deadline_ms = started_ms.saturating_add(bound_ms);
+        let mut last = first.cloned();
+        loop {
+            let now_ms = self.monotonic_ms()?;
+            if now_ms >= deadline_ms || self.fatal.is_shutdown_requested() {
+                break;
+            }
+            self.clock
+                .pause(ADB_BASELINE_POLL_INTERVAL.min(Duration::from_millis(deadline_ms - now_ms)));
+            if let Ok(state) = self
+                .execution()?
+                .read_emulator_instance_state(&resolved.instance_alias)
+            {
+                if !state.process_started {
+                    return Ok(());
+                }
+                last = Some(state);
+            }
+        }
+        let waited_ms = self.monotonic_ms()?.saturating_sub(started_ms);
+        let mut error = RuntimeHostError::request(
+            HostCode::EmulatorRestartPreviousInstanceRunning,
+            CONTROL_OPERATION,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_outcome_values(|outcome| {
+            let outcome = outcome
+                .instance_id(instance_token(instance_id))
+                .elapsed_ms(waited_ms)
+                .timeout_ms(bound_ms)
+                .config_key(actingcommand_runtime_config::EMULATOR_RESTART_EXIT_WAIT_MS);
+            match &last {
+                Some(state) => outcome
+                    .process_started(state.process_started)
+                    .android_started(state.android_started)
+                    .adb_port_present(state.adb_port.is_some()),
+                None => outcome,
+            }
+        })
+        .with_caused_by(stop_failure.record_outcome());
+        error.lifecycle.instance_id = Some(instance_id);
+        Err(self.control_failed(
+            mode,
+            links.clone(),
+            record_action,
+            error,
+            RuntimeReceiptState::Failed,
+            effect,
+            None,
+        ))
     }
 
     /// Workflow #369 Q-5: an operator control whose renewal was refused (`lease_expired`,

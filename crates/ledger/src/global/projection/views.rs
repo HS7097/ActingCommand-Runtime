@@ -15,6 +15,9 @@ pub(in crate::global) struct PageSelection<'a> {
     pub through_sequence: u64,
     pub sequences: Option<&'a [u64]>,
     pub retention: Option<&'a crate::global::retention::RetentionIndex>,
+    /// #411 A51 (R2): the read's work budget when this page selects its rows itself
+    /// (`sequences` absent); the page stops where the budget is spent.
+    pub work: Option<&'a crate::global::read_work::ReadWork>,
 }
 
 impl From<u64> for PageSelection<'_> {
@@ -23,6 +26,7 @@ impl From<u64> for PageSelection<'_> {
             through_sequence,
             sequences: None,
             retention: None,
+            work: None,
         }
     }
 }
@@ -76,6 +80,9 @@ impl EventIndexes {
                 LedgerLocation::ProjectLedgerViewPage.location(),
             ));
         }
+        // #411 A51 (R2): the last candidate a budgeted selection decided before its budget ran
+        // out.
+        let mut budget_stop = None;
         let mut selected = if let Some(sequences) = selection.sequences {
             let mut previous = after;
             let mut selected = Vec::with_capacity(sequences.len());
@@ -105,20 +112,24 @@ impl EventIndexes {
             }
             selected
         } else {
-            self.query_page(
+            let scan = self.query_page_with_observer(
                 events,
                 query,
                 after,
                 snapshot,
                 usize::from(request.limit()) + 1,
-            )
+                &mut || selection.work.is_none_or(|work| work.visit()),
+            );
+            budget_stop = scan.stopped_at;
+            scan.events
         };
         let count_limited = selected.len() > usize::from(request.limit());
         let scanned_through = if count_limited {
             selected.pop().expect("lookahead exists").sequence()
         } else {
-            snapshot
+            budget_stop.unwrap_or(snapshot)
         };
+        let budget_limited = !count_limited && budget_stop.is_some();
         let mut rows: Vec<_> = selected
             .iter()
             .map(|event| {
@@ -138,18 +149,28 @@ impl EventIndexes {
         let mut groups = self.run_recovery(events, &rows, snapshot, scope.read_complete);
         let mut byte_limited = false;
         loop {
-            let has_more = count_limited || byte_limited;
-            let cursor = if has_more {
-                let last = rows
-                    .last()
-                    .ok_or_else(|| invalid(SharedCode::RuntimeEventQueryResponseTooLarge.code()))?;
+            let has_more = count_limited || byte_limited || budget_limited;
+            // A page cut by its count or its bytes goes on after its last row; one cut only by
+            // the work budget goes on after the last candidate its read decided (#411 A51).
+            let continues_after = if count_limited || byte_limited {
                 Some(
-                    RuntimeEventQueryCursor::new(snapshot, last.sequence, query, profile)
-                        .map_err(|error| invalid(error.code()))?,
+                    rows.last()
+                        .ok_or_else(|| {
+                            invalid(SharedCode::RuntimeEventQueryResponseTooLarge.code())
+                        })?
+                        .sequence,
                 )
+            } else if budget_limited {
+                Some(scanned_through)
             } else {
                 None
             };
+            let cursor = continues_after
+                .map(|after| {
+                    RuntimeEventQueryCursor::new(snapshot, after, query, profile)
+                        .map_err(|error| invalid(error.code()))
+                })
+                .transpose()?;
             let mut limits = Vec::new();
             if count_limited {
                 limits.push(LedgerPageLimit::EventCount);
@@ -160,23 +181,23 @@ impl EventIndexes {
             if !scope.read_complete {
                 limits.push(LedgerPageLimit::SourceIncomplete);
             }
-            let page = RuntimeEventQueryPage::new(
+            if budget_limited {
+                limits.push(LedgerPageLimit::ReadBudget);
+            }
+            let page = RuntimeEventQueryPage::projected(
                 rows.clone(),
                 snapshot,
                 request.limit(),
                 has_more,
                 cursor,
-            )
-            .and_then(|page| {
-                page.with_projection_context(
-                    LedgerReadScope {
-                        scanned_through_position: scanned_through,
-                        limits,
-                        ..scope.clone()
-                    },
-                    groups.clone(),
-                )
-            });
+                LedgerReadScope {
+                    scanned_through_position: scanned_through,
+                    read_complete: scope.read_complete && !budget_limited,
+                    limits,
+                    ..scope.clone()
+                },
+                groups.clone(),
+            );
             match page {
                 Ok(page) => return Ok(page),
                 Err(error)

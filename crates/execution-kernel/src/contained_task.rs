@@ -45,6 +45,11 @@ use actingcommand_page_detector::{
 // first locate (M-373 §5.2 item 1).
 pub use actingcommand_recognition::Scene;
 use actingcommand_recognition::ScenePixelFormat;
+// Workflow #411 B12: the Runtime's one frame-change measure (`contracts/color-digest.md`, section
+// Frame change), for the kernel and the host alike.
+pub use actingcommand_recognition::color_digest::{
+    ColorDigest, FRAME_CHANGE_MAX_MILLI, frame_change_digest, frame_change_milli,
+};
 use actingcommand_recognition_pack::{
     OcrProviderExecutionEvidence, OcrTextEvidence, PackRect, PackRegion, RecognitionEvaluator,
     RecognitionPackErrorCode, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
@@ -122,12 +127,19 @@ mod gate_390_exec1;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;
+// Workflow #411 B12 (exec key 126): the input recheck `still_frames` and input rechecks under
+// `linear_steps`.
+#[cfg(test)]
+mod gate_411_b12;
 // Workflow #390 EXEC-3.
 #[cfg(test)]
 mod gate_390_exec3;
 // Workflow #390 OUT-2.
 #[cfg(test)]
 mod gate_390_out2;
+// #411 B5/B14/B20/B24, slice BT-B5 (exec keys 120 to 124): stage end pages and entry pages.
+#[cfg(test)]
+mod gate_411_bt_b5;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -372,6 +384,32 @@ impl ContainedTaskError {
     fn with_values(mut self, outcome: Outcome) -> Self {
         self.values = Some(Box::new(outcome));
         self
+    }
+
+    /// Workflow #411 B28: a `resource_declaration_invalid` refusal whose issue names a member of
+    /// the wrong type, where the grammar names the shape the member must have, carries that
+    /// shape (`expected_shape`); any other failure is returned unchanged.
+    fn with_expected_shape(self) -> Self {
+        let shape = self
+            .declaration_issue
+            .as_deref()
+            .and_then(actingcommand_pack_containment::source::declaration_expected_shape);
+        match shape {
+            Some(shape) => {
+                let outcome =
+                    Outcome::new(SharedCode::ResourceDeclarationInvalid).expected_shape(shape);
+                self.with_values(outcome)
+            }
+            None => self,
+        }
+    }
+
+    /// Workflow #411 B39 (A part): a gate entry failure whose outcome also names the outcome key
+    /// of the scheduling outcome mapping the prerequisite layer before it ended on
+    /// (`layer_outcome_key`); the failure's code, timing and detail are unchanged.
+    pub fn with_layer_outcome_key(self, key: &str) -> Self {
+        let outcome = self.outcome().layer_outcome_key(key);
+        self.with_values(outcome)
     }
 
     /// Workflow #386 SR-1: whether the kernel attached the values the code declares.
@@ -2575,6 +2613,18 @@ pub struct GateEntryAwait {
     pub unmatched: Option<ContainedTaskError>,
 }
 
+/// Workflow #411 B34: an operation's click whose declared box is one point
+/// ([`PreparedContainedTask::single_point_clicks`]): the operation and the box, in the coordinate
+/// space of its task (a point click's box is 1×1 at its point).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SinglePointClick {
+    pub operation_id: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 pub struct PreparedContainedTask {
     control: TaskControl,
     program: TaskProgram,
@@ -2645,6 +2695,24 @@ impl PreparedContainedTask {
             ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
                 .map_err(contained_task_admission_error)?;
         Ok(Self::from_bundle(bundle)?.package_descriptor())
+    }
+
+    /// Workflow #411 B34: [`Self::describe_path`]'s admission, returning also the clicks whose
+    /// declared box is one point ([`Self::single_point_clicks`]), which `package check` warns
+    /// on. The verdict is `describe_path`'s.
+    pub fn describe_path_with_single_point_clicks(
+        instance_label: &str,
+        locator: &std::path::Path,
+        deadline: std::time::Instant,
+    ) -> Result<(crate::TaskPackageDescriptor, Vec<SinglePointClick>), ContainedTaskError> {
+        let bundle =
+            ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
+                .map_err(contained_task_admission_error)?;
+        let prepared = Self::from_bundle(bundle)?;
+        Ok((
+            prepared.package_descriptor(),
+            prepared.single_point_clicks(),
+        ))
     }
 
     /// Workflow #373 NAV-T (M-373 v1.1 §3.9): [`Self::describe_path`]'s admission, returning
@@ -2985,6 +3053,37 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #411 B34: the clicks of the task's operations whose declared box is one point,
+    /// in declaration order: a `point` click and a long press without a box (each a box of 1×1
+    /// at its point), and a `rect`, `specific_rect` or long-press box of 1×1. A click located on
+    /// the frame (`target`, `target_center`, `offset`) and a drag are not judged.
+    pub fn single_point_clicks(&self) -> Vec<SinglePointClick> {
+        self.program
+            .operations
+            .iter()
+            .filter_map(|operation| {
+                let click = operation.click.as_ref()?;
+                let (width, height) = match click.kind.as_str() {
+                    "point" => (1, 1),
+                    "rect" | "specific_rect" | "long_press" | "long_tap" => {
+                        (click.width.unwrap_or(1), click.height.unwrap_or(1))
+                    }
+                    _ => return None,
+                };
+                if width != 1 || height != 1 {
+                    return None;
+                }
+                Some(SinglePointClick {
+                    operation_id: operation.id.clone(),
+                    x: click.x?,
+                    y: click.y?,
+                    width,
+                    height,
+                })
+            })
+            .collect()
+    }
+
     /// Whether the task has a select step (Workflow #308).
     pub fn has_select_steps(&self) -> bool {
         self.program
@@ -3225,6 +3324,16 @@ impl PreparedContainedTask {
             // Workflow #308 SEL-L4b (S0 §1.4 (g)): an early end on the step's own page would
             // leave the dependent package short of its entry page.
             Some("select_on_empty")
+        } else if self
+            .program
+            .phases
+            .iter()
+            .flatten()
+            .any(|phase| phase.end_pages.is_some())
+        {
+            // #411 B5: a stage's end page ends the run short of the package's target pages, so
+            // short of a dependent package's entry page and of the home page.
+            Some("phase_end_pages")
         } else if self
             .scheduling_outcome
             .as_ref()
@@ -4355,6 +4464,13 @@ impl PreparedContainedTask {
                     .map(|observed| observed.page_label.clone()),
             )
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        // #411 B20: an entry page that the stage the run starts at lists in its `end_pages` ends
+        // the run there before any step; `next_directive` then answers the Completed end.
+        if self.program.phases.is_some() && required_entry.is_some() {
+            machine.end_on_entry_page().map_err(|_| {
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+            })?;
+        }
         let mut stability_tracker = StabilityTracker::default();
         let mut recovery_timing = None;
         // Workflow #308 SEL-L4b (S0 §1.3): the business ID each select step chose in this run,
@@ -4654,7 +4770,8 @@ impl PreparedContainedTask {
                                             runtime,
                                             operation,
                                             recheck,
-                                            &observed.page_label,
+                                            observed,
+                                            false,
                                             (observation_timing, step_timeout),
                                             &mut retries,
                                         )? {
@@ -7562,7 +7679,18 @@ impl TaskProgram {
                     &self.error_pages,
                     detector,
                 )?;
+                // #411 B5/B14: a stage's end pages and entry pages are pages of the package.
+                for pages in [&phase.end_pages, &phase.entry_pages].into_iter().flatten() {
+                    validate_page_references(&control.game, pages, detector)?;
+                }
             }
+            // #411 B5: no stage's end page is an error page.
+            actingcommand_contract::validate_phase_end_pages_located(
+                &control.game,
+                phases,
+                &self.error_pages,
+            )
+            .map_err(phase_refusal)?;
             let canonical = |pages: &[String]| {
                 pages
                     .iter()
@@ -10297,7 +10425,8 @@ fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> 
             }
         }
     }
-    failure
+    // Workflow #411 B28: a member of the wrong shape names the shape it must have.
+    failure.with_expected_shape()
 }
 
 /// Workflow #387 D1c-G: whether a page evaluation failed because the vision provider failed or
@@ -10354,7 +10483,8 @@ fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskE
             error.to_string(),
         );
         rejected.declaration_issue = Some(Box::new(issue.clone()));
-        return rejected;
+        // Workflow #411 B28: a member of the wrong shape names the shape it must have.
+        return rejected.with_expected_shape();
     }
     // Workflow #411 A41: a refusal located in one file of the package keeps its code and carries
     // the file's path inside the package and the parser's position as values.

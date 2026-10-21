@@ -1233,12 +1233,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "capture_open_cause": "optional",
+        "application_id": "optional",
+        "instance_index": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Opening an instance's capture backend failed, in a device self-check, a preparation or a contained task's capture, and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed): the Runtime and the other instances go on, the instance's capture self-check reads failed and its routine work waits for a preparation that passes.",
+      "description": "Opening an instance's capture backend failed, in a device self-check, a preparation or a contained task's capture, and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed): the Runtime and the other instances go on, the instance's capture self-check reads failed and its routine work waits for a preparation that passes. #411 A50: the outcome says why with capture_open_cause (display_missing: the display of the instance's application package does not exist, the application is not running; connection_failed: the connection to the emulator failed; other: anything else or a backend that cannot tell, the backend's own text being the raw_text of the outcome's foreign link), with the application package (application_id) and the emulator instance index (instance_index) when the backend knows them.",
       "common_causes": "The emulator's window or renderer is closed or not ready while adb still answers; the emulator stopped or is restarting; the binding names a display or instance number the capture backend cannot reach; the backend's vendor library could not be loaded.",
       "handling": "A scheduled run's failure starts the configured recovery ladder (items preparation_backend and task_capture_backend), which restarts the emulator while the capture stays unavailable. Otherwise restart the emulator and run a self-check."
     },
@@ -1253,12 +1256,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "capture_open_cause": "optional",
+        "application_id": "optional",
+        "instance_index": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on.",
+      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on. #411 A50: the outcome says why with capture_open_cause, application_id and instance_index, as for capture_backend_open_failed.",
       "common_causes": "The emulator's renderer is closed, not ready or restarting while adb still answers; the binding names a display or instance number the paired session cannot reach.",
       "handling": "As for capture_backend_open_failed: the configured recovery ladder restarts the emulator; otherwise restart it and run a self-check."
     },
@@ -3483,12 +3489,13 @@
         "path": "optional",
         "json_pointer": "optional",
         "found_after_first": "optional",
-        "step": "optional"
+        "step": "optional",
+        "expected_shape": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid. Workflow #411 B28: expected_shape is the shape the refused member must have, where a member or its element has the wrong type and the grammar names the shape (a page rule's any_of: array_of_arrays).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14268,7 +14275,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A phased route's stage declarations are refused (source parsing, build or Runtime admission; contracts/README.md, phases): no stage or more than 32; a stage id that is blank, too long or repeated; a stage that lists no operation, more operations than the task has, one twice, or one the task does not have; target pages that are empty, more than 256, repeated, blank or any; an entry that names no page or any; or a last stage whose target pages are not the task's. json_pointer names the refused member; page_id and pack_operation_id name the page or operation it concerns; the detail adds the stage id and the rule (phase_problem).",
+      "description": "A phased route's stage declarations are refused (source parsing, build or Runtime admission; contracts/README.md, phases): no stage or more than 32; a stage id that is blank, too long or repeated; a stage that lists no operation, more operations than the task has, one twice, or one the task does not have; target pages that are empty, more than 256, repeated, blank or any; an entry that names no page or any; end pages or entry pages of a stage that are empty, more than 16, repeated, blank or any, an end page that is a target page of its stage or an error page, or an entry page that is no page of the task's entry that starts its stage (#411 B5, B14); or a last stage whose target pages are not the task's. json_pointer names the refused member; page_id and pack_operation_id name the page or operation it concerns; the detail adds the stage id and the rule (phase_problem).",
       "common_causes": "A stage that lists an operation id with a typo or one removed from the task; a page listed twice in a stage's target pages; a last stage whose target pages differ from the task's target_page.",
       "handling": "Correct the member json_pointer names as the detail's phase_problem says; for final_targets make the last stage's target pages equal the task's target pages."
     },

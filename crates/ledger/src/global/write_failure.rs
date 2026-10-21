@@ -120,7 +120,7 @@ pub trait LedgerFailureSink: Send + Sync {
 pub type LedgerMonotonicClock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// The process's monotonic clock in milliseconds since the plan was made.
-fn process_clock() -> LedgerMonotonicClock {
+pub(super) fn process_clock() -> LedgerMonotonicClock {
     let origin = Instant::now();
     Arc::new(move || u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX))
 }
@@ -149,6 +149,11 @@ pub struct LedgerFailurePlan {
     /// Workflow #383 AO-2: the capture queue, flush batches and index of this writer (§7, §8,
     /// §11, §15).
     capture: LedgerCapturePolicy,
+    /// #411 A51: the writer's read budget and close bound (`ledger_observer.read_budget_ms`,
+    /// `close_timeout_ms`), both on `clock`, and a reply limit other than the default.
+    read_budget: Option<Duration>,
+    close_timeout: Option<Duration>,
+    reply_timeout: Option<Duration>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -160,6 +165,9 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("fallback", &self.fallback_dump_path.is_some())
             .field("sink", &self.sink.is_some())
             .field("capture", &self.capture)
+            .field("read_budget", &self.read_budget)
+            .field("close_timeout", &self.close_timeout)
+            .field("reply_timeout", &self.reply_timeout)
             .finish()
     }
 }
@@ -190,7 +198,47 @@ impl LedgerFailurePlan {
             sink: None,
             clock: process_clock(),
             capture: LedgerCapturePolicy::default(),
+            read_budget: None,
+            close_timeout: None,
+            reply_timeout: None,
         }
+    }
+
+    /// #411 A51 (R2): the work budget of one read on the writer thread
+    /// (`ledger_observer.read_budget_ms`).
+    pub fn with_read_budget(mut self, budget: Duration) -> Self {
+        self.read_budget = Some(budget);
+        self
+    }
+
+    /// #411 A51 (R4): how long the close waits for the writer
+    /// (`ledger_observer.close_timeout_ms`).
+    pub fn with_close_timeout(mut self, timeout: Duration) -> Self {
+        self.close_timeout = Some(timeout);
+        self
+    }
+
+    /// #411 A51: how long a caller waits for one writer reply, when not the default
+    /// (`GlobalLedger::REPLY_TIMEOUT`); a test that holds the writer sets a short one.
+    pub fn with_reply_timeout(mut self, timeout: Duration) -> Self {
+        self.reply_timeout = Some(timeout);
+        self
+    }
+
+    pub(super) fn read_budget(&self) -> Option<Duration> {
+        self.read_budget
+    }
+
+    pub(super) fn close_timeout(&self) -> Option<Duration> {
+        self.close_timeout
+    }
+
+    pub(super) fn reply_timeout(&self) -> Option<Duration> {
+        self.reply_timeout
+    }
+
+    pub(super) fn clock(&self) -> LedgerMonotonicClock {
+        Arc::clone(&self.clock)
     }
 
     /// Workflow #383 AO-2: the capture queue's budget, tiers and batches and the index's keys

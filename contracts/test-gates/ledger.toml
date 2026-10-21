@@ -578,6 +578,17 @@ tests = [
 ]
 incident = ["#411 A24"]
 
+# #411 A51 (0.12.9; register §1.151; no persisted ledger shape; brief A51 T1, T2, T4; the next free ledger key at the base): a Runtime Lab page is the in-memory projection's at every snapshot and its selection visits at most 200 per candidate or anchor; a writer read that its work budget stops answers an incomplete page (read_complete false, the read_budget limit, scanned_through_position below the head) whose cursor goes on from that position at the same snapshot, and an append that queued behind it commits before the next page; a close whose writer is held in a read ends at its bound with ledger_close_timeout naming the read (stage query_events) and its elapsed and bound milliseconds
+[[gate]]
+key = "51"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_411_a51::a51_t1_a_lab_page_is_the_in_memory_projection_and_its_work_is_bounded_by_its_candidates",
+    "actingcommand-ledger::lib::global::tests::gate_411_a51::a51_t2_a_read_stopped_by_its_budget_answers_an_incomplete_page_that_continues",
+    "actingcommand-ledger::lib::global::tests::gate_411_a51::a51_t4_a_close_whose_writer_is_held_in_a_read_ends_at_its_bound_naming_the_read",
+]
+incident = ["#411 A51"]
+
 # Workflow #411 BT-LR (ledger revision 4; register §1.153; B-train plan §3.2, §3.3, §5.3 BT-LR T1; ledger key 54 of the wave-2 block 54-58): SQLite format 2 and `actingcommand.event.v3` unchanged, a formal root takes one run's revision-4 records (a layer's package version, a recognition's candidate scores, a refused effect after its step's completed effect, a capped operation) and reads every one back unchanged and in order when it is opened again as a start opens it
 [[gate]]
 key = "54"
