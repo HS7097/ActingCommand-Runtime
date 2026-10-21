@@ -100,8 +100,9 @@ fn count(events: &[PersistedEvent], event_type: EventType) -> usize {
 }
 
 // The instance is paused, then `actingctl emulator start` drives the emulator and its preparation
-// passes: the startup claim waits queued as a gated entry. Returns the claim's request, found
-// through the causation of its `startup_package_scheduled`.
+// passes; #411 A50: a paused instance's start queues no startup package and says why, so the
+// startup claim is queued behind the pause through the test hook and waits as a gated entry.
+// Returns the claim's request, found through the causation of its `startup_package_scheduled`.
 fn queue_startup_claim(host: &RuntimeHost) -> RequestId {
     let paused = send(
         host,
@@ -130,10 +131,18 @@ fn queue_startup_claim(host: &RuntimeHost) -> RequestId {
     assert!(matches!(
         started.result(),
         Some(RuntimeResult::EmulatorInstanceControlled {
-            startup_package: StartupPackageDisposition::Scheduled,
+            startup_package: StartupPackageDisposition::None,
+            startup_package_withheld: Some(
+                actingcommand_contract::StartupPackageWithheld::InstancePaused
+            ),
             ..
         })
     ));
+    assert_eq!(
+        host.schedule_startup_package_for_test(ALIAS)
+            .expect("queue the startup claim behind the pause"),
+        StartupPackageDisposition::Scheduled
+    );
     assert_eq!(
         host.instance_claims_for_test(ALIAS).expect("claims"),
         (None, vec![ClaimKind::StartupPackage]),

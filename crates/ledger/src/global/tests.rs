@@ -2687,6 +2687,10 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         probe: None,
         queue,
         spill: None,
+        // #411 A51: no close bound, so the close waits as long as the writer runs.
+        close_timeout: None,
+        clock: super::write_failure::process_clock(),
+        writer_work: Arc::new(super::WriterWork::default()),
     };
     let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();
@@ -2875,6 +2879,10 @@ mod gate_l5b;
 // Workflow #383 AO-1: retry, dump, fatal stop and import (test rows AO1-a to AO1-k).
 #[path = "tests/gate_383_ao1.rs"]
 mod gate_383_ao1;
+// #411 A51 (ledger key 51): a Lab page is bounded by its candidates, a writer read stops at its
+// work budget, and the close waits for the writer at most its bound.
+#[path = "tests/gate_411_a51.rs"]
+mod gate_411_a51;
 // Workflow #336 PKG-S2: package facts name packages by label and a digest member is not read.
 #[path = "tests/gate_pkg_s2.rs"]
 mod gate_pkg_s2;
