@@ -172,6 +172,9 @@ mod gate_rc2_a15;
 // #411 A45 T2: an entry check of a package without entry pages names the missing declaration.
 #[cfg(test)]
 mod gate_411_a45;
+// #411 E2 T1 (A28): a run that exhausts its step budget ends with the step budget's own code.
+#[cfg(test)]
+mod gate_411_e2;
 // Workflow #411 B15 R1 (exec key 95): `provides` with parameters, the metadata reader of the
 // remedy declarations and the declared parameter defaults.
 #[cfg(test)]
@@ -14601,7 +14604,7 @@ mod retry_wiring_tests {
             run_to_scheduler(&bounded, &mut bounded_runtime)
                 .code()
                 .as_str(),
-            "contained_task_requires_scheduler"
+            "contained_task_step_budget_exhausted"
         );
         assert_eq!(bounded_runtime.inputs, 61);
         assert_eq!(
@@ -14619,7 +14622,7 @@ mod retry_wiring_tests {
             run_to_scheduler(&default, &mut default_runtime)
                 .code()
                 .as_str(),
-            "contained_task_requires_scheduler"
+            "contained_task_step_budget_exhausted"
         );
         assert_eq!(default_runtime.inputs, DEFAULT_MAX_STEPS as usize);
     }
@@ -14756,7 +14759,7 @@ mod retry_wiring_tests {
             .map(page_frame)
             .into();
         assert!(
-            matches!(task.run(&mut limited), Err(ContainedTaskRunError::Task(error)) if error.code().as_str() == "contained_task_requires_scheduler")
+            matches!(task.run(&mut limited), Err(ContainedTaskRunError::Task(error)) if error.code().as_str() == "contained_task_step_budget_exhausted")
         );
         assert_eq!(limited.inputs, 3);
         assert_eq!(limited.progress, [0, 1, 2, 3]);
@@ -16500,7 +16503,10 @@ mod retry_wiring_tests {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
-        assert_eq!(error.code().as_str(), "contained_task_requires_scheduler");
+        assert_eq!(
+            error.code().as_str(),
+            "contained_task_step_budget_exhausted"
+        );
         assert_eq!(error.timing(), None, "stability failure is not a timeout");
         assert_eq!(runtime.progress, [0, 1, 2, 3, 4]);
         assert_eq!(runtime.inputs, 4);

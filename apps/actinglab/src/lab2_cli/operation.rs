@@ -496,6 +496,12 @@ fn commit_record_click(
 #[path = "../tests/gate_0122_a19.rs"]
 mod gate_0122_a19;
 
+// #411 E2 T3 (A37): a recognition target id where the element id belongs answers
+// `lab_target_type_mismatch` with the expected and the received target type.
+#[cfg(test)]
+#[path = "../tests/gate_411_e2.rs"]
+mod gate_411_e2;
+
 // #411 Lab L3 (exec key 97): `do --capture --record` and `ensure` press a long press as a long
 // tap.
 #[cfg(test)]
