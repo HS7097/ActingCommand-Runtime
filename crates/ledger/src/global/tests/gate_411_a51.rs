@@ -56,6 +56,8 @@ const LAB_RELATED: usize = 3;
 const WORK_PER_ROW: u64 = 200;
 /// The Lab page's limit, as `ac_events` asks.
 const PAGE_LIMIT: u16 = 40;
+/// The bounded waits' duration (test plan v2.2 §2.1 guard 3); it only bounds a broken run.
+const GATE_WAIT: Duration = Duration::from_secs(30);
 
 /// A test clock in milliseconds that moves `step_ms` each time it is read.
 fn stepping_clock(step_ms: u64) -> LedgerMonotonicClock {
@@ -432,12 +434,12 @@ fn a51_t4_a_close_whose_writer_is_held_in_a_read_ends_at_its_bound_naming_the_re
     thread::spawn(move || {
         let _ = closed_sender.send(ledger.close());
     });
-    let first = closed.recv_timeout(BARRIER_WAIT);
+    let first = closed.recv_timeout(GATE_WAIT);
     hold.release();
     let result = match first {
         Ok(result) => result,
         Err(_) => closed
-            .recv_timeout(BARRIER_WAIT)
+            .recv_timeout(GATE_WAIT)
             .expect("the close returns once the read ends"),
     };
     let error = result.err();
