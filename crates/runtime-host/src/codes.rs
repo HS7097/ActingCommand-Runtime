@@ -40,6 +40,11 @@ actingcommand_contract::outcome_codes! {
         /// walk of the kept folders, within 60 s; once per process (keys `entry`, `io_kind`,
         /// `os_error`).
         FrameRetentionCounterFailed => "frame_retention_counter_failed": warning / none,
+        /// Warning (Workflow #411 A29). The frame cleaner removed or moved a frame but could not
+        /// delete its use lock `artifact-use-locks/<name>.lock`; the frame counts as removed or
+        /// moved and the lock stays; once per object per process (keys `artifact_id`,
+        /// `io_kind`, `os_error`).
+        FrameRetentionLockRemoveFailed => "frame_retention_lock_remove_failed": warning / none,
         /// Info. A policy candidate, or its admission, met an instance that a claim holds or
         /// that an eligible claim waits for: the candidate is deferred, or its intent is
         /// rejected at Info, and the driver wakes when a key returns (keys `instance_id`,
@@ -2302,6 +2307,8 @@ actingcommand_contract::outcome_locations! {
         FrameRetentionMove => "frame_retention_move",
         FrameRetentionCounter => "frame_retention_counter",
         FrameRetentionRemove => "frame_retention_remove",
+        // Workflow #411 A29: deleting a removed or moved frame's use lock.
+        FrameRetentionLockRemove => "frame_retention_lock_remove",
         RuntimeMonitorRestore => "runtime_monitor_restore",
         ObservationFailed => "observation_failed",
         InstanceDiscoveryFailed => "instance_discovery_failed",
