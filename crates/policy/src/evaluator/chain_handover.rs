@@ -91,7 +91,10 @@ impl Handover {
     /// Whether the candidate `work_index` waits for the successor now: it ranked ahead of it, and
     /// the successor was dispatched, waits for its dispatch or is still to be allocated.
     pub(super) fn holds(&self, work_index: usize) -> bool {
-        self.ahead.contains(&work_index) && self.allocation != Allocation::NotDispatched
+        // B41 red proof 4 (mutation): the deferral never lifts, even when the successor is not
+        // dispatched this round.
+        let _ = self.allocation;
+        self.ahead.contains(&work_index)
     }
 
     /// Records that the successor waits for its dispatch: the candidates it went before keep
