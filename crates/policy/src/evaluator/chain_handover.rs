@@ -149,8 +149,9 @@ pub(super) fn plan<E>(
         };
         // The Runtime reads the successor's package only for a candidate that follows its
         // predecessor on the resting page.
-        let hands_over = follows_on_page(task, &candidate.instance_id, page, task_states)
-            && entry_holds(task, &candidate.instance_id, &page.page_id)?;
+        // B41 red proof 3 (mutation): every chain hands over, whatever the successor's entry.
+        let _ = &entry_holds;
+        let hands_over = follows_on_page(task, &candidate.instance_id, page, task_states);
         if !hands_over {
             continue;
         }
