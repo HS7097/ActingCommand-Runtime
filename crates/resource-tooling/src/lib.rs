@@ -31,6 +31,9 @@ mod gate_411_b15b;
 // why they refuse: a pack table that holds no pack, and the file of a package that does not parse.
 #[cfg(test)]
 mod gate_411_e1;
+// Workflow #411 A32 (slice E3, T3): only the recognition pack a server declares counts.
+#[cfg(test)]
+mod gate_411_e3;
 // Test plan v2.2 E-1 G10 (exec key 33): package bundle and the business catalog.
 #[cfg(test)]
 mod gate_e1;

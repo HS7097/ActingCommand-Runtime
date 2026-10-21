@@ -34,6 +34,14 @@ const PACKS_DIRECTORY: &str = "packs";
 /// The read and the admission of one pack directory share one deadline.
 pub(crate) const PACK_DEADLINE: Duration = Duration::from_secs(60);
 
+/// Workflow #411 E3: the deadline a gate test hands an admission by path. A gate file reads no
+/// clock (test plan v2.2 §2.1 guard 3); this deadline only bounds the admission, which never takes
+/// this long, so it decides nothing (the CD-27 D2 (a) form).
+#[cfg(test)]
+pub(crate) fn admission_deadline() -> Instant {
+    Instant::now() + PACK_DEADLINE
+}
+
 /// The identity a pack's control declaration states, read from its admitted bundle.
 struct PackIdentity {
     game: String,
@@ -309,20 +317,29 @@ fn declared_package_id(directory: &Path, files: &BTreeMap<String, Vec<u8>>) -> L
 /// not recognize-only) belongs to the standard package's one recognition maintenance package;
 /// each such pack the declarations do not name for `recognition` is one
 /// `recognition_pack_undeclared`, a warning while the resource repositories declare theirs.
-fn undeclared_recognition_packs(
+/// Workflow #411 A32: a server (variant) declares at most one, and only the one it declares
+/// counts: the other qualifying packs of a server that declares one raise nothing, and each
+/// qualifying pack of a server that declares none still does.
+pub(crate) fn undeclared_recognition_packs(
     maintenance: &[BundleMaintenance],
     descriptors: &[TaskPackageDescriptor],
 ) -> Vec<Outcome> {
-    let declared = maintenance
+    let recognition = maintenance
         .iter()
-        .filter(|entry| entry.uses.contains(&MaintenanceUse::Recognition))
+        .filter(|entry| entry.uses.contains(&MaintenanceUse::Recognition));
+    let declared = recognition
+        .clone()
         .map(|entry| entry.package_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let declaring_servers = recognition
+        .map(|entry| entry.server.as_str())
         .collect::<BTreeSet<_>>();
     descriptors
         .iter()
         .filter(|descriptor| {
             descriptor.recognition_problem().is_none()
                 && !declared.contains(descriptor.package_id())
+                && !declaring_servers.contains(descriptor.server())
         })
         .map(|descriptor| {
             Outcome::new(ResourceToolingCode::RecognitionPackUndeclared)
