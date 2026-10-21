@@ -1745,6 +1745,15 @@ tests = [
 ]
 incident = ["#406"]
 
+# Workflow #411 B2 (b-plan §2.2, BT-B2 test T2; contracts/business-identity-consensus.md; register §1.146 B2-2; no persisted ledger shape; package 6, declared by BT-PK6): an ocr_integer feature of format current_capacity reads the part of a/b its optional integer.part names: capacity the right-hand part, current and no part the left-hand one
+[[gate]]
+key = "116"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_411_b2::b2_t2_ocr_integer_with_part_capacity_reads_the_right_hand_part",
+]
+incident = ["#411 B2"]
+
 # Workflow #411 B3 (0.12.x; register §1.146; no persisted ledger shape; B-train plan §2.3, §5.3 rows T1 to T4; package revision 6, declared by BT-PK6): a color probe, a template's color_check and the repeated_anchor color predicate may declare 1 to 7 alternatives besides expected; the nearest declared color, the earliest among equal distances, within the one max_distance passes, and the color evidence names it as expected with its distance; in the joint template and relative color search any declared color qualifies a candidate; the declaration gate refuses 8 colors, a color listed twice or equal to expected and a component above 255 with resource_declaration_invalid (invalid_value) at the member
 [[gate]]
 key = "116"

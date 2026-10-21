@@ -447,7 +447,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | The document is at most 512 KiB, decodes as a selection-policy document, has an unambiguous canonical form (no floats, no unsafe integers, no duplicate keys) and validates, in that order. | the document | the policy |
 | Each `gate_id` and `term_id` is a token (lowercase ASCII letters, digits, `_`, `.`, `:`, `-`), the form of the `rule_id` a selection reason carries (`InvalidValue`). | `/gates/<j>/gate_id`, `/scoring/<k>/term_id` | the policy |
 | `applies_to.candidate_layout_id` is the step's `layout_id`. | `/applies_to/candidate_layout_id` | the policy |
-| Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
+| Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli` or `ocr_integer` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
 | `selection.required_count` is `1`. | `/selection/required_count` | the policy |
 
 A select step whose policy declares more than one candidate is a multi select (Workflow #357,
@@ -552,8 +552,8 @@ One attempt of a single-frame select runs, before any input:
    context is the instance alias with the game and server of the instance's configured policy
    identity, or of the package's `control.json` when none is configured.
 3. The policy is evaluated over P1's actionable candidates, each feature a field of its name (a
-   `passed` feature a boolean, a `measure_milli` feature an integer), with the snapshot's facts
-   at that instant.
+   `passed` feature a boolean, a `measure_milli` or `ocr_integer` feature an integer), with the
+   snapshot's facts at that instant.
 4. When the outcome is `selected` (one candidate), and, for a step that declares `on_empty`, no
    unknown instance blocks it (rules 2 and 3, section Select over a scan), a confirmation frame
    F2 is captured and recognized like every frame, with its capture and recognition records and
