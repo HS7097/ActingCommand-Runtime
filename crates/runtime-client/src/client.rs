@@ -2837,6 +2837,69 @@ impl RuntimeClient {
         ))
     }
 
+    /// Every record `query` selects, oldest first, at one ledger snapshot, handed to `visit` page
+    /// by page as each page arrives; none is kept (Workflow #411 A42). Each page is one bounded
+    /// QueryEvents answer: at most `MAX_RUNTIME_EVENT_QUERY_EVENTS` records, and the Runtime cuts
+    /// it to its response limit. Unlike `query_events` the read has no record count bound; it
+    /// ends at its last page, or fails with `runtime_event_query_time_limit_exceeded` when
+    /// `deadline` comes first. It checks the cursor, snapshot and order as `query_events` does.
+    /// Answers the snapshot position the records were read at. Read-only.
+    pub fn visit_events(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        deadline: Instant,
+        mut visit: impl FnMut(&ProjectedEvent),
+    ) -> RuntimeClientResult<u64> {
+        let operation = ContractLocation::QueryRuntimeEvents.location();
+        let failure = |code: ClientCode| RuntimeClientError::fatal(code, operation);
+        let io_timeout = self.connection(operation)?.io_timeout;
+        let mut cursor = None;
+        let mut snapshot_ledger_position = None;
+        let mut last_sequence = 0_u64;
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| failure(ClientCode::RuntimeEventQueryTimeLimitExceeded))?;
+            let request =
+                RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
+                    .map_err(|_| failure(ClientCode::RuntimeEventQueryPageRequestInvalid))?;
+            let page = self.query_event_page_with_timeout(
+                query.clone(),
+                profile,
+                request,
+                Some(io_timeout.min(remaining)),
+            )?;
+            match snapshot_ledger_position {
+                Some(expected) if expected != page.snapshot_ledger_position() => {
+                    return Err(failure(ClientCode::RuntimeEventQueryPaginationInvalid));
+                }
+                None => snapshot_ledger_position = Some(page.snapshot_ledger_position()),
+                Some(_) => {}
+            }
+            for event in page.events() {
+                if event.sequence <= last_sequence {
+                    return Err(failure(ClientCode::RuntimeEventQueryPaginationInvalid));
+                }
+                last_sequence = event.sequence;
+                visit(event);
+            }
+            if !page.has_more() {
+                return Ok(page.snapshot_ledger_position());
+            }
+            let next = page
+                .next_cursor()
+                .cloned()
+                .ok_or_else(|| failure(ClientCode::RuntimeEventQueryPaginationInvalid))?;
+            // A page that has more always holds a record, so every next page starts later.
+            if next.after_sequence() != last_sequence {
+                return Err(failure(ClientCode::RuntimeEventQueryPaginationInvalid));
+            }
+            cursor = Some(next);
+        }
+    }
+
     /// Projects one completed scheduler/policy/contained-task run from authoritative ledger links.
     pub fn summarize_run(&self, run_id: RunId) -> RuntimeClientResult<Value> {
         let events = self.query_complete_run_events(run_id)?;

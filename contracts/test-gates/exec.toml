@@ -1744,3 +1744,21 @@ tests = [
     "actingcommand-lab::lib::gate_406_t4::t4_recording_writes_a_path_drag_and_names_the_press_rule",
 ]
 incident = ["#406"]
+
+# Workflow #411 B2 (b-plan §2.2, BT-B2 test T2; contracts/business-identity-consensus.md; register §1.146 B2-2; no persisted ledger shape; package 6, declared by BT-PK6): an ocr_integer feature of format current_capacity reads the part of a/b its optional integer.part names: capacity the right-hand part, current and no part the left-hand one
+[[gate]]
+key = "116"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_411_b2::b2_t2_ocr_integer_with_part_capacity_reads_the_right_hand_part",
+]
+incident = ["#411 B2"]
+
+# #411 A13 B part (slice BT-LAB, v0.12.x; register §1.147 L13-1; plan §2.16, test row BT-L13 T1; no persisted ledger shape, no outcome code; the key continues the exec numbering): offline observe lists each operation of the observed page whose to is a page set in actions with input next to its declared click, built from its generated navigation row as an edge's input is (a box or a point a tap of the box at its centre, a drag its two boxes and their centres, a segmented or path drag null), equal to the input of an edge with the same click, with no coordinate resolved on the frame
+[[gate]]
+key = "117"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_411_bt_l13::a13b_offline_observe_gives_a_page_set_action_the_input_of_an_edge_with_the_same_click",
+]
+incident = ["#411 A13"]

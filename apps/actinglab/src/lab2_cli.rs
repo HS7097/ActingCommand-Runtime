@@ -138,7 +138,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
     let (targets, explicit) = observe_targets(&evaluator, &frames, &flags, &outcome)?;
     // Workflow #308 SEL-L6a (FCM T-03): the page's operations with several destinations follow
-    // its navigation edges, with every page they may reach.
+    // its navigation edges, with every page they may reach; #411 A13 B part: each with the input
+    // an edge has for its click.
     let actions = view
         .navigation
         .iter()
@@ -152,15 +153,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
             view.multi_destination
                 .iter()
                 .filter(|operation| outcome.matched && operation.from_page == outcome.page)
-                .map(|operation| {
-                    json!({
-                        "id": operation.id,
-                        "task_id": operation.task_id,
-                        "from_page": operation.from_page,
-                        "to_pages": operation.to_pages,
-                        "click": operation.click
-                    })
-                }),
+                .map(|operation| page_set_action_json(&view.navigation, operation)),
         )
         .collect::<Vec<_>>();
     let (observation, ocr_not_evaluated) = observation::build(
@@ -312,12 +305,44 @@ fn navigation_action_json(row: &NavigationRow, to_page: &str) -> Value {
         "id": row.id,
         "from_page": row.from_page,
         "to_page": to_page,
-        "input": match &row.click {
-            NavigationClick::Input(input) => semantic_input_json(input),
-            // Workflow #406 T4: nor does a path drag.
-            NavigationClick::SegmentedDrag(_) | NavigationClick::PathDrag(_) => Value::Null,
-        },
+        "input": navigation_input_json(&row.click),
         "source": row.source
+    })
+}
+
+/// The `input` of an `actions` entry for a navigation row's click: the input the click names
+/// (`semantic_input_json`), resolved on no frame; #411 Lab L2: `null` for a segmented drag.
+fn navigation_input_json(click: &NavigationClick) -> Value {
+    match click {
+        NavigationClick::Input(input) => semantic_input_json(input),
+        // Workflow #406 T4: nor does a path drag.
+        NavigationClick::SegmentedDrag(_) | NavigationClick::PathDrag(_) => Value::Null,
+    }
+}
+
+/// Workflow #308 SEL-L6a (FCM T-03): an operation of offline `observe`'s `actions` whose `to` is
+/// a page set, with every page it may reach and its click as its task file declares it. #411 A13
+/// B part: next to that click, `input` as an edge's is built ([`navigation_input_json`]), from the
+/// operation's row in the generated navigation (its `id` and `from_page`, a page set), which holds
+/// the click in the navigation form; `null` when the navigation holds no such row, as for a
+/// segmented or path drag.
+fn page_set_action_json(
+    navigation: &[NavigationRow],
+    operation: &super::contained_resources::MultiDestinationOperation,
+) -> Value {
+    let input = navigation
+        .iter()
+        .find(|row| {
+            row.to_page.is_none() && row.id == operation.id && row.from_page == operation.from_page
+        })
+        .map_or(Value::Null, |row| navigation_input_json(&row.click));
+    json!({
+        "id": operation.id,
+        "task_id": operation.task_id,
+        "from_page": operation.from_page,
+        "to_pages": operation.to_pages,
+        "click": operation.click,
+        "input": input
     })
 }
 
