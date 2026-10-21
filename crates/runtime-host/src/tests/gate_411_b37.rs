@@ -89,16 +89,16 @@ fn busy_return_home_package() -> Vec<u8> {
     )
 }
 
-struct BusyLadder {
-    root: TempDir,
-    host: RuntimeHost,
-    state: Arc<FakeState>,
-    clock: Arc<ManualRuntimeClock>,
+pub(super) struct BusyLadder {
+    pub(super) root: TempDir,
+    pub(super) host: RuntimeHost,
+    pub(super) state: Arc<FakeState>,
+    pub(super) clock: Arc<ManualRuntimeClock>,
 }
 
 /// The fixture with `recovery_ladder.busy` set to `busy`: the scheduled run has failed and its
 /// ladder climbs; its first return-home run shows the activity page.
-fn busy_ladder(busy: &Value) -> BusyLadder {
+pub(super) fn busy_ladder(busy: &Value) -> BusyLadder {
     let root = TempDir::new().expect("tempdir");
     let (host_config, request) = ladder_setup(root.path());
     // The scheduled run's request binds `return-home.zip` (`ladder_setup`).
@@ -135,7 +135,7 @@ fn busy_ladder(busy: &Value) -> BusyLadder {
     }
 }
 
-fn busy_config(recheck_ms: u64, max_wait_ms: u64, on_exhausted: &str) -> Value {
+pub(super) fn busy_config(recheck_ms: u64, max_wait_ms: u64, on_exhausted: &str) -> Value {
     json!({
         "poll_ms": POLL_MS,
         "outcome": {
