@@ -25374,6 +25374,31 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "emulator_control_timeout_settled": {
+      "category": "warning",
+      "ladder_class": "stability_warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "elapsed_ms": "required",
+        "process_started": "required",
+        "android_started": "required",
+        "adb_port_present": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "An emulator control command (an operator's stop or start, a restart's phase, or a stuck-recovery ladder's emulator-restart rung) passed its own bound (mumu_manager_timeout), and the one bounded status read after it showed the requested state (stopped for a stop, running for a start), so the step counts as done (#411 A38). process_started, android_started and adb_port_present are that status read, elapsed_ms the command's time; the timed-out command is the caused_by link (emulator_control_failed). Recorded once under the request's links before command.validated; a stop settled this way had no process listing, so emulator_stop_process_unverified follows it. When the read does not show the requested state the step fails with emulator_control_failed as before, carrying the read.",
+      "common_causes": "MuMuManager answered the control command late under host load while the emulator did change its state.",
+      "handling": "Nothing to do; when it repeats, check the host's load and MuMuManager."
+    },
     "emulator_control_unavailable": {
       "category": "error",
       "ladder_class": "none",
@@ -32649,6 +32674,31 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "instance_resources_fence_awaiting_person": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "limit_count": "required",
+        "retry_after_ms": "required",
+        "failure_code": "optional",
+        "next_occurrence_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A fenced instance (instance_id) began to wait for a person (#411 A38): the recovery ladder that held its fence ended without proving the close, no ladder could start, or manual work met the fence. failure_code is the fence's cause. While it waits, the Runtime runs the instance's self-check (the recheck) every retry_after_ms (recovery_ladder.fence_recheck.interval_ms), at most limit_count times (recovery_ladder.fence_recheck.max_attempts; 0 turns the recheck off); next_occurrence_unix_ms is the first recheck's time, absent while the recheck is off. Recorded once per wait as a runtime.failed record under the instance's links; status shows the wait as resource_fence.person_wait.",
+      "common_causes": "A capture, input or application backend of the instance, or the emulator, did not come back within the recovery ladder's rungs; the ladder is off or cooling down; a person's direct run, lease or command met the fence.",
+      "handling": "Usually wait for the rechecks: a passing one lifts the fence. When they keep failing, bring the device back and run actingctl selfcheck, actingctl resume or an emulator restart for the instance."
+    },
     "instance_resources_fence_lifted": {
       "category": "info",
       "ladder_class": "none",
@@ -32668,6 +32718,54 @@
       "since": "0.12.0",
       "description": "A preparation of a fenced instance (instance_id) passed its self-check after the unconfirmed close, which proves the close: the resource fence is lifted, the instance's policy availability follows its self-check again and it schedules again (Workflow #403). Recorded once as the outcome of the resource_fence_lifted lifecycle record, which names the passing preparation's instance_preparation_finished record. The proving preparation is the recovery ladder's (after an application or emulator restart) or a person's resume, emulator start or restart, or self-check.",
       "common_causes": "The recovery ladder restarted the application or the emulator and the instance's preparation passed, or a person resumed, restarted or self-checked the instance.",
+      "handling": "Nothing to do."
+    },
+    "instance_resources_fence_recheck_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "attempts": "required",
+        "limit_count": "required",
+        "failure_code": "optional",
+        "next_occurrence_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A periodic self-check (recheck) of a fenced instance (instance_id) that waits for a person failed (#411 A38): attempts is its number, limit_count the most rechecks of the wait, failure_code the self-check's failure when it named one. The instance stays fenced and waiting; next_occurrence_unix_ms is the next recheck's time, absent after the last one, after which only a person, or a change of the fence, ends the wait. The recheck is the self-check actingctl selfcheck runs (a preparation on the instance's key: no game input, no application launch, no emulator start); it starts no recovery ladder. Recorded as a runtime.failed record under the recheck's request links.",
+      "common_causes": "The capture or input backend of the instance still does not open: the emulator or the device is not back yet.",
+      "handling": "Nothing until the last recheck has failed; then bring the device back and run actingctl selfcheck, actingctl resume or an emulator restart for the instance."
+    },
+    "instance_resources_fence_recheck_passed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "attempts": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A periodic self-check (recheck) of a fenced instance (instance_id) that waited for a person passed (#411 A38): the fence is lifted as a person's passing self-check lifts it, the instance's policy availability follows its self-check again and it schedules again. attempts is the passing recheck's number, limit_count the most rechecks of the wait. The outcome of that lift's resource_fence_lifted lifecycle record, which names the recheck's instance_preparation_finished record; it ends the wait for a person.",
+      "common_causes": "The device came back by itself (a capture channel that could not open for a moment).",
       "handling": "Nothing to do."
     },
     "instance_resources_fenced": {
@@ -81888,6 +81986,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: await policy admissions for pause."
     },
+    "await_resource_fence_person": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A Runtime host operation or stage: a fenced instance begins to wait for a person (#411 A38)."
+    },
     "backend_open_source": {
       "owner": "runtime-host",
       "layer": "host",
@@ -88353,6 +88459,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: queue lease status."
     },
+    "queue_resource_fence_rechecks": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A Runtime host operation or stage: the lease sweep queues the due periodic self-checks of fences that wait for a person (#411 A38)."
+    },
     "read_active_contained_run": {
       "owner": "runtime-host",
       "layer": "host",
@@ -91826,6 +91940,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: run recovery ladder."
+    },
+    "run_resource_fence_recheck": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A Runtime host operation or stage: one periodic self-check of a fence that waits for a person, on its instance's worker (#411 A38)."
     },
     "run_scheduled_contained_task": {
       "owner": "runtime-host",
