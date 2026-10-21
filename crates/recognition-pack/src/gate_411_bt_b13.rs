@@ -5,13 +5,12 @@
 // template's scored pixels, its mean and its standard deviation each divided by the template's
 // and times 1000; a candidate below a declared floor is not accepted, so the target does not
 // pass although its score does, and the template evidence carries the ratios as `luma` only when
-// the target declares the floor. Frames are synthetic grey windows on a flat neutral background.
+// the target declares the floor. Frames are synthetic grey windows on a flat grey background.
 
 use crate::*;
 use serde_json::json;
 
 const TONES: &str = "assets/tones.png";
-const BACKGROUND: [u8; 3] = [30, 30, 30];
 /// The template's two grey tones, left half and right half: over its 48 pixels its mean is 150
 /// and its standard deviation 50.
 const LOW: u8 = 100;
@@ -72,9 +71,13 @@ fn tones(low: u8, high: u8) -> Frame {
     window
 }
 
-/// A 32x20 frame with the tone window `low`/`high` at `WINDOW`.
+/// A 32x20 frame with the tone window `low`/`high` at `WINDOW`, on a background halfway between
+/// the two tones. Both of the window's side edges then step down, against the template's step up,
+/// so no box straddling an edge matches the template and the window is the frame's only full
+/// match. (A background darker than `low`, or brighter than `high`, matches as well where it
+/// meets that tone.)
 fn frame(low: u8, high: u8) -> Frame {
-    let mut frame = Frame::new(32, 20, BACKGROUND);
+    let mut frame = Frame::new(32, 20, [low + (high - low) / 2; 3]);
     let (x, y) = (WINDOW.0 as u32, WINDOW.1 as u32);
     frame.fill(x, y, 4, 6, [low; 3]);
     frame.fill(x + 4, y, 4, 6, [high; 3]);
