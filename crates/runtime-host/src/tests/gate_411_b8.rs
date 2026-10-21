@@ -2,7 +2,7 @@
 
 // Workflow #411 B8 gate test, host half (plan `rd-1021/train-0129/b-plan/plan.md` §2.8 and §5.3
 // BT-B8 T2; `contracts/remedies.md` section 4; contracts/instance-fact-store.md, "Run
-// parameters"; host gate key 128; register §1.146): the host overlays the schedule values a
+// parameters"; host gate key 129; register §1.150): the host overlays the schedule values a
 // policy dispatch carries as `session.dispatch.schedule.<key>` on the instance fact snapshots of
 // that run, so its select step reads them; a direct run has none, and the package policy's
 // `on_unknown` decides. Every expected value comes from §2.8.
