@@ -495,10 +495,8 @@ fn gate_layer(
             None => layer_outcome_key(prerequisite, &outcome),
             Some(_) => None,
         };
-        let error = match layer_key {
-            Some(key) => error.with_layer_outcome_key(key),
-            None => error,
-        };
+        // E4 red proof 4: the old failure, without the layer's outcome key.
+        let _ = layer_key;
         return Err(fail_gate(runtime, gate, ContainedTaskRunError::Task(error)));
     }
     runtime.entry_scene = None;
