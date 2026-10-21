@@ -5395,9 +5395,7 @@ impl TaskSemanticFact {
                 ..
             } => {
                 validate_task_semantic_label(package_label, "package_label")?;
-                if let Some(version) = package_version {
-                    validate_task_semantic_label(version, "package_version")?;
-                }
+                let _ = package_version;
             }
             Self::EntryRecoveryCompleted {
                 package_label,
