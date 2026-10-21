@@ -760,9 +760,18 @@ pub(super) fn performance_monitor_loop(
         since_runtime_fact_snapshot = since_runtime_fact_snapshot.saturating_add(sample_interval);
         if since_runtime_fact_snapshot >= snapshot_interval {
             since_runtime_fact_snapshot = Duration::ZERO;
-            if let Err(error) = shared.append_runtime_fact_snapshot_if_dirty() {
-                shared.fatal.mark(error.clone())?;
-                return Err(error);
+            match shared.append_runtime_fact_snapshot_if_dirty() {
+                Ok(_) => {}
+                // #411 A51 (R3): a ledger read the writer did not answer in time skips this
+                // seal, said in the daemon's log; the store stays dirty and the next tick seals
+                // it.
+                Err(error) if unanswered_ledger_read(&error) => {
+                    shared.fatal.report_skipped(&error.outcome());
+                }
+                Err(error) => {
+                    shared.fatal.mark(error.clone())?;
+                    return Err(error);
+                }
             }
         }
         if stop_sampling && !retention_enabled {

@@ -954,6 +954,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `probe_sample_keys` | 1 024 | integer | keys per T1 sample: the whole instance store plus a workbench sample | AO-8, 0.12.x |
 | `request_index_records` | 4 096 | integer | ring size of `request` rows (X3) | AO-2 (rows), AO-6 (read), v0.12.0 |
 | `status_gap_window_ms` | 86 400 000 | ms | window of "recent gaps" in status | AO-8, 0.12.x |
+| `read_budget_ms` | 1 000 | ms | work budget of one read on the writer's thread; a page it stops answers incomplete (`read_budget`), any other read `ledger_read_budget_exceeded`; below the writer's 10 s reply limit (#411 A51) | A51, 0.12.9 |
+| `close_timeout_ms` | 60 000 | ms | how long the Runtime's close waits for the writer's answer and its end; then `ledger_close_timeout` (#411 A51) | A51, 0.12.9 |
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
@@ -966,6 +968,14 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `buffer_bytes` holds at least `spill_batch_bytes`, `write_retry_backoff_ms` lists one wait per
   attempt, and the tag lists hold non-empty texts without spaces. Every integer and millisecond
   key is at least 1.
+- #411 A51 (0.12.9, `actingd-config` revision 8; register §1.151): `read_budget_ms` and
+  `close_timeout_ms` are read when the ledger opens (`false`). The section's check refuses a
+  `read_budget_ms` of 10 000 or more (a read stops before its caller stops waiting for it) and a
+  `close_timeout_ms` not above `read_budget_ms` (the close waits longer than one read). A read
+  looks at the writer's clock every 256 rows it visits; the appends that queued behind it commit
+  before the writer's next command. A close that passes its bound leaves the writer behind and
+  ends with `ledger_close_timeout` (`stage` the writer's command, `elapsed_ms`, `timeout_ms`), so
+  actingd ends and its watchdog starts it again.
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
   (#387) and `config.catalog` (MCP-9a) fall under the existing `config.` prefix.

@@ -179,6 +179,9 @@ mod gate_383;
 // Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is
 // imported once by the restart and deleted.
 mod gate_383_ao1;
+// #411 A51 (host key 130): a ledger read the writer does not answer in time latches nothing,
+// and the first latched fatal reaches the daemon's log at once.
+mod gate_411_a51;
 // Workflow #383 AO-4q, test row AO4-c: status reads append no ledger record.
 mod gate_383_ao4q;
 // Workflow #383 SH-1, register §1.18: the reserved single-touch path drag was refused; its test
@@ -212,6 +215,9 @@ mod gate_387_d1cf;
 // Workflow #387 D1c-G: a ladder's unconfirmed ADB cleanup fences its instance, a frame without
 // an extent ends only its run, a vision provider failure starts no ladder at once.
 mod gate_387_d1cg;
+// #411 B37 (A35-S1, host keys 133 to 136), register §1.152: a return-home run that ends on a
+// `busy` mapping is not recovered; the ladder holds and runs it again, or `on_exhausted` decides.
+mod gate_411_b37;
 // Workflow #389 MCP-4, register W2: the instance fact read records nothing.
 mod gate_389_mcp4;
 // Workflow #389 MCP-9a, register A5: `config.catalog` names the active policy catalog
@@ -284,6 +290,11 @@ mod gate_411_a48;
 // #411 A49: a read-only observe between a run's recognition and its input does not displace the
 // run's frame; the observe still captures a frame of its own.
 mod gate_411_a49;
+// #411 A50 (host keys 144-147), register §1.158: a capture open that cannot open says why; an
+// operator start or restart queues the startup package unless a pause holds the instance; a
+// restart launches only after the old VM has exited; the recovery preparation reads the
+// emulator status first.
+mod gate_411_a50;
 // Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
 // journal, plan, admission check, stop, lift and expiry signals).
 mod gate_411_b15h;

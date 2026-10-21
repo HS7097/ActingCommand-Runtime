@@ -7,10 +7,11 @@ use crate::mumu::{
 };
 use crate::vendor_stdio::{VendorStdioCapture, VendorStdioSession};
 use crate::{
-    DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage,
-    DeviceErrorSensitivity, DeviceLocation, DeviceResourceCloseOutcome, DeviceResourceClosePhase,
-    DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
-    NemuResolutionContext, NemuResolutionCountKind, NemuResolutionReason,
+    CaptureOpenCause, DeviceCloseAuthority, DeviceError, DeviceErrorCategory,
+    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceLocation,
+    DeviceResourceCloseOutcome, DeviceResourceClosePhase, DeviceResourceKind,
+    DeviceResourceQuiescence, DeviceResult, DeviceTarget, NemuResolutionContext,
+    NemuResolutionCountKind, NemuResolutionReason,
 };
 pub use actingcommand_contract::{
     CaptureAdbDisplayMapping, CaptureBackendName, CaptureExtent, CaptureFrameTransform,
@@ -2732,8 +2733,12 @@ impl NemuIpcWorkerState {
         self.connect_id = connect_id;
         self.record_vendor_stdio_snapshot()?;
         if connect_id <= 0 {
+            // #411 A50: the connection to the emulator failed.
             let error = DeviceError::fatal(
                 "Nemu IPC connect did not return a positive handle; check MuMu path and running instance",
+            )
+            .with_capture_open_failure(
+                self.capture_open_failure(CaptureOpenCause::ConnectionFailed),
             );
             return Err(if self.input.is_some() {
                 error.input_parameter_failure()

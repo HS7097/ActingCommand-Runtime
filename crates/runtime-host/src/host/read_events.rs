@@ -20,11 +20,11 @@ impl HostShared {
                 RuntimeErrorCode::ProtocolInvalid,
             ))
         })?;
-        let current_ledger_position = self.ledger.latest_sequence().map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error(
-                HostLocation::ProjectRuntimePosition,
-            ))
-        })?;
+        // #411 A51 (R3): a read the writer did not answer in time fails only this request.
+        let current_ledger_position = self
+            .ledger
+            .latest_sequence()
+            .map_err(|error| ledger_read_failure(&error, HostLocation::ProjectRuntimePosition))?;
         let decision_page = request
             .decision_page()
             .cloned()
@@ -142,10 +142,8 @@ impl HostShared {
                 let page = self
                     .ledger
                     .query_page(query.clone(), after, upper, MAX_PROJECT_DIAGNOSTICS)
-                    .map_err(|_| {
-                        RequestFailure::poison_without_terminal(ledger_error(
-                            HostLocation::ProjectRuntimeDiagnostics,
-                        ))
+                    .map_err(|error| {
+                        ledger_read_failure(&error, HostLocation::ProjectRuntimeDiagnostics)
                     })?;
                 let exhausted = page.len() < MAX_PROJECT_DIAGNOSTICS;
                 if let Some(last) = page.last() {
@@ -187,8 +185,8 @@ impl HostShared {
         #[cfg(any(test, feature = "test-hooks"))]
         self.event_subscriptions_for_test
             .fetch_add(1, Ordering::AcqRel);
-        let mut subscription = self.ledger.subscribe(request.cursor()).map_err(|_| {
-            RequestFailure::poison(ledger_error(ContractLocation::SubscribeRuntimeEvents), None)
+        let mut subscription = self.ledger.subscribe(request.cursor()).map_err(|error| {
+            ledger_read_failure(&error, ContractLocation::SubscribeRuntimeEvents)
         })?;
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(request.wait_ms()))
@@ -286,10 +284,10 @@ impl HostShared {
                 {
                     break events.is_empty();
                 }
-                Err(_) => {
-                    return Err(RequestFailure::poison(
-                        ledger_error(HostLocation::ReceiveRuntimeSubscription),
-                        None,
+                Err(error) => {
+                    return Err(ledger_read_failure(
+                        &error,
+                        HostLocation::ReceiveRuntimeSubscription,
                     ));
                 }
             }
@@ -375,9 +373,12 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
         let state = sample()?;
-        let ledger_committed_head = self.ledger.latest_sequence().map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error(HostLocation::RuntimeStateSource))
-        })?;
+        // #411 A51 (R3): a head the writer did not answer in time fails only this read; the
+        // next status reads it again.
+        let ledger_committed_head = self
+            .ledger
+            .latest_sequence()
+            .map_err(|error| ledger_read_failure(&error, HostLocation::RuntimeStateSource))?;
         let sampled_completed_at_unix_ms = self
             .clock
             .sample()

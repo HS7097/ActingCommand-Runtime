@@ -93,9 +93,7 @@ impl HostShared {
                 },
                 actingcommand_contract::ProjectionProfile::Forensic,
             )
-            .map_err(|_| {
-                RequestFailure::poison(ledger_error(HostLocation::ProjectEvidenceEvents), None)
-            })?;
+            .map_err(|error| ledger_read_failure(&error, HostLocation::ProjectEvidenceEvents))?;
         let terminal_receipt = events
             .iter()
             .rev()
@@ -443,9 +441,7 @@ impl HostShared {
                 actingcommand_contract::ProjectionProfile::Forensic,
             )
             .map(|events| events.last().map(terminal_from_projected))
-            .map_err(|_| {
-                RequestFailure::poison(ledger_error(HostLocation::QueryEvidenceTerminal), None)
-            })
+            .map_err(|error| ledger_read_failure(&error, HostLocation::QueryEvidenceTerminal))
     }
 }
 

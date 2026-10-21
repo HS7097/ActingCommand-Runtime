@@ -767,8 +767,9 @@ impl RuntimeClient {
                 .cloned()
                 .ok_or_else(|| invalid(ClientCode::RunStatusPaginationInvalid))?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
-            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
-            {
+            // #411 A51: a page the Runtime's read budget cut goes on after the position its
+            // read reached, at or after its last row.
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(invalid(ClientCode::RunStatusPaginationInvalid));
             }
             cursor = Some(next);
@@ -1195,8 +1196,9 @@ impl RuntimeClient {
                 .cloned()
                 .ok_or_else(|| invalid(ClientCode::RunStatusPaginationInvalid))?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
-            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
-            {
+            // #411 A51: a page the Runtime's read budget cut goes on after the position its
+            // read reached, at or after its last row.
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(invalid(ClientCode::RunStatusPaginationInvalid));
             }
             cursor = Some(next);

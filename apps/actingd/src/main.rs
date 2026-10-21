@@ -63,8 +63,8 @@ use actingcommand_runtime_client::ClientCode;
 use actingcommand_runtime_host::{
     EmulatorAutostartReports, FactRefreshTransition, LedgerFailureSink, PolicyAdmissionContext,
     PolicyCadence, PolicyCycle, PolicyDispatchAdmission, PolicyRecomputeKind, PolicyRunContext,
-    PolicyTrigger, PolicyWakes, RuntimeHost, RuntimeHostError, RuntimeLifecycleFailure,
-    RuntimeLifecycleFailureStage,
+    PolicyTrigger, PolicyWakes, RuntimeDaemonReporter, RuntimeHost, RuntimeHostError,
+    RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
 };
 use codes::{ActingdCode, ActingdLocation};
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
@@ -154,6 +154,23 @@ impl LedgerFailureSink for DaemonLedgerFailure {
             daemon_lines(outcome, None)
         ));
         std::process::exit(i32::from(outcome.category().exit_code()));
+    }
+}
+
+/// #411 A51: the daemon's side of the host's reporter. The first fatal condition the host
+/// latches is written as its daemon lines at the moment it latches (R4), so the log has it
+/// even when the close that follows takes long; the condition is written again as the
+/// terminal outcome after the close. A background step a ledger read skipped is a developer
+/// line (R3); the step runs again at its next tick.
+struct DaemonReporter;
+
+impl RuntimeDaemonReporter for DaemonReporter {
+    fn fatal_latched(&self, outcome: &Outcome) {
+        write_stderr(&daemon_lines(outcome, None));
+    }
+
+    fn step_skipped(&self, outcome: &Outcome) {
+        write_stderr(&developer_line(outcome, None));
     }
 }
 
@@ -567,6 +584,9 @@ fn start_daemon(
     // Workflow #383 AO-1: the ledger's retried writes and its fatal stop after a dump; the
     // commit actingd was built from names the dump's header.
     let host = host.with_ledger_failure_sink(Arc::new(DaemonLedgerFailure));
+    // #411 A51: the first latched fatal condition and each skipped background step go to the
+    // daemon's log at once.
+    let host = host.with_daemon_reporter(Arc::new(DaemonReporter));
     let host = match option_env!("ACTINGCOMMAND_RUNTIME_HEAD") {
         Some(commit) => host.with_runtime_commit(commit),
         None => host,

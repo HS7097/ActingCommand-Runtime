@@ -489,4 +489,7 @@ mod tests {
     mod gate_mcp8;
     // Workflow #411 A8: lab::tests::gate_rc2_a8 takes its unreached deadline.
     pub(super) mod gate_mcpt1;
+
+    // Workflow #411 slice E4, T1 (B27): ac_events names the event type it does not know.
+    mod gate_411_e4;
 }

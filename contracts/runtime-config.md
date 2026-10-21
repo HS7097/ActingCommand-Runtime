@@ -121,6 +121,10 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.kind_profiles` | object, device kind (`emulator`, `handset`) to profile name (Workflow #398 RD-4) | `handset` → `handset` |
 | `recovery_ladder.fence_recheck.interval_ms` | milliseconds 10000..=86400000 (#411 A38) | `300000` |
 | `recovery_ladder.fence_recheck.max_attempts` | integer 0..=1000 (#411 A38); `0` turns the recheck off | `12` |
+| `recovery_ladder.busy.poll_ms` | milliseconds 100..=`busy.outcome.recheck_ms` (#411 B37) | `500` |
+| `recovery_ladder.busy.outcome.recheck_ms` | milliseconds; plus `hold.margin_ms` within the longest renewal (#411 B37) | `60000` |
+| `recovery_ladder.busy.outcome.max_wait_ms` | milliseconds 0..=86400000 (#411 B37); `0` holds nothing | `3600000` |
+| `recovery_ladder.busy.outcome.on_exhausted` | `stop` \| `escalate` (#411 B37) | `stop` |
 
 The whole-section check (`recovery_ladder_config_invalid`, `config_key` and
 `config_value_problem`): trigger ids are tokens and unique (`duplicate_id`); an item names one or
@@ -151,6 +155,22 @@ change through an instruction (`ac_config_set`) applies from the next tick; `Sta
 device that came back by itself, such as a capture channel that could not open for a moment, run
 again within minutes, without a self-check every few seconds while a device is really away; after
 the last one a person is needed, as before.
+
+#411 B37 (slice A35-S1; `actingd-config` revision 8, extended; coordinator decision Q3 of
+2026-10-21): `busy` is the ladder's hold after a rung run that ended on a mapping its package
+marks `busy` ([emulator-control.md](emulator-control.md), "Busy ends"). After such an end the
+ladder holds its key for `outcome.recheck_ms` and runs the return-home rung again, as long as the
+climb has held less than `outcome.max_wait_ms` since its first busy end (each hold no longer than
+what is left); at that limit `outcome.on_exhausted` either ends the ladder without a restart
+(`stop`, `recovery_ladder_hold_exhausted`) or goes on to the next rung (`escalate`). While it
+holds, the ladder makes its holding check every `poll_ms`. The check adds: `poll_ms` from 100 to
+`outcome.recheck_ms` and `outcome.max_wait_ms` within a day (`bound_out_of_range`), and
+`outcome.recheck_ms` plus `hold.margin_ms` within the longest renewal, the renewal a hold makes
+before it waits (`renewal_cap_exceeded`); `on_exhausted` is one of its two words (`out_of_range`,
+like the section's other rules). All four keys are settable and part of the section's digest; a
+ladder holds by the values it was admitted with. The defaults (recheck every minute, at most one
+hour, then stop) bring an instance home within a minute of an activity's end and never restart
+the game while its package says it is busy; they are recalibrated after the real-device check.
 
 Workflow #398 RD-4 (model-398 v1.1 §6.2, §6.6; [emulator-control.md](emulator-control.md),
 "Ladder profiles") adds to the check: a profile name is a token (1 to 64 bytes of lowercase
@@ -380,6 +400,8 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.probe_sample_keys` | integer, at least 1 | `1024` | yes |
 | `ledger_observer.request_index_records` | integer, at least 1 | `4096` | no |
 | `ledger_observer.status_gap_window_ms` | milliseconds, at least 1 | `86400000` | yes |
+| `ledger_observer.read_budget_ms` (#411 A51) | milliseconds `1..=9999` | `1000` | no |
+| `ledger_observer.close_timeout_ms` (#411 A51) | milliseconds, above `read_budget_ms` | `60000` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -391,7 +413,8 @@ the tiers rise strictly within (0, 1] (`tier1_ratio` above 0 and below `tier2_ra
 `tier2_ratio` below `tier3_ratio`, `tier3_ratio` at most 1); `hysteresis_ratio` lies within
 (0, 1); (`tier3_ratio` − `tier2_ratio`) × `buffer_bytes` is at least `spill_batch_bytes`;
 `write_retry_backoff_ms` lists exactly `write_attempts` waits; the tag lists hold non-empty texts
-without spaces or control characters. A ratio or a wait of the wrong type is `wrong_type`.
+without spaces or control characters; `read_budget_ms` lies below the writer's 10 s reply limit
+and `close_timeout_ms` above `read_budget_ms` (#411 A51). A ratio or a wait of the wrong type is `wrong_type`.
 
 ## The `device_link` section (Workflow #398 RD-2)
 
@@ -505,6 +528,27 @@ A value outside its range is `config_value_invalid` (`out_of_range`, with `range
 `range_max`) for its key at start, in `check-config` and in `ConfigureSettings`; a value that is
 no integer is `wrong_type`. The rows are those of `config.parameters.touch`. The landing history
 itself is memory only and never recorded.
+
+## The `emulator_control` section (#411 A50)
+
+#411 A50 ([v012-register.md](v012-register.md) §1.158; [emulator-control.md](emulator-control.md),
+"Restart"): how long a restart waits for its old VM to exit before it launches. A restart (an
+operator's `emulator restart`, or the ladder's emulator-restart rung) whose Stop's readiness wait
+expired reads the emulator status (as a self-check does) until it reads the old VM stopped, at
+most this long; still running at the bound, the restart fails
+`emulator_restart_previous_instance_running` and launches nothing. Host-wide. The host reads the
+key at every such restart, so an instruction may change it while the Runtime runs.
+`actingd-config` revision 8 ([component-interfaces.md](component-interfaces.md)) adds the section;
+a file that does not name it keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `emulator_control.restart_exit_wait_ms` | milliseconds `1000..=300000`, the longest wait for the old VM to exit, on the Runtime clock | `60000` | yes |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
+`wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
+a restart adds the range's maximum (745 s).
 
 ## Facts
 

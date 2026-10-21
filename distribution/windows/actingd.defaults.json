@@ -87,6 +87,14 @@
       "interval_ms": 300000,
       "max_attempts": 12
     },
+    "busy": {
+      "poll_ms": 500,
+      "outcome": {
+        "recheck_ms": 60000,
+        "max_wait_ms": 3600000,
+        "on_exhausted": "stop"
+      }
+    },
     "profiles": {
       "handset": {
         "rungs": [{"action": "return_home"}, {"action": "application_restart"}]
@@ -354,6 +362,8 @@
     "probe_sample_keys": 1024,
     "request_index_records": 4096,
     "status_gap_window_ms": 86400000,
+    "read_budget_ms": 1000,
+    "close_timeout_ms": 60000,
     "tag": {
       "workbench_patterns": [
         "task.*.last_duration_ms",
@@ -419,5 +429,8 @@
       "points_per_box": 16,
       "max_boxes": 1024
     }
+  },
+  "emulator_control": {
+    "restart_exit_wait_ms": 60000
   }
 }

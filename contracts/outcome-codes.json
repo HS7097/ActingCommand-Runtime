@@ -1521,6 +1521,10 @@
       "type": "vocab:device_process_presence",
       "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
     },
+    "capture_open_cause": {
+      "type": "vocab:capture_open_cause",
+      "description": "Why opening an instance's capture backend failed, as far as the backend can tell (#411 A50)."
+    },
     "duplicate_count": {
       "type": "integer",
       "description": "Records skipped because their event id was already in the ledger."
@@ -2022,6 +2026,34 @@
     "daily_remaining": {
       "type": "integer",
       "description": "The runs the daily budgets of a task and its activity profile still allow in the activity day after this dispatch (Workflow #411 B8)."
+    },
+    "argument_value": {
+      "type": "name",
+      "description": "The value an MCP tool argument was given, verbatim, where the argument's refusal names it: for a list argument, the one element refused (Workflow #411 B27)."
+    },
+    "expected_shape": {
+      "type": "vocab:expected_shape",
+      "description": "The shape a declaration member must have, where the declaration check refused the member, or an element of it, for its type and the grammar names the shape (Workflow #411 B28)."
+    },
+    "box_x": {
+      "type": "integer",
+      "description": "The left edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_y": {
+      "type": "integer",
+      "description": "The top edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_width": {
+      "type": "integer",
+      "description": "The width of a click box, pixels; a point click's box is 1 wide (Workflow #411 B34)."
+    },
+    "box_height": {
+      "type": "integer",
+      "description": "The height of a click box, pixels; a point click's box is 1 high (Workflow #411 B34)."
+    },
+    "layer_outcome_key": {
+      "type": "name",
+      "description": "The outcome key of the scheduling outcome mapping a prerequisite layer's run ended on, as the layer's package declares it (Workflow #411 B39)."
     }
   },
   "vocabularies": {
@@ -5072,6 +5104,20 @@
         }
       }
     },
+    "capture_open_cause": {
+      "description": "Why opening an instance's capture backend failed, as far as the backend can tell (#411 A50).",
+      "tokens": {
+        "display_missing": {
+          "description": "The display of the instance's application package does not exist: the application is not running (a Nemu display lookup by package answered no display)."
+        },
+        "connection_failed": {
+          "description": "The connection to the emulator instance failed (a Nemu connect answered no handle)."
+        },
+        "other": {
+          "description": "Any other failure, or a backend that cannot tell the causes apart; the backend's own text is the raw_text of the outcome's foreign link."
+        }
+      }
+    },
     "ledger_source": {
       "description": "A revisioned source whose changes the ledger records (Workflow #383).",
       "review": "pending",
@@ -6169,6 +6215,15 @@
         },
         "target_id": {
           "description": "The id of a recognition target in the package's recognition pack."
+        }
+      }
+    },
+    "expected_shape": {
+      "description": "The shape a declaration member must have (Workflow #411 B28).",
+      "review": "pending",
+      "tokens": {
+        "array_of_arrays": {
+          "description": "An array whose every element is an array: a page rule's any_of, a list of groups of target ids (contracts/resource-declarations.md)."
         }
       }
     }
@@ -9040,6 +9095,9 @@
     ],
     "package_fmt_": [
       "actinglab"
+    ],
+    "package_check_": [
+      "actinglab"
     ]
   },
   "codes": {
@@ -10842,12 +10900,13 @@
         "argument": "required",
         "argument_problem": "required",
         "range_min": "optional",
-        "range_max": "optional"
+        "range_max": "optional",
+        "argument_value": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An MCP tool was called with arguments its input schema refuses.",
+      "description": "An MCP tool was called with arguments its input schema refuses. Workflow #411 B27: argument_value is the value an event type argument of ac_events was given that names no event type (for event_types and exclude_event_types, the element).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14898,12 +14957,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "capture_open_cause": "optional",
+        "application_id": "optional",
+        "instance_index": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Opening an instance's capture backend failed, in a device self-check, a preparation or a contained task's capture, and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed): the Runtime and the other instances go on, the instance's capture self-check reads failed and its routine work waits for a preparation that passes.",
+      "description": "Opening an instance's capture backend failed, in a device self-check, a preparation or a contained task's capture, and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed): the Runtime and the other instances go on, the instance's capture self-check reads failed and its routine work waits for a preparation that passes. #411 A50: the outcome says why with capture_open_cause (display_missing: the display of the instance's application package does not exist, the application is not running; connection_failed: the connection to the emulator failed; other: anything else or a backend that cannot tell, the backend's own text being the raw_text of the outcome's foreign link), with the application package (application_id) and the emulator instance index (instance_index) when the backend knows them.",
       "common_causes": "The emulator's window or renderer is closed or not ready while adb still answers; the emulator stopped or is restarting; the binding names a display or instance number the capture backend cannot reach; the backend's vendor library could not be loaded.",
       "handling": "A scheduled run's failure starts the configured recovery ladder (items preparation_backend and task_capture_backend), which restarts the emulator while the capture stays unavailable. Otherwise restart the emulator and run a self-check."
     },
@@ -18330,7 +18392,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Admission refuses a contained task's entry page set (Workflow #373 NAV-3b): it is empty, names more than 16 pages, names a page twice, names any, names a page that is not exactly one page of the package, or a page of a phased route starts no stage or more than one. entry_problem names the rule; for phase_start_missing and phase_start_ambiguous, page_id is the entry page whose stage start was refused, and the detail lists the stages that start it.",
+      "description": "Admission refuses a contained task's entry page set (Workflow #373 NAV-3b): it is empty, names more than 16 pages, names a page twice, names any, names a page that is not exactly one page of the package, or a page of a phased route starts no stage or more than one (a stage starts the page when one of its operations leaves from it or it lists the page in its entry_pages; a stage that lists the page in its end_pages is a start of its own, #411 B14, B20). entry_problem names the rule; for phase_start_missing and phase_start_ambiguous, page_id is the entry page whose stage start was refused, and the detail lists the stages that start it.",
       "common_causes": "An entry page that no stage's operation leaves from, or one that operations of two stages both leave from (for example a return stage with an operation from the business stage's page); an entry set that is empty, too long, names a page twice, names any, or names a page the package does not have.",
       "handling": "phase_start_missing: add an operation from the page named by page_id to the stage the run should enter at, or drop the page from the set. phase_start_ambiguous: keep the operations from that page in one stage, or drop the page. Otherwise correct the set as entry_problem names."
     },
@@ -19122,9 +19184,31 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph click declared input_recheck stable_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
+      "description": "A click declared input_recheck stable_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "contained_task_input_still_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "optional",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A click declared input_recheck still_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames, each changed by at most the threshold from the frame before it in the declared region (the frame-change measure of contracts/color-digest.md), before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
+      "common_causes": "A looping animation in the region, or a region that includes a clock, a counter or particles.",
+      "handling": "Narrow the region to the part that must stop moving, lower frames, raise max_distance_milli, or raise the control step timeout."
     },
     "contained_task_interrupt_ambiguous": {
       "category": "warning",
@@ -20768,12 +20852,13 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "layer_outcome_key": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A linear task's first page was not seen within its budget after its prerequisite package ran.",
+      "description": "A linear task's first page was not seen within its budget after its prerequisite package ran. Workflow #411 B39 (A part): layer_outcome_key is the outcome key of the scheduling outcome mapping the prerequisite layer's run ended on, when its final page is a terminal page of one of its package's mappings.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -25581,6 +25666,33 @@
       "description": "A self-check (actingctl selfcheck, SelfCheckInstance, and an instance resume's reconnect; #411 A48) read the emulator status first (MuMuManager info, a status read that starts nothing) and found the emulator process running, but its device could not be recognized, so nothing was opened. stage names the step: read_instance_state when the read reported Android not started or no ADB port; probe_adb_baseline when the reported port was bound (the Runtime had held the instance stopped or unrecognized) and adbd did not answer through the 30 s ADB baseline wait, the last probe's failure being the caused_by link (an adb child the probe left unconfirmed fences the instance, and the fence is the link). process_started, android_started, adb_port_present and adb_port are the status read; elapsed_ms is the time from the read to the failure. Recorded once as a connection-preparation runtime.failed record (its stage the step) under the self-check's links, before the preparation's instance_preparation_finished; the self-check reports the code as its failure_code and the instance stays unavailable.",
       "common_causes": "The emulator was started outside the Runtime and is still booting; adbd of a running emulator does not answer (a hung Android, an adb server problem).",
       "handling": "Wait until the emulator has finished booting and run actingctl selfcheck again; if adbd stays silent, restart the emulator through the Runtime (actingctl emulator restart)."
+    },
+    "emulator_restart_previous_instance_running": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "elapsed_ms": "required",
+        "timeout_ms": "required",
+        "config_key": "required",
+        "process_started": "optional",
+        "android_started": "optional",
+        "adb_port_present": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A restart (an operator's emulator restart, or the stuck-recovery ladder's emulator-restart rung) launches only after the old VM has exited (#411 A50). Its Stop's readiness wait had expired, so it read the emulator status as a self-check does (MuMuManager info: the bounded read after the Stop's failure, then one read every 500 ms on the Runtime clock) for at most emulator_control.restart_exit_wait_ms, and every read that answered still showed the emulator process running. The restart fails and launches nothing, so the new instance never comes up on another ADB port beside the old one. elapsed_ms is the time waited, timeout_ms the bound in effect, config_key the bound's key; process_started, android_started and adb_port_present are the last read that answered. The Stop's failure (emulator_control_wait_timeout) is the caused_by link. Recorded as the request's command.rejected and runtime.failed under the restart's links (the ladder's rung fails with this code).",
+      "common_causes": "The emulator's VM process stays alive after its shutdown (it is still stopping, or its manager lost track of it) and keeps the instance's ADB port.",
+      "handling": "Wait until the old emulator process has exited, or end it, then restart again; raise emulator_control.restart_exit_wait_ms when the emulator needs longer to stop."
     },
     "emulator_restart_start_failed": {
       "category": "error",
@@ -42776,6 +42888,29 @@
       "common_causes": "The flush thread cannot keep up, usually because the disk is slow or busy.",
       "handling": "Check the disk that holds the state root if it recurs."
     },
+    "ledger_close_timeout": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "timeout_ms": "required",
+        "stage": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "The close of the ledger waited ledger_observer.close_timeout_ms (timeout_ms) for the writer to answer its shutdown and end, and the writer was still busy: stage is the operation of the writer command in progress and elapsed_ms how long it had run. The writer is left behind, so the Runtime's close ends and the process exits, which releases the owner lock (#411 A51).",
+      "common_causes": "A writer command that does not end: a read or a flush much slower than usual, or a hung storage device.",
+      "handling": "None: the watchdog starts the Runtime again. When it recurs, report the stage with the daemon log."
+    },
     "ledger_database_root_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -49211,6 +49346,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_check_click_box_single_point": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "box_x": "required",
+        "box_y": "required",
+        "box_width": "required",
+        "box_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 B34: actinglab package check admitted the package, and an operation's click declares a box of one point: a point click, a long press without a box, or a rect, specific_rect or long-press box of 1x1. pack_operation_id names the operation; box_x, box_y, box_width and box_height the box in the coordinate space of its task (a point click's box is 1x1 at its point). A click located on the frame (target, target_center, offset) and a drag are not judged. The package still passes; one warning per such click.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "package_edit_admission_refused": {
       "category": "error",
       "ladder_class": "none",
@@ -49415,12 +49570,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "capture_open_cause": "optional",
+        "application_id": "optional",
+        "instance_index": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on.",
+      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on. #411 A50: the outcome says why with capture_open_cause, application_id and instance_index, as for capture_backend_open_failed.",
       "common_causes": "The emulator's renderer is closed, not ready or restarting while adb still answers; the binding names a display or instance number the paired session cannot reach.",
       "handling": "As for capture_backend_open_failed: the configured recovery ladder restarts the emulator; otherwise restart it and run a self-check."
     },
@@ -51748,6 +51906,29 @@
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): policy catalog unavailable.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "policy_chain_handover_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Scheduling decision reason (Workflow #411 B41, contracts/scheduling/README.md \"Chain Handover\"): the candidate waits for the chain step that goes first on its instance. A chain's predecessor run ended completed on the page the instance rests on (page_id), that page is in the entry page set of the step's package (task_id, the step), and the step is dispatched this round, so every candidate that ranked ahead of it on the instance waits, a fact refresh reading included: its run would take the instance off that page first. The candidate keeps its own due time and has no wake of its own; it keeps waiting while the step waits for its random delay (part of its dispatch), and takes its turn when another gate defers the step (an admission gate or the host budget) or the step is no longer a candidate. A step whose own trigger or selection document reads a key the fact refresh reads is no candidate, so the refresh goes first.",
+      "common_causes": "A chain step became due right after its predecessor ended on the page the step starts on, while a higher-ranked task or a fact refresh reading was due on the same instance.",
+      "handling": "None. The waiting candidate runs after the chain step."
     },
     "policy_cost_commit_waiting": {
       "category": "info",
@@ -59997,6 +60178,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "recovery_ladder_hold_exhausted": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "held_ms": "required",
+        "limit_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A stuck-recovery ladder's busy hold reached its limit (#411 B37): held_ms since the climb's first busy end is at least limit_ms (recovery_ladder.busy.outcome.max_wait_ms), and recovery_ladder.busy.outcome.on_exhausted is stop, so the ladder ended without restarting the application or the emulator. The outcome of the recovery_ladder_finished record (ladder_result exhausted), caused by the last busy rung's recovery_rung_busy_outcome. The instance is not fenced; the next trigger may start a new ladder once the cool-down allows.",
+      "common_causes": "The activity the return-home package recognised lasted longer than recovery_ladder.busy.outcome.max_wait_ms.",
+      "handling": "Nothing to do when the activity ends by itself; otherwise bring the instance home by hand, or raise max_wait_ms or set on_exhausted to escalate."
+    },
     "recovery_ladder_instance_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -60178,6 +60381,31 @@
       "description": "The Runtime host reports recovery readiness adb unconfirmed.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "recovery_rung_busy_outcome": {
+      "category": "info",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "outcome_key": "required",
+        "held_ms": "required",
+        "limit_ms": "required",
+        "page_id": "optional",
+        "retry_after_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A stuck-recovery ladder rung's package run completed on a scheduling outcome mapping that its package marks busy (#411 B37): the instance still shows an activity in progress and the expected end page was not reached, so the rung did not recover it. The outcome of that rung's recovery_rung_finished record (rung_result failed, with the run's run_id). outcome_key is the mapping's key and page_id the run's final page; held_ms is the time since the climb's first busy end and limit_ms is recovery_ladder.busy.outcome.max_wait_ms. While the climb has a return-home package and the limit is not reached, the ladder holds its key for retry_after_ms (recovery_ladder.busy.outcome.recheck_ms, no longer than what is left) and runs the return-home rung again; retry_after_ms is absent when the hold ends, and recovery_ladder.busy.outcome.on_exhausted then decides.",
+      "common_causes": "The instance runs a long activity that ends by itself, and the return-home package recognised its page.",
+      "handling": "Nothing to do: the ladder brings the instance home when the activity ends. When the hold is too short or too long for the activity, change recovery_ladder.busy.outcome.recheck_ms or max_wait_ms."
     },
     "recovery_rung_result_invalid": {
       "category": "error",
@@ -64195,12 +64423,13 @@
         "path": "optional",
         "json_pointer": "optional",
         "found_after_first": "optional",
-        "step": "optional"
+        "step": "optional",
+        "expected_shape": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid. Workflow #411 B28: expected_shape is the shape the refused member must have, where a member or its element has the wrong type and the grammar names the shape (a page rule's any_of: array_of_arrays).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -78919,7 +79148,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A phased route's stage declarations are refused (source parsing, build or Runtime admission; contracts/README.md, phases): no stage or more than 32; a stage id that is blank, too long or repeated; a stage that lists no operation, more operations than the task has, one twice, or one the task does not have; target pages that are empty, more than 256, repeated, blank or any; an entry that names no page or any; or a last stage whose target pages are not the task's. json_pointer names the refused member; page_id and pack_operation_id name the page or operation it concerns; the detail adds the stage id and the rule (phase_problem).",
+      "description": "A phased route's stage declarations are refused (source parsing, build or Runtime admission; contracts/README.md, phases): no stage or more than 32; a stage id that is blank, too long or repeated; a stage that lists no operation, more operations than the task has, one twice, or one the task does not have; target pages that are empty, more than 256, repeated, blank or any; an entry that names no page or any; end pages or entry pages of a stage that are empty, more than 16, repeated, blank or any, an end page that is a target page of its stage or an error page, or an entry page that is no page of the task's entry that starts its stage (#411 B5, B14); or a last stage whose target pages are not the task's. json_pointer names the refused member; page_id and pack_operation_id name the page or operation it concerns; the detail adds the stage id and the rule (phase_problem).",
       "common_causes": "A stage that lists an operation id with a typo or one removed from the task; a page listed twice in a stage's target pages; a last stage whose target pages differ from the task's target_page.",
       "handling": "Correct the member json_pointer names as the detail's phase_problem says; for final_targets make the last stage's target pages equal the task's target pages."
     },
