@@ -822,3 +822,12 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t3_a_click_box_of_one_point_is_a_warning_and_the_package_still_passes",
 ]
 incident = ["#411 B34"]
+
+# Workflow #411 E4 tail (B34 follow-up; wave-3 row 13; register §1.172 unused; text only, the result's bytes do not change): the declared ac_pack_check result schema names the warnings member the result carries (actinglab package check's warnings, each an outcome with its code and values), and its description names it
+[[gate]]
+key = "97"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_411_e4_tail::e4_tail_t1_ac_pack_check_result_schema_names_its_warnings",
+]
+incident = ["#411 B34"]

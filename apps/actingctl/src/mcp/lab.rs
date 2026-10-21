@@ -1579,15 +1579,16 @@ pub(super) fn pack_check_input() -> Value {
 }
 
 /// Workflow #411 A5: `package check`'s data, verbatim, or the one overflow rule's answer, or a
-/// job handle.
+/// job handle. Workflow #411 E4 tail (B34): the data's `warnings`, named; text only.
 pub(super) fn pack_check_result() -> Value {
     json!({
         "type": "object",
-        "description": "actinglab package check's data, unchanged: {status: admitted, package_id, entry_task_id} of a package the Runtime's structural admission admitted. Beyond the call budget: {handle, job_phase}.",
+        "description": "actinglab package check's data, unchanged: {status: admitted, package_id, entry_task_id, warnings} of a package the Runtime's structural admission admitted. warnings lists the check's warnings in declaration order, empty when there is none: each an outcome {code, category: warning, values}, such as package_check_click_box_single_point with pack_operation_id, box_x, box_y, box_width and box_height. A warning does not make the check fail: the package is still admitted. These are the check's own warnings, apart from the answer's top-level warnings. Beyond the call budget: {handle, job_phase}.",
         "properties": {
             "status": {"type": "string", "const": "admitted"},
             "package_id": {"type": "string"},
             "entry_task_id": {"type": "string"},
+            "warnings": {"type": "array", "items": tools::outcome_schema()},
             "req_id": {"type": ["string", "null"]},
             "export": export_schema(),
             "overflowed": {"type": "boolean"},
@@ -1727,4 +1728,7 @@ mod tests {
     // Workflow #406 T4 (apps key 79): ac_lab_do passes seed as --seed and answers the sampling
     // actinglab gives.
     mod gate_406_t4;
+
+    // Workflow #411 E4 tail (apps key 97): the ac_pack_check result schema names its warnings.
+    mod gate_411_e4_tail;
 }
