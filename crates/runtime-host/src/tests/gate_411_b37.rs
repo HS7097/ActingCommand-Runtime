@@ -220,6 +220,20 @@ fn application_commands(state: &FakeState) -> usize {
     state.application_count.load(Ordering::Acquire)
 }
 
+/// Closes `host` while its ladder holds, on a thread of its own, waiting at most `GATE_WAIT`: the
+/// hold makes its holding check at every poll, so the shutdown ends it at the next one and the
+/// close returns.
+fn close_while_holding(host: RuntimeHost) {
+    let (closed_tx, closed_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = closed_tx.send(host.close());
+    });
+    closed_rx
+        .recv_timeout(GATE_WAIT)
+        .expect("the close returns at the hold's next poll")
+        .expect("close host");
+}
+
 /// T1 (design §2.2, §4.3 table row 2): the return-home run completes `success` on the `busy`
 /// mapping. The rung is recorded `failed` with `recovery_rung_busy_outcome` (info), carrying the
 /// mapping's key, the time held since the first busy end (0) and the configured limit, and the
@@ -271,7 +285,7 @@ fn b37_t1_a_busy_return_home_end_is_recorded_failed_and_not_recovered() {
         "no application stop while the budget lasts"
     );
     assert!(ladder.host.fatal_error().expect("runtime health").is_none());
-    ladder.host.close().expect("close host");
+    close_while_holding(ladder.host);
     drop(ladder.root);
 }
 
@@ -459,14 +473,7 @@ fn b37_t4_a_shutdown_during_the_hold_ends_the_climb_at_the_next_poll() {
     let ladder = busy_ladder(&busy_config(1_200_000, 3_600_000, "stop"));
     wait_for_busy_records(&ladder.host, 1);
     let BusyLadder { root, host, .. } = ladder;
-    let (closed_tx, closed_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = closed_tx.send(host.close());
-    });
-    closed_rx
-        .recv_timeout(GATE_WAIT)
-        .expect("the close returns at the hold's next poll")
-        .expect("close host");
+    close_while_holding(host);
 
     let events = closed_ledger_events(root.path());
     let records = rung_records(&events);
