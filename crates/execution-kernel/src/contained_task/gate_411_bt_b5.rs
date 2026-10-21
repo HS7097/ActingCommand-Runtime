@@ -289,7 +289,7 @@ fn mapped_key<'a>(task: &'a PreparedContainedTask, page: &str) -> &'a str {
     let [key] = keys.as_slice() else {
         panic!("{page}: one mapping, not {keys:?}");
     };
-    *key
+    key
 }
 
 fn step_finished(
