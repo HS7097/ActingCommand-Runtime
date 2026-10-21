@@ -500,8 +500,10 @@ facts (D2-S4). It is an ordinary task package that only navigates and reads.
   checks the qualification again when it prepares the package (D2-S4).
 - **Resource validation.** `package bundle --maintenance` adds one warning
   `recognition_pack_undeclared` (`package_id`) to its output's `warnings` for each pack that
-  qualifies as a reader but is not declared `recognition`; the resource repositories make it an
-  error once their readers are declared (D2-S6).
+  qualifies as a reader of a server (variant) that declares no `recognition` package. Only the
+  one a server declares counts (Workflow #411 A32): the other qualifying packs of a server that
+  declares one raise nothing. The resource repositories make it an error once their readers are
+  declared (D2-S6).
 
 ## Never written
 

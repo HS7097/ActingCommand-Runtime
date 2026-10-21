@@ -4469,7 +4469,7 @@ const ARTIFACT_BYTE_WRITES: &[(&str, &str)] = &[
         "the one-shot artifact temporary",
     ),
     (
-        "crates/artifact-store/src/usage.rs::open_lock -> OpenOptions(write+create).open [NOT admitted]",
+        "crates/artifact-store/src/usage.rs::open_lock_file -> OpenOptions(write+create).open [NOT admitted]",
         "a zero-byte OS lock file for use and delete coordination; it holds no artifact bytes",
     ),
 ];
