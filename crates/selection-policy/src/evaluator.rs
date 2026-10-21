@@ -1147,7 +1147,7 @@ fn truth(
             left,
             op,
             right,
-            mul,
+            mul: _,
             add,
         } => {
             // Both sides are read, so the collect option lists each one that is unknown; the
@@ -1156,10 +1156,9 @@ fn truth(
             let right = integer_side(right, candidate, resolver, reads);
             match (left, right) {
                 (Err(reason), _) | (Ok(_), Err(reason)) => Truth::Unknown(reason),
-                (Ok(left), Ok(right)) => {
-                    let right = i128::from(right) * i128::from(mul.unwrap_or(1))
-                        + i128::from(add.unwrap_or(0));
-                    bool_truth(op.holds(i128::from(left), right))
+                // B2 red proof 1 (do not merge): the right side is read as a constant.
+                (Ok(left), Ok(_)) => {
+                    bool_truth(op.holds(i128::from(left), i128::from(add.unwrap_or(0))))
                 }
             }
         }
