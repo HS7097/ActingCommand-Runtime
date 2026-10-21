@@ -317,17 +317,26 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             )?,
             None => Vec::new(),
         };
-        let action_events = match operation.record.input_action_id {
-            Some(action) => restore_event_page(
+        // LR-10 (#412 B-3): each attempt of a declared operation has its own physical action.
+        let action_ids = match &operation.record.operation_result {
+            Some(result) => result
+                .attempts
+                .iter()
+                .filter_map(|attempt| attempt.input_action_id)
+                .collect::<Vec<_>>(),
+            None => operation.record.input_action_id.into_iter().collect(),
+        };
+        let mut action_events = Vec::new();
+        for action in action_ids {
+            action_events.extend(restore_event_page(
                 &snapshot,
                 &EventQuery {
                     action_id: Some(action),
                     ..EventQuery::default()
                 },
                 through,
-            )?,
-            None => Vec::new(),
-        };
+            )?);
+        }
         let evidence = LabOperationEvidence {
             operation,
             terminal,

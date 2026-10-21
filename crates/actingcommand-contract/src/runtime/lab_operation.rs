@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::InputSamplingEvidence;
 use crate::codes::{RuntimeContractCode, SharedCode};
 use crate::page_projection::{Geometry, PageProjection, Point, Rect};
 
@@ -11,6 +12,10 @@ pub const MAX_LAB_ARRIVAL_FRAMES: usize = 20;
 /// sample is what is left of it after the sample's capture and evaluation, bounded by the
 /// deadline.
 pub const LAB_ARRIVAL_INTERVAL_MS: u64 = 500;
+/// LR-10 (#412 B-3): the most destination pages a declared operation's prepared record names.
+pub const MAX_LAB_DECLARED_DESTINATION_PAGES: usize = 16;
+/// LR-10 (#412 B-3): the most frames a declared operation's terminal record lists.
+pub const MAX_LAB_DECLARED_OPERATION_FRAMES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,11 +50,58 @@ crate::outcome_vocabulary! {
     }
 }
 
+crate::outcome_vocabulary! {
+    /// How a Lab operation that ran a declared operation ended (the vocabulary
+    /// `lab_operation_end`, #412 B-3, ledger revision 4 row LR-10).
+    #[derive(Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum LabOperationEnd: "lab_operation_end" {
+        /// The operation's step completed on its confirmed page.
+        Confirmed => "confirmed",
+        /// The step ended the package's run as a success, on a page and an outcome key.
+        RunCompleted => "run_completed",
+        /// The guard refused the input and the operation was passed over.
+        PassedOver => "passed_over",
+        /// The operation's failure asked for recovery, which the Lab does not run.
+        RecoveryRequested => "recovery_requested",
+        /// The operation failed otherwise.
+        Failed => "failed",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Why the Lab cannot run a declared operation (the vocabulary `lab_operation_problem`,
+    /// #412 B-3; the value `lab_operation_problem` of the kernel's refusal).
+    pub enum LabOperationProblem: "lab_operation_problem" {
+        /// The operation is an application effect.
+        ApplicationEffect => "application_effect",
+        /// The operation is a select step.
+        SelectStep => "select_step",
+        /// The package runs `linear_steps`.
+        LinearSteps => "linear_steps",
+        /// The package only recognizes.
+        RecognizeOnly => "recognize_only",
+        /// The operation reads the identity an earlier select step of the same run chose.
+        ChosenIdentity => "chosen_identity",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LabOperationSelection {
-    Element { id: String },
-    Coordinates { action: InputAction },
+    Element {
+        id: String,
+    },
+    Coordinates {
+        action: InputAction,
+    },
+    /// LR-10 (#412 B-3): an operation the package declares, by the id of an operation of its
+    /// entry task, run as the kernel runs it; attempt 1 draws its point from `seed` when given.
+    Operation {
+        operation_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
+    },
 }
 
 impl LabOperationSelection {
@@ -58,6 +110,13 @@ impl LabOperationSelection {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::Element { id } if !id.is_empty() && id.len() <= 2048 && !id.contains('\0') => {
+                Ok(())
+            }
+            Self::Operation { operation_id, .. }
+                if !operation_id.is_empty()
+                    && operation_id.len() <= 2048
+                    && !operation_id.contains('\0') =>
+            {
                 Ok(())
             }
             Self::Coordinates {
@@ -154,6 +213,13 @@ impl LabOperationSelection {
                 };
                 (None, geometry)
             }
+            // LR-10 (#412 B-3): a declared operation is run as the kernel runs it; no projection
+            // resolves it.
+            Self::Operation { .. } => {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidLabOperationSelection,
+                ));
+            }
         };
         geometry
             .validate(projection.frame.width, projection.frame.height)
@@ -230,6 +296,13 @@ impl ContainedLabOperationRequest {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         ContainedObservationRequest::new(&self.package_path, Vec::new())?;
         self.selection.validate()?;
+        // LR-10 (#412 B-3): a declared operation's own `expect_after` or `to` is its arrival.
+        if matches!(self.selection, LabOperationSelection::Operation { .. }) && self.after.is_some()
+        {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLabOperationSelection,
+            ));
+        }
         if let Some(after) = &self.after {
             after.validate()?;
         }
@@ -290,6 +363,10 @@ pub struct LabOperationPrepared {
     pub package_label: Option<String>,
     pub lease_id: Option<LeaseId>,
     pub selection: LabOperationSelection,
+    /// LR-10 (#412 B-3): present exactly when the selection is `operation`, except in the record
+    /// of a request that failed before any input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<LabDeclaredOperation>,
     pub projection_hint: LabProjectionHint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<LabArrivalCondition>,
@@ -304,6 +381,95 @@ impl fmt::Debug for LabOperationPrepared {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("LabOperationPrepared(<controlled-evidence>)")
     }
+}
+
+/// LR-10 (#412 B-3): the guard decision of a declared operation's attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LabGuardOutcome {
+    /// The operation declares no guard and trusts its coordinates.
+    TrustedCoordinate,
+    /// The guard passed on `page_id`, confirming `target_id` of the kind `target_kind`.
+    Passed {
+        page_id: String,
+        target_id: String,
+        target_kind: String,
+    },
+}
+
+/// LR-10 (#412 B-3): what the prepared record of a declared operation states, as known at
+/// attempt 1's input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabDeclaredOperation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_id: Option<String>,
+    /// As declared: `any` or a page anchor.
+    pub from_page: String,
+    /// The operation's `to` or `expect_after.page_id` pages, at most 16.
+    pub destination_pages: Vec<String>,
+    /// 1 without a retry policy.
+    pub max_attempts: u32,
+    /// The fresh frames of attempt 1's input recheck.
+    pub recheck_frames: u32,
+    /// Attempt 1's guard decision.
+    pub guard: LabGuardOutcome,
+    /// Attempt 1's draw: seed, regions, rule and chosen candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<InputSamplingEvidence>,
+}
+
+/// LR-10 (#412 B-3): one attempt of a declared operation, one per effect intent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabOperationAttempt {
+    /// 1, 2, … in order.
+    pub attempt: u32,
+    /// The index in `frames` of the frame the input binds to: a frame of this attempt before
+    /// its input.
+    pub input_frame_index: u32,
+    pub guard: LabGuardOutcome,
+    pub action: InputAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<InputSamplingEvidence>,
+    pub input_returned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_action_id: Option<ActionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_intent: Option<TerminalEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_event: Option<TerminalEvent>,
+    pub effect: EffectDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_page: Option<String>,
+}
+
+/// LR-10 (#412 B-3): one frame the kernel captured for a declared operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabOperationFrameEntry {
+    pub frame: LabOperationFrame,
+    /// The attempt the frame belongs to; 0 before the first attempt.
+    pub attempt: u32,
+    /// Captured after its attempt's input.
+    pub after_input: bool,
+    /// The page the kernel matched on the frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+}
+
+/// LR-10 (#412 B-3): how a declared operation ended, its attempts and every frame it took.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabDeclaredOperationResult {
+    pub end: LabOperationEnd,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_page: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_key: Option<String>,
+    pub attempts: Vec<LabOperationAttempt>,
+    /// Every frame the kernel captured, in order, at most 256.
+    pub frames: Vec<LabOperationFrameEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,6 +533,9 @@ pub struct LabOperationRecord {
     pub after_projection: Option<ContainedPageObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrival: Option<LabArrivalResult>,
+    /// LR-10 (#412 B-3): present exactly when the prepared record states a declared operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_result: Option<LabDeclaredOperationResult>,
     pub failure: Option<LabOperationFailure>,
     pub cleanup_failure: Option<LabOperationFailure>,
 }
@@ -385,6 +554,7 @@ impl ContainedLabOperationResult {
         prepared.selection.validate()?;
         record.prepared_artifact.validate()?;
         self.terminal_artifact.validate()?;
+        let declared = self.validate_declared_operation()?;
         if prepared.schema_version != LAB_OPERATION_PREPARED_SCHEMA
             || record.schema_version != LAB_OPERATION_TERMINAL_SCHEMA
             || prepared
@@ -425,7 +595,7 @@ impl ContainedLabOperationResult {
                     || failure.code.len() > 128
                     || failure.error.fatal
             })
-            || prepared.action.is_some() != prepared.geometry.is_some()
+            || (!declared && prepared.action.is_some() != prepared.geometry.is_some())
             || (prepared.selected_element.is_some() && prepared.action.is_none())
             || prepared.projection_hint.sequence == Some(0)
         {
@@ -467,18 +637,23 @@ impl ContainedLabOperationResult {
             let frame = prepared.before_frame.as_ref().ok_or_else(|| {
                 RuntimeContractError::new(RuntimeContractCode::LabActionWithoutFrame)
             })?;
-            prepared
-                .geometry
-                .as_ref()
-                .ok_or_else(|| {
-                    RuntimeContractError::new(RuntimeContractCode::LabActionWithoutGeometry)
-                })?
-                .validate(frame.observation.width(), frame.observation.height())
-                .map_err(|_| {
-                    RuntimeContractError::new(RuntimeContractCode::InvalidLabActionGeometry)
-                })?;
+            // LR-10 (#412 B-3): a declared operation's action is the kernel's draw, not a
+            // projection geometry.
+            if !declared {
+                prepared
+                    .geometry
+                    .as_ref()
+                    .ok_or_else(|| {
+                        RuntimeContractError::new(RuntimeContractCode::LabActionWithoutGeometry)
+                    })?
+                    .validate(frame.observation.width(), frame.observation.height())
+                    .map_err(|_| {
+                        RuntimeContractError::new(RuntimeContractCode::InvalidLabActionGeometry)
+                    })?;
+            }
         }
-        if record.failure.is_none()
+        if !declared
+            && record.failure.is_none()
             && (record.input_event.is_none()
                 || record.effect != EffectDisposition::Performed
                 || prepared
@@ -498,6 +673,131 @@ impl ContainedLabOperationResult {
         }
         self.validate_arrival()?;
         Ok(())
+    }
+
+    /// LR-10 (#412 B-3): the rules of a record that ran a declared operation, and whether the
+    /// record is one. The prepared `operation` and the terminal `operation_result` come together
+    /// and only with the selection `operation`; a selection `operation` without them is a
+    /// request that failed before any input (the Runtime before Lab B-3 S2 refuses the mode at
+    /// selection).
+    fn validate_declared_operation(&self) -> RuntimeContractResult<bool> {
+        let record = &self.record;
+        let prepared = &record.prepared;
+        let invalid = || RuntimeContractError::new(RuntimeContractCode::InvalidLabOperationRecord);
+        let selected = matches!(prepared.selection, LabOperationSelection::Operation { .. });
+        let (operation, result) = match (&prepared.operation, &record.operation_result) {
+            (None, None) => {
+                if selected && (record.input_returned || record.failure.is_none()) {
+                    return Err(invalid());
+                }
+                return Ok(false);
+            }
+            (Some(operation), Some(result)) if selected => (operation, result),
+            _ => return Err(invalid()),
+        };
+        let first = result.attempts.first();
+        if prepared.geometry.is_some()
+            || prepared.selected_element.is_some()
+            || prepared.before_projection.is_some()
+            || prepared.after.is_some()
+            || record.arrival.is_some()
+            || operation.destination_pages.len() > MAX_LAB_DECLARED_DESTINATION_PAGES
+            || operation.max_attempts == 0
+            || usize::try_from(operation.max_attempts)
+                .is_ok_and(|max_attempts| result.attempts.len() > max_attempts)
+            || result.frames.len() > MAX_LAB_DECLARED_OPERATION_FRAMES
+            || result.frames.windows(2).any(|pair| {
+                pair[0].frame.verified.sequence >= pair[1].frame.verified.sequence
+            })
+            // The prepared record states attempt 1: its input frame, action, guard and draw.
+            || prepared.before_frame.as_ref()
+                != first
+                    .and_then(|attempt| declared_input_frame(result, attempt))
+                    .map(|entry| &entry.frame)
+            || prepared.action.as_ref() != first.map(|attempt| &attempt.action)
+            || first.is_some_and(|attempt| {
+                attempt.guard != operation.guard || attempt.sampling != operation.sampling
+            })
+            // The after frame is the last frame the kernel captured.
+            || record.after_frame.as_ref() != result.frames.last().map(|entry| &entry.frame)
+        {
+            return Err(invalid());
+        }
+        for entry in &result.frames {
+            entry.frame.observation.validate()?;
+            if entry.frame.verified.sequence == 0 || prepared.lease_id.is_none() {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidLabOperationFrame,
+                ));
+            }
+        }
+        // Attempts run 1, 2, … each binding its input to a frame of its own before its input,
+        // each intent before its outcome event and after the previous attempt's.
+        let mut previous = record.prepared_artifact.verified.sequence;
+        let mut effect = EffectDisposition::NotPerformed;
+        for (index, attempt) in result.attempts.iter().enumerate() {
+            attempt.action.validate()?;
+            if usize::try_from(attempt.attempt).ok() != index.checked_add(1)
+                || declared_input_frame(result, attempt)
+                    .is_none_or(|entry| entry.attempt != attempt.attempt || entry.after_input)
+                || attempt.input_action_id.is_some() != attempt.input_intent.is_some()
+                || (!attempt.input_returned
+                    && (attempt.input_intent.is_some()
+                        || attempt.input_event.is_some()
+                        || attempt.effect != EffectDisposition::NotPerformed))
+                || (attempt.input_returned
+                    && attempt.input_event.is_none()
+                    && attempt.effect != EffectDisposition::Indeterminate)
+                || attempt
+                    .input_intent
+                    .is_some_and(|intent| intent.sequence <= previous)
+                || attempt.input_event.is_some_and(|event| {
+                    attempt
+                        .input_intent
+                        .is_none_or(|intent| intent.sequence >= event.sequence)
+                })
+                || [attempt.input_intent, attempt.input_event]
+                    .into_iter()
+                    .flatten()
+                    .any(|event| event.sequence >= self.terminal_artifact.verified.sequence)
+            {
+                return Err(invalid());
+            }
+            if let Some(event) = attempt.input_event.or(attempt.input_intent) {
+                previous = event.sequence;
+            }
+            effect = match (effect, attempt.effect) {
+                (EffectDisposition::Performed, _) | (_, EffectDisposition::Performed) => {
+                    EffectDisposition::Performed
+                }
+                (EffectDisposition::Indeterminate, _) | (_, EffectDisposition::Indeterminate) => {
+                    EffectDisposition::Indeterminate
+                }
+                _ => EffectDisposition::NotPerformed,
+            };
+        }
+        // The record's input members are the last attempt's; its effect is performed when an
+        // attempt performed, else indeterminate when one was; it succeeded exactly when it
+        // ended `confirmed` or `run_completed`.
+        let last = result.attempts.last();
+        let succeeded = matches!(
+            result.end,
+            LabOperationEnd::Confirmed | LabOperationEnd::RunCompleted
+        );
+        if record.input_returned != last.is_some_and(|attempt| attempt.input_returned)
+            || record.input_action_id != last.and_then(|attempt| attempt.input_action_id)
+            || record.input_intent != last.and_then(|attempt| attempt.input_intent)
+            || record.input_event != last.and_then(|attempt| attempt.input_event)
+            || record.effect != effect
+            || succeeded
+                != record
+                    .failure
+                    .as_ref()
+                    .is_none_or(|failure| failure.stage == LabOperationStage::Release)
+        {
+            return Err(invalid());
+        }
+        Ok(true)
     }
 
     fn validate_arrival(&self) -> RuntimeContractResult<()> {
@@ -594,4 +894,14 @@ impl ContainedLabOperationResult {
         }
         Ok(())
     }
+}
+
+/// LR-10 (#412 B-3): the frame an attempt binds its input to, when its index names one.
+fn declared_input_frame<'a>(
+    result: &'a LabDeclaredOperationResult,
+    attempt: &LabOperationAttempt,
+) -> Option<&'a LabOperationFrameEntry> {
+    usize::try_from(attempt.input_frame_index)
+        .ok()
+        .and_then(|index| result.frames.get(index))
 }

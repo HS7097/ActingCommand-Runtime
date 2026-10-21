@@ -9,7 +9,7 @@ use crate::{
 use actingcommand_contract::page_projection::{Geometry, Privacy};
 use actingcommand_contract::{
     ContainedLabOperationResult, EffectDisposition, EventType, LabArrivalStatus, LabError,
-    LabOperationStage, LabResult, TerminalEvent,
+    LabOperationSelection, LabOperationStage, LabResult, TerminalEvent,
 };
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition_pack::PackRect;
@@ -326,6 +326,15 @@ pub fn restore_authoring_draft(
         let record = &operation.record;
         let prepared = &record.prepared;
         let mut record_source = record_provenance(input);
+        // LR-10 (#412 B-3, decision Q12): a declared operation ran as the kernel runs it; restore
+        // does not turn it into a page-graph operation, so it is a gap and contributes none.
+        if matches!(prepared.selection, LabOperationSelection::Operation { .. }) {
+            let record_gaps = ["lab_declared_operation"];
+            record_source["gaps"] = json!(record_gaps);
+            gaps.push(json!({"request_id":prepared.request_id,"codes":record_gaps}));
+            provenance.push(record_source);
+            continue;
+        }
         let mut record_gaps = Vec::new();
         if prepared.after.is_some()
             && (record
@@ -601,7 +610,7 @@ fn record_provenance(input: &ResourceRestoreRecord) -> Value {
                 "sequence":projection.projection_sequence,"event_id":projection.projection_event_id,
                 "artifact_sha256":projection.artifact.sha256,"content_sha256":projection.projection.content_sha256}))})
         };
-    json!({"request_id":prepared.request_id,"correlation_id":prepared.correlation_id,"instance_id":prepared.instance_id,
+    let mut provenance = json!({"request_id":prepared.request_id,"correlation_id":prepared.correlation_id,"instance_id":prepared.instance_id,
         "lease_id":prepared.lease_id,"package_label":prepared.package_label,
         "prepared":prepared_record_reference(&record.prepared_artifact),"terminal_record":prepared_record_reference(&input.operation.terminal_artifact),
         "command_terminal":input.terminal,"input_action_id":record.input_action_id,"input_intent":record.input_intent,
@@ -610,7 +619,12 @@ fn record_provenance(input: &ResourceRestoreRecord) -> Value {
         "after_condition":prepared.after,"arrival":record.arrival,
         "before":observation(&prepared.before_frame,&prepared.before_projection),"after":observation(&record.after_frame,&record.after_projection),
         "failure":record.failure.as_ref().map(|failure|json!({"stage":failure.stage,"code":failure.code,"event":failure.event})),
-        "cleanup_failure":record.cleanup_failure.as_ref().map(|failure|json!({"stage":failure.stage,"code":failure.code,"event":failure.event}))})
+        "cleanup_failure":record.cleanup_failure.as_ref().map(|failure|json!({"stage":failure.stage,"code":failure.code,"event":failure.event}))});
+    // LR-10 (#412 B-3): how a declared operation ended.
+    if let Some(result) = &record.operation_result {
+        provenance["end"] = json!(result.end);
+    }
+    provenance
 }
 
 /// Workflow #336 PKG-S2 (option 丙): the original package by the `package_id` its control
