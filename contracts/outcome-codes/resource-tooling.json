@@ -1037,6 +1037,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_bundle_packs_empty": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "json_pointer": "optional",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 A40: the pack table holds no pack. package bundle's --packs-root holds no pack directory (path packs, the standard package's pack directory), or the bundle.json that actinglab standard-pack check reads lists no pack (path bundle.json, json_pointer /packs). Paths are relative to the standard package, never absolute local paths.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "package_bundle_write_failed": {
       "category": "error",
       "ladder_class": "none",

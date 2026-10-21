@@ -1012,12 +1012,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "program_problem": "optional",
+        "path": "optional",
+        "json_pointer": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A contained task package's task program breaks a rule.",
+      "description": "A contained task package's task program breaks a rule. Workflow #411 A39: where the refusal names its rule, program_problem is that rule, path the task declaration's path inside the package and json_pointer the refused member.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

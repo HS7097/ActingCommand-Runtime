@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{CliError, CliOutcome, FlagArgs, GlobalOptions, attach_package_event};
+use actingcommand_contract::outcome::Detail;
 use actingcommand_lab::{PackageValidateRequest, PackageValidationResponse};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -61,6 +62,8 @@ pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
                 .with_details(json!({
                     "code": error.code().as_str(),
                     "declaration": error.declaration_issue(),
+                    // Workflow #411 A39: the admission's outcome with the values it carries.
+                    "outcome": error.outcome().envelope(Detail::Full),
                 }))
             })?;
     serialize_response(PackageCheckResponse {
@@ -74,6 +77,12 @@ pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
 #[cfg(test)]
 #[path = "tests/gate_0121_pkgcheck.rs"]
 mod gate_0121_pkgcheck;
+
+// Workflow #411 slice E1 (train 0.12.9), T1 (A39): `package check` and `package preflight` name
+// the rule that refused a package and where.
+#[cfg(test)]
+#[path = "tests/gate_411_e1.rs"]
+mod gate_411_e1;
 
 pub(super) fn is_offline_command(args: &[String]) -> bool {
     matches!(args, [group, command, ..] if group == "package" && matches!(command.as_str(), "dry-run" | "preflight"))
@@ -111,7 +120,7 @@ pub(super) fn preflight_admission(
         .map_err(|_| CliError::package_invalid("preflight package ownership is shared"))?;
     actingcommand_lab::PreparedContainedTask::from_bundle(bundle).map_err(|error| {
         CliError::package_invalid(format!("{}: {}", error.code(), error.detail().unwrap_or("task preparation failed")))
-            .with_details(json!({"code":error.code().as_str(),"declaration":error.declaration_issue(),"coverage":{"declaration_parse":"passed","package_load":"passed","task_prepare":"failed","execution":"not_run"}}))
+            .with_details(json!({"code":error.code().as_str(),"declaration":error.declaration_issue(),"outcome":error.outcome().envelope(Detail::Full),"coverage":{"declaration_parse":"passed","package_load":"passed","task_prepare":"failed","execution":"not_run"}}))
     })
 }
 

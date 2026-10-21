@@ -531,4 +531,7 @@ outcome_keys! {
     eligibility: vocab(eligibility),
     omitted_why: records(why, count),
     // ---- Workflow #411 A26: end ----
+    // ---- Workflow #411 A39 (which rule of a task program refused it): begin ----
+    program_problem: vocab(program_problem),
+    // ---- Workflow #411 A39: end ----
 }
