@@ -315,6 +315,8 @@ pub struct RunStateConfig {
     /// Workflow #390 OUT-2: the members of a designated effect set with the caps the run holds
     /// them to, in declaration order.
     designated_effect_caps: Vec<DesignatedEffectCap>,
+    /// #411 B16 part 1: the operations that declare a per-run cap, in declaration order.
+    operation_run_caps: Vec<OperationRunCap>,
 }
 
 /// Workflow #390 OUT-2: one member of a designated effect set and the cap a run holds it to (the
@@ -323,6 +325,42 @@ pub struct RunStateConfig {
 pub struct DesignatedEffectCap {
     pub operation_id: String,
     pub max_repeats: u32,
+}
+
+/// #411 B16 part 1 (B-train plan §2.11 item 1): what a run does once it dispatched an operation
+/// as often as the operation's `max_runs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunMaxRunsEnd {
+    /// `on_max_runs: "next_candidate"`: the operation is passed over like a capped member of a
+    /// designated effect set, and the page's next operation is dispatched.
+    NextCandidate,
+    /// `on_max_runs: {"outcome_key": K}`: the run ends Completed on the current page with K.
+    OutcomeKey(String),
+}
+
+/// #411 B16 part 1 (B-train plan §2.11 item 1): an operation's per-run cap. The count is per run
+/// and operation, of dispatches that started a step: a guard pass-over counts, a `when`
+/// withdrawal does not (D10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationRunCap {
+    pub operation_id: String,
+    /// `max_runs`, 1..=1000.
+    pub max_runs: u32,
+    pub on_max_runs: RunMaxRunsEnd,
+}
+
+/// #411 B16 part 1 (B-train plan §2.11 items 1 and 5): a run ended by an operation's keyed cap.
+/// The run dispatched `operation_id` `count` times, its cap `limit_count`, and was about to
+/// dispatch it again on `page` as its step `step_index`; it ended Completed there with
+/// `outcome_key` instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOperationCapped {
+    pub step_index: u32,
+    pub operation_id: String,
+    pub count: u32,
+    pub limit_count: u32,
+    pub page: String,
+    pub outcome_key: String,
 }
 
 impl RunStateConfig {
@@ -358,6 +396,7 @@ impl RunStateConfig {
             phases: None,
             designated_operation: None,
             designated_effect_caps: Vec::new(),
+            operation_run_caps: Vec::new(),
         };
         if config.game.trim().is_empty() {
             return Err(RunDecisionError::invalid(
@@ -409,6 +448,14 @@ impl RunStateConfig {
     /// completed as often as its cap is not selected again; the page's next operation is.
     pub fn with_designated_effect_caps(mut self, caps: Vec<DesignatedEffectCap>) -> Self {
         self.designated_effect_caps = caps;
+        self
+    }
+
+    /// #411 B16 part 1: the operations' per-run caps. An operation the run dispatched as often as
+    /// its cap is passed over (`next_candidate`), or ends the run with its key when it is the
+    /// operation the page would dispatch.
+    pub fn with_operation_run_caps(mut self, caps: Vec<OperationRunCap>) -> Self {
+        self.operation_run_caps = caps;
         self
     }
 }
@@ -489,6 +536,11 @@ pub struct RunStateMachine {
     /// order they were passed over (a `when` that did not hold, a guard that refused and declared
     /// `on_guard_refused: next_candidate`). A new frame starts the page's candidates again.
     passed_over: Vec<String>,
+    /// #411 B16 part 1: how often the run dispatched each capped operation, in the order of
+    /// `operation_run_caps`.
+    operation_runs: Vec<u32>,
+    /// #411 B16 part 1: the keyed cap that ended the run, once one did.
+    operation_capped: Option<RunOperationCapped>,
 }
 
 impl RunStateMachine {
@@ -503,6 +555,7 @@ impl RunStateMachine {
             )));
         }
         let designated_effect_counts = vec![0; config.designated_effect_caps.len()];
+        let operation_runs = vec![0; config.operation_run_caps.len()];
         Ok(Self {
             config,
             completed_task_retries,
@@ -514,6 +567,8 @@ impl RunStateMachine {
             designated_effect_completed: false,
             designated_effect_counts,
             passed_over: Vec::new(),
+            operation_runs,
+            operation_capped: None,
         })
     }
 
@@ -603,7 +658,8 @@ impl RunStateMachine {
             }));
         }
         // Workflow #390 OUT-2: a member of the designated effect set that reached its cap is
-        // passed over. Workflow #390 EXEC-1: so is a candidate passed over on this frame.
+        // passed over. Workflow #390 EXEC-1: so is a candidate passed over on this frame. #411
+        // B16 part 1: so is an operation capped with `on_max_runs: next_candidate`.
         let phase_operations = operations
             .iter()
             .filter(|operation| {
@@ -613,6 +669,7 @@ impl RunStateMachine {
                         .is_some_and(|phase| phase.operations.contains(&operation.id))
                 }) && !self.designated_effect_capped(operation.id())
                     && !self.passed_over.contains(&operation.id)
+                    && !self.run_capped_over(operation.id())
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -636,9 +693,27 @@ impl RunStateMachine {
                 "designated effect already completed",
             ));
         }
+        // #411 B16 part 1 (B-train plan §2.11 item 1): the operation the page dispatches reached
+        // its cap and declares `on_max_runs: {"outcome_key": K}`; the run ends Completed on the
+        // current page with K, and no step starts.
+        if let Some((member, key)) = self.run_capped_end(operation.id()) {
+            let cap = &self.config.operation_run_caps[member];
+            self.operation_capped = Some(RunOperationCapped {
+                step_index: self.completed_steps,
+                operation_id: cap.operation_id.clone(),
+                count: self.operation_runs[member],
+                limit_count: cap.max_runs,
+                page: current_page.clone(),
+                outcome_key: key,
+            });
+            return Ok(self.finish(RunTerminal::Completed {
+                current_page: Some(current_page),
+            }));
+        }
         let step_index = self.completed_steps;
         self.completed_steps += 1;
         self.executing_operation = Some(operation.id.clone());
+        self.count_operation_run(operation.id());
         Ok(RunDirective::ExecuteOperation {
             operation_id: operation.id.clone(),
             current_page,
@@ -670,6 +745,7 @@ impl RunStateMachine {
         }
         self.completed_steps = 1;
         self.executing_operation = Some(operation.id.clone());
+        self.count_operation_run(operation.id());
         Ok(RunDirective::ExecuteOperation {
             operation_id: operation.id.clone(),
             current_page: "<unrecognized>".to_string(),
@@ -746,11 +822,12 @@ impl RunStateMachine {
         Ok(true)
     }
 
-    /// Workflow #308 SEL-L4b (frozen selector model S0 §1.4): the dispatched select step, which
-    /// declares `on_empty`, found nobody listed and nothing unknown on `current_page`, its own
-    /// page. The run is Completed there, mid-phase: no further operation runs, and its step stays
-    /// counted.
-    pub fn operation_ended_empty(
+    /// A keyed end of the dispatched operation's step on `current_page`, its own page: Workflow
+    /// #308 SEL-L4b (frozen selector model S0 §1.4), a select step that declares `on_empty` found
+    /// nobody listed and nothing unknown; #411 B22 (B-train plan §2.11 item 2), a click's guard
+    /// refused with a definite fail and the operation declares a keyed `on_guard_refused`. The
+    /// run is Completed there, mid-phase: no further operation runs, and its step stays counted.
+    pub fn operation_ended_keyed(
         &mut self,
         operation_id: &str,
         current_page: String,
@@ -773,6 +850,13 @@ impl RunStateMachine {
         self.completed_steps = self.completed_steps.checked_sub(1).ok_or_else(|| {
             RunDecisionError::invalid_transition("withdrawn operation has no dispatched step")
         })?;
+        // #411 B16 part 1 (D10): a withdrawal started no step, so it does not count as a run.
+        if let Some(member) = self.operation_run_member(operation_id) {
+            let runs = &mut self.operation_runs[member];
+            *runs = runs.checked_sub(1).ok_or_else(|| {
+                RunDecisionError::invalid_transition("withdrawn operation has no counted run")
+            })?;
+        }
         self.passed_over.push(operation_id.to_owned());
         Ok(())
     }
@@ -907,6 +991,51 @@ impl RunStateMachine {
                 self.designated_effect_counts[member]
                     >= self.config.designated_effect_caps[member].max_repeats
             })
+    }
+
+    /// #411 B16 part 1: the keyed cap that ended the run, when one did; the interpreter writes it
+    /// as the run's `task.operation_capped` and ends the run with its key.
+    pub fn operation_capped(&self) -> Option<&RunOperationCapped> {
+        self.operation_capped.as_ref()
+    }
+
+    fn operation_run_member(&self, operation_id: &str) -> Option<usize> {
+        self.config
+            .operation_run_caps
+            .iter()
+            .position(|cap| cap.operation_id == operation_id)
+    }
+
+    /// #411 B16 part 1: a dispatch that starts a step counts as one run of the operation.
+    fn count_operation_run(&mut self, operation_id: &str) {
+        if let Some(member) = self.operation_run_member(operation_id) {
+            let _ = member;
+        }
+    }
+
+    /// #411 B16 part 1: the run dispatched the operation as often as its cap.
+    fn run_capped(&self, operation_id: &str) -> Option<usize> {
+        self.operation_run_member(operation_id).filter(|member| {
+            self.operation_runs[*member] >= self.config.operation_run_caps[*member].max_runs
+        })
+    }
+
+    /// #411 B16 part 1: the operation reached its cap and declares `on_max_runs:
+    /// next_candidate`, so it is passed over.
+    fn run_capped_over(&self, operation_id: &str) -> bool {
+        self.run_capped(operation_id).is_some_and(|member| {
+            self.config.operation_run_caps[member].on_max_runs == RunMaxRunsEnd::NextCandidate
+        })
+    }
+
+    /// #411 B16 part 1: the operation reached its cap and declares `on_max_runs:
+    /// {"outcome_key": K}`; its member and K.
+    fn run_capped_end(&self, operation_id: &str) -> Option<(usize, String)> {
+        let member = self.run_capped(operation_id)?;
+        match &self.config.operation_run_caps[member].on_max_runs {
+            RunMaxRunsEnd::OutcomeKey(key) => Some((member, key.clone())),
+            RunMaxRunsEnd::NextCandidate => None,
+        }
     }
 
     fn require_executing(&self, operation_id: &str) -> Result<(), RunDecisionError> {
