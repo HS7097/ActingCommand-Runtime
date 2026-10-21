@@ -254,6 +254,9 @@ mod gate_398_rd4;
 mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
+// #411 A38: a fence that waits for a person re-checks itself; an emulator control command that
+// times out reads the status first; the wait is visible in status.
+mod gate_411_a38;
 // Workflow #405 D1 (host key 122), register §1.135: once an instance has its random delay
 // enabled, every task the scheduler dispatches there first waits a random time.
 mod gate_405_d1;
@@ -274,6 +277,10 @@ mod gate_411_a45;
 mod gate_411_a46;
 // #411 A47: a ladder whose application stop fails keeps its key and climbs to its next rung.
 mod gate_411_a47;
+// #411 A48: a self-check reads the emulator status first: a running emulator the Runtime holds
+// stopped is recognized again, a stopped one is `instance_not_running`, an unrecognized device
+// says why.
+mod gate_411_a48;
 // #411 A49: a read-only observe between a run's recognition and its input does not displace the
 // run's frame; the observe still captures a frame of its own.
 mod gate_411_a49;

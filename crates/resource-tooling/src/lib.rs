@@ -27,6 +27,10 @@ mod gate_411_a25;
 // check.
 #[cfg(test)]
 mod gate_411_b15b;
+// Workflow #411 slice E1 (train 0.12.9; A40, A41): `package bundle` and `standard-pack check` say
+// why they refuse: a pack table that holds no pack, and the file of a package that does not parse.
+#[cfg(test)]
+mod gate_411_e1;
 // Workflow #411 A32 (slice E3, T3): only the recognition pack a server declares counts.
 #[cfg(test)]
 mod gate_411_e3;

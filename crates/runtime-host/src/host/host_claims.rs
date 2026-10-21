@@ -21,6 +21,7 @@
 use super::device_link::PendingLinkRestore;
 use super::emulator_autostart::PendingAutostart;
 use super::recovery_ladder::PendingRecoveryLadder;
+use super::resource_fence::PendingFenceRecheck;
 use super::startup_package::PendingStartupPackage;
 use super::*;
 use crate::codes::HostCode;
@@ -42,6 +43,9 @@ pub(super) enum HostClaimWork {
     /// Workflow #369 S6c (H-5): a configured emulator start at daemon start, on its autostart
     /// claim.
     Autostart(PendingAutostart),
+    /// #411 A38: one periodic self-check of a fence that waits for a person, on a self-check
+    /// claim.
+    FenceRecheck(PendingFenceRecheck),
 }
 
 impl HostClaimWork {
@@ -53,6 +57,8 @@ impl HostClaimWork {
             Self::LinkRestore(_) => HostLocation::DeviceLinkRestore.as_str(),
             // The payload runs the registered host operation of a configured start.
             Self::Autostart(_) => HostLocation::RunEmulatorAutostart.as_str(),
+            // The payload runs the registered host operation of a fence's recheck.
+            Self::FenceRecheck(_) => HostLocation::RunResourceFenceRecheck.as_str(),
         }
     }
 }
@@ -169,6 +175,7 @@ impl HostShared {
             HostClaimWork::RecoveryLadder(pending) => self.run_recovery_ladder(&pending, key),
             HostClaimWork::LinkRestore(pending) => self.run_link_restore(&pending, key),
             HostClaimWork::Autostart(pending) => self.run_autostart_claim(&pending, key),
+            HostClaimWork::FenceRecheck(pending) => self.run_fence_recheck(&pending, key),
         }
     }
 
@@ -191,6 +198,7 @@ impl HostShared {
                     .issuer()
                     .issue_registered_instance(pending.instance_id),
             ),
+            HostClaimWork::FenceRecheck(pending) => pending.links.clone(),
         })
     }
 

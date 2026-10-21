@@ -5592,6 +5592,8 @@ const HOST_SPLIT: &[HostModule] = &[
     // explanation, read from the policy host's memory; it appends nothing.
     host_module("schedule_explanation_read", &["HostShared"]),
     host_module("scheduling_pause", &["HostShared"]),
+    // #411 A48: a self-check reads the emulator status first.
+    host_module("selfcheck_emulator", &["HostShared"]),
     host_module("signatures", &["HostShared"]),
     // Workflow #373 NAV-6: the standard-pack root reader and a run's shared interrupt pages.
     host_module("standard_pack", &["HostShared", "RuntimeContainedTask"]),

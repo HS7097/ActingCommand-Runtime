@@ -492,12 +492,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "path": "optional",
+        "line": "optional",
+        "column": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A source snapshot's operation declaration cannot be read.",
+      "description": "A source snapshot's operation declaration cannot be read. Workflow #411 A41: path is its path inside the package (resources/operations/<task>/task.json), line and column the parser's position where the parser gives one, and the parser's own text is the foreign_data_error cause.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

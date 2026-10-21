@@ -34,13 +34,33 @@
 //! (`fence_application_backend_failure`). Before, the failure kept its fatal projection, a
 //! ladder rung returned it to the instance's worker, and the worker marked the whole Runtime
 //! fatal: the host stopped, and every start that met the same instance stopped again.
+//!
+//! #411 A38 (10-20 incident: a capture channel that could not open for a moment fenced an
+//! instance, its ladder's emulator restart timed out, and the instance waited two hours for a
+//! person although one self-check would have passed at once): a fence that waits for a person
+//! records `instance_resources_fence_awaiting_person` and runs the instance's self-check
+//! periodically (the recheck). Every `recovery_ladder.fence_recheck.interval_ms` after the
+//! wait began, or after a failed recheck ended, the lease sweep queues one self-check claim on
+//! the instance's key (`recheck_resource_fences`), at most `max_attempts` per wait (`0`: never).
+//! The instance's worker runs the same preparation and self-check as a person's
+//! `actingctl selfcheck` (no game input, no application launch, no emulator start), as the
+//! Runtime's own recovery preparation: it starts no ladder, and direction ① counts none of its
+//! records. A passing recheck lifts the fence as a person's self-check does, its lift record
+//! carrying `instance_resources_fence_recheck_passed` with the attempt; a failing one leaves the
+//! instance fenced and waiting (`instance_resources_fence_recheck_failed`). After the last one
+//! the instance waits for a person with no further recheck. `Status` shows the wait as
+//! `resource_fence.person_wait`.
 
+use super::host_claims::{HostClaimWork, HostKey};
+use super::lease::HostClaim;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::identifier_text;
-use actingcommand_contract::InstanceResourceFence;
+use crate::time::RuntimeClockSample;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
+use actingcommand_contract::{InstanceFencePersonWait, InstanceResourceFence, LeasePriority};
+use actingcommand_runtime_config::FenceRecheckConfig;
 use std::collections::btree_map::Entry;
 
 /// Where a fence stands.
@@ -61,6 +81,90 @@ pub(super) struct ResourceFence {
     cause: CodeStr,
     since_unix_ms: u64,
     stage: FenceStage,
+    /// #411 A38: present exactly while the stage is `Person`.
+    person_wait: Option<PersonWait>,
+}
+
+/// #411 A38: a fence's wait for a person and its periodic self-check (memory only).
+struct PersonWait {
+    /// When the wait began.
+    since_unix_ms: u64,
+    /// When the interval to the next recheck began: the wait's start, then the end of each
+    /// failed recheck (the host clock's monotonic reading and Unix time).
+    from: RuntimeClockSample,
+    /// The rechecks started in this wait.
+    attempts: u32,
+    recheck: Recheck,
+}
+
+/// #411 A38: where a fence's recheck stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recheck {
+    /// None is queued or running.
+    Idle,
+    /// Its self-check claim waits for the instance's key, or its worker has not begun.
+    Queued,
+    /// Its preparation runs on the instance's key: a lift now is the recheck's.
+    Preparing,
+}
+
+impl PersonWait {
+    fn new(now: RuntimeClockSample) -> Self {
+        Self {
+            since_unix_ms: now.unix_ms,
+            from: now,
+            attempts: 0,
+            recheck: Recheck::Idle,
+        }
+    }
+
+    /// When the next recheck is due under `config` (monotonic, Unix): none while one is queued
+    /// or runs, once `max_attempts` have started, or while the recheck is off.
+    fn next_due(&self, config: FenceRecheckConfig) -> Option<RuntimeClockSample> {
+        (self.recheck == Recheck::Idle && self.attempts < config.max_attempts).then(|| {
+            RuntimeClockSample {
+                monotonic_ms: self.from.monotonic_ms.saturating_add(config.interval_ms),
+                unix_ms: self.from.unix_ms.saturating_add(config.interval_ms),
+            }
+        })
+    }
+
+    /// The wait as `Status` reports it.
+    fn status(&self, config: FenceRecheckConfig) -> InstanceFencePersonWait {
+        InstanceFencePersonWait {
+            since_unix_ms: self.since_unix_ms,
+            recheck_attempts: self.attempts,
+            recheck_max_attempts: config.max_attempts,
+            next_recheck_unix_ms: self.next_due(config).map(|due| due.unix_ms),
+        }
+    }
+}
+
+/// #411 A38: one recheck of a fence that waits for a person, on a self-check claim of its
+/// instance's queue (no new claim kind).
+pub(super) struct PendingFenceRecheck {
+    pub(super) instance_id: InstanceId,
+    /// The recheck's number in its wait.
+    pub(super) attempt: u32,
+    /// The instance and the recheck's causation: what a worker failure is recorded under.
+    pub(super) links: EventLinksDraft,
+}
+
+/// #411 A38: `outcome` with `failure_code` = the registered code `spelling` names; a spelling
+/// the embedded catalog does not list leaves the value out.
+fn with_failure_code(outcome: Outcome, spelling: Option<&str>) -> Outcome {
+    let registered = spelling.and_then(|spelling| {
+        let relayed = Outcome::relayed(spelling);
+        if relayed.code().as_str() == spelling {
+            relayed.code().registered()
+        } else {
+            None
+        }
+    });
+    match registered {
+        Some(code) => outcome.failure_code(code),
+        None => outcome,
+    }
 }
 
 /// What an unconfirmed failure led to (`HostShared::settle_unconfirmed_resources`).
@@ -239,7 +343,8 @@ impl HostShared {
         error: &RuntimeHostError,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<RuntimeHostError> {
-        let since_unix_ms = self.clock.sample()?.unix_ms;
+        let now = self.runtime_clock_sample()?;
+        let since_unix_ms = now.unix_ms;
         // M387 B1: manual work that met the fence starts no ladder; its instance waits for a
         // person at once. Workflow #387 D1c (coordinator ruling 4): `rules.direct_runs` decides
         // it, so under `trigger` such a fence goes to a ladder as a routine one does.
@@ -262,6 +367,7 @@ impl HostShared {
                     } else {
                         FenceStage::Pending
                     },
+                    person_wait: manual.then(|| PersonWait::new(now)),
                 });
                 true
             }
@@ -284,6 +390,10 @@ impl HostShared {
                 error.diagnostics().recorded_event().get().copied(),
             )?;
             self.withhold_policy_instance_availability(instance_id)?;
+            // #411 A38: a fence that waits for a person at once says so after its own record.
+            if manual {
+                self.record_person_wait_entered(instance_id)?;
+            }
         }
         Ok(fence)
     }
@@ -373,10 +483,13 @@ impl HostShared {
         .is_some_and(|fence| fence.stage != FenceStage::Ladder))
     }
 
-    /// Every fence as `Status` reports it.
+    /// Every fence as `Status` reports it; #411 A38: one that waits for a person with since
+    /// when, its rechecks so far and allowed (the configuration in effect) and the next one's
+    /// time.
     pub(super) fn resource_fence_statuses(
         &self,
     ) -> RuntimeHostResult<BTreeMap<InstanceId, InstanceResourceFence>> {
+        let recheck = self.fence_recheck_config()?;
         Ok(lock(
             &self.resource_fences,
             HostLocation::ReadInstanceResourceFence,
@@ -389,6 +502,7 @@ impl HostShared {
                     cause: fence.cause.clone(),
                     since_unix_ms: fence.since_unix_ms,
                     awaiting_person: fence.stage == FenceStage::Person,
+                    person_wait: fence.person_wait.as_ref().map(|wait| wait.status(recheck)),
                 },
             )
         })
@@ -416,28 +530,40 @@ impl HostShared {
     /// A preparation of `instance_id` passed its self-check (`preparation` is its
     /// `instance_preparation_finished`). When the instance is fenced, that proves the close:
     /// the fence is lifted with one `resource_fence_lifted` record naming the preparation, and
-    /// the instance's policy availability follows its self-check again.
+    /// the instance's policy availability follows its self-check again. #411 A38: the record of
+    /// a lift that the fence's own recheck made carries `instance_resources_fence_recheck_passed`
+    /// with the recheck's number; it ends the wait for a person.
     pub(super) fn lift_resource_fence(
         &self,
         instance_id: InstanceId,
         preparation: TerminalEvent,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
+        let limit = self.fence_recheck_config()?.max_attempts;
         let lifted = lock(
             &self.resource_fences,
             HostLocation::LiftInstanceResourceFence,
         )?
-        .remove(&instance_id)
-        .is_some();
-        if !lifted {
+        .remove(&instance_id);
+        let Some(lifted) = lifted else {
             return Ok(());
-        }
+        };
+        let outcome = match lifted
+            .person_wait
+            .filter(|wait| wait.recheck == Recheck::Preparing)
+        {
+            Some(wait) => Outcome::new(HostCode::InstanceResourcesFenceRecheckPassed)
+                .instance_id(identifier_text(&instance_id))
+                .attempts(wait.attempts)
+                .limit_count(limit),
+            None => Outcome::new(HostCode::InstanceResourcesFenceLifted)
+                .instance_id(identifier_text(&instance_id)),
+        };
         self.append_lifecycle_observed(
             RuntimeLifecyclePhase::ResourceFenceLifted {
                 instance_id,
                 preparation,
-                outcome: Outcome::new(HostCode::InstanceResourcesFenceLifted)
-                    .instance_id(identifier_text(&instance_id)),
+                outcome,
             },
             links,
         )?;
@@ -479,7 +605,7 @@ impl HostShared {
                         self.resource_fence_awaits_person(instance_id)?;
                     }
                 }
-                None => self.set_resource_fence_stage(instance_id, FenceStage::Person)?,
+                None => self.resource_fence_awaits_person(instance_id)?,
             }
         }
         Ok(())
@@ -491,17 +617,30 @@ impl HostShared {
     /// instance decides it at its end, whether or not a sweep tick fell inside the climb. Left
     /// `Pending`, a later tick would either start a second ladder for it, or, while the ladder
     /// still holds the key before its release, hand it to this ladder after its decision, so
-    /// that it never waits for a person.
+    /// that it never waits for a person. The sweep hands a fence no ladder may take here too.
+    /// #411 A38: a fence that begins to wait now records it, and its wait's first recheck
+    /// counts its interval from now; one that already waits keeps its wait.
     pub(super) fn resource_fence_awaits_person(
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<()> {
-        let mut fences = lock(
-            &self.resource_fences,
-            HostLocation::HandResourceFencesToLadders,
-        )?;
-        if let Some(fence) = fences.get_mut(&instance_id) {
-            fence.stage = FenceStage::Person;
+        let now = self.runtime_clock_sample()?;
+        let entered = {
+            let mut fences = lock(
+                &self.resource_fences,
+                HostLocation::HandResourceFencesToLadders,
+            )?;
+            match fences.get_mut(&instance_id) {
+                Some(fence) if fence.stage != FenceStage::Person => {
+                    fence.stage = FenceStage::Person;
+                    fence.person_wait = Some(PersonWait::new(now));
+                    true
+                }
+                _ => false,
+            }
+        };
+        if entered {
+            self.record_person_wait_entered(instance_id)?;
         }
         Ok(())
     }
@@ -517,8 +656,338 @@ impl HostShared {
         )?;
         if let Some(fence) = fences.get_mut(&instance_id) {
             fence.stage = stage;
+            // #411 A38: only a fence that waits for a person has a wait.
+            if stage != FenceStage::Person {
+                fence.person_wait = None;
+            }
         }
         Ok(())
+    }
+
+    /// #411 A38: `recovery_ladder.fence_recheck` in effect, read at every use: a change through
+    /// `ac_config_set` applies from the next sweep tick.
+    fn fence_recheck_config(&self) -> RuntimeHostResult<FenceRecheckConfig> {
+        Ok(self.ladder_config()?.fence_recheck)
+    }
+
+    /// #411 A38: `instance_resources_fence_awaiting_person` for the wait `instance_id` began:
+    /// the fence's cause, the most rechecks, their interval and the first one's time.
+    fn record_person_wait_entered(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
+        let config = self.fence_recheck_config()?;
+        let entered = lock(
+            &self.resource_fences,
+            HostLocation::AwaitResourceFencePerson,
+        )?
+        .get(&instance_id)
+        .and_then(|fence| {
+            let wait = fence.person_wait.as_ref()?;
+            Some((fence.cause.registered(), wait.next_due(config)))
+        });
+        let Some((cause, first)) = entered else {
+            return Ok(());
+        };
+        let outcome = Outcome::new(HostCode::InstanceResourcesFenceAwaitingPerson)
+            .operation(HostLocation::AwaitResourceFencePerson)
+            .instance_id(identifier_text(&instance_id))
+            .limit_count(config.max_attempts)
+            .retry_after_ms(config.interval_ms);
+        let outcome = match cause {
+            Some(cause) => outcome.failure_code(cause),
+            None => outcome,
+        };
+        let outcome = match first {
+            Some(first) => outcome.next_occurrence_unix_ms(first.unix_ms),
+            None => outcome,
+        };
+        let links = self
+            .events
+            .system_links()?
+            .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+        self.record_person_wait(links, outcome, HostLocation::AwaitResourceFencePerson)
+    }
+
+    /// #411 A38: one record of a fence's wait for a person (`runtime.failed`, its severity the
+    /// outcome's category, warning).
+    fn record_person_wait(
+        &self,
+        links: EventLinksDraft,
+        outcome: Outcome,
+        operation: HostLocation,
+    ) -> RuntimeHostResult<()> {
+        self.append_event_raw(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                outcome,
+                DiagnosticDetailDraft::new(
+                    "resource_fence",
+                    operation,
+                    "runtime_host",
+                    operation.as_str(),
+                ),
+                AuditInput::new(),
+            ),
+        )
+        .map(|_| ())
+    }
+
+    /// #411 A38: the lease sweep's step after the hand-off: for each fence that waits for a
+    /// person whose next recheck is due under `recovery_ladder.fence_recheck` in effect, one
+    /// self-check claim on its instance's queue. Only a failure the Runtime does not survive is
+    /// returned; a claim the queue refuses is recorded and ends that recheck as failed.
+    pub(super) fn recheck_resource_fences(&self) -> RuntimeHostResult<()> {
+        if self.fatal.is_shutdown_requested() {
+            return Ok(());
+        }
+        let config = self.fence_recheck_config()?;
+        let now = self.runtime_clock_sample()?;
+        let due = {
+            let mut fences = lock(
+                &self.resource_fences,
+                HostLocation::QueueResourceFenceRechecks,
+            )?;
+            fences
+                .iter_mut()
+                .filter_map(|(instance_id, fence)| {
+                    let wait = fence.person_wait.as_mut()?;
+                    let next = wait.next_due(config)?;
+                    if now.monotonic_ms < next.monotonic_ms {
+                        return None;
+                    }
+                    wait.attempts = wait.attempts.saturating_add(1);
+                    wait.recheck = Recheck::Queued;
+                    Some((*instance_id, wait.attempts))
+                })
+                .collect::<Vec<_>>()
+        };
+        for (instance_id, attempt) in due {
+            self.queue_fence_recheck(instance_id, attempt)?;
+        }
+        Ok(())
+    }
+
+    /// #411 A38: queues one recheck on a self-check claim of the instance's queue (as a
+    /// person's `actingctl selfcheck` waits for the key; no new claim kind).
+    fn queue_fence_recheck(&self, instance_id: InstanceId, attempt: u32) -> RuntimeHostResult<()> {
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::QueueResourceFenceRechecks,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeInstanceRegistryIncomplete,
+                HostLocation::QueueResourceFenceRechecks,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let issuer = self.events.issuer();
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let causation_id = issuer
+            .mint_causation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let (actor, source) = scheduled_request_transport_origin(resolved.provenance());
+        let request = RuntimeRequest::new(
+            issuer
+                .mint_request_id()
+                .map_err(|_| runtime_identifier_error())?,
+            issuer
+                .mint_correlation_id()
+                .map_err(|_| runtime_identifier_error())?,
+            Some(causation_id),
+            actor,
+            source,
+            unix_ms_now()?,
+            RuntimeOperation::AcquireLease {
+                instance_alias: resolved.instance_alias.clone(),
+                holder_id,
+            },
+        )
+        .map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::QueueResourceFenceRechecks,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::QueueResourceFenceRechecks, &error)
+            })?;
+        let lease_ttl_ms = lock(&self.scheduler, HostLocation::QueueResourceFenceRechecks)?
+            .config()
+            .lease_ttl_ms;
+        let links = self
+            .events
+            .system_links()?
+            .with_instance_id(issuer.issue_registered_instance(instance_id))
+            .with_causation_id(causation_id);
+        let queued = self.request_host_claim_work(
+            HostClaim {
+                request: &request,
+                instance_alias: &resolved.instance_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::SelfCheck,
+                priority: LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            HostClaimWork::FenceRecheck(PendingFenceRecheck {
+                instance_id,
+                attempt,
+                links: links.clone(),
+            }),
+        );
+        match queued {
+            Ok(()) => Ok(()),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err(*failure.error)
+            }
+            Err(failure) => {
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    links.clone(),
+                    None,
+                )?;
+                self.settle_fence_recheck(instance_id, attempt, Some(failure.error.code()), links)
+            }
+        }
+    }
+
+    /// #411 A38: a granted recheck on the instance's worker: the preparation and self-check a
+    /// person's `actingctl selfcheck` makes, on the claim's key, as the Runtime's own recovery
+    /// preparation (no ladder starts from it, and direction ① counts none of its records), then
+    /// the key's release. A passing self-check lifted the fence on its way; a failing one is
+    /// recorded and the next recheck counts its interval from now. A fence lifted, or a recheck
+    /// superseded, while the claim waited runs nothing. Only a fatal failure is returned.
+    pub(super) fn run_fence_recheck(
+        &self,
+        pending: &PendingFenceRecheck,
+        key: HostKey,
+    ) -> RuntimeHostResult<()> {
+        let instance_id = pending.instance_id;
+        let began = {
+            let mut fences = lock(&self.resource_fences, HostLocation::RunResourceFenceRecheck)?;
+            match fences
+                .get_mut(&instance_id)
+                .and_then(|fence| fence.person_wait.as_mut())
+            {
+                Some(wait)
+                    if wait.recheck == Recheck::Queued && wait.attempts == pending.attempt =>
+                {
+                    wait.recheck = Recheck::Preparing;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !began {
+            return self.release_host_key(&key);
+        }
+        let validated = key.request.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::RunResourceFenceRecheck,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let links = self
+            .events
+            .request_links(&validated, Some(instance_id), None, None);
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::RunResourceFenceRecheck,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeInstanceRegistryIncomplete,
+                HostLocation::RunResourceFenceRecheck,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        lock(
+            &self.stability_counter,
+            HostLocation::RunResourceFenceRecheck,
+        )?
+        .set_climbing(instance_id, true);
+        let prepared = self
+            .instance_guard(instance_id)
+            .map_err(|failure| *failure.error)
+            .and_then(|instance_guard| {
+                let admission = lock(&instance_guard, HostLocation::RunResourceFenceRecheck)?;
+                self.prepare_recovery_connection(&resolved, links.clone(), &admission, &key)
+            });
+        let unmarked = lock(
+            &self.stability_counter,
+            HostLocation::RunResourceFenceRecheck,
+        )
+        .map(|mut counter| counter.set_climbing(instance_id, false));
+        let released = self.release_host_key(&key);
+        let (selfcheck, _, _) = prepared?;
+        unmarked?;
+        released?;
+        let passed = selfcheck.capture.ok && selfcheck.touch.ok && selfcheck.failure_code.is_none();
+        if passed {
+            return Ok(());
+        }
+        self.settle_fence_recheck(
+            instance_id,
+            pending.attempt,
+            selfcheck.failure_code.as_deref(),
+            links,
+        )
+    }
+
+    /// #411 A38: the recheck `attempt` of `instance_id` failed (`cause_spelling` the code of its
+    /// self-check's failure, or of the refusal of its claim): the fence stays and waits, the
+    /// next recheck counts its interval from now, and `instance_resources_fence_recheck_failed`
+    /// is recorded with that code as its `failure_code`. A fence lifted in the meantime records
+    /// nothing.
+    fn settle_fence_recheck(
+        &self,
+        instance_id: InstanceId,
+        attempt: u32,
+        cause_spelling: Option<&str>,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
+        let config = self.fence_recheck_config()?;
+        let now = self.runtime_clock_sample()?;
+        let next = {
+            let mut fences = lock(&self.resource_fences, HostLocation::RunResourceFenceRecheck)?;
+            let Some(wait) = fences
+                .get_mut(&instance_id)
+                .and_then(|fence| fence.person_wait.as_mut())
+                .filter(|wait| wait.attempts == attempt && wait.recheck != Recheck::Idle)
+            else {
+                return Ok(());
+            };
+            wait.recheck = Recheck::Idle;
+            wait.from = now;
+            wait.next_due(config)
+        };
+        let outcome = Outcome::new(HostCode::InstanceResourcesFenceRecheckFailed)
+            .operation(HostLocation::RunResourceFenceRecheck)
+            .instance_id(identifier_text(&instance_id))
+            .attempts(attempt)
+            .limit_count(config.max_attempts);
+        let outcome = with_failure_code(outcome, cause_spelling);
+        let outcome = match next {
+            Some(next) => outcome.next_occurrence_unix_ms(next.unix_ms),
+            None => outcome,
+        };
+        self.record_person_wait(links, outcome, HostLocation::RunResourceFenceRecheck)
     }
 }
 

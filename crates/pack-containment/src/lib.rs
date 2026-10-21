@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::page_projection::{
     ProjectionCatalog, ProjectionMetadata, VerifiedProjectionMetadata,
 };
@@ -998,6 +998,13 @@ pub enum ContainmentError {
     SourceTree {
         code: Code,
     },
+    /// Workflow #411 A41: a source tree refusal located in one file of the package: its `code`,
+    /// and its outcome carrying the file's path inside the package and, for a document that does
+    /// not parse, the parser's position, caused by the parser's own text.
+    LocatedSourceTree {
+        code: Code,
+        outcome: Outcome,
+    },
     InvalidInstanceId,
     MissingTaskId,
     InvalidHash {
@@ -1072,6 +1079,15 @@ impl fmt::Display for ContainmentError {
                 }
             }
             Self::SourceTree { code } => write!(f, "fatal containment error: {code}"),
+            Self::LocatedSourceTree { code, outcome } => {
+                write!(f, "fatal containment error: {code}")?;
+                for key in ["path", "line", "column"] {
+                    if let Some(value) = outcome.value(key) {
+                        write!(f, " {key}={value}")?;
+                    }
+                }
+                Ok(())
+            }
             Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
             Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
             Self::InvalidHash { value } => write!(
