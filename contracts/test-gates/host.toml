@@ -1526,3 +1526,12 @@ tests = [
     "actingcommand-device::lib::touch::tests::t3_a_vertical_brake_drag_runs_on_adb_through_motionevents",
 ]
 incident = ["#406"]
+
+# Workflow #411 B8 (plan rd-1021/train-0129 §2.8, §5.3 BT-B8 T2; contracts/remedies.md section 4, contracts/instance-fact-store.md "Run parameters"; register §1.146; no persisted ledger shape): a policy run of a task that opts in holds, in the select step's snapshot, its dispatch's five schedule values as session.dispatch.schedule.<key> (typed) and chooses by them; a direct run holds none, so the package policy's on_unknown (abort_evaluation) decides and the select record is unknown with fact_missing
+[[gate]]
+key = "128"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b8::b8_t2_a_policy_run_reads_the_schedule_values_and_a_direct_run_has_none",
+]
+incident = ["#411 B8"]
