@@ -249,6 +249,13 @@ deadline, settlement and record is the one before pacing.
   time × 1000 / f; a deadline handed to code that reads the wall clock is converted to the wall
   instant it falls on. Gesture durations, admission and preparation checks and the device
   layer's own waits are not scaled.
+- **A still screen it cannot recognise (Workflow #411 A43b).** A page wait or a step's
+  confirmation whose latest two frames are unchanged by the one frame-change measure
+  ([color-digest.md](color-digest.md), section Frame change, at its default) and match no page
+  the wait accepts counts the rest of the wait at the factor 1 000: its pauses last their
+  declared length and its wall time counts in full against its limit. A page it accepts or a
+  frame that changed returns it to the step's factor at once. The run's budget clock, the
+  task's deadline, the extra rounds and the outcome of a wait that runs out are unchanged.
 - **Host deadline and lease.** A run's host deadline (`response_deadline_ms`), its lease TTL,
   its active checks and `contained_task_deadline_exceeded` stay wall-clock and identical at
   every factor. A stretched run that reaches its host deadline ends

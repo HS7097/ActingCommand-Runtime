@@ -53,6 +53,12 @@ impl PaceClock {
         self.anchor.is_none()
     }
 
+    /// #411 A43b: whether the current segment runs at the factor 1000, where a wait counted
+    /// unpaced is counted as it is paced.
+    pub(super) const fn at_unit_factor(self) -> bool {
+        self.factor_milli == UNIT_FACTOR_MILLI
+    }
+
     /// The budget instant of `wall`, a reading of the runtime's clock in the current segment.
     pub(super) fn budget(self, wall: Instant) -> Instant {
         match self.anchor {
