@@ -711,8 +711,9 @@ fn read_pages(
         for event in page.events() {
             each(event);
         }
-        let last = page.events().last().map(|event| event.sequence);
-        match last {
+        // Where the next page starts: after the last row, or (#411 A51) after the position a
+        // read the Runtime's budget cut reached, which may hold no row.
+        match page.next_cursor().map(|cursor| cursor.after_sequence()) {
             Some(last) if page.has_more() => {
                 next = EventQuery {
                     from_sequence: Some(last + 1),

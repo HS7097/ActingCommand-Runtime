@@ -55,3 +55,15 @@ actingcommand_contract::outcome_codes! {
         OcrFieldsOutcomeMissing => "ocr_fields_outcome_missing": error / declaration_error,
     }
 }
+
+actingcommand_contract::outcome_vocabulary! {
+    /// The shape a declaration member must have (vocabulary `expected_shape`, Workflow #411 B28):
+    /// the value of `resource_declaration_invalid` where the declaration check refused a member,
+    /// or an element of it, for its type and the grammar names the shape
+    /// (`source::declaration_expected_shape`).
+    pub enum ExpectedShape: "expected_shape" {
+        /// An array whose every element is an array: a page rule's `any_of`, a list of groups of
+        /// target ids.
+        ArrayOfArrays => "array_of_arrays",
+    }
+}

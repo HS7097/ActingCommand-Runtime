@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{Bundle, CliError, CliOutcome, ParseFiles, SourceRead};
+use crate::ExpectedShape;
 use actingcommand_contract::candidate_projection::{
     CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_FEATURES,
     validate_candidate_feature_name, validate_candidate_layout_id,
@@ -41,9 +42,16 @@ const OBSERVATION_WINDOW_MEMBERS: &[(&str, &[&str])] = &[
     ("stable", &["window_ms", "frames"]),
 ];
 /// Workflow #390 EXEC-2: an operation's `input_recheck`, by its `kind`, with its required unsigned
-/// members.
-const INPUT_RECHECK_MEMBERS: &[(&str, &[&str])] =
-    &[("fresh_frame", &[]), ("stable_frames", &["frames"])];
+/// members (`still_frames`: Workflow #411 B12).
+const INPUT_RECHECK_MEMBERS: &[(&str, &[&str])] = &[
+    ("fresh_frame", &[]),
+    ("stable_frames", &["frames"]),
+    ("still_frames", &["frames"]),
+];
+/// Workflow #411 B12: the optional members of an `input_recheck` kind: its unsigned members, then
+/// its rectangles (`{x, y, width, height}`).
+const INPUT_RECHECK_OPTIONAL: &[(&str, &[&str], &[&str])] =
+    &[("still_frames", &["max_distance_milli"], &["region"])];
 /// Workflow #390 EXEC-1: an operation's `when` names its target under exactly one of these.
 const WHEN_MEMBERS: &[&str] = &["present", "absent"];
 /// Workflow #390 EXEC-1: the one value of an operation's `on_guard_refused`.
@@ -639,10 +647,16 @@ impl Declaration<'_> {
                 "transition" if !value.is_null() => self.transition(value, &pointer)?,
                 "optional" if !value.is_null() => self.optional(value, &pointer)?,
                 "observation_window" if !value.is_null() => {
-                    self.tagged(value, &pointer, "until", OBSERVATION_WINDOW_MEMBERS)?;
+                    self.tagged(value, &pointer, "until", OBSERVATION_WINDOW_MEMBERS, &[])?;
                 }
                 "input_recheck" if !value.is_null() => {
-                    self.tagged(value, &pointer, "kind", INPUT_RECHECK_MEMBERS)?;
+                    self.tagged(
+                        value,
+                        &pointer,
+                        "kind",
+                        INPUT_RECHECK_MEMBERS,
+                        INPUT_RECHECK_OPTIONAL,
+                    )?;
                 }
                 "when" if !value.is_null() => self.when(value, &pointer)?,
                 "on_guard_refused" if !value.is_null() => {
@@ -666,14 +680,16 @@ impl Declaration<'_> {
 
     /// Workflow #390 EXEC-2: an operation's `observation_window` or `input_recheck`, task schema
     /// `0.9` only (`UnconsumedField` before it): an object whose `tag` names one of `variants`,
-    /// with that variant's unsigned members, all required, and nothing else. Runtime admission
-    /// checks the values.
+    /// with that variant's unsigned members, all required, the optional members `optional`
+    /// gives it (Workflow #411 B12: unsigned members, then rectangles), and nothing else. Runtime
+    /// admission checks the values.
     fn tagged(
         &self,
         value: &Value,
         pointer: &str,
         tag: &str,
         variants: &[(&str, &[&str])],
+        optional: &[(&str, &[&str], &[&str])],
     ) -> CliOutcome<()> {
         if self.schema != Some("0.9") {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
@@ -691,8 +707,16 @@ impl Declaration<'_> {
             .find(|(variant, _)| *variant == name)
             .map(|(_, members)| *members)
             .ok_or_else(|| self.error(&tag_pointer, ResourceDeclarationReason::InvalidValue))?;
+        let (unsigned, rects) = optional
+            .iter()
+            .find(|(variant, _, _)| *variant == name)
+            .map_or((&[][..], &[][..]), |(_, unsigned, rects)| {
+                (*unsigned, *rects)
+            });
         let allowed = std::iter::once(tag)
             .chain(members.iter().copied())
+            .chain(unsigned.iter().copied())
+            .chain(rects.iter().copied())
             .collect::<Vec<_>>();
         let object = self.object(value, pointer, &allowed)?;
         for member in members {
@@ -700,6 +724,17 @@ impl Declaration<'_> {
                 self.required(object, pointer, member)?,
                 &child(pointer, member),
             )?;
+        }
+        let declared = |member: &str| object.get(member).filter(|value| !value.is_null());
+        for &member in unsigned {
+            if let Some(value) = declared(member) {
+                self.unsigned(value, &child(pointer, member))?;
+            }
+        }
+        for &member in rects {
+            if let Some(value) = declared(member) {
+                self.rect(value, &child(pointer, member))?;
+            }
         }
         Ok(())
     }
@@ -2320,6 +2355,32 @@ fn child(pointer: &str, field: &str) -> String {
     format!("{pointer}/{}", field.replace('~', "~0").replace('/', "~1"))
 }
 
+/// Workflow #411 B28: the shape the member a declaration refusal names must have, when the
+/// declaration check refused the member, or an element of it, for its type (`InvalidType`) and
+/// the grammar names the shape: a page rule's `any_of` (`/page_rules/<page>/any_of`) and each of
+/// its entries (`/page_rules/<page>/any_of/<index>`) make an array of arrays (`page_rule`).
+/// `None` for every other refusal, a target id inside a group (a string) included.
+pub fn declaration_expected_shape(issue: &ResourceDeclarationIssue) -> Option<ExpectedShape> {
+    if issue.reason != ResourceDeclarationReason::InvalidType {
+        return None;
+    }
+    let segments = issue
+        .field_path
+        .strip_prefix('/')?
+        .split('/')
+        .collect::<Vec<_>>();
+    match segments.as_slice() {
+        ["page_rules", _, "any_of"] => Some(ExpectedShape::ArrayOfArrays),
+        ["page_rules", _, "any_of", entry] if is_index(entry) => Some(ExpectedShape::ArrayOfArrays),
+        _ => None,
+    }
+}
+
+/// Whether a JSON pointer segment is an array index.
+fn is_index(segment: &str) -> bool {
+    !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// Checks the execution declarations of an already verified, contained bundle.
 /// Source trees have already passed the same operation checks before canonicalization.
 pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutcome<()> {
@@ -2945,7 +3006,7 @@ impl Declaration<'_> {
             let mapping = self.object(
                 mapping,
                 &pointer,
-                &["outcome_key", "effect", "terminal_pages", "remedy"],
+                &["outcome_key", "effect", "terminal_pages", "remedy", "busy"],
             )?;
             for field in ["outcome_key", "effect"] {
                 self.string(
@@ -2959,6 +3020,11 @@ impl Declaration<'_> {
             )?;
             if let Some(remedy) = mapping.get("remedy") {
                 self.remedy(remedy, &child(&pointer, "remedy"))?;
+            }
+            // #411 B37 (A35-S1): a boolean; its rules (only `no_designated_effect`, never with
+            // `remedy`) are the declaration's own check below.
+            if let Some(busy) = mapping.get("busy") {
+                self.boolean(busy, &child(&pointer, "busy"))?;
             }
         }
         let declaration: actingcommand_contract::SchedulingOutcomeDeclaration =
@@ -3856,7 +3922,18 @@ impl Declaration<'_> {
     fn phases(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         for (index, phase) in self.array(value, pointer)?.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
-            let phase = self.object(phase, &pointer, &["id", "operations", "target_pages"])?;
+            // #411 B5/B14: a stage may also list its end pages and its entry pages.
+            let phase = self.object(
+                phase,
+                &pointer,
+                &[
+                    "id",
+                    "operations",
+                    "target_pages",
+                    "end_pages",
+                    "entry_pages",
+                ],
+            )?;
             self.string(
                 self.required(phase, &pointer, "id")?,
                 &child(&pointer, "id"),
@@ -3866,6 +3943,11 @@ impl Declaration<'_> {
                     self.required(phase, &pointer, field)?,
                     &child(&pointer, field),
                 )?;
+            }
+            for field in ["end_pages", "entry_pages"] {
+                if let Some(pages) = phase.get(field) {
+                    self.strings(pages, &child(&pointer, field))?;
+                }
             }
         }
         Ok(())

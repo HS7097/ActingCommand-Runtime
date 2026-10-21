@@ -1521,6 +1521,10 @@
       "type": "vocab:device_process_presence",
       "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
     },
+    "capture_open_cause": {
+      "type": "vocab:capture_open_cause",
+      "description": "Why opening an instance's capture backend failed, as far as the backend can tell (#411 A50)."
+    },
     "duplicate_count": {
       "type": "integer",
       "description": "Records skipped because their event id was already in the ledger."
@@ -2022,6 +2026,34 @@
     "daily_remaining": {
       "type": "integer",
       "description": "The runs the daily budgets of a task and its activity profile still allow in the activity day after this dispatch (Workflow #411 B8)."
+    },
+    "argument_value": {
+      "type": "name",
+      "description": "The value an MCP tool argument was given, verbatim, where the argument's refusal names it: for a list argument, the one element refused (Workflow #411 B27)."
+    },
+    "expected_shape": {
+      "type": "vocab:expected_shape",
+      "description": "The shape a declaration member must have, where the declaration check refused the member, or an element of it, for its type and the grammar names the shape (Workflow #411 B28)."
+    },
+    "box_x": {
+      "type": "integer",
+      "description": "The left edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_y": {
+      "type": "integer",
+      "description": "The top edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_width": {
+      "type": "integer",
+      "description": "The width of a click box, pixels; a point click's box is 1 wide (Workflow #411 B34)."
+    },
+    "box_height": {
+      "type": "integer",
+      "description": "The height of a click box, pixels; a point click's box is 1 high (Workflow #411 B34)."
+    },
+    "layer_outcome_key": {
+      "type": "name",
+      "description": "The outcome key of the scheduling outcome mapping a prerequisite layer's run ended on, as the layer's package declares it (Workflow #411 B39)."
     }
   },
   "vocabularies": {
@@ -5072,6 +5104,20 @@
         }
       }
     },
+    "capture_open_cause": {
+      "description": "Why opening an instance's capture backend failed, as far as the backend can tell (#411 A50).",
+      "tokens": {
+        "display_missing": {
+          "description": "The display of the instance's application package does not exist: the application is not running (a Nemu display lookup by package answered no display)."
+        },
+        "connection_failed": {
+          "description": "The connection to the emulator instance failed (a Nemu connect answered no handle)."
+        },
+        "other": {
+          "description": "Any other failure, or a backend that cannot tell the causes apart; the backend's own text is the raw_text of the outcome's foreign link."
+        }
+      }
+    },
     "ledger_source": {
       "description": "A revisioned source whose changes the ledger records (Workflow #383).",
       "review": "pending",
@@ -6169,6 +6215,15 @@
         },
         "target_id": {
           "description": "The id of a recognition target in the package's recognition pack."
+        }
+      }
+    },
+    "expected_shape": {
+      "description": "The shape a declaration member must have (Workflow #411 B28).",
+      "review": "pending",
+      "tokens": {
+        "array_of_arrays": {
+          "description": "An array whose every element is an array: a page rule's any_of, a list of groups of target ids (contracts/resource-declarations.md)."
         }
       }
     }
@@ -9039,6 +9094,9 @@
       "actinglab"
     ],
     "package_fmt_": [
+      "actinglab"
+    ],
+    "package_check_": [
       "actinglab"
     ]
   },

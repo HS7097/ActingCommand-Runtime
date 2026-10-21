@@ -373,6 +373,8 @@ outcome_keys! {
     android_started: boolean,
     adb_port_present: boolean,
     device_process_present: vocab(device_process_presence),
+    // #411 A50: why a capture backend's open failed, when the backend can tell.
+    capture_open_cause: vocab(capture_open_cause),
     // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.
     duplicate_count: integer,
     dump_sealed: boolean,
@@ -543,4 +545,13 @@ outcome_keys! {
     last_daily_slot: boolean,
     daily_remaining: integer,
     // ---- Workflow #411 B8: end ----
+    // ---- Workflow #411 E4 (B27, B28, B34, B39 A part: refusals and warnings that say what is wrong): begin ----
+    argument_value: name,
+    expected_shape: vocab(expected_shape),
+    box_x: integer,
+    box_y: integer,
+    box_width: integer,
+    box_height: integer,
+    layer_outcome_key: name,
+    // ---- Workflow #411 E4: end ----
 }

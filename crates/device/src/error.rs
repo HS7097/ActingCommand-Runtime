@@ -488,6 +488,26 @@ impl DeviceErrorContext {
     }
 }
 
+/// #411 A50: why opening a capture backend failed, when the backend can tell. A backend that
+/// cannot tell attaches none; the Runtime then reports the cause `other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureOpenCause {
+    /// The display of the instance's application package does not exist: the application is
+    /// not running (a Nemu display lookup by package answered no display).
+    DisplayMissing,
+    /// The connection to the emulator instance failed (a Nemu connect answered no handle).
+    ConnectionFailed,
+}
+
+/// #411 A50: a capture open failure's cause with the application package and the emulator
+/// instance index the backend used, each when it knows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureOpenFailure {
+    pub cause: CaptureOpenCause,
+    pub application_id: Option<String>,
+    pub instance_index: Option<i64>,
+}
+
 #[derive(Clone)]
 enum StoredDiagnosticMessage {
     Fixed(DeviceErrorDiagnosticMessage),
@@ -586,9 +606,26 @@ struct StoredDeviceEvidence {
     vendor_stdio: Vec<DeviceStdioObservation>,
     command: Option<crate::AdbCommandEvidence>,
     recovery: Option<crate::AdbTargetRecovery>,
+    /// #411 A50: why a capture open failed, when the backend could tell.
+    capture_open: Option<CaptureOpenFailure>,
 }
 
 impl DeviceError {
+    /// #411 A50: this error with the cause of the capture open it ended.
+    pub fn with_capture_open_failure(mut self, failure: CaptureOpenFailure) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .capture_open = Some(failure);
+        self
+    }
+
+    /// #411 A50: the cause of the capture open this error ended, when the backend could tell.
+    pub fn capture_open_failure(&self) -> Option<&CaptureOpenFailure> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.capture_open.as_ref())
+    }
+
     pub(crate) fn with_input_parameters(
         mut self,
         check: actingcommand_contract::BackendInputParameterCheck,

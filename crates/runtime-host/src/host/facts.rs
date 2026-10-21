@@ -893,10 +893,11 @@ impl HostShared {
             HostLocation::ReadInstanceFactSnapshot,
         )?;
         self.synchronize_fact_store_under_gate()?;
+        // #411 A51 (R3): a position the writer did not answer in time fails only this read.
         let ledger_position = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error(HostLocation::ReadInstanceFactPosition))?;
+            .map_err(|error| ledger_read_error(&error, HostLocation::ReadInstanceFactPosition))?;
         lock(&self.facts, HostLocation::ReadInstanceFactSnapshot)?
             .snapshot(context, ledger_position)
     }

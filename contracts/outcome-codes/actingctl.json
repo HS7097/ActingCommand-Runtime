@@ -176,12 +176,13 @@
         "argument": "required",
         "argument_problem": "required",
         "range_min": "optional",
-        "range_max": "optional"
+        "range_max": "optional",
+        "argument_value": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An MCP tool was called with arguments its input schema refuses.",
+      "description": "An MCP tool was called with arguments its input schema refuses. Workflow #411 B27: argument_value is the value an event type argument of ac_events was given that names no event type (for event_types and exclude_event_types, the element).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -109,6 +109,11 @@ actingcommand_contract::outcome_codes! {
         LedgerCaptureBufferBusy => "ledger_capture_buffer_busy": warning / none,
         LedgerCaptureBufferOverloaded => "ledger_capture_buffer_overloaded": warning / none,
         LedgerCaptureSpilled => "ledger_capture_spilled": warning / none,
+        /// Error (#411 A51 R4). The close waited `ledger_observer.close_timeout_ms`
+        /// (`timeout_ms`) for the writer to answer its shutdown and end, and the writer was still
+        /// busy (`stage`, the operation of its command in progress, for `elapsed_ms`); the
+        /// writer is left behind so the process can end. A restart clears it.
+        LedgerCloseTimeout => "ledger_close_timeout": error / none,
         LedgerDatabaseRootMismatch => "ledger_database_root_mismatch": error / none,
         LedgerDumpFailed => "ledger_dump_failed": fatal / none,
         LedgerDumpImported => "ledger_dump_imported": info / none,

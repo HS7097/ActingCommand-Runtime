@@ -388,3 +388,56 @@ pub fn distance(
         worst_cell,
     })
 }
+
+/// Workflow #411 B12: the columns of the frame-change grid (`contracts/color-digest.md`, section
+/// Frame change), at most the region's width in pixels.
+pub const FRAME_CHANGE_COLUMNS: u32 = 16;
+/// Workflow #411 B12: the rows of the frame-change grid, at most the region's height in pixels.
+pub const FRAME_CHANGE_ROWS: u32 = 9;
+/// Workflow #411 B12: the default threshold of the frame-change measure. Two frames are still
+/// when their change is at most this many milli, unless the caller declares its own threshold.
+pub const FRAME_CHANGE_MAX_MILLI: u32 = 1500;
+
+/// Workflow #411 B12: the digest the Runtime's one frame-change measure compares
+/// (`contracts/color-digest.md`, section Frame change): `region` of `scene`, the whole frame when
+/// `None`, digested by `color_digest.v1` on a grid of [`FRAME_CHANGE_COLUMNS`] columns and
+/// [`FRAME_CHANGE_ROWS`] rows, each axis at most the region's size in pixels. A region that does
+/// not lie in the frame is `color_digest_region_invalid`.
+pub fn frame_change_digest(scene: &Scene, region: Option<Rect>) -> ColorDigestResult<ColorDigest> {
+    let region = match region {
+        Some(region) => region,
+        None => {
+            let side = |pixels: u32| {
+                i32::try_from(pixels).map_err(|_| {
+                    ColorDigestError::new(
+                        ColorDigestErrorCode::RegionInvalid,
+                        format!("frame side {pixels} overflows i32"),
+                    )
+                })
+            };
+            Rect {
+                x: 0,
+                y: 0,
+                width: side(scene.width())?,
+                height: side(scene.height())?,
+            }
+        }
+    };
+    let bounds = validate_rect(region, scene.width(), scene.height()).map_err(|error| {
+        ColorDigestError::new(ColorDigestErrorCode::RegionInvalid, error.message())
+    })?;
+    let grid = ColorDigestGrid::new(
+        bounds.width.min(FRAME_CHANGE_COLUMNS),
+        bounds.height.min(FRAME_CHANGE_ROWS),
+    )?;
+    ColorDigest::compute(scene, region, grid)
+}
+
+/// Workflow #411 B12: how much a region changed between two frames, the Runtime's one
+/// frame-change measure: the `mean_milli` of the [`distance`] of their
+/// [`frame_change_digest`]s, no cell excluded. The frames are still when it is at most the
+/// threshold, [`FRAME_CHANGE_MAX_MILLI`] unless the caller declares one. Digests of regions with
+/// different grids are `color_digest_grid_mismatch`.
+pub fn frame_change_milli(previous: &ColorDigest, current: &ColorDigest) -> ColorDigestResult<u32> {
+    distance(previous, current, &[]).map(|distance| distance.mean_milli)
+}

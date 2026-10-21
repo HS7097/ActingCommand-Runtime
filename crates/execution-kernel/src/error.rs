@@ -150,6 +150,8 @@ pub struct ExecutionFailureContext {
     resources: Vec<ExecutionResourceContribution>,
     close_recording: bool,
     prior_recorded_event: Option<Arc<OnceLock<EventId>>>,
+    /// #411 A50: why a capture open failed, when the device backend could tell.
+    capture_open: Option<Box<actingcommand_device::CaptureOpenFailure>>,
 }
 
 impl ExecutionFailureContext {
@@ -190,6 +192,12 @@ impl ExecutionFailureContext {
 
     pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
         self.adb_recovery.as_deref()
+    }
+
+    /// #411 A50: why the capture open this failure ended failed, when the device backend could
+    /// tell.
+    pub fn capture_open_failure(&self) -> Option<&actingcommand_device::CaptureOpenFailure> {
+        self.capture_open.as_deref()
     }
 
     pub fn lifecycle_causes(&self) -> &[ExecutionLifecycleCause] {
@@ -487,6 +495,7 @@ impl ExecutionKernelError {
                 adb_recovery: error.adb_recovery().map(adb_recovery_record).map(Box::new),
                 native_detail: device_native_detail(error),
                 native_detail_is_device_message: error.diagnostic_message().is_none(),
+                capture_open: error.capture_open_failure().cloned().map(Box::new),
                 causes,
                 resources: error
                     .resource_contributions()
