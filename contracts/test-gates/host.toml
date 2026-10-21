@@ -1526,3 +1526,12 @@ tests = [
     "actingcommand-device::lib::touch::tests::t3_a_vertical_brake_drag_runs_on_adb_through_motionevents",
 ]
 incident = ["#406"]
+
+# #411 A18 option ④ (slice BT-LAB, v0.12.x; register §1.147 L18-1; plan §2.17, test row BT-L18 T1; no persisted ledger shape, no outcome code; the key continues the host numbering): online do's arrival samples start every 500 ms, start to start: after a sample's capture and evaluation the request waits on the Runtime clock for what is left of the 500 ms since that sample started (none when they took longer), never past the deadline; with capture and evaluation taking 300 ms on the manual Runtime clock the samples start 500 ms apart
+[[gate]]
+key = "128"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_bt_l18::a18_arrival_samples_start_500_ms_apart_when_their_evaluation_takes_300_ms",
+]
+incident = ["#411 A18"]

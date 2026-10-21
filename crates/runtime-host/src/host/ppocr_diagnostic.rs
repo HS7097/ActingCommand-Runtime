@@ -229,6 +229,13 @@ impl HostShared {
                 continue;
             }
             let result = (|| {
+                // #411 A36c, test only: runs between this report's writes and its seal.
+                #[cfg(test)]
+                let before_seal = lock(
+                    &self.ppocr_seal_hook_for_test,
+                    crate::codes::test_spellings::TestLocation::ConsumePpocrSealTestHook,
+                )?
+                .take();
                 report.validate().map_err(|message| {
                     RuntimeHostError::fatal(
                         HostCode::PpocrDiagnosticInvalid,
@@ -287,6 +294,16 @@ impl HostShared {
                     result
                 };
                 if let Err(message) = encoded {
+                    let cleanup = match stream.abort() {
+                        // #411 A36c: the stream refused the report's bytes (its capacity owner's
+                        // refusal, which it recorded); that ends only the stream's owner, as a
+                        // refusal when the stream opened does. A cleanup failure joined to it
+                        // stays fatal.
+                        Err(refused) if !refused.is_fatal() => {
+                            return Err(ppocr_artifact_error(refused));
+                        }
+                        aborted => aborted.err(),
+                    };
                     let mut error = RuntimeHostError::fatal(
                         HostCode::PpocrDiagnosticWriteFailed,
                         HostLocation::ArchivePpocrDiagnostic,
@@ -294,13 +311,17 @@ impl HostShared {
                     )
                     .with_native_detail(message.clone());
                     error.lifecycle.ppocr_message = Some(message);
-                    return Err(match stream.abort() {
-                        Ok(()) => error,
-                        Err(cleanup) => error.with_complete_failure(
+                    return Err(match cleanup {
+                        None => error,
+                        Some(cleanup) => error.with_complete_failure(
                             RuntimeFailureRelation::DiagnosticArchive,
                             ppocr_artifact_error(cleanup),
                         ),
                     });
+                }
+                #[cfg(test)]
+                if let Some(action) = before_seal {
+                    action();
                 }
                 let mut sink = online_observation::ObservationArtifactSink {
                     ledger: &self.ledger,
@@ -344,7 +365,11 @@ impl HostShared {
                     report.model_role,
                     error.complete_message()
                 );
-                return Err(attach_ppocr_failure(error.into_fatal(), reports, message));
+                // #411 A36c: the failure keeps its own category. A stream's seal mismatch or a
+                // capacity refusal ends only the work that owns the archive; every other failure
+                // here (a cleanup failure joined to one of them, post-publication verification,
+                // the ledger) is fatal where it arose.
+                return Err(attach_ppocr_failure(error, reports, message));
             }
         }
         Ok(())
@@ -378,11 +403,24 @@ impl RuntimeContainedTask<'_> {
                 },
             )
             .map_err(|failure| {
-                RequestFailure::poison_without_terminal(match primary {
+                let error = match primary {
                     Some(primary) => primary
                         .with_complete_failure(RuntimeFailureRelation::DiagnosticArchive, failure),
                     None => failure,
-                })
+                };
+                // #411 A36c: an archive failure that leaves the Runtime running ends only this
+                // run, which records its terminal with it (a scheduled run through its task
+                // failure); a fatal one poisons the Runtime as before.
+                if error.is_fatal() {
+                    return RequestFailure::poison_without_terminal(error);
+                }
+                let evidence = TaskFailureEvidence {
+                    outcome: error.outcome(),
+                    severe: false,
+                };
+                let mut failure = RequestFailure::request(error, RuntimeReceiptState::Failed, None);
+                failure.task_failure = Some(evidence);
+                failure
             })
     }
 }

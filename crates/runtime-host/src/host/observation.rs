@@ -4,6 +4,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_execution_kernel::FrameOwner;
 
 /// Workflow #375 R5c: an observe frame is compared only with the previous observe frame of
 /// its instance and origin, and only when that one was captured less than 50 s earlier, so
@@ -211,11 +212,14 @@ impl HostShared {
         // Workflow #369 Q-6: a read-only observe stays keyless; its guard pumps when dropped, so a
         // claim queued during the observe is granted right after it.
         let admission = self.lock_admission(&instance_guard, instance_id)?;
+        // #411 A49: a keyless observe's frame is an observer's; it leaves the frame of a run in
+        // flight on the instance in place.
         self.capture_observation_with_links(
             request,
             instance_alias,
             links,
             artifact_links,
+            FrameOwner::Observer,
             &admission,
         )
     }
@@ -312,6 +316,7 @@ impl HostShared {
         instance_alias: &str,
         links: EventLinksDraft,
         artifact_links: ArtifactLinksDraft,
+        owner: FrameOwner,
         admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.require_business_capacity(links.clone())?;
@@ -353,6 +358,7 @@ impl HostShared {
             .capture_frame_retained_with_registration_guard(
                 instance_alias,
                 links.frame_id().copied(),
+                owner,
                 registration,
                 memory,
             );
@@ -587,6 +593,7 @@ impl HostShared {
                     width: observation.width(),
                     height: observation.height(),
                 },
+                owner,
             )
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
