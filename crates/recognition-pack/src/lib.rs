@@ -24,6 +24,9 @@ mod candidate_consensus;
 mod candidate_identity;
 mod candidate_layout;
 mod codes;
+// Workflow #411 B3.
+#[cfg(test)]
+mod gate_411_b3;
 mod target_consensus;
 // Workflow #396 REC-7.
 mod template_mask;

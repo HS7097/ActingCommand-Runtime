@@ -5302,3 +5302,7 @@ pub fn validate_ocr_fields_mode_declaration(
 
 #[cfg(test)]
 mod tests;
+
+// Workflow #411 B3.
+#[cfg(test)]
+mod gate_411_b3;
