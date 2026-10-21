@@ -2634,6 +2634,26 @@ fence.
 | A38-6 | `recovery_ladder.fence_recheck.interval_ms` (`10000..=86400000`, 300 000), `recovery_ladder.fence_recheck.max_attempts` (`0..=1000`, 12; `0` turns the recheck off) | configuration keys (§5 row; `config.parameters.recovery_ladder` rows) | A38 | A38 | settable, read by the lease sweep at each tick; defaults only in `actingd.defaults.json`; `config_value_invalid` (`out_of_range`) through an instruction, `recovery_ladder_config_invalid` at load and in check-config |
 | A38-7 | `actingd-config` [5, 8] | interface revision (§6; K27) | A38 | A38 | revision 8 is revision 7 plus the optional member `recovery_ladder.fence_recheck`; a Runtime before A38 refuses a file that names it (the section denies unknown members); a file that does not name it keeps its revision |
 
+### 1.149 Slice BT-B3 (0.12.x): several expected colors (#411 B3; B-train plan §2.3; Alice's reading (a), 2026-10-20)
+
+A color probe, a template's `color_check` and with it the `repeated_anchor` anchor's color
+predicate may list up to seven `alternatives` besides `expected`; one acceptance decides all of
+them: the nearest declared color, the earliest among equal distances, within the one
+`max_distance`. **No persisted ledger shape**: `TaskDiagnosticColorData` is unchanged and keeps
+`expected` and `distance`, which are now the matched color's; `expected_index` is read-only and
+Lab output only. No code, location, key, vocabulary token, wire or configuration key is added;
+the refusals reuse `resource_declaration_invalid` reasons and the recognition pack's existing
+load refusal. The member belongs to `package` revision 6, which BT-PK6 declares at the end of
+the B train (plan §4); until then it is admitted by code. [resource-declarations.md](resource-declarations.md)
+("Task schema `0.9` several expected colors"), [template-relative-color.md](template-relative-color.md)
+and [selection-graph.md](selection-graph.md) are the contract. Gate: exec key 118.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B3-1 | `alternatives: [[r, g, b], …]` on a `color_probes[]` entry with `expected` and on the `color_check` of `anchors[]` and `verify_templates[]`; derived onto the `color` target and the `color_check` | resource file format (task schema `0.9`, no version change; pack schema `0.7`) (exec 118) | BT-B3 | resource side | 1..=7 colors, none repeated, none equal to `expected`; refused `resource_declaration_invalid` at `…/alternatives` (`UnconsumedField` before task schema `0.9` and on a digest entry, `InvalidType` for no array, `InvalidValue` otherwise); a source that uses it derives pack schema `0.7`; a `0.6` pack refuses it as an unknown field and the evaluator refuses the same counts, repeats and copies at load |
+| B3-2 | the color acceptance of a probe, a `color_check` (absolute, relative and in the joint search) and the `repeated_anchor` predicate | rule (no shape change) (exec 118) | BT-B3 | BT-B3 | the region's mean against `expected`, then each alternative in order; the nearest, the earliest among equals, is the evaluation's `expected` and `distance`, and passes within `max_distance` (else the package default); in the joint search any declared color qualifies a candidate; without `alternatives` evaluation is unchanged |
+| B3-3 | `expected_index` of the recognition evaluation's `color` and of the read-only `ColorEvaluationResponse` | in-process and output member (not persisted) (exec 118) | BT-B3 | BT-B3 | 0 for `expected`, `n` for the `n`th alternative; present only when the probe or check declares `alternatives`; the task diagnostic record does not carry it |
+
 ### 1.150 Slice BT-B8 (0.12.x): the scheduler passes a run its schedule values (#411 B8; plan `rd-1021/train-0129/b-plan/plan.md` §2.8, Q12, D7; [remedies.md](remedies.md) section 4)
 
 B8 adds its typed values to the channel B15 R5 opened (§1.115). **No persisted ledger shape**:
