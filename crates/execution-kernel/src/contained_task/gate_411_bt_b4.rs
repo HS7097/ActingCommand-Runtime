@@ -124,7 +124,7 @@ impl Device {
             })
             .collect::<Vec<_>>();
         match records.as_slice() {
-            [record] => *record,
+            [record] => record,
             _ => panic!("one decision record: {:?}", self.events),
         }
     }
