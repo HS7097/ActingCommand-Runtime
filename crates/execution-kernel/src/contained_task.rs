@@ -128,6 +128,9 @@ mod gate_390_exec3;
 // Workflow #390 OUT-2.
 #[cfg(test)]
 mod gate_390_out2;
+// #411 B5/B14/B20/B24, slice BT-B5 (exec keys 120 to 124): stage end pages and entry pages.
+#[cfg(test)]
+mod gate_411_bt_b5;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
