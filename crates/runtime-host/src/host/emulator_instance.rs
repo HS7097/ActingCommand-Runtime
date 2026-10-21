@@ -1058,7 +1058,6 @@ impl HostShared {
         {
             Ok(outcome) => outcome,
             Err(failure) => {
-                let (error, state, effect) = emulator_control_error(&failure, instance_id);
                 // Workflow #381 B F4 (review M3): one bounded read of the instance's current
                 // state, applied before the failure is recorded; a failed read is no
                 // observation.
@@ -1066,28 +1065,54 @@ impl HostShared {
                     .execution()?
                     .read_emulator_instance_state(&resolved.instance_alias)
                     .ok();
-                if let Err(applied) =
-                    self.apply_failure_observation(resolved, &links, observed.as_ref(), effect)
-                {
+                // #411 A38: a control command that passed its own bound is judged by that one
+                // status read: the requested state there settles the step as done, recorded
+                // with the timeout and the read; any other read fails it with the existing code,
+                // carrying the read.
+                let timed_out =
+                    failure_stage(&failure) == DeviceStage::MumuManagerTimeout.location();
+                let (error, state, effect) = emulator_control_error(
+                    &failure,
+                    instance_id,
+                    observed.as_ref().filter(|_| timed_out),
+                );
+                let settled = observed.as_ref().filter(|_| timed_out).and_then(|read| {
+                    timeout_settled(resolved, action, &failure, read)
+                        .map(|done| (read.clone(), done))
+                });
+                if let Some((read, settled)) = settled {
+                    self.record_control_timeout_settled(
+                        &links,
+                        instance_id,
+                        &error,
+                        failure.elapsed_ms,
+                        &read,
+                    )?;
+                    settled
+                } else {
+                    if let Err(applied) =
+                        self.apply_failure_observation(resolved, &links, observed.as_ref(), effect)
+                    {
+                        return Err(self.control_failed(
+                            mode,
+                            links,
+                            record_action,
+                            applied,
+                            RuntimeReceiptState::Failed,
+                            effect,
+                            None,
+                        ));
+                    }
                     return Err(self.control_failed(
                         mode,
                         links,
                         record_action,
-                        applied,
-                        RuntimeReceiptState::Failed,
+                        error,
+                        state,
                         effect,
-                        None,
+                        Some(ProviderControlFailure { failure, observed }),
                     ));
                 }
-                return Err(self.control_failed(
-                    mode,
-                    links,
-                    record_action,
-                    error,
-                    state,
-                    effect,
-                    Some(ProviderControlFailure { failure, observed }),
-                ));
             }
         };
         // Workflow #381 B D6: a Stop that `info` alone confirmed (its process listing failed)
@@ -1430,6 +1455,48 @@ impl HostShared {
                 DiagnosticDetailDraft::new(
                     "emulator_control",
                     HostLocation::MumuManagerProcessList,
+                    "mumu_manager",
+                    ContractLocation::ControlInstance.as_str(),
+                ),
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// #411 A38: a control command that passed its own bound and that the one status read after
+    /// it (`read`) settled as done is recorded once at Warning
+    /// (`emulator_control_timeout_settled`) under the request's links, before its
+    /// `command.validated`: the read as values, the command's timeout (`timeout`, the failure it
+    /// would otherwise have been) as its `caused_by` link.
+    fn record_control_timeout_settled(
+        &self,
+        links: &EventLinksDraft,
+        instance_id: InstanceId,
+        timeout: &RuntimeHostError,
+        elapsed_ms: u64,
+        read: &InstanceState,
+    ) -> Result<(), RequestFailure> {
+        self.append_event(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                Outcome::new(HostCode::EmulatorControlTimeoutSettled)
+                    .operation(ContractLocation::ControlInstance)
+                    .instance_id(instance_token(instance_id))
+                    .elapsed_ms(elapsed_ms)
+                    .process_started(read.process_started)
+                    .android_started(read.android_started)
+                    .adb_port_present(read.adb_port.is_some())
+                    .caused_by(timeout.record_outcome()),
+                DiagnosticDetailDraft::new(
+                    "emulator_control",
+                    DeviceStage::MumuManagerTimeout.location(),
                     "mumu_manager",
                     ContractLocation::ControlInstance.as_str(),
                 ),
@@ -1801,10 +1868,13 @@ impl HostShared {
 
 /// Maps the typed device failure onto the host error: code, projection, receipt state and the
 /// effect claim. The vendor output goes to `native_detail` only; the device observations are
-/// the outcome's values and the primary detail keeps the stage (ledger revision 3).
+/// the outcome's values and the primary detail keeps the stage (ledger revision 3). #411 A38:
+/// `status_read` is the one state read after a control command that passed its own bound; with
+/// no observation of the failure's own, it is the observation the failure carries.
 fn emulator_control_error(
     failure: &EmulatorControlFailure,
     instance_id: InstanceId,
+    status_read: Option<&InstanceState>,
 ) -> (RuntimeHostError, RuntimeReceiptState, EffectDisposition) {
     let diagnostic = failure.error.diagnostic();
     let stage = failure_stage(failure);
@@ -1852,7 +1922,7 @@ fn emulator_control_error(
                 Some(exit_code) => outcome.exit_code(exit_code),
                 None => outcome,
             };
-            let outcome = match &failure.last_state {
+            let outcome = match failure.last_state.as_ref().or(status_read) {
                 Some(state) => outcome
                     .process_started(state.process_started)
                     .android_started(state.android_started)
@@ -1876,6 +1946,39 @@ fn emulator_control_error(
     let mut error = control_output(error, failure);
     error.lifecycle.instance_id = Some(instance_id);
     (error, state, effect)
+}
+
+/// #411 A38: the outcome of a control command that passed its own bound when the one status
+/// read after it, `read`, shows the action's requested state (running after a Start, the process
+/// gone after a Stop): the readings are the read's and a Stop's process check is unknown, since
+/// no listing ran (`emulator_stop_process_unverified` follows). `None` when the read does not
+/// show it, or the instance has no discovery binding to name its index.
+fn timeout_settled(
+    resolved: &RegisteredInstance,
+    action: EmulatorInstanceAction,
+    failure: &EmulatorControlFailure,
+    read: &InstanceState,
+) -> Option<EmulatorControlOutcome> {
+    if !read.satisfies(action) {
+        return None;
+    }
+    let instance_index = resolved
+        .adb_endpoint
+        .as_ref()
+        .and_then(ResolvedInstanceEndpoint::discovered_binding)?
+        .instance_index();
+    Some(EmulatorControlOutcome {
+        exit_code: failure.exit_code,
+        output_summary: failure.output_summary.clone(),
+        instance_index,
+        process_started: read.process_started,
+        running: read.running(),
+        adb_port: read.adb_port,
+        player_state: read.player_state.clone(),
+        elapsed_ms: failure.elapsed_ms,
+        device_process_present: (action == EmulatorInstanceAction::Stop)
+            .then_some(DeviceProcessPresence::Unknown),
+    })
 }
 
 /// The failure's text as the error's native detail (ledger revision 3, acceptance H-M1): once

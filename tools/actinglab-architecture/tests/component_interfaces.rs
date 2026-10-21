@@ -22,7 +22,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   NAV-3a removed are refused, so no revision-4 file is read. Workflow #411 B15 R3 (v0.12.3,
 ///   register §1.113): revision 6 adds the optional remedy keys; a revision-5 file is still read,
 ///   so [5, 6]. Workflow #406 T12 (register §1.136): revision 7 adds the optional `touch`
-///   section; a revision-5 or revision-6 file is still read, so [5, 7].
+///   section; a revision-5 or revision-6 file is still read, so [5, 7]. #411 A38 (register
+///   §1.146): revision 8 adds the optional `recovery_ladder.fence_recheck` member; revisions 5
+///   to 7 are still read, so [5, 8].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused.
@@ -33,7 +35,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused.
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 7]),
+    ("actingd-config", [5, 8]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 3]),

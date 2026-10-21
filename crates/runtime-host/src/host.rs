@@ -3155,6 +3155,14 @@ impl RuntimeHost {
         device_link::tick(shared)
     }
 
+    /// #411 A38: one tick of the fences' periodic self-checks at the host clock, as the lease
+    /// sweep runs it.
+    #[cfg(test)]
+    pub(crate) fn fence_recheck_tick_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::FenceRecheckTickForTest)?
+            .recheck_resource_fences()
+    }
+
     /// Workflow #398 RD-5b: one sample of every handset's device state at once, as the sampler
     /// runs it when a sample is due.
     #[cfg(test)]
@@ -5175,6 +5183,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // Workflow #403: every new resource fence goes to a recovery ladder or a person before
         // the sweep's pump grants anything.
         if let Err(error) = shared.hand_resource_fences_to_ladders() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
+        // #411 A38: a fence that waits for a person queues its periodic self-check when it is
+        // due, on the host clock.
+        if let Err(error) = shared.recheck_resource_fences() {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }

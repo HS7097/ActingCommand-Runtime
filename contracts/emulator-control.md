@@ -266,6 +266,21 @@ admission guard and before the failure is recorded:
 
 Each request still gets exactly one terminal.
 
+A control command that passed its own bound (#411 A38; device stage `mumu_manager_timeout`, the
+60 s `control` dispatch of a `stop` or `start`, of either phase of a restart, or of the ladder's
+rung 3) is judged by that one read before anything is recorded. When the read shows the
+requested state (a Stop: the process not started; a Start: running, with Android started and a
+port), the step counts as done: one `runtime.failed` record `emulator_control_timeout_settled`
+(warning, `stability_warning`) under the request's links carries the read (`process_started`,
+`android_started`, `adb_port_present`), the command's time (`elapsed_ms`) and the timeout as its
+`caused_by` link (`emulator_control_failed` with its vendor text), and the action goes on as a
+confirmed one (rebinding, `command.validated`, and for a Stop, whose process listing did not
+run, `emulator_stop_process_unverified` first). Any other read, or none, fails the step with the
+existing `emulator_control_failed`, whose outcome now carries the read's `process_started`,
+`android_started` and `adb_port_present` when the read answered. The read is a status read only:
+nothing is dispatched again, and a readiness wait that expired (`mumu_manager_wait_timeout`)
+keeps its own handling.
+
 Note for #322 readers: the port recorded by the newest `runtime.instance_bound` of an instance
 represents that instance from then on; older events keep the port they were recorded with.
 
@@ -604,6 +619,28 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   does any unconfirmed close once the Runtime is shutting down (a requested shutdown, or after a
   fatal): a fence would end with the process before a ladder or a person could take it, so the
   shutdown records the close failure and the owner journal says `unconfirmed`, as before.
+  #411 A38: entering that wait records `instance_resources_fence_awaiting_person` (warning, the
+  instance's links; the fence's cause as `failure_code`, the rechecks allowed as `limit_count`,
+  their interval as `retry_after_ms`, the first one's time as `next_occurrence_unix_ms`). While
+  the instance waits, the lease sweep runs its self-check periodically (the recheck): every
+  `recovery_ladder.fence_recheck.interval_ms` after the wait began, then after each failed
+  recheck ended, at most `recovery_ladder.fence_recheck.max_attempts` per wait (`0`: none), on a
+  self-check claim of the instance's queue (it waits for the key as a person's `actingctl
+  selfcheck` does). The recheck is the preparation and self-check `actingctl selfcheck` makes (no
+  game input, no application launch, no emulator start), recorded as the Runtime's own recovery
+  preparation (`instance_preparation_finished` stage `recovery_preparation`): it starts no
+  ladder, and direction ① counts none of its records. A passing recheck lifts the fence as a
+  person's self-check does; its `resource_fence_lifted` record carries
+  `instance_resources_fence_recheck_passed` with the recheck's number (`attempts`) and
+  `limit_count`, and ends the wait. A failing one records `instance_resources_fence_recheck_failed`
+  (warning; `attempts`, `limit_count`, the self-check's `failure_code` when it named one, and the
+  next recheck's `next_occurrence_unix_ms`, absent after the last) and the instance stays fenced
+  and waiting. After the last recheck the instance waits for a person with no further recheck,
+  until the fence is lifted (a person's resume, emulator start or restart, or self-check) and a
+  later fence begins a new wait. `Status` shows the wait as `resource_fence.person_wait`
+  (`since_unix_ms`, `recheck_attempts`, `recheck_max_attempts`, `next_recheck_unix_ms`, absent
+  while a recheck runs, after the last one and while the recheck is off); `ac_overview` shows the
+  same member in the instance's row.
 
 Instance aliases, indices, tool paths and addresses come from formal configuration and the
 registered provider binding. Provider control polls discover the current process state and

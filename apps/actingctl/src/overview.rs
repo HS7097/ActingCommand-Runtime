@@ -700,16 +700,11 @@ fn instance_row(
         members.insert("pause_reason".to_owned(), json!(pause.pause_reason));
         row.insert("pause".to_owned(), Value::Object(members));
     }
-    // Workflow #403: an instance an unconfirmed close fenced, and whether it waits for a person.
+    // Workflow #403: an instance an unconfirmed close fenced, and whether it waits for a person;
+    // #411 A38: while it waits, since when and its periodic self-check (`person_wait`). The row
+    // carries the status member as the Runtime answers it.
     if let Some(fence) = instance.resource_fence() {
-        row.insert(
-            "resource_fence".to_owned(),
-            json!({
-                "cause": fence.cause,
-                "since_unix_ms": fence.since_unix_ms,
-                "awaiting_person": fence.awaiting_person,
-            }),
-        );
+        row.insert("resource_fence".to_owned(), json!(fence));
     }
     // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4): whether the
     // instance's emulator runs, as the Runtime last read it, with the time of that reading;

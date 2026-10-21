@@ -119,6 +119,8 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.hold.margin_ms` | milliseconds | `5000` |
 | `recovery_ladder.profiles` | object, profile name to `{rungs}` (Workflow #398 RD-4) | `handset`: return home, application restart (each rung's bounds the defaults file's of its action) |
 | `recovery_ladder.kind_profiles` | object, device kind (`emulator`, `handset`) to profile name (Workflow #398 RD-4) | `handset` → `handset` |
+| `recovery_ladder.fence_recheck.interval_ms` | milliseconds 10000..=86400000 (#411 A38) | `300000` |
+| `recovery_ladder.fence_recheck.max_attempts` | integer 0..=1000 (#411 A38); `0` turns the recheck off | `12` |
 
 The whole-section check (`recovery_ladder_config_invalid`, `config_key` and
 `config_value_problem`): trigger ids are tokens and unique (`duplicate_id`); an item names one or
@@ -138,6 +140,17 @@ the longest renewal, a task's longest deadline plus the heartbeat bound (`renewa
 margin (`claim_ttl_out_of_range`). Elements a list leaves out take their schema values: a
 trigger item's `start`, `start_rung` and `respect_cooldown` from `trigger_defaults`, a rung's
 bounds from the defaults file's rung of the same action.
+
+#411 A38 (`actingd-config` revision 8): `fence_recheck` is the periodic self-check of a fenced
+instance that waits for a person ([emulator-control.md](emulator-control.md), "Resource fence"):
+the first one `interval_ms` after the wait began, each next one `interval_ms` after the failed one
+before it ended, at most `max_attempts` per wait. The lease sweep reads both at each tick, so a
+change through an instruction (`ac_config_set`) applies from the next tick; `Status` reports
+`max_attempts` in effect. A value outside its range is `out_of_range` (with `range_min` and
+`range_max`). The defaults (every five minutes, at most twelve times, one hour of rechecks) let a
+device that came back by itself, such as a capture channel that could not open for a moment, run
+again within minutes, without a self-check every few seconds while a device is really away; after
+the last one a person is needed, as before.
 
 Workflow #398 RD-4 (model-398 v1.1 §6.2, §6.6; [emulator-control.md](emulator-control.md),
 "Ladder profiles") adds to the check: a profile name is a token (1 to 64 bytes of lowercase

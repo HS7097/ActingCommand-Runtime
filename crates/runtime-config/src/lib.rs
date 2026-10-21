@@ -65,9 +65,9 @@ pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile
 pub use performance::PerformanceFile;
 pub use recovery_ladder::{
     AlreadyRunning, BurstWindow, CodePattern, CooldownOpensOn, DirectRuns, EntryUnavailable,
-    HoldConfig, LadderConfig, LadderProfile, LadderRules, MatchedBy, PreparationSuperseded,
-    RecoveryLadderFile, RungConfig, StartBeyondProfile, TriggerItem, TriggerVerdict,
-    ladder_class_of,
+    FenceRecheckConfig, HoldConfig, LadderConfig, LadderProfile, LadderRules, MatchedBy,
+    PreparationSuperseded, RecoveryLadderFile, RungConfig, StartBeyondProfile, TriggerItem,
+    TriggerVerdict, ladder_class_of,
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{

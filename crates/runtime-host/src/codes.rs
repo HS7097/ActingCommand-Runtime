@@ -124,6 +124,13 @@ actingcommand_contract::outcome_codes! {
         /// `command.validated` (keys `instance_id`, `device_process_present`, and
         /// `stop_elapsed_ms`).
         EmulatorStopProcessUnverified => "emulator_stop_process_unverified": warning / none,
+        /// Warning (#411 A38). An emulator control command (`stop` or `start`, an operator's,
+        /// a restart's phase or a ladder rung's) passed its bound, and the one status read after
+        /// it showed the requested state, so the step counts as done. Recorded once under the
+        /// request's links before `command.validated` (keys `instance_id`, `elapsed_ms`, and the
+        /// status read's `process_started`, `android_started`, `adb_port_present`); the
+        /// command's timeout is its `caused_by` link.
+        EmulatorControlTimeoutSettled => "emulator_control_timeout_settled": warning / stability_warning,
         /// Error. A configured emulator start names an alias that is not a registered instance;
         /// the start fails (Workflow #369 S6c; keys `alias`).
         EmulatorAutostartInstanceUnknown => "emulator_autostart_instance_unknown": error / none,
@@ -223,6 +230,23 @@ actingcommand_contract::outcome_codes! {
         /// Info. A resource fence's ladder skipped a rung that cannot prove the close (the
         /// rung's `recovery_rung_finished` outcome).
         RecoveryRungSkippedResourceFence => "recovery_rung_skipped_resource_fence": info / none,
+        /// Warning (#411 A38). A fenced instance began to wait for a person: its ladder ended
+        /// without proving the close, none could start, or manual work met the fence. One
+        /// `runtime.failed` record under the instance's links (keys `instance_id`,
+        /// `failure_code` the fence's cause, `limit_count` the most rechecks, `retry_after_ms`
+        /// their interval, `next_occurrence_unix_ms` the first one's time while rechecks are on).
+        InstanceResourcesFenceAwaitingPerson => "instance_resources_fence_awaiting_person": warning / none,
+        /// Warning (#411 A38). A periodic self-check of a fenced instance that waits for a
+        /// person failed; the instance stays fenced and waiting. One `runtime.failed` record per
+        /// failed recheck (keys `instance_id`, `attempts` its number, `limit_count`,
+        /// `failure_code` the self-check's failure, `next_occurrence_unix_ms` the next one's
+        /// time, absent after the last).
+        InstanceResourcesFenceRecheckFailed => "instance_resources_fence_recheck_failed": warning / none,
+        /// Info (#411 A38). A periodic self-check of a fenced instance that waited for a person
+        /// passed: the fence is lifted as a person's self-check lifts it and the instance
+        /// schedules again. The outcome of that lift's `resource_fence_lifted` record (keys
+        /// `instance_id`, `attempts` the passing recheck's number, `limit_count`).
+        InstanceResourcesFenceRecheckPassed => "instance_resources_fence_recheck_passed": info / none,
         // Workflow #403 end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
@@ -1495,6 +1519,8 @@ actingcommand_contract::outcome_locations! {
         AwaitClientReset => "await_client_reset",
         AwaitOperatorClaim => "await_operator_claim",
         AwaitPolicyAdmissionsForPause => "await_policy_admissions_for_pause",
+        // #411 A38: a fenced instance begins to wait for a person.
+        AwaitResourceFencePerson => "await_resource_fence_person",
         BackendOpenSource => "backend_open_source",
         BeginContainedRun => "begin_contained_run",
         BeginDestructiveApplication => "begin_destructive_application",
@@ -1838,6 +1864,8 @@ actingcommand_contract::outcome_locations! {
         QueryRequestTerminal => "query_request_terminal",
         QueryStateMigrations => "query_state_migrations",
         QueueLeaseStatus => "queue_lease_status",
+        // #411 A38: the lease sweep queues the due rechecks of fences that wait for a person.
+        QueueResourceFenceRechecks => "queue_resource_fence_rechecks",
         ReadActiveContainedRun => "read_active_contained_run",
         ReadActiveContainedRuns => "read_active_contained_runs",
         ReadActiveInstances => "read_active_instances",
@@ -2120,6 +2148,8 @@ actingcommand_contract::outcome_locations! {
         RunPerformanceProbe => "run_performance_probe",
         RunPreparedPackage => "run_prepared_package",
         RunRecoveryLadder => "run_recovery_ladder",
+        // #411 A38: one recheck of a fence that waits for a person, on its instance's worker.
+        RunResourceFenceRecheck => "run_resource_fence_recheck",
         RunScheduledContainedTask => "run_scheduled_contained_task",
         RunStartupPackage => "run_startup_package",
         RuntimeLocalIpc => "runtime_local_ipc",
@@ -2422,6 +2452,7 @@ pub(crate) mod test_spellings {
             // Workflow #398 RD-2: a test hands the device-link watch's events and timers in.
             DeviceLinkEventForTest => "device_link_event_for_test",
             DeviceLinkTickForTest => "device_link_tick_for_test",
+            FenceRecheckTickForTest => "fence_recheck_tick_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
         }
