@@ -2382,6 +2382,8 @@ pub(crate) mod test_spellings {
             CompleteScheduledPolicyFailureWithoutTerminalForTest => "complete_scheduled_policy_failure_without_terminal_for_test",
             CompleteScheduledPolicySuccessWithoutTerminalForTest => "complete_scheduled_policy_success_without_terminal_for_test",
             ConsumeContainedTaskCheckpointTestHook => "consume_contained_task_checkpoint_test_hook",
+            // #411 A36c: the hook between a PP-OCR diagnostic stream's writes and its seal.
+            ConsumePpocrSealTestHook => "consume_ppocr_seal_test_hook",
             ConsumeScheduledPolicyCheckpointTestHook => "consume_scheduled_policy_checkpoint_test_hook",
             ExpireAllQueuedForTest => "expire_all_queued_for_test",
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
@@ -2397,6 +2399,7 @@ pub(crate) mod test_spellings {
             InjectTestTaskGeometryFrameExtentFault => "inject_test_task_geometry_frame_extent_fault",
             InstallContainedTaskCheckpointTestHook => "install_contained_task_checkpoint_test_hook",
             InstallPolicyOutcomeTransitionTestHook => "install_policy_outcome_transition_test_hook",
+            InstallPpocrSealTestHook => "install_ppocr_seal_test_hook",
             InstallQueueOperationTestHook => "install_queue_operation_test_hook",
             InstallScheduledPolicyCheckpointTestHook => "install_scheduled_policy_checkpoint_test_hook",
             InstanceAdmissionForTest => "instance_admission_for_test",
