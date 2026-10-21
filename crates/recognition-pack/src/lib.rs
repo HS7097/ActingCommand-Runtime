@@ -2176,7 +2176,7 @@ impl RecognitionEvaluator {
                             scene,
                             region,
                             check.expected,
-                            check.alternatives.as_deref(),
+                            None,
                             check.max_distance,
                         )?
                     }),
