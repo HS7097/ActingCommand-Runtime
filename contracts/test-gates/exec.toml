@@ -1839,3 +1839,14 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t2_an_any_of_of_the_wrong_shape_is_refused_naming_the_shape_it_must_have",
 ]
 incident = ["#411 B28"]
+
+# Workflow #411 B4 (slice BT-B4, 0.12.x; register §1.166 B4-1 to B4-4; ledger revision 4, the first writer of §1.153 LR-1; B-train plan §2.4 with D3, test rows BT-B4 T1 to T3 of §5.3; package revision 6, declared by BT-PK6): a single-frame select step that declares confirm decision decides its confirmation frame again with the same fact snapshot and instant and compares the decision hashes (the actionable candidates' ids, click boxes and statuses, the selected ids, the outcome key; no feature value): a changed reading of a gate-rejected row keeps the decision, records decision_matched with the confirmation frame's candidate-set hash and taps; another selected candidate records decision_mismatched and fails selection_decision_mismatch before any input; both are written as LR-1 registers them; a step without confirm records matched or mismatched as before
+[[gate]]
+key = "165"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b4::bt_b4_t1_a_changed_reading_of_a_gate_rejected_row_keeps_the_decision_and_taps",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b4::bt_b4_t2_a_confirmation_frame_that_selects_another_candidate_is_a_decision_mismatch",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b4::bt_b4_t3_without_confirm_the_candidate_sets_compare_as_before",
+]
+incident = ["#411 B4"]
