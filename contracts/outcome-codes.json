@@ -18374,6 +18374,29 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_entry_busy": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "page_id": "required",
+        "outcome_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "A run's entry layer completed on a scheduling outcome mapping its package marks busy (#411 B37, slice A35-S4): the home entry's return-home package, or a step of the navigation recovery chain, ended on a page that shows an activity still in progress. The run ends before its own steps: in the home entry in place of contained_task_home_recovery_terminal_non_home, with no recheck of the entry and no navigation; in the navigation the run does not locate again and the chain's next step is neither admitted nor run. package_id is the layer's package, page_id the page it ended on and outcome_key the busy mapping's key. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt. Its ladder class planned_stop matches no default trigger item, so no stuck-recovery ladder starts.",
+      "common_causes": "The instance runs a long activity that ends by itself, and the return-home or recovery chain package recognised its page.",
+      "handling": "Nothing to do: a later run, or a ladder another trigger starts, brings the instance home once the activity has ended."
+    },
     "contained_task_entry_pages_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
