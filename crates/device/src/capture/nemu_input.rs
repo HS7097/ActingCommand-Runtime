@@ -444,6 +444,25 @@ type FingerDown = unsafe extern "C" fn(i32, i32, i32, i32, i32) -> i32;
 type FingerUp = unsafe extern "C" fn(i32, i32, i32) -> i32;
 
 impl NemuIpcWorkerState {
+    /// #411 A50: a capture open failure's `cause`, with the instance index this worker
+    /// connects to and, for a paired session, the application package whose display it looks up.
+    pub(super) fn capture_open_failure(
+        &self,
+        cause: CaptureOpenCause,
+    ) -> crate::CaptureOpenFailure {
+        crate::CaptureOpenFailure {
+            cause,
+            application_id: self.input.as_ref().map(|input| {
+                input
+                    .application
+                    .application_id
+                    .to_string_lossy()
+                    .into_owned()
+            }),
+            instance_index: Some(i64::from(self.instance_id)),
+        }
+    }
+
     pub(super) fn invalidate_display(&mut self) -> DeviceResult<()> {
         if let Some(input) = &mut self.input {
             if matches!(input.contact, Contact::MayBeDown | Contact::UpAttempted) {
@@ -475,17 +494,22 @@ impl NemuIpcWorkerState {
         self.resume_vendor_stdio()?;
         let display = unsafe { query(self.connect_id, application_id, app_index) };
         let snapshot = self.record_vendor_stdio_snapshot();
-        let input = self.input.as_mut().expect("input target exists");
         if display < 0 {
+            // #411 A50: no display for the package: the application is not running.
             let native = Err(DeviceError::fatal(format!(
                 "Nemu application display query failed with code {display}"
             ))
-            .input_parameter_failure());
+            .input_parameter_failure()
+            .with_capture_open_failure(
+                self.capture_open_failure(CaptureOpenCause::DisplayMissing),
+            ));
+            let input = self.input.as_mut().expect("input target exists");
             return merge_input_snapshot(
                 merge_input_snapshot(native, snapshot),
                 input.invalidate(),
             );
         }
+        let input = self.input.as_mut().expect("input target exists");
         snapshot?;
         if input.display.is_some_and(|previous| previous != display) {
             input.invalidate()?;

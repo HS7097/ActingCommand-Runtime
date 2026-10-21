@@ -1233,12 +1233,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "capture_open_cause": "optional",
+        "application_id": "optional",
+        "instance_index": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Opening an instance's capture backend failed, in a device self-check, a preparation or a contained task's capture, and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed): the Runtime and the other instances go on, the instance's capture self-check reads failed and its routine work waits for a preparation that passes.",
+      "description": "Opening an instance's capture backend failed, in a device self-check, a preparation or a contained task's capture, and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed): the Runtime and the other instances go on, the instance's capture self-check reads failed and its routine work waits for a preparation that passes. #411 A50: the outcome says why with capture_open_cause (display_missing: the display of the instance's application package does not exist, the application is not running; connection_failed: the connection to the emulator failed; other: anything else or a backend that cannot tell, the backend's own text being the raw_text of the outcome's foreign link), with the application package (application_id) and the emulator instance index (instance_index) when the backend knows them.",
       "common_causes": "The emulator's window or renderer is closed or not ready while adb still answers; the emulator stopped or is restarting; the binding names a display or instance number the capture backend cannot reach; the backend's vendor library could not be loaded.",
       "handling": "A scheduled run's failure starts the configured recovery ladder (items preparation_backend and task_capture_backend), which restarts the emulator while the capture stays unavailable. Otherwise restart the emulator and run a self-check."
     },
@@ -1253,12 +1256,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "capture_open_cause": "optional",
+        "application_id": "optional",
+        "instance_index": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on.",
+      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on. #411 A50: the outcome says why with capture_open_cause, application_id and instance_index, as for capture_backend_open_failed.",
       "common_causes": "The emulator's renderer is closed, not ready or restarting while adb still answers; the binding names a display or instance number the paired session cannot reach.",
       "handling": "As for capture_backend_open_failed: the configured recovery ladder restarts the emulator; otherwise restart it and run a self-check."
     },

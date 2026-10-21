@@ -1469,6 +1469,16 @@ actingcommand_contract::outcome_codes! {
         /// Runtime's own state of the instance. The read's failure text is the cause.
         EmulatorStateReadFailed => "emulator_state_read_failed": warning / none,
         // ---- #411 A48: end
+        // ---- #411 A50: a restart launches only after the old VM has exited: begin
+        /// Error. A restart (an operator's, or the ladder's emulator-restart rung) whose Stop's
+        /// readiness wait expired read the emulator status until
+        /// `emulator_control.restart_exit_wait_ms`, and the old VM's process was still running:
+        /// the restart fails and launches nothing (keys `instance_id`, `elapsed_ms` the time
+        /// waited, `timeout_ms` the bound, `config_key` the bound's key, and the last read's
+        /// `process_started`, `android_started`, `adb_port_present` when a read answered). The
+        /// Stop's failure is its `caused_by` link.
+        EmulatorRestartPreviousInstanceRunning => "emulator_restart_previous_instance_running": error / environment_fault,
+        // ---- #411 A50: end
     }
 }
 

@@ -1608,3 +1608,42 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav5::gate_411_e4::e4_t4_an_unmatched_entry_after_a_prerequisite_names_the_layer_outcome_key",
 ]
 incident = ["#411 B39"]
+
+# #411 A50 item 1 (register §1.158 A50-1; no persisted ledger shape): a capture open that cannot open says why: a Nemu display lookup by package that answered no display (the application is not running) fails capture_backend_open_failed with capture_open_cause display_missing, the package and the instance index; a failed connection to the emulator has its own cause, connection_failed
+[[gate]]
+key = "144"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t1_a_missing_package_display_is_the_capture_open_failures_cause_with_package_and_index",
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t2_a_failed_connection_to_the_emulator_is_its_own_capture_open_cause",
+]
+incident = ["#411 A50"]
+
+# #411 A50 item 2 (register §1.158 A50-2, A50-3; no persisted ledger shape): an operator restart of an unpaused instance that has a startup package queues it, also when its preparation failed; on a paused instance it queues nothing and the answer says why (startup_package_withheld instance_paused)
+[[gate]]
+key = "145"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t3_an_operator_restart_of_an_unpaused_instance_queues_its_startup_package",
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t4_an_operator_restart_of_a_paused_instance_queues_nothing_and_says_why",
+]
+incident = ["#411 A50"]
+
+# #411 A50 item 3 (register §1.158 A50-4, A50-5; no persisted ledger shape): a restart whose Stop's readiness wait expired launches only after the emulator status reads the old VM stopped; still running at emulator_control.restart_exit_wait_ms (the configuration in effect) it fails emulator_restart_previous_instance_running and launches nothing
+[[gate]]
+key = "146"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t5_a_restart_launches_only_after_the_status_reads_the_old_vm_stopped",
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t6_an_old_vm_still_running_at_the_configured_bound_fails_the_restart_without_a_launch",
+]
+incident = ["#411 A50"]
+
+# #411 A50 item 4, the A38 follow-up (register §1.158 A50-7; no persisted ledger shape): prepare_recovery_connection (here a fence's own recheck) reads the emulator status first; a running emulator the Runtime holds stopped is recognized again and bound, and the recheck passes
+[[gate]]
+key = "147"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t7_the_recovery_preparation_reads_the_status_and_recognizes_a_running_emulator",
+]
+incident = ["#411 A50"]

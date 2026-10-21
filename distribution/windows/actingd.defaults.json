@@ -429,5 +429,8 @@
       "points_per_box": 16,
       "max_boxes": 1024
     }
+  },
+  "emulator_control": {
+    "restart_exit_wait_ms": 60000
   }
 }

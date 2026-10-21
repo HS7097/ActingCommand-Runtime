@@ -529,6 +529,27 @@ A value outside its range is `config_value_invalid` (`out_of_range`, with `range
 no integer is `wrong_type`. The rows are those of `config.parameters.touch`. The landing history
 itself is memory only and never recorded.
 
+## The `emulator_control` section (#411 A50)
+
+#411 A50 ([v012-register.md](v012-register.md) §1.158; [emulator-control.md](emulator-control.md),
+"Restart"): how long a restart waits for its old VM to exit before it launches. A restart (an
+operator's `emulator restart`, or the ladder's emulator-restart rung) whose Stop's readiness wait
+expired reads the emulator status (as a self-check does) until it reads the old VM stopped, at
+most this long; still running at the bound, the restart fails
+`emulator_restart_previous_instance_running` and launches nothing. Host-wide. The host reads the
+key at every such restart, so an instruction may change it while the Runtime runs.
+`actingd-config` revision 8 ([component-interfaces.md](component-interfaces.md)) adds the section;
+a file that does not name it keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `emulator_control.restart_exit_wait_ms` | milliseconds `1000..=300000`, the longest wait for the old VM to exit, on the Runtime clock | `60000` | yes |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
+`wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
+a restart adds the range's maximum (745 s).
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |

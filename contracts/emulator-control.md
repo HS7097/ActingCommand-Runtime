@@ -150,8 +150,21 @@ of its shell was lost when that shell's own shutdown hung, and the instance stay
 - The Start follows a confirmed Stop, or a Stop that ended in `mumu_manager_wait_timeout`. After
   any other Stop failure (`control_exit`, `control_errcode`, `run`, `launch_error` and every
   other stage) no Start is dispatched.
+- #411 A50: the Start is dispatched only after the old VM has exited. After a Stop that ended in
+  `mumu_manager_wait_timeout`, the restart reads the emulator status as a self-check does
+  (`MuMuManager info`, bounded): the bounded read after the Stop's failure (else the failure's
+  last observation), then one read every 500 ms on the Runtime clock, until one reads the
+  process stopped, at most `emulator_control.restart_exit_wait_ms` (default 60 s,
+  [runtime-config.md](runtime-config.md)); a failed read is no observation. Still running at the
+  bound, the restart fails `emulator_restart_previous_instance_running` (its `caused_by` the
+  Stop's `emulator_control_wait_timeout`) and dispatches no Start, so the new instance never
+  comes up on another ADB port beside the old one. The key is renewed to the wait's bound first.
+  A confirmed Stop needs no wait (the device's own `info` read showed it stopped). The ladder's
+  emulator-restart rung drives its Stop through the same path and waits the same way.
 - A restart succeeds only when both phases are confirmed; it then ends exactly as a successful
-  start does (connection preparation, startup package scheduling), and the receipt result is
+  start does (connection preparation, startup package scheduling; #411 A50: the package is
+  queued whether or not the preparation passed, unless a pause holds the instance), and the
+  receipt result is
   `EmulatorInstanceControlled { action: restart, .. }` with `elapsed_ms` the whole request's
   provider and ADB baseline time.
 - A restart whose Stop was not confirmed by its provider control fails
@@ -161,7 +174,8 @@ of its shell was lost when that shell's own shutdown hung, and the instance stay
   the ADB baseline) fails the restart with its own code, as for `start` and `stop`.
 - Bounds: a Stop phase takes at most 200 s, 210 s when it fails (the state read below); a Start
   phase at most 220 s on success (with the 30 s ADB baseline), 200 s on failure. The client
-  waits 445 s for a restart's receipt ("Client and CLI").
+  waits 745 s for a restart's receipt ("Client and CLI"; 445 s before #411 A50 added the wait
+  for the old VM, at most `emulator_control.restart_exit_wait_ms`, whose maximum is 300 s).
 
 ### Observed on MuMuManager 6.5.7.0 (acceptance run of #437; observations, not vendor guarantees)
 
@@ -379,7 +393,8 @@ fact store (`runtime-fact-store.md`).
   "running": true,
   "adb_port": 16384,
   "elapsed_ms": 12345,
-  "startup_package": "none"
+  "startup_package": "none",
+  "startup_package_withheld": "instance_paused"
 }
 ```
 
@@ -387,7 +402,9 @@ fact store (`runtime-fact-store.md`).
 state is `completed` with the `command.validated` event as terminal. `startup_package` is
 `scheduled` when a successful `start` / `restart` handed its key to, or queued, the claim of the
 instance's configured startup package (see "Startup package hook"), `none` otherwise (nothing
-configured, a failed preparation, or `stop`).
+configured, a pause that holds the instance, or `stop`). #411 A50: `startup_package_withheld`
+says why an instance that has a startup package got none: `instance_paused` (its own scheduling
+pause holds it) or `scheduling_paused` (the global one does); it is absent otherwise.
 
 ## Startup package hook (slice #316-B3)
 
@@ -403,7 +420,11 @@ that belongs to emulator control:
   startup schedule nothing. A configured package is always invoked; an instance without one
   never has anything pulled.
 - The control request only *schedules* it, after `command.validated`, the second
-  `runtime.instance_bound`, the `device.connected` fact and a passing connection preparation:
+  `runtime.instance_bound`, the `device.connected` fact and the connection preparation (#411
+  A50: whether or not the preparation passed, since the game the package starts is what a capture
+  by package needs; before A50 only a passing one); a scheduling pause that holds the instance
+  (its own or the global one) schedules none, the answer saying why
+  (`startup_package_withheld`), and cancels the instance's queued startup claims:
   one `runtime.lifecycle_observed` (phase `startup_package_scheduled { instance_id }`, the
   package locator in the audit machine path, links of the control request plus a freshly
   minted causation id) is appended, the control's key goes to the package's claim, and the
@@ -415,19 +436,21 @@ that belongs to emulator control:
   causation id) are followed by the control's `lease.transition_intent`, the claim's
   `lease.transition_intent`, `lease.transferred` and the control's `lease.released`; the
   claim takes no `lease.granted` of its own and bypasses the queue, so no dispatch can see the
-  instance free between the start and the startup run. While a scheduling pause holds the
-  instance or the global gate (a restored pause included), the claim waits queued as a gated
-  routine entry and the control's key is released: no startup run happens until the resume,
-  whose reconnect claim runs first and whose release hands the key to the startup claim
-  (`contracts/scheduling-pause.md`). A claim of a kind that takes the admission checks passes
-  them first; a refusal is recorded as the package's failure and the receipt still says
+  instance free between the start and the startup run. A startup claim queued while a
+  scheduling pause holds the instance or the global gate (a restored pause included; since #411
+  A50 an operator start or restart of a paused instance queues none) waits as a gated routine
+  entry: no startup run happens until the resume, whose reconnect claim runs first and whose
+  release hands the key to the startup claim (`contracts/scheduling-pause.md`). #411 A50: when
+  the start's failed preparation admitted a ladder, the startup claim is queued and the
+  control's release hands the key to the ladder; the claim waits behind it. A claim of a kind
+  that takes the admission checks passes them first; a refusal is recorded as the package's failure and the receipt still says
   `scheduled`. A new startup claim cancels one still queued for the same instance
   (`scheduler.denied lease_queue_cancelled`, warning), and so does a control whose hold hands
-  no startup claim over (a `stop`, a `start` / `restart` whose preparation failed, and since
-  Workflow #369 S6c a failed control, one whose provider step failed included): a startup run
-  against a stopped or unprepared emulator is meaningless, so a start under a pause followed
-  by a stop leaves no startup run at the resume. For the same reason a resume's reconnect or a
-  self-check whose preparation failed and admitted no ladder cancels it before its claim's
+  no startup claim over (a `stop`, since #411 A50 a `start` / `restart` of a paused instance,
+  before it one whose preparation failed, and since Workflow #369 S6c a failed control, one
+  whose provider step failed included): a startup run against a stopped emulator is
+  meaningless, so a stop leaves no startup run at the resume. For the same reason a resume's
+  reconnect or a self-check whose preparation failed and admitted no ladder cancels it before its claim's
   release (Workflow #369 S6c review low (b); `contracts/scheduling-pause.md`).
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
@@ -1059,10 +1082,11 @@ explicit receipt wait (`emulator_control_response_timeout(action)`) and returns 
   = 220 s; a stop 60 + 120 + 10 s + one 10 s process listing that may straddle the deadline,
   + the 10 s state read after a failure = 210 s; plus the IO margin (230 s), plus at most 5 s
   for the emulator-control claim's turn in the instance's queue (Workflow #369 Q-2, W-3, S5).
-- restart: 445 s (`EMULATOR_RESTART_RESPONSE_TIMEOUT`, Workflow #381 B, coordinator answer
-  D3): a Stop phase of at most 210 s and a Start phase of at most 220 s, plus the 10 s IO
-  margin (440 s), plus the claim's 5 s wait for its turn once, since a restart is one
-  emulator-control claim (Workflow #369 S5, D1). MCP `ac_emulator` states both figures.
+- restart: 745 s (`EMULATOR_RESTART_RESPONSE_TIMEOUT`, Workflow #381 B, coordinator answer D3):
+  a Stop phase of at most 210 s and a Start phase of at most 220 s, plus the 10 s IO margin
+  (440 s), plus the claim's 5 s wait for its turn once, since a restart is one emulator-control
+  claim (Workflow #369 S5, D1): 445 s; #411 A50 adds the wait for the old VM between the phases,
+  at most `emulator_control.restart_exit_wait_ms`, whose largest value is 300 s. MCP `ac_emulator` states both figures.
 
 ```
 actingctl emulator status  --state-root <state-root> --instance <alias>

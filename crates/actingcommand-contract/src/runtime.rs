@@ -966,14 +966,27 @@ impl ApplicationLifecycleAction {
 }
 
 /// What emulator instance control did with the instance's configured startup package
-/// (slice #316-B3): `none` when no package is configured for the instance or the action was
-/// `stop`, `scheduled` when the host queued it for its own scheduling point.
+/// (slice #316-B3): `none` when no package is configured for the instance, the action was
+/// `stop` or (#411 A50) a scheduling pause holds the instance, `scheduled` when the host queued
+/// it for its own scheduling point.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartupPackageDisposition {
     #[default]
     None,
     Scheduled,
+}
+
+/// #411 A50: why an operator's emulator `start` or `restart` queued no startup package although
+/// the instance has one: a scheduling pause holds the instance. The control's answer carries it
+/// beside `startup_package: none`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupPackageWithheld {
+    /// The instance's own scheduling pause holds it.
+    InstancePaused,
+    /// The global scheduling pause holds every instance.
+    SchedulingPaused,
 }
 
 /// One lifecycle action on the emulator instance itself (the provider's `control` surface),
@@ -5091,6 +5104,10 @@ pub enum RuntimeResult {
         /// contained task with its own `task.*` events; nothing runs inside this request.
         #[serde(default)]
         startup_package: StartupPackageDisposition,
+        /// #411 A50: why no startup package was queued although the instance has one (a
+        /// scheduling pause holds it); absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        startup_package_withheld: Option<StartupPackageWithheld>,
     },
     /// The provider's on-demand instance discovery answer (`DiscoverInstances`).
     InstancesDiscovered {

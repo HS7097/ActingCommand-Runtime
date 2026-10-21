@@ -290,6 +290,11 @@ mod gate_411_a48;
 // #411 A49: a read-only observe between a run's recognition and its input does not displace the
 // run's frame; the observe still captures a frame of its own.
 mod gate_411_a49;
+// #411 A50 (host keys 144-147), register §1.158: a capture open that cannot open says why; an
+// operator start or restart queues the startup package unless a pause holds the instance; a
+// restart launches only after the old VM has exited; the recovery preparation reads the
+// emulator status first.
+mod gate_411_a50;
 // Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
 // journal, plan, admission check, stop, lift and expiry signals).
 mod gate_411_b15h;
