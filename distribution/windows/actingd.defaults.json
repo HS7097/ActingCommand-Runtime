@@ -354,6 +354,8 @@
     "probe_sample_keys": 1024,
     "request_index_records": 4096,
     "status_gap_window_ms": 86400000,
+    "read_budget_ms": 1000,
+    "close_timeout_ms": 60000,
     "tag": {
       "workbench_patterns": [
         "task.*.last_duration_ms",

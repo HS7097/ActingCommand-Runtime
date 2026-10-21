@@ -967,13 +967,36 @@ pub(crate) fn spelled(spelling: &str, codes: &[Code]) -> bool {
     codes.iter().any(|code| code.as_str() == spelling)
 }
 
+/// #411 A51: where the host hands outcomes for the daemon's log at once (actingd writes them as
+/// its daemon lines).
+pub trait RuntimeDaemonReporter: Send + Sync {
+    /// The first fatal condition the host latched, at the moment it latched (R4): the outcome a
+    /// daemon line of the condition carries ([`RuntimeHostError::daemon_outcome`]). The close
+    /// that follows may take long; the condition is in the log before it.
+    fn fatal_latched(&self, outcome: &Outcome);
+
+    /// A background step that a ledger read did not answer in time, or that its read stopped at
+    /// its work budget, skipped (R3); the step runs again at its next tick.
+    fn step_skipped(&self, outcome: &Outcome);
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct FatalState {
     inner: Arc<Mutex<Option<RuntimeHostError>>>,
     shutdown: Arc<AtomicBool>,
+    /// #411 A51: the daemon's log, which the first latched condition is handed to at once.
+    reporter: Option<Arc<dyn RuntimeDaemonReporter>>,
 }
 
 impl FatalState {
+    /// #411 A51: a fatal state whose first latched condition goes to `reporter` at once.
+    pub(crate) fn reporting_to(reporter: Option<Arc<dyn RuntimeDaemonReporter>>) -> Self {
+        Self {
+            reporter,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn mark(&self, error: RuntimeHostError) -> RuntimeHostResult<()> {
         if !error.is_fatal() {
             return Err(RuntimeHostError::fatal(
@@ -989,11 +1012,25 @@ impl FatalState {
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
+        let first = current.is_none().then(|| error.daemon_outcome());
         if current.is_none() {
             *current = Some(error);
         }
+        drop(current);
         self.shutdown.store(true, Ordering::Release);
+        // #411 A51 (R4): the first latched condition is in the daemon's log at once, not only
+        // after the close.
+        if let (Some(outcome), Some(reporter)) = (first, self.reporter.as_ref()) {
+            reporter.fatal_latched(&outcome);
+        }
         Ok(())
+    }
+
+    /// #411 A51 (R3): hands a skipped background step's outcome to the daemon's log.
+    pub(crate) fn report_skipped(&self, outcome: &Outcome) {
+        if let Some(reporter) = self.reporter.as_ref() {
+            reporter.step_skipped(outcome);
+        }
     }
 
     /// The latched condition as the host answers a later request with it (Workflow #378 A6a,

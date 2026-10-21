@@ -31,7 +31,7 @@ use crate::{
     PerformanceControlConfig, PerformanceControlDirective, PerformanceMonitorConfig,
     PipelinePerformanceSignal, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
     PolicyDispatchAdmission, PolicyExecutionInput, PolicyRunContext, PolicyTrigger,
-    ProcedureManifest, RuntimeHostError, RuntimeHostResult,
+    ProcedureManifest, RuntimeDaemonReporter, RuntimeHostError, RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -546,6 +546,12 @@ pub struct RuntimeHostConfig {
     ledger_failure_sink: Option<Arc<dyn actingcommand_ledger::LedgerFailureSink>>,
     /// Workflow #383 AO-1: the commit the Runtime was built from, for the dump's header.
     runtime_commit: Option<String>,
+    /// #411 A51: where the host hands outcomes for the daemon's log at once: the first fatal
+    /// condition it latches, and a background step a ledger read skipped.
+    daemon_reporter: Option<Arc<dyn RuntimeDaemonReporter>>,
+    /// #411 A51: how long a caller waits for one ledger writer reply, when not the ledger's
+    /// default; only a test sets it.
+    ledger_reply_timeout: Option<Duration>,
     #[cfg(any(test, feature = "test-hooks"))]
     preparation_test_hook: Option<PreparationTestHook>,
     /// Workflow #369 E3 (#670 safety net), test only: the run whose settlement the start
@@ -604,6 +610,8 @@ impl RuntimeHostConfig {
             standard_packs_root: None,
             ledger_failure_sink: None,
             runtime_commit: None,
+            daemon_reporter: None,
+            ledger_reply_timeout: None,
             #[cfg(any(test, feature = "test-hooks"))]
             preparation_test_hook: None,
             #[cfg(test)]
@@ -907,6 +915,20 @@ impl RuntimeHostConfig {
     /// Workflow #383 AO-1: the commit the Runtime was built from, named by the dump's header.
     pub fn with_runtime_commit(mut self, commit: impl Into<String>) -> Self {
         self.runtime_commit = Some(commit.into());
+        self
+    }
+
+    /// #411 A51: where the host hands the first fatal condition it latches, at the moment it
+    /// latches, and each background step a ledger read skipped, for the daemon's log.
+    pub fn with_daemon_reporter(mut self, reporter: Arc<dyn RuntimeDaemonReporter>) -> Self {
+        self.daemon_reporter = Some(reporter);
+        self
+    }
+
+    /// #411 A51, tests: how long a caller waits for one ledger writer reply.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn with_ledger_reply_timeout(mut self, timeout: Duration) -> Self {
+        self.ledger_reply_timeout = Some(timeout);
         self
     }
 
@@ -1568,7 +1590,8 @@ impl RuntimeHost {
         if !config.frame_retention_enabled {
             println!("actingd frame_retention disabled");
         }
-        let fatal = FatalState::default();
+        // #411 A51 (R4): the first latched fatal goes to the daemon's log at once.
+        let fatal = FatalState::reporting_to(config.daemon_reporter.clone());
         // Workflow #384 D2-S4 (D2 model §3.1, §3.2): L, the instant the instance facts finished
         // loading, and the marks of the recognition maintenance packages the start kept.
         let instance_facts_loaded_at_unix_ms = config.clock.sample()?.unix_ms;
@@ -2154,6 +2177,15 @@ impl RuntimeHost {
             crate::codes::test_spellings::TestLocation::AppendRuntimeFactSnapshotForTest,
         )?
         .append_runtime_fact_snapshot_if_dirty()
+    }
+
+    /// #411 A51, tests: latches `error` in the Runtime's fatal state, as a request or a loop
+    /// whose failure the Runtime does not survive does.
+    #[cfg(test)]
+    pub(crate) fn latch_fatal_for_test(&self, error: RuntimeHostError) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::MarkRuntimeFatalForTest)?
+            .fatal
+            .mark(error)
     }
 
     /// Workflow #382 H-5 G15 (seam I5): what the last runtime-fact recovery on this thread (the
@@ -4976,11 +5008,16 @@ impl HostShared {
             ),
         );
         let HostShared { owner, ledger, .. } = self;
-        if ledger.close().is_err() {
-            record_failure(
-                &mut failure,
-                Err(ledger_error(HostLocation::CloseGlobalLedger)),
-            );
+        if let Err(error) = ledger.close() {
+            // #411 A51 (R4): a close that waited its bound for the writer names what the writer
+            // was doing (`ledger_close_timeout`, its `stage` and `elapsed_ms`).
+            let closed = match error.outcome_values() {
+                Some(cause) => {
+                    ledger_error(HostLocation::CloseGlobalLedger).with_caused_by(cause.clone())
+                }
+                None => ledger_error(HostLocation::CloseGlobalLedger),
+            };
+            record_failure(&mut failure, Err(closed));
         }
         match owner.into_inner() {
             Ok(mut owner) => {
@@ -5352,6 +5389,67 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     )
 }
 
+/// #411 A51 (R3): the ledger codes of a read the writer did not answer in time
+/// (`writer_response_timeout`) or stopped at its work budget (`ledger_read_budget_exceeded`).
+/// Neither is a ledger failure: the Runtime goes on, and the read's caller reads again at its
+/// next tick or request.
+const UNANSWERED_LEDGER_READS: [actingcommand_ledger::LedgerCode; 2] = [
+    actingcommand_ledger::LedgerCode::WriterResponseTimeout,
+    actingcommand_ledger::LedgerCode::LedgerReadBudgetExceeded,
+];
+
+/// #411 A51 (R3): a failed ledger read of `operation`. A read the writer did not answer in
+/// time, or stopped at its budget, is relayed as a request error (`runtime_unavailable`), as
+/// the frame cleaner relays one (Workflow #383 AO-1, `contracts/ledger-observer.md` §9.5); any
+/// other read failure stays the fatal `ledger_failure` of `operation`.
+pub(crate) fn ledger_read_error(
+    error: &actingcommand_ledger::GlobalLedgerError,
+    operation: impl Into<Location>,
+) -> RuntimeHostError {
+    if !error.is_fatal()
+        && UNANSWERED_LEDGER_READS
+            .iter()
+            .any(|code| code.as_str() == error.code())
+    {
+        let operation: Location = operation.into();
+        RuntimeHostError::relayed_request(
+            error.code(),
+            operation.as_str(),
+            RuntimeErrorCode::RuntimeUnavailable,
+        )
+    } else {
+        ledger_error(operation)
+    }
+}
+
+/// #411 A51 (R3): [`ledger_read_error`] as a request's failure: only a fatal one poisons the
+/// Runtime; the request is answered `failed` with the read's code otherwise.
+fn ledger_read_failure(
+    error: &actingcommand_ledger::GlobalLedgerError,
+    operation: impl Into<Location>,
+) -> RequestFailure {
+    request_failure(ledger_read_error(error, operation))
+}
+
+/// #411 A51 (R3): a request's failure of `error`: only a fatal one poisons the Runtime.
+fn request_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+    }
+}
+
+/// #411 A51 (R3): whether `error` relays a ledger read the writer did not answer in time, or
+/// stopped at its budget ([`ledger_read_error`]); the background step that read it runs again
+/// at its next tick.
+fn unanswered_ledger_read(error: &RuntimeHostError) -> bool {
+    !error.is_fatal()
+        && UNANSWERED_LEDGER_READS
+            .iter()
+            .any(|code| code.as_str() == error.code())
+}
+
 /// Workflow #378 A6a (model section 7.4, N1): `code` (`ledger_opened` or, as a note link of a
 /// failed open, `ledger_open_measured`) with the phases of a ledger open and its deadline.
 pub(crate) fn ledger_open_outcome(
@@ -5456,6 +5554,14 @@ fn ledger_failure_plan(
     }
     if let Some(sink) = &config.ledger_failure_sink {
         plan = plan.with_sink(Arc::clone(sink));
+    }
+    // #411 A51: a read on the writer stops at its budget, and the close waits at most its bound
+    // (`ledger_observer.read_budget_ms`, `close_timeout_ms`); both on the plan's clock.
+    plan = plan
+        .with_read_budget(Duration::from_millis(section.read_budget_ms))
+        .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
+    if let Some(timeout) = config.ledger_reply_timeout {
+        plan = plan.with_reply_timeout(timeout);
     }
     // Workflow #383 AO-2 (`contracts/ledger-observer.md` §7, §8, §11, §15): the capture queue's
     // budget, tiers and batches and the index's keys; the writer checks them when it opens.

@@ -575,8 +575,11 @@ pub(crate) fn read(
         let page = client
             .query_event_page(sent.clone(), PROFILE, page_request.clone())
             .map_err(EventsError::Runtime)?;
+        // #411 A51: a page the Runtime's read budget cut is answered at once with its cursor,
+        // never read again from the same place.
         if !waiting
             || !page.events().is_empty()
+            || page.has_more()
             || stop()
             || Instant::now() + POLL_INTERVAL >= wait_until
         {

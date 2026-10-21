@@ -169,6 +169,10 @@ pub enum LedgerPageLimit {
     EventCount,
     ResponseBytes,
     SourceIncomplete,
+    /// #411 A51: the Runtime's read stopped at its work budget (`ledger_observer.read_budget_ms`)
+    /// after `scanned_through_position`; the page is not complete and its cursor goes on from
+    /// that position.
+    ReadBudget,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

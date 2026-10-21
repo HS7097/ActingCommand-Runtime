@@ -284,9 +284,7 @@ impl HostShared {
                 request_id: Some(request.request_id()),
                 ..EventQuery::default()
             })
-            .map_err(|_| {
-                RequestFailure::poison(ledger_error(HostLocation::QueryClientFactReplay), None)
-            })?;
+            .map_err(|error| ledger_read_failure(&error, HostLocation::QueryClientFactReplay))?;
         if events.len() > 1 {
             if events.iter().all(|event| {
                 event.event_type() == event_type
