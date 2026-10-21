@@ -212,6 +212,9 @@ mod gate_387_d1cf;
 // Workflow #387 D1c-G: a ladder's unconfirmed ADB cleanup fences its instance, a frame without
 // an extent ends only its run, a vision provider failure starts no ladder at once.
 mod gate_387_d1cg;
+// #411 B37 (A35-S1, host keys 133 to 136), register §1.152: a return-home run that ends on a
+// `busy` mapping is not recovered; the ladder holds and runs it again, or `on_exhausted` decides.
+mod gate_411_b37;
 // Workflow #389 MCP-4, register W2: the instance fact read records nothing.
 mod gate_389_mcp4;
 // Workflow #389 MCP-9a, register A5: `config.catalog` names the active policy catalog

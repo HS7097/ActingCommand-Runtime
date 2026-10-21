@@ -122,3 +122,7 @@ mod tests;
 // Workflow #406 T12.
 #[cfg(test)]
 mod touch_tests;
+
+// #411 B37 (A35-S1, host key 137): the busy hold's configuration keys.
+#[cfg(test)]
+mod gate_411_b37;
