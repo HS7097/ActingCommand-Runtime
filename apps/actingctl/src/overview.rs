@@ -693,7 +693,10 @@ pub(crate) fn run_block(
         return;
     }
     let read_until = deadline.checked_sub(READ_RESERVE).unwrap_or(deadline);
-    match client.latest_runs(instance.instance_id(), window.since_unix_ms, 1, read_until) {
+    // A42 red proof 3 (do not merge): today's listing of the whole history by instance and
+    // time.
+    let _ = read_until;
+    match client.recent_runs(instance.instance_id(), window.since_unix_ms, 1) {
         Ok(latest) => {
             if let Some(run) = latest.runs.first() {
                 row["run"] = json!(run);
