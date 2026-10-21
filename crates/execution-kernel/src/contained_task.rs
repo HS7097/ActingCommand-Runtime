@@ -124,6 +124,10 @@ mod gate_387_d1cf;
 // Workflow #390 EXEC-1.
 #[cfg(test)]
 mod gate_390_exec1;
+// #411 B16 part 1 and B22, slice BT-KEY (exec keys 152 to 157): a per-run operation cap and a
+// keyed guard refusal.
+#[cfg(test)]
+mod gate_411_bt_key;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;

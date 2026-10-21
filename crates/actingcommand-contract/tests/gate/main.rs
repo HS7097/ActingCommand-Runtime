@@ -14,6 +14,9 @@ mod c1;
 mod lab_l3;
 mod rd1a;
 
+// #411 B16 part 1, slice BT-KEY (contract key K47): a keyed cap in the static walk.
+mod gate_411_bt_key;
+
 /// Installs this binary's one outcome diagnostic sink, which drops the text. Cutting an
 /// envelope sends the cut text to the sink, and a debug build panics when none is installed.
 fn diagnostic_sink() {

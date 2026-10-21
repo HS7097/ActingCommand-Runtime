@@ -1839,3 +1839,57 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t2_an_any_of_of_the_wrong_shape_is_refused_naming_the_shape_it_must_have",
 ]
 incident = ["#411 B28"]
+
+# #411 B16 part 1 (slice BT-KEY; register §1.164 KEY-1, KEY-4, KEY-5; B-train plan §2.11 items 1 and 5, test row T1 of §5.3; ledger revision 4 LR-7, first writer; package revision 6, declared by BT-PK6): an operation with max_runs and a keyed on_max_runs that the run dispatched max_runs times ends the run Completed on the current page with its key when the page would dispatch it again, no step starting; the run writes one task.operation_capped of exactly the LR-7 shape with the info outcome contained_task_operation_runs_capped (pack_operation_id, count, limit_count, page_id, outcome_key)
+[[gate]]
+key = "152"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t1_a_keyed_cap_ends_the_run_on_its_page_and_writes_the_capped_record",
+]
+incident = ["#411 B16"]
+
+# #411 B16 part 1 (slice BT-KEY; register §1.164 KEY-1; B-train plan §2.11 item 1, test row T2 of §5.3): an operation with max_runs and on_max_runs next_candidate that the run dispatched max_runs times is passed over like a capped designated member, and the page's next operation runs
+[[gate]]
+key = "153"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t2_a_capped_operation_with_next_candidate_gives_way_to_the_next_operation",
+]
+incident = ["#411 B16"]
+
+# #411 B22 (slice BT-KEY; register §1.164 KEY-2; B-train plan §2.11 item 2, test row T4 of §5.3; no code, no record): a guard value test read and not met (value_test_not_met) at attempt 1 with a keyed on_guard_refused ends the step without an input on the frame's page and the run Completed there with the key, no failure counted
+[[gate]]
+key = "154"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t4_a_guard_value_test_not_met_ends_the_run_on_the_keyed_refusal",
+]
+incident = ["#411 B22"]
+
+# #411 B22 (slice BT-KEY; register §1.164 KEY-2; B-train plan §2.11 item 2, test row T5 of §5.3): a guard value test that is not read (value_test_unresolved) is no definite fail; the keyed on_guard_refused does not apply and the run fails with contained_task_guard_refused
+[[gate]]
+key = "155"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t5_an_unread_value_test_keeps_the_guard_refusal_a_failure",
+]
+incident = ["#411 B22"]
+
+# #411 B22 and B33 (slice BT-KEY; register §1.164 KEY-2; B-train plan §2.11 item 2 and §6 (B33 merged into B22), test row T6 of §5.3): a keyed on_guard_refused whose failed names one member of the guard's composite applies only to that member's definite fail; another member failing alone keeps contained_task_guard_refused
+[[gate]]
+key = "156"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t6_another_member_failing_alone_keeps_the_guard_refusal_a_failure",
+]
+incident = ["#411 B22", "#411 B33"]
+
+# #411 B16 part 1 and B22 (slice BT-KEY; register §1.164 KEY-6; B-train plan §2.11 item 4 and coordinator decision Q9, test row T7 of §5.3): a package with a keyed on_max_runs or a keyed on_guard_refused is neither a prerequisite package nor a return-home package, contained_task_prerequisite_incompatible reasons max_runs_end and guard_refused_end
+[[gate]]
+key = "157"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t7_a_package_with_a_keyed_end_is_no_prerequisite_or_return_home_layer",
+]
+incident = ["#411 B16", "#411 B22"]
