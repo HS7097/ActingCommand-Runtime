@@ -2634,6 +2634,24 @@ fence.
 | A38-6 | `recovery_ladder.fence_recheck.interval_ms` (`10000..=86400000`, 300 000), `recovery_ladder.fence_recheck.max_attempts` (`0..=1000`, 12; `0` turns the recheck off) | configuration keys (§5 row; `config.parameters.recovery_ladder` rows) | A38 | A38 | settable, read by the lease sweep at each tick; defaults only in `actingd.defaults.json`; `config_value_invalid` (`out_of_range`) through an instruction, `recovery_ladder_config_invalid` at load and in check-config |
 | A38-7 | `actingd-config` [5, 8] | interface revision (§6; K27) | A38 | A38 | revision 8 is revision 7 plus the optional member `recovery_ladder.fence_recheck`; a Runtime before A38 refuses a file that names it (the section denies unknown members); a file that does not name it keeps its revision |
 
+### 1.150 Slice BT-B8 (0.12.x): the scheduler passes a run its schedule values (#411 B8; plan `rd-1021/train-0129/b-plan/plan.md` §2.8, Q12, D7; [remedies.md](remedies.md) section 4)
+
+B8 adds its typed values to the channel B15 R5 opened (§1.115). **No persisted ledger shape**:
+the values are new optional values of the pending entry `policy_dispatch_parameters` in the
+existing dispatch reason chains (`PolicyReasonRecord` is `#[serde(transparent)]` over `Outcome`;
+earlier 0.12 readers keep `values` as a map without a key check), and the records
+`session.dispatch.schedule.<key>` are an overlay of a run's instance fact snapshots, never stored.
+The catalog member is V2 only and optional; a catalog without it keeps its bytes and its hash. No
+package format change. Gates: policy key 59, host key 129.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B8-1 | `TaskSpec.dispatch_parameters: Option<bool>` (V2 `tasks.schema.json` `dispatch_parameters`, boolean) | catalog member (V2 only; absent serializes as nothing) (policy 59) | BT-B8 | BT-B8 | `true` opts the task in; `false` or absent carries nothing; a V1 document that names it is refused `unknown_field` at `/tasks/<i>/dispatch_parameters` |
+| B8-2 | `policy_dispatch_parameters` values `next_occurrence_unix_ms`, `window_end_unix_ms` (existing keys), `last_in_window`, `last_daily_slot` (booleans), `daily_remaining` (integer, new keys); `run_parameters` becomes optional | new optional values of a pending entry (no shape change) (policy 59) | BT-B8 | BT-B8 | on every selected dispatch of an opted-in task, with or without remedies (Q12), merged into the remedy plan's reason or alone; each only when known: the least next occurrence of the clocks `clock_slot_view` counts (none without such a clock, an interval under one hour, or when none occurs again), the end of the instance's activity window at the evaluation (the intent's profile), whether that next occurrence is absent or at or after the window end, the fewer of the task's (accounting group) and the activity profile's remaining daily runs after this dispatch as the host's admission preview counts them, and whether that is 0; a schedule with no known value adds nothing |
+| B8-3 | `CandidateEligibility::EligibleWithDailyRemaining { daily_remaining }` | policy interface (memory only) (policy 59) | BT-B8 | BT-B8 | the host's eligibility closure answers it for an admissible candidate (positions 1 to 9 passed), from the admission preview's `PolicyBudgetReceipt` (`task_daily_limit − task_daily_used`, `activity_daily_limit − activity_daily_used`, the fewer); the evaluator treats it as `Eligible` |
+| B8-4 | `RunParameters::with_dispatch_schedule(values, admitted_at_unix_ms)` and the overlay's `session.dispatch.schedule.<key>` records | kernel interface (memory only, not persisted) (host 129) | BT-B8 | BT-B8 | after the parameter records: the key under `session.dispatch.schedule.` (D7), the value typed (`timestamp_ms` for the two instants, `boolean`, `integer`), the other members as B15R-1's, observed at the dispatch's admission; a run without a dispatch (direct, Lab, the Lab's single-step evaluations) and a dispatch without the values hold none, so a policy that reads one meets an unknown fact and its `on_unknown` decides; a reason without `run_parameters` leaves the parameters at their declared defaults (B15R-2 unchanged) |
+| B8-5 | keys `last_in_window`, `last_daily_slot` (boolean), `daily_remaining` (integer) | new key-table entries (no shape) (policy 59) | BT-B8 | BT-B8 | review of the code stays `pending`; no new code, vocabulary token, location or configuration key |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

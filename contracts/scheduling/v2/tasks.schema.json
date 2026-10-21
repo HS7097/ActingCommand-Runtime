@@ -155,7 +155,8 @@
           "maxItems": 8,
           "uniqueItems": true,
           "items": { "$ref": "./common.schema.json#/$defs/identifier" }
-        }
+        },
+        "dispatch_parameters": { "type": "boolean" }
       },
       "additionalProperties": false
     }
