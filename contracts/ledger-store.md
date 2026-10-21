@@ -171,7 +171,8 @@ configuration inventory) and every other lifecycle phase (`vendor_stdio_close`
 included, so it reaches storage before the owner journal records the close).
 The task family's `task.selection_evaluated` (Workflow #308, the decision record a
 select step appends before its input; see `selection-graph.md`, section Records) is
-durable as well.
+durable as well, as are ledger revision 4's `task.effect_refused` and
+`task.operation_capped` (Workflow #411 B train, `v012-register.md` §1.153).
 
 WAL recovery keeps the longest valid prefix ending at a commit, so power loss can
 drop only a suffix of observational commits; sequence continuity and the hash

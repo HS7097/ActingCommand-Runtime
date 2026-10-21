@@ -3564,6 +3564,14 @@
           "description": "Task effect completed.",
           "category": "info"
         },
+        "task.effect_refused": {
+          "description": "Task effect refused.",
+          "category": "info"
+        },
+        "task.operation_capped": {
+          "description": "Task operation capped.",
+          "category": "info"
+        },
         "task.step_finished": {
           "description": "Task step finished.",
           "category": "info"
@@ -4069,6 +4077,9 @@
         },
         "low_confidence": {
           "description": "The read's confidence is missing or below the OCR target's minimum_confidence."
+        },
+        "no_agreement": {
+          "description": "The frames of a declared agreement did not read one value often enough."
         }
       }
     },

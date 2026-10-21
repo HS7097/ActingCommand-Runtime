@@ -830,6 +830,7 @@ impl RuntimeContainedTask<'_> {
         self.record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_label: package_label.clone(),
             role,
+            package_version: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
         // M-373 §8.3: one effective configuration record per distinct layer package.
@@ -898,6 +899,7 @@ impl RuntimeContainedTask<'_> {
             final_page,
             executed_steps: outcome.executed_steps,
             role,
+            package_version: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
         Ok(outcome.executed_steps)

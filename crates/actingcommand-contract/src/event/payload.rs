@@ -4113,6 +4113,39 @@ pub enum RecognizedTargetRole {
     Forbidden,
 }
 
+/// Ledger revision 4 (Workflow #411 A44, register §1.153 LR-8): the most candidate pages one
+/// `task.recognition_completed` fact lists in `candidate_scores`; `omitted` counts the rest.
+pub const TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT: usize = 16;
+/// Ledger revision 4 (register §1.153 LR-7): the highest per-run cap of an operation
+/// (Workflow #411 B16 part 1, `max_runs: 1..=1000`).
+const MAX_TASK_OPERATION_RUNS: u32 = 1_000;
+
+/// Ledger revision 4 (Workflow #411 A44, register §1.153 LR-8; writer: a later A44 slice): the
+/// recognised frame's verdict on one candidate page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecognitionCandidateScore {
+    pub page_id: String,
+    /// The page matched.
+    pub passed: bool,
+    /// The highest target score evaluated on the page, in milli.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_score_milli: Option<u32>,
+    /// The first target that failed: why the page did not match. Only on a page that did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_failed_target_id: Option<String>,
+}
+
+/// Ledger revision 4 (register §1.153 LR-8): one entry per candidate page in candidate order,
+/// at most [`TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT`]; `omitted` is how many candidate pages
+/// after them have no entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecognitionCandidateScores {
+    pub pages: Vec<RecognitionCandidateScore>,
+    pub omitted: u32,
+}
+
 /// One target of the evaluated page; `region` is in frame pixels.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4156,6 +4189,10 @@ pub enum TaskSemanticFact {
         frame_height: u32,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<RecognizedTarget>,
+        /// Ledger revision 4 (Workflow #411 A44, register §1.153 LR-8): each candidate page's
+        /// verdict; absent, the fact keeps its revision-3 bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        candidate_scores: Option<Box<RecognitionCandidateScores>>,
     },
     /// Workflow #373 NAV-3b: the entry's pages (one page, or the 1..=16 pages of an entry page
     /// set) and the one page of them the frame matched.
@@ -4175,6 +4212,10 @@ pub enum TaskSemanticFact {
         /// Workflow #373 NAV-6: the layer's part; absent on the layers that have none yet.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<TaskEntryRecoveryRole>,
+        /// Ledger revision 4 (Workflow #411 B26, register §1.153 LR-9; writer: a later B26
+        /// slice): the version the layer's package declares, never a digest (option 丙).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_version: Option<String>,
     },
     EntryRecoveryCompleted {
         package_label: String,
@@ -4182,6 +4223,9 @@ pub enum TaskSemanticFact {
         executed_steps: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<TaskEntryRecoveryRole>,
+        /// Ledger revision 4 (register §1.153 LR-9): as on the layer's admission.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_version: Option<String>,
     },
     /// The entry recovery package failed; `outcome` is its failure (ledger revision 3).
     /// Workflow #336 PKG-S2: `package_label` is absent only when the layer's package was refused
@@ -4270,6 +4314,25 @@ pub enum TaskSemanticFact {
     EffectCompleted {
         step_index: u32,
         operation_label: String,
+    },
+    /// Ledger revision 4 (Workflow #411 B18, register §1.153 LR-3; writer BT-B18): the refusal
+    /// marker `target_id` passed after the step's effect completed, so that effect is not done.
+    /// It follows the step's `task.effect_completed` and is the step's only one; the designated
+    /// effect derivation leaves the refused effect out of the disposition.
+    EffectRefused {
+        step_index: u32,
+        operation_label: String,
+        target_id: String,
+    },
+    /// Ledger revision 4 (Workflow #411 B16 part 1, register §1.153 LR-7; writer BT-KEY): the
+    /// operation reached its per-run cap after `count` dispatches of at most `limit_count`;
+    /// `outcome` is `contained_task_operation_runs_capped`. A run records at most one.
+    OperationCapped {
+        step_index: u32,
+        operation_label: String,
+        count: u32,
+        limit_count: u32,
+        outcome: Outcome,
     },
     StepFinished {
         step_index: u32,
@@ -5121,7 +5184,7 @@ fn redact_sensitive_input(action: &mut InputAction) {
 impl TaskSemanticFact {
     /// The outcome the fact carries (ledger revision 3): a failed or cancelled terminal's
     /// failure, a refused second terminal, a failed entry recovery or fail-closed entry, or a
-    /// select step's failed confirmation.
+    /// select step's failed confirmation; from ledger revision 4 also a capped operation's.
     pub fn outcome(&self) -> Option<&Outcome> {
         match self {
             Self::EntryRecoveryFailed { outcome, .. }
@@ -5129,6 +5192,7 @@ impl TaskSemanticFact {
             | Self::InterruptHandled { outcome, .. }
             | Self::InterruptAmbiguous { outcome, .. }
             | Self::NavigationLocated { outcome, .. }
+            | Self::OperationCapped { outcome, .. }
             | Self::NavigationWarning { outcome } => Some(outcome),
             Self::EntryTargetDisposition { outcome, .. }
             | Self::TerminalCommitted { outcome, .. } => outcome.as_ref(),
@@ -5152,6 +5216,7 @@ impl TaskSemanticFact {
             | Self::InterruptHandled { outcome, .. }
             | Self::InterruptAmbiguous { outcome, .. }
             | Self::NavigationLocated { outcome, .. }
+            | Self::OperationCapped { outcome, .. }
             | Self::NavigationWarning { outcome } => {
                 *outcome = outcome.codes_only();
             }
@@ -5236,6 +5301,8 @@ impl TaskSemanticFact {
             Self::SelectionEvaluated { .. } => EventType::TaskSelectionEvaluated,
             Self::EffectIntent { .. } => EventType::TaskEffectIntent,
             Self::EffectCompleted { .. } => EventType::TaskEffectCompleted,
+            Self::EffectRefused { .. } => EventType::TaskEffectRefused,
+            Self::OperationCapped { .. } => EventType::TaskOperationCapped,
             Self::StepFinished { .. } => EventType::TaskStepFinished,
             Self::Finalizing { .. } => EventType::TaskTerminalIntent,
             Self::TerminalCommitted {
@@ -5290,6 +5357,7 @@ impl TaskSemanticFact {
                 frame_width,
                 frame_height,
                 targets,
+                candidate_scores,
             } => {
                 validate_task_candidate_pages(candidate_pages)?;
                 validate_task_frame_dimensions(*frame_width, *frame_height)?;
@@ -5303,6 +5371,13 @@ impl TaskSemanticFact {
                     }
                 }
                 validate_task_recognition_targets(targets, *frame_width, *frame_height)?;
+                if let Some(scores) = candidate_scores {
+                    validate_task_candidate_scores(
+                        scores,
+                        candidate_pages,
+                        matched_page.as_deref(),
+                    )?;
+                }
             }
             Self::EntryRecognition {
                 required_pages,
@@ -5337,16 +5412,27 @@ impl TaskSemanticFact {
                 }
             }
             Self::EntryRecoveryDecision { .. } => {}
-            Self::EntryRecoveryPackageAdmitted { package_label, .. } => {
+            Self::EntryRecoveryPackageAdmitted {
+                package_label,
+                package_version,
+                ..
+            } => {
                 validate_task_semantic_label(package_label, "package_label")?;
+                if let Some(version) = package_version {
+                    validate_task_semantic_label(version, "package_version")?;
+                }
             }
             Self::EntryRecoveryCompleted {
                 package_label,
                 final_page,
                 executed_steps,
+                package_version,
                 ..
             } => {
                 validate_task_semantic_label(package_label, "package_label")?;
+                if let Some(version) = package_version {
+                    validate_task_semantic_label(version, "package_version")?;
+                }
                 validate_task_semantic_label(final_page, "final_page")?;
                 if *executed_steps > 1_000 {
                     return Err(SanitizationError::new(
@@ -5490,6 +5576,31 @@ impl TaskSemanticFact {
                 validate_task_step(*step_index)?;
                 validate_task_semantic_label(operation_label, "operation_label")?;
             }
+            Self::EffectRefused {
+                step_index,
+                operation_label,
+                target_id,
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+                validate_task_semantic_label(target_id, "target_id")?;
+            }
+            // Workflow #411 B16 part 1 (b-plan §2.11): an operation's cap is 1..=1000 runs.
+            Self::OperationCapped {
+                step_index,
+                operation_label,
+                limit_count,
+                ..
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+                if !(1..=MAX_TASK_OPERATION_RUNS).contains(limit_count) {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskSemanticPayload,
+                        "limit_count",
+                    ));
+                }
+            }
             Self::StepFinished {
                 step_index,
                 operation_label,
@@ -5603,6 +5714,66 @@ impl TaskSemanticFact {
             _ => None,
         }
     }
+
+    /// Ledger revision 4 (Workflow #411 B train, register §1.153 LR-3, LR-7): whether the fact
+    /// has rules that tie it to its run's earlier facts ([`Self::validate_in_run`]).
+    pub fn has_run_rules(&self) -> bool {
+        matches!(
+            self,
+            Self::EffectRefused { .. } | Self::OperationCapped { .. }
+        )
+    }
+
+    /// Ledger revision 4 (register §1.153 LR-3, LR-7): the fact against its run's earlier
+    /// facts, `earlier` in record order. An `effect_refused` follows an `effect_completed` of
+    /// its step (the same step index and operation) and is the step's only one
+    /// (`invalid_task_effect` at `effect_refused`); a run records at most one
+    /// `operation_capped` (`invalid_task_semantic_payload` at `operation_capped`). Every other
+    /// fact passes.
+    pub fn validate_in_run<'a>(
+        &self,
+        earlier: impl IntoIterator<Item = &'a TaskSemanticFact>,
+    ) -> Result<(), SanitizationError> {
+        match self {
+            Self::EffectRefused {
+                step_index,
+                operation_label,
+                ..
+            } => {
+                let refused = || {
+                    SanitizationError::new(SanitizationCode::InvalidTaskEffect, "effect_refused")
+                };
+                let mut completed = false;
+                for fact in earlier {
+                    match fact {
+                        Self::EffectCompleted {
+                            step_index: index,
+                            operation_label: label,
+                        } if index == step_index && label == operation_label => completed = true,
+                        Self::EffectRefused {
+                            step_index: index, ..
+                        } if index == step_index => return Err(refused()),
+                        _ => {}
+                    }
+                }
+                if completed { Ok(()) } else { Err(refused()) }
+            }
+            Self::OperationCapped { .. } => {
+                if earlier
+                    .into_iter()
+                    .any(|fact| matches!(fact, Self::OperationCapped { .. }))
+                {
+                    Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskSemanticPayload,
+                        "operation_capped",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 impl PayloadDetail for TaskSemanticPayload {
@@ -5684,6 +5855,47 @@ fn validate_task_recognition_targets(
                 SanitizationCode::InvalidTaskRecognitionTargets,
                 "region",
             ));
+        }
+    }
+    Ok(())
+}
+
+/// Ledger revision 4 (register §1.153 LR-8): one entry per candidate page in candidate order, the
+/// first [`TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT`] of them, and `omitted` the rest; the matched
+/// page's entry passed and, without a matched page, none did; a failed target only on a page
+/// that did not pass.
+fn validate_task_candidate_scores(
+    scores: &RecognitionCandidateScores,
+    candidate_pages: &[String],
+    matched_page: Option<&str>,
+) -> Result<(), SanitizationError> {
+    let invalid = || {
+        SanitizationError::new(
+            SanitizationCode::InvalidTaskRecognitionResult,
+            "candidate_scores",
+        )
+    };
+    let listed = candidate_pages
+        .len()
+        .min(TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT);
+    if scores.pages.len() != listed
+        || usize::try_from(scores.omitted).ok() != Some(candidate_pages.len() - listed)
+    {
+        return Err(invalid());
+    }
+    for (score, page) in scores.pages.iter().zip(candidate_pages) {
+        if score.page_id != *page {
+            return Err(invalid());
+        }
+        let matched = matched_page == Some(page.as_str());
+        if (matched && !score.passed)
+            || (matched_page.is_none() && score.passed)
+            || (score.passed && score.first_failed_target_id.is_some())
+        {
+            return Err(invalid());
+        }
+        if let Some(target) = &score.first_failed_target_id {
+            validate_task_semantic_label(target, "candidate_scores")?;
         }
     }
     Ok(())

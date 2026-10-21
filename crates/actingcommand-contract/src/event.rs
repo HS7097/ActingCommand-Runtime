@@ -135,6 +135,8 @@ use std::fmt;
 // Interface anchor `ledger` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older readers can no longer read this.
 // Ledger revision 3 (Workflow #378 A3): records carry `outcome`, severity is the category.
+// Ledger revision 4 (Workflow #411 B train, contracts/v012-register.md §1.153): additive members
+// and two task record types; the schema string and SQLite format 2 stay.
 pub const GLOBAL_EVENT_SCHEMA_VERSION: &str = "actingcommand.event.v3";
 
 /// The complete identity of an existing semantic run fact. This read-only value is neither
@@ -395,6 +397,14 @@ pub enum EventType {
     TaskEffectIntent,
     #[serde(rename = "task.effect_completed")]
     TaskEffectCompleted,
+    /// Ledger revision 4 (Workflow #411 B18, register §1.153 LR-3; writer BT-B18): a refusal
+    /// marker showed after the step's effect completed, so the effect counts as not done.
+    #[serde(rename = "task.effect_refused")]
+    TaskEffectRefused,
+    /// Ledger revision 4 (Workflow #411 B16 part 1, register §1.153 LR-7; writer BT-KEY): an
+    /// operation reached its per-run cap.
+    #[serde(rename = "task.operation_capped")]
+    TaskOperationCapped,
     #[serde(rename = "task.step_finished")]
     TaskStepFinished,
     #[serde(rename = "task.completed")]
@@ -615,6 +625,8 @@ impl EventType {
             | Self::TaskSelectionEvaluated
             | Self::TaskEffectIntent
             | Self::TaskEffectCompleted
+            | Self::TaskEffectRefused
+            | Self::TaskOperationCapped
             | Self::TaskStepFinished
             | Self::TaskCompleted
             | Self::TaskFailed

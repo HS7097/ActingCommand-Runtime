@@ -442,6 +442,7 @@ fn recognition(page: &str, targets: &[(&str, bool, Option<Rect>)]) -> TaskSemant
                 region: *region,
             })
             .collect(),
+        candidate_scores: None,
     }
 }
 

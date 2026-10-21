@@ -103,12 +103,14 @@ fn run_facts() -> Vec<TaskSemanticFact> {
             TaskSemanticFact::EntryRecoveryPackageAdmitted {
                 package_label: EDGE_PACKAGE.to_owned(),
                 role: None,
+                package_version: None,
             },
             TaskSemanticFact::EntryRecoveryCompleted {
                 package_label: EDGE_PACKAGE.to_owned(),
                 final_page: page.to_owned(),
                 executed_steps: 1,
                 role: None,
+                package_version: None,
             },
             TaskSemanticFact::EntryRecognition {
                 phase: TaskEntryRecognitionPhase::NavigationTarget,

@@ -133,6 +133,7 @@ fn s2_t1_a_run_s_package_facts_read_back_by_label_and_a_digest_member_is_not_rea
             TaskSemanticFact::EntryRecoveryPackageAdmitted {
                 package_label: "neutral.layer".to_owned(),
                 role: None,
+                package_version: None,
             },
         ),
         run.append(
@@ -218,6 +219,7 @@ fn s2_t2_each_layer_names_its_package_and_recovery_pairs_by_label() {
         TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_label: outer.to_owned(),
             role: None,
+            package_version: None,
         },
     );
     run.append(
@@ -226,6 +228,7 @@ fn s2_t2_each_layer_names_its_package_and_recovery_pairs_by_label() {
         TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_label: inner.to_owned(),
             role: None,
+            package_version: None,
         },
     );
     let failure = run.append(
@@ -245,6 +248,7 @@ fn s2_t2_each_layer_names_its_package_and_recovery_pairs_by_label() {
             final_page: "home".to_owned(),
             executed_steps: 1,
             role: None,
+            package_version: None,
         },
     );
     let recovered = run.append(
@@ -255,6 +259,7 @@ fn s2_t2_each_layer_names_its_package_and_recovery_pairs_by_label() {
             final_page: "home".to_owned(),
             executed_steps: 1,
             role: None,
+            package_version: None,
         },
     );
 

@@ -234,8 +234,9 @@ impl TaskSelectionMarkExpectation {
 ///
 /// A confirmation is attempted exactly when the outcome is `selected` and nothing blocks it
 /// (path rule 7). `matched` and `mismatched` carry the confirmation frame's candidate-set hash
-/// and belong to a single-frame select (v1); `identity_matched`, `identity_unconfirmed` and
-/// `reposition_failed` belong to a scan select (v2).
+/// and belong to a single-frame select (v1), as do `decision_matched` and `decision_mismatched`
+/// (ledger revision 4, a select that confirms by its decision); `identity_matched`,
+/// `identity_unconfirmed` and `reposition_failed` belong to a scan select (v2).
 ///
 /// A multi select (M-357b §5.1) adds six variants. `pick_matched`, `mark_unconfirmed` and
 /// `tap_marked` appear only inside `multi_select.picks`, `pick_moved` only as a v1 pick's
@@ -322,6 +323,26 @@ pub enum TaskSelectionConfirmation {
     /// checked (M-357b §4.5).
     PicksStopped {
         count: u32,
+    },
+    /// Ledger revision 4 (Workflow #411 B4, register §1.153 LR-1; writer BT-B4): a single-frame
+    /// select that confirms by its decision (`select.confirm: decision`) projected and decided
+    /// F2 again, and F2's decision hash `decision_sha256` (over the actionable candidates' id,
+    /// click box and status, the selected ids and the outcome key) equals the decision's.
+    /// `candidate_set_sha256` is F2's candidate-set hash, which may differ from the evaluated
+    /// projection's; `projection` is F2's projection, as for `matched`.
+    DecisionMatched {
+        candidate_set_sha256: String,
+        decision_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        projection: Option<Box<CandidateProjection>>,
+    },
+    /// Ledger revision 4 (register §1.153 LR-1): as `decision_matched`, but F2's decision hash
+    /// differs from the decision's.
+    DecisionMismatched {
+        candidate_set_sha256: String,
+        decision_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        projection: Option<Box<CandidateProjection>>,
     },
 }
 
@@ -616,6 +637,14 @@ impl TaskSelectionRecord {
         | TaskSelectionConfirmation::Mismatched {
             projection: Some(projection),
             ..
+        }
+        | TaskSelectionConfirmation::DecisionMatched {
+            projection: Some(projection),
+            ..
+        }
+        | TaskSelectionConfirmation::DecisionMismatched {
+            projection: Some(projection),
+            ..
         } = &self.confirmation
         {
             projection
@@ -748,10 +777,10 @@ impl TaskSelectionRecord {
     }
 
     /// Path rule 7: a confirmation is attempted ⇔ R selected and B none. A v2 record never
-    /// records `matched` or `mismatched`, a v1 record never one of the three scan variants, and
-    /// `identity_matched` names the selected candidate. A single select never records a
-    /// multi-select variant or a tap check's reposition stage; a multi select's confirmation
-    /// follows its picks (M-357b M2–M5).
+    /// records `matched`, `mismatched` or a decision variant (ledger revision 4), a v1 record
+    /// never one of the three scan variants, and `identity_matched` names the selected
+    /// candidate. A single select never records a multi-select variant or a tap check's
+    /// reposition stage; a multi select's confirmation follows its picks (M-357b M2–M5).
     fn validate_confirmation(
         &self,
         blocking_none: bool,
@@ -772,6 +801,10 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::CaptureFailed { .. } => Ok(()),
             TaskSelectionConfirmation::Matched { .. }
             | TaskSelectionConfirmation::Mismatched { .. } => self.validate_frame_comparison(),
+            TaskSelectionConfirmation::DecisionMatched { .. }
+            | TaskSelectionConfirmation::DecisionMismatched { .. } => {
+                self.validate_decision_comparison()
+            }
             TaskSelectionConfirmation::IdentityMatched { candidate_id, .. } => {
                 if !scan || self.selected.first() != Some(candidate_id) {
                     return Err(invalid("confirmation"));
@@ -1013,6 +1046,8 @@ impl TaskSelectionRecord {
             }
             TaskSelectionConfirmation::Matched { .. }
             | TaskSelectionConfirmation::Mismatched { .. }
+            | TaskSelectionConfirmation::DecisionMatched { .. }
+            | TaskSelectionConfirmation::DecisionMismatched { .. }
             | TaskSelectionConfirmation::TapMarked { .. }
             | TaskSelectionConfirmation::PicksConfirmed { .. }
             | TaskSelectionConfirmation::PicksStopped { .. } => false,
@@ -1039,6 +1074,8 @@ impl TaskSelectionRecord {
             TaskSelectionConfirmation::NotAttempted
             | TaskSelectionConfirmation::Matched { .. }
             | TaskSelectionConfirmation::Mismatched { .. }
+            | TaskSelectionConfirmation::DecisionMatched { .. }
+            | TaskSelectionConfirmation::DecisionMismatched { .. }
             | TaskSelectionConfirmation::IdentityMatched { .. }
             | TaskSelectionConfirmation::IdentityUnconfirmed { .. }
             | TaskSelectionConfirmation::PickMatched { .. }
@@ -1106,6 +1143,45 @@ impl TaskSelectionRecord {
         };
         if !compares {
             return Err(invalid("confirmation"));
+        }
+        Ok(())
+    }
+
+    /// Ledger revision 4 (Workflow #411 B4, register §1.153 LR-1): a `decision_matched` or
+    /// `decision_mismatched` belongs to a single-frame select (a v1 projection; a multi select
+    /// keeps its own picks, M-357b), carries two hashes of 64 lowercase hex digits, and an
+    /// embedded F2 projection that seals its candidate-set hash. The decision hash is the
+    /// writer's (b-plan §2.4); a reader checks its grammar and never recomputes it.
+    fn validate_decision_comparison(&self) -> Result<(), SanitizationError> {
+        if !matches!(self.projection, TaskSelectionProjection::V1(_)) {
+            return Err(invalid("confirmation"));
+        }
+        let (candidate_set_sha256, decision_sha256, projection) = match &self.confirmation {
+            TaskSelectionConfirmation::DecisionMatched {
+                candidate_set_sha256,
+                decision_sha256,
+                projection,
+            }
+            | TaskSelectionConfirmation::DecisionMismatched {
+                candidate_set_sha256,
+                decision_sha256,
+                projection,
+            } => (candidate_set_sha256, decision_sha256, projection),
+            _ => return Err(invalid("confirmation")),
+        };
+        if !is_candidate_set_sha256(candidate_set_sha256)
+            || !is_candidate_set_sha256(decision_sha256)
+        {
+            return Err(invalid("confirmation"));
+        }
+        if let Some(projection) = projection {
+            projection.validate_decoded().map_err(projection_error)?;
+            if projection.candidate_set_sha256() != candidate_set_sha256
+                || projection.layout_id() != self.layout_id
+                || projection.page_id() != self.page_id
+            {
+                return Err(invalid("confirmation"));
+            }
         }
         Ok(())
     }

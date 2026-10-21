@@ -2144,6 +2144,7 @@ fn task_semantic_payload_preserves_recognition_basis_and_v3_schema() {
                 frame_width: 1280,
                 frame_height: 720,
                 targets: Vec::new(),
+                candidate_scores: None,
             },
             AuditInput::new(),
         )
@@ -2430,6 +2431,7 @@ fn task_semantic_payload_rejects_invalid_facts() {
             frame_width: 1280,
             frame_height: 720,
             targets: Vec::new(),
+            candidate_scores: None,
         },
         TaskSemanticFact::TerminalCommitted {
             task_result: TaskOutcome::Success,
@@ -4008,6 +4010,10 @@ fn every_event_type_resolves_its_catalog_category() {
         assert_eq!(event_type.category(), category, "{token}");
     }
 }
+
+// Workflow #411 BT-LR: ledger revision 4's shapes, readers and validation (register §1.153).
+#[path = "gate_411_bt_lr.rs"]
+mod gate_411_bt_lr;
 
 #[test]
 fn record_severity_is_the_outcome_category_else_the_event_type_category() {

@@ -440,6 +440,7 @@ fn observational(ids: &IdentifierIssuer, owner: OwnerEpoch) -> Vec<Row> {
                     frame_width: 1280,
                     frame_height: 720,
                     targets: Vec::new(),
+                    candidate_scores: None,
                 },
                 AuditInput::new(),
             )

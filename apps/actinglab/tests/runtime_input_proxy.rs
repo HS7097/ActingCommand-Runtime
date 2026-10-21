@@ -4260,6 +4260,8 @@ fn task_fact_kind(fact: &TaskSemanticFact) -> &'static str {
         TaskSemanticFact::SelectionEvaluated { .. } => "selection_evaluated",
         TaskSemanticFact::EffectIntent { .. } => "effect_intent",
         TaskSemanticFact::EffectCompleted { .. } => "effect_completed",
+        TaskSemanticFact::EffectRefused { .. } => "effect_refused",
+        TaskSemanticFact::OperationCapped { .. } => "operation_capped",
         TaskSemanticFact::StepFinished { .. } => "step_finished",
         TaskSemanticFact::Finalizing { .. } => "finalizing",
         TaskSemanticFact::TerminalCommitted { .. } => "terminal_committed",

@@ -130,6 +130,7 @@ impl From<ValueTestProblem> for ValueProblem {
             ValueTestProblem::OutOfRange => Self::OutOfRange,
             ValueTestProblem::RegionUnresolved => Self::RegionUnresolved,
             ValueTestProblem::LowConfidence => Self::LowConfidence,
+            ValueTestProblem::NoAgreement => Self::NoAgreement,
         }
     }
 }

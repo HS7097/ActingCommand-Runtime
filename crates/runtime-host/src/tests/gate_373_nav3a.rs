@@ -338,6 +338,7 @@ impl Run {
                 TaskSemanticFact::EntryRecoveryPackageAdmitted {
                     package_label,
                     role,
+                    ..
                 } => Some((package_label.clone(), *role)),
                 _ => None,
             })

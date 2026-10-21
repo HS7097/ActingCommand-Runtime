@@ -390,7 +390,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     );
     assert!(facts.iter().any(|fact| matches!(
         fact,
-        TaskSemanticFact::EntryRecoveryPackageAdmitted { package_label, role: None }
+        TaskSemanticFact::EntryRecoveryPackageAdmitted { package_label, role: None, .. }
             if package_label == "fixture01.return-home"
     )));
     assert!(facts.iter().any(|fact| matches!(
@@ -400,6 +400,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
             final_page,
             executed_steps: 1,
             role: None,
+            ..
         } if package_label == "fixture01.return-home" && final_page == "fixture01/home"
     )));
     assert!(facts.iter().any(|fact| matches!(
