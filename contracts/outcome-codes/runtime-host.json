@@ -424,6 +424,29 @@
       "common_causes": "A folder or a read-only file where kept/.moves should be; access to the kept folder denied.",
       "handling": "Remove whatever occupies kept/.moves so that a file can be written there; the next move writes the counter again."
     },
+    "frame_retention_lock_remove_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "io_kind": "optional",
+        "os_error": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 A29: the frame cleaner removed a due frame or moved an error or Lab frame into its kept folder, but could not delete the frame's use lock artifact-use-locks/<name>.lock in the state root. The frame counts as removed or moved; the lock file stays. Reported once per object per process.",
+      "common_causes": "Another program (a backup or indexing tool, security software) holds the lock file open without delete sharing; access to the state root's artifact-use-locks folder denied.",
+      "handling": "Close or exclude whatever holds the state root's artifact-use-locks folder; a lock file left there is harmless."
+    },
     "emulator_restart_stop_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -28497,6 +28520,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Stage of a frame retention warning: removing a frame failed."
+    },
+    "frame_retention_lock_remove": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Stage of a frame retention warning (Workflow #411 A29): deleting the use lock of a removed or moved frame failed."
     },
     "runtime_monitor_restore": {
       "owner": "runtime-host",

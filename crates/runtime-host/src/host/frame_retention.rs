@@ -123,7 +123,8 @@ impl super::HostShared {
     }
 
     /// One Warning `runtime.failed` with system links for a frame the cleaner could not remove
-    /// or move; its outcome carries the frame, the kept folder and the OS error as values.
+    /// or move, or whose use lock it could not delete (Workflow #411 A29); its outcome carries
+    /// the frame, the kept folder and the OS error as values.
     fn record_frame_retention_warning(
         &self,
         warning: &FrameRetentionWarning,
@@ -352,6 +353,7 @@ impl FrameRetentionWarning {
         match self.code {
             HostCode::FrameRetentionMoveFailed => HostLocation::FrameRetentionMove,
             HostCode::FrameRetentionCounterFailed => HostLocation::FrameRetentionCounter,
+            HostCode::FrameRetentionLockRemoveFailed => HostLocation::FrameRetentionLockRemove,
             _ => HostLocation::FrameRetentionRemove,
         }
         .location()
@@ -552,6 +554,8 @@ impl FrameRetention {
                     &folder.file_name,
                 ),
             };
+            // Workflow #411 A29: a removed or moved frame whose use lock could not be deleted.
+            let lock_left = result.as_ref().ok().and_then(|outcome| outcome.lock_left());
             match result {
                 Ok(FrameFileOutcome::Absent) => {
                     if self.completed_sweeps == 0 {
@@ -561,13 +565,13 @@ impl FrameRetention {
                     }
                     self.handled.insert(id);
                 }
-                Ok(FrameFileOutcome::Removed) => {
+                Ok(FrameFileOutcome::Removed | FrameFileOutcome::RemovedLockLeft(_)) => {
                     actions += 1;
                     report.deleted += 1;
                     report.deleted_bytes = report.deleted_bytes.saturating_add(bytes);
                     self.handled.insert(id);
                 }
-                Ok(FrameFileOutcome::Moved) => {
+                Ok(FrameFileOutcome::Moved | FrameFileOutcome::MovedLockLeft(_)) => {
                     actions += 1;
                     report.moved += 1;
                     report.moved_bytes = report.moved_bytes.saturating_add(bytes);
@@ -609,6 +613,17 @@ impl FrameRetention {
                         error.raw_os_error(),
                     ))?;
                 }
+            }
+            // The frame counts as removed or moved; only its lock stays, reported once (the
+            // frame is handled, so it is never visited again by this process).
+            if let Some(left) = lock_left {
+                warn(&FrameRetentionWarning::new(
+                    HostCode::FrameRetentionLockRemoveFailed,
+                    Some(id),
+                    None,
+                    Some(left.io_kind),
+                    left.os_error,
+                ))?;
             }
         }
         if !sweep.actions.is_empty() {

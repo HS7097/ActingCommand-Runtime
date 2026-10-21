@@ -139,7 +139,7 @@ fn advance_to_recheck(host: &RuntimeHost, clock: &ManualRuntimeClock, before_ms:
 }
 
 /// The outcomes of the `runtime.failed` records whose code is `code`, in ledger order.
-fn failed_outcomes<'a>(events: &'a [PersistedEvent], code: HostCode) -> Vec<&'a Outcome> {
+fn failed_outcomes(events: &[PersistedEvent], code: HostCode) -> Vec<&Outcome> {
     events
         .iter()
         .filter_map(|event| match event.payload() {
