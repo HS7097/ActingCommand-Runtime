@@ -23,7 +23,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   register §1.113): revision 6 adds the optional remedy keys; a revision-5 file is still read,
 ///   so [5, 6]. Workflow #406 T12 (register §1.136): revision 7 adds the optional `touch`
 ///   section; a revision-5 or revision-6 file is still read, so [5, 7]. #411 A38 (register
-///   §1.146): revision 8 adds the optional `recovery_ladder.fence_recheck` member; revisions 5
+///   §1.148): revision 8 adds the optional `recovery_ladder.fence_recheck` member; revisions 5
 ///   to 7 are still read, so [5, 8].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
