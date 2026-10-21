@@ -29489,6 +29489,29 @@
       "common_causes": "A folder or a read-only file where kept/.moves should be; access to the kept folder denied.",
       "handling": "Remove whatever occupies kept/.moves so that a file can be written there; the next move writes the counter again."
     },
+    "frame_retention_lock_remove_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "artifact_id": "required",
+        "io_kind": "optional",
+        "os_error": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 A29: the frame cleaner removed a due frame or moved an error or Lab frame into its kept folder, but could not delete the frame's use lock artifact-use-locks/<name>.lock in the state root. The frame counts as removed or moved; the lock file stays. Reported once per object per process.",
+      "common_causes": "Another program (a backup or indexing tool, security software) holds the lock file open without delete sharing; access to the state root's artifact-use-locks folder denied.",
+      "handling": "Close or exclude whatever holds the state root's artifact-use-locks folder; a lock file left there is harmless."
+    },
     "frame_retention_move_failed": {
       "category": "warning",
       "ladder_class": "none",
@@ -58995,9 +59018,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package) but the declarations do not name it for recognition. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
-      "common_causes": "A reading pack of the standard package is not declared in maintenance.json.",
-      "handling": "Declare the standard package's one recognition maintenance package with the use recognition, and merge other reading packs into it."
+      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package), and the declarations name no recognition package for its server (variant). Workflow #411 A32: only the one package a server declares counts, so the other qualifying packs of a server that declares one raise nothing. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
+      "common_causes": "A server of the standard package declares no recognition maintenance package in maintenance.json.",
+      "handling": "Declare, for each server, its one recognition maintenance package with the use recognition."
     },
     "recognition_regression_evidence_invalid": {
       "category": "error",
@@ -84785,6 +84808,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Stage of a frame retention warning: writing the move counter failed."
+    },
+    "frame_retention_lock_remove": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Stage of a frame retention warning (Workflow #411 A29): deleting the use lock of a removed or moved frame failed."
     },
     "frame_retention_move": {
       "owner": "runtime-host",

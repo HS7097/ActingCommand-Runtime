@@ -2596,6 +2596,23 @@ contract.
 | B2-1 | selection-policy document predicate `integer_compare {left, op, right, mul?, add?}`, `op` one of `eq`, `ne`, `lt`, `le`, `gt`, `ge` | new predicate (resource file format, not a ledger shape) (policy 58) | BT-B2 | resource side | holds when `left op right × mul + add`, compared in 128 bits as a value test compares; both sides declared `integer` values (`type_mismatch` otherwise); `mul` 1..=1000000, default 1, and `add` within ±(2^53 − 1), default 0 (`integer_out_of_range` otherwise); an unknown side leaves the predicate unknown and the gate's `on_unknown` decides, the left side's reason first; the collect option lists each unknown side; the upper bound compares the sides' ranges; a document that leaves `mul` and `add` out is serialised without them, and one without `integer_compare` keeps its canonical bytes, `policy_sha256` and `input_sha256` (so the scheduling consumer's `catalog_hash` too); a reader before B2 refuses it (unknown predicate kind); `package` revision 6 |
 | B2-2 | candidate layout feature `ocr_integer`: `integer.part` (`current` or `capacity`) | new optional member (resource file format, not a ledger shape) (exec 116) | BT-B2 | resource side | only with `format` `current_capacity` (otherwise the layout is refused, `InvalidValue`, at parse and pack load); `capacity` reads the right-hand part of `a/b`, `current` and no `part` the left-hand part as before; the range applies to the part read, so a scan's field domain stays `min..=max`; the derived pack copies `integer` as declared; a reader before B2 refuses it (`integer` denies unknown members); `package` revision 6 |
 
+### 1.147 Slice BT-LAB (0.12.x B train, group G0): a page-set entry of offline `observe`'s `actions` carries a normalised `input`; Lab arrival samples start on a fixed period (#411 A13 B part, A18 option ④; plan-B §2.16, §2.17)
+
+A13 B part: offline `observe` lists an operation whose `to` is a page set in `actions` with
+`input` next to its declared `click`, built from its generated navigation row as an edge's
+`input` is; A13's A part (§1.104 A13-1) left `actions` unchanged.
+[resource-declarations.md](resource-declarations.md) (the navigation paragraph of Workflow #390
+LAB-2) is the contract. A18 option ④ (Alice's ruling on item 14, question 13; Lab B-3, #412,
+answers A18 fully later): online `do`'s arrival samples start on a fixed period instead of one
+fixed sleep after each evaluation; [contained-lab-operation.md](contained-lab-operation.md) (the
+arrival paragraph) is the contract. No persisted ledger shape, no wire, key, configuration or
+interface revision (§6), no outcome code. Gates: exec key 117, host key 128.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L13-1 | offline `observe`'s `actions` entry of an operation whose `to` is a page set: `{id, task_id, from_page, to_pages, click, input}` | new member of a Lab answer entry (operation output, no persisted record) (exec 117) | BT-LAB | BT-LAB | `input` from the operation's row in the generated navigation (same `id` and `from_page`, a page set), built as an edge entry's `input` (`semantic_input_json` of the navigation reader's click; no coordinate resolved on the frame), so it equals the `input` of an edge with the same click; `null` for a segmented or path drag, as an edge's, and when the navigation holds no such row (a package compiled from source always holds one); `click` stays the task file's declared click; every other entry unchanged |
+| L18-1 | the wait between two arrival samples of online `do` | rule (no shape change) (host 128) | BT-LAB | BT-LAB | a sample starts `LAB_ARRIVAL_INTERVAL_MS` (500 ms) after the previous one started: after its capture and evaluation the request waits on the Runtime clock (`kernel_pause`, as the transaction's own interval) for the rest of the 500 ms, none when they took longer, never past the deadline; was a 500 ms sleep after each evaluation, bounded by the deadline; the 20-sample budget, the deadline, `timed_out` and `elapsed_ms` are unchanged |
+
 ### 1.150 Slice BT-B8 (0.12.x): the scheduler passes a run its schedule values (#411 B8; plan `rd-1021/train-0129/b-plan/plan.md` §2.8, Q12, D7; [remedies.md](remedies.md) section 4)
 
 B8 adds its typed values to the channel B15 R5 opened (§1.115). **No persisted ledger shape**:

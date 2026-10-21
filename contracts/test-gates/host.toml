@@ -1527,6 +1527,15 @@ tests = [
 ]
 incident = ["#406"]
 
+# #411 A18 option ④ (slice BT-LAB, v0.12.x; register §1.147 L18-1; plan §2.17, test row BT-L18 T1; no persisted ledger shape, no outcome code; the key continues the host numbering): online do's arrival samples start every 500 ms, start to start: after a sample's capture and evaluation the request waits on the Runtime clock for what is left of the 500 ms since that sample started (none when they took longer), never past the deadline; with capture and evaluation taking 300 ms on the manual Runtime clock the samples start 500 ms apart
+[[gate]]
+key = "128"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_bt_l18::a18_arrival_samples_start_500_ms_apart_when_their_evaluation_takes_300_ms",
+]
+incident = ["#411 A18"]
+
 # Workflow #411 B8 (plan rd-1021/train-0129 §2.8, §5.3 BT-B8 T2; contracts/remedies.md section 4, contracts/instance-fact-store.md "Run parameters"; register §1.150; no persisted ledger shape): a policy run of a task that opts in holds, in the select step's snapshot, its dispatch's five schedule values as session.dispatch.schedule.<key> (typed) and chooses by them; a direct run holds none, so the package policy's on_unknown (abort_evaluation) decides and the select record is unknown with fact_missing
 [[gate]]
 key = "129"

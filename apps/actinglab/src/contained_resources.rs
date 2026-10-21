@@ -40,7 +40,8 @@ pub(super) struct PageOperation {
 /// (`to_pages`, Workflow #390 LAB-2) but no route passes it, and observe lists it from the task
 /// file with its pages as the page set names them and its declared click. #411 A13: its element
 /// of the page projection comes from the generated navigation row
-/// ([`ObservationResources::navigation`]).
+/// ([`ObservationResources::navigation`]), and (A13 B part) so does the `input` observe lists
+/// next to its declared click.
 pub(super) struct MultiDestinationOperation {
     pub id: String,
     pub task_id: String,
