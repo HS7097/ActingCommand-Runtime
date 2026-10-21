@@ -9,7 +9,7 @@ use crate::{
 use actingcommand_contract::page_projection::{Geometry, Privacy};
 use actingcommand_contract::{
     ContainedLabOperationResult, EffectDisposition, EventType, LabArrivalStatus, LabError,
-    LabOperationSelection, LabOperationStage, LabResult, TerminalEvent,
+    LabOperationStage, LabResult, TerminalEvent,
 };
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition_pack::PackRect;
@@ -328,13 +328,6 @@ pub fn restore_authoring_draft(
         let mut record_source = record_provenance(input);
         // LR-10 (#412 B-3, decision Q12): a declared operation ran as the kernel runs it; restore
         // does not turn it into a page-graph operation, so it is a gap and contributes none.
-        if matches!(prepared.selection, LabOperationSelection::Operation { .. }) {
-            let record_gaps = ["lab_declared_operation"];
-            record_source["gaps"] = json!(record_gaps);
-            gaps.push(json!({"request_id":prepared.request_id,"codes":record_gaps}));
-            provenance.push(record_source);
-            continue;
-        }
         let mut record_gaps = Vec::new();
         if prepared.after.is_some()
             && (record
