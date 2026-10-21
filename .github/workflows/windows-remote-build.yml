@@ -48,6 +48,10 @@ concurrency:
 
 jobs:
   build:
+    # Red-proof drafts (#411 CI-RED): a draft pull request whose head branch contains `-red-` is
+    # never merged and its build is never used, so the job is skipped there. Every other pull
+    # request, the stable push, dispatches and the release call build as before.
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && contains(github.event.pull_request.head.ref, '-red-')) }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:

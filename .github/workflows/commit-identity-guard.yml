@@ -10,9 +10,19 @@ on:
 permissions:
   contents: read
 
+# One group per pull request, so a new push to a pull request cancels that branch's older run;
+# every push to main or stable gets its own group (the run id) and is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify-author-identity:
     name: verify commit author identity
+    # Red-proof drafts (#411 CI-RED): a draft pull request whose head branch contains `-red-`
+    # carries the main pull request's commits plus one mutation and is never merged, so the
+    # check is skipped there. Every other pull request and every push run it as before.
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && contains(github.event.pull_request.head.ref, '-red-')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
