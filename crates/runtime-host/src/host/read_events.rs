@@ -473,7 +473,7 @@ impl HostShared {
             let resource_fence = resource_fences.get(&instance_id).cloned();
             // Workflow #390 九处-1: the emulator as the Runtime last read it.
             let emulator_state = instance.emulator_state;
-            let ladder_busy_hold = ladder_busy_holds.get(&instance_id).copied();
+            let _ladder_busy_hold = ladder_busy_holds.get(&instance_id).copied();
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -504,7 +504,6 @@ impl HostShared {
                     status
                         .with_resource_fence(resource_fence)
                         .with_emulator_state(emulator_state)
-                        .with_ladder_busy_hold(ladder_busy_hold)
                 })
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
