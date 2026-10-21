@@ -1012,7 +1012,9 @@ impl FatalState {
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
-        let first = current.is_none().then(|| error.daemon_outcome());
+        // A51 red proof 5 (do not merge): nothing reported at the latch; actingd writes the
+        // condition only after the close, as before A51.
+        let first: Option<Outcome> = None;
         if current.is_none() {
             *current = Some(error);
         }
