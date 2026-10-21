@@ -2856,6 +2856,22 @@ No ledger change. Gates: host keys 144 to 147 (148 to 151 unused).
 | A50-7 | `prepare_recovery_connection` (a ladder's readiness wait, the application restart rung's preparation, a fence's recheck) reads the emulator status first, as A48's self-check does | rule (no shape change; A48's codes and records) (host 147) | A50 | A50 | a running emulator the Runtime holds stopped or on another port is recognized again (port bound, `runtime.instance_bound`, the ADB baseline awaited, `device.connected`) before the opens; a stopped one is `instance_not_running`; a failed read is `emulator_state_read_failed` and the check goes on from the Runtime's own state |
 | A50-8 | the client's receipt wait of a restart: 745 s (was 445 s) | client constant (no shape) | A50 | A50 | 445 s plus the largest `restart_exit_wait_ms` (300 s); start and stop keep 235 s |
 
+### 1.167 Slice BT-B16b (0.12.x): a task's reserves gate it; of two tasks that fit alone but not together the higher score runs first (#411 B16 part 2; plan `rd-1021/train-0129/b-plan/plan.md` §2.12; [scheduling/README.md](scheduling/README.md), "Task Reserves")
+
+**No persisted ledger shape**: the new reason travels in the existing decisions and dispatch reason
+chains (`PolicyReasonRecord` is `#[serde(transparent)]` over `Outcome`), and a dispatch decision
+record lists a held candidate with it as `why` (§1.145). The catalog member is V2 only and
+optional; a catalog without it keeps its bytes and its hash. No package format change, no
+configuration key, vocabulary token or location. Several instances that share one pool belong to
+Workflow #367 (multi-dispatch) and are not handled. Gates: policy keys 64 to 66 (67 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B16b-1 | `TaskSpec.reserves: Option<Vec<ReserveSpec>>`, `ReserveSpec { pool_id, at_least }` (V2 `tasks.schema.json` `reserves`, 1 to 128 entries) | catalog member (V2 only; absent serializes as nothing) (policy 64) | BT-B16b | BT-B16b | `at_least` in `0..=capacity` of the named pool (`limit_exceeded` at `at_least`); an undeclared pool `dangling_reference` and a pool named twice `duplicate_id` at the entry's `pool_id`; an empty or longer list `limit_exceeded` at the member; a V1 document that names it is refused `unknown_field` at `/tasks/<i>/reserves` |
+| B16b-2 | the selection document's candidate fields `task.consumes.<pool>`, `task.after.<pool>`, `task.reserve_gap.<pool>` (integers) | evaluator interface (memory only) (policy 66) | BT-B16b | BT-B16b | per reserved pool of the candidate's task: its declared consumption (the sum of its `consumes` amounts for the pool, 0 without one), `after = projected − consumes` (the pool's projection at the evaluation, as `resource_projection` reads it) and `after − at_least`; the last two only while the pool's amount is known; a catalog with reserves runs the score stage even without a document, value, offset or target, and every candidate without reserves keeps its rank, reasons and fields |
+| B16b-3 | `resource_reserve_insufficient` (info, `none`; `pool_id`, `reserve_at_least`; optional `amount_after`, `task_id`) | new code of existing decision reasons (policy 64, 65) | BT-B16b | BT-B16b | the last reason of a candidate the reserve gate holds this round, its decision deferred: on each instance the ranked candidates are taken by `effective_milli`, the higher first, and a candidate with reserves is held when for one reserved pool the amount is unknown (no `amount_after`), or `after < at_least`, or `after` less the consumption of other tasks dispatched on the instance at or after the pool's latest observation is below it (`task_id` the first such task), or that less the consumption of a candidate taken before it and not held is below it (`task_id` that candidate's task); a regenerating pool wakes the evaluation at its next projection step; review `pending` |
+| B16b-4 | keys `pool_id` (name), `reserve_at_least`, `amount_after` (integers) | new key-table entries (no shape) (policy 64) | BT-B16b | BT-B16b | used by `resource_reserve_insufficient` only |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

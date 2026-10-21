@@ -2054,6 +2054,18 @@
     "layer_outcome_key": {
       "type": "name",
       "description": "The outcome key of the scheduling outcome mapping a prerequisite layer's run ended on, as the layer's package declares it (Workflow #411 B39)."
+    },
+    "pool_id": {
+      "type": "name",
+      "description": "The id of a resource pool of the scheduling catalog (Workflow #411 B16)."
+    },
+    "reserve_at_least": {
+      "type": "integer",
+      "description": "The least amount, in the pool's real units, that a task's catalog reserve says the pool must still hold after a run of the task (Workflow #411 B16)."
+    },
+    "amount_after": {
+      "type": "integer",
+      "description": "The amount, in the pool's real units, that the pool would hold after a run of the task: its projected amount less the task's declared consumption and less any consumption that goes first; negative when the consumption exceeds the amount (Workflow #411 B16)."
     }
   },
   "vocabularies": {
