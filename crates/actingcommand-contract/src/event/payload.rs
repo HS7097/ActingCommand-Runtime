@@ -5735,19 +5735,7 @@ impl TaskSemanticFact {
                 }
                 if completed { Ok(()) } else { Err(refused()) }
             }
-            Self::OperationCapped { .. } => {
-                if earlier
-                    .into_iter()
-                    .any(|fact| matches!(fact, Self::OperationCapped { .. }))
-                {
-                    Err(SanitizationError::new(
-                        SanitizationCode::InvalidTaskSemanticPayload,
-                        "operation_capped",
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
+            Self::OperationCapped { .. } => Ok(()),
             _ => Ok(()),
         }
     }
