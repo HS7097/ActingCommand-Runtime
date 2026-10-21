@@ -2856,6 +2856,22 @@ No ledger change. Gates: host keys 144 to 147 (148 to 151 unused).
 | A50-7 | `prepare_recovery_connection` (a ladder's readiness wait, the application restart rung's preparation, a fence's recheck) reads the emulator status first, as A48's self-check does | rule (no shape change; A48's codes and records) (host 147) | A50 | A50 | a running emulator the Runtime holds stopped or on another port is recognized again (port bound, `runtime.instance_bound`, the ADB baseline awaited, `device.connected`) before the opens; a stopped one is `instance_not_running`; a failed read is `emulator_state_read_failed` and the check goes on from the Runtime's own state |
 | A50-8 | the client's receipt wait of a restart: 745 s (was 445 s) | client constant (no shape) | A50 | A50 | 445 s plus the largest `restart_exit_wait_ms` (300 s); start and stop keep 235 s |
 
+### 1.170 Slice A35-S5 (0.12.x): the status shows a recovery ladder that holds instead of climbing: what it waits for, how long it has held, its limit (#411 A35; design `rd-1021/train-0129/a35-design.md` §5.1 S5; coordinator decision Q7 of 2026-10-21)
+
+A hold may keep an instance for up to an hour (A35-S1's default `busy.outcome.max_wait_ms`), and
+until now nothing but the records said so. While a ladder's hold waits, `Status` (and so
+`actingctl status`) and the instance's `ac_overview` row show it.
+[emulator-control.md](emulator-control.md) ("Busy ends") is the contract,
+[runtime-interface.md](runtime-interface.md) (`status`, `ac_overview`) the reads'. **Persisted
+shapes:** none. The member is the ladder's state in memory, read at the status read; no record,
+no configuration key, no code. Gate: host key 410 (wave-3 row 11 listed apps 95 and 96, which stay
+unused: the status block is built in the host crate, and the frame gives a family the row does
+not list the numbers `300 + 10 × row`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A35S5-1 | `RuntimeInstanceStatus.ladder_busy_hold` (`InstanceLadderBusyHold {kind, held_ms, limit_ms}`, `deny_unknown_fields`; `kind` `LadderBusyHoldKind`: `busy_outcome`, `screen_changing`) | new optional member of the status projection (wire, served under runtime-client 2; absent unless a hold waits); the same type is the status inside the runtime state observation of `command.validated`, which no writer records since AO-4q (as F5 and A38-1) (host 410) | A35-S5 | A35-S5 | present exactly while the ladder's hold waits (`show_ladder_busy_hold` around the hold's wait), absent while the return-home rung runs again; `held_ms` is the time since the climb's first hold of the kind began, on the Runtime clock at the read; `limit_ms` the kind's configured `max_wait_ms` (the ladder's admission snapshot); A35-S1's busy hold shows `busy_outcome`; `screen_changing` is the vocabulary's second value, for A35-S2's changing-screen hold once it passes it (the coordinator re-checks it when A35-S2 has merged); `ac_overview` shows the status member verbatim as the row's `ladder_busy_hold` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
