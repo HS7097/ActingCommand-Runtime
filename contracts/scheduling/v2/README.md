@@ -87,6 +87,18 @@ without the member. A V1 document that names it is refused as an unknown
 member. A task without `dispatch_parameters` serializes, and hashes, exactly as
 before.
 
+A task may carry `reserves` (Workflow #411 B16 part 2), V2 only: 1 to 128
+entries `{"pool_id": …, "at_least": N}`, the least amount, in the pool's real
+units, that each named pool must still hold after a run of the task. The
+evaluator does not admit a candidate that would leave a pool below it
+(`resource_reserve_insufficient`, `../README.md`, "Task Reserves"). A pool the
+catalog does not declare is `dangling_reference` and a pool named twice is
+`duplicate_id`, each at the entry's `pool_id`; N above the pool's `capacity` is
+`limit_exceeded` at `at_least`; an empty list or more than 128 entries is
+`limit_exceeded` at the member; a V1 document that names it is refused as an
+unknown member. A task without `reserves` serializes, and hashes, exactly as
+before.
+
 A predicate may be `{"kind":"fact_time_reached","scope":…,"fact_key":…,"offset_ms":N,"max_age_ms":M}`
 (Workflow #405), V2 only: true once the `timestamp_ms` value of the fact plus N
 has come, false with its reason before that or when the fact gives no time

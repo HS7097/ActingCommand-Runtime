@@ -363,8 +363,83 @@ fn validate_tasks(
                 descriptor,
             ));
         }
+        validate_reserves(
+            task,
+            &path,
+            map,
+            &bundle.pools.pools,
+            descriptor,
+            diagnostics,
+        );
     }
     validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
+}
+
+/// Workflow #411 B16 part 2: a task's `reserves`. It is a V2 member (a V1 document that names it
+/// is refused as an unknown member) of 1..=`MAX_EFFECTS_PER_TASK` entries; each names a pool of
+/// the catalog (`dangling_reference`) once (`duplicate_id`), and its `at_least` is at most that
+/// pool's capacity (`limit_exceeded`).
+fn validate_reserves(
+    task: &TaskSpec,
+    path: &str,
+    map: &SourceMap,
+    pools: &[PoolSpec],
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(reserves) = &task.reserves else {
+        return;
+    };
+    let path = format!("{path}/reserves");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            path,
+            "reserves requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if reserves.is_empty() || reserves.len() > MAX_EFFECTS_PER_TASK {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            &path,
+            format!("reserves must list 1..={MAX_EFFECTS_PER_TASK} pools"),
+            descriptor,
+        ));
+    }
+    let mut listed = HashSet::new();
+    for (index, reserve) in reserves.iter().enumerate() {
+        let item_path = format!("{path}/{index}");
+        let Some(pool) = pools.iter().find(|pool| pool.id == reserve.pool_id) else {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::DanglingReference,
+                format!("{item_path}/pool_id"),
+                format!("referenced pool `{}` does not exist", reserve.pool_id),
+                descriptor,
+            ));
+            continue;
+        };
+        if !listed.insert(reserve.pool_id.as_str()) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::DuplicateId,
+                format!("{item_path}/pool_id"),
+                format!("pool `{}` is reserved twice", reserve.pool_id),
+                descriptor,
+            ));
+        }
+        if reserve.at_least > pool.capacity {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("{item_path}/at_least"),
+                format!(
+                    "a reserve of {} exceeds pool capacity {}",
+                    reserve.at_least, pool.capacity
+                ),
+                descriptor,
+            ));
+        }
+    }
 }
 
 /// Workflow #372 K5: each task's `continues_from`. It is a V2 member (a V1 document that names

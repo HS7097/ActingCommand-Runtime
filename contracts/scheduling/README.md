@@ -330,7 +330,9 @@ ranking, the evaluator runs an optional score stage:
 - With a `selection` document, every eligible (task, instance) pair becomes one
   selection candidate `<task_id>@<instance_id>` whose fields are `task.priority`,
   `task.strategic_weight_milli`, `task.urgency_milli`, `task.aging_ms`,
-  `task.load_cost_milli` (integers), `instance.affinity` (boolean), and every
+  `task.load_cost_milli` (integers), `instance.affinity` (boolean), for a task
+  with `reserves` the integers `task.consumes.<pool>`, `task.after.<pool>` and
+  `task.reserve_gap.<pool>` of each reserved pool ("Task Reserves" below), and every
   scalar fact the instance can see (its own, its server's and its game's scope,
   the most specific scope per key; timestamps and durations become integer
   milliseconds; record lists are unusable). A fact field carries only a record
@@ -654,6 +656,52 @@ A chain step that hands over on its page goes first (coordinator triage Q15; reg
   successor's dispatch decision record lists them with that `why`, and the not-run explanation
   (`ac_schedule`) shows it as their `why`. Without a resting page every evaluation is the one
   before B41.
+
+## Task Reserves (Workflow #411 B16 part 2)
+
+A V2 task may declare `reserves: [{pool_id, at_least}]`: the least amount, in the pool's real
+units, that each named pool must still hold after a run of the task ([v2/README.md](v2/README.md)
+gives the member's rules). The reserve is a hard gate, never a score penalty (register §1.167).
+
+- **What a run leaves.** In the score stage ("Score-Assisted Priority" above) each candidate of
+  such a task gets, per reserved pool, `after = projected − consumes`: the pool's projected
+  amount at the evaluation (as the `resource_projection` predicate reads it) less the task's
+  declared consumption of the pool (the sum of its `consumes` amounts for it; 0 when it declares
+  none). The selection document reads them as the integer fields `task.consumes.<pool>`,
+  `task.after.<pool>` and `task.reserve_gap.<pool>` (`after − at_least`); the last two only
+  while the pool's amount is known. A catalog with reserves runs the score stage even without a
+  selection document, value, offset or resource target; every candidate without reserves keeps
+  its rank, its reasons and its fields.
+- **The gate.** After the stage, on each instance, the ranked candidates are taken by
+  `effective_milli`, the higher first (a tie in allocation order). A candidate with reserves is
+  not admitted this round when, for one of its reserved pools:
+  1. the pool's amount is unknown (no usable reading or snapshot), so the reserve cannot be shown
+     to hold;
+  2. `after < at_least`;
+  3. `after`, less the declared consumption of every other task whose latest dispatch on the
+     instance is at or after the pool's latest observation (a reading that does not show that
+     run yet), is below `at_least`;
+  4. that amount, less the declared consumption of a candidate of the instance taken before it
+     and not held, is below `at_least`: of two tasks that each fit alone but not together, the
+     higher `effective_milli` runs this round, whatever their priorities.
+
+  Its decision is deferred with `resource_reserve_insufficient` (info, `ladder_class` none;
+  `pool_id`, `reserve_at_least`; `amount_after`, what the pool would hold after it, absent in
+  case 1; `task_id` in cases 3 and 4, the task whose consumption goes first), and it takes no
+  part in the allocation. A regenerating pool wakes the evaluation at its next projection step;
+  otherwise the next reading (FactsChanged) brings the next evaluation. A candidate without
+  reserves is never held, and its consumption still counts against the others.
+- **Scored again after the refresh.** The other task of such a pair waits while the pool's
+  latest reading predates the winner's dispatch (case 3), and is scored again on the first
+  reading or adjustment taken since. A pool that is never read again after the winner keeps it
+  waiting; a package that consumes a reserved pool should read or adjust it at its end
+  ([resource-readings.md](../resource-readings.md)).
+- **Several instances on one pool.** The gate counts the candidates and dispatches of the
+  candidate's own instance only. Instances that share one pool are Workflow #367's
+  multi-dispatch and are not handled here.
+- **Records.** No record is new: the reason travels in the decisions and, when a dispatch
+  decision record lists a held candidate, as its `why`. Without `reserves` every evaluation is
+  the one before B16 part 2, and the catalog keeps its bytes and its hash.
 
 ## Dispatch Decision Record
 
