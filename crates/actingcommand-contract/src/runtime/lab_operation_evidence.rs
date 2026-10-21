@@ -867,7 +867,7 @@ fn verify_declared_operation(
             .count()
     };
     let outcomes = [EventType::InputCommitted, EventType::InputFailed];
-    if count(events, &[EventType::InputIntent]) != intents
+    if count(events, &[EventType::InputIntent]) != 1
         || count(action_events, &[EventType::InputIntent]) != intents
         || count(events, &outcomes) != inputs
         || count(action_events, &outcomes) != inputs
