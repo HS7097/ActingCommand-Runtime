@@ -2312,7 +2312,7 @@ impl RecognitionEvaluator {
             &target.id,
             target.region,
             target.expected,
-            target.alternatives.as_deref(),
+            None,
             target.max_distance,
         )?;
         let passed = color.distance <= color.max_distance;
