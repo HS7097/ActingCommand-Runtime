@@ -812,22 +812,30 @@ code.
 
 Workflow #390 EXEC-2 (forced-compromises mapping, rows E-05 and E-06). An operation of a
 page-graph task may declare an observation window, and a click may declare an input recheck.
-An older task schema refuses either with `UnconsumedField`; a `linear_steps` task refuses either
-at admission (`contained_task_linear_invalid`, `reason=observation_window` or
-`reason=input_recheck`, [Linear steps](linear-steps.md)). A task that declares neither runs as
-before.
+An older task schema refuses either with `UnconsumedField`; a `linear_steps` task refuses an
+observation window at admission (`contained_task_linear_invalid`, `reason=observation_window`,
+[Linear steps](linear-steps.md)). Workflow #411 B12: a click of a `linear_steps` task may declare
+an input recheck of any kind, and the kind `still_frames` waits for a still screen. A task that
+declares neither runs as before.
 
 ```json
 "observation_window": {"until": "window_end", "window_ms": 60000}
 "observation_window": {"until": "stable", "window_ms": 10000, "frames": 3}
 "input_recheck": {"kind": "fresh_frame"}
 "input_recheck": {"kind": "stable_frames", "frames": 3}
+"input_recheck": {"kind": "still_frames", "frames": 3}
+"input_recheck": {"kind": "still_frames", "frames": 3,
+                  "region": {"x": 0, "y": 600, "width": 1280, "height": 120},
+                  "max_distance_milli": 500}
 ```
 
 | Member | Declaration gate | Runtime admission (`contained_task_operation_invalid`) |
 | --- | --- | --- |
 | `observation_window` | `until` is `window_end` (members `until`, `window_ms`) or `stable` (members `until`, `window_ms`, `frames`); every member is required (`MissingField`), `window_ms` and `frames` are unsigned integers (`InvalidType`), another member is `UnknownField` and another `until` `InvalidValue` | `window_ms` from 1 to 60,000; `frames` from 2 to 32, and `frames - 1` confirmation intervals (`expect_after.interval_ms`, else the control capture interval) fit in `window_ms`; the operation declares a destination (`to` or `expect_after`) |
-| `input_recheck` | `kind` is `fresh_frame` (member `kind`) or `stable_frames` (members `kind`, `frames`), with the same refusals | the operation's effect is a click (not an `application` effect, not a select step, which confirms its candidate on a fresh frame already); `frames` from 2 to 32, and `frames - 1` control capture intervals fit in the control step timeout |
+| `input_recheck` | `kind` is `fresh_frame` (member `kind`), `stable_frames` (members `kind`, `frames`) or `still_frames` (members `kind`, `frames`, and the optional `region` and `max_distance_milli`), with the same refusals; `region` is an object of the integers `x`, `y`, `width` and `height` (`InvalidType`, another member `UnknownField`) and `max_distance_milli` an unsigned integer (`InvalidType`) | the operation's effect is a click (not an `application` effect, not a select step, which confirms its candidate on a fresh frame already); `frames` from 2 to 32, and `frames - 1` control capture intervals fit in the control step timeout; a `region` has a positive size and lies in the coordinate space |
+
+`still_frames` joins `package` revision 6, which is declared at the end of the 0.12.x B train;
+until then it, and an input recheck under `linear_steps`, are admitted by code.
 
 The post-input delay keeps its bound of 5,000 ms.
 
@@ -866,6 +874,19 @@ SR-1).
   the start of the wait, ends first, the input is refused with
   `contained_task_input_stability_unconfirmed` (`pack_operation_id`, and `timeout_ms` the step
   timeout), through the operation's failure decision.
+- `still_frames` (Workflow #411 B12): as `stable_frames`, and each frame is also compared with the
+  frame before it, whatever that frame showed, by the Runtime's one frame-change measure
+  ([color-digest.md](color-digest.md), section Frame change) over `region` (the whole frame when
+  absent). A frame whose change exceeds `max_distance_milli` (the measure's default threshold,
+  1500, when absent) and on which the guard passes starts the count again at one. The input is
+  drawn from and bound to the last frame. When the control step timeout ends first, the input is
+  refused with `contained_task_input_still_unconfirmed` (`pack_operation_id`, and `timeout_ms`
+  the step timeout), through the operation's failure decision.
+
+Under `linear_steps` (Workflow #411 B12) the recheck follows the guard on the step's frame as on
+the page-graph path, and each fresh frame is evaluated against the step's page only, as a linear
+task observes; a refusal of the recheck ends the run with its code, as a guard refusal does there,
+with no input and no retry ([Linear steps](linear-steps.md)).
 
 Each fresh frame is an observation before the input: it feeds no collector, and a sampling
 timeout of it takes the step's observe-only retries ([Business identity, consensus and catalog

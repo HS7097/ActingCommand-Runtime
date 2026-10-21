@@ -68,7 +68,7 @@ one operation is at fault; an existing check keeps its existing code.
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
 | each operation's effect is `click` or `application`; no `select` or `on_error` | `operation_effect` |
-| no operation declares an `observation_window` or an `input_recheck`, page-graph declarations (Workflow #390 EXEC-2, `resource-declarations.md`) | the field name |
+| no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
@@ -145,7 +145,13 @@ operation dispatched, with `step_index` `d` the number of operations dispatched 
 
 1. The run progress becomes `d + 1`, and `StepStarted` names the operation and the step's page.
 2. The guard is evaluated on the frame on which the step's page passed; a refusal is the
-   existing `contained_task_guard_refused`, with no input and no retry.
+   existing `contained_task_guard_refused`, with no input and no retry. Workflow #411 B12: a
+   click that declares an `input_recheck` is then checked again on fresh frames as on the
+   page-graph path (`resource-declarations.md`, section Task schema `0.9` observation windows and
+   input rechecks), each evaluated against the step's page only; a refusal of the recheck
+   (`contained_task_guard_refused`, `contained_task_page_unknown`,
+   `contained_task_input_stability_unconfirmed` or `contained_task_input_still_unconfirmed`)
+   ends the run the same way, and the input is drawn from the recheck's last frame.
 3. The effect intent, the input bound to that frame's input context and the effect completion
    follow, in the order of the page-graph path.
 4. The post-input wait is `post_delay_ms`, or the window's `min_ms` when larger.
@@ -689,6 +695,7 @@ starts the stuck-recovery ladder.
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30) | none |
+| A declared input recheck that did not hold before the step timeout (Workflow #411 B12) | `contained_task_input_stability_unconfirmed` (`stable_frames`) or `contained_task_input_still_unconfirmed` (`still_frames`), with `pack_operation_id` and `timeout_ms` | none |
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |
 | A recognition error | `contained_task_recognition_failed` | none |
 | The vision provider failed or answered invalidly (Workflow #387 D1c-G) | `contained_task_vision_provider_failed` | none |

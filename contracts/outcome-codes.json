@@ -19111,9 +19111,31 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph click declared input_recheck stable_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
+      "description": "A click declared input_recheck stable_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "contained_task_input_still_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "optional",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A click declared input_recheck still_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames, each changed by at most the threshold from the frame before it in the declared region (the frame-change measure of contracts/color-digest.md), before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
+      "common_causes": "A looping animation in the region, or a region that includes a clock, a counter or particles.",
+      "handling": "Narrow the region to the part that must stop moving, lower frames, raise max_distance_milli, or raise the control step timeout."
     },
     "contained_task_interrupt_ambiguous": {
       "category": "warning",

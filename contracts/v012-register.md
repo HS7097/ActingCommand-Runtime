@@ -2693,6 +2693,25 @@ are unchanged; the writer's Lab facts are memory only. [ledger-observer.md](ledg
 | A51-7 | the host's reads that the writer did not answer in time (`writer_response_timeout`) or stopped at its budget | rule (no shape) | A51 | A51 | relayed as request errors (`runtime_unavailable`), the request answered `failed` with the read's code, nothing latched: the status and overview head read, the fact snapshots' position reads, the event and diagnostics pages, subscriptions, the evidence, lease, contained-task, safe-reset, lifecycle, client-fact, observation-input, artifact-index and agent-context reads; the performance loop's seal skips its tick; every other read failure stays `ledger_failure` |
 | A51-8 | `RuntimeDaemonReporter` (host interface; actingd's `DaemonReporter`) | host interface (memory only) | A51 | A51 | the first fatal condition the host latches goes to actingd's daemon lines at the moment it latches, before the close; a skipped background step is a developer line |
 
+### 1.155 Slice BT-B12 (0.12.x): tap only after a still screen (#411 B12; plan `rd-1021/train-0129/b-plan/plan.md` §2.9, D8, Q7, Q9)
+
+A click's `input_recheck` gains the kind `still_frames`, and an input recheck of any kind is
+admitted under `linear_steps`. The colour-digest distance between consecutive frames is the
+Runtime's one frame-change measure ([color-digest.md](color-digest.md), section Frame change);
+later rules that ask whether the screen is still use it. **No persisted ledger shape**: a refused
+recheck ends with an existing terminal record carrying the new code; the frames are recorded as
+every capture, recognition and guard evaluation is. No location, key, vocabulary token, wire or
+configuration key is added. The new members join `package` revision 6, which BT-PK6 declares at
+the end of the B train (plan §4); until then they are admitted by code. Gate: exec key 126.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B12-1 | `input_recheck: {kind: "still_frames", frames, region?, max_distance_milli?}` | resource file format (task schema `0.9`, no version change) (exec 126) | BT-B12 | resource side | `frames` 2..=32 and `frames - 1` control capture intervals within the control step timeout; `region` `{x, y, width, height}` with a positive size inside the coordinate space; `max_distance_milli` an unsigned integer (Runtime admission, `contained_task_operation_invalid`); the declaration gate refuses a wrong shape (`resource_declaration_invalid`: `InvalidType`, `UnknownField`, `MissingField`) and an older task schema `UnconsumedField` |
+| B12-2 | the `still_frames` recheck | rule (no shape change) (exec 126) | BT-B12 | BT-B12 | fresh frames one control capture interval apart; the count restarts at 0 when the guard fails or no page passes, and at 1 when the region's frame change since the frame before exceeds the threshold (default 1500 milli, D8: the whole frame on a 16×9 grid); the input is drawn from and bound to the last frame |
+| B12-3 | `contained_task_input_still_unconfirmed` (error, `ladder_class` `pack_logic_mismatch`, values `pack_operation_id`, `timeout_ms`) | new code (pending) (exec 126) | BT-B12 | BT-B12 | the step timeout ended before the frames held and stayed still; the input is refused through the operation's failure decision (page graph) or ends the run (`linear_steps`) |
+| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does |
+| B12-5 | `frame_change_digest`, `frame_change_milli`, `FRAME_CHANGE_MAX_MILLI` (`actingcommand_recognition::color_digest`, re-exported by the execution kernel) | Runtime-internal interface (memory only) | BT-B12 | BT-B12 | the one frame-change measure: the `color_digest.v1` digest of a region (the whole frame by default) on 16×9 cells, each axis at most the region's pixels; the change is the digests' `mean_milli`, no cell excluded; still at most 1500 by default |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
