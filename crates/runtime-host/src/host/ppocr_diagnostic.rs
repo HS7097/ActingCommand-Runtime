@@ -369,7 +369,7 @@ impl HostShared {
                 // capacity refusal ends only the work that owns the archive; every other failure
                 // here (a cleanup failure joined to one of them, post-publication verification,
                 // the ledger) is fatal where it arose.
-                return Err(attach_ppocr_failure(error, reports, message));
+                return Err(attach_ppocr_failure(error.into_fatal(), reports, message));
             }
         }
         Ok(())
