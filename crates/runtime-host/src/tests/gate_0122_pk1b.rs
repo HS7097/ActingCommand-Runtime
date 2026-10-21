@@ -296,7 +296,7 @@ fn moving_home(state: &FakeState) {
         |capture: usize, _inputs: usize| -> Vec<(usize, [u8; 3])> {
             vec![(
                 1,
-                if capture % 2 == 0 {
+                if capture.is_multiple_of(2) {
                     [0, 0, 0]
                 } else {
                     [128, 128, 128]
