@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 mod gate_411_a36a;
 #[cfg(windows)]
 mod native_facts;
+#[cfg(any(windows, test))]
+mod redirect_order;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VendorStdioCapture {
@@ -33,7 +35,7 @@ pub fn vendor_stdio_session_diagnostic() -> DeviceResult<VendorStdioCapture> {
 
 #[cfg(windows)]
 pub(crate) struct VendorStdioSession {
-    lock: Option<std::sync::MutexGuard<'static, ()>>,
+    lock: Option<RedirectGateTicket>,
     guard: Option<imp::RedirectGuard>,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
@@ -41,9 +43,13 @@ pub(crate) struct VendorStdioSession {
 #[cfg(windows)]
 impl VendorStdioSession {
     pub(crate) fn start() -> DeviceResult<Self> {
-        let lock = stdio_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::start_within(VENDOR_STDIO_REDIRECT_WAIT)
+    }
+
+    /// Workflow #411 A36a: takes the process-wide redirect gate, waiting at most `bound`, before
+    /// anything is redirected; a longer wait fails with `vendor_stdio_redirect_busy`.
+    fn start_within(bound: std::time::Duration) -> DeviceResult<Self> {
+        let lock = stdio_gate().enter(bound)?;
         let guard = match imp::RedirectGuard::new() {
             Ok(guard) => guard,
             Err(error) => {
@@ -84,6 +90,12 @@ impl VendorStdioSession {
     /// resumes nothing. A redirection that fails is undone at once; the lock is released unless
     /// that undo failed too.
     pub(crate) fn resume(&mut self) -> DeviceResult<()> {
+        self.resume_within(VENDOR_STDIO_REDIRECT_WAIT)
+    }
+
+    /// Workflow #411 A36a: the lock is the process-wide redirect gate; a wait longer than `bound`
+    /// fails with `vendor_stdio_redirect_busy` and leaves the session suspended.
+    fn resume_within(&mut self, bound: std::time::Duration) -> DeviceResult<()> {
         let guard = self
             .guard
             .as_mut()
@@ -91,9 +103,7 @@ impl VendorStdioSession {
         if self.lock.is_some() {
             return guard.resume();
         }
-        let lock = stdio_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = stdio_gate().enter(bound)?;
         let result = guard.resume();
         if !guard.is_suspended() {
             self.lock = Some(lock);
@@ -204,16 +214,111 @@ fn write_vendor_stdio_diagnostic_noise() -> DeviceResult<()> {
     Ok(())
 }
 
+/// Workflow #411 A36a: how long a vendor library call waits for the process's stdio redirect
+/// while another call holds it. Longer than one vendor call holds it, shorter than the Nemu
+/// worker's default request timeout (`DEFAULT_CAPTURE_TIMEOUT`, 5 s), so the waiting call
+/// answers `vendor_stdio_redirect_busy` before its owner stops waiting for it.
 #[cfg(windows)]
-fn stdio_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+const VENDOR_STDIO_REDIRECT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Workflow #411 A36a: at most one vendor stdio redirect is active in the process, across all
+/// threads and sessions. A caller waits for the holder to leave, at most for its bound; a longer
+/// wait fails with `vendor_stdio_redirect_busy` and the caller redirects nothing.
+#[cfg(windows)]
+struct RedirectGate {
+    state: std::sync::Mutex<RedirectGateState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(windows)]
+struct RedirectGateState {
+    held: bool,
+    /// Callers waiting at the gate now.
+    waiting: usize,
+}
+
+/// The gate held by one redirect; dropping it lets the next caller in. A session whose restore
+/// is unconfirmed forgets it, so the gate stays held and later callers fail at their bound.
+#[cfg(windows)]
+struct RedirectGateTicket(&'static RedirectGate);
+
+#[cfg(windows)]
+impl Drop for RedirectGateTicket {
+    fn drop(&mut self) {
+        let mut state = self.0.lock_state();
+        state.held = false;
+        drop(state);
+        self.0.changed.notify_all();
+    }
+}
+
+#[cfg(windows)]
+impl RedirectGate {
+    const fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(RedirectGateState {
+                held: false,
+                waiting: 0,
+            }),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, RedirectGateState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn enter(&'static self, bound: std::time::Duration) -> DeviceResult<RedirectGateTicket> {
+        let mut state = self.lock_state();
+        state.waiting += 1;
+        self.changed.notify_all();
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, bound, |state| state.held)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.waiting -= 1;
+        if state.held {
+            return Err(crate::DeviceError::transient(format!(
+                "{}: another vendor library call held the process stdio redirect for more than {} ms ({} other callers waiting)",
+                crate::codes::VendorStdioCode::VendorStdioRedirectBusy.as_str(),
+                bound.as_millis(),
+                state.waiting
+            )));
+        }
+        state.held = true;
+        Ok(RedirectGateTicket(self))
+    }
+
+    #[cfg(test)]
+    fn is_held(&self) -> bool {
+        self.lock_state().held
+    }
+
+    /// Waits at most `bound` until `count` callers wait at the gate.
+    #[cfg(test)]
+    fn wait_for_waiters(&self, count: usize, bound: std::time::Duration) -> bool {
+        let state = self.lock_state();
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, bound, |state| state.waiting < count)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.waiting >= count
+    }
+}
+
+#[cfg(windows)]
+fn stdio_gate() -> &'static RedirectGate {
+    static GATE: RedirectGate = RedirectGate::new();
+    &GATE
 }
 
 #[cfg(windows)]
 mod imp {
     use super::VendorStdioCapture;
     use super::native_facts;
+    use super::redirect_order::{self, StdStream, StdTarget, TableSource};
     use crate::{
         DeviceError, DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence,
         DeviceResult,
@@ -254,8 +359,9 @@ mod imp {
         facts: VendorStdioFacts,
         saved_stdout: i32,
         saved_stderr: i32,
-        saved_stdout_handle: *mut c_void,
-        saved_stderr_handle: *mut c_void,
+        /// Workflow #411 A36a: where the restore takes each Win32 standard handle from, by
+        /// `StdStream::index`.
+        table_sources: [TableSource; 2],
         capture_stdout: i32,
         capture_stderr: i32,
         stdout_path: PathBuf,
@@ -399,23 +505,42 @@ mod imp {
                     }
                 };
 
+            let stdout_slot = get_std_handle(
+                STD_OUTPUT_HANDLE,
+                STDOUT_FD,
+                StdioReference::Stdout,
+                StdioReference::Win32Stdout,
+                &mut facts,
+            );
+            let stderr_slot = get_std_handle(
+                STD_ERROR_HANDLE,
+                STDERR_FD,
+                StdioReference::Stderr,
+                StdioReference::Win32Stderr,
+                &mut facts,
+            );
+            // Workflow #411 A36a: a slot that holds a standard descriptor's own handle is
+            // restored from that descriptor; the install closes the number it holds now.
+            let stdout_owned = unsafe { _get_osfhandle(STDOUT_FD) };
+            let stderr_owned = unsafe { _get_osfhandle(STDERR_FD) };
+            let table_sources = [
+                redirect_order::table_source(
+                    StdStream::Stdout,
+                    stdout_slot as isize,
+                    stdout_owned,
+                    stderr_owned,
+                ),
+                redirect_order::table_source(
+                    StdStream::Stderr,
+                    stderr_slot as isize,
+                    stdout_owned,
+                    stderr_owned,
+                ),
+            ];
             let mut guard = Self {
                 saved_stdout,
                 saved_stderr,
-                saved_stdout_handle: get_std_handle(
-                    STD_OUTPUT_HANDLE,
-                    STDOUT_FD,
-                    StdioReference::Stdout,
-                    StdioReference::Win32Stdout,
-                    &mut facts,
-                ),
-                saved_stderr_handle: get_std_handle(
-                    STD_ERROR_HANDLE,
-                    STDERR_FD,
-                    StdioReference::Stderr,
-                    StdioReference::Win32Stderr,
-                    &mut facts,
-                ),
+                table_sources,
                 facts,
                 capture_stdout,
                 capture_stderr,
@@ -446,44 +571,64 @@ mod imp {
             Ok(guard)
         }
 
+        /// Points the standard targets at the capture files, in `redirect_order::INSTALL_ORDER`.
         fn install(&mut self) -> DeviceResult<()> {
             flush_recorded(StdioPhase::Install, &mut self.facts)?;
-            self.stdout_crt_redirected = true;
-            dup2_fd(
-                self.capture_stdout,
-                STDOUT_FD,
-                "stdout",
-                StdioReference::CaptureStdout,
-                StdioReference::Stdout,
-                StdioPhase::Install,
-                &mut self.facts,
-            )?;
-            self.stderr_crt_redirected = true;
-            dup2_fd(
-                self.capture_stderr,
-                STDERR_FD,
-                "stderr",
-                StdioReference::CaptureStderr,
-                StdioReference::Stderr,
-                StdioPhase::Install,
-                &mut self.facts,
-            )?;
-            self.stdout_win32_redirected = true;
-            set_std_handle(
-                STD_OUTPUT_HANDLE,
-                self.capture_stdout,
-                "stdout",
-                StdioReference::CaptureStdout,
-                &mut self.facts,
-            )?;
-            self.stderr_win32_redirected = true;
-            set_std_handle(
-                STD_ERROR_HANDLE,
-                self.capture_stderr,
-                "stderr",
-                StdioReference::CaptureStderr,
-                &mut self.facts,
-            )
+            for target in redirect_order::INSTALL_ORDER {
+                match target {
+                    StdTarget::Descriptor(stream) => {
+                        *self.descriptor_redirected(stream) = true;
+                        dup2_fd(
+                            self.capture_fd(stream),
+                            stream.fd(),
+                            stream_name(stream),
+                            capture_reference(stream),
+                            standard_reference(stream),
+                            StdioPhase::Install,
+                            &mut self.facts,
+                        )?;
+                    }
+                    StdTarget::Table(stream) => {
+                        *self.table_redirected(stream) = true;
+                        set_std_handle(
+                            table_slot(stream),
+                            self.capture_fd(stream),
+                            stream_name(stream),
+                            capture_reference(stream),
+                            &mut self.facts,
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        fn capture_fd(&self, stream: StdStream) -> i32 {
+            match stream {
+                StdStream::Stdout => self.capture_stdout,
+                StdStream::Stderr => self.capture_stderr,
+            }
+        }
+
+        fn saved_fd(&self, stream: StdStream) -> i32 {
+            match stream {
+                StdStream::Stdout => self.saved_stdout,
+                StdStream::Stderr => self.saved_stderr,
+            }
+        }
+
+        fn descriptor_redirected(&mut self, stream: StdStream) -> &mut bool {
+            match stream {
+                StdStream::Stdout => &mut self.stdout_crt_redirected,
+                StdStream::Stderr => &mut self.stderr_crt_redirected,
+            }
+        }
+
+        fn table_redirected(&mut self, stream: StdStream) -> &mut bool {
+            match stream {
+                StdStream::Stdout => &mut self.stdout_win32_redirected,
+                StdStream::Stderr => &mut self.stderr_win32_redirected,
+            }
         }
 
         pub(super) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
@@ -622,6 +767,8 @@ mod imp {
 
         /// Restores the standard targets this session redirected. Workflow #191 H: it runs after
         /// every native call (`suspend`); a failure is cached as the session's restore result.
+        /// Workflow #411 A36a: in `redirect_order::RESTORE_ORDER`, the descriptors first, then
+        /// the Win32 standard handles from their `TableSource`.
         fn restore_targets(&mut self) -> DeviceResult<()> {
             if let Some(result) = &self.restore_result {
                 return result.clone();
@@ -635,107 +782,13 @@ mod imp {
                     )
                 })
                 .err();
-            for (handle, name, redirected) in [
-                (
-                    self.saved_stdout_handle,
-                    "stdout",
-                    &mut self.stdout_win32_redirected,
-                ),
-                (
-                    self.saved_stderr_handle,
-                    "stderr",
-                    &mut self.stderr_win32_redirected,
-                ),
-            ] {
-                if !*redirected {
-                    continue;
-                }
-                let which = if name == "stdout" {
-                    STD_OUTPUT_HANDLE
-                } else {
-                    STD_ERROR_HANDLE
+            for target in redirect_order::RESTORE_ORDER {
+                let restored = match target {
+                    StdTarget::Descriptor(stream) => self.restore_descriptor(stream),
+                    StdTarget::Table(stream) => self.restore_table(stream),
                 };
-                let target = if name == "stdout" {
-                    StdioReference::Win32Stdout
-                } else {
-                    StdioReference::Win32Stderr
-                };
-                let (capture_fd, capture_reference) = if name == "stdout" {
-                    (self.capture_stdout, StdioReference::CaptureStdout)
-                } else {
-                    (self.capture_stderr, StdioReference::CaptureStderr)
-                };
-                let owner = native_facts::owned_fd(capture_fd, capture_reference);
-                let before = native_facts::table(which, target, Some(&owner));
-                let returned = unsafe { SetStdHandle(which, handle) };
-                let native_error = (returned == 0).then(native_facts::win32_error);
-                let mut observation = native_facts::step(
-                    StdioPhase::Restore,
-                    StdioApi::SetStdHandle,
-                    target,
-                    Some(target),
-                    i64::from(returned),
-                    native_error,
-                );
-                observation.before = Some(before);
-                observation.after = Some(native_facts::table(which, target, None));
-                self.facts.push(observation);
-                if returned == 0 {
-                    merge_close_failure(
-                        &mut failure,
-                        resource_close_error(
-                            DeviceError::fatal(format!(
-                                "failed to restore vendor {name} Win32 handle"
-                            )),
-                            DeviceResourceKind::VendorStdio,
-                            DeviceResourceClosePhase::RestoreWin32,
-                        ),
-                    );
-                } else {
-                    *redirected = false;
-                }
-            }
-            for (saved, target, name, redirected) in [
-                (
-                    self.saved_stdout,
-                    STDOUT_FD,
-                    "stdout",
-                    &mut self.stdout_crt_redirected,
-                ),
-                (
-                    self.saved_stderr,
-                    STDERR_FD,
-                    "stderr",
-                    &mut self.stderr_crt_redirected,
-                ),
-            ] {
-                if !*redirected {
-                    continue;
-                }
-                let (source_reference, target_reference) = if target == STDOUT_FD {
-                    (StdioReference::SavedStdout, StdioReference::Stdout)
-                } else {
-                    (StdioReference::SavedStderr, StdioReference::Stderr)
-                };
-                if let Err(error) = dup2_fd(
-                    saved,
-                    target,
-                    name,
-                    source_reference,
-                    target_reference,
-                    StdioPhase::Restore,
-                    &mut self.facts,
-                ) {
-                    merge_close_failure(
-                        &mut failure,
-                        resource_close_error(
-                            error,
-                            DeviceResourceKind::FileDescriptor,
-                            DeviceResourceClosePhase::RestoreCrt,
-                        ),
-                    );
-                } else {
-                    *redirected = false;
+                if let Err(error) = restored {
+                    merge_close_failure(&mut failure, error);
                 }
             }
             if let Some(error) = failure {
@@ -743,6 +796,145 @@ mod imp {
                 return Err(error);
             }
             Ok(())
+        }
+
+        /// Retires the standard descriptor's capture duplicate and duplicates the saved original
+        /// back onto it (`dup2_fd`).
+        fn restore_descriptor(&mut self, stream: StdStream) -> DeviceResult<()> {
+            if !*self.descriptor_redirected(stream) {
+                return Ok(());
+            }
+            dup2_fd(
+                self.saved_fd(stream),
+                stream.fd(),
+                stream_name(stream),
+                saved_reference(stream),
+                standard_reference(stream),
+                StdioPhase::Restore,
+                &mut self.facts,
+            )
+            .map_err(|error| {
+                resource_close_error(
+                    error,
+                    DeviceResourceKind::FileDescriptor,
+                    DeviceResourceClosePhase::RestoreCrt,
+                )
+            })?;
+            *self.descriptor_redirected(stream) = false;
+            Ok(())
+        }
+
+        /// Workflow #411 A36a: points the Win32 standard handle back at its original object. A
+        /// slot that held a standard descriptor's own handle takes the handle that descriptor
+        /// owns after its restore, never the saved number, which the install closed and another
+        /// file may hold by now. While that descriptor is still redirected the slot keeps this
+        /// session's capture handle, which an unconfirmed session keeps open.
+        fn restore_table(&mut self, stream: StdStream) -> DeviceResult<()> {
+            if !*self.table_redirected(stream) {
+                return Ok(());
+            }
+            let which = table_slot(stream);
+            let target = table_reference(stream);
+            let name = stream_name(stream);
+            let source = self.table_sources[stream.index()];
+            let (handle, source_reference, restored_owner) = match source {
+                TableSource::Descriptor(owner) => {
+                    if *self.descriptor_redirected(owner) {
+                        return Err(resource_close_error(
+                            DeviceError::fatal(format!(
+                                "vendor {name} Win32 handle stays redirected: its {} descriptor was not restored",
+                                stream_name(owner)
+                            )),
+                            DeviceResourceKind::VendorStdio,
+                            DeviceResourceClosePhase::RestoreWin32,
+                        ));
+                    }
+                    let restored = native_facts::owned_fd(owner.fd(), standard_reference(owner));
+                    let handle = match restored.handle {
+                        crate::StdioFact::Known(handle) => handle as isize,
+                        crate::StdioFact::Unknown(_) => {
+                            return Err(resource_close_error(
+                                DeviceError::fatal(format!(
+                                    "restored vendor {} descriptor handle is unavailable",
+                                    stream_name(owner)
+                                )),
+                                DeviceResourceKind::VendorStdio,
+                                DeviceResourceClosePhase::RestoreWin32,
+                            ));
+                        }
+                    };
+                    (handle, standard_reference(owner), Some(restored))
+                }
+                TableSource::Unowned(handle) => (handle, target, None),
+            };
+            let capture =
+                native_facts::owned_fd(self.capture_fd(stream), capture_reference(stream));
+            let before = native_facts::table(which, target, Some(&capture));
+            let returned = unsafe { SetStdHandle(which, handle as *mut c_void) };
+            let native_error = (returned == 0).then(native_facts::win32_error);
+            let mut observation = native_facts::step(
+                StdioPhase::Restore,
+                StdioApi::SetStdHandle,
+                target,
+                Some(source_reference),
+                i64::from(returned),
+                native_error,
+            );
+            observation.before = Some(before);
+            observation.after = Some(native_facts::table(which, target, restored_owner.as_ref()));
+            observation.related = restored_owner;
+            self.facts.push(observation);
+            if returned == 0 {
+                return Err(resource_close_error(
+                    DeviceError::fatal(format!("failed to restore vendor {name} Win32 handle")),
+                    DeviceResourceKind::VendorStdio,
+                    DeviceResourceClosePhase::RestoreWin32,
+                ));
+            }
+            *self.table_redirected(stream) = false;
+            Ok(())
+        }
+    }
+
+    const fn table_slot(stream: StdStream) -> u32 {
+        match stream {
+            StdStream::Stdout => STD_OUTPUT_HANDLE,
+            StdStream::Stderr => STD_ERROR_HANDLE,
+        }
+    }
+
+    const fn stream_name(stream: StdStream) -> &'static str {
+        match stream {
+            StdStream::Stdout => "stdout",
+            StdStream::Stderr => "stderr",
+        }
+    }
+
+    const fn standard_reference(stream: StdStream) -> StdioReference {
+        match stream {
+            StdStream::Stdout => StdioReference::Stdout,
+            StdStream::Stderr => StdioReference::Stderr,
+        }
+    }
+
+    const fn saved_reference(stream: StdStream) -> StdioReference {
+        match stream {
+            StdStream::Stdout => StdioReference::SavedStdout,
+            StdStream::Stderr => StdioReference::SavedStderr,
+        }
+    }
+
+    const fn capture_reference(stream: StdStream) -> StdioReference {
+        match stream {
+            StdStream::Stdout => StdioReference::CaptureStdout,
+            StdStream::Stderr => StdioReference::CaptureStderr,
+        }
+    }
+
+    const fn table_reference(stream: StdStream) -> StdioReference {
+        match stream {
+            StdStream::Stdout => StdioReference::Win32Stdout,
+            StdStream::Stderr => StdioReference::Win32Stderr,
         }
     }
 

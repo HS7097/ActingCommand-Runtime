@@ -35,8 +35,8 @@ life. The session starts redirected and holding the lock (the library load is it
 first call); each later native call (`nemu_connect`, `nemu_get_display_id`,
 `nemu_capture_display`, the finger down / up events, `nemu_disconnect`) resumes the
 redirection (takes the lock, installs the capture targets again), makes the call,
-reads its snapshot and suspends (flushes, restores FD1/2 and the Win32 standard
-handles to the saved originals and releases the lock); the saved and capture
+reads its snapshot and suspends (flushes, restores FD1/2 from the saved descriptors,
+then the Win32 standard handles, and releases the lock); the saved and capture
 descriptors, the capture files and the library stay with the session. Vendor output
 during a call is captured as before; output outside a call, and the daemon's own
 output, reaches the daemon's real standard streams. A resume that cannot redirect
@@ -45,6 +45,20 @@ undoes its partial install at once and skips the call, except for the release ca
 A failed restore is unconfirmed, keeps the lock and is the session's cached failure,
 reported again by its close. Library unload stays after the stdio close, outside any
 redirection, as before.
+
+Workflow #411 A36a: the process-level stdio lock is one gate for the whole process, so
+at most one vendor stdio redirect is active at a time, across all threads and
+sessions. A start or resume waits for the holder at most 3 s; a longer wait fails with
+`vendor_stdio_redirect_busy`, redirects nothing and skips the call (the release calls
+are made anyway, as above). A lock kept by an unconfirmed restore therefore makes later
+calls fail at that bound instead of waiting for ever. The restore never writes a saved
+handle number back: FD1/2 are restored first, and a Win32 standard handle that held a
+standard descriptor's own handle at acquisition then takes the handle that descriptor
+owns after its restore, a new reference to the same original object. The install's
+`_dup2` closed the number the slot held, and any file opened in the process may hold
+that number by then. A slot that held any other value gets that value back. While the
+descriptor a slot depends on is not restored, the slot keeps the session's capture
+handle and the restore fails Unconfirmed.
 
 The stdio owner retains a bounded private context for its existing acquisition,
 redirection, restoration, descriptor close and path unlink operations. The fixed
