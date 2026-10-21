@@ -9515,7 +9515,6 @@ impl TaskOperation {
                     self.id, guard.page_id, observation.page_label
                 ),
             )
-            .with_values(guard_refusal_values(observation))
             .into());
         }
         let sampling = observation.sampling.map(|original| {
@@ -9640,7 +9639,6 @@ impl TaskOperation {
                 ExecutionKernelCode::ContainedTaskGuardRefused.code(),
                 detail,
             )
-            .with_values(guard_refusal_values(observation))
             .into());
         }
         let outcome = ContainedTaskGuardOutcome::Passed {
@@ -9650,13 +9648,6 @@ impl TaskOperation {
         };
         Ok((outcome, Some(target)))
     }
-}
-
-/// #411 A30: a guard refusal's outcome names the page of the frame the guard judged on
-/// (`page_id`); the host adds that frame (`artifact_id`, the run's `GuardRejection` pin).
-fn guard_refusal_values(observation: &PageObservation) -> Outcome {
-    Outcome::new(ExecutionKernelCode::ContainedTaskGuardRefused.code())
-        .page_id(observation.page_label.as_str())
 }
 
 #[derive(Debug, Deserialize)]
