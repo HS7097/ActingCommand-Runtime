@@ -1444,6 +1444,7 @@ impl Declaration<'_> {
                 "region",
                 "expected",
                 "max_distance",
+                "alternatives",
                 "digest",
                 "provenance",
             ],
@@ -1493,6 +1494,10 @@ impl Declaration<'_> {
                 "expected" if family == "ocr_targets" => self.strings(value, &pointer)?,
                 "expected" => self.color(value, &pointer)?,
                 "max_distance" => self.max_distance(value, &pointer)?,
+                // Workflow #411 B3.
+                "alternatives" => {
+                    self.color_alternatives(value, &pointer, object.get("expected"))?
+                }
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "locate" => self.locate(value, &pointer)?,
                 "unique" => self.unique(value, &pointer)?,
@@ -1508,8 +1513,11 @@ impl Declaration<'_> {
                     return Err(self.error(&pointer, ResourceDeclarationReason::UnconsumedField));
                 }
                 "color_check" if !value.is_null() => {
-                    let check =
-                        self.object(value, &pointer, &["region", "expected", "max_distance"])?;
+                    let check = self.object(
+                        value,
+                        &pointer,
+                        &["region", "expected", "max_distance", "alternatives"],
+                    )?;
                     let region = self.required(check, &pointer, "region")?;
                     if region.get("mode").is_some() {
                         self.source_region(region, &child(&pointer, "region"), true)?;
@@ -1522,6 +1530,14 @@ impl Declaration<'_> {
                     )?;
                     if let Some(distance) = check.get("max_distance") {
                         self.max_distance(distance, &child(&pointer, "max_distance"))?;
+                    }
+                    // Workflow #411 B3.
+                    if let Some(alternatives) = check.get("alternatives") {
+                        self.color_alternatives(
+                            alternatives,
+                            &child(&pointer, "alternatives"),
+                            check.get("expected"),
+                        )?;
                     }
                 }
                 _ => {}
@@ -1547,11 +1563,14 @@ impl Declaration<'_> {
                     self.required(object, pointer, "expected")?;
                 }
                 (None, Some(digest)) => {
-                    if object.contains_key("max_distance") {
-                        return Err(self.error(
-                            &child(pointer, "max_distance"),
-                            ResourceDeclarationReason::UnconsumedField,
-                        ));
+                    // Workflow #411 B3: nor `alternatives`.
+                    for field in ["max_distance", "alternatives"] {
+                        if object.contains_key(field) {
+                            return Err(self.error(
+                                &child(pointer, field),
+                                ResourceDeclarationReason::UnconsumedField,
+                            ));
+                        }
                     }
                     self.color_digest(
                         digest,
@@ -2128,6 +2147,33 @@ impl Declaration<'_> {
         // Each value fits an `i32`, so neither sum overflows.
         if x + width > frame[0] || y + height > frame[1] {
             return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        Ok(())
+    }
+
+    /// Workflow #411 B3: `alternatives` of a `color_probes[]` entry or a `color_check`, task
+    /// schema `0.9` only (`UnconsumedField` before it): an array (`InvalidType`) of 1 to 7
+    /// colors, each three integers in 0..=255, none repeated and none equal to `expected`;
+    /// every other refusal is `InvalidValue` at the member.
+    fn color_alternatives(
+        &self,
+        value: &Value,
+        pointer: &str,
+        expected: Option<&Value>,
+    ) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let colors = self.array(value, pointer)?;
+        let invalid = || self.error(pointer, ResourceDeclarationReason::InvalidValue);
+        if !(1..=actingcommand_recognition_pack::MAX_COLOR_ALTERNATIVES).contains(&colors.len()) {
+            return Err(invalid());
+        }
+        for (position, color) in colors.iter().enumerate() {
+            self.color(color, pointer).map_err(|_| invalid())?;
+            if Some(color) == expected || colors[..position].contains(color) {
+                return Err(invalid());
+            }
         }
         Ok(())
     }

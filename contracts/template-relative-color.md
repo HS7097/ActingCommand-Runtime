@@ -35,7 +35,13 @@ An absolute or relative `color_check` may also carry `max_distance`, a finite nu
 `verify_templates[].color_check`), and the parser then writes
 `pack.json` at schema `0.7` (`selection-graph.md`, section Checks); older pack schemas
 refuse it at `/targets/<i>/color_check/max_distance`. Without it the check uses
-`defaults.color_max_distance`, as before. Existing page-to-template color propagation
+`defaults.color_max_distance`, as before. An absolute or relative `color_check` may also
+carry `alternatives` (Workflow #411 B3): 1 to 7 further colors besides `expected`, none
+repeated and none equal to `expected`, a pack schema `0.7` construct that task schema `0.9`
+accepts in `anchors[].color_check` and `verify_templates[].color_check`
+(`resource-declarations.md`, section Task schema `0.9` several expected colors). The check's
+color is then the nearest of `expected` and its alternatives, the earliest among equal
+distances, within the one `max_distance`. Existing page-to-template color propagation
 binds the copied check to the destination template alias's own candidate. Expected
 RGB components are bytes; offsets and dimensions are signed 32-bit integers.
 Pack admission rejects unknown fields/modes, use on other target kinds, another
@@ -50,7 +56,8 @@ width and height scale by the factor the candidate's template was resampled by
 (`resource-declarations.md`, section Task schema `0.9` multi-scale templates). Arithmetic overflow or an out-of-frame rectangle disqualifies
 that candidate without clipping. Color uses the existing mean RGB and Euclidean
 distance predicate with the check's `max_distance`, or `defaults.color_max_distance` when
-it declares none.
+it declares none; with `alternatives`, any declared color within it qualifies the candidate,
+and the color evidence names the matched color as `expected`.
 
 The joint candidate with the highest raw template score is selected; equal raw
 scores retain the first `(y, x)` position. A lower-scoring candidate with valid color can win over a

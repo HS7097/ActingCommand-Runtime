@@ -453,8 +453,8 @@ lazily (section Task schema `0.9` value tests); the match is the one a full eval
 | Backend | Declared in | A target passes when |
 | --- | --- | --- |
 | Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches); with a mask, only the template pixels it selects are scored (section Task schema `0.9` template masks); with `scales`, the template is searched resampled by each declared factor (section Task schema `0.9` multi-scale templates) |
-| Template with color | `anchors[].color_check`, `verify_templates[].color_check` (task schema `0.9`) | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent |
-| Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected`; when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
+| Template with color | `anchors[].color_check`, `verify_templates[].color_check` (task schema `0.9`) | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent; with `alternatives`, the nearest declared color counts (section Task schema `0.9` several expected colors) |
+| Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected` (with `alternatives`, of the nearest declared color, section Task schema `0.9` several expected colors); when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
 | OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
 | Located text | `ocr_targets[]` with `locate` (task schema `0.9`) | one block read in the region matches one `expected` value under `match_mode` after the identity normalization, with confidence at least `minimum_confidence`, and lies in a declared cell when `cells` is declared (`ocr-fields.md`, section Located text); with `unique`, no other matching block lies within its margin |
@@ -703,8 +703,8 @@ targets in the same build. The derived layout names its page by the full page-se
 `<game>/<page>`.
 
 Only `pack.json` is written at schema `0.7`, and only when it holds a `composite`,
-`color_digest` or (task schema `0.9`) `value_test` target, a per-target `max_distance` or a
-candidate layout. The page set,
+`color_digest` or (task schema `0.9`) `value_test` target, a per-target `max_distance`, (task
+schema `0.9`) color `alternatives` or a candidate layout. The page set,
 navigation, operation index and primitives stay at `0.6`.
 
 A select step's refusals name the task's `task.json` (`/operations/<i>/select/…`, its `guard`,
@@ -766,6 +766,41 @@ fits its region (its rectangle, or the coordinate space for `full_frame`), with
 `resource_declaration_invalid` (`InvalidValue`) at `/targets/<i>/scales/factors_milli/<k>`
 otherwise; the mask minimum and the `ccorr_normed` threshold floor (section Task schema `0.9`
 template masks) hold for each resampled template, whose floor refusal names its `scale_milli`.
+
+### Task schema `0.9` several expected colors
+
+Workflow #411 B3 (Alice's reading (a), 2026-10-20). Task schema `0.9` accepts `alternatives`,
+1 to 7 colors `[r, g, b]` besides `expected`, on a `color_probes[]` entry that declares
+`expected` and on the `color_check` of `anchors[]` and `verify_templates[]` entries. An older
+task schema refuses it with `UnconsumedField`, and so does a digest entry. The declaration gate
+refuses, at `…/alternatives`, a value that is no array with `InvalidType`, and with
+`InvalidValue` no color or more than 7, a color that is not three integers from 0 to 255, a
+color listed twice and a copy of `expected`. It passes to the derived `color` target or
+`color_check` as declared, and a source that uses it derives pack schema `0.7`; a source that
+does not derives every document byte for byte as before. In the recognition pack, schema `0.7`
+`color` targets and `color_check` objects accept it, an older pack schema refuses it as an
+unknown field, and the evaluator refuses the same counts, repeats and copies when the pack
+loads.
+
+```json
+{"id": "state/card", "region": {"mode": "rect", "rect": {"x": 40, "y": 300, "width": 12, "height": 12}},
+ "expected": [60, 110, 220], "alternatives": [[150, 70, 210], [230, 180, 50]], "max_distance": 30}
+```
+
+One rule decides every color: a color probe, a template's absolute or relative `color_check`
+and the `repeated_anchor` anchor's color predicate (`selection-graph.md`, section Candidate
+layouts). The region's mean color is measured against `expected` and then each
+alternative in order; the nearest of them, the earliest among equal distances, is the matched
+color, and the region passes when its distance is within the one `max_distance` (the package
+default when absent). In the joint template and relative color search
+(`template-relative-color.md`) any declared color qualifies a candidate. No outcome code is
+added: a region within no color's distance fails as a single color does. The color evidence
+names the matched color as `expected` with its `distance`, so the persisted task diagnostic
+keeps its shape; the read-only and Lab evaluation output also give `expected_index`, 0 for
+`expected` and `n` for the `n`th alternative, when the probe or check declares alternatives. A
+probe or check without `alternatives` evaluates exactly as before. The member belongs to package
+interface revision 6, declared at the end of the 0.12.x B train; until then it is admitted by
+code.
 
 ### Task schema `0.9` observation windows and input rechecks
 

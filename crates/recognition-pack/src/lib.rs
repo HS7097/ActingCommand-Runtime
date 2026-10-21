@@ -443,7 +443,15 @@ pub struct ColorTarget {
     /// Schema 0.7: this target's color threshold; absent means `defaults.color_max_distance`.
     #[serde(default)]
     pub max_distance: Option<f32>,
+    /// Schema 0.7 (Workflow #411 B3): 1..=7 further colors the target accepts besides
+    /// `expected`; absent means `expected` alone.
+    #[serde(default)]
+    pub alternatives: Option<Vec<[u8; 3]>>,
 }
+
+/// Workflow #411 B3: a color probe or check declares at most this many `alternatives`, so it
+/// accepts at most eight colors with `expected`.
+pub const MAX_COLOR_ALTERNATIVES: usize = 7;
 
 /// Schema 0.7 `color_digest.v1` verifier of one fixed rectangle. It never locates anything
 /// and has no default threshold.
@@ -541,6 +549,10 @@ pub struct ColorCheck {
     /// Schema 0.7: this check's color threshold; absent means `defaults.color_max_distance`.
     #[serde(default)]
     pub max_distance: Option<f32>,
+    /// Schema 0.7 (Workflow #411 B3): 1..=7 further colors the check accepts besides
+    /// `expected`; absent means `expected` alone.
+    #[serde(default)]
+    pub alternatives: Option<Vec<[u8; 3]>>,
 }
 
 impl ColorCheck {
@@ -1023,6 +1035,9 @@ impl fmt::Display for UnsupportedRecognitionTarget {
     }
 }
 
+/// One color measurement. With `alternatives` declared (Workflow #411 B3), `expected` and
+/// `distance` are those of the nearest declared color, so the region passes when `distance` is
+/// within `max_distance`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct ColorEvaluation {
     pub distance: f32,
@@ -1031,6 +1046,11 @@ pub struct ColorEvaluation {
     pub expected: [u8; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<PackRect>,
+    /// Workflow #411 B3: which declared color `expected` is, 0 for `expected` and `n` for the
+    /// `n`th alternative, when the probe or check declares `alternatives`; absent otherwise.
+    /// Read-only and Lab output only: the persisted task diagnostic keeps its shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -2149,19 +2169,19 @@ impl RecognitionEvaluator {
                 width,
                 height,
             ) {
-                Ok(region) => {
-                    let measured = scene.compare_color(region.into(), check.expected)?;
-                    (
-                        Some(ColorEvaluation {
-                            distance: measured.distance,
-                            max_distance: self.color_max_distance(check.max_distance),
-                            mean: measured.mean,
-                            expected: check.expected,
-                            region: Some(region),
-                        }),
-                        None,
-                    )
-                }
+                Ok(region) => (
+                    Some(ColorEvaluation {
+                        region: Some(region),
+                        ..self.measure_color(
+                            scene,
+                            region,
+                            check.expected,
+                            check.alternatives.as_deref(),
+                            check.max_distance,
+                        )?
+                    }),
+                    None,
+                ),
                 Err((_, reason)) => (None, Some(reason)),
             },
         )
@@ -2292,6 +2312,7 @@ impl RecognitionEvaluator {
             &target.id,
             target.region,
             target.expected,
+            target.alternatives.as_deref(),
             target.max_distance,
         )?;
         let passed = color.distance <= color.max_distance;
@@ -2636,7 +2657,14 @@ impl RecognitionEvaluator {
                 "relative color requires its template candidate",
             ));
         };
-        self.evaluate_color_match(scene, target_id, region, check.expected, check.max_distance)
+        self.evaluate_color_match(
+            scene,
+            target_id,
+            region,
+            check.expected,
+            check.alternatives.as_deref(),
+            check.max_distance,
+        )
     }
 
     fn evaluate_color_match(
@@ -2645,17 +2673,42 @@ impl RecognitionEvaluator {
         target_id: &str,
         region: PackRect,
         expected: [u8; 3],
+        alternatives: Option<&[[u8; 3]]>,
         max_distance: Option<f32>,
     ) -> RecognitionPackResult<ColorEvaluation> {
-        let matched = scene
-            .compare_color(region.into(), expected)
-            .map_err(|err| primitive_error(target_id, err))?;
+        self.measure_color(scene, region, expected, alternatives, max_distance)
+            .map_err(|err| primitive_error(target_id, err))
+    }
+
+    /// The one color acceptance of a color probe, a template's `color_check` and the
+    /// `repeated_anchor` color predicate (Workflow #411 B3): the mean of `region` measured
+    /// against `expected` and then each of `alternatives`, in declaration order. The nearest
+    /// color, the earliest among equal distances, becomes the evaluation's `expected` and
+    /// `distance`, so the region passes when that distance is within the one `max_distance`.
+    pub(crate) fn measure_color(
+        &self,
+        scene: &Scene,
+        region: PackRect,
+        expected: [u8; 3],
+        alternatives: Option<&[[u8; 3]]>,
+        max_distance: Option<f32>,
+    ) -> recognition::RecognitionResult<ColorEvaluation> {
+        let measured = scene.compare_color(region.into(), expected)?;
+        let mut nearest = (0, expected, measured.distance);
+        for (position, alternative) in alternatives.unwrap_or(&[]).iter().enumerate() {
+            let distance = scene.compare_color(region.into(), *alternative)?.distance;
+            if distance < nearest.2 {
+                nearest = (position + 1, *alternative, distance);
+            }
+        }
+        let (index, expected, distance) = nearest;
         Ok(ColorEvaluation {
-            distance: matched.distance,
+            distance,
             max_distance: self.color_max_distance(max_distance),
-            mean: matched.mean,
+            mean: measured.mean,
             expected,
             region: None,
+            expected_index: alternatives.map(|_| index),
         })
     }
 
@@ -2827,9 +2880,16 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                     "scales",
                 ][..]
             }
-            "color" if schema == SCHEMA_0_7 => {
-                &["type", "id", "region", "expected", "click", "max_distance"][..]
-            }
+            // Workflow #411 B3: `alternatives`.
+            "color" if schema == SCHEMA_0_7 => &[
+                "type",
+                "id",
+                "region",
+                "expected",
+                "click",
+                "max_distance",
+                "alternatives",
+            ][..],
             "color" => &["type", "id", "region", "expected", "click"][..],
             "color_digest" | "composite" | "value_test" if schema != SCHEMA_0_7 => {
                 return Err(RecognitionPackError::fatal_with_code(
@@ -2977,7 +3037,8 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             && !color_check.is_null()
         {
             let color_check_fields: &[&str] = if schema == SCHEMA_0_7 {
-                &["region", "expected", "max_distance"]
+                // Workflow #411 B3: `alternatives`.
+                &["region", "expected", "max_distance", "alternatives"]
             } else {
                 &["region", "expected"]
             };
@@ -3192,6 +3253,13 @@ fn validate_pack(
                         &format!("target[{index}].color_check.max_distance"),
                         errors,
                     );
+                    validate_color_alternatives(
+                        check.expected,
+                        check.alternatives.as_deref(),
+                        schema_0_7,
+                        &format!("target[{index}].color_check.alternatives"),
+                        errors,
+                    );
                     if let PackRegion::TemplateRelative(
                         TemplateRelativeRegion::TemplateRelative { width, height, .. },
                     ) = &check.region
@@ -3229,6 +3297,13 @@ fn validate_pack(
                     target.max_distance,
                     schema_0_7,
                     &format!("target[{index}].max_distance"),
+                    errors,
+                );
+                validate_color_alternatives(
+                    target.expected,
+                    target.alternatives.as_deref(),
+                    schema_0_7,
+                    &format!("target[{index}].alternatives"),
                     errors,
                 );
             }
@@ -3495,6 +3570,34 @@ fn validate_max_distance(
     }
     if !max_distance.is_finite() || max_distance < 0.0 {
         errors.push(format!("{label} must be finite and >= 0.0: {max_distance}"));
+    }
+}
+
+/// Workflow #411 B3: a color probe's or check's `alternatives`, a schema 0.7 construct of
+/// 1..=7 colors, none repeated and none equal to `expected`.
+fn validate_color_alternatives(
+    expected: [u8; 3],
+    alternatives: Option<&[[u8; 3]]>,
+    schema_0_7: bool,
+    label: &str,
+    errors: &mut Vec<String>,
+) {
+    let Some(alternatives) = alternatives else {
+        return;
+    };
+    if !schema_0_7 {
+        errors.push(format!("{label} requires schema_version '{SCHEMA_0_7}'"));
+    }
+    if !(1..=MAX_COLOR_ALTERNATIVES).contains(&alternatives.len()) {
+        errors.push(format!(
+            "{label} must hold 1..={MAX_COLOR_ALTERNATIVES} colors, got {}",
+            alternatives.len()
+        ));
+    }
+    for (position, color) in alternatives.iter().enumerate() {
+        if *color == expected || alternatives[..position].contains(color) {
+            errors.push(format!("{label}[{position}] repeats a declared color"));
+        }
     }
 }
 
@@ -5692,6 +5795,7 @@ mod tests {
                     expected: [255, 0, 0],
                     click: Some(rect(9, 10, 11, 12)),
                     max_distance: None,
+                    alternatives: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "no-click".to_string(),
@@ -5699,6 +5803,7 @@ mod tests {
                     expected: [255, 0, 0],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
             ],
             ..base_pack()
@@ -5760,6 +5865,7 @@ mod tests {
                     expected: [0, 0, 0],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
             ],
             ..base_pack()
@@ -5839,6 +5945,7 @@ mod tests {
                 expected,
                 click: None,
                 max_distance: None,
+                alternatives: None,
             })],
             ..base_pack()
         }
@@ -5941,6 +6048,7 @@ mod tests {
                         region: PackRegion::Rect(rect(0, 0, 8, 8)),
                         expected,
                         max_distance: None,
+                        alternatives: None,
                     }),
                     click: None,
                     unique: None,
@@ -5972,6 +6080,7 @@ mod tests {
                 }),
                 expected: [255, 0, 0],
                 max_distance: None,
+                alternatives: None,
             });
             RecognitionEvaluator::new(self.dir.path.clone(), pack).expect("relative evaluator")
         }
@@ -6003,6 +6112,7 @@ mod tests {
                         expected: [30, 31, 32],
                         click: None,
                         max_distance: None,
+                        alternatives: None,
                     }),
                     RecognitionTarget::Ocr(OcrTarget {
                         id: "ocr/page".to_string(),

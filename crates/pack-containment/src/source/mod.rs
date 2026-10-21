@@ -24,8 +24,8 @@ const GENERATED_BY: &str = "actinglab resource convert";
 const CONVERTER_SCHEMA_VERSION: &str = "0.5";
 const OUTPUT_SCHEMA_VERSION: &str = "0.6";
 /// The schema `pack.json` alone is written at, and only when it uses a construct of that
-/// schema: a composite or color digest target, a per-target color `max_distance`, or a
-/// candidate layout.
+/// schema: a composite or color digest target, a per-target color `max_distance` or
+/// `alternatives` (Workflow #411 B3), or a candidate layout.
 const PACK_SCHEMA_0_7: &str = "0.7";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
@@ -924,6 +924,10 @@ impl OperationParser {
                 );
                 if let Some(max_distance) = color_probe.get("max_distance") {
                     target["max_distance"] = max_distance.clone();
+                }
+                // Workflow #411 B3.
+                if let Some(alternatives) = color_probe.get("alternatives") {
+                    target["alternatives"] = alternatives.clone();
                 }
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
@@ -2935,6 +2939,9 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
                 Some("composite" | "color_digest" | "value_test")
             ) || target.get("max_distance").is_some()
                 || target.pointer("/color_check/max_distance").is_some()
+                // Workflow #411 B3.
+                || target.get("alternatives").is_some()
+                || target.pointer("/color_check/alternatives").is_some()
                 || target.get("locate").is_some()
                 || target.get("unique").is_some()
                 || target.get("mask").is_some()
@@ -4585,7 +4592,7 @@ fn color_check_to_pack(color_check: Option<&Value>, target_id: &str) -> CliOutco
         if region.get("mode").and_then(Value::as_str) == Some("template_relative") {
             require_exact_object(
                 color_check,
-                &["region", "expected", "max_distance"],
+                &["region", "expected", "max_distance", "alternatives"],
                 "relative color check",
             )?;
             object.insert("region".to_string(), ocr_region_to_pack(region)?);

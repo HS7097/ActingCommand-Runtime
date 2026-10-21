@@ -2579,6 +2579,26 @@ Record", "Why A Candidate Does Not Run") is the contract.
 | A26-3 | keys `why` (code), `decision_state`, `eligibility` (vocabularies of the same names), `omitted_why` (records of `why`, `count`) | new key-table and vocabulary entries (no shape) (policy 57) | A26 | A26 | the vocabularies are built from the policy crate's enums in `codes.rs` (G7), review `pending`; the two codes keep `since` 0.12.0, their text names 0.12.5 |
 | A26-4 | the developer detail of the decision record's reasons | contract text (no shape change) | A26 | A26 | unchanged; it is kept only in the in-memory decision. The sentence that it goes to a developer log is removed: no such log line exists |
 
+### 1.146 Slice BT-B3 (0.12.x): several expected colors (#411 B3; B-train plan §2.3; Alice's reading (a), 2026-10-20)
+
+A color probe, a template's `color_check` and with it the `repeated_anchor` anchor's color
+predicate may list up to seven `alternatives` besides `expected`; one acceptance decides all of
+them: the nearest declared color, the earliest among equal distances, within the one
+`max_distance`. **No persisted ledger shape**: `TaskDiagnosticColorData` is unchanged and keeps
+`expected` and `distance`, which are now the matched color's; `expected_index` is read-only and
+Lab output only. No code, location, key, vocabulary token, wire or configuration key is added;
+the refusals reuse `resource_declaration_invalid` reasons and the recognition pack's existing
+load refusal. The member belongs to `package` revision 6, which BT-PK6 declares at the end of
+the B train (plan §4); until then it is admitted by code. [resource-declarations.md](resource-declarations.md)
+("Task schema `0.9` several expected colors"), [template-relative-color.md](template-relative-color.md)
+and [selection-graph.md](selection-graph.md) are the contract. Gate: exec key 116.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B3-1 | `alternatives: [[r, g, b], …]` on a `color_probes[]` entry with `expected` and on the `color_check` of `anchors[]` and `verify_templates[]`; derived onto the `color` target and the `color_check` | resource file format (task schema `0.9`, no version change; pack schema `0.7`) (exec 116) | BT-B3 | resource side | 1..=7 colors, none repeated, none equal to `expected`; refused `resource_declaration_invalid` at `…/alternatives` (`UnconsumedField` before task schema `0.9` and on a digest entry, `InvalidType` for no array, `InvalidValue` otherwise); a source that uses it derives pack schema `0.7`; a `0.6` pack refuses it as an unknown field and the evaluator refuses the same counts, repeats and copies at load |
+| B3-2 | the color acceptance of a probe, a `color_check` (absolute, relative and in the joint search) and the `repeated_anchor` predicate | rule (no shape change) (exec 116) | BT-B3 | BT-B3 | the region's mean against `expected`, then each alternative in order; the nearest, the earliest among equals, is the evaluation's `expected` and `distance`, and passes within `max_distance` (else the package default); in the joint search any declared color qualifies a candidate; without `alternatives` evaluation is unchanged |
+| B3-3 | `expected_index` of the recognition evaluation's `color` and of the read-only `ColorEvaluationResponse` | in-process and output member (not persisted) (exec 116) | BT-B3 | BT-B3 | 0 for `expected`, `n` for the `n`th alternative; present only when the probe or check declares `alternatives`; the task diagnostic record does not carry it |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

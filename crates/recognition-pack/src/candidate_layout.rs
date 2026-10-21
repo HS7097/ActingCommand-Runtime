@@ -1030,9 +1030,16 @@ impl SceneEvaluation<'_> {
                         width,
                         height,
                     ) {
+                        // Workflow #411 B3: any declared color qualifies the position.
                         Ok(region) => {
-                            Ok(scene.compare_color(region.into(), check.expected)?.distance
-                                <= evaluator.color_max_distance(check.max_distance))
+                            let color = evaluator.measure_color(
+                                scene,
+                                region,
+                                check.expected,
+                                check.alternatives.as_deref(),
+                                check.max_distance,
+                            )?;
+                            Ok(color.distance <= color.max_distance)
                         }
                         Err(_) => Ok(false),
                     }

@@ -2307,6 +2307,7 @@ mod tests {
                     expected: [255, 0, 0],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "fixture/settings_anchor".to_string(),
@@ -2314,6 +2315,7 @@ mod tests {
                     expected: [0, 255, 0],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "fixture/forbidden_popup".to_string(),
@@ -2321,6 +2323,7 @@ mod tests {
                     expected: [0, 0, 255],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
                 RecognitionTarget::ClickOnly(ClickOnlyTarget {
                     id: "fixture/click_only".to_string(),

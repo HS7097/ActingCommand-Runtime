@@ -452,6 +452,7 @@ pub fn target_evaluation_response(evaluation: &TargetEvaluation) -> TargetEvalua
             mean: color.mean,
             expected: color.expected,
             region: color.region.map(rect_response),
+            expected_index: color.expected_index,
         }),
     }
 }
@@ -678,6 +679,10 @@ pub struct ColorEvaluationResponse {
     pub expected: [u8; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<RectResponse>,
+    /// Workflow #411 B3: which declared color `expected` is (0 for `expected`, `n` for the
+    /// `n`th alternative), when the probe or check declares `alternatives`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -943,6 +948,7 @@ mod tests {
                     expected: [255, 0, 0],
                     click: None,
                     max_distance: None,
+                    alternatives: None,
                 }),
                 RecognitionTarget::ClickOnly(ClickOnlyTarget {
                     id: "home_button".to_string(),
