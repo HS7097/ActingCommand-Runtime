@@ -1754,6 +1754,15 @@ tests = [
 ]
 incident = ["#411 B2"]
 
+# #411 A13 B part (slice BT-LAB, v0.12.x; register §1.147 L13-1; plan §2.16, test row BT-L13 T1; no persisted ledger shape, no outcome code; the key continues the exec numbering): offline observe lists each operation of the observed page whose to is a page set in actions with input next to its declared click, built from its generated navigation row as an edge's input is (a box or a point a tap of the box at its centre, a drag its two boxes and their centres, a segmented or path drag null), equal to the input of an edge with the same click, with no coordinate resolved on the frame
+[[gate]]
+key = "117"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_411_bt_l13::a13b_offline_observe_gives_a_page_set_action_the_input_of_an_edge_with_the_same_click",
+]
+incident = ["#411 A13"]
+
 # Workflow #411 B3 (0.12.x; register §1.149; no persisted ledger shape; B-train plan §2.3, §5.3 rows T1 to T4; package revision 6, declared by BT-PK6): a color probe, a template's color_check and the repeated_anchor color predicate may declare 1 to 7 alternatives besides expected; the nearest declared color, the earliest among equal distances, within the one max_distance passes, and the color evidence names it as expected with its distance; in the joint template and relative color search any declared color qualifies a candidate; the declaration gate refuses 8 colors, a color listed twice or equal to expected and a component above 255 with resource_declaration_invalid (invalid_value) at the member
 [[gate]]
 key = "118"

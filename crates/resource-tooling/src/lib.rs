@@ -27,6 +27,9 @@ mod gate_411_a25;
 // check.
 #[cfg(test)]
 mod gate_411_b15b;
+// Workflow #411 A32 (slice E3, T3): only the recognition pack a server declares counts.
+#[cfg(test)]
+mod gate_411_e3;
 // Test plan v2.2 E-1 G10 (exec key 33): package bundle and the business catalog.
 #[cfg(test)]
 mod gate_e1;
