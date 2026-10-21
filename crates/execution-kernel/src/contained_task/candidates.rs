@@ -16,16 +16,36 @@
 //! - A page whose candidates were all passed over ends the run with
 //!   `contained_task_operation_candidates_exhausted`. A frame that matches more than one page
 //!   is still a conflict.
+//!
+//! #411 B16 part 1 and B22 (B-train plan §2.11), task schema `0.9` page-graph tasks:
+//!
+//! - **`max_runs` and `on_max_runs`.** An operation may be dispatched at most `max_runs` times
+//!   per run (1..=1000; a guard pass-over counts, a `when` withdrawal does not, D10). Once it
+//!   was, `on_max_runs: next_candidate` passes it over like a capped member of a designated
+//!   effect set, and `on_max_runs: {"outcome_key": K}` ends the run Completed on the current page
+//!   with K, written as `task.operation_capped`. Never on a designated operation or a member of
+//!   a designated effect set, which have their own cap.
+//! - **A keyed `on_guard_refused`.** `{"outcome_key": K, "failed"?: <target>}`: a click whose
+//!   guard refuses on its step's frame at attempt 1, before any input, with a definite fail of
+//!   the named target (the guard target, or a member of it), ends its step without an input on
+//!   the frame's page, and the run ends Completed there with K. Any other refusal keeps the
+//!   operation's failure decision.
+//! - Both keyed ends follow the one keyed-terminal rule of the static checks
+//!   (`actingcommand_contract::keyed_terminal_holds`), and a package that declares one is no
+//!   prerequisite or return-home layer.
 
 use super::{
     ContainedTaskError, ContainedTaskGuardEvaluation, ContainedTaskRunError, ContainedTaskRuntime,
     ContainedTaskTrace, PageObservation, PreparedContainedTask, TaskOperation, TaskProgram,
 };
 use crate::codes::ExecutionKernelCode;
-use crate::{RunDecisionError, RunDirective, RunStateMachine};
+use crate::{OperationRunCap, RunDecisionError, RunDirective, RunMaxRunsEnd, RunStateMachine};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_recognition_pack::{RecognitionEvaluator, TargetKind};
+use actingcommand_recognition_pack::{
+    CompositeMode, RecognitionEvaluator, RecognitionPackCode, RecognitionTarget, TargetEvaluation,
+    TargetKind,
+};
 use serde::Deserialize;
 
 /// The task schema that admits both declarations.
@@ -57,20 +77,121 @@ impl TaskWhen {
     }
 }
 
-/// What a guard refusal on the step's frame does, as the package writes it.
+/// The string `next_candidate` of `on_guard_refused` and `on_max_runs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum TaskGuardRefusal {
-    /// The step ends without an input and the page's next candidate is taken on the same
-    /// frame.
+pub(super) enum NextCandidate {
     NextCandidate,
 }
 
+/// What a guard refusal on the step's frame does, as the package writes it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(super) enum TaskGuardRefusal {
+    /// `"next_candidate"`: the step ends without an input and the page's next candidate is
+    /// taken on the same frame.
+    NextCandidate(NextCandidate),
+    /// #411 B22: `{"outcome_key": K, "failed"?: <target>}`: a definite fail of `failed` (the
+    /// guard target when absent) ends the step without an input and the run with K.
+    Keyed(TaskGuardRefusalEnd),
+}
+
+/// #411 B22 (B-train plan §2.11 item 2): the keyed form of `on_guard_refused`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TaskGuardRefusalEnd {
+    outcome_key: String,
+    /// The guard target or one member of it (the guard target is a composite); absent, the
+    /// guard target.
+    #[serde(default)]
+    failed: Option<String>,
+}
+
+/// #411 B16 part 1 (B-train plan §2.11 item 1): what the run does once it dispatched the
+/// operation `max_runs` times, as the package writes it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(super) enum TaskOnMaxRuns {
+    /// `"next_candidate"`: the operation is passed over and the page's next operation runs.
+    NextCandidate(NextCandidate),
+    /// `{"outcome_key": K}`: the run ends Completed on the current page with K.
+    Keyed(TaskKeyedEnd),
+}
+
+/// #411 B16 part 1: the keyed form of `on_max_runs`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TaskKeyedEnd {
+    outcome_key: String,
+}
+
 impl TaskOperation {
-    /// Workflow #390 EXEC-1: the page's next candidate may run instead of this operation (it
-    /// declares `when` or `on_guard_refused`).
-    pub(super) const fn may_be_passed_over(&self) -> bool {
-        self.when.is_some() || self.on_guard_refused.is_some()
+    /// Workflow #390 EXEC-1: the page's next candidate may run instead of this operation when its
+    /// `when` does not hold or its guard refuses (`when`, `on_guard_refused: next_candidate`).
+    pub(super) fn may_be_passed_over(&self) -> bool {
+        self.when.is_some()
+            || matches!(
+                self.on_guard_refused,
+                Some(TaskGuardRefusal::NextCandidate(_))
+            )
+    }
+
+    /// #411 B22: the outcome key of a keyed `on_guard_refused`.
+    pub(super) fn on_guard_refused_key(&self) -> Option<&str> {
+        match &self.on_guard_refused {
+            Some(TaskGuardRefusal::Keyed(end)) => Some(end.outcome_key.as_str()),
+            Some(TaskGuardRefusal::NextCandidate(_)) | None => None,
+        }
+    }
+
+    /// #411 B16 part 1: the outcome key of a keyed `on_max_runs`.
+    pub(super) fn on_max_runs_key(&self) -> Option<&str> {
+        match &self.on_max_runs {
+            Some(TaskOnMaxRuns::Keyed(end)) => Some(end.outcome_key.as_str()),
+            Some(TaskOnMaxRuns::NextCandidate(_)) | None => None,
+        }
+    }
+
+    /// #411 B16 part 1: the operation's per-run cap as the static checks see it.
+    pub(super) fn phase_run_cap(&self) -> Option<actingcommand_contract::TaskPhaseRunCap<'_>> {
+        self.max_runs
+            .map(|limit| actingcommand_contract::TaskPhaseRunCap {
+                limit,
+                outcome_key: self.on_max_runs_key(),
+            })
+    }
+
+    /// #411 B16/B22 (B-train plan §2.11 item 3): the outcome keys on which a run may end at this
+    /// operation's state, on its page, each with the member that declares it: `on_empty`, a
+    /// keyed `on_max_runs`, a keyed `on_guard_refused`.
+    pub(super) fn keyed_ends(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        [
+            ("on_empty", self.on_empty_key()),
+            ("on_max_runs", self.on_max_runs_key()),
+            ("on_guard_refused", self.on_guard_refused_key()),
+        ]
+        .into_iter()
+        .filter_map(|(member, key)| key.map(|key| (member, key)))
+    }
+
+    /// #411 B16 part 1: the operation may be capped and passed over to the page's next operation
+    /// (`on_max_runs: next_candidate`).
+    pub(super) fn may_be_run_capped(&self) -> bool {
+        self.max_runs.is_some() && matches!(self.on_max_runs, Some(TaskOnMaxRuns::NextCandidate(_)))
+    }
+
+    /// #411 B16 part 1: the per-run cap the run holds the operation to.
+    pub(super) fn run_cap(&self) -> Option<OperationRunCap> {
+        let max_runs = self.max_runs?;
+        let on_max_runs = match self.on_max_runs.as_ref()? {
+            TaskOnMaxRuns::NextCandidate(_) => RunMaxRunsEnd::NextCandidate,
+            TaskOnMaxRuns::Keyed(end) => RunMaxRunsEnd::OutcomeKey(end.outcome_key.clone()),
+        };
+        Some(OperationRunCap {
+            operation_id: self.id.clone(),
+            max_runs,
+            on_max_runs,
+        })
     }
 }
 
@@ -81,9 +202,16 @@ fn invalid(operation: &TaskOperation, field: &str) -> ContainedTaskError {
     )
 }
 
-/// Admission of an operation's `when` and `on_guard_refused`
+/// A key of a keyed end: not blank.
+fn keyed(key: &str) -> bool {
+    !key.trim().is_empty()
+}
+
+/// Admission of an operation's `when`, `on_guard_refused`, `max_runs` and `on_max_runs`
 /// (`contained_task_operation_invalid`): task schema `0.9`; a `when` names a target;
-/// `on_guard_refused` is declared on a click with a declared guard.
+/// `on_guard_refused` is declared on a click with a declared guard, and its keyed form names its
+/// key (and a `failed` target, when it declares one); #411 B16 part 1: `max_runs` (1..=1000) and
+/// `on_max_runs` are declared together, and a keyed `on_max_runs` names its key.
 pub(super) fn validate_operation(
     operation: &TaskOperation,
     schema_version: &str,
@@ -95,13 +223,29 @@ pub(super) fn validate_operation(
     {
         return Err(invalid(operation, "when"));
     }
-    if operation.on_guard_refused.is_some()
+    if let Some(refusal) = &operation.on_guard_refused
         && (schema_version != TASK_SCHEMA
             || operation.click.is_none()
             || operation.guard.is_none()
-            || operation.unguarded_trusted_coordinate)
+            || operation.unguarded_trusted_coordinate
+            || matches!(refusal, TaskGuardRefusal::Keyed(end)
+                if !keyed(&end.outcome_key)
+                    || end.failed.as_deref().is_some_and(|failed| !keyed(failed))))
     {
         return Err(invalid(operation, "on_guard_refused"));
+    }
+    if operation.max_runs.is_some_and(|max_runs| {
+        schema_version != TASK_SCHEMA
+            || !(1..=actingcommand_contract::MAX_TASK_OPERATION_RUNS).contains(&max_runs)
+            || operation.on_max_runs.is_none()
+    }) {
+        return Err(invalid(operation, "max_runs"));
+    }
+    if let Some(on_max_runs) = &operation.on_max_runs
+        && (operation.max_runs.is_none()
+            || matches!(on_max_runs, TaskOnMaxRuns::Keyed(end) if !keyed(&end.outcome_key)))
+    {
+        return Err(invalid(operation, "on_max_runs"));
     }
     Ok(())
 }
@@ -152,6 +296,114 @@ impl TaskProgram {
             }
         }
         Ok(())
+    }
+
+    /// #411 B16 part 1 and B22 (B-train plan §2.11 items 1 and 2): a keyed `on_max_runs` or
+    /// `on_guard_refused` ends the run with its key, so the task declares a `scheduling_outcome`;
+    /// a keyed `on_guard_refused` names as `failed` its guard target or one member of that target
+    /// (a composite of the recognition pack). Each refusal is `contained_task_operation_invalid`
+    /// at the member.
+    pub(super) fn validate_keyed_ends(
+        &self,
+        evaluator: &RecognitionEvaluator,
+    ) -> Result<(), ContainedTaskError> {
+        for operation in &self.operations {
+            if operation.on_max_runs_key().is_some() && self.scheduling_outcome.is_none() {
+                return Err(invalid(operation, "on_max_runs"));
+            }
+            let Some(TaskGuardRefusal::Keyed(end)) = &operation.on_guard_refused else {
+                continue;
+            };
+            let named = match (&operation.guard, end.failed.as_deref()) {
+                (Some(_), None) => true,
+                (Some(guard), Some(failed)) => {
+                    names_guard_member(evaluator, &guard.target_id, failed)
+                }
+                (None, _) => false,
+            };
+            if self.scheduling_outcome.is_none() || !named {
+                return Err(invalid(operation, "on_guard_refused"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// #411 B22: `failed` is the guard target itself or one member of it, a composite of the pack
+/// (composites are not nested).
+fn names_guard_member(evaluator: &RecognitionEvaluator, guard_target: &str, failed: &str) -> bool {
+    failed == guard_target
+        || evaluator.pack().targets.iter().any(|target| {
+            matches!(target, RecognitionTarget::Composite(composite)
+                if composite.id == guard_target
+                    && composite.members.iter().any(|member| member == failed))
+        })
+}
+
+/// #411 B22 (B-train plan §2.11 item 2): the key a guard refusal on the step's frame ends the
+/// run with: the operation declares a keyed `on_guard_refused`, and `evaluation`, the guard
+/// target's evaluation that refused, shows a definite fail of the named target (`failed`, else
+/// the guard target). The failing member travels typed, in the evaluation, never parsed from a
+/// developer detail.
+pub(super) fn guard_refusal_key<'o>(
+    operation: &'o TaskOperation,
+    evaluation: &TargetEvaluation,
+) -> Option<&'o str> {
+    let Some(TaskGuardRefusal::Keyed(end)) = &operation.on_guard_refused else {
+        return None;
+    };
+    let named = match end.failed.as_deref() {
+        None => Some(evaluation),
+        Some(failed) => evaluation_of(evaluation, failed),
+    }?;
+    definitely_failed(named)
+        .then_some(end.outcome_key.as_str())
+        .filter(|_| false)
+}
+
+/// The evaluation of `target_id` within the guard target's `evaluation`: the guard target's own,
+/// or one member's of a composite.
+fn evaluation_of<'e>(
+    evaluation: &'e TargetEvaluation,
+    target_id: &str,
+) -> Option<&'e TargetEvaluation> {
+    if evaluation.id == target_id {
+        return Some(evaluation);
+    }
+    evaluation
+        .composite
+        .as_deref()?
+        .members
+        .iter()
+        .find(|member| member.target_id == target_id)
+        .map(|member| &member.evaluation)
+}
+
+/// #411 B22: a definite fail ("read, and not met"): the target was evaluated and did not pass,
+/// either as a value test whose comparison does not hold (`value_test_not_met`) or without a
+/// registered reason (a plain miss). A registered reason other than `value_test_not_met`
+/// (`value_test_unresolved`, an unresolved OCR region, a match that is not unique, …) is no
+/// definite fail. A composite fails definitely when its members' definite fails decide it: one
+/// of `all_of`, every one of `any_of`.
+fn definitely_failed(evaluation: &TargetEvaluation) -> bool {
+    if evaluation.passed {
+        return false;
+    }
+    if let Some(failure) = &evaluation.failure {
+        return failure.is(RecognitionPackCode::ValueTestNotMet);
+    }
+    match evaluation.composite.as_deref() {
+        None => true,
+        Some(composite) => match composite.mode {
+            CompositeMode::AllOf => composite
+                .members
+                .iter()
+                .any(|member| definitely_failed(&member.evaluation)),
+            CompositeMode::AnyOf => composite
+                .members
+                .iter()
+                .all(|member| definitely_failed(&member.evaluation)),
+        },
     }
 }
 

@@ -2834,6 +2834,19 @@ impl RuntimeContainedTask<'_> {
                 step_index: self.absolute_step_index(step_index)?,
                 operation_label,
             },
+            ContainedTaskTrace::OperationCapped {
+                step_index,
+                operation_label,
+                count,
+                limit_count,
+                outcome,
+            } => ContainedTaskTrace::OperationCapped {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                count,
+                limit_count,
+                outcome,
+            },
             ContainedTaskTrace::StepFinished {
                 step_index,
                 operation_label,
@@ -4854,6 +4867,28 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 appended?;
                 self.capture_evidence.effect_completed()
             }
+            // #411 B16 part 1 (ledger revision 4, register §1.153 LR-7): the run's one
+            // `task.operation_capped`, before its terminal.
+            ContainedTaskTrace::OperationCapped {
+                step_index,
+                operation_label,
+                count,
+                limit_count,
+                outcome,
+            } => self.append_task(
+                EventSeverity::Info,
+                self.links(),
+                TaskPayloadDraft::semantic(
+                    TaskSemanticFact::OperationCapped {
+                        step_index,
+                        operation_label,
+                        count,
+                        limit_count,
+                        outcome,
+                    },
+                    AuditInput::new(),
+                ),
+            ),
             ContainedTaskTrace::StepFinished {
                 step_index,
                 operation_label,
