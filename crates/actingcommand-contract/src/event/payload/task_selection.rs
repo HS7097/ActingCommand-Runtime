@@ -1153,9 +1153,6 @@ impl TaskSelectionRecord {
     /// embedded F2 projection that seals its candidate-set hash. The decision hash is the
     /// writer's (b-plan §2.4); a reader checks its grammar and never recomputes it.
     fn validate_decision_comparison(&self) -> Result<(), SanitizationError> {
-        if !matches!(self.projection, TaskSelectionProjection::V1(_)) {
-            return Err(invalid("confirmation"));
-        }
         let (candidate_set_sha256, decision_sha256, projection) = match &self.confirmation {
             TaskSelectionConfirmation::DecisionMatched {
                 candidate_set_sha256,
