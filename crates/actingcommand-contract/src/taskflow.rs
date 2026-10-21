@@ -1310,7 +1310,7 @@ impl IntegerDictionary {
                         confusions
                             .iter()
                             .find(|(from, _)| from.chars().next() == Some(character))
-                            .and_then(|(_, to)| to.chars().next())
+                            .and_then(|(from, _)| from.chars().next())
                             .unwrap_or(character)
                     })
                     .collect(),
