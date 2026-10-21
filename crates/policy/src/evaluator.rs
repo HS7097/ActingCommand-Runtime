@@ -1492,6 +1492,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             if let Some(handover) = handovers
                 .get_mut(candidate.instance_id.as_str())
                 .filter(|handover| handover.is_successor(candidate.work_index))
+                // B41 red proof 5 (mutation): today's behaviour, a successor waiting for its
+                // random delay counts as not dispatched.
+                && successor_waits.is_empty()
                 && successor_waits.iter().any(|code| reason.outcome.is(*code))
             {
                 handover.wait();
