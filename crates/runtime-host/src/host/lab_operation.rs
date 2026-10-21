@@ -17,7 +17,7 @@ use actingcommand_contract::{
     LabOperationRecord, LabOperationStage, MAX_LAB_ARRIVAL_FRAMES, ONLINE_OBSERVATION_SCHEMA,
     PageObservationStatus,
 };
-use actingcommand_execution_kernel::{ObservationMode, PreparedPageObservation};
+use actingcommand_execution_kernel::{FrameOwner, ObservationMode, PreparedPageObservation};
 
 impl HostShared {
     pub(super) fn run_contained_lab_operation(
@@ -747,11 +747,13 @@ impl HostShared {
             links = run_links.apply(links);
             artifact_links = artifact_links.with_run_id(run_links.run_id);
         }
+        // #411 A49: the operation captures under its lease, as the lease holder.
         let completed = self.capture_observation_with_links(
             request,
             &instance.instance_alias,
             links,
             artifact_links,
+            FrameOwner::Lease,
             &admission,
         )?;
         let fence = self
