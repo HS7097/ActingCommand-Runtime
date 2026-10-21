@@ -22049,6 +22049,33 @@
       "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links.",
       "common_causes": "MuMuManager did not answer within its bound or printed an answer of an unknown shape.",
       "handling": "TBD"
+    },
+    "emulator_restart_previous_instance_running": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "elapsed_ms": "required",
+        "timeout_ms": "required",
+        "config_key": "required",
+        "process_started": "optional",
+        "android_started": "optional",
+        "adb_port_present": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A restart (an operator's emulator restart, or the stuck-recovery ladder's emulator-restart rung) launches only after the old VM has exited (#411 A50). Its Stop's readiness wait had expired, so it read the emulator status as a self-check does (MuMuManager info: the bounded read after the Stop's failure, then one read every 500 ms on the Runtime clock) for at most emulator_control.restart_exit_wait_ms, and every read that answered still showed the emulator process running. The restart fails and launches nothing, so the new instance never comes up on another ADB port beside the old one. elapsed_ms is the time waited, timeout_ms the bound in effect, config_key the bound's key; process_started, android_started and adb_port_present are the last read that answered. The Stop's failure (emulator_control_wait_timeout) is the caused_by link. Recorded as the request's command.rejected and runtime.failed under the restart's links (the ladder's rung fails with this code).",
+      "common_causes": "The emulator's VM process stays alive after its shutdown (it is still stopping, or its manager lost track of it) and keeps the instance's ADB port.",
+      "handling": "Wait until the old emulator process has exited, or end it, then restart again; raise emulator_control.restart_exit_wait_ms when the emulator needs longer to stop."
     }
   },
   "locations": {

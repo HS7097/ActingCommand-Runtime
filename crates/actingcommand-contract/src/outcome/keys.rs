@@ -373,6 +373,8 @@ outcome_keys! {
     android_started: boolean,
     adb_port_present: boolean,
     device_process_present: vocab(device_process_presence),
+    // #411 A50: why a capture backend's open failed, when the backend can tell.
+    capture_open_cause: vocab(capture_open_cause),
     // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.
     duplicate_count: integer,
     dump_sealed: boolean,

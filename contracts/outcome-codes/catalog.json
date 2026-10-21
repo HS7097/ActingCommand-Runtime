@@ -1521,6 +1521,10 @@
       "type": "vocab:device_process_presence",
       "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
     },
+    "capture_open_cause": {
+      "type": "vocab:capture_open_cause",
+      "description": "Why opening an instance's capture backend failed, as far as the backend can tell (#411 A50)."
+    },
     "duplicate_count": {
       "type": "integer",
       "description": "Records skipped because their event id was already in the ledger."
@@ -5058,6 +5062,20 @@
         },
         "unknown": {
           "description": "No listing answered: it failed, passed its bound or never ran."
+        }
+      }
+    },
+    "capture_open_cause": {
+      "description": "Why opening an instance's capture backend failed, as far as the backend can tell (#411 A50).",
+      "tokens": {
+        "display_missing": {
+          "description": "The display of the instance's application package does not exist: the application is not running (a Nemu display lookup by package answered no display)."
+        },
+        "connection_failed": {
+          "description": "The connection to the emulator instance failed (a Nemu connect answered no handle)."
+        },
+        "other": {
+          "description": "Any other failure, or a backend that cannot tell the causes apart; the backend's own text is the raw_text of the outcome's foreign link."
         }
       }
     },

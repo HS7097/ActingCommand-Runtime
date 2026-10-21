@@ -938,7 +938,11 @@ impl HostShared {
     /// The stuck-recovery ladder's preparation (stage `recovery_preparation`): the self-check,
     /// the `instance_preparation_finished` event, and whether a failure is one the existing
     /// preparation rule calls recoverable (Workflow #369-1, review M3). Workflow #369 H-3: it
-    /// runs on the ladder's key, takes no dedicated lease and releases nothing.
+    /// runs on the ladder's key, takes no dedicated lease and releases nothing. #411 A50 (the A38
+    /// follow-up): it first reads the emulator status as A48's self-check does
+    /// (`selfcheck_emulator`), so a running emulator the Runtime holds stopped or on another port
+    /// is recognized again (the reported port bound, the ADB baseline awaited) before the opens,
+    /// instead of an open failing on the stale binding; that covers a fence's own recheck too.
     pub(super) fn prepare_recovery_connection(
         &self,
         resolved: &RegisteredInstance,
@@ -956,7 +960,7 @@ impl HostShared {
                 token: &key.token,
                 connection_id: key.connection_id,
             },
-            EmulatorStatusRead::Skip,
+            EmulatorStatusRead::First,
         )
         .map(|prepared| (prepared.selfcheck, prepared.event, prepared.recoverable))
     }

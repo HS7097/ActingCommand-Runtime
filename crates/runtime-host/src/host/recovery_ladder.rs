@@ -2688,7 +2688,7 @@ impl HostShared {
                 action,
                 pending.request_id,
                 &admission,
-                &key.token,
+                key,
             ) {
                 Ok(driven) => driven,
                 Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {

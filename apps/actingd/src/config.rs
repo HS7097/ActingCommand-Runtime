@@ -206,6 +206,13 @@ pub(super) struct ActingdConfigFile {
     // a file that does not name it keeps its revision.
     #[serde(default)]
     touch: Option<actingcommand_runtime_config::TouchFile>,
+    /// #411 A50: how long a restart waits for its old VM to exit
+    /// (`emulator_control.restart_exit_wait_ms`), optional; the defaults file holds the default.
+    // Interface anchor `actingd-config` revision 8 (contracts/component-interfaces.md): a Runtime
+    // before #411 A50 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    emulator_control: Option<actingcommand_runtime_config::EmulatorControlFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1412,6 +1419,8 @@ impl ActingdConfigFile {
             "startup_discovery": serde_json::to_value(&self.startup_discovery)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "touch": serde_json::to_value(&self.touch)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "emulator_control": serde_json::to_value(&self.emulator_control)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
