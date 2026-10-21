@@ -1439,7 +1439,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 )
             })
             .transpose()?;
-        if let Some(parameters) = dispatch_parameters_reason(remedy_parameters, schedule) {
+        if let Some(parameters) =
+            dispatch_parameters_reason(remedy_parameters, schedule.filter(|_| false))
+        {
             reasons.push(parameters);
         }
         reasons.extend([
