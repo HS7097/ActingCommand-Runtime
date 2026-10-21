@@ -401,7 +401,8 @@ impl PreparedContainedTask {
             ) {
                 Ok((guard, target)) => {
                     // A frame that moved starts the count again: it is the first still frame.
-                    held = if moved { 1 } else { held + 1 };
+                    let _ = moved;
+                    held += 1;
                     if held >= frames {
                         return Ok(InputRecheck::Held(Box::new(RecheckedInput {
                             observation: fresh,
