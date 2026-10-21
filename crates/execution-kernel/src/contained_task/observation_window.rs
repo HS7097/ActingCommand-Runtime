@@ -328,7 +328,7 @@ impl PreparedContainedTask {
         };
         let unconfirmed = match still {
             None => ExecutionKernelCode::ContainedTaskInputStabilityUnconfirmed,
-            Some(_) => ExecutionKernelCode::ContainedTaskInputStillUnconfirmed,
+            Some(_) => ExecutionKernelCode::ContainedTaskInputStabilityUnconfirmed,
         };
         let task_deadline = timing.deadline();
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
