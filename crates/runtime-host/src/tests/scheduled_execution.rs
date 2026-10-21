@@ -333,7 +333,7 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
         !error.is_fatal(),
         "unexpected fatal scheduled error: {error}"
     );
-    assert_eq!(error.code(), "contained_task_requires_scheduler");
+    assert_eq!(error.code(), "contained_task_step_budget_exhausted");
     let mut client = TestClient::connect(&host);
     let events = projected_events(
         &mut client,
