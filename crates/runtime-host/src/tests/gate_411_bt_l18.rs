@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #411 A18 option ④ (slice BT-LAB, plan §2.17, test row BT-L18 T1; host key 128; register §1.146
+// #411 A18 option ④ (slice BT-LAB, plan §2.17, test row BT-L18 T1; host key 128; register §1.147
 // L18-1): online `do`'s arrival samples start every 500 ms, start to start; after a sample's
 // capture and evaluation the request waits for what is left of the period, never past the
 // deadline. On the manual Runtime clock every capture records the instant it starts and then moves

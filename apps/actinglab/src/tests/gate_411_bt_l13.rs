@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #411 A13 B part (slice BT-LAB, plan §2.16, test row BT-L13 T1; exec key 116; register §1.146
+// #411 A13 B part (slice BT-LAB, plan §2.16, test row BT-L13 T1; exec key 117; register §1.147
 // L13-1): offline `observe` lists each operation of the observed page whose `to` is a page set in
 // `actions` with `input` next to its declared `click`, built from its generated navigation row as
 // an edge's `input` is (`null` for a segmented drag, as an edge's), with no coordinate resolved on

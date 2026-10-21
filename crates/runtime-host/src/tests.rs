@@ -298,7 +298,7 @@ mod gate_411_lab_l5;
 // #411 Lab L5b (host key 121), register §1.130: `observe --capture` projects a multi-frame
 // candidate layout over its own series.
 mod gate_411_lab_l5b;
-// #411 A18 option ④ (host key 128), register §1.146: online `do`'s arrival samples start every
+// #411 A18 option ④ (host key 128), register §1.147: online `do`'s arrival samples start every
 // 500 ms, start to start.
 mod gate_411_bt_l18;
 // Workflow #406 T12 (host key 123), register §1.136: the touch keys in effect and the landing

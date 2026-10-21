@@ -45,7 +45,7 @@ mod gate_lab_l5c;
 // declare or an option it does not declare.
 #[path = "gate_lab_rp.rs"]
 mod gate_lab_rp;
-// #411 A13 B part (exec key 116): offline `observe` gives an operation whose `to` is a page set
+// #411 A13 B part (exec key 117): offline `observe` gives an operation whose `to` is a page set
 // the `input` an edge has for the same click.
 #[path = "gate_411_bt_l13.rs"]
 mod gate_411_bt_l13;
