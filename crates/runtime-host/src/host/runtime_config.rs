@@ -369,6 +369,21 @@ impl HostShared {
             })
     }
 
+    /// #411 A50: `emulator_control.restart_exit_wait_ms` in effect, read at every restart whose
+    /// Stop's readiness wait expired: how long it waits for the old VM to exit.
+    pub(super) fn restart_exit_wait_ms(&self) -> RuntimeHostResult<u64> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .restart_exit_wait_ms()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, read
     /// when a run joins the readings it handed to recognition.
     pub(super) fn recognition_join_timeout(&self) -> RuntimeHostResult<Duration> {

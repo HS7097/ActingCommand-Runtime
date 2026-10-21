@@ -18,12 +18,13 @@
 use super::{
     ApplicationEffectSupport, ContainedTaskBoundaryTiming, ContainedTaskError,
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
-    ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, ExtraRounds, MAX_CAPTURE_INTERVAL_MS,
-    MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates,
-    PageObservation, PostAdmissionOcrCollector, PreparedContainedTask, SampleRetries, StepPacing,
-    TaskControl, TaskOperation, TaskProgram, budget_elapsed_since, budget_now,
-    budget_observation_now, pace_pause, paced_step, resolve_page_reference, runtime_touch_choice,
-    sample_budget_invalid, selection, step_point_draw,
+    ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, ExtraRounds, InputRecheck,
+    MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock,
+    PageCandidates, PageObservation, PostAdmissionOcrCollector, PreparedContainedTask,
+    RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
+    budget_elapsed_since, budget_now, budget_observation_now, pace_pause, paced_step,
+    resolve_page_reference, runtime_touch_choice, sample_budget_invalid, selection,
+    step_point_draw,
 };
 use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
@@ -604,13 +605,10 @@ impl TaskProgram {
             if operation.select.is_some() || operation.on_error.is_some() {
                 return Err(invalid("operation_effect", Some(operation)));
             }
-            // Workflow #390 EXEC-2: the observation window and the input recheck are page-graph
-            // declarations.
+            // Workflow #390 EXEC-2: the observation window is a page-graph declaration. Workflow
+            // #411 B12 (Q9): an input recheck of any kind is admitted under `linear_steps` too.
             if operation.observation_window.is_some() {
                 return Err(invalid("observation_window", Some(operation)));
-            }
-            if operation.input_recheck.is_some() {
-                return Err(invalid("input_recheck", Some(operation)));
             }
             // Workflow #390 EXEC-1: candidate operations are page-graph declarations.
             if operation.when.is_some() {
@@ -1271,7 +1269,8 @@ impl PreparedContainedTask {
     }
 
     /// The guard on the frame that passed this step, then the effect intent and the input
-    /// bound to that frame's input context, in the order of the page-graph path.
+    /// bound to that frame's input context, in the order of the page-graph path; with a declared
+    /// input recheck (Workflow #411 B12), to the input context of the recheck's last frame.
     fn linear_input<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1311,6 +1310,35 @@ impl PreparedContainedTask {
                     continue;
                 }
             };
+            // Workflow #411 B12 (Q9): a click that declares a recheck is checked again on fresh
+            // frames of the step's page, as on the page-graph path; its input is drawn from and
+            // bound to the last of them. A refusal ends the run as a guard refusal does, with no
+            // input and no retry.
+            let (guard, target, rechecked) = match operation.input_recheck {
+                None => (guard, target, None),
+                Some(recheck) => match self.recheck_before_input(
+                    runtime,
+                    operation,
+                    recheck,
+                    frame,
+                    true,
+                    (run.timing, run.step_timeout),
+                    &mut retries,
+                )? {
+                    InputRecheck::Held(held) => {
+                        let RecheckedInput {
+                            observation: fresh,
+                            timing,
+                            guard,
+                            target,
+                        } = *held;
+                        step_timing = timing;
+                        (guard, target, Some(fresh))
+                    }
+                    InputRecheck::Refused { error, .. } => return Err(error.into()),
+                },
+            };
+            let frame = rechecked.as_ref().unwrap_or(frame);
             // Workflow #406 T12: the step's seed and the touch keys in effect.
             let draw = step_point_draw(runtime, step_index, &operation.id)?;
             let click = operation.click.as_ref().ok_or_else(|| {

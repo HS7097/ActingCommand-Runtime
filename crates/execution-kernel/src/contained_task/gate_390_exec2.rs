@@ -451,48 +451,42 @@ fn exec2_admission_bounds_the_window_at_60_s_and_keeps_the_post_delay_bound() {
     assert_eq!(refused_code(slow_check(4)), invalid);
 }
 
-// FCM §2.4 row EXEC-2: both declarations belong to page-graph tasks; a linear task refuses them.
+// FCM §2.4 row EXEC-2: the observation window belongs to page-graph tasks; a linear task refuses
+// it. (Workflow #411 B12, Q9: a linear task admits the input recheck, exec key 126.)
 #[test]
-fn exec2_a_linear_task_refuses_the_window_and_the_recheck() {
+fn exec2_a_linear_task_refuses_the_window() {
     let mut linear = control_json();
     linear["execution_mode"] = json!("linear_steps");
     linear["max_steps"] = json!(1);
     let linear: TaskControl = serde_json::from_value(linear).expect("linear control");
     let detector = PageDetector::new(page_set()).expect("page detector");
-    for (member, value) in [
-        (
-            "observation_window",
-            json!({"until": "window_end", "window_ms": 1_000}),
-        ),
-        ("input_recheck", json!({"kind": "fresh_frame"})),
-    ] {
-        let mut operation = open(json!({}));
-        operation[member] = value;
-        let program: TaskProgram = serde_json::from_value(json!({
-            "schema_version": "0.9",
-            "task_id": "task",
-            "game": "neutral",
-            "server_scope": ["test"],
-            "coordinate_space": {"width": 2, "height": 1},
-            "entry_page": "home",
-            "target_page": "terminal",
-            "max_steps": 1,
-            "operations": [operation]
-        }))
-        .expect("linear program");
-        let error = program
-            .validate_linear(&linear, &detector)
-            .err()
-            .expect("a linear task refuses the declaration");
-        assert_eq!(
-            error.code().as_str(),
-            ExecutionKernelCode::ContainedTaskLinearInvalid.as_str()
-        );
-        assert_eq!(
-            error.detail(),
-            Some(format!("reason={member} operation=open").as_str())
-        );
-    }
+    let operation = open(json!({
+        "observation_window": {"until": "window_end", "window_ms": 1_000}
+    }));
+    let program: TaskProgram = serde_json::from_value(json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "terminal",
+        "max_steps": 1,
+        "operations": [operation]
+    }))
+    .expect("linear program");
+    let error = program
+        .validate_linear(&linear, &detector)
+        .err()
+        .expect("a linear task refuses the declaration");
+    assert_eq!(
+        error.code().as_str(),
+        ExecutionKernelCode::ContainedTaskLinearInvalid.as_str()
+    );
+    assert_eq!(
+        error.detail(),
+        Some("reason=observation_window operation=open")
+    );
 }
 
 // FCM E-05 「等迟到的弹层出现」: a popup that is a destination of the operation and appears two

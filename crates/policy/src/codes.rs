@@ -191,6 +191,13 @@ actingcommand_contract::outcome_codes! {
         /// fact refresh is requested (keys `fact_key`, `fact_time_problem`).
         FactTimeUnavailable => "fact_time_unavailable": info / none,
         // ---- Workflow #405 W1: end ----
+        // ---- Workflow #411 B41 (chain handover, `contracts/scheduling/README.md`, "Chain
+        // Handover"): begin ----
+        /// Info. A candidate waits for the chain step that goes first on its instance: a chain's
+        /// predecessor run ended on a page the step's package starts on, and the step is
+        /// dispatched this round (keys `instance_id`, `task_id` the step, `page_id` the page).
+        PolicyChainHandoverWaiting => "policy_chain_handover_waiting": info / none,
+        // ---- Workflow #411 B41: end ----
     }
 }
 

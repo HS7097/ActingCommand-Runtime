@@ -2,7 +2,7 @@
 
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
-use actingcommand_contract::outcome::{CauseRelation, Code, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, Location, Outcome, VocabularyToken};
 use actingcommand_contract::{
     CleanupCauseDraft, DiagnosticDetailDraft, InstanceId, ResourceQuiescence, RuntimeErrorCode,
     RuntimeErrorProjection,
@@ -737,6 +737,20 @@ impl RuntimeHostError {
                 ..RuntimeHostFailureContext::default()
             }),
         };
+        // #411 A50: a failed capture open says why (`capture_open_cause`), with the application
+        // package and the emulator instance index when the device backend knows them.
+        let runtime_error = if spelled(
+            kernel_code,
+            &[
+                DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
+                DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
+            ],
+        ) {
+            let failure = error.failure_context().capture_open_failure();
+            runtime_error.with_outcome_values(|outcome| capture_open_values(outcome, failure))
+        } else {
+            runtime_error
+        };
         if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
             runtime_error.into_fatal()
         } else {
@@ -978,6 +992,45 @@ pub trait RuntimeDaemonReporter: Send + Sync {
     /// A background step that a ledger read did not answer in time, or that its read stopped at
     /// its work budget, skipped (R3); the step runs again at its next tick.
     fn step_skipped(&self, outcome: &Outcome);
+}
+
+/// #411 A50: a capture open failure's cause as a token of the catalog vocabulary
+/// `capture_open_cause`; `other` when the device backend could not tell.
+#[derive(Clone, Copy)]
+struct CaptureOpenCauseToken(Option<actingcommand_device::CaptureOpenCause>);
+
+impl VocabularyToken for CaptureOpenCauseToken {
+    const VOCABULARY: &'static str = "capture_open_cause";
+
+    fn token(self) -> &'static str {
+        match self.0 {
+            Some(actingcommand_device::CaptureOpenCause::DisplayMissing) => "display_missing",
+            Some(actingcommand_device::CaptureOpenCause::ConnectionFailed) => "connection_failed",
+            None => "other",
+        }
+    }
+}
+
+/// #411 A50: the values of a failed capture open: its cause, and the application package and
+/// the emulator instance index when the device backend knows them. Without a cause the backend's
+/// own text, the outcome's foreign link, is the evidence of `other`.
+fn capture_open_values(
+    outcome: Outcome,
+    failure: Option<&actingcommand_device::CaptureOpenFailure>,
+) -> Outcome {
+    let outcome =
+        outcome.capture_open_cause(CaptureOpenCauseToken(failure.map(|failure| failure.cause)));
+    let Some(failure) = failure else {
+        return outcome;
+    };
+    let outcome = match &failure.application_id {
+        Some(application_id) => outcome.application_id(application_id),
+        None => outcome,
+    };
+    match failure.instance_index {
+        Some(instance_index) => outcome.instance_index(instance_index),
+        None => outcome,
+    }
 }
 
 #[derive(Clone, Default)]

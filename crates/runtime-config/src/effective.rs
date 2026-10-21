@@ -19,8 +19,8 @@ use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, f
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, host_claims, instance, ledger_observer, performance,
-    recovery_ladder, scheduling, startup_discovery, touch,
+    device_link, device_state, emulator_control, host_claims, instance, ledger_observer,
+    performance, recovery_ladder, scheduling, startup_discovery, touch,
 };
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -416,6 +416,12 @@ impl EffectiveConfig {
         host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// #411 A50: `emulator_control.restart_exit_wait_ms` in effect, in milliseconds: how long a
+    /// restart waits for its old VM to exit before it launches.
+    pub fn restart_exit_wait_ms(&self) -> Result<u64, ConfigFailure> {
+        emulator_control::restart_exit_wait_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #385 P-c: the `performance` section in effect, checked whole (PERF §4.1,
     /// §10.4).
     pub fn check_performance(&self) -> Result<(), ConfigFailure> {
@@ -654,6 +660,9 @@ impl EffectiveConfig {
         }
         if sections.contains(touch::SECTION) {
             self.touch()?;
+        }
+        if sections.contains(emulator_control::SECTION) {
+            self.restart_exit_wait_ms()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

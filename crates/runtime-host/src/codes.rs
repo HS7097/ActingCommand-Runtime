@@ -267,6 +267,20 @@ actingcommand_contract::outcome_codes! {
         /// ruling 1); NAV-5 emits it.
         ContainedTaskNavigationRecoveryExhausted => "contained_task_navigation_recovery_exhausted": error / pack_logic_mismatch,
         // Workflow #387 D1c end
+        // #411 B37 (A35-S1) begin: a busy end and the ladder's busy hold.
+        /// Info (#411 B37). A rung's package run completed on a mapping its package marks
+        /// `busy`: the instance still shows an activity in progress, so the rung did not recover
+        /// it (the rung's `recovery_rung_finished` outcome, `failed`; keys `outcome_key`,
+        /// `page_id`, `held_ms` since the climb's first busy end, `limit_ms` the configured hold,
+        /// `retry_after_ms` the wait before the return-home rung runs again, absent when the hold
+        /// ends).
+        RecoveryRungBusyOutcome => "recovery_rung_busy_outcome": info / planned_stop,
+        /// Warning (#411 B37). A climb's busy hold reached `recovery_ladder.busy.outcome.max_wait_ms`
+        /// under `on_exhausted = stop`: the ladder ended without a restart (the
+        /// `recovery_ladder_finished` outcome, `exhausted`; keys `held_ms`, `limit_ms`; caused by
+        /// the last busy rung's outcome).
+        RecoveryLadderHoldExhausted => "recovery_ladder_hold_exhausted": warning / planned_stop,
+        // #411 B37 (A35-S1) end
         // Workflow #390 DRILL-1 begin: a person's drill of an instance's ladder.
         /// Info. The trigger of a drill's ladder: a person asked for it (`DrillRecoveryLadder`);
         /// its `recovery_ladder_started` names it as the trigger's `failure_code`, stage `drill`.
@@ -1455,6 +1469,16 @@ actingcommand_contract::outcome_codes! {
         /// Runtime's own state of the instance. The read's failure text is the cause.
         EmulatorStateReadFailed => "emulator_state_read_failed": warning / none,
         // ---- #411 A48: end
+        // ---- #411 A50: a restart launches only after the old VM has exited: begin
+        /// Error. A restart (an operator's, or the ladder's emulator-restart rung) whose Stop's
+        /// readiness wait expired read the emulator status until
+        /// `emulator_control.restart_exit_wait_ms`, and the old VM's process was still running:
+        /// the restart fails and launches nothing (keys `instance_id`, `elapsed_ms` the time
+        /// waited, `timeout_ms` the bound, `config_key` the bound's key, and the last read's
+        /// `process_started`, `android_started`, `adb_port_present` when a read answered). The
+        /// Stop's failure is its `caused_by` link.
+        EmulatorRestartPreviousInstanceRunning => "emulator_restart_previous_instance_running": error / environment_fault,
+        // ---- #411 A50: end
     }
 }
 

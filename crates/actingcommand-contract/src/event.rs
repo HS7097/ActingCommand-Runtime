@@ -975,3 +975,8 @@ impl Error for SanitizationError {}
 #[cfg(test)]
 #[path = "event/v2_tests.rs"]
 mod tests;
+
+// #411 B37 (A35-S1, contract key K29): a scheduling outcome mapping's `busy` member and its rules.
+#[cfg(test)]
+#[path = "event/gate_411_b37.rs"]
+mod gate_411_b37;

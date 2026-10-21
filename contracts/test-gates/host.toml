@@ -1554,3 +1554,96 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a51::a51_t5_the_first_latched_fatal_reaches_the_daemon_log_at_once",
 ]
 incident = ["#411 A51"]
+
+# #411 B37 (slice A35-S1, 0.12.x; register §1.152 B37-1, B37-3; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S1 T1; host keys 133 to 137 assigned by the coordinator): a stuck-recovery ladder whose return-home run completes on a scheduling outcome mapping its package marks busy records the rung failed with recovery_rung_busy_outcome (info; outcome_key, held_ms 0, limit_ms the configured busy.outcome.max_wait_ms, retry_after_ms the configured busy.outcome.recheck_ms), does not count it as recovered, and while its busy budget lasts issues no application stop and runs no further rung
+[[gate]]
+key = "133"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37::b37_t1_a_busy_return_home_end_is_recorded_failed_and_not_recovered",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 B37 (slice A35-S1; register §1.152 B37-3; design §5.1 S1 T2; coordinator decisions Q1, Q2): after a busy end the ladder holds its key until busy.outcome.recheck_ms has passed on the Runtime clock and runs the return-home rung again; a rerun that completes on a mapping that is not busy ends the ladder recovered with rungs_tried 1 (distinct rungs), two return-home rung records at least recheck_ms apart and no application stop
+[[gate]]
+key = "134"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37::b37_t2_after_the_hold_the_return_home_rung_runs_again_and_recovers",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 B37 (slice A35-S1; register §1.152 B37-2, B37-3; design §5.1 S1 T3; coordinator decision Q3): a return-home run that stays busy is held recheck_ms at a time, never longer than what is left of busy.outcome.max_wait_ms since the first busy end (the busy record's retry_after_ms, absent at the limit); at the limit on_exhausted stop ends the ladder exhausted with recovery_ladder_hold_exhausted (warning; held_ms at least limit_ms; caused by the last recovery_rung_busy_outcome) and no application stop, and escalate goes on to the application restart rung, which stops the application
+[[gate]]
+key = "135"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37::b37_t3_at_the_limit_on_exhausted_stops_or_escalates",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 B37 (slice A35-S1; register §1.152 B37-3; design §5.1 S1 T4, §4.3 "the hold"): a busy hold makes the ladder's holding check every busy.poll_ms; a shutdown requested during the hold ends the climb at the next poll, before the hold's end: the return-home rung it was about to run again is recorded failed with recovery_ladder_interrupted caused by recovery_ladder_shutdown_requested, the ladder ends exhausted at warning, no second return-home run starts and the close returns
+[[gate]]
+key = "136"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37::b37_t4_a_shutdown_during_the_hold_ends_the_climb_at_the_next_poll",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 B37 (slice A35-S1; register §1.152 B37-4, B37-5; design §5.1 S1 T5, §3; coordinator decision Q3): recovery_ladder.busy.poll_ms, busy.outcome.recheck_ms, max_wait_ms and on_exhausted default to 500, 60000, 3600000 and stop from the shipped defaults file; poll_ms below 100 or above recheck_ms and max_wait_ms above a day are bound_out_of_range, recheck_ms plus hold.margin_ms beyond the longest renewal renewal_cap_exceeded, at start (recovery_ladder_config_invalid) and through an instruction (config_value_invalid, the configuration in effect unchanged)
+[[gate]]
+key = "137"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_411_b37::b37_t5_the_busy_keys_default_from_the_file_and_their_bounds_are_checked",
+]
+incident = ["#411 B37"]
+
+# Workflow #411 B39 A part (slice E4, 0.12.x; register §1.156 E4-4, E4-5; no persisted ledger shape; B-train plan §6, Q15): after a declared prerequisite package whose run ended on a page one of its scheduling_outcome mappings lists, an entry that still does not pass fails the run as before with contained_task_prerequisite_entry_unmatched, and its outcome names that mapping's outcome key as layer_outcome_key
+[[gate]]
+key = "139"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::gate_411_e4::e4_t4_an_unmatched_entry_after_a_prerequisite_names_the_layer_outcome_key",
+]
+incident = ["#411 B39"]
+
+# #411 A50 item 1 (register §1.158 A50-1; no persisted ledger shape): a capture open that cannot open says why: a Nemu display lookup by package that answered no display (the application is not running) fails capture_backend_open_failed with capture_open_cause display_missing, the package and the instance index; a failed connection to the emulator has its own cause, connection_failed
+[[gate]]
+key = "144"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t1_a_missing_package_display_is_the_capture_open_failures_cause_with_package_and_index",
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t2_a_failed_connection_to_the_emulator_is_its_own_capture_open_cause",
+]
+incident = ["#411 A50"]
+
+# #411 A50 item 2 (register §1.158 A50-2, A50-3; no persisted ledger shape): an operator restart of an unpaused instance that has a startup package queues it, also when its preparation failed; on a paused instance it queues nothing and the answer says why (startup_package_withheld instance_paused)
+[[gate]]
+key = "145"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t3_an_operator_restart_of_an_unpaused_instance_queues_its_startup_package",
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t4_an_operator_restart_of_a_paused_instance_queues_nothing_and_says_why",
+]
+incident = ["#411 A50"]
+
+# #411 A50 item 3 (register §1.158 A50-4, A50-5; no persisted ledger shape): a restart whose Stop's readiness wait expired launches only after the emulator status reads the old VM stopped; still running at emulator_control.restart_exit_wait_ms (the configuration in effect) it fails emulator_restart_previous_instance_running and launches nothing
+[[gate]]
+key = "146"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t5_a_restart_launches_only_after_the_status_reads_the_old_vm_stopped",
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t6_an_old_vm_still_running_at_the_configured_bound_fails_the_restart_without_a_launch",
+]
+incident = ["#411 A50"]
+
+# #411 A50 item 4, the A38 follow-up (register §1.158 A50-7; no persisted ledger shape): prepare_recovery_connection (here a fence's own recheck) reads the emulator status first; a running emulator the Runtime holds stopped is recognized again and bound, and the recheck passes
+[[gate]]
+key = "147"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t7_the_recovery_preparation_reads_the_status_and_recognizes_a_running_emulator",
+]
+incident = ["#411 A50"]
