@@ -2758,6 +2758,23 @@ exec key 131; host key 139.
 | E4-4 | `contained_task_prerequisite_entry_unmatched` after a declared prerequisite package whose run ended on a page exactly one of its `scheduling_outcome` mappings lists | new optional value `layer_outcome_key` (`name`) on the failure's outcome, the terminal's and the receipt's (host 139) | E4 | E4 | the mapping's `outcome_key`; a prerequisite package declares no designated effect, so the condition is `no_designated_effect`; none when the layer's run did not succeed, ended on an unmapped page or selected a key of its own; not on `contained_task_return_home_entry_unmatched`; the run still fails with this code (B39's B part, a mapped layer key that ends the main run, is not in this slice) |
 | E4-5 | keys `argument_value`, `layer_outcome_key` (`name`), `expected_shape` (`vocab:expected_shape`), `box_x`, `box_y`, `box_width`, `box_height` (integer); vocabulary `expected_shape`; domain `package_check_` (actinglab); code `package_check_click_box_single_point` (warning, ladder class `none`) | new key-table, vocabulary, domain and catalog entries (no shape) | E4 | E4 | every entry stays `pending`; no location or configuration key |
 
+### 1.157 Slice B41 (0.12.x): a chain step that hands over on its page goes first (#411 B41; coordinator triage Q15; [scheduling/README.md](scheduling/README.md), "Chain Handover")
+
+The 10-20 incident: a chain's predecessor ended on a result page that is its successor's entry
+page; a fact refresh reading ranked ahead of the successor ran first, its return-home
+prerequisite layer left the page, and the successor failed with
+`contained_task_home_recovery_terminal_outside_entry`. **No persisted ledger shape**: the new
+reason travels in the existing decisions and dispatch reason chains (`PolicyReasonRecord` is
+`#[serde(transparent)]` over `Outcome`), and a dispatch decision record lists a waiting candidate
+with it as `why` (§1.145). No catalog or package format change, no key, vocabulary token,
+location or configuration key. Gates: policy keys 60 to 63, T5 in key 63's row (host keys 141 to 143 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B41-1 | `policy_chain_handover_waiting` (info, `none`; `instance_id`, `task_id` the successor, `page_id` the page) | new code of existing decision reasons (policy 60 to 63) | B41 | B41 | the last reason of each candidate that ranked ahead of a dispatched successor on its instance, a fact refresh reading included (its decision deferred, no wake); the affected candidates of that reading carry it as `fact_refresh_pending`'s `gate_code`; review `pending` |
+| B41-2 | `evaluate_with_chain_handovers` with `ChainHandoverInputs { resting_pages, successor_wait_codes }` (`RestingPage { page_id, observed_at_unix_ms }` per instance alias; the deferral codes under which a successor still goes first, the host's `dispatch_random_delay_waiting`) and the entry answer `(task, instance alias, page id) -> bool` | policy interface (memory only) (policy 60 to 63) | B41 | B41 | the host passes each instance's `task.page` runtime fact and answers from the successor's package (its declared entry page or set, or its entry gate's pages, without the game prefix; a package it cannot read holds no page); none of it enters a snapshot or a decision identity |
+| B41-3 | the allocation order on a handover instance | rule (no shape change) (policy 60 to 63) | B41 | B41 | the successor moves ahead of the candidates that ranked ahead of it; they wait while it is dispatched or waits for its random delay (part of its dispatch, coordinator ruling 10-21), and take their turn in rank order when any other gate defers it (an admission gate at positions 1 to 8a, or the host budget); a successor that reads a key the fact refresh reads is no candidate, so the refresh goes first (model item 4) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

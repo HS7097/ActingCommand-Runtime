@@ -615,6 +615,46 @@ target record `session.remedy.choices` (an overlaid instance fact) and the confi
   evaluation's output keeps its shape, and with no remedy declared every evaluation is
   byte-identical to one without remedies.
 
+## Chain Handover (Workflow #411 B41)
+
+A chain step that hands over on its page goes first (coordinator triage Q15; register §1.157).
+
+- **Handover.** On an instance, a round has a handover when a candidate of the round, the
+  *successor*, follows a predecessor on the page the instance rests on: its trigger names
+  `dependency_completed` (outside a `not`, accepting `succeeded`) of the predecessor; the
+  predecessor's latest run on the instance succeeded; the instance's `task.page` runtime fact (the
+  page its latest recognition matched) was recorded between that run's admission and its end, so
+  nothing recognized another page since; and the entry page set of the successor's package holds
+  that page (its declared `entry_page` or entry page set, or the entry its entry gate checks, each
+  without the game prefix). The Runtime reads the package its procedure binding locates, only for
+  such a candidate; a package it cannot read holds no page, and its run's own admission refuses
+  it. A takeover, an unreachable ADB or an emulator restart drops `task.page`, so no instance has a
+  handover until a run recognizes a page again. The first such candidate in rank order is the
+  instance's successor.
+- **The successor goes first.** It is allocated before every candidate of its instance that ranked
+  ahead of it. While it is dispatched, each of those waits with `policy_chain_handover_waiting`
+  (info; `instance_id`, `task_id` the successor, `page_id` the page), its decision deferred and
+  with no wake of its own: a fact refresh reading too (its decision ends with that reason, and
+  each candidate it reads for gets `fact_refresh_pending` with `gate_code`
+  `policy_chain_handover_waiting`). The Runtime does not predict where another package's run ends,
+  so every candidate that ranked ahead waits, not only those whose entry or prerequisite layer
+  goes home. The candidates ranked behind the successor lose to it with
+  `instance_already_selected` as before.
+- **The waiting work keeps its own due time.** It runs after the chain step. The successor's
+  random delay (`dispatch_random_delay_waiting`, position 9 of the order of deferrals) is part of
+  its dispatch: while the successor waits for its planned start the candidates it went before keep
+  waiting with `policy_chain_handover_waiting` (coordinator ruling 10-21). When any other gate
+  defers the successor in the round (an admission gate at positions 1 to 8a, or the host budget),
+  the candidates it went before take their turn in the same round, in rank order. When the
+  successor is no longer a candidate (withdrawn, refused, no longer due) there is no handover.
+- **Exception.** A successor whose own trigger or selection document reads a key the fact refresh
+  reads is deferred for that key and is no candidate: the refresh goes first, as before. Its run
+  then starts wherever the refresh left the instance, and its entry recovery decides as before.
+- **Records.** No record is new: the waiting candidates' decisions carry the reason, the
+  successor's dispatch decision record lists them with that `why`, and the not-run explanation
+  (`ac_schedule`) shows it as their `why`. Without a resting page every evaluation is the one
+  before B41.
+
 ## Dispatch Decision Record
 
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the
