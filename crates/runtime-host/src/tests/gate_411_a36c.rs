@@ -151,9 +151,9 @@ fn staging_files(root: &Path) -> Vec<PathBuf> {
     found
 }
 
-// What the foreign write met: per staged PP-OCR report, its length before the write and the
-// write's result; per staging file it could not read, the read's error.
-type ForeignAppends = Arc<Mutex<Vec<(u64, Result<(), std::io::ErrorKind>)>>>;
+// What the foreign write met: per staged PP-OCR report, its path, its length before the write and
+// the write's result; per staging file it could not read, its path and the read's error.
+type ForeignAppends = Arc<Mutex<Vec<(PathBuf, u64, Result<(), std::io::ErrorKind>)>>>;
 
 // Once the next PP-OCR report is written and before its seal, appends FOREIGN to every staged
 // PP-OCR report below `root`. Other open streams (a run's task diagnostic) are left alone.
@@ -169,7 +169,7 @@ fn append_before_next_ppocr_seal(host: &RuntimeHost, root: &Path) -> ForeignAppe
                     record
                         .lock()
                         .expect("foreign appends")
-                        .push((0, Err(error.kind())));
+                        .push((staging, 0, Err(error.kind())));
                     continue;
                 }
             };
@@ -180,10 +180,11 @@ fn append_before_next_ppocr_seal(host: &RuntimeHost, root: &Path) -> ForeignAppe
                 .append(true)
                 .open(&staging)
                 .and_then(|mut file| file.write_all(FOREIGN));
-            record
-                .lock()
-                .expect("foreign appends")
-                .push((staged.len() as u64, written.map_err(|error| error.kind())));
+            record.lock().expect("foreign appends").push((
+                staging,
+                staged.len() as u64,
+                written.map_err(|error| error.kind()),
+            ));
         }
     })
     .expect("install the foreign write");
@@ -194,7 +195,7 @@ fn append_before_next_ppocr_seal(host: &RuntimeHost, root: &Path) -> ForeignAppe
 // stream and the staged file.
 fn one_foreign_append(appended: &ForeignAppends) -> (u64, u64) {
     let appends = appended.lock().expect("foreign appends").clone();
-    let [(written, Ok(()))] = appends.as_slice() else {
+    let [(_, written, Ok(()))] = appends.as_slice() else {
         panic!("one foreign write into one staged PP-OCR report: {appends:?}");
     };
     (*written, *written + FOREIGN.len() as u64)
