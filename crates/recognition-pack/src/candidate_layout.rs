@@ -334,11 +334,8 @@ impl CandidateIntegerDeclaration {
     fn parse(&self, text: &str) -> Result<u64, actingcommand_contract::OcrFieldReason> {
         match self.part {
             Some(ValueTestPart::Capacity) => {
-                let capacity = self
-                    .format
-                    .parse_parts(text)?
-                    .capacity
-                    .ok_or(actingcommand_contract::OcrFieldReason::InvalidInteger)?;
+                // B2 red proof 2 (do not merge): always the left-hand part.
+                let capacity = self.format.parse_parts(text)?.value;
                 if (self.min..=self.max).contains(&capacity) {
                     Ok(capacity)
                 } else {
