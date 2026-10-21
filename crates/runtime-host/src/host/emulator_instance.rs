@@ -1367,13 +1367,13 @@ impl HostShared {
             return Ok(None);
         }
         let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
-        Ok(if pauses.holds_instance(&resolved.instance_alias) {
-            Some(StartupPackageWithheld::InstancePaused)
-        } else if pauses.holds_global() {
-            Some(StartupPackageWithheld::SchedulingPaused)
-        } else {
-            None
-        })
+        // A50 red proof 4: a pause withholds nothing (queued anyway).
+        let _ = (
+            pauses.holds_instance(&resolved.instance_alias),
+            pauses.holds_global(),
+        );
+        let withheld: Option<StartupPackageWithheld> = None;
+        Ok(withheld)
     }
 
     /// #411 A50: a restart whose Stop's readiness wait expired launches only once the old VM
