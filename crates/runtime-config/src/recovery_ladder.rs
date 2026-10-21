@@ -86,6 +86,16 @@ pub const KIND_PROFILES: &str = "recovery_ladder.kind_profiles";
 pub const FENCE_RECHECK_INTERVAL_MS: &str = "recovery_ladder.fence_recheck.interval_ms";
 /// #411 A38: the most rechecks of one wait for a person; `0` turns the recheck off.
 pub const FENCE_RECHECK_MAX_ATTEMPTS: &str = "recovery_ladder.fence_recheck.max_attempts";
+/// #411 B37 (A35-S1): the cadence of a busy hold's holding checks, in milliseconds.
+pub const BUSY_POLL_MS: &str = "recovery_ladder.busy.poll_ms";
+/// #411 B37 (A35-S1): the wait after a rung run that ended busy before the return-home rung runs
+/// again, in milliseconds.
+pub const BUSY_OUTCOME_RECHECK_MS: &str = "recovery_ladder.busy.outcome.recheck_ms";
+/// #411 B37 (A35-S1): the total hold for busy ends in one climb, from the first busy end, in
+/// milliseconds; `0` holds nothing.
+pub const BUSY_OUTCOME_MAX_WAIT_MS: &str = "recovery_ladder.busy.outcome.max_wait_ms";
+/// #411 B37 (A35-S1): what a climb does once its busy hold reached `max_wait_ms`.
+pub const BUSY_OUTCOME_ON_EXHAUSTED: &str = "recovery_ladder.busy.outcome.on_exhausted";
 
 /// The shortest readiness poll a ladder may be given (§4.2: `100..=readiness_window_ms`):
 /// schema, not a threshold.
@@ -101,6 +111,10 @@ const FENCE_RECHECK_INTERVAL_RANGE: KeyRange = KeyRange::Integer {
 };
 /// #411 A38: the bounds of `fence_recheck.max_attempts`. Schema.
 const FENCE_RECHECK_MAX_ATTEMPTS_RANGE: KeyRange = KeyRange::Integer { min: 0, max: 1_000 };
+/// #411 B37 (A35-S1, design §3): the shortest busy poll (`100..=outcome.recheck_ms`). Schema.
+const MIN_BUSY_POLL_MS: u64 = 100;
+/// #411 B37 (A35-S1, design §3): the longest busy hold of one climb, a day. Schema.
+const MAX_BUSY_WAIT_MS: u64 = 86_400_000;
 
 macro_rules! two_way_rule {
     (
@@ -163,6 +177,12 @@ two_way_rule! {
 two_way_rule! {
     /// B5 (§2.2a): a rung whose entry channel is unavailable is skipped or fails.
     EntryUnavailable { Skip => "skip", Fail => "fail" }
+}
+
+two_way_rule! {
+    /// #411 B37 (A35-S1, design §3, §4.3): what a climb does once a busy hold reached its limit:
+    /// end without a restart (`recovery_ladder_hold_exhausted`), or go on to the next rung.
+    OnExhausted { Stop => "stop", Escalate => "escalate" }
 }
 
 /// Workflow #398 RD-4 (model-398 v1.1 §6.6, option B), the sixth rule beside B1–B5: what a
@@ -246,6 +266,34 @@ pub struct RecoveryLadderFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fence_recheck: Option<FenceRecheckFile>,
+    /// #411 B37 (A35-S1).
+    // Interface anchor `actingd-config` revision 8, extended (not raised): a Runtime before
+    // A35-S1 refuses a file that names `busy`, because the section denies unknown members; a
+    // file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    busy: Option<BusyFile>,
+}
+
+/// #411 B37 (A35-S1): the busy hold of a ladder (S2 adds `screen`).
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BusyFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    poll_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<BusyOutcomeFile>,
+}
+
+/// #411 B37 (A35-S1): the hold after a rung run that ended on a busy mapping.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BusyOutcomeFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recheck_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_wait_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    on_exhausted: Option<Value>,
 }
 
 /// #411 A38: the periodic self-check of a fenced instance that waits for a person.
@@ -324,7 +372,8 @@ const fn row_since(
         default: DefaultSource::File,
         // §5.5: every key of the section can change while the Runtime runs; a ladder climbs by
         // the snapshot it was admitted with (§4.7). Workflow #398 RD-4's keys too (model-398
-        // §6.2, §6.6), and #411 A38's, which the lease sweep reads at each tick.
+        // §6.2, §6.6), #411 A38's, which the lease sweep reads at each tick, and #411 B37's
+        // (A35-S1; coordinator decision Q3).
         settable: Settable::Yes,
         reader,
         since,
@@ -406,6 +455,36 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::Integer,
         FENCE_RECHECK_MAX_ATTEMPTS_RANGE,
         "A38",
+        "0.12.9",
+    ),
+    // #411 B37 (A35-S1, design §3): the ranges are the section check's (`bound_out_of_range`,
+    // `renewal_cap_exceeded`), as the rungs' bounds are.
+    row_since(
+        BUSY_POLL_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "A35-S1",
+        "0.12.9",
+    ),
+    row_since(
+        BUSY_OUTCOME_RECHECK_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "A35-S1",
+        "0.12.9",
+    ),
+    row_since(
+        BUSY_OUTCOME_MAX_WAIT_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "A35-S1",
+        "0.12.9",
+    ),
+    row_since(
+        BUSY_OUTCOME_ON_EXHAUSTED,
+        ValueType::String,
+        KeyRange::Tokens(OnExhausted::TOKENS),
+        "A35-S1",
         "0.12.9",
     ),
 ];
@@ -553,6 +632,27 @@ pub struct FenceRecheckConfig {
     pub max_attempts: u32,
 }
 
+/// #411 B37 (A35-S1, design §3, §4.3): the busy hold of a ladder, in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusyConfig {
+    /// The cadence of the holding checks while a hold waits (`100..=outcome.recheck_ms`).
+    pub poll_ms: u64,
+    /// The hold after a rung run that ended on a busy mapping.
+    pub outcome: BusyOutcomeConfig,
+}
+
+/// #411 B37 (A35-S1): the hold after a rung run that ended on a busy mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusyOutcomeConfig {
+    /// The wait before the return-home rung runs again; plus `hold.margin_ms`, within the
+    /// longest renewal.
+    pub recheck_ms: u64,
+    /// The total hold of one climb, from its first busy end (`0..=86400000`); `0` holds nothing.
+    pub max_wait_ms: u64,
+    /// What the climb does at the limit.
+    pub on_exhausted: OnExhausted,
+}
+
 /// Workflow #398 RD-4 (model-398 §6.2): one ladder profile, its name and its rungs, each
 /// checked as the section's `rungs` are.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,6 +687,8 @@ pub struct LadderConfig {
     instance_profiles: BTreeMap<String, String>,
     /// #411 A38: the recheck of a fence that waits for a person.
     pub fence_recheck: FenceRecheckConfig,
+    /// #411 B37 (A35-S1): the busy hold.
+    pub busy: BusyConfig,
     digest: String,
 }
 
@@ -1056,6 +1158,34 @@ fn triggers(
     Ok(triggers)
 }
 
+/// #411 B37 (A35-S1, design §3): the busy hold's values, checked: `poll_ms` within 100 and
+/// `outcome.recheck_ms`, `outcome.max_wait_ms` within a day (`bound_out_of_range`), and
+/// `outcome.recheck_ms` plus `hold.margin_ms` within the longest renewal
+/// (`renewal_cap_exceeded`), the renewal a hold makes before it waits.
+fn busy(
+    poll_ms: u64,
+    outcome: BusyOutcomeConfig,
+    margin_ms: u64,
+    renewal_cap_ms: u64,
+) -> Result<BusyConfig, ConfigFailure> {
+    if !(MIN_BUSY_POLL_MS..=outcome.recheck_ms).contains(&poll_ms) {
+        return Err(failure(BUSY_POLL_MS, ConfigValueProblem::BoundOutOfRange));
+    }
+    if outcome.recheck_ms.saturating_add(margin_ms) > renewal_cap_ms {
+        return Err(failure(
+            BUSY_OUTCOME_RECHECK_MS,
+            ConfigValueProblem::RenewalCapExceeded,
+        ));
+    }
+    if outcome.max_wait_ms > MAX_BUSY_WAIT_MS {
+        return Err(failure(
+            BUSY_OUTCOME_MAX_WAIT_MS,
+            ConfigValueProblem::BoundOutOfRange,
+        ));
+    }
+    Ok(BusyConfig { poll_ms, outcome })
+}
+
 /// Workflow #398 RD-4: one profile of `profiles` as written (model-398 §6.2).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1233,6 +1363,14 @@ impl LadderConfig {
             )?)
             .map_err(|_| failure(FENCE_RECHECK_MAX_ATTEMPTS, ConfigValueProblem::OutOfRange))?,
         };
+        // #411 B37 (A35-S1).
+        let busy_poll_ms = reader.duration(BUSY_POLL_MS)?;
+        let busy_outcome = BusyOutcomeConfig {
+            recheck_ms: reader.duration(BUSY_OUTCOME_RECHECK_MS)?,
+            max_wait_ms: reader.duration(BUSY_OUTCOME_MAX_WAIT_MS)?,
+            on_exhausted: rule(&mut reader, BUSY_OUTCOME_ON_EXHAUSTED, OnExhausted::parse)?,
+        };
+        let busy = busy(busy_poll_ms, busy_outcome, margin_ms, renewal_cap_ms)?;
         let digest = format!(
             "{:x}",
             Sha256::digest(canonical_json(&Value::Object(reader.seen)).as_bytes())
@@ -1255,6 +1393,7 @@ impl LadderConfig {
             kind_profiles,
             instance_profiles: BTreeMap::new(),
             fence_recheck,
+            busy,
             digest,
         })
     }

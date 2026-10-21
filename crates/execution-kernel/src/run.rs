@@ -683,19 +683,67 @@ impl RunStateMachine {
         current_page: Option<String>,
     ) -> Result<RunDirective, RunDecisionError> {
         self.require_executing(operation_id)?;
-        if self
-            .phase_evidence(current_page.as_deref())
-            .is_some_and(|phase| phase.completed)
+        // #411 B5/B24 (D5): a page the current stage's operation confirms that is one of the
+        // stage's end pages ends the run there, Completed; it is never a target page of the
+        // stage, so the stage does not advance.
+        let ends = current_page
+            .as_deref()
+            .is_some_and(|page| self.ends_current_phase(page));
+        if !ends
+            && self
+                .phase_evidence(current_page.as_deref())
+                .is_some_and(|phase| phase.completed)
         {
             self.phase_index += 1;
         }
         self.executing_operation = None;
         self.current_page = current_page.clone();
         self.passed_over.clear();
+        if ends {
+            return Ok(self.finish(RunTerminal::Completed { current_page }));
+        }
         Ok(match current_page {
             Some(current_page) => RunDirective::Continue { current_page },
             None => RunDirective::AwaitPage,
         })
+    }
+
+    /// #411 B5/B24/B20: whether `page` is one of the current stage's `end_pages`
+    /// ([`TaskPhase::is_end_page`]); false without stages. The one end-page check of a run: a
+    /// page an operation of the stage confirms ([`Self::operation_succeeded`]) and the run's
+    /// entry observation ([`Self::end_on_entry_page`]); a stage entered by advancing does not
+    /// test it on the advancing frame (D5).
+    pub fn ends_current_phase(&self, page: &str) -> bool {
+        self.config
+            .phases
+            .as_ref()
+            .and_then(|phases| phases.get(self.phase_index))
+            .is_some_and(|phase| phase.is_end_page(&self.config.game, page))
+    }
+
+    /// #411 B20: the run's entry observation, before any step, shows an end page of the stage
+    /// the run starts at (an entry page that stage lists in its `end_pages`): the run is
+    /// Completed there with no step. Returns whether it ended.
+    pub(crate) fn end_on_entry_page(&mut self) -> Result<bool, RunDecisionError> {
+        if self.terminal.is_some()
+            || self.executing_operation.is_some()
+            || self.completed_steps != 0
+        {
+            return Err(RunDecisionError::invalid_transition(
+                "entry end is not available",
+            ));
+        }
+        let Some(page) = self
+            .current_page
+            .clone()
+            .filter(|page| self.ends_current_phase(page))
+        else {
+            return Ok(false);
+        };
+        self.finish(RunTerminal::Completed {
+            current_page: Some(page),
+        });
+        Ok(true)
     }
 
     /// Workflow #308 SEL-L4b (frozen selector model S0 §1.4): the dispatched select step, which

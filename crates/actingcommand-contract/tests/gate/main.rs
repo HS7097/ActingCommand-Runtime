@@ -6,6 +6,9 @@
 use actingcommand_contract::outcome::{Outcome, install_diagnostic_sink};
 use std::sync::Once;
 
+// #411 B5, slice BT-B5 (contract key K37): a stage's end pages in the static walk.
+mod gate_411_bt_b5;
+
 mod a2a;
 mod c1;
 mod lab_l3;
