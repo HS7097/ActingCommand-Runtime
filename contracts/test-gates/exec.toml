@@ -1774,3 +1774,12 @@ tests = [
     "actingcommand-pack-containment::lib::source::gate_411_b3::b3_t4_eight_repeated_or_out_of_range_alternatives_are_refused_at_the_member",
 ]
 incident = ["#411 B3"]
+
+# Workflow #411 B28 (slice E4, 0.12.x; register §1.156 E4-2, E4-5; no persisted ledger shape; B-train plan §6, Q15): a page rule's any_of that is no array, or an entry of it that is no array, is refused as before (package check: package_invalid, exit 2, details.code resource_declaration_invalid, invalid_type at that member), and the refusal's outcome names the shape any_of must have, expected_shape array_of_arrays
+[[gate]]
+key = "131"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t2_an_any_of_of_the_wrong_shape_is_refused_naming_the_shape_it_must_have",
+]
+incident = ["#411 B28"]

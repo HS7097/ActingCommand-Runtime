@@ -1544,3 +1544,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_b8::b8_t2_a_policy_run_reads_the_schedule_values_and_a_direct_run_has_none",
 ]
 incident = ["#411 B8"]
+
+# Workflow #411 B39 A part (slice E4, 0.12.x; register §1.156 E4-4, E4-5; no persisted ledger shape; B-train plan §6, Q15): after a declared prerequisite package whose run ended on a page one of its scheduling_outcome mappings lists, an entry that still does not pass fails the run as before with contained_task_prerequisite_entry_unmatched, and its outcome names that mapping's outcome key as layer_outcome_key
+[[gate]]
+key = "139"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::gate_411_e4::e4_t4_an_unmatched_entry_after_a_prerequisite_names_the_layer_outcome_key",
+]
+incident = ["#411 B39"]

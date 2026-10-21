@@ -2075,3 +2075,8 @@ fn nav5_a_real_navigation_exhaustion_starts_the_configured_ladder_profile() {
         });
     assert_eq!(finished, Some(RecoveryLadderOutcome::Exhausted));
 }
+
+// Workflow #411 slice E4, T4 (B39 A part): an unmatched entry after a prerequisite names the
+// outcome key the layer's run ended on. A child module, so it reuses this world's fixtures.
+#[path = "gate_411_e4.rs"]
+mod gate_411_e4;

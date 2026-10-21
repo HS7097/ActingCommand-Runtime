@@ -84,6 +84,12 @@ mod gate_0121_pkgcheck;
 #[path = "tests/gate_411_e1.rs"]
 mod gate_411_e1;
 
+// Workflow #411 slice E4 (0.12.x train, wave 2), T2 (B28) and T3 (B34): `package check` names the
+// shape a page rule's `any_of` must have, and warns on a click box of one point.
+#[cfg(test)]
+#[path = "tests/gate_411_e4.rs"]
+mod gate_411_e4;
+
 pub(super) fn is_offline_command(args: &[String]) -> bool {
     matches!(args, [group, command, ..] if group == "package" && matches!(command.as_str(), "dry-run" | "preflight"))
 }
