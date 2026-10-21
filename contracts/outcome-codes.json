@@ -1998,6 +1998,10 @@
         "count": "required"
       },
       "description": "The candidates of the same instance that a dispatch decision record does not list, counted by why: one record per code, in ascending code order (Workflow #411 A26)."
+    },
+    "program_problem": {
+      "type": "vocab:program_problem",
+      "description": "Which rule of a contained task's program refused it at admission (Workflow #411 A39)."
     }
   },
   "vocabularies": {
@@ -6114,6 +6118,15 @@
         },
         "unknown": {
           "description": "Not decided: a predicate is unknown, or the candidate was settled before its trigger was read."
+        }
+      }
+    },
+    "program_problem": {
+      "description": "Which rule of a contained task's program refused it at admission (Workflow #411 A39).",
+      "review": "pending",
+      "tokens": {
+        "operations_empty": {
+          "description": "The task declares no operation, which only a task schema 0.8 zero-input reading task without recovery may (contracts/ocr-fields.md)."
         }
       }
     }
@@ -20872,12 +20885,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "program_problem": "optional",
+        "path": "optional",
+        "json_pointer": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A contained task package's task program breaks a rule.",
+      "description": "A contained task package's task program breaks a rule. Workflow #411 A39: where the refusal names its rule, program_problem is that rule, path the task declaration's path inside the package and json_pointer the refused member.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -48873,6 +48889,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_bundle_packs_empty": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "json_pointer": "optional",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 A40: the pack table holds no pack. package bundle's --packs-root holds no pack directory (path packs, the standard package's pack directory), or the bundle.json that actinglab standard-pack check reads lists no pack (path bundle.json, json_pointer /packs). Paths are relative to the standard package, never absolute local paths.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "package_bundle_packs_root_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -75039,12 +75073,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "path": "optional",
+        "line": "optional",
+        "column": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A source snapshot's operation declaration cannot be read.",
+      "description": "A source snapshot's operation declaration cannot be read. Workflow #411 A41: path is its path inside the package (resources/operations/<task>/task.json), line and column the parser's position where the parser gives one, and the parser's own text is the foreign_data_error cause.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
