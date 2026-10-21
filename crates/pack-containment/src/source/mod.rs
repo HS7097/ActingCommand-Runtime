@@ -3145,13 +3145,31 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 .get("retryable")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            // Workflow #390 EXEC-1: a candidate the page's next one may run instead of.
-            may_be_passed_over: ["when", "on_guard_refused"]
-                .into_iter()
-                .any(|member| operation.get(member).is_some_and(|value| !value.is_null())),
+            // Workflow #390 EXEC-1: a candidate the page's next one may run instead of (a `when`,
+            // or `on_guard_refused: next_candidate`; #411 B22: its keyed form ends the run).
+            may_be_passed_over: operation.get("when").is_some_and(|value| !value.is_null())
+                || operation
+                    .get("on_guard_refused")
+                    .and_then(Value::as_str)
+                    .is_some(),
             // Workflow #308 SEL-L4b (S0 §1.4 (c)): a select step that may end the run empty.
             on_empty_key: operation
                 .pointer("/select/on_empty/outcome_key")
+                .and_then(Value::as_str),
+            // #411 B16 part 1: a per-run cap; a keyed `on_max_runs` may end the run.
+            max_runs: operation
+                .get("max_runs")
+                .and_then(Value::as_u64)
+                .and_then(|limit| u32::try_from(limit).ok())
+                .map(move |limit| actingcommand_contract::TaskPhaseRunCap {
+                    limit,
+                    outcome_key: operation
+                        .pointer("/on_max_runs/outcome_key")
+                        .and_then(Value::as_str),
+                }),
+            // #411 B22: a keyed `on_guard_refused` may end the run.
+            on_guard_refused_key: operation
+                .pointer("/on_guard_refused/outcome_key")
                 .and_then(Value::as_str),
         });
     }
