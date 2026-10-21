@@ -135,3 +135,4 @@ fn workspace_root() -> PathBuf {
         .expect("the architecture tool sits two levels below the workspace root")
         .to_path_buf()
 }
+// CI-RED red proof 1: throwaway draft marker, push 1 (do not merge).
