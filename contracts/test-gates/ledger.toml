@@ -577,3 +577,21 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_411_a24::a24_forensic_taken_at_is_the_latest_timestamp",
 ]
 incident = ["#411 A24"]
+
+# Workflow #411 BT-LR (ledger revision 4; register §1.153; B-train plan §3.2, §3.3, §5.3 BT-LR T1; ledger key 54 of the wave-2 block 54-58): SQLite format 2 and `actingcommand.event.v3` unchanged, a formal root takes one run's revision-4 records (a layer's package version, a recognition's candidate scores, a refused effect after its step's completed effect, a capped operation) and reads every one back unchanged and in order when it is opened again as a start opens it
+[[gate]]
+key = "54"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_411_bt_lr::bt_lr_t1_a_formal_root_reads_back_a_runs_revision_4_records",
+]
+incident = ["#411 BT-LR"]
+
+# Workflow #411 BT-LR (ledger revision 4; register §1.153 LR-3, LR-7; B-train plan §5.3 BT-LR T2; ledger key 55): the writer refuses a refused effect without an earlier completed effect of its step and a second one of the step (`invalid_task_effect`), and a second capped operation in one run (`invalid_task_semantic_payload`), and writes none of them; the run's admitted records are its only ones
+[[gate]]
+key = "55"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_411_bt_lr::bt_lr_t2_the_writer_refuses_a_fact_out_of_its_runs_order",
+]
+incident = ["#411 BT-LR"]

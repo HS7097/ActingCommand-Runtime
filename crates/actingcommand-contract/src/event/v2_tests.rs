@@ -4009,6 +4009,10 @@ fn every_event_type_resolves_its_catalog_category() {
     }
 }
 
+// Workflow #411 BT-LR: ledger revision 4's shapes, readers and validation (register §1.153).
+#[path = "gate_411_bt_lr.rs"]
+mod gate_411_bt_lr;
+
 #[test]
 fn record_severity_is_the_outcome_category_else_the_event_type_category() {
     // The categories the catalog gives these codes and event types (vocabulary `event_type`):
