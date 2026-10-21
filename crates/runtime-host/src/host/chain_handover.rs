@@ -95,5 +95,5 @@ pub(crate) fn chain_entry_holds_page(
     package.entry_holds_page(&page)
         || package
             .navigation_entry_pages()
-            .is_some_and(|pages| pages.iter().any(|entry| *entry == page))
+            .is_some_and(|pages| pages.contains(&page))
 }
