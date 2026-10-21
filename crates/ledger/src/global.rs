@@ -2691,34 +2691,15 @@ impl GlobalLedger {
             Err(timed_out) => return Err(timed_out.with_close_result(deferred_result)),
         };
         drop(sender);
-        let response_result = match send_result {
-            Ok(()) => {
-                match self.await_writer(started_ms, |wait| match receiver.recv_timeout(wait) {
-                    Ok(reply) => Some(reply),
-                    Err(mpsc::RecvTimeoutError::Timeout) => None,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        Some(Err(GlobalLedgerError::fatal(
-                            LedgerCode::WriterUnavailable.code(),
-                            LedgerLocation::ShutdownWriter.location(),
-                        )))
-                    }
-                }) {
-                    Ok(reply) => reply,
-                    Err(timed_out) => return Err(timed_out.with_close_result(deferred_result)),
-                }
-            }
-            Err(error) => Err(error),
-        };
-        if let Err(timed_out) = self.await_writer(started_ms, |wait| {
-            if writer.is_finished() {
-                Some(())
-            } else {
-                thread::sleep(wait);
-                None
-            }
-        }) {
-            return Err(timed_out.with_close_result(deferred_result.and(response_result)));
-        }
+        // A51 red proof 4 (do not merge): the unbounded reply wait and join of before A51.
+        let response_result = send_result.and_then(|()| {
+            receiver.recv().map_err(|_| {
+                GlobalLedgerError::fatal(
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::ShutdownWriter.location(),
+                )
+            })?
+        });
         let join_result = writer.join().map_err(|_| {
             GlobalLedgerError::fatal(
                 LedgerCode::WriterPanicked.code(),
