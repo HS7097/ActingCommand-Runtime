@@ -23,7 +23,8 @@ use actingcommand_contract::{
 };
 use actingcommand_execution_kernel::{
     CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, DesignatedEffectCap,
-    ExecutionKernelCode, ResourceAdjustmentResult, ResourceReadingValue, Scene, StepPacing,
+    ExecutionKernelCode, FrameOwner, ResourceAdjustmentResult, ResourceReadingValue, Scene,
+    StepPacing,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -4430,6 +4431,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 width,
                                 height,
                             },
+                            FrameOwner::Lease,
                         )
                         .map(|_| ())
                         .map_err(|error| {

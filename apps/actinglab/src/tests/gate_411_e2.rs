@@ -62,7 +62,7 @@ fn e2_t3_a_target_id_where_the_element_id_belongs_answers_the_type_mismatch_with
     assert_eq!(
         details
             .as_object()
-            .and_then(|members| members.keys().last())
+            .and_then(|members| members.keys().next_back())
             .map(String::as_str),
         Some("arrival")
     );

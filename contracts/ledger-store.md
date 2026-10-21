@@ -820,7 +820,8 @@ without its outcome, stay.
   shared for deletion only, without reading or hashing it. A held lock, or os error 32
   or 33 on the open, the unlink or the rename, is **busy**: the frame is retried by the
   next sweep. Any other error is **failed**: one Warning (below), and the frame stays
-  until a restart.
+  until a restart. Once the frame is removed or moved, the cleaner deletes its use lock
+  while it still holds it (Workflow #411 A29); a lock already gone is fine.
 - **Moves.** The cleaner creates the kept folder if needed, puts the frame into its own
   kept map, renames the file, and then overwrites `kept\.moves` with its process start
   time and its move count (16 bytes). A failed rename takes the map entry out again. A
@@ -844,8 +845,11 @@ without its outcome, stay.
   `frame_retention_move_failed` (adds `entry`, the kept folder relative to the state
   root). A move whose counter `kept\.moves` could not be written counts as moved and is
   reported once per process by its own code, `frame_retention_counter_failed` (`entry`,
-  `io_kind`, `os_error`). Only a ledger error, including a failed append of such a
-  Warning, is fatal; a held file never is.
+  `io_kind`, `os_error`). A removed or moved frame whose use lock could not be deleted
+  counts as removed or moved, and its lock is reported once per object per process by its
+  own code, `frame_retention_lock_remove_failed` (`artifact_id`, `io_kind`, `os_error`);
+  the lock stays. Only a ledger error, including a failed append of such a Warning, is
+  fatal; a held file never is.
 
 ### Moved-frame reads (Workflow #375 R5d)
 

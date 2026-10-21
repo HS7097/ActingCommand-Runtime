@@ -64,10 +64,14 @@ from a record-list fact through `keyed_fact` (see selection-policy.md) rather th
 lookup, which stays bounded to 512 entries.
 
 For current numeric attributes, `value: "ocr_integer"` requires
-`integer: {min, max, format?, minimum_confidence_milli}`. It reuses the existing
+`integer: {min, max, format?, part?, minimum_confidence_milli}`. It reuses the existing
 `OcrUnsignedIntegerFormat` parser after whitespace trim. `format` defaults to `ascii_decimal`;
-`comma_grouped`, `current_capacity` and `times_prefixed` keep their
-`ocr-fields.md` semantics. Bounds satisfy
+`comma_grouped`, `current_capacity`, `times_prefixed` and `clock_hms` keep their
+`ocr-fields.md` semantics. `part` (Workflow #411 B2) names the part of a `current_capacity`
+text `a/b` the feature reads, as a value test side's `part` does: `capacity` the right-hand part
+`b`, `current` the left-hand part `a`; without `part` the feature reads `a`, as before. The range
+applies to the part read. `part` is declared only with `current_capacity`; with another format the
+layout is refused (`InvalidValue`). It belongs to `package` revision 6. Bounds satisfy
 `0 <= min <= max <= 2^53-1`; confidence is 1..=1000. The result is a real integer, not a milli
 quantity. Missing/low confidence and failed parsing produce typed Unknown. `passed` and
 `measure_milli` retain their existing meanings, including OCR confidence for `measure_milli`.

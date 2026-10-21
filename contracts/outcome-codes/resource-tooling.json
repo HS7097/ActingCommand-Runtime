@@ -1101,9 +1101,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package) but the declarations do not name it for recognition. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
-      "common_causes": "A reading pack of the standard package is not declared in maintenance.json.",
-      "handling": "Declare the standard package's one recognition maintenance package with the use recognition, and merge other reading packs into it."
+      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package), and the declarations name no recognition package for its server (variant). Workflow #411 A32: only the one package a server declares counts, so the other qualifying packs of a server that declares one raise nothing. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
+      "common_causes": "A server of the standard package declares no recognition maintenance package in maintenance.json.",
+      "handling": "Declare, for each server, its one recognition maintenance package with the use recognition."
     },
     "selection_policy_limit_exceeded": {
       "category": "error",
