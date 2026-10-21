@@ -5322,6 +5322,36 @@ const fn host_module(module: &'static str, owners: &'static [&'static str]) -> H
 const HOST_SPLIT: &[HostModule] = &[
     host_module("agent_control", &["HostShared"]),
     host_module("backend_open", &["HostShared"]),
+    // Workflow #411 B41: what the scheduler's chain handover reads at the cycle: each instance's
+    // resting page from its `task.page` runtime fact, and whether a task's package entry holds a
+    // page, read from the package its procedure binding locates.
+    HostModule {
+        module: "chain_handover",
+        owners: &["HostShared"],
+        definitions: &[
+            HostDefinition {
+                name: "HostShared::chain_handover_inputs",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/policy_dispatch.rs"],
+                delegates: &[
+                    "self.runtime_facts",
+                    "TASK_PAGE_FACT_KEY",
+                    "HostCode::DispatchRandomDelayWaiting",
+                ],
+            },
+            HostDefinition {
+                name: "chain_entry_holds_page",
+                visibility: DeclaredVisibility::Crate,
+                callers: &["policy_host.rs"],
+                delegates: &[
+                    "ProcedureBinding::package_path",
+                    "PreparedContainedTask::describe_navigation_path",
+                    "canonical_page_anchor",
+                ],
+            },
+        ],
+        delegates: &[],
+    },
     host_module("client_events", &["HostShared"]),
     HostModule {
         module: "contained_task",

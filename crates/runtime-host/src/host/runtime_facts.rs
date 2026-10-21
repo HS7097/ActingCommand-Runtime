@@ -945,10 +945,11 @@ impl HostShared {
     /// Seals the live store at the ledger's latest sequence. Writes nothing.
     pub(super) fn runtime_fact_snapshot(&self) -> RuntimeHostResult<RuntimeFactSnapshot> {
         let _gate = lock(&self.fact_write_gate, HostLocation::ReadRuntimeFactSnapshot)?;
+        // #411 A51 (R3): a position the writer did not answer in time fails only this read.
         let ledger_position = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error(HostLocation::ReadRuntimeFactPosition))?;
+            .map_err(|error| ledger_read_error(&error, HostLocation::ReadRuntimeFactPosition))?;
         let taken_at_unix_ms = self.clock.sample()?.unix_ms;
         Ok(
             lock(&self.runtime_facts, HostLocation::ReadRuntimeFactSnapshot)?
@@ -970,10 +971,11 @@ impl HostShared {
             if !self.runtime_facts_dirty.load(Ordering::Acquire) {
                 return Ok(false);
             }
-            let ledger_position = self
-                .ledger
-                .latest_sequence()
-                .map_err(|_| ledger_error(HostLocation::ReadRuntimeFactPosition))?;
+            // #411 A51 (R3): a position the writer did not answer in time is no ledger failure:
+            // the store stays dirty and the next tick seals it.
+            let ledger_position = self.ledger.latest_sequence().map_err(|error| {
+                ledger_read_error(&error, HostLocation::ReadRuntimeFactPosition)
+            })?;
             let taken_at_unix_ms = self.clock.sample()?.unix_ms;
             let sealed = lock(&self.runtime_facts, HostLocation::AppendRuntimeFactSnapshot)?
                 .snapshot(ledger_position, taken_at_unix_ms);

@@ -150,8 +150,21 @@ of its shell was lost when that shell's own shutdown hung, and the instance stay
 - The Start follows a confirmed Stop, or a Stop that ended in `mumu_manager_wait_timeout`. After
   any other Stop failure (`control_exit`, `control_errcode`, `run`, `launch_error` and every
   other stage) no Start is dispatched.
+- #411 A50: the Start is dispatched only after the old VM has exited. After a Stop that ended in
+  `mumu_manager_wait_timeout`, the restart reads the emulator status as a self-check does
+  (`MuMuManager info`, bounded): the bounded read after the Stop's failure (else the failure's
+  last observation), then one read every 500 ms on the Runtime clock, until one reads the
+  process stopped, at most `emulator_control.restart_exit_wait_ms` (default 60 s,
+  [runtime-config.md](runtime-config.md)); a failed read is no observation. Still running at the
+  bound, the restart fails `emulator_restart_previous_instance_running` (its `caused_by` the
+  Stop's `emulator_control_wait_timeout`) and dispatches no Start, so the new instance never
+  comes up on another ADB port beside the old one. The key is renewed to the wait's bound first.
+  A confirmed Stop needs no wait (the device's own `info` read showed it stopped). The ladder's
+  emulator-restart rung drives its Stop through the same path and waits the same way.
 - A restart succeeds only when both phases are confirmed; it then ends exactly as a successful
-  start does (connection preparation, startup package scheduling), and the receipt result is
+  start does (connection preparation, startup package scheduling; #411 A50: the package is
+  queued whether or not the preparation passed, unless a pause holds the instance), and the
+  receipt result is
   `EmulatorInstanceControlled { action: restart, .. }` with `elapsed_ms` the whole request's
   provider and ADB baseline time.
 - A restart whose Stop was not confirmed by its provider control fails
@@ -161,7 +174,8 @@ of its shell was lost when that shell's own shutdown hung, and the instance stay
   the ADB baseline) fails the restart with its own code, as for `start` and `stop`.
 - Bounds: a Stop phase takes at most 200 s, 210 s when it fails (the state read below); a Start
   phase at most 220 s on success (with the 30 s ADB baseline), 200 s on failure. The client
-  waits 445 s for a restart's receipt ("Client and CLI").
+  waits 745 s for a restart's receipt ("Client and CLI"; 445 s before #411 A50 added the wait
+  for the old VM, at most `emulator_control.restart_exit_wait_ms`, whose maximum is 300 s).
 
 ### Observed on MuMuManager 6.5.7.0 (acceptance run of #437; observations, not vendor guarantees)
 
@@ -379,7 +393,8 @@ fact store (`runtime-fact-store.md`).
   "running": true,
   "adb_port": 16384,
   "elapsed_ms": 12345,
-  "startup_package": "none"
+  "startup_package": "none",
+  "startup_package_withheld": "instance_paused"
 }
 ```
 
@@ -387,7 +402,9 @@ fact store (`runtime-fact-store.md`).
 state is `completed` with the `command.validated` event as terminal. `startup_package` is
 `scheduled` when a successful `start` / `restart` handed its key to, or queued, the claim of the
 instance's configured startup package (see "Startup package hook"), `none` otherwise (nothing
-configured, a failed preparation, or `stop`).
+configured, a pause that holds the instance, or `stop`). #411 A50: `startup_package_withheld`
+says why an instance that has a startup package got none: `instance_paused` (its own scheduling
+pause holds it) or `scheduling_paused` (the global one does); it is absent otherwise.
 
 ## Startup package hook (slice #316-B3)
 
@@ -403,7 +420,11 @@ that belongs to emulator control:
   startup schedule nothing. A configured package is always invoked; an instance without one
   never has anything pulled.
 - The control request only *schedules* it, after `command.validated`, the second
-  `runtime.instance_bound`, the `device.connected` fact and a passing connection preparation:
+  `runtime.instance_bound`, the `device.connected` fact and the connection preparation (#411
+  A50: whether or not the preparation passed, since the game the package starts is what a capture
+  by package needs; before A50 only a passing one); a scheduling pause that holds the instance
+  (its own or the global one) schedules none, the answer saying why
+  (`startup_package_withheld`), and cancels the instance's queued startup claims:
   one `runtime.lifecycle_observed` (phase `startup_package_scheduled { instance_id }`, the
   package locator in the audit machine path, links of the control request plus a freshly
   minted causation id) is appended, the control's key goes to the package's claim, and the
@@ -415,19 +436,21 @@ that belongs to emulator control:
   causation id) are followed by the control's `lease.transition_intent`, the claim's
   `lease.transition_intent`, `lease.transferred` and the control's `lease.released`; the
   claim takes no `lease.granted` of its own and bypasses the queue, so no dispatch can see the
-  instance free between the start and the startup run. While a scheduling pause holds the
-  instance or the global gate (a restored pause included), the claim waits queued as a gated
-  routine entry and the control's key is released: no startup run happens until the resume,
-  whose reconnect claim runs first and whose release hands the key to the startup claim
-  (`contracts/scheduling-pause.md`). A claim of a kind that takes the admission checks passes
-  them first; a refusal is recorded as the package's failure and the receipt still says
+  instance free between the start and the startup run. A startup claim queued while a
+  scheduling pause holds the instance or the global gate (a restored pause included; since #411
+  A50 an operator start or restart of a paused instance queues none) waits as a gated routine
+  entry: no startup run happens until the resume, whose reconnect claim runs first and whose
+  release hands the key to the startup claim (`contracts/scheduling-pause.md`). #411 A50: when
+  the start's failed preparation admitted a ladder, the startup claim is queued and the
+  control's release hands the key to the ladder; the claim waits behind it. A claim of a kind
+  that takes the admission checks passes them first; a refusal is recorded as the package's failure and the receipt still says
   `scheduled`. A new startup claim cancels one still queued for the same instance
   (`scheduler.denied lease_queue_cancelled`, warning), and so does a control whose hold hands
-  no startup claim over (a `stop`, a `start` / `restart` whose preparation failed, and since
-  Workflow #369 S6c a failed control, one whose provider step failed included): a startup run
-  against a stopped or unprepared emulator is meaningless, so a start under a pause followed
-  by a stop leaves no startup run at the resume. For the same reason a resume's reconnect or a
-  self-check whose preparation failed and admitted no ladder cancels it before its claim's
+  no startup claim over (a `stop`, since #411 A50 a `start` / `restart` of a paused instance,
+  before it one whose preparation failed, and since Workflow #369 S6c a failed control, one
+  whose provider step failed included): a startup run against a stopped emulator is
+  meaningless, so a stop leaves no startup run at the resume. For the same reason a resume's
+  reconnect or a self-check whose preparation failed and admitted no ladder cancels it before its claim's
   release (Workflow #369 S6c review low (b); `contracts/scheduling-pause.md`).
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
@@ -757,17 +780,47 @@ capture nor input before its application action, and neither does a page-graph a
 entry, which a rung runs first (Workflow #390 EXEC-3, [Application
 lifecycle](application-lifecycle.md)). A page entry still needs capture for its
 entry/prerequisite gate. Missing/unknown channel observations are attempted through the normal
-provider path. Input unavailability never establishes ADB unavailability. A rung is tried at
-most once.
+provider path. Input unavailability never establishes ADB unavailability. A rung is escalated
+past at most once; the return-home rung runs again after a busy hold (#411 B37, below), and
+`rungs_tried` counts distinct rungs.
 
-A rung recovers when its package run completes `success` (its target page reached); any other
-end fails it, with the failure code as its `outcome` (`recovery_rung_target_not_reached` for a
-run that completed without reaching its target; a holding interruption such as
-`recovery_ladder_shutdown_requested` when the host is shutting down is the `caused_by` link of
-`recovery_ladder_interrupted`). The first successful application rung ends the ladder
-`recovered`; a successful cold environment without a package ends it `environment_ready`. When
-every rung failed or was skipped it ends `exhausted`. No result replays an uncertain business
-operation.
+A rung recovers when its package run completes `success` (its target page reached) on a mapping
+that is not `busy`; any other end fails it, with the failure code as its `outcome`
+(`recovery_rung_target_not_reached` for a run that completed without reaching its target; a
+holding interruption such as `recovery_ladder_shutdown_requested` when the host is shutting down
+is the `caused_by` link of `recovery_ladder_interrupted`). The first successful application rung
+ends the ladder `recovered`; a successful cold environment without a package ends it
+`environment_ready`. When every rung failed or was skipped it ends `exhausted`. No result replays
+an uncertain business operation.
+
+**Busy ends (#411 B37, slice A35-S1; coordinator decisions Q1 to Q3 of 2026-10-21).** A rung's
+package run that completes `success` on a `scheduling_outcome` mapping its package marks `busy`
+([resource-declarations.md](resource-declarations.md), "Busy outcome mappings") ended on a page
+that shows an activity still in progress: it does not recover the instance. The rung is recorded
+`failed` with `recovery_rung_busy_outcome` (info; `outcome_key`, `page_id` the final page,
+`held_ms` the time since the climb's first busy end, `limit_ms` the configured
+`recovery_ladder.busy.outcome.max_wait_ms`, and `retry_after_ms` while the ladder holds). While
+the climb has a return-home package (the return-home rung of the rungs it climbs, with a recovery
+package it can run; never on a resource fence's ladder) and `held_ms` is below `limit_ms`, the
+ladder holds its key, doing nothing, for `busy.outcome.recheck_ms`, no longer than what is left of
+the limit (`retry_after_ms`), and then runs the return-home rung again: a busy end of the
+application restart's or the emulator restart's startup package is held and re-checked the same
+way, by the return-home package. Before the hold the key is renewed to the hold plus
+`hold.margin_ms`; during it the ladder makes its holding check every `busy.poll_ms`, so a
+shutdown, an install drain, a scheduling pause, a capacity refusal, a lost key or device link
+ends the climb at the next poll (the return-home rung it was about to run again is recorded
+failed with that interruption). The hold and the reruns repeat until a run ends:
+
+- not busy: as above (recovered, or a failure the climb handles as before, going on to the next
+  rung);
+- busy at the limit, or busy without a return-home package: `busy.outcome.on_exhausted`
+  decides. `stop` (the default) ends the ladder `exhausted` with `recovery_ladder_hold_exhausted`
+  (warning; `held_ms`, `limit_ms`; caused by the last `recovery_rung_busy_outcome`): no
+  application or emulator restart runs, the instance is not fenced, and the next trigger may
+  start a new ladder once the cool-down allows. `escalate` goes on to the next rung, the last
+  busy record carrying `held_ms` at least `limit_ms`. A climb without a return-home package
+  always goes on as under `escalate`. `max_wait_ms` 0 holds nothing: `on_exhausted` applies at
+  the first busy end.
 
 ### Ladder profiles (Workflow #398 RD-4)
 
@@ -828,7 +881,8 @@ the ladder's own preparation never does; shutdown and an install drain refuse a 
 a climb; a lost key ends a climb; a capacity refusal and a scheduling pause refuse a trigger and
 end a climb; an interrupted climb ends `exhausted` at warning and one whose rungs failed on their
 own at error. Once a ladder holds the key (Workflow #369 H-3, ruling Q8), every rung boundary,
-every control step and every readiness poll checks that it still holds the key and that no
+every control step, every readiness poll and every busy-hold poll (#411 B37) checks that it
+still holds the key and that no
 scheduling pause or capacity refusal (`recovery_admission_denied`), install drain
 (`recovery_ladder_drain_requested`) or shutdown (`recovery_ladder_shutdown_requested`)
 intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
@@ -893,8 +947,8 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 | `recovery_ladder_started` | `trigger { stage, run_id?, task_id?, preparation?, failure_code, rule?, matched?, start }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (one to three, in the configured order, no action twice; `reason` exactly when skipped), `config_digest` (64 lowercase hexadecimal digits: the SHA-256 of the section's values the ladder climbs by), `profile?` (the name of the ladder profile the instance climbs by, Workflow #398 RD-4; absent when it climbs the section's `rungs`) | info |
 | `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
-| `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info), `environment?` | its outcome's category when it has one; otherwise info |
-| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
+| `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info; a busy end is `failed` with the busy run's `run_id` and `recovery_rung_busy_outcome`, info, #411 B37); `environment?`. One rung may have several records in one ladder: the return-home rung's, once per run after a busy hold | its outcome's category when it has one; otherwise info |
+| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (distinct rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, `recovery_ladder_interrupted`, caused by the holding interruption, or `recovery_ladder_hold_exhausted`, caused by the last busy rung's outcome, #411 B37); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`, `recovery_ladder_hold_exhausted`) |
 | `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied" \| "blackout"` (`blackout`: a trigger inside a blackout, `until_unix_ms` its end; written from SR-4a on, read from v0.12.0 on, [scheduling-blackout.md](scheduling-blackout.md)), `until_unix_ms`, `rule?` (the trigger item that matched; absent for a fence's ladder) | admission denial warning; otherwise info |
 
 Ledger revision 3 (Workflow #378 A3): a phase's severity is its `outcome`'s category, else
@@ -1028,10 +1082,11 @@ explicit receipt wait (`emulator_control_response_timeout(action)`) and returns 
   = 220 s; a stop 60 + 120 + 10 s + one 10 s process listing that may straddle the deadline,
   + the 10 s state read after a failure = 210 s; plus the IO margin (230 s), plus at most 5 s
   for the emulator-control claim's turn in the instance's queue (Workflow #369 Q-2, W-3, S5).
-- restart: 445 s (`EMULATOR_RESTART_RESPONSE_TIMEOUT`, Workflow #381 B, coordinator answer
-  D3): a Stop phase of at most 210 s and a Start phase of at most 220 s, plus the 10 s IO
-  margin (440 s), plus the claim's 5 s wait for its turn once, since a restart is one
-  emulator-control claim (Workflow #369 S5, D1). MCP `ac_emulator` states both figures.
+- restart: 745 s (`EMULATOR_RESTART_RESPONSE_TIMEOUT`, Workflow #381 B, coordinator answer D3):
+  a Stop phase of at most 210 s and a Start phase of at most 220 s, plus the 10 s IO margin
+  (440 s), plus the claim's 5 s wait for its turn once, since a restart is one emulator-control
+  claim (Workflow #369 S5, D1): 445 s; #411 A50 adds the wait for the old VM between the phases,
+  at most `emulator_control.restart_exit_wait_ms`, whose largest value is 300 s. MCP `ac_emulator` states both figures.
 
 ```
 actingctl emulator status  --state-root <state-root> --instance <alias>

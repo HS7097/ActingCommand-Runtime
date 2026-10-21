@@ -137,6 +137,14 @@ actingcommand_contract::outcome_codes! {
         /// `resource verify` checks a resource repository's commit.
         ResourceCheckReleaseRetired => "resource_check_release_retired": error / none,
         // ---- end of #411 RV-1
+        // ---- Workflow #411 B34 (slice E4, pending): `package check` warns on a click box of one
+        // point.
+        /// Warning. `package check` admitted the package, and an operation's click declares a
+        /// box of one point: a `point` click, a long press without a box, or a `rect`,
+        /// `specific_rect` or long-press box of 1×1. The package still passes (keys
+        /// `pack_operation_id`, `box_x`, `box_y`, `box_width`, `box_height`).
+        PackageCheckClickBoxSinglePoint => "package_check_click_box_single_point": warning / none,
+        // ---- end of B34
     }
 }
 

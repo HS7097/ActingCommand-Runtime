@@ -5,6 +5,7 @@
 use super::index::{IndexChange, IndexRows};
 use super::projection::EventIndexes;
 use super::read_only::check_read_budget;
+use super::read_work::ReadWork;
 use super::retention::{LedgerOpenTiming, elapsed_ms};
 use super::storage::{
     DurableStorage, EventStore, ReadBack, UniqueJsonValue, WriterOwnership, increment_sequence,
@@ -1488,6 +1489,7 @@ impl DurableStorage for SqliteStorage {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
+        work: &ReadWork,
     ) -> Option<GlobalLedgerResult<RuntimeEventQueryPage>> {
         Some(
             SqliteViewSnapshot {
@@ -1502,7 +1504,7 @@ impl DurableStorage for SqliteStorage {
                 profile,
                 request,
                 observation,
-                Some(&self.prefix),
+                (Some(&self.prefix), work),
             ),
         )
     }
@@ -1800,18 +1802,26 @@ impl SqliteViewSnapshot {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        self.project_view_page_observed(query, profile, request, &mut None, None)
+        self.project_view_page_observed(
+            query,
+            profile,
+            request,
+            &mut None,
+            (None, &ReadWork::unbounded()),
+        )
     }
 
     /// `cache` is the writer's verified prefix (Runtime reads only); without it every
-    /// read is the original full read and verification.
+    /// read is the original full read and verification. #411 A51 (R2): `work` bounds the
+    /// selection of a Runtime read; the verification of the snapshot is not interrupted (a
+    /// stopped refresh would discard the writer's verified prefix).
     fn project_view_page_observed(
         &self,
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
-        cache: Option<&Cell<Option<VerifiedPrefix>>>,
+        (cache, work): (Option<&Cell<Option<VerifiedPrefix>>>, &ReadWork),
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         if let Some(value) = observation {
             *value = LedgerProjectViewObservation {
@@ -1903,9 +1913,9 @@ impl SqliteViewSnapshot {
                             query,
                             profile,
                             request,
-                            snapshot,
-                            after,
+                            (snapshot, after),
                             observation,
+                            work,
                         )
                     }
                     verified => {
@@ -1958,9 +1968,9 @@ impl SqliteViewSnapshot {
                             query,
                             profile,
                             request,
-                            snapshot,
-                            after,
+                            (snapshot, after),
                             observation,
+                            work,
                         )
                     }
                 }
@@ -2023,6 +2033,9 @@ impl SqliteViewSnapshot {
 
     /// Workflow #191 C: the original selection and projection of one view read over
     /// `events`. Without `indexes`, page projection creates them from `events` as before.
+    /// #411 A51: a Runtime read selects its rows from the writer's indexes, a Lab-view read
+    /// included (`lab_related` is one lookup per relation), within `work`'s budget; an offline
+    /// read selects them with the stored view, as before.
     #[allow(clippy::too_many_arguments)]
     fn select_and_project(
         &self,
@@ -2034,14 +2047,55 @@ impl SqliteViewSnapshot {
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
-        snapshot: u64,
-        after: u64,
+        (snapshot, after): (u64, u64),
         observation: &mut Option<LedgerProjectViewObservation>,
+        work: &ReadWork,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         let selection_limit = usize::from(request.limit()) + 1;
         if let Some(value) = observation {
             value.selection_limit = LedgerProjectViewCount::from_len(selection_limit);
             value.select_sequences.begin(Instant::now());
+        }
+        let created;
+        let indexes = match indexes {
+            Some(indexes) => indexes,
+            None => {
+                created = EventIndexes::from_events(events);
+                &created
+            }
+        };
+        let scope = LedgerReadScope {
+            source: self.source,
+            material_read: LedgerMaterialReadState::NotRequested,
+            scanned_through_position: self.through_sequence,
+            read_complete: true,
+            limits: Vec::new(),
+        };
+        if self.source == LedgerReadSource::Runtime {
+            let page = indexes.project_view_page(
+                events,
+                query,
+                profile,
+                request,
+                scope,
+                super::projection::PageSelection {
+                    through_sequence: self.through_sequence,
+                    sequences: None,
+                    retention,
+                    work: Some(work),
+                },
+            );
+            if let Some(value) = observation {
+                value.select_sequences.finish(Instant::now(), page.is_ok());
+                value.selection_work = LedgerProjectViewCount::from_len(work.visited());
+            }
+            let page = page?;
+            if let Some(value) = observation {
+                value.selected_sequences =
+                    LedgerProjectViewCount::Observed(u64::from(page.returned_count()));
+            }
+            check_read_budget(self.budget, bytes, events.len())?;
+            return Ok(page);
         }
         let selected = views::select_sequences(
             connection,
@@ -2057,35 +2111,23 @@ impl SqliteViewSnapshot {
                 .select_sequences
                 .finish(Instant::now(), selected.is_ok());
         }
-        let sequences = selected?;
+        let (sequences, steps) = selected?;
         if let Some(value) = observation {
             value.selected_sequences = LedgerProjectViewCount::from_len(sequences.len());
+            value.selection_work = LedgerProjectViewCount::Observed(steps);
             value.project_page.begin(Instant::now());
         }
-        let created;
-        let indexes = match indexes {
-            Some(indexes) => indexes,
-            None => {
-                created = EventIndexes::from_events(events);
-                &created
-            }
-        };
         let page = indexes.project_view_page(
             events,
             query,
             profile,
             request,
-            LedgerReadScope {
-                source: self.source,
-                material_read: LedgerMaterialReadState::NotRequested,
-                scanned_through_position: self.through_sequence,
-                read_complete: true,
-                limits: Vec::new(),
-            },
+            scope,
             super::projection::PageSelection {
                 through_sequence: self.through_sequence,
                 sequences: Some(&sequences),
                 retention,
+                work: None,
             },
         )?;
         check_read_budget(self.budget, bytes, events.len())?;
@@ -4223,6 +4265,7 @@ fn sql_error(error: rusqlite::Error, operation: Location) -> GlobalLedgerError {
         rolled_back_work: None,
         io_kind: None,
         write_failure,
+        values: None,
     }
 }
 

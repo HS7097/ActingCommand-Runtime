@@ -737,6 +737,7 @@ fn gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected(
                         adb_port: None,
                         elapsed_ms: 1,
                         startup_package: StartupPackageDisposition::None,
+                        startup_package_withheld: None,
                     },
                 )
             })]

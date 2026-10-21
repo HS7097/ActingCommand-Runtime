@@ -180,6 +180,7 @@ pub(super) trait DurableStorage: Send + 'static {
         _profile: actingcommand_contract::ProjectionProfile,
         _request: &actingcommand_contract::RuntimeEventQueryPageRequest,
         _observation: &mut Option<LedgerProjectViewObservation>,
+        _work: &super::read_work::ReadWork,
     ) -> Option<GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>> {
         None
     }
@@ -1640,24 +1641,43 @@ impl<B: DurableStorage> EventStore<B> {
         events
     }
 
-    pub(super) fn query_page(
+    /// #411 A51 (R2): [`Self::query`] within `work`'s budget; `ledger_read_budget_exceeded` of
+    /// `operation` when it ran out.
+    pub(super) fn query_within(
         &self,
         query: &actingcommand_contract::EventQuery,
-        after_sequence: u64,
-        through_sequence: u64,
-        page_events: usize,
-    ) -> Vec<PersistedEvent> {
-        let mut events = self.indexes.query_page(
-            &self.events,
-            query,
-            after_sequence,
-            through_sequence,
-            page_events,
-        );
+        work: &super::read_work::ReadWork,
+        operation: actingcommand_contract::outcome::Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let mut events = self
+            .indexes
+            .query_within(&self.events, query, work)
+            .ok_or_else(|| super::read_work::ReadWork::exceeded(operation))?;
         for event in &mut events {
             self.retention.annotate_event(event);
         }
-        events
+        Ok(events)
+    }
+
+    /// #411 A51 (R2): one page of the events `query` selects after `range.0` through `range.1`,
+    /// at most `page_events`, within `work`'s budget; `ledger_read_budget_exceeded` of
+    /// `operation` when it ran out.
+    pub(super) fn query_page_within(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        range: (u64, u64),
+        page_events: usize,
+        work: &super::read_work::ReadWork,
+        operation: actingcommand_contract::outcome::Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let mut events = self
+            .indexes
+            .query_page_within(&self.events, query, range, page_events, work)
+            .ok_or_else(|| super::read_work::ReadWork::exceeded(operation))?;
+        for event in &mut events {
+            self.retention.annotate_event(event);
+        }
+        Ok(events)
     }
 
     pub(super) fn latest_sequence(&self) -> u64 {
@@ -1687,20 +1707,23 @@ impl<B: DurableStorage> EventStore<B> {
         query: &actingcommand_contract::EventQuery,
         profile: actingcommand_contract::ProjectionProfile,
         request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+        work: &super::read_work::ReadWork,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
-        self.project_view_page_observed(query, profile, request, &mut None)
+        self.project_view_page_observed(query, profile, request, &mut None, work)
     }
 
+    /// #411 A51 (R2): the page's selection stops where `work`'s budget runs out.
     pub(super) fn project_view_page_observed(
         &self,
         query: &actingcommand_contract::EventQuery,
         profile: actingcommand_contract::ProjectionProfile,
         request: &actingcommand_contract::RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
+        work: &super::read_work::ReadWork,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
-        if let Some(page) = self
-            .backend
-            .project_view_page(query, profile, request, observation)
+        if let Some(page) =
+            self.backend
+                .project_view_page(query, profile, request, observation, work)
         {
             return page;
         }
@@ -1721,29 +1744,38 @@ impl<B: DurableStorage> EventStore<B> {
                 through_sequence: self.latest_sequence(),
                 sequences: None,
                 retention: Some(&self.retention),
+                work: Some(work),
             },
         )
     }
 
-    pub(super) fn replay_page(
+    /// The events after `range.0` through `range.1`, at most `page_events`, for a
+    /// subscription's replay; #411 A51 (R2): within `work`'s budget,
+    /// `ledger_read_budget_exceeded` of `operation` when it ran out.
+    pub(super) fn replay_page_within(
         &self,
-        after_sequence: u64,
-        through_sequence: u64,
+        (after_sequence, through_sequence): (u64, u64),
         page_events: usize,
-    ) -> Vec<PersistedEvent> {
+        work: &super::read_work::ReadWork,
+        operation: actingcommand_contract::outcome::Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         let start = self
             .events
             .partition_point(|event| event.sequence() <= after_sequence);
-        let mut events = self.events[start..]
+        let mut events = Vec::new();
+        for event in self.events[start..]
             .iter()
             .take_while(|event| event.sequence() <= through_sequence)
             .take(page_events)
-            .cloned()
-            .collect::<Vec<_>>();
-        for event in &mut events {
-            self.retention.annotate_event(event);
+        {
+            if !work.visit() {
+                return Err(super::read_work::ReadWork::exceeded(operation));
+            }
+            let mut event = event.clone();
+            self.retention.annotate_event(&mut event);
+            events.push(event);
         }
-        events
+        Ok(events)
     }
 
     pub(super) fn close(mut self) -> GlobalLedgerResult<()> {

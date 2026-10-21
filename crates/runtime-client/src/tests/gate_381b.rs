@@ -11,7 +11,8 @@ use std::time::Duration;
 #[test]
 fn gate_the_emulator_control_receipt_wait_is_440_s_for_a_restart_and_230_s_otherwise() {
     for (action, seconds) in [
-        (EmulatorInstanceAction::Restart, 445),
+        // #411 A50: a restart may also wait for its old VM to exit, at most 300 s.
+        (EmulatorInstanceAction::Restart, 745),
         (EmulatorInstanceAction::Start, 235),
         (EmulatorInstanceAction::Stop, 235),
     ] {

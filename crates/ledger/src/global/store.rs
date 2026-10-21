@@ -4,9 +4,11 @@
 
 use super::capture::Captured;
 use super::flush::FlushReport;
+use super::read_work::ReadWork;
 use super::storage::{DurableStorage, EventStore};
 use super::{CommitStatistics, GlobalLedgerResult, LedgerProjectViewObservation};
 use crate::PersistedEvent;
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     EventId, EventQuery, IdentifierIssuer, PolicyExecutionEventData, ProjectionProfile,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
@@ -50,6 +52,7 @@ pub(super) trait LedgerStore: Send + 'static {
         &self,
         now_unix_ms: u64,
         switches: super::FrameRetentionSwitches,
+        work: &ReadWork,
     ) -> GlobalLedgerResult<super::FrameRetentionView>;
     fn admit_artifact_eviction(
         &mut self,
@@ -83,13 +86,23 @@ pub(super) trait LedgerStore: Send + 'static {
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)>;
 
     fn query(&self, query: &EventQuery) -> Vec<PersistedEvent>;
+    /// #411 A51 (R2): every read below stops where `work`'s budget runs out; a page answers
+    /// incomplete, any other read `ledger_read_budget_exceeded` of `operation`.
+    fn query_within(
+        &self,
+        query: &EventQuery,
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
+    /// The page after `range.0` through `range.1`.
     fn query_page(
         &self,
         query: &EventQuery,
-        after_sequence: u64,
-        through_sequence: u64,
+        range: (u64, u64),
         page_events: usize,
-    ) -> Vec<PersistedEvent>;
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
     fn latest_sequence(&self) -> u64;
     fn project_view_page(
         &self,
@@ -97,13 +110,19 @@ pub(super) trait LedgerStore: Send + 'static {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
+        work: &ReadWork,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage>;
+    /// The replay page after `range.0` through `range.1`.
     fn replay_page(
         &self,
-        after_sequence: u64,
-        through_sequence: u64,
+        range: (u64, u64),
         page_events: usize,
-    ) -> Vec<PersistedEvent>;
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
+    /// #411 A51: the root a test hook names this store by (its canonical state root).
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn hook_root(&self) -> std::path::PathBuf;
     fn close(self) -> GlobalLedgerResult<()>;
 }
 
@@ -147,8 +166,9 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         &self,
         now_unix_ms: u64,
         switches: super::FrameRetentionSwitches,
+        work: &ReadWork,
     ) -> GlobalLedgerResult<super::FrameRetentionView> {
-        Self::frame_retention_view(self, now_unix_ms, switches)
+        Self::frame_retention_view(self, now_unix_ms, switches, work)
     }
     fn admit_artifact_eviction(
         &mut self,
@@ -191,14 +211,24 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         Self::query(self, query)
     }
 
+    fn query_within(
+        &self,
+        query: &EventQuery,
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        Self::query_within(self, query, work, operation)
+    }
+
     fn query_page(
         &self,
         query: &EventQuery,
-        after_sequence: u64,
-        through_sequence: u64,
+        range: (u64, u64),
         page_events: usize,
-    ) -> Vec<PersistedEvent> {
-        Self::query_page(self, query, after_sequence, through_sequence, page_events)
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        Self::query_page_within(self, query, range, page_events, work, operation)
     }
 
     fn latest_sequence(&self) -> u64 {
@@ -211,21 +241,30 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
+        work: &ReadWork,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         if observation.is_some() {
-            Self::project_view_page_observed(self, query, profile, request, observation)
+            Self::project_view_page_observed(self, query, profile, request, observation, work)
         } else {
-            Self::project_view_page(self, query, profile, request)
+            Self::project_view_page(self, query, profile, request, work)
         }
     }
 
     fn replay_page(
         &self,
-        after_sequence: u64,
-        through_sequence: u64,
+        range: (u64, u64),
         page_events: usize,
-    ) -> Vec<PersistedEvent> {
-        Self::replay_page(self, after_sequence, through_sequence, page_events)
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        Self::replay_page_within(self, range, page_events, work, operation)
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn hook_root(&self) -> std::path::PathBuf {
+        // The gate names its root canonically (`\\?\` on Windows); so does the writer.
+        let root = self.backend.material_root();
+        root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
     }
 
     fn close(self) -> GlobalLedgerResult<()> {
