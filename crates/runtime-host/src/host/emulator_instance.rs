@@ -1076,10 +1076,7 @@ impl HostShared {
                     instance_id,
                     observed.as_ref().filter(|_| timed_out),
                 );
-                let settled = observed.as_ref().filter(|_| timed_out).and_then(|read| {
-                    timeout_settled(resolved, action, &failure, read)
-                        .map(|done| (read.clone(), done))
-                });
+                let settled: Option<(InstanceState, EmulatorControlOutcome)> = None;
                 if let Some((read, settled)) = settled {
                     self.record_control_timeout_settled(
                         &links,
