@@ -127,10 +127,9 @@ impl HostShared {
         };
         if !state.process_started {
             self.note_emulator_reading(instance_id, false)?;
-            return self.end_selfcheck(
-                not_running(instance_id, ContractLocation::ReadInstanceState),
-                links,
-            );
+            // A48 red proof 2 (T2's mutation, do not merge): today's behaviour, a stopped
+            // emulator is not reported; the opens go on as before A48.
+            return Ok(None);
         }
         let Some(adb_port) = state.adb_port.filter(|port| *port != 0 && state.running()) else {
             self.note_emulator_reading(instance_id, false)?;
