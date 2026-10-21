@@ -189,8 +189,8 @@ fn tool_error(error: EventsError) -> ToolError {
             value,
         } => match (problem.range(), value) {
             (Some((minimum, maximum)), _) => tools::out_of_range(&field, minimum, maximum),
-            (None, Some(value)) => tools::invalid_argument(&field, problem.token())
-                .with(|outcome| outcome.argument_value(value)),
+            // E4 red proof 1: the old refusal, without the value it received.
+            (None, Some(_)) => tools::invalid_argument(&field, problem.token()),
             (None, None) => tools::invalid_argument(&field, problem.token()),
         },
         EventsError::Runtime(error) => super::runtime::client_error(&error),
