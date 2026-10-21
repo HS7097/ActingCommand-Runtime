@@ -93,21 +93,27 @@ pub(super) enum TaskInputRecheck {
 
 /// Workflow #411 B12: what a `still_frames` recheck compares between consecutive frames.
 #[derive(Debug, Clone, Copy)]
-struct StillScreen {
+pub(super) struct StillScreen {
     region: Option<Rect>,
     max_milli: u32,
 }
 
 impl StillScreen {
+    /// #411 A43b: the whole frame at the frame-change default, as a wait compares its frames.
+    pub(super) const WHOLE_FRAME: Self = Self {
+        region: None,
+        max_milli: FRAME_CHANGE_MAX_MILLI,
+    };
+
     /// The frame-change digest of `scene`'s region; a region the frame does not hold (admission
     /// keeps it in the coordinate space) is `contained_task_recognition_failed`, caused by the
     /// digest's refusal.
-    fn digest(self, scene: &Scene) -> Result<ColorDigest, ContainedTaskError> {
+    pub(super) fn digest(self, scene: &Scene) -> Result<ColorDigest, ContainedTaskError> {
         frame_change_digest(scene, self.region).map_err(recognition_failed)
     }
 
     /// Whether `current` changed by more than the threshold since `previous`.
-    fn moved(
+    pub(super) fn moved(
         self,
         previous: &ColorDigest,
         current: &ColorDigest,
