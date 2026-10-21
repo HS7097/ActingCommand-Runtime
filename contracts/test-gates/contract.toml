@@ -645,3 +645,39 @@ tests = [
     "actingcommand-contract::gate::gate_411_bt_b5::bt_b5_t2_an_end_page_needs_one_mapping_and_is_no_target_page_of_its_stage",
 ]
 incident = ["#411 B5"]
+
+# Workflow #412 Lab B-3 S0 (ledger revision 4 row LR-10; register §1.153 LR-10, §1.159 B3-1; design rd-1021/train-0129/lab-b3-design.md §5 S0 T0-1; contract key K39 of the slice's block K39-K42): a declared Lab operation's records round-trip with every LR-10 member (the selection operation, the prepared record's operation, the terminal record's operation_result with its attempts and frames, the guard's two forms, every lab_operation_end token) and pass validation; element and coordinate records serialize byte for byte as before LR-10
+[[gate]]
+key = "K39"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::gate_412_b3_s0::b3_s0_t0_1_every_lr10_member_round_trips_and_element_and_coordinate_records_keep_their_bytes",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S0 (register §1.159 B3-2; design §3.2, §5 S0 T0-2; contract key K40): the validation of a declared Lab operation's record refuses each rule's violation with invalid_lab_operation_record (the two members together and only with the selection operation; no geometry, selected element, before projection or arrival; attempts 1.. ascending, at most max_attempts, each intent after the previous attempt's outcome and before its own; each input bound to a frame of its attempt before the input; at most 256 frames in capture order; the record's input members the last attempt's and its effect the aggregate; a completed end exactly without a failure or with one at release; the prepared record states attempt 1 and the after frame is the last frame; at most 16 destination pages), and a request refuses operation with an arrival condition and an empty or NUL operation id with invalid_lab_operation_selection
+[[gate]]
+key = "K40"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::gate_412_b3_s0::b3_s0_t0_2_validation_refuses_each_lr10_rule_violation_and_operation_with_after",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S0 (register §1.159 B3-3; design §3.3 item 2, §5 S0 T0-3; contract key K41): the shared Lab evidence verifier passes a two-attempt declared operation, one intent and one outcome per attempt, the prepared record verified before attempt 1's intent; it refuses an input intent of the request no attempt reports (runtime_lab_unreported_input) and a capture frame of the request no entry lists (runtime_lab_frame_budget_mismatch)
+[[gate]]
+key = "K41"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::gate_412_b3_s0::b3_s0_t0_3_the_verifier_passes_two_attempts_and_refuses_an_extra_intent_or_an_unlisted_frame",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S0 (register §1.159 B3-4; design §3.3 item 4, §5 S0 T0-4, decision Q12; contract key K42): resource restore gives the record of a declared Lab operation the gap lab_declared_operation and restores no operation from it
+[[gate]]
+key = "K42"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_412_b3_s0_restore::b3_s0_t0_4_restore_gives_a_declared_operation_the_gap_lab_declared_operation_and_no_operation",
+]
+incident = ["#412 B-3"]
