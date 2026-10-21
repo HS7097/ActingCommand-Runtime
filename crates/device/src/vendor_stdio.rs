@@ -274,9 +274,10 @@ impl RedirectGate {
         let mut state = self.lock_state();
         state.waiting += 1;
         self.changed.notify_all();
-        let (mut state, _) = self
+        // A36a red proof 3: the wait has no bound.
+        let mut state = self
             .changed
-            .wait_timeout_while(state, bound, |state| state.held)
+            .wait_while(state, |state| state.held)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.waiting -= 1;
         if state.held {
