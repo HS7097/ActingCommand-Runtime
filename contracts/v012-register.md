@@ -2579,6 +2579,23 @@ Record", "Why A Candidate Does Not Run") is the contract.
 | A26-3 | keys `why` (code), `decision_state`, `eligibility` (vocabularies of the same names), `omitted_why` (records of `why`, `count`) | new key-table and vocabulary entries (no shape) (policy 57) | A26 | A26 | the vocabularies are built from the policy crate's enums in `codes.rs` (G7), review `pending`; the two codes keep `since` 0.12.0, their text names 0.12.5 |
 | A26-4 | the developer detail of the decision record's reasons | contract text (no shape change) | A26 | A26 | unchanged; it is kept only in the in-memory decision. The sentence that it goes to a developer log is removed: no such log line exists |
 
+### 1.146 Slice BT-LAB (0.12.x B train, group G0): a page-set entry of offline `observe`'s `actions` carries a normalised `input`; Lab arrival samples start on a fixed period (#411 A13 B part, A18 option ④; plan-B §2.16, §2.17)
+
+A13 B part: offline `observe` lists an operation whose `to` is a page set in `actions` with
+`input` next to its declared `click`, built from its generated navigation row as an edge's
+`input` is; A13's A part (§1.104 A13-1) left `actions` unchanged.
+[resource-declarations.md](resource-declarations.md) (the navigation paragraph of Workflow #390
+LAB-2) is the contract. A18 option ④ (Alice's ruling on item 14, question 13; Lab B-3, #412,
+answers A18 fully later): online `do`'s arrival samples start on a fixed period instead of one
+fixed sleep after each evaluation; [contained-lab-operation.md](contained-lab-operation.md) (the
+arrival paragraph) is the contract. No persisted ledger shape, no wire, key, configuration or
+interface revision (§6), no outcome code. Gates: exec key 116, host key 128.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L13-1 | offline `observe`'s `actions` entry of an operation whose `to` is a page set: `{id, task_id, from_page, to_pages, click, input}` | new member of a Lab answer entry (operation output, no persisted record) (exec 116) | BT-LAB | BT-LAB | `input` from the operation's row in the generated navigation (same `id` and `from_page`, a page set), built as an edge entry's `input` (`semantic_input_json` of the navigation reader's click; no coordinate resolved on the frame), so it equals the `input` of an edge with the same click; `null` for a segmented or path drag, as an edge's, and when the navigation holds no such row (a package compiled from source always holds one); `click` stays the task file's declared click; every other entry unchanged |
+| L18-1 | the wait between two arrival samples of online `do` | rule (no shape change) (host 128) | BT-LAB | BT-LAB | a sample starts `LAB_ARRIVAL_INTERVAL_MS` (500 ms) after the previous one started: after its capture and evaluation the request waits on the Runtime clock (`kernel_pause`, as the transaction's own interval) for the rest of the 500 ms, none when they took longer, never past the deadline; was a 500 ms sleep after each evaluation, bounded by the deadline; the 20-sample budget, the deadline, `timed_out` and `elapsed_ms` are unchanged |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
