@@ -1754,9 +1754,9 @@ tests = [
 ]
 incident = ["#411 B2"]
 
-# Workflow #411 B3 (0.12.x; register §1.146; no persisted ledger shape; B-train plan §2.3, §5.3 rows T1 to T4; package revision 6, declared by BT-PK6): a color probe, a template's color_check and the repeated_anchor color predicate may declare 1 to 7 alternatives besides expected; the nearest declared color, the earliest among equal distances, within the one max_distance passes, and the color evidence names it as expected with its distance; in the joint template and relative color search any declared color qualifies a candidate; the declaration gate refuses 8 colors, a color listed twice or equal to expected and a component above 255 with resource_declaration_invalid (invalid_value) at the member
+# Workflow #411 B3 (0.12.x; register §1.149; no persisted ledger shape; B-train plan §2.3, §5.3 rows T1 to T4; package revision 6, declared by BT-PK6): a color probe, a template's color_check and the repeated_anchor color predicate may declare 1 to 7 alternatives besides expected; the nearest declared color, the earliest among equal distances, within the one max_distance passes, and the color evidence names it as expected with its distance; in the joint template and relative color search any declared color qualifies a candidate; the declaration gate refuses 8 colors, a color listed twice or equal to expected and a component above 255 with resource_declaration_invalid (invalid_value) at the member
 [[gate]]
-key = "116"
+key = "118"
 coverage = "Y"
 tests = [
     "actingcommand-recognition-pack::lib::gate_411_b3::b3_t1_a_probe_passes_on_its_nearest_alternative_and_names_it_as_expected",
