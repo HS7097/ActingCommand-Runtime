@@ -8,14 +8,13 @@
 // mark on each page, described by the Runtime's own preparation as `package bundle` describes
 // the packs it admits. Every expected value comes from the E3 brief (A32).
 
-use crate::package_directory::undeclared_recognition_packs;
+use crate::package_directory::{admission_deadline, undeclared_recognition_packs};
 use actingcommand_contract::{BundleMaintenance, MaintenanceUse};
 use actingcommand_execution_kernel::{PreparedContainedTask, TaskPackageDescriptor};
 use serde_json::{Value, json};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::FileOptions;
@@ -141,12 +140,9 @@ fn readers(temp: &TempDir) -> Vec<TaskPackageDescriptor> {
         .map(|package_id| {
             let path = temp.path().join(format!("{package_id}.zip"));
             write_reader(&path, package_id);
-            let descriptor = PreparedContainedTask::describe_path(
-                "package-bundle",
-                &path,
-                Instant::now() + Duration::from_secs(60),
-            )
-            .unwrap_or_else(|error| panic!("{package_id} is admitted: {error}"));
+            let descriptor =
+                PreparedContainedTask::describe_path("package-bundle", &path, admission_deadline())
+                    .unwrap_or_else(|error| panic!("{package_id} is admitted: {error}"));
             assert_eq!(descriptor.server(), SERVER);
             assert_eq!(
                 descriptor.recognition_problem(),

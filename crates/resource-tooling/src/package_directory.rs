@@ -31,6 +31,14 @@ const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
 /// The read and the admission of one pack directory share one deadline.
 pub(crate) const PACK_DEADLINE: Duration = Duration::from_secs(60);
 
+/// Workflow #411 E3: the deadline a gate test hands an admission by path. A gate file reads no
+/// clock (test plan v2.2 §2.1 guard 3); this deadline only bounds the admission, which never takes
+/// this long, so it decides nothing (the CD-27 D2 (a) form).
+#[cfg(test)]
+pub(crate) fn admission_deadline() -> Instant {
+    Instant::now() + PACK_DEADLINE
+}
+
 /// The identity a pack's control declaration states, read from its admitted bundle.
 struct PackIdentity {
     game: String,
