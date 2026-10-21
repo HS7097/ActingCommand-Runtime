@@ -376,7 +376,10 @@ the backend self-check facts (source `device-proxy` or `capture`).
   Workflow #398 RD-2: for a bound handset the device-link watch writes it too:
   `false` when the handset leaves `device` for a state adb reports, `true` when
   the watch's first list finds it prepared at `device` and when its restore
-  preparation passes; each only when the value changes.
+  preparation passes; each only when the value changes. #411 A48: a
+  self-check that recognizes an emulator running while the Runtime held it
+  stopped or unrecognized records it `true` once the ADB baseline answers
+  ("Emulator status first" below).
 - `device.link` (Workflow #398 RD-2, model-398 v1.1 §4.7) — instance scope,
   `string`, a bound handset only: the state of its wired device link as the
   `adb track-devices` watch reports it (`device`, `absent`, `offline`,
@@ -672,6 +675,46 @@ is returned as an error; every other failure leaves the instance unavailable.
 
 Fixture instances and providers without a device endpoint are not prepared by
 the automatic triggers.
+
+**Emulator status first (#411 A48).** A self-check (`SelfCheckInstance` and an
+instance resume's reconnect, the phase on an operator claim) of a
+discovery-bound instance reads the emulator's status once (`MuMuManager info`,
+bounded; a status read that never starts or stops anything) after step 2's
+close of a retained session and before its opens:
+
+- stopped (no emulator process): the check ends `instance_not_running` (stage
+  `read_instance_state`); nothing opens and nothing is started;
+- running while the Runtime holds the instance stopped or unrecognized (its
+  binding pending, its emulator reading not `on`, or bound to another port
+  than the one reported): the recognition that follows a Runtime `start`
+  once its emulator runs, without the start: the reported port is bound
+  (`runtime.instance_bound` when the binding changed, the reading `on`), the
+  ADB baseline is awaited as after a start (`emulator-control.md`, "ADB
+  baseline"; an adb child a probe left unconfirmed fences the instance), and
+  `device.connected` is recorded true; the opens then go on as before and the
+  check passes when they do;
+- running, but its device cannot be recognized (Android not started or no ADB
+  port reported, stage `read_instance_state`; adbd silent through the ADB wait,
+  stage `probe_adb_baseline`, the last probe's failure or the fence as the
+  cause): the check ends `emulator_device_unrecognized` (error,
+  `environment_fault`) with the status read as typed values
+  (`process_started`, `android_started`, `adb_port_present`, `adb_port`) and
+  `elapsed_ms`;
+- running and already recognized: the reading is renewed and the opens go on;
+- the read failed: `emulator_state_read_failed` (warning, the read's text as
+  its cause) is recorded and the check goes on from the Runtime's own state: a
+  bound instance opens as before, a pending one ends `instance_not_running`
+  (stage `require_bound_adb_endpoint`), as every device-facing request on a
+  pending binding does.
+
+A check that ends there writes one connection-preparation `runtime.failed`
+record with its code, values and step, then `instance_preparation_finished`,
+and answers that code as the self-check's `failure_code`, never
+`input_backend_open_failed`. An instance without a discovery binding, and
+every other preparation (daemon start, emulator control, ladder, handset
+restore), reads no status. Before A48 a self-check of an emulator started
+outside the Runtime opened nothing and reported `input_backend_open_failed`
+with an unobserved provider and no attempt.
 
 ## Typed codes
 

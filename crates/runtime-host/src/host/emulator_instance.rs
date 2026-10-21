@@ -206,9 +206,10 @@ pub(super) const EMULATOR_CONTROL_WAIT_TIMEOUT: &str =
     HostCode::EmulatorControlWaitTimeout.as_str();
 /// Every other failure of the provider control once it was dispatched or refused by the tool.
 const EMULATOR_CONTROL_FAILED: &str = HostCode::EmulatorControlFailed.as_str();
-/// Longest wait for adbd after the vendor reports the instance running (#316-B3).
-const ADB_BASELINE_WAIT: Duration = Duration::from_secs(30);
-const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Longest wait for adbd after the vendor reports the instance running (#316-B3); a
+/// self-check's recognition of a running emulator waits the same (#411 A48).
+pub(super) const ADB_BASELINE_WAIT: Duration = Duration::from_secs(30);
+pub(super) const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// A performed control action: its result terminal and, after `start` / `restart` of an
 /// instance with a startup package, that package with its scheduling intent recorded, which the
@@ -1666,8 +1667,9 @@ impl HostShared {
     /// Binds the instance's discovery binding to `adb_port`, or returns it to pending: the
     /// provider's binding and the host record together, under the registry lock. Workflow #390
     /// 九处-1: the reading this binding follows is the emulator's running state now, `on` with a
-    /// port and `off` without one.
-    fn bind_observed_endpoint(
+    /// port and `off` without one. #411 A48: a self-check's recognition of a running emulator
+    /// binds through it too (`selfcheck_emulator`).
+    pub(super) fn bind_observed_endpoint(
         &self,
         instance_id: InstanceId,
         adb_port: Option<u16>,

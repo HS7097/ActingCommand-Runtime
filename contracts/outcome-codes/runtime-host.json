@@ -21883,6 +21883,51 @@
       "description": "A direct task run (task-run --recovery-package, ac_run_pack recovery_package, the console) bound a recovery package that no path of the run can use, so the run is refused before any lease and nothing runs. A request's recovery package is used only by the home entry of a package whose entry is checked (an entry page set, a single entry page with stages, or home with any_of) and with no prerequisite chain, and by the stuck-recovery ladder's return_home rung, which a failed direct run starts only under recovery_ladder.rules.direct_runs = trigger with the instance's stuck recovery on. package_id is the run's package; the native detail names reason=entry_not_checked (its entry is not checked) or reason=prerequisite_gate (it enters through its prerequisite chain, which ignores the binding).",
       "common_causes": "A page-graph package with a single entry page and no stages (or home without any_of) run with a recovery package; a package that declares a prerequisite package, or a linear_steps package that falls back to the registered return-home package, run with a recovery package; direct_runs left at exempt.",
       "handling": "Declare the package's entry as an entry page set (for example [\"home\"], or every page it may start from) so its entry is checked; then a wrong start is recovered by the game's registered return-home package and recovery_package is not needed. Otherwise run it without recovery_package."
+    },
+    "emulator_device_unrecognized": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "process_started": "required",
+        "android_started": "required",
+        "adb_port_present": "required",
+        "adb_port": "optional",
+        "elapsed_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A self-check (actingctl selfcheck, SelfCheckInstance, and an instance resume's reconnect; #411 A48) read the emulator status first (MuMuManager info, a status read that starts nothing) and found the emulator process running, but its device could not be recognized, so nothing was opened. stage names the step: read_instance_state when the read reported Android not started or no ADB port; probe_adb_baseline when the reported port was bound (the Runtime had held the instance stopped or unrecognized) and adbd did not answer through the 30 s ADB baseline wait, the last probe's failure being the caused_by link (an adb child the probe left unconfirmed fences the instance, and the fence is the link). process_started, android_started, adb_port_present and adb_port are the status read; elapsed_ms is the time from the read to the failure. Recorded once as a connection-preparation runtime.failed record (its stage the step) under the self-check's links, before the preparation's instance_preparation_finished; the self-check reports the code as its failure_code and the instance stays unavailable.",
+      "common_causes": "The emulator was started outside the Runtime and is still booting; adbd of a running emulator does not answer (a hung Android, an adb server problem).",
+      "handling": "Wait until the emulator has finished booting and run actingctl selfcheck again; if adbd stays silent, restart the emulator through the Runtime (actingctl emulator restart)."
+    },
+    "emulator_state_read_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links.",
+      "common_causes": "MuMuManager did not answer within its bound or printed an answer of an unknown shape.",
+      "handling": "TBD"
     }
   },
   "locations": {

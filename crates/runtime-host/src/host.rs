@@ -221,6 +221,8 @@ use material_read::MaterialReadContext;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
 mod schedule_explanation_read;
 mod scheduling_pause;
+// #411 A48: a self-check reads the emulator status first and recognizes a running emulator again.
+mod selfcheck_emulator;
 mod signatures;
 // Workflow #373 NAV-6: the standard-pack root reader and the shared interrupt pages of a run.
 mod standard_pack;
