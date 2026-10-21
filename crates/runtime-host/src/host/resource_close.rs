@@ -4,6 +4,7 @@ use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::recovery_ladder::PendingRecoveryLadder;
 use super::resource_fence::UnconfirmedResources;
+use super::selfcheck_emulator::EmulatorStatusRead;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{DeviceSelfCheckFailure, RuntimeErrorCode};
@@ -761,6 +762,7 @@ impl HostShared {
             &admission,
             actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
             PreparationLease::Dedicated(ClaimKind::DaemonStartPreparation),
+            EmulatorStatusRead::Skip,
         )?;
         Ok((prepared.selfcheck, prepared.cooldown_until))
     }
@@ -853,7 +855,9 @@ impl HostShared {
     /// never hands the key to a startup run against an instance that failed its preparation
     /// (Workflow #369 S6c review low (b)); the failure stays in the self-check and in
     /// `instance_preparation_finished`. An unconfirmed close or a failed record fails the request
-    /// and leaves the key held, as a dedicated preparation lease is left then.
+    /// and leaves the key held, as a dedicated preparation lease is left then. #411 A48: this
+    /// preparation is a self-check (`SelfCheckInstance`, an instance resume's reconnect), so it
+    /// reads the emulator status before its opens (`selfcheck_emulator`).
     pub(super) fn prepare_on_operator_claim(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -878,6 +882,7 @@ impl HostShared {
                 token,
                 connection_id,
             },
+            EmulatorStatusRead::First,
         );
         drop(admission);
         let prepared = prepared.map_err(RequestFailure::poison_without_terminal)?;
@@ -925,6 +930,7 @@ impl HostShared {
                 token,
                 connection_id,
             },
+            EmulatorStatusRead::Skip,
         )
         .map(|prepared| (prepared.selfcheck, prepared.ladder))
     }
@@ -950,6 +956,7 @@ impl HostShared {
                 token: &key.token,
                 connection_id: key.connection_id,
             },
+            EmulatorStatusRead::Skip,
         )
         .map(|prepared| (prepared.selfcheck, prepared.event, prepared.recoverable))
     }
@@ -958,7 +965,10 @@ impl HostShared {
     /// cooldown when it refused the preparation lease (`lease_cooldown`, Workflow #191 h2), and
     /// whether a failed open is recoverable: an ordinary acquisition failure (#411 A7: a failed
     /// capture-backend open whatever its diagnostic category) whose resources were disposed and
-    /// whose cleanup succeeded (the rule a preparation trigger follows).
+    /// whose cleanup succeeded (the rule a preparation trigger follows). #411 A48: with
+    /// `EmulatorStatusRead::First` (a self-check) the emulator status is read before the opens;
+    /// a check that ends there opens nothing and reports its code (`selfcheck_emulator`).
+    #[allow(clippy::too_many_arguments)]
     fn prepare_instance_connection_with_cooldown(
         &self,
         instance_alias: &str,
@@ -967,6 +977,7 @@ impl HostShared {
         admission: &MutexGuard<'_, ()>,
         stage: actingcommand_contract::RecoveryTriggerStage,
         lease: PreparationLease<'_>,
+        status: EmulatorStatusRead,
     ) -> RuntimeHostResult<PreparationAttempt> {
         lock(
             &self.recovery_ladders,
@@ -1052,15 +1063,24 @@ impl HostShared {
         } else {
             Ok(())
         };
+        // #411 A48: a self-check first reads the emulator status; one that ends there opens
+        // nothing, and its code is the failing step's.
+        let mut status_failure = None;
         let opened = match &retained_close {
             Ok(()) => {
                 self.invalidate_backend_selfcheck_facts(instance_id)?;
-                Some(self.execution()?.open_instance_backends_until(
-                    instance_alias,
-                    self.mark_resources_in_use()?,
-                    frame_store.memory_budget(),
-                    self.install_preparation_deadline()?,
-                ))
+                match self.read_emulator_status_first(status, instance_id, &links)? {
+                    Some(code) => {
+                        status_failure = Some(code.as_str());
+                        None
+                    }
+                    None => Some(self.execution()?.open_instance_backends_until(
+                        instance_alias,
+                        self.mark_resources_in_use()?,
+                        frame_store.memory_budget(),
+                        self.install_preparation_deadline()?,
+                    )),
+                }
             }
             Err(_) => None,
         };
@@ -1083,7 +1103,7 @@ impl HostShared {
                         .is_some_and(|check| check.status == actingcommand_contract::BackendObservationStatus::Failed)))
         }));
         let (observations, mut failure_code) = match opened {
-            None => (Vec::new(), None),
+            None => (Vec::new(), status_failure),
             Some(Ok(observations)) => {
                 self.append_backend_open_observations(
                     &observations,

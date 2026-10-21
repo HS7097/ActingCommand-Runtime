@@ -274,6 +274,10 @@ mod gate_411_a45;
 mod gate_411_a46;
 // #411 A47: a ladder whose application stop fails keeps its key and climbs to its next rung.
 mod gate_411_a47;
+// #411 A48: a self-check reads the emulator status first: a running emulator the Runtime holds
+// stopped is recognized again, a stopped one is `instance_not_running`, an unrecognized device
+// says why.
+mod gate_411_a48;
 // #411 A49: a read-only observe between a run's recognition and its input does not displace the
 // run's frame; the observe still captures a frame of its own.
 mod gate_411_a49;

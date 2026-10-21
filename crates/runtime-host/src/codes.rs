@@ -1418,6 +1418,19 @@ actingcommand_contract::outcome_codes! {
         /// `reason=prerequisite_gate`).
         ContainedTaskRecoveryBindingUnused => "contained_task_recovery_binding_unused": error / declaration_error,
         // ---- Workflow #411 A22: end
+        // ---- #411 A48: a self-check reads the emulator status first: begin
+        /// Error. A self-check (`SelfCheckInstance`, an instance resume's reconnect) read the
+        /// emulator status first and found its process running, but its device could not be
+        /// recognized: Android not started or no ADB port reported (stage `read_instance_state`),
+        /// or adbd silent through the ADB baseline wait after the reported port was bound (stage
+        /// `probe_adb_baseline`; the last probe's failure, or the fence an unconfirmed probe
+        /// caused, is the cause). Nothing opened (keys `process_started`, `android_started`,
+        /// `adb_port_present`, `adb_port`, `elapsed_ms`).
+        EmulatorDeviceUnrecognized => "emulator_device_unrecognized": error / environment_fault,
+        /// Warning. A self-check's emulator status read failed; the check went on from the
+        /// Runtime's own state of the instance. The read's failure text is the cause.
+        EmulatorStateReadFailed => "emulator_state_read_failed": warning / none,
+        // ---- #411 A48: end
     }
 }
 
