@@ -36,8 +36,8 @@ pub(super) fn compile(
                     PackContainmentCode::SourceOperationPathInvalid,
                 ));
             }
-            let data = serde_json::from_slice(bytes)
-                .map_err(|_| source_error(PackContainmentCode::SourceOperationInvalid))?;
+            let data =
+                serde_json::from_slice(bytes).map_err(|error| operation_unparsed(path, &error))?;
             bundles.push(Bundle {
                 task_id: task.to_owned(),
                 dir: PathBuf::from(format!("resources/operations/{task}")),
@@ -214,4 +214,13 @@ pub(super) fn compile(
         },
         operation,
     ))
+}
+
+/// Workflow #411 A41: `source_operation_invalid` for a task declaration that is no JSON document,
+/// located: the declaration's `path` inside the package and, where the parser gives one, its
+/// position (`line` and `column`), caused by the parser's own text (`foreign_data_error`).
+fn operation_unparsed(path: &str, error: &serde_json::Error) -> ContainmentError {
+    // E1 red proof 3 (do not merge): today's refusal, without the file's path or position.
+    let _ = (path, error);
+    source_error(PackContainmentCode::SourceOperationInvalid)
 }

@@ -12,7 +12,7 @@
 use crate::codes::ResourceToolingCode;
 use crate::standard_pack_check::{RootFileInputs, cross_check};
 use crate::{PackageBundleRequest, PackageBundleResponse};
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleIndexVersion, BundleMaintenance, BundlePack, LabError, LabErrorClass,
     LabResult, MaintenanceUse, package_id_names_one_path_segment, reserved_package_id,
@@ -20,7 +20,7 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{NavigationPackageDescriptor, TaskPackageDescriptor};
 use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -28,6 +28,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
+/// The standard package's pack directory (`packs/<package_id>`), where a bundle lays out the
+/// packs of `--packs-root`.
+const PACKS_DIRECTORY: &str = "packs";
 /// The read and the admission of one pack directory share one deadline.
 pub(crate) const PACK_DEADLINE: Duration = Duration::from_secs(60);
 
@@ -409,13 +412,30 @@ fn pack_directories(packs_root: &Path) -> LabResult<Vec<PathBuf>> {
         directories.push(path);
     }
     if directories.is_empty() {
-        return Err(invalid(format!(
-            "{} holds no pack directory",
-            packs_root.display()
-        )));
+        // Workflow #411 A40: the pack table of the bundle to be made is `packs/`.
+        return Err(packs_empty(
+            "--packs-root holds no pack directory",
+            PACKS_DIRECTORY,
+            None,
+        ));
     }
     directories.sort();
     Ok(directories)
+}
+
+/// Workflow #411 A40: `package_bundle_packs_empty`, the pack table holds no pack, with where it
+/// looked relative to the standard package: `path` (`packs`, the bundle's pack directory, whose
+/// entries `package bundle` reads from `--packs-root`; or `bundle.json`) and, inside
+/// `bundle.json`, `json_pointer`. No absolute local path is reported.
+pub(crate) fn packs_empty(message: &str, path: &str, json_pointer: Option<&str>) -> LabError {
+    let code = ResourceToolingCode::PackageBundlePacksEmpty;
+    let outcome = Outcome::new(code).path(path);
+    let outcome = match json_pointer {
+        Some(pointer) => outcome.json_pointer(pointer),
+        None => outcome,
+    };
+    LabError::new(LabErrorClass::UsageValidation, code.as_str(), message, &[])
+        .with_details(json!({"outcome": outcome.envelope(Detail::Full)}))
 }
 
 /// Admits `locator` in full by its path and reads the identity its control states.

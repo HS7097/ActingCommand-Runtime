@@ -55,7 +55,10 @@ set must coincide with the `fields_recorded` mapping's terminal-page set, and it
 target-page set with the union of every mapping's terminal pages, under the existing
 game-prefix page normalization, with no duplicate aliases and no page in two mappings.
 Every mapping has `no_designated_effect`, there is no designated operation, and the task
-has no recovery or stability declaration. Build-task and Runtime admission apply the same
+has no recovery or stability declaration. A task of another schema, or one with recovery, that
+declares `operations: []` is refused `contained_task_program_invalid` with `program_problem`
+`operations_empty`, the task declaration's `path` inside the package and `json_pointer`
+`/operations` (Workflow #411 A39). Build-task and Runtime admission apply the same
 contract predicate; the offline package consumer delegates fields-package deep validation
 to Runtime admission. The first frame is page-admitted before fields are read from that
 same frame. Reaching a `fields_recorded` terminal page produces the ordinary verified
