@@ -99,6 +99,9 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskSelectPolicyInvalid => "contained_task_select_policy_invalid": error / declaration_error,
         ContainedTaskSelectPolicyMismatch => "contained_task_select_policy_mismatch": error / declaration_error,
         ContainedTaskRequiresScheduler => "contained_task_requires_scheduler": error / none,
+        /// Error. The run used up its step budget (`max_steps`; a stability declaration's step
+        /// limit is the same budget) before it ended (#411 A28).
+        ContainedTaskStepBudgetExhausted => "contained_task_step_budget_exhausted": error / budget_or_permission,
         ContainedTaskHomeEntryNotRequired => "contained_task_home_entry_not_required": error / none,
         // Workflow #373 NAV-3b: a task's entry page set is refused (key `entry_problem`).
         ContainedTaskEntryPagesInvalid => "contained_task_entry_pages_invalid": error / declaration_error,

@@ -32,6 +32,16 @@ impl LabArrivalCondition {
     }
 }
 
+crate::outcome_vocabulary! {
+    /// What kind of id a Lab operation's target is (the vocabulary `lab_target_type`, #411 A37).
+    pub enum LabTargetType: "lab_target_type" {
+        /// The element id of an observation: the complete `elements[].id`.
+        ElementId => "element_id",
+        /// The id of a recognition target in the package's recognition pack.
+        TargetId => "target_id",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LabOperationSelection {

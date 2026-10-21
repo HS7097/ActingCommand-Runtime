@@ -48,7 +48,13 @@ otherwise `unknown`), and nothing is accepted and ignored (#411 Lab L1).
 instance. `--projection-sequence` and `--projection-hash` supply optional source
 hints. Element IDs are the complete `observation.elements[].id` values returned
 by observation. An absent or unresolvable element fails with
-`capability_insufficient` and performs no input. The caller can explicitly
+`capability_insufficient` and performs no input. An element ID that no element of the
+projection has and that is one of the package's recognition target IDs (what offline `do`
+takes) is a target of the wrong type (#411 A37): the Runtime refuses it at selection with
+`lab_target_type_mismatch`, whose outcome names `expected_target_type` `element_id` and
+`received_target_type` `target_id`, and actinglab answers that code (exit 2, `blocked_by:
+[target]`) with the two types in its details, `arrival` still last; no input is performed.
+The caller can explicitly
 submit a separate coordinate request. Coordinates are validated by the existing
 InputAction limits and the current frame dimensions; a recognized page is not a
 coordinate prerequisite. Element safety annotations are informational.

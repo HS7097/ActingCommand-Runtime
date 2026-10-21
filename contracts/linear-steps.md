@@ -672,9 +672,11 @@ on a confirmation timeout, by ` confirm_elapsed_ms=<e> confirm_limit_ms=<l>`.
 `contained_task_step_unconfirmed` also carries `pack_operation_id`, `page_ids`, `attempts`,
 `page_id` (the last frame's page, absent when it matched none) and `artifact_id` (the run's
 failure pin) as outcome values, on the terminal and the receipt (#411 A15).
-`contained_task_requires_scheduler` remains for a run the state machine pauses or hands to a
-successor and for the stability step limit. None of these codes starts the stuck-recovery
-ladder.
+A run that uses up its step budget (`max_steps`, the stability step limit included, which equals
+it) ends with `contained_task_step_budget_exhausted` (#411 A28; it was
+`contained_task_requires_scheduler`). `contained_task_requires_scheduler` remains for a run the
+state machine hands to a successor or pauses when its recovery ran out. None of these codes
+starts the stuck-recovery ladder.
 
 ## Failure codes
 
@@ -686,7 +688,7 @@ ladder.
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
-| A guard refusal | `contained_task_guard_refused` | none |
+| A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30) | none |
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |
 | A recognition error | `contained_task_recognition_failed` | none |
 | The vision provider failed or answered invalidly (Workflow #387 D1c-G) | `contained_task_vision_provider_failed` | none |

@@ -192,7 +192,10 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
             }
         }
         if let Some(failure) = &record.failure {
-            return Err(operation_failure_error(failure, projected));
+            return Err(operation_failure_error(
+                failure,
+                with_target_types(projected, verified.receipt().outcome()),
+            ));
         }
         Ok(projected)
     })();
@@ -223,6 +226,15 @@ fn operation_failure_error(failure: &LabOperationFailure, details: Value) -> Cli
             "the selected element is not resolvable in the current Runtime projection",
             &[],
         )
+    } else if failure.code == SharedCode::LabTargetTypeMismatch.as_str() {
+        // #411 A37: a recognition target id where the element id belongs.
+        CliError::new(
+            ErrorKind::UsageValidation,
+            SharedCode::LabTargetTypeMismatch.as_str(),
+            "do --capture takes the element id of an observation; the target is a recognition \
+             target id of the package",
+            &["target"],
+        )
     } else {
         CliError::device(format!(
             "contained Lab operation failed at {:?}: {}",
@@ -230,6 +242,24 @@ fn operation_failure_error(failure: &LabOperationFailure, details: Value) -> Cli
         ))
     };
     error.with_details(details)
+}
+
+/// #411 A37: an online `do` answer with the expected and the received target type of a target of
+/// the wrong type, as the receipt's outcome names them (`expected_target_type`,
+/// `received_target_type`); `arrival` stays the last member (#411 A19). An outcome that names
+/// neither leaves the answer as it is.
+fn with_target_types(
+    mut answer: Value,
+    outcome: &actingcommand_contract::outcome::Outcome,
+) -> Value {
+    if let Some(object) = answer.as_object_mut() {
+        for key in ["expected_target_type", "received_target_type"] {
+            if let Some(value) = outcome.value(key) {
+                object.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    arrival_last(answer)
 }
 
 /// #411 A19: an online `do` answer with its `arrival` as the last member, every other member in

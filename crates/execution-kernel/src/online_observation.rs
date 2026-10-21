@@ -444,6 +444,17 @@ impl PreparedPageObservation {
             .contains(page_id)
     }
 
+    /// #411 A37: whether `target_id` is the id of a recognition target the package declares.
+    pub fn declares_target(&self, target_id: &str) -> bool {
+        self.bundle
+            .loaded_bundle()
+            .projection_metadata()
+            .expect("admitted metadata")
+            .catalog()
+            .targets
+            .contains(target_id)
+    }
+
     /// The one-frame observation: [`Self::evaluate_frames`] over `png` alone, inspecting.
     pub fn evaluate(
         &self,

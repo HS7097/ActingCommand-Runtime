@@ -531,4 +531,8 @@ outcome_keys! {
     eligibility: vocab(eligibility),
     omitted_why: records(why, count),
     // ---- Workflow #411 A26: end ----
+    // ---- Workflow #411 A37 (a Lab operation's target of the wrong type): begin ----
+    expected_target_type: vocab(lab_target_type),
+    received_target_type: vocab(lab_target_type),
+    // ---- Workflow #411 A37: end ----
 }

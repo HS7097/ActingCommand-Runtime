@@ -1998,6 +1998,14 @@
         "count": "required"
       },
       "description": "The candidates of the same instance that a dispatch decision record does not list, counted by why: one record per code, in ascending code order (Workflow #411 A26)."
+    },
+    "expected_target_type": {
+      "type": "vocab:lab_target_type",
+      "description": "The kind of id a Lab operation's target must be (#411 A37)."
+    },
+    "received_target_type": {
+      "type": "vocab:lab_target_type",
+      "description": "The kind of id a Lab operation's target was (#411 A37)."
     }
   },
   "vocabularies": {
@@ -6114,6 +6122,17 @@
         },
         "unknown": {
           "description": "Not decided: a predicate is unknown, or the candidate was settled before its trigger was read."
+        }
+      }
+    },
+    "lab_target_type": {
+      "description": "What kind of id a Lab operation's target is (#411 A37).",
+      "tokens": {
+        "element_id": {
+          "description": "The element id of an observation: the complete elements[].id."
+        },
+        "target_id": {
+          "description": "The id of a recognition target in the package's recognition pack."
         }
       }
     }

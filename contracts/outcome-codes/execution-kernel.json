@@ -1586,6 +1586,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_step_budget_exhausted": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "A contained task run used up its step budget before it ended: it completed as many steps as its max_steps allows (the default 100 when the control declares none) without reaching a terminal page, or a stability termination declaration reached its step limit, which equals the run's max_steps, before the screen held still for its threshold (#411 A28).",
+      "common_causes": "The steps did not move the screen towards the target page (taps that land on nothing, a carousel or a list that turns without end); an operation keeps being chosen on a page the package should leave by another operation; max_steps is too low for the work the package does.",
+      "handling": "Read the run's steps and frames to see where the run turned in place; give the package a way off that page or a named end for it, or raise max_steps when the work needs more steps."
+    },
     "contained_task_home_entry_not_required": {
       "category": "error",
       "ladder_class": "none",
@@ -1896,6 +1916,8 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "page_id": "optional",
+        "artifact_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -1905,7 +1927,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A contained task operation's guard did not pass before its input.",
+      "description": "A contained task operation's guard did not pass before its input. page_id is the page of the frame the guard judged on and artifact_id that frame, the run's GuardRejection pin (#411 A30).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

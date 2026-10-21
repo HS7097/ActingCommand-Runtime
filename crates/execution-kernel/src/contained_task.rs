@@ -6,8 +6,8 @@ use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{
     ExecutionBundleError, ExternallyVerifiedBundle, InputFrameContext, ObservedFrame, RunDirective,
     RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
-    RunOperationPolicy, RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
-    select_run_operation,
+    RunOperationPolicy, RunPause, RunPauseReason, RunStateConfig, RunStateMachine, RunTerminal,
+    decide_run_operation_failure, select_run_operation,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
@@ -5203,6 +5203,21 @@ impl PreparedContainedTask {
                         observation_timing.pace(),
                     );
                 }
+                // #411 A28: a run that used up its step budget ends with the step budget's own
+                // code.
+                RunDirective::Terminal(RunTerminal::PausedNeedsHuman {
+                    pause:
+                        RunPause {
+                            reason: RunPauseReason::MaxStepsExhausted,
+                            ..
+                        },
+                }) => {
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskStepBudgetExhausted.code(),
+                    )
+                    .with_timing(recovery_timing)
+                    .into());
+                }
                 RunDirective::Terminal(
                     RunTerminal::SuccessorSuggested { .. } | RunTerminal::PausedNeedsHuman { .. },
                 ) => {
@@ -5314,8 +5329,9 @@ impl PreparedContainedTask {
                 (machine.completed_steps(), machine.designated_effect_caps()),
                 pace,
             ),
+            // #411 A28: the stability step limit is the run's step budget (`max_steps`).
             StabilityTerminalReason::MaxStepsReached => Err(ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
+                ExecutionKernelCode::ContainedTaskStepBudgetExhausted.code(),
             )
             .into()),
         }
@@ -9499,6 +9515,7 @@ impl TaskOperation {
                     self.id, guard.page_id, observation.page_label
                 ),
             )
+            .with_values(guard_refusal_values(observation))
             .into());
         }
         let sampling = observation.sampling.map(|original| {
@@ -9623,6 +9640,7 @@ impl TaskOperation {
                 ExecutionKernelCode::ContainedTaskGuardRefused.code(),
                 detail,
             )
+            .with_values(guard_refusal_values(observation))
             .into());
         }
         let outcome = ContainedTaskGuardOutcome::Passed {
@@ -9632,6 +9650,13 @@ impl TaskOperation {
         };
         Ok((outcome, Some(target)))
     }
+}
+
+/// #411 A30: a guard refusal's outcome names the page of the frame the guard judged on
+/// (`page_id`); the host adds that frame (`artifact_id`, the run's `GuardRejection` pin).
+fn guard_refusal_values(observation: &PageObservation) -> Outcome {
+    Outcome::new(ExecutionKernelCode::ContainedTaskGuardRefused.code())
+        .page_id(observation.page_label.as_str())
 }
 
 #[derive(Debug, Deserialize)]
