@@ -308,7 +308,7 @@ fn agreed_side(
         return current;
     };
     let window = values.len().saturating_sub(agreement.frame_count());
-    let value = k_of_n_value(values[window..].iter().copied(), agreement.required());
+    let value = values[window..].last().copied().flatten();
     SideReading {
         evidence: TaskDiagnosticValueOperand {
             target_id: operand.target_id.clone(),
