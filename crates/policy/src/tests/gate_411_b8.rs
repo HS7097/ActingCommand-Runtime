@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #411 B8 gate tests, policy half (plan `rd-1021/train-0129/b-plan/plan.md` §2.8 and
-// §5.3 BT-B8 T1, T3; `contracts/remedies.md` section 4; policy gate key 58; register §1.146): a
+// §5.3 BT-B8 T1, T3; `contracts/remedies.md` section 4; policy gate key 59; register §1.150): a
 // V2 catalog task that opts in with `dispatch_parameters: true` hands its run the schedule values
 // of its dispatch on `policy_dispatch_parameters`, with or without remedies; a catalog without the
 // opt-in keeps its hash and its chains. Every expected value comes from §2.8 and the draft it
