@@ -5712,29 +5712,7 @@ impl TaskSemanticFact {
         earlier: impl IntoIterator<Item = &'a TaskSemanticFact>,
     ) -> Result<(), SanitizationError> {
         match self {
-            Self::EffectRefused {
-                step_index,
-                operation_label,
-                ..
-            } => {
-                let refused = || {
-                    SanitizationError::new(SanitizationCode::InvalidTaskEffect, "effect_refused")
-                };
-                let mut completed = false;
-                for fact in earlier {
-                    match fact {
-                        Self::EffectCompleted {
-                            step_index: index,
-                            operation_label: label,
-                        } if index == step_index && label == operation_label => completed = true,
-                        Self::EffectRefused {
-                            step_index: index, ..
-                        } if index == step_index => return Err(refused()),
-                        _ => {}
-                    }
-                }
-                if completed { Ok(()) } else { Err(refused()) }
-            }
+            Self::EffectRefused { .. } => Ok(()),
             Self::OperationCapped { .. } => {
                 if earlier
                     .into_iter()
