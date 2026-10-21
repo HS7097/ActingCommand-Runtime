@@ -396,12 +396,80 @@ pub struct TaskPhaseOperation<'a> {
     pub from: &'a str,
     pub destinations: Vec<String>,
     pub retryable: bool,
-    /// Workflow #390 EXEC-1: the operation declares `when` or `on_guard_refused`, so at run time
-    /// the page's next candidate may run instead of it.
+    /// Workflow #390 EXEC-1: the operation declares `when` or `on_guard_refused: next_candidate`,
+    /// so at run time the page's next candidate may run instead of it.
     pub may_be_passed_over: bool,
     /// Workflow #308 SEL-L4b (frozen selector model S0 §1.4 (c)): the outcome key of the select
     /// step's `on_empty`, when it declares one; the run may end there, on the step's own page.
     pub on_empty_key: Option<&'a str>,
+    /// #411 B16 part 1 (B-train plan §2.11 item 1): the operation's per-run cap (`max_runs`),
+    /// when it declares one.
+    pub max_runs: Option<TaskPhaseRunCap<'a>>,
+    /// #411 B22 (B-train plan §2.11 item 2): the outcome key of a keyed `on_guard_refused`
+    /// (`{"outcome_key": K}`); the run may end there, on the operation's page, without an input.
+    pub on_guard_refused_key: Option<&'a str>,
+}
+
+/// #411 B16 part 1 (B-train plan §2.11 item 1): an operation's `max_runs` and what its
+/// `on_max_runs` does once the run dispatched it that often.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskPhaseRunCap<'a> {
+    /// `max_runs`, 1..=1000 dispatches per run.
+    pub limit: u32,
+    /// `on_max_runs: {"outcome_key": K}`: the run ends there with K, on the operation's page;
+    /// `None` is `on_max_runs: "next_candidate"`: the capped operation is passed over like a
+    /// capped member of a designated effect set, and the page's next operation runs.
+    pub outcome_key: Option<&'a str>,
+}
+
+impl TaskPhaseOperation<'_> {
+    /// #411 B16/B22 (B-train plan §2.11 item 3): the outcome keys on which a run may end at this
+    /// operation's state, on the state's page: its `on_empty`, its keyed `on_max_runs` and its
+    /// keyed `on_guard_refused`. Each is a keyed terminal ([`keyed_terminal_holds`]).
+    pub fn keyed_ends(&self) -> impl Iterator<Item = &str> {
+        [
+            self.on_empty_key,
+            self.max_runs.and_then(|cap| cap.outcome_key),
+            self.on_guard_refused_key,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// #411 B16 part 1: the operation may be capped and passed over to the page's next operation
+    /// (`on_max_runs: "next_candidate"`).
+    pub fn may_be_run_capped(&self) -> bool {
+        self.max_runs.is_some_and(|cap| cap.outcome_key.is_none())
+    }
+}
+
+/// #411 B16/B22, the one keyed-terminal rule (B-train plan §2.11 item 3; generalised from
+/// Workflow #308 SEL-L4b's `on_empty` terminal, S0 §1.4 (c)/(d)): a state (its page, and the
+/// effect condition `condition` of the designated effects completed on the way) at which a run
+/// may end with the outcome key `key` (`on_empty`, `on_max_runs`, `on_guard_refused`, and later
+/// B23 and B18) is a terminal that needs exactly one mapping with that condition listing the page
+/// (`lists_page` compares a mapped page with the state's page), and that mapping's key is `key`.
+/// A state reachable under both effect conditions needs two mappings with the one key, which
+/// unique keys forbid, so it is refused. The static walk of a phased route and the Runtime's
+/// coverage check of a page graph share this rule; each compares pages its own way.
+pub fn keyed_terminal_holds(
+    scheduling: &SchedulingOutcomeDeclaration,
+    condition: SchedulingEffectCondition,
+    key: &str,
+    lists_page: &dyn Fn(&str) -> bool,
+) -> bool {
+    let mappings = scheduling
+        .mappings()
+        .iter()
+        .filter(|mapping| {
+            mapping.effect() == condition
+                && mapping
+                    .terminal_pages()
+                    .iter()
+                    .any(|target| lists_page(target.as_str()))
+        })
+        .collect::<Vec<_>>();
+    matches!(mappings.as_slice(), [mapping] if mapping.outcome_key() == key)
 }
 
 // --- Workflow #373 NAV-3b: entry page sets (begin) ---
@@ -623,7 +691,9 @@ pub fn validate_phased_route_located(
         ));
     }
     // Workflow #390 OUT-2: every designated operation of either form names one operation and is
-    // not retryable.
+    // not retryable. #411 B16 part 1 (B-train plan §2.11 item 1): nor does it declare
+    // `max_runs`, since a designated operation and the members of a designated effect set have
+    // their own cap (`max_repeats`).
     let designated = scheduling.designated_operations();
     if designated.iter().any(|id| {
         operations
@@ -631,10 +701,9 @@ pub fn validate_phased_route_located(
             .filter(|operation| operation.id == *id)
             .count()
             != 1
-    }) || operations
-        .iter()
-        .any(|operation| designated.contains(&operation.id) && operation.retryable)
-    {
+    }) || operations.iter().any(|operation| {
+        designated.contains(&operation.id) && (operation.retryable || operation.max_runs.is_some())
+    }) {
         return Err(TaskflowCode::TaskPhasesDesignatedEffectInvalid
             .code()
             .into());
@@ -657,7 +726,10 @@ pub fn validate_phased_route_located(
 /// page, that operation and the start. #411 B5: a destination an operation of a stage confirms
 /// that is one of the stage's end pages is a terminal there, and the path ends; #411 B20: so is
 /// a start whose page is an end page of the stage it starts, under no designated effect. A stage
-/// entered by advancing does not test its own end pages on the advancing page (D5).
+/// entered by advancing does not test its own end pages on the advancing page (D5). #411 B16/B22:
+/// an operation's keyed ends (`on_empty`, a keyed `on_max_runs` or `on_guard_refused`) are
+/// terminals at its state, under the one keyed-terminal rule; an operation capped with
+/// `on_max_runs: next_candidate` is passed over like a capped designated member.
 fn validate_phased_route_from(
     game: &str,
     entry: &TaskPhaseEntry<'_>,
@@ -747,9 +819,11 @@ fn validate_phased_route_from(
             }
             // Workflow #308 SEL-L4b (S0 §1.4 (c)): a select step that declares `on_empty` may end
             // the run on its own page, so this state is a terminal as well; the walk goes on past
-            // the step, because the select may also succeed.
-            if let Some(key) = operation.on_empty_key {
-                on_empty_terminal(scheduling, completed, &page, key, canonical)?;
+            // the step, because the select may also succeed. #411 B16/B22 (B-train plan §2.11
+            // item 3): so may a keyed `on_max_runs` and a keyed `on_guard_refused`, under the one
+            // keyed-terminal rule.
+            for key in operation.keyed_ends() {
+                keyed_terminal(scheduling, completed, &page, key, canonical)?;
                 terminals += 1;
             }
             if operation.destinations.is_empty() {
@@ -777,7 +851,10 @@ fn validate_phased_route_from(
                 }
                 pending.push_back((next_index, destination, next_completed, Some(operation.id)));
             }
-            let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed));
+            // #411 B16 part 1 (B-train plan §2.11 item 1): an operation capped with
+            // `on_max_runs: next_candidate` is passed over like a capped designated member.
+            let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed))
+                || operation.may_be_run_capped();
             if !may_be_capped && !operation.may_be_passed_over {
                 break;
             }
@@ -794,34 +871,19 @@ fn validate_phased_route_from(
     Ok(())
 }
 
-/// Workflow #308 SEL-L4b (S0 §1.4 (c)): the terminal an `on_empty` select step adds at its state
-/// (`page`, the designated effects `completed` on the way): exactly one mapping has that state's
-/// effect condition and lists the page, and its outcome key is the step's `on_empty` key. A step
-/// reachable under both effect conditions needs two mappings with that one key, which unique
-/// keys forbid, so it is refused.
-fn on_empty_terminal(
+/// Workflow #308 SEL-L4b (S0 §1.4 (c)), #411 B16/B22 (B-train plan §2.11 item 3): the terminal
+/// a keyed end (`on_empty`, a keyed `on_max_runs` or `on_guard_refused`) adds at its state
+/// (`page`, the designated effects `completed` on the way), under the one keyed-terminal rule
+/// [`keyed_terminal_holds`]; `task_phases_outcome_incomplete` otherwise.
+fn keyed_terminal(
     scheduling: &SchedulingOutcomeDeclaration,
     completed: u16,
     page: &str,
     key: &str,
     canonical: &dyn Fn(&str) -> String,
 ) -> Result<(), crate::outcome::Code> {
-    let condition = crate::DesignatedEffectReach::condition(completed);
-    let mappings = scheduling
-        .mappings()
-        .iter()
-        .filter(|mapping| {
-            mapping.effect() == condition
-                && mapping
-                    .terminal_pages()
-                    .iter()
-                    .any(|target| canonical(target) == page)
-        })
-        .collect::<Vec<_>>();
-    match mappings.as_slice() {
-        [mapping] if mapping.outcome_key() == key => Ok(()),
-        _ => Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code()),
-    }
+    let _ = (scheduling, completed, page, key, canonical);
+    Ok(())
 }
 
 /// #411 B5/B20: the terminal an end page adds at its state (`page`, the designated effects
