@@ -5735,10 +5735,8 @@ impl HostShared {
                 request_id: Some(task_request_id),
                 ..EventQuery::default()
             })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::QueryContainedTaskCancellation,
-                ))
+            .map_err(|error| {
+                ledger_read_failure(&error, HostLocation::QueryContainedTaskCancellation)
             })?;
         if let Some(control) = &active
             && (control.request_id != task_request_id
@@ -8130,11 +8128,7 @@ impl HostShared {
                 request_id: Some(request.request_id()),
                 ..EventQuery::default()
             })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::RecoverContainedTask,
-                ))
-            })?;
+            .map_err(|error| ledger_read_failure(&error, HostLocation::RecoverContainedTask))?;
         if events.is_empty() {
             return if active {
                 Err(contained_task_replay_denied(
@@ -8358,10 +8352,11 @@ impl HostShared {
                     lease_id: Some(lease_id),
                     ..EventQuery::default()
                 })
-                .map_err(|_| {
-                    RequestFailure::poison_without_terminal(ledger_error(
+                .map_err(|error| {
+                    ledger_read_failure(
+                        &error,
                         HostLocation::QueryRecoveredContainedTaskLeaseTerminal,
-                    ))
+                    )
                 })?;
             let granted = lease_events.iter().any(|event| {
                 event.event_type() == EventType::LeaseGranted

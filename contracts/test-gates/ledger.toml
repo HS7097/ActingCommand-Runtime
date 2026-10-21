@@ -577,3 +577,14 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_411_a24::a24_forensic_taken_at_is_the_latest_timestamp",
 ]
 incident = ["#411 A24"]
+
+# #411 A51 (0.12.9; register §1.151; no persisted ledger shape; brief A51 T1, T2, T4; the next free ledger key at the base): a Runtime Lab page is the in-memory projection's at every snapshot and its selection visits at most 200 per candidate or anchor; a writer read that its work budget stops answers an incomplete page (read_complete false, the read_budget limit, scanned_through_position below the head) whose cursor goes on from that position at the same snapshot, and an append that queued behind it commits before the next page; a close whose writer is held in a read ends at its bound with ledger_close_timeout naming the read (stage query_events) and its elapsed and bound milliseconds
+[[gate]]
+key = "51"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_411_a51::a51_t1_a_lab_page_is_the_in_memory_projection_and_its_work_is_bounded_by_its_candidates",
+    "actingcommand-ledger::lib::global::tests::gate_411_a51::a51_t2_a_read_stopped_by_its_budget_answers_an_incomplete_page_that_continues",
+    "actingcommand-ledger::lib::global::tests::gate_411_a51::a51_t4_a_close_whose_writer_is_held_in_a_read_ends_at_its_bound_naming_the_read",
+]
+incident = ["#411 A51"]

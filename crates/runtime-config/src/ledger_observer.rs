@@ -67,6 +67,21 @@ pub const STATUS_GAP_WINDOW_MS: &str = "ledger_observer.status_gap_window_ms";
 pub const TAG_WORKBENCH_PATTERNS: &str = "ledger_observer.tag.workbench_patterns";
 /// The workbench keys known to be untagged and re-observed (§11.2; AO-5).
 pub const TAG_REOBSERVE_PREFIXES: &str = "ledger_observer.tag.reobserve_prefixes";
+/// #411 A51: the work budget of one read on the ledger writer's thread, in milliseconds.
+pub const READ_BUDGET_MS: &str = "ledger_observer.read_budget_ms";
+/// #411 A51: how long the Runtime's close waits for the ledger writer, in milliseconds.
+pub const CLOSE_TIMEOUT_MS: &str = "ledger_observer.close_timeout_ms";
+
+/// #411 A51: how long a caller waits for one reply of the ledger writer (the ledger's
+/// `GlobalLedger::REPLY_TIMEOUT`, 10 s). A read's budget stays below it, so a read stops before
+/// its caller stops waiting for it.
+pub const WRITER_REPLY_TIMEOUT_MS: i64 = 10_000;
+
+/// #411 A51: `read_budget_ms` lies below the writer's reply limit.
+const READ_BUDGET_RANGE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: WRITER_REPLY_TIMEOUT_MS - 1,
+};
 
 /// The largest attempt count a configuration may name: the write path counts in `u32`.
 const MAX_ATTEMPTS: i64 = u32::MAX as i64;
@@ -111,6 +126,12 @@ pub struct LedgerObserverFile {
     status_gap_window_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tag: Option<TagFile>,
+    // #411 A51 (`actingd-config` revision 8): a Runtime before A51 refuses a file that names
+    // either, because the section denies unknown members.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read_budget_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    close_timeout_ms: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -313,7 +334,29 @@ pub(crate) static ROWS: &[KeyRow] = &[
         AT_OPEN,
         "AO-5",
     ),
+    // #411 A51: read when the ledger opens, as the writer's other limits are.
+    row_since(READ_BUDGET_MS, READ_BUDGET_RANGE, "A51", "0.12.9"),
+    row_since(CLOSE_TIMEOUT_MS, POSITIVE, "A51", "0.12.9"),
 ];
+
+/// A milliseconds key read when the ledger opens, with the release that added its row.
+const fn row_since(
+    name: &'static str,
+    range: KeyRange,
+    reader: &'static str,
+    since: &'static str,
+) -> KeyRow {
+    KeyRow {
+        name: KeyName::Exact(name),
+        file_path: FilePath::Key,
+        value_type: ValueType::DurationMs,
+        range,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader,
+        since,
+    }
+}
 
 /// The capture queue's tiers (§7).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -345,6 +388,9 @@ pub struct LedgerObserverConfig {
     pub status_gap_window_ms: u64,
     pub tag_workbench_patterns: Vec<String>,
     pub tag_reobserve_prefixes: Vec<String>,
+    /// #411 A51.
+    pub read_budget_ms: u64,
+    pub close_timeout_ms: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -472,6 +518,18 @@ impl LedgerObserverConfig {
                 ConfigValueProblem::SectionCheck,
             ));
         }
+        // #411 A51: a read stops before its caller stops waiting for it, and the close waits
+        // longer than one read.
+        let read_budget_ms = reader.duration(READ_BUDGET_MS)?;
+        if read_budget_ms == 0
+            || i64::try_from(read_budget_ms).unwrap_or(i64::MAX) >= WRITER_REPLY_TIMEOUT_MS
+        {
+            return Err(invalid(READ_BUDGET_MS, ConfigValueProblem::SectionCheck));
+        }
+        let close_timeout_ms = reader.duration(CLOSE_TIMEOUT_MS)?;
+        if close_timeout_ms <= read_budget_ms {
+            return Err(invalid(CLOSE_TIMEOUT_MS, ConfigValueProblem::SectionCheck));
+        }
         Ok(Self {
             buffer_bytes,
             buffer_records: reader.count(BUFFER_RECORDS)?,
@@ -491,6 +549,8 @@ impl LedgerObserverConfig {
             status_gap_window_ms: reader.duration(STATUS_GAP_WINDOW_MS)?,
             tag_workbench_patterns: reader.keys(TAG_WORKBENCH_PATTERNS)?,
             tag_reobserve_prefixes: reader.keys(TAG_REOBSERVE_PREFIXES)?,
+            read_budget_ms,
+            close_timeout_ms,
         })
     }
 }

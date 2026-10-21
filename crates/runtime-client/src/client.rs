@@ -2822,8 +2822,9 @@ impl RuntimeClient {
                 )
             })?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
-            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
-            {
+            // #411 A51: a page the Runtime's read budget cut goes on after the position its
+            // read reached, at or after its last row.
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(RuntimeClientError::fatal(
                     ClientCode::RuntimeEventQueryPaginationInvalid,
                     ContractLocation::QueryRuntimeEvents.location(),
@@ -2892,8 +2893,10 @@ impl RuntimeClient {
                 .next_cursor()
                 .cloned()
                 .ok_or_else(|| failure(ClientCode::RuntimeEventQueryPaginationInvalid))?;
-            // A page that has more always holds a record, so every next page starts later.
-            if next.after_sequence() != last_sequence {
+            // Every next page starts later: after the page's last record, or (#411 A51) after
+            // the position a read the Runtime's budget cut reached, which may hold no record.
+            let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(failure(ClientCode::RuntimeEventQueryPaginationInvalid));
             }
             cursor = Some(next);
@@ -2985,8 +2988,9 @@ impl RuntimeClient {
                 )
             })?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
-            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
-            {
+            // #411 A51: a page the Runtime's read budget cut goes on after the position its
+            // read reached, at or after its last row.
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
                 return Err(RuntimeClientError::fatal(
                     ClientCode::RunSummaryPaginationInvalid,
                     ClientLocation::SummarizeRun.location(),

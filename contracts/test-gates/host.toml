@@ -1544,3 +1544,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_b8::b8_t2_a_policy_run_reads_the_schedule_values_and_a_direct_run_has_none",
 ]
 incident = ["#411 B8"]
+
+# #411 A51 (0.12.9; register §1.151 A51-7, A51-8; no persisted ledger shape; brief A51 T3, T5; the next free host key above 129): while the writer is held in a read, a Status and the performance loop's runtime-fact seal answer the non-fatal writer_response_timeout, nothing is latched and no stop is requested, and once the read ends Status completes; the first fatal condition the host latches reaches the daemon reporter at once, before any close, and only the first
+[[gate]]
+key = "130"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a51::a51_t3_reads_the_writer_does_not_answer_in_time_latch_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_411_a51::a51_t5_the_first_latched_fatal_reaches_the_daemon_log_at_once",
+]
+incident = ["#411 A51"]

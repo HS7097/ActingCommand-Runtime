@@ -3163,13 +3163,53 @@ impl RuntimeEventQueryPage {
         Ok(page)
     }
 
+    /// #411 A51: a projected page with its read scope and run recovery, checked once as a whole.
+    /// A page whose read stopped at the Runtime's work budget (`LedgerPageLimit::ReadBudget`)
+    /// may hold no event and still have more, and its cursor goes on from the scope's
+    /// `scanned_through_position`, which [`Self::new`] (without the scope) refuses.
+    pub fn projected(
+        events: Vec<ProjectedEvent>,
+        snapshot_ledger_position: u64,
+        requested_limit: u16,
+        has_more: bool,
+        next_cursor: Option<RuntimeEventQueryCursor>,
+        scope: crate::LedgerReadScope,
+        run_recovery: Vec<crate::LedgerRunRecovery>,
+    ) -> RuntimeContractResult<Self> {
+        let returned_count = u16::try_from(events.len()).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeEventQueryPage)
+        })?;
+        let page = Self {
+            events,
+            snapshot_ledger_position,
+            requested_limit,
+            returned_count,
+            has_more,
+            next_cursor,
+            read_scope: Some(scope),
+            run_recovery,
+        };
+        page.validate()?;
+        Ok(page)
+    }
+
+    /// #411 A51: whether the read stopped at the Runtime's work budget before the snapshot's end
+    /// (`LedgerPageLimit::ReadBudget`); the page is then not complete and its cursor goes on from
+    /// `scanned_through_position`.
+    pub fn read_budget_stopped(&self) -> bool {
+        self.read_scope
+            .as_ref()
+            .is_some_and(|scope| scope.limits.contains(&crate::LedgerPageLimit::ReadBudget))
+    }
+
     pub fn validate(&self) -> RuntimeContractResult<()> {
+        let budget_stopped = self.read_budget_stopped();
         if self.requested_limit == 0
             || self.requested_limit > MAX_RUNTIME_EVENT_QUERY_EVENTS
             || self.returned_count as usize != self.events.len()
             || self.returned_count > self.requested_limit
             || self.has_more != self.next_cursor.is_some()
-            || (self.events.is_empty() && self.has_more)
+            || (self.events.is_empty() && self.has_more && !budget_stopped)
         {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidRuntimeEventQueryPage,
@@ -3201,8 +3241,23 @@ impl RuntimeEventQueryPage {
         }
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;
+            // #411 A51: a page cut by its count or its bytes goes on after its last row, so byte
+            // trimming skips nothing; one cut only by the work budget goes on after the position
+            // its read reached, every row before which it decided.
+            let continues_after = match &self.read_scope {
+                Some(scope)
+                    if budget_stopped
+                        && !scope.limits.contains(&crate::LedgerPageLimit::EventCount)
+                        && !scope
+                            .limits
+                            .contains(&crate::LedgerPageLimit::ResponseBytes) =>
+                {
+                    Some(scope.scanned_through_position)
+                }
+                _ => self.events.last().map(|event| event.sequence),
+            };
             if cursor.snapshot_ledger_position != self.snapshot_ledger_position
-                || self.events.last().map(|event| event.sequence) != Some(cursor.after_sequence)
+                || continues_after != Some(cursor.after_sequence)
             {
                 return Err(RuntimeContractError::new(
                     RuntimeContractCode::InvalidRuntimeEventQueryPage,
@@ -3210,20 +3265,22 @@ impl RuntimeEventQueryPage {
             }
         }
         if let Some(scope) = &self.read_scope {
+            let incomplete = scope
+                .limits
+                .contains(&crate::LedgerPageLimit::SourceIncomplete)
+                || budget_stopped;
             if scope.scanned_through_position > self.snapshot_ledger_position
                 || self
                     .events
                     .last()
                     .is_some_and(|event| event.sequence > scope.scanned_through_position)
-                || scope.read_complete
-                    == scope
-                        .limits
-                        .contains(&crate::LedgerPageLimit::SourceIncomplete)
+                || scope.read_complete == incomplete
                 || (self.has_more
                     != (scope.limits.contains(&crate::LedgerPageLimit::EventCount)
                         || scope
                             .limits
-                            .contains(&crate::LedgerPageLimit::ResponseBytes)))
+                            .contains(&crate::LedgerPageLimit::ResponseBytes)
+                        || budget_stopped))
             {
                 return Err(RuntimeContractError::new(
                     RuntimeContractCode::InvalidRuntimeEventReadScope,
