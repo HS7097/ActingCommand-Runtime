@@ -179,6 +179,9 @@ mod gate_383;
 // Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is
 // imported once by the restart and deleted.
 mod gate_383_ao1;
+// #411 A51 (host key 130): a ledger read the writer does not answer in time latches nothing,
+// and the first latched fatal reaches the daemon's log at once.
+mod gate_411_a51;
 // Workflow #383 AO-4q, test row AO4-c: status reads append no ledger record.
 mod gate_383_ao4q;
 // Workflow #383 SH-1, register §1.18: the reserved single-touch path drag was refused; its test

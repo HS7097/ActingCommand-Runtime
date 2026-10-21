@@ -2875,6 +2875,10 @@ mod gate_l5b;
 // Workflow #383 AO-1: retry, dump, fatal stop and import (test rows AO1-a to AO1-k).
 #[path = "tests/gate_383_ao1.rs"]
 mod gate_383_ao1;
+// #411 A51 (ledger key 51): a Lab page is bounded by its candidates, a writer read stops at its
+// work budget, and the close waits for the writer at most its bound.
+#[path = "tests/gate_411_a51.rs"]
+mod gate_411_a51;
 // Workflow #336 PKG-S2: package facts name packages by label and a digest member is not read.
 #[path = "tests/gate_pkg_s2.rs"]
 mod gate_pkg_s2;
