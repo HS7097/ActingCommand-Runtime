@@ -476,7 +476,12 @@ directly; a package whose prerequisite chain is empty starts as above. Layer `i`
    `EntryRecognition { PostRecovery }` follows; when the entry did not pass, the run fails with
    `contained_task_prerequisite_entry_unmatched`, detail `layer=<i> package_id=<X_i>
    required_page=<page>` (`required_pages=<page>,<page>...` for an entry page set), timing
-   `page_recognition` / `entry_recognition` with `limit_ms` the step timeout.
+   `page_recognition` / `entry_recognition` with `limit_ms` the step timeout. Workflow #411
+   B39 (A part): when the prerequisite package's run ended on a page that exactly one of its
+   `scheduling_outcome` mappings lists (its condition `no_designated_effect`, the only one a
+   prerequisite package can reach), the failure's outcome also carries that mapping's
+   `outcome_key` as `layer_outcome_key`. The run still fails with this code; a mapped layer key
+   does not end the run.
 
 Each prerequisite package runs at most once per run. On any failure every prerequisite package
 opened and not yet closed gets one `EntryRecoveryFailed` with the failure code and its `role`,

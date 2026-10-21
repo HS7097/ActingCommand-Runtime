@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{Bundle, CliError, CliOutcome, ParseFiles, SourceRead};
+use crate::ExpectedShape;
 use actingcommand_contract::candidate_projection::{
     CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_FEATURES,
     validate_candidate_feature_name, validate_candidate_layout_id,
@@ -2352,6 +2353,32 @@ impl Declaration<'_> {
 
 fn child(pointer: &str, field: &str) -> String {
     format!("{pointer}/{}", field.replace('~', "~0").replace('/', "~1"))
+}
+
+/// Workflow #411 B28: the shape the member a declaration refusal names must have, when the
+/// declaration check refused the member, or an element of it, for its type (`InvalidType`) and
+/// the grammar names the shape: a page rule's `any_of` (`/page_rules/<page>/any_of`) and each of
+/// its entries (`/page_rules/<page>/any_of/<index>`) make an array of arrays (`page_rule`).
+/// `None` for every other refusal, a target id inside a group (a string) included.
+pub fn declaration_expected_shape(issue: &ResourceDeclarationIssue) -> Option<ExpectedShape> {
+    if issue.reason != ResourceDeclarationReason::InvalidType {
+        return None;
+    }
+    let segments = issue
+        .field_path
+        .strip_prefix('/')?
+        .split('/')
+        .collect::<Vec<_>>();
+    match segments.as_slice() {
+        ["page_rules", _, "any_of"] => Some(ExpectedShape::ArrayOfArrays),
+        ["page_rules", _, "any_of", entry] if is_index(entry) => Some(ExpectedShape::ArrayOfArrays),
+        _ => None,
+    }
+}
+
+/// Whether a JSON pointer segment is an array index.
+fn is_index(segment: &str) -> bool {
+    !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Checks the execution declarations of an already verified, contained bundle.

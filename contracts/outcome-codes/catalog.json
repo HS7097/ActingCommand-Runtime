@@ -2022,6 +2022,34 @@
     "daily_remaining": {
       "type": "integer",
       "description": "The runs the daily budgets of a task and its activity profile still allow in the activity day after this dispatch (Workflow #411 B8)."
+    },
+    "argument_value": {
+      "type": "name",
+      "description": "The value an MCP tool argument was given, verbatim, where the argument's refusal names it: for a list argument, the one element refused (Workflow #411 B27)."
+    },
+    "expected_shape": {
+      "type": "vocab:expected_shape",
+      "description": "The shape a declaration member must have, where the declaration check refused the member, or an element of it, for its type and the grammar names the shape (Workflow #411 B28)."
+    },
+    "box_x": {
+      "type": "integer",
+      "description": "The left edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_y": {
+      "type": "integer",
+      "description": "The top edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_width": {
+      "type": "integer",
+      "description": "The width of a click box, pixels; a point click's box is 1 wide (Workflow #411 B34)."
+    },
+    "box_height": {
+      "type": "integer",
+      "description": "The height of a click box, pixels; a point click's box is 1 high (Workflow #411 B34)."
+    },
+    "layer_outcome_key": {
+      "type": "name",
+      "description": "The outcome key of the scheduling outcome mapping a prerequisite layer's run ended on, as the layer's package declares it (Workflow #411 B39)."
     }
   },
   "vocabularies": {
@@ -6160,6 +6188,15 @@
           "description": "The id of a recognition target in the package's recognition pack."
         }
       }
+    },
+    "expected_shape": {
+      "description": "The shape a declaration member must have (Workflow #411 B28).",
+      "review": "pending",
+      "tokens": {
+        "array_of_arrays": {
+          "description": "An array whose every element is an array: a page rule's any_of, a list of groups of target ids (contracts/resource-declarations.md)."
+        }
+      }
     }
   },
   "domains": {
@@ -9028,6 +9065,9 @@
       "actinglab"
     ],
     "package_fmt_": [
+      "actinglab"
+    ],
+    "package_check_": [
       "actinglab"
     ]
   },

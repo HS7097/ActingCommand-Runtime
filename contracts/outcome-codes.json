@@ -2022,6 +2022,34 @@
     "daily_remaining": {
       "type": "integer",
       "description": "The runs the daily budgets of a task and its activity profile still allow in the activity day after this dispatch (Workflow #411 B8)."
+    },
+    "argument_value": {
+      "type": "name",
+      "description": "The value an MCP tool argument was given, verbatim, where the argument's refusal names it: for a list argument, the one element refused (Workflow #411 B27)."
+    },
+    "expected_shape": {
+      "type": "vocab:expected_shape",
+      "description": "The shape a declaration member must have, where the declaration check refused the member, or an element of it, for its type and the grammar names the shape (Workflow #411 B28)."
+    },
+    "box_x": {
+      "type": "integer",
+      "description": "The left edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_y": {
+      "type": "integer",
+      "description": "The top edge of a click box, in the coordinate space of its task, pixels (Workflow #411 B34)."
+    },
+    "box_width": {
+      "type": "integer",
+      "description": "The width of a click box, pixels; a point click's box is 1 wide (Workflow #411 B34)."
+    },
+    "box_height": {
+      "type": "integer",
+      "description": "The height of a click box, pixels; a point click's box is 1 high (Workflow #411 B34)."
+    },
+    "layer_outcome_key": {
+      "type": "name",
+      "description": "The outcome key of the scheduling outcome mapping a prerequisite layer's run ended on, as the layer's package declares it (Workflow #411 B39)."
     }
   },
   "vocabularies": {
@@ -6160,6 +6188,15 @@
           "description": "The id of a recognition target in the package's recognition pack."
         }
       }
+    },
+    "expected_shape": {
+      "description": "The shape a declaration member must have (Workflow #411 B28).",
+      "review": "pending",
+      "tokens": {
+        "array_of_arrays": {
+          "description": "An array whose every element is an array: a page rule's any_of, a list of groups of target ids (contracts/resource-declarations.md)."
+        }
+      }
     }
   },
   "domains": {
@@ -9029,6 +9066,9 @@
     ],
     "package_fmt_": [
       "actinglab"
+    ],
+    "package_check_": [
+      "actinglab"
     ]
   },
   "codes": {
@@ -10831,12 +10871,13 @@
         "argument": "required",
         "argument_problem": "required",
         "range_min": "optional",
-        "range_max": "optional"
+        "range_max": "optional",
+        "argument_value": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An MCP tool was called with arguments its input schema refuses.",
+      "description": "An MCP tool was called with arguments its input schema refuses. Workflow #411 B27: argument_value is the value an event type argument of ac_events was given that names no event type (for event_types and exclude_event_types, the element).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20779,12 +20820,13 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "layer_outcome_key": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A linear task's first page was not seen within its budget after its prerequisite package ran.",
+      "description": "A linear task's first page was not seen within its budget after its prerequisite package ran. Workflow #411 B39 (A part): layer_outcome_key is the outcome key of the scheduling outcome mapping the prerequisite layer's run ended on, when its final page is a terminal page of one of its package's mappings.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -49245,6 +49287,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_check_click_box_single_point": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "box_x": "required",
+        "box_y": "required",
+        "box_width": "required",
+        "box_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Workflow #411 B34: actinglab package check admitted the package, and an operation's click declares a box of one point: a point click, a long press without a box, or a rect, specific_rect or long-press box of 1x1. pack_operation_id names the operation; box_x, box_y, box_width and box_height the box in the coordinate space of its task (a point click's box is 1x1 at its point). A click located on the frame (target, target_center, offset) and a drag are not judged. The package still passes; one warning per such click.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "package_edit_admission_refused": {
       "category": "error",
       "ladder_class": "none",
@@ -64229,12 +64291,13 @@
         "path": "optional",
         "json_pointer": "optional",
         "found_after_first": "optional",
-        "step": "optional"
+        "step": "optional",
+        "expected_shape": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid. Workflow #411 B28: expected_shape is the shape the refused member must have, where a member or its element has the wrong type and the grammar names the shape (a page rule's any_of: array_of_arrays).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

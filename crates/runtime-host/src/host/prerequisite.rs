@@ -35,7 +35,9 @@ use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
 use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
 use actingcommand_contract::outcome::Code;
-use actingcommand_contract::{TaskEntryRecoveryRole, TaskTimingBudgetOrigin};
+use actingcommand_contract::{
+    SchedulingEffectCondition, TaskEntryRecoveryRole, TaskTimingBudgetOrigin,
+};
 pub(super) use actingcommand_execution_kernel::MAX_PREREQUISITE_DEPTH;
 use actingcommand_execution_kernel::{MAX_GATED_STEPS, PrerequisiteChain};
 
@@ -487,10 +489,49 @@ fn gate_layer(
         }
         // The failure's timing belongs to the wait's own budget.
         runtime.task_timing.replace_context(Some(waited.timing));
+        // Workflow #411 B39 (A part): after a declared prerequisite package, the failure names
+        // the outcome key its run ended on.
+        let layer_key = match return_home {
+            None => layer_outcome_key(prerequisite, &outcome),
+            Some(_) => None,
+        };
+        let error = match layer_key {
+            Some(key) => error.with_layer_outcome_key(key),
+            None => error,
+        };
         return Err(fail_gate(runtime, gate, ContainedTaskRunError::Task(error)));
     }
     runtime.entry_scene = None;
     Ok(())
+}
+
+/// Workflow #411 B39 (A part): the outcome key of the scheduling outcome mapping a prerequisite
+/// layer's completed run ended on: its final page is a terminal page of exactly one of its
+/// package's mappings. A prerequisite package declares no designated effect (preparation refuses
+/// one, `designated_operation`), so its run's mapping condition is `no_designated_effect`, as the
+/// terminal projection would read it. `None` when the run did not succeed, ended on no page, its
+/// package declares no mapping of that page, or the run selected a key of its own.
+fn layer_outcome_key<'a>(
+    package: &'a PreparedContainedTask,
+    outcome: &ContainedTaskOutcome,
+) -> Option<&'a str> {
+    if outcome.outcome != TaskOutcome::Success || outcome.selected_scheduling_outcome.is_some() {
+        return None;
+    }
+    let final_page = outcome.final_page.as_deref()?;
+    let declaration = package.scheduling_outcome()?;
+    if declaration.has_designated_effect() {
+        return None;
+    }
+    let mut mapped = declaration.mappings().iter().filter(|mapping| {
+        mapping.effect() == SchedulingEffectCondition::NoDesignatedEffect
+            && mapping
+                .terminal_pages()
+                .iter()
+                .any(|page| page_anchor_matches(package.game(), final_page, page))
+    });
+    let mapping = mapped.next()?;
+    mapped.next().is_none().then_some(mapping.outcome_key())
 }
 
 /// A failure of the gate's own recognition. Only the outermost first check, before any fact of

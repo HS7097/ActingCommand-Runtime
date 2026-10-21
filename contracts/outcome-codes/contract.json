@@ -3483,12 +3483,13 @@
         "path": "optional",
         "json_pointer": "optional",
         "found_after_first": "optional",
-        "step": "optional"
+        "step": "optional",
+        "expected_shape": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): resource declaration invalid. Workflow #411 B28: expected_shape is the shape the refused member must have, where a member or its element has the wrong type and the grammar names the shape (a page rule's any_of: array_of_arrays).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

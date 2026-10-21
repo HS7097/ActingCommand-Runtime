@@ -2736,6 +2736,28 @@ the end of the B train (plan §4); until then they are admitted by code. Gate: e
 | B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does |
 | B12-5 | `frame_change_digest`, `frame_change_milli`, `FRAME_CHANGE_MAX_MILLI` (`actingcommand_recognition::color_digest`, re-exported by the execution kernel) | Runtime-internal interface (memory only) | BT-B12 | BT-B12 | the one frame-change measure: the `color_digest.v1` digest of a region (the whole frame by default) on 16×9 cells, each axis at most the region's pixels; the change is the digests' `mean_milli`, no cell excluded; still at most 1500 by default |
 
+### 1.156 Slice E4 (0.12.x): four refusals and warnings say what is wrong (#411 B27, B28, B34, B39 A part; B-train plan §6, Q15)
+
+Each item says what is wrong as typed values under the outcome-code spec; nothing that was
+accepted is refused, nor the other way round, and B34 only adds a warning. **No persisted ledger
+shape**: the new values are optional values of three pending entries
+(`arguments_invalid`, `resource_declaration_invalid`,
+`contained_task_prerequisite_entry_unmatched`), and the one new code, a pending warning, is
+answered only by `actinglab package check`. No wire, configuration key, location or package
+format changes. [runtime-interface.md](runtime-interface.md) (`ac_events`),
+[resource-declarations.md](resource-declarations.md) (page rules),
+[package-reference.md](package-reference.md) (`package check`) and
+[linear-steps.md](linear-steps.md) (prerequisite gate) are the contract. Gates: apps keys 87, 88;
+exec key 131; host key 139.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| E4-1 | `ac_events` given an `event_type`, or an element of `event_types` or `exclude_event_types`, that names no event type: `arguments_invalid {argument, argument_problem: not_recognised, argument_value}` (class `usage`) | changed answer: a new optional value (apps 87) | E4 | E4 | `argument_value` (`name`) is the value given, kept when it is at most 256 bytes without a control character; refused before any Runtime read, as before; the input schema is unchanged; `actingctl events` keeps its `actingctl_usage_invalid` without the value |
+| E4-2 | `resource_declaration_invalid` of a page rule's `any_of` that is no array, or of an entry of it that is no array (`invalid_type` at that member) | new optional value `expected_shape` (`vocab:expected_shape`, token `array_of_arrays`) on the kernel admission's outcome (exec 131) | E4 | E4 | the same refusal and the same `details.declaration`; `package check`'s and `package preflight`'s `details.outcome` and the Runtime's refusal carry it (`declaration_expected_shape` reads the refused member's pointer); a target id inside a group that is no string gets no value; the `resource_declaration_rejected` record's own outcome is unchanged, so on the Runtime the refusal's lifecycle record carries the value (ledger revision 3, as for every failure with values) |
+| E4-3 | `actinglab package check` answer member `warnings` | changed output (not persisted) (apps 88) | E4 | E4 | the envelope of one `package_check_click_box_single_point` warning per operation click whose declared box is one point (a `point` click and a long press without a box, each a box of 1×1 at its point, or a `rect`, `specific_rect` or long-press box of 1×1), in declaration order, with `pack_operation_id`, `box_x`, `box_y`, `box_width`, `box_height`; empty when there is none; a click located on the frame (`target`, `target_center`, `offset`) and a drag are not judged; the package still passes (exit 0); `ac_pack_check` answers it verbatim |
+| E4-4 | `contained_task_prerequisite_entry_unmatched` after a declared prerequisite package whose run ended on a page exactly one of its `scheduling_outcome` mappings lists | new optional value `layer_outcome_key` (`name`) on the failure's outcome, the terminal's and the receipt's (host 139) | E4 | E4 | the mapping's `outcome_key`; a prerequisite package declares no designated effect, so the condition is `no_designated_effect`; none when the layer's run did not succeed, ended on an unmapped page or selected a key of its own; not on `contained_task_return_home_entry_unmatched`; the run still fails with this code (B39's B part, a mapped layer key that ends the main run, is not in this slice) |
+| E4-5 | keys `argument_value`, `layer_outcome_key` (`name`), `expected_shape` (`vocab:expected_shape`), `box_x`, `box_y`, `box_width`, `box_height` (integer); vocabulary `expected_shape`; domain `package_check_` (actinglab); code `package_check_click_box_single_point` (warning, ladder class `none`) | new key-table, vocabulary, domain and catalog entries (no shape) | E4 | E4 | every entry stays `pending`; no location or configuration key |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
