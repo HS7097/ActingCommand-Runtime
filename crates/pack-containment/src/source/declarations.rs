@@ -41,9 +41,16 @@ const OBSERVATION_WINDOW_MEMBERS: &[(&str, &[&str])] = &[
     ("stable", &["window_ms", "frames"]),
 ];
 /// Workflow #390 EXEC-2: an operation's `input_recheck`, by its `kind`, with its required unsigned
-/// members.
-const INPUT_RECHECK_MEMBERS: &[(&str, &[&str])] =
-    &[("fresh_frame", &[]), ("stable_frames", &["frames"])];
+/// members (`still_frames`: Workflow #411 B12).
+const INPUT_RECHECK_MEMBERS: &[(&str, &[&str])] = &[
+    ("fresh_frame", &[]),
+    ("stable_frames", &["frames"]),
+    ("still_frames", &["frames"]),
+];
+/// Workflow #411 B12: the optional members of an `input_recheck` kind: its unsigned members, then
+/// its rectangles (`{x, y, width, height}`).
+const INPUT_RECHECK_OPTIONAL: &[(&str, &[&str], &[&str])] =
+    &[("still_frames", &["max_distance_milli"], &["region"])];
 /// Workflow #390 EXEC-1: an operation's `when` names its target under exactly one of these.
 const WHEN_MEMBERS: &[&str] = &["present", "absent"];
 /// Workflow #390 EXEC-1: the one value of an operation's `on_guard_refused`.
@@ -639,10 +646,16 @@ impl Declaration<'_> {
                 "transition" if !value.is_null() => self.transition(value, &pointer)?,
                 "optional" if !value.is_null() => self.optional(value, &pointer)?,
                 "observation_window" if !value.is_null() => {
-                    self.tagged(value, &pointer, "until", OBSERVATION_WINDOW_MEMBERS)?;
+                    self.tagged(value, &pointer, "until", OBSERVATION_WINDOW_MEMBERS, &[])?;
                 }
                 "input_recheck" if !value.is_null() => {
-                    self.tagged(value, &pointer, "kind", INPUT_RECHECK_MEMBERS)?;
+                    self.tagged(
+                        value,
+                        &pointer,
+                        "kind",
+                        INPUT_RECHECK_MEMBERS,
+                        INPUT_RECHECK_OPTIONAL,
+                    )?;
                 }
                 "when" if !value.is_null() => self.when(value, &pointer)?,
                 "on_guard_refused" if !value.is_null() => {
@@ -666,14 +679,16 @@ impl Declaration<'_> {
 
     /// Workflow #390 EXEC-2: an operation's `observation_window` or `input_recheck`, task schema
     /// `0.9` only (`UnconsumedField` before it): an object whose `tag` names one of `variants`,
-    /// with that variant's unsigned members, all required, and nothing else. Runtime admission
-    /// checks the values.
+    /// with that variant's unsigned members, all required, the optional members `optional`
+    /// gives it (Workflow #411 B12: unsigned members, then rectangles), and nothing else. Runtime
+    /// admission checks the values.
     fn tagged(
         &self,
         value: &Value,
         pointer: &str,
         tag: &str,
         variants: &[(&str, &[&str])],
+        optional: &[(&str, &[&str], &[&str])],
     ) -> CliOutcome<()> {
         if self.schema != Some("0.9") {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
@@ -691,8 +706,16 @@ impl Declaration<'_> {
             .find(|(variant, _)| *variant == name)
             .map(|(_, members)| *members)
             .ok_or_else(|| self.error(&tag_pointer, ResourceDeclarationReason::InvalidValue))?;
+        let (unsigned, rects) = optional
+            .iter()
+            .find(|(variant, _, _)| *variant == name)
+            .map_or((&[][..], &[][..]), |(_, unsigned, rects)| {
+                (*unsigned, *rects)
+            });
         let allowed = std::iter::once(tag)
             .chain(members.iter().copied())
+            .chain(unsigned.iter().copied())
+            .chain(rects.iter().copied())
             .collect::<Vec<_>>();
         let object = self.object(value, pointer, &allowed)?;
         for member in members {
@@ -700,6 +723,17 @@ impl Declaration<'_> {
                 self.required(object, pointer, member)?,
                 &child(pointer, member),
             )?;
+        }
+        let declared = |member: &str| object.get(member).filter(|value| !value.is_null());
+        for &member in unsigned {
+            if let Some(value) = declared(member) {
+                self.unsigned(value, &child(pointer, member))?;
+            }
+        }
+        for &member in rects {
+            if let Some(value) = declared(member) {
+                self.rect(value, &child(pointer, member))?;
+            }
         }
         Ok(())
     }

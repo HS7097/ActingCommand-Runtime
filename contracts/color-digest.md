@@ -168,3 +168,30 @@ of the field, below `/color_probes/<i>`:
 
 A missing required field is `MissingField` at its pointer. Loading the derived pack checks
 the target again and fails with the error codes of the algorithm above.
+
+## Frame change
+
+Workflow #411 B12. The Runtime has one measure of how much the screen changed between two
+frames, and every rule that asks whether the screen is still uses it: the `still_frames` input
+recheck ([resource-declarations.md](resource-declarations.md), section Task schema `0.9`
+observation windows and input rechecks) and, later, the kernel's waits on a stable screen and
+the recovery ladder's settle probe. No other frame-change measure is written.
+
+- **Region.** An absolute rectangle of the frame, as above, or the whole frame when none is
+  given. It must lie in the frame (`color_digest_region_invalid`).
+- **Grid.** 16 columns and 9 rows; an axis of the region shorter than that in pixels takes one
+  cell per pixel (`columns = min(16, width)`, `rows = min(9, height)`).
+- **Digest.** The region's `color_digest.v1` digest on that grid, computed for each frame.
+- **Change.** `mean_milli` of the distance between the digest of the earlier frame and that of
+  the later one, no cell excluded. Digests of grids that differ are
+  `color_digest_grid_mismatch`.
+- **Still.** Two frames are still when the change is at most the threshold. The default threshold
+  is **1500** milli (a mean of 1.5 quantized levels per cell); a declaration may give its own,
+  such as `still_frames`' `max_distance_milli`.
+
+Unlike a digest target, the frame-change measure has a default grid and a default threshold, and
+it compares two observed frames with each other, never a frame with a declared digest.
+`actingcommand_recognition::color_digest` implements it as `frame_change_digest`,
+`frame_change_milli` and `FRAME_CHANGE_MAX_MILLI` (with `FRAME_CHANGE_COLUMNS` and
+`FRAME_CHANGE_ROWS`); the execution kernel re-exports the first three, so the kernel and the host
+call the same functions.

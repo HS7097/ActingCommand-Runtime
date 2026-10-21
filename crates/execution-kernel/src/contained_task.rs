@@ -45,6 +45,11 @@ use actingcommand_page_detector::{
 // first locate (M-373 §5.2 item 1).
 pub use actingcommand_recognition::Scene;
 use actingcommand_recognition::ScenePixelFormat;
+// Workflow #411 B12: the Runtime's one frame-change measure (`contracts/color-digest.md`, section
+// Frame change), for the kernel and the host alike.
+pub use actingcommand_recognition::color_digest::{
+    ColorDigest, FRAME_CHANGE_MAX_MILLI, frame_change_digest, frame_change_milli,
+};
 use actingcommand_recognition_pack::{
     OcrProviderExecutionEvidence, OcrTextEvidence, PackRect, PackRegion, RecognitionEvaluator,
     RecognitionPackErrorCode, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
@@ -4658,7 +4663,8 @@ impl PreparedContainedTask {
                                             runtime,
                                             operation,
                                             recheck,
-                                            &observed.page_label,
+                                            observed,
+                                            false,
                                             (observation_timing, step_timeout),
                                             &mut retries,
                                         )? {

@@ -2672,6 +2672,25 @@ package format change. Gates: policy key 59, host key 129.
 | B8-4 | `RunParameters::with_dispatch_schedule(values, admitted_at_unix_ms)` and the overlay's `session.dispatch.schedule.<key>` records | kernel interface (memory only, not persisted) (host 129) | BT-B8 | BT-B8 | after the parameter records: the key under `session.dispatch.schedule.` (D7), the value typed (`timestamp_ms` for the two instants, `boolean`, `integer`), the other members as B15R-1's, observed at the dispatch's admission; a run without a dispatch (direct, Lab, the Lab's single-step evaluations) and a dispatch without the values hold none, so a policy that reads one meets an unknown fact and its `on_unknown` decides; a reason without `run_parameters` leaves the parameters at their declared defaults (B15R-2 unchanged) |
 | B8-5 | keys `last_in_window`, `last_daily_slot` (boolean), `daily_remaining` (integer) | new key-table entries (no shape) (policy 59) | BT-B8 | BT-B8 | review of the code stays `pending`; no new code, vocabulary token, location or configuration key |
 
+### 1.155 Slice BT-B12 (0.12.x): tap only after a still screen (#411 B12; plan `rd-1021/train-0129/b-plan/plan.md` §2.9, D8, Q7, Q9)
+
+A click's `input_recheck` gains the kind `still_frames`, and an input recheck of any kind is
+admitted under `linear_steps`. The colour-digest distance between consecutive frames is the
+Runtime's one frame-change measure ([color-digest.md](color-digest.md), section Frame change);
+later rules that ask whether the screen is still use it. **No persisted ledger shape**: a refused
+recheck ends with an existing terminal record carrying the new code; the frames are recorded as
+every capture, recognition and guard evaluation is. No location, key, vocabulary token, wire or
+configuration key is added. The new members join `package` revision 6, which BT-PK6 declares at
+the end of the B train (plan §4); until then they are admitted by code. Gate: exec key 126.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B12-1 | `input_recheck: {kind: "still_frames", frames, region?, max_distance_milli?}` | resource file format (task schema `0.9`, no version change) (exec 126) | BT-B12 | resource side | `frames` 2..=32 and `frames - 1` control capture intervals within the control step timeout; `region` `{x, y, width, height}` with a positive size inside the coordinate space; `max_distance_milli` an unsigned integer (Runtime admission, `contained_task_operation_invalid`); the declaration gate refuses a wrong shape (`resource_declaration_invalid`: `InvalidType`, `UnknownField`, `MissingField`) and an older task schema `UnconsumedField` |
+| B12-2 | the `still_frames` recheck | rule (no shape change) (exec 126) | BT-B12 | BT-B12 | fresh frames one control capture interval apart; the count restarts at 0 when the guard fails or no page passes, and at 1 when the region's frame change since the frame before exceeds the threshold (default 1500 milli, D8: the whole frame on a 16×9 grid); the input is drawn from and bound to the last frame |
+| B12-3 | `contained_task_input_still_unconfirmed` (error, `ladder_class` `pack_logic_mismatch`, values `pack_operation_id`, `timeout_ms`) | new code (pending) (exec 126) | BT-B12 | BT-B12 | the step timeout ended before the frames held and stayed still; the input is refused through the operation's failure decision (page graph) or ends the run (`linear_steps`) |
+| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does |
+| B12-5 | `frame_change_digest`, `frame_change_milli`, `FRAME_CHANGE_MAX_MILLI` (`actingcommand_recognition::color_digest`, re-exported by the execution kernel) | Runtime-internal interface (memory only) | BT-B12 | BT-B12 | the one frame-change measure: the `color_digest.v1` digest of a region (the whole frame by default) on 16×9 cells, each axis at most the region's pixels; the change is the digests' `mean_milli`, no cell excluded; still at most 1500 by default |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
