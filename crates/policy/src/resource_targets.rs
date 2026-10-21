@@ -3271,11 +3271,13 @@ fn reserve_hold(
             left -= i128::from(*consumes);
             first = first.or(Some(*task_id));
         }
-        if left < at_least {
+        if left < at_least
+            && let Some(first) = first
+        {
             return Ok(Some(reserve_insufficient(
                 view,
                 Some(amount_after(view, left)?),
-                first,
+                Some(first),
             )));
         }
         for &other in kept {
