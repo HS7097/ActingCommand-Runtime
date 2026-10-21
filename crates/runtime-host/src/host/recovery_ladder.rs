@@ -3255,8 +3255,12 @@ impl HostShared {
                 },
                 busy,
             )) => match (outcome, busy) {
-                (TaskOutcome::Success, Some(busy)) => RungAttempt::Busy { run_id, busy },
-                (TaskOutcome::Success, None) => RungAttempt::Recovered { run_id },
+                // RED PROOF 1 (do not merge): today's Success => Recovered; a busy end is
+                // recovered (an outcome key is never empty).
+                (TaskOutcome::Success, Some(busy)) if busy.outcome_key.is_empty() => {
+                    RungAttempt::Busy { run_id, busy }
+                }
+                (TaskOutcome::Success, _) => RungAttempt::Recovered { run_id },
                 _ => RungAttempt::Failed {
                     run_id: Some(run_id),
                     reason: HostCode::RecoveryRungTargetNotReached.as_str(),
