@@ -25,10 +25,10 @@ use crate::{
     PackPoint, PackRect, PackRegion, RecognitionEvaluator, RecognitionPack, RecognitionPackError,
     RecognitionPackErrorCode, RecognitionPackResult, RecognitionTarget, SCHEMA_0_7,
     SceneEvaluation, TargetEvaluation, TargetKind, TemplateEvaluation, TemplateRelativeRegion,
-    UnsupportedRecognitionTarget, ocr_verdict, primitive_error, provider_error, provider_frame,
-    provider_region, rect_is_within, reject_unknown_fields, resolve_template_relative_region,
-    target_region, template_message, validate_ocr_result, validate_rect_shape,
-    validate_region_within_coordinate_space,
+    UnsupportedRecognitionTarget, ValueTestPart, ocr_verdict, primitive_error, provider_error,
+    provider_frame, provider_region, rect_is_within, reject_unknown_fields,
+    resolve_template_relative_region, target_region, template_message, validate_ocr_result,
+    validate_rect_shape, validate_region_within_coordinate_space,
 };
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::candidate_projection::{
@@ -306,6 +306,11 @@ pub struct CandidateIntegerDeclaration {
     pub max: u64,
     #[serde(default)]
     pub format: actingcommand_contract::OcrUnsignedIntegerFormat,
+    /// Workflow #411 B2: which part of a `current_capacity` text the feature reads, as a value
+    /// test side's `part`; without it, the current (left-hand) part. Declared only with
+    /// `current_capacity`.
+    #[serde(default)]
+    pub part: Option<ValueTestPart>,
     pub minimum_confidence_milli: u16,
 }
 
@@ -316,8 +321,31 @@ impl CandidateIntegerDeclaration {
             || !(1..=1000).contains(&self.minimum_confidence_milli)
         {
             Err("invalid OCR integer bounds or confidence")
+        } else if self.part.is_some()
+            && self.format != actingcommand_contract::OcrUnsignedIntegerFormat::CurrentCapacity
+        {
+            Err("part is declared only with format current_capacity")
         } else {
             Ok(())
+        }
+    }
+
+    /// Parses an already-trimmed text: the declared part, checked against `min..=max`.
+    fn parse(&self, text: &str) -> Result<u64, actingcommand_contract::OcrFieldReason> {
+        match self.part {
+            Some(ValueTestPart::Capacity) => {
+                let capacity = self
+                    .format
+                    .parse_parts(text)?
+                    .capacity
+                    .ok_or(actingcommand_contract::OcrFieldReason::InvalidInteger)?;
+                if (self.min..=self.max).contains(&capacity) {
+                    Ok(capacity)
+                } else {
+                    Err(actingcommand_contract::OcrFieldReason::OutOfRange)
+                }
+            }
+            Some(ValueTestPart::Current) | None => self.format.parse(text, self.min, self.max),
         }
     }
 }
@@ -1846,10 +1874,7 @@ fn feature_value(
                         source: None,
                     }
                 } else {
-                    match integer
-                        .format
-                        .parse(ocr.text.trim(), integer.min, integer.max)
-                    {
+                    match integer.parse(ocr.text.trim()) {
                         Ok(value) => CandidateFeature::Integer {
                             value: value as i64,
                             confidence,
