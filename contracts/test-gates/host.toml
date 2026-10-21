@@ -1647,3 +1647,21 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t7_the_recovery_preparation_reads_the_status_and_recognizes_a_running_emulator",
 ]
 incident = ["#411 A50"]
+
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-3 and §1.153 LR-5, LR-6, first writer; B-train plan §2.1 items 2 and 3, Q6, test row T2 of §5.3; the host family is outside the slice's row: 300 + 10 x 4, wave-3 frame): a value test whose agreement of three frames reads 100, 100 and 180 leaves its side unread, so its page does not match and the run fails; the run's task diagnostic stream carries the side's problem no_agreement and one agreement_sample row per frame, as registered
+[[gate]]
+key = "340"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_bt_b1::bt_b1_t2_frames_that_do_not_agree_leave_the_side_unread_and_the_page_unmatched",
+]
+incident = ["#411 B1"]
+
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-4, B1-5; B-train plan §2.1 items 2 and 3, test row T3 of §5.3): a reading mark whose agreement of three frames reads two different values writes no fact; the run completes and the mark's miss is the warning contained_task_resource_reading_unresolved with reading_problem no_agreement
+[[gate]]
+key = "341"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_bt_b1::bt_b1_t3_a_mark_whose_frames_do_not_agree_writes_no_fact_and_warns",
+]
+incident = ["#411 B1"]

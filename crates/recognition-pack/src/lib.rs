@@ -37,6 +37,9 @@ mod target_unique;
 mod text_locate;
 // Workflow #396 REC-6.
 mod value_test;
+// Workflow #411 B1 (slice BT-B1): a number's dictionary, and an agreement admitted.
+#[cfg(test)]
+mod gate_411_bt_b1;
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};

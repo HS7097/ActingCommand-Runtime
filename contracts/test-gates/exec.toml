@@ -1839,3 +1839,30 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t2_an_any_of_of_the_wrong_shape_is_refused_naming_the_shape_it_must_have",
 ]
 incident = ["#411 B28"]
+
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-1; B-train plan §2.1 item 1, test row T1 of §5.3; package revision 6, declared by BT-PK6): a value-test side's dictionary turns the confusion O into 0, so the text 1O0 reads 100 while its evidence keeps 1O0; a reading mark with the same dictionary parses 1O0 as 100
+[[gate]]
+key = "144"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::gate_411_bt_b1::bt_b1_t1_a_confusion_reads_its_digit_and_the_evidence_keeps_the_text",
+]
+incident = ["#411 B1", "#411 B40"]
+
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-1, B1-2; B-train plan §2.1 items 1 and 2, test row T4 of §5.3): the declaration gate admits a reading mark's dictionary of 32 confusion pairs and an agreement whose k is its frames, and refuses 33 pairs, a from of two characters and a mark whose k is below its frames with resource_declaration_invalid (invalid_value) at the member; the mark's shared rule refuses the last at Runtime admission
+[[gate]]
+key = "145"
+coverage = "Y"
+tests = [
+    "actingcommand-pack-containment::lib::source::gate_411_bt_b1::bt_b1_t4_too_many_pairs_a_long_from_and_k_below_frames_are_refused_at_the_member",
+]
+incident = ["#411 B1"]
+
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-2, B1-3; B-train plan §2.1 item 2, test row T5 of §5.3): a value-test side that declares an agreement is admitted and its test's consumers take its frames as for target consensus; without an agreement a target_consensus declared on a value test and a side that reads a target under target consensus are refused as before
+[[gate]]
+key = "146"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::gate_411_bt_b1::bt_b1_t5_an_agreement_is_admitted_and_the_consensus_refusals_hold_without_it",
+]
+incident = ["#411 B1"]
