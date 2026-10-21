@@ -145,10 +145,13 @@ impl HostShared {
                 links,
             );
         };
-        let recognized = matches!(record.emulator_state, EmulatorRunningState::On { .. })
-            && record
-                .bound_adb_endpoint()
-                .is_some_and(|endpoint| endpoint.port() == adb_port);
+        // A48 red proof 1 (T1's mutation, do not merge): today's behaviour, a running emulator
+        // the Runtime holds stopped is never recognized again; the opens go on as before A48.
+        let recognized = std::hint::black_box(true)
+            || matches!(record.emulator_state, EmulatorRunningState::On { .. })
+                && record
+                    .bound_adb_endpoint()
+                    .is_some_and(|endpoint| endpoint.port() == adb_port);
         if recognized {
             self.note_emulator_reading(instance_id, true)?;
             return Ok(None);
