@@ -51,9 +51,12 @@ on:
     branches: [main, stable]
   pull_request:
 
+# One group per pull request, so a new push to a pull request cancels that branch's older run;
+# every push to main or stable gets its own group (the run id) and is never cancelled (G9 reads a
+# main commit's own `outcome-codes-<sha>` artifact).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Test plan §1.2: faster links and smaller PDBs; backtraces keep their files and lines.
