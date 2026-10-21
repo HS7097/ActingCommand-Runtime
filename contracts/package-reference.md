@@ -251,7 +251,9 @@ packs/<package_id>/resources/...
 ```
 
 Every entry of `--packs-root` must be one pack source directory (anything else fails
-`package_bundle_packs_root_invalid`). Each is read with the loader's snapshot; only
+`package_bundle_packs_root_invalid`), and it must hold one at least: an empty one fails
+`package_bundle_packs_empty` with `path` `packs`, the standard package's pack directory, never
+the given directory's local path (Workflow #411 A40). Each is read with the loader's snapshot; only
 `control.json` and `resources/**` are copied into `packs/<package_id>/`, named by the
 `package_id` that `control.json` declares, and the copy is read again and admitted in full by
 its path (structural admission; no digest is computed). A `package_id` that is not one path
@@ -324,10 +326,15 @@ part, every other package of the registry after them. Its answer is `{status: "c
 game, root_files, pack_count, warnings}`, given only once every package of the registry was
 admitted; `pack_count` is the registry's length, and `warnings` is the report (empty when there
 is nothing to report; its entry-page entries need `pages.json`). A root without any root file is
-`standard_pack_root_invalid` `bundle_missing`; a package a root file names that cannot be
-admitted (its directory missing too) is `admission_failed` for its part; any other package of the
-registry that fails admission, or whose directory is missing, is `package_invalid` naming its
-directory (exit 2).
+`standard_pack_root_invalid` `bundle_missing`; a `bundle.json` whose `packs` lists no pack is
+`package_bundle_packs_empty` with `path` `bundle.json` and `json_pointer` `/packs` (Workflow #411
+A40); a package a root file names that cannot be admitted (its directory missing too) is
+`admission_failed` for its part; any other package of the registry that fails admission, or whose
+directory is missing, is `package_invalid` naming its directory (exit 2). Its `details.outcome`
+(Workflow #411 A41) is `package_invalid` with the directory below the game root as `path`, caused
+by the admission's own outcome; a task declaration that is no JSON document is
+`source_operation_invalid` with the declaration's `path` inside the package and, where the parser
+gives one, its `line` and `column`, caused by the parser's text (`foreign_data_error`).
 
 `resource verify` runs this check on the installed root it lays out from the bundle
 ([resource-verify.md](resource-verify.md), Workflow #411 RV-1).
@@ -547,7 +554,11 @@ need not be installed locally. It answers `{status: "admitted", package_id, entr
 (`content_directory_*`, `content_container_*`, `resource_declaration_invalid` with
 `details.declaration`, `contained_task_*`); a usage error is `validation_failed` (exit 2). It
 only reads. `ac_pack_check {package}` runs it and answers its data verbatim; `package
-preflight` and `ac_binding_draft`, which runs preflight, are unchanged.
+preflight` and `ac_binding_draft`, which runs preflight, are unchanged. Workflow #411 A39: the
+refusal of `package check`, and a `package preflight` refused at task preparation, also carry
+`details.outcome`, the admission's outcome with the values it names (a
+`contained_task_program_invalid` that names its rule: `program_problem`, the task declaration's
+`path` inside the package and `json_pointer`).
 A procedure binding's `scheduled_execution.package_path` may equally name a directory or a
 container file. Evidence replay continues to
 use its independent evidence ZIP hash (`lab replay-evidence --expected-sha256`).

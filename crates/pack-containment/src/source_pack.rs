@@ -3,6 +3,8 @@
 //! Source-neutral in-memory assembly of an admitted source snapshot.
 
 use super::*;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::RawSource;
 use actingcommand_contract::safe_source_path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -36,8 +38,8 @@ pub(super) fn compile(
                     PackContainmentCode::SourceOperationPathInvalid,
                 ));
             }
-            let data = serde_json::from_slice(bytes)
-                .map_err(|_| source_error(PackContainmentCode::SourceOperationInvalid))?;
+            let data =
+                serde_json::from_slice(bytes).map_err(|error| operation_unparsed(path, &error))?;
             bundles.push(Bundle {
                 task_id: task.to_owned(),
                 dir: PathBuf::from(format!("resources/operations/{task}")),
@@ -214,4 +216,24 @@ pub(super) fn compile(
         },
         operation,
     ))
+}
+
+/// Workflow #411 A41: `source_operation_invalid` for a task declaration that is no JSON document,
+/// located: the declaration's `path` inside the package and, where the parser gives one, its
+/// position (`line` and `column`), caused by the parser's own text (`foreign_data_error`).
+fn operation_unparsed(path: &str, error: &serde_json::Error) -> ContainmentError {
+    let code = PackContainmentCode::SourceOperationInvalid;
+    let outcome = Outcome::new(code).path(path);
+    let outcome = if error.line() > 0 {
+        outcome.line(error.line()).column(error.column())
+    } else {
+        outcome
+    };
+    let parser = Outcome::new(ContractCode::ForeignDataError)
+        .raw_source(RawSource::Json)
+        .raw_text(error.to_string());
+    ContainmentError::LocatedSourceTree {
+        code: code.code(),
+        outcome: outcome.caused_by(parser),
+    }
 }
