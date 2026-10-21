@@ -677,7 +677,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Check a task package",
         tier: Tier::Observer,
         description: concat!(
-            "Checks one task package offline, as actinglab --json package check --package <package> does, and answers its data verbatim: {status: admitted, package_id, entry_task_id}. The check is the Runtime's own structural admission, the one check-config and the daemon apply, so it admits exactly what the Runtime admits; it recognizes and executes nothing, and a declared OCR model need not be installed. The package is named by its path only (a directory, .zip or .json container); no digest is computed. A refused package is actinglab's package_invalid, whose details code is the admission's own code.",
+            "Checks one task package offline, as actinglab --json package check --package <package> does, and answers its data verbatim: {status: admitted, package_id, entry_task_id, warnings}; warnings lists the check's warnings (each an outcome with its code and values, such as package_check_click_box_single_point), and a warning does not make the check fail. The check is the Runtime's own structural admission, the one check-config and the daemon apply, so it admits exactly what the Runtime admits; it recognizes and executes nothing, and a declared OCR model need not be installed. The package is named by its path only (a directory, .zip or .json container); no digest is computed. A refused package is actinglab's package_invalid, whose details code is the admission's own code.",
             lab_errors!(),
             check_job!()
         ),
