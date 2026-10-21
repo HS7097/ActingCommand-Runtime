@@ -32,6 +32,9 @@ mod target_consensus;
 mod template_mask;
 // Workflow #396 REC-5.
 mod template_scales;
+// Workflow #411 B13: brightness and contrast floors of template targets.
+#[cfg(test)]
+mod gate_411_bt_b13;
 // Workflow #396 REC-2.
 mod target_unique;
 mod text_locate;
