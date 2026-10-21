@@ -352,6 +352,11 @@ impl IntegerCompareOp {
     }
 }
 
+// B2 red proof 3 (do not merge).
+fn default_mul() -> Option<u64> {
+    Some(1)
+}
+
 /// Three-valued predicate vocabulary over declared fields and facts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -384,7 +389,8 @@ pub enum Predicate {
         left: ValueRef,
         op: IntegerCompareOp,
         right: ValueRef,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        // B2 red proof 3 (do not merge): a left-out `mul` is read and serialised as 1.
+        #[serde(default = "default_mul", skip_serializing_if = "Option::is_none")]
         mul: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         add: Option<i64>,
