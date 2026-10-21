@@ -5213,7 +5213,7 @@ impl PreparedContainedTask {
                         },
                 }) => {
                     return Err(ContainedTaskError::new(
-                        ExecutionKernelCode::ContainedTaskStepBudgetExhausted.code(),
+                        ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
                     )
                     .with_timing(recovery_timing)
                     .into());
@@ -5331,7 +5331,7 @@ impl PreparedContainedTask {
             ),
             // #411 A28: the stability step limit is the run's step budget (`max_steps`).
             StabilityTerminalReason::MaxStepsReached => Err(ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskStepBudgetExhausted.code(),
+                ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
             )
             .into()),
         }
