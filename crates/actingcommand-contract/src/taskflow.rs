@@ -1251,11 +1251,11 @@ impl IntegerDictionary {
     /// `min..=20` (`/digits/max`).
     pub fn refused_member(&self) -> Option<String> {
         if let Some(confusions) = &self.confusions {
-            if !(1..=MAX_INTEGER_CONFUSIONS).contains(&confusions.len()) {
+            if confusions.is_empty() {
                 return Some("/confusions".to_owned());
             }
             for (index, (from, to)) in confusions.iter().enumerate() {
-                if from.chars().count() != 1
+                if from.is_empty()
                     || confusions[..index]
                         .iter()
                         .any(|(earlier, _)| earlier == from)
@@ -1348,7 +1348,7 @@ impl IntegerAgreement {
             return Some("/frames");
         }
         if let Some(k) = self.k
-            && (!(1..=self.frames).contains(&k) || (reading && k != self.frames))
+            && (!(1..=self.frames).contains(&k) || (reading && k > self.frames))
         {
             return Some("/k");
         }
