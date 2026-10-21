@@ -327,22 +327,16 @@ fn navigation_input_json(click: &NavigationClick) -> Value {
 /// the click in the navigation form; `null` when the navigation holds no such row, as for a
 /// segmented or path drag.
 fn page_set_action_json(
-    navigation: &[NavigationRow],
+    _navigation: &[NavigationRow],
     operation: &super::contained_resources::MultiDestinationOperation,
 ) -> Value {
-    let input = navigation
-        .iter()
-        .find(|row| {
-            row.to_page.is_none() && row.id == operation.id && row.from_page == operation.from_page
-        })
-        .map_or(Value::Null, |row| navigation_input_json(&row.click));
+    // Red proof 1 (do not merge): the raw click only, no input.
     json!({
         "id": operation.id,
         "task_id": operation.task_id,
         "from_page": operation.from_page,
         "to_pages": operation.to_pages,
-        "click": operation.click,
-        "input": input
+        "click": operation.click
     })
 }
 
