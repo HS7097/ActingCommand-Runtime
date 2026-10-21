@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Code, Outcome};
 use serde_json::{Value, json};
 
 use super::selection_catalog::{DAY_MS, HOUR_MS, NOW, fact, instance};
@@ -42,6 +42,9 @@ const NOT_SELECTED: &str = "decision_candidate_not_selected";
 // The Runtime's deferral of a pair whose task package was unloaded (Workflow #389: its pending
 // dispatch is withdrawn, and the next rounds defer the pair at position 5).
 const NOT_LOADED: &str = "pack_registry_not_loaded";
+// The Runtime's deferral of a pair that waits for its drawn random delay (Workflow #405 D1,
+// position 9); the host names it as a deferral under which a successor still goes first.
+const RANDOM_DELAY: &str = "dispatch_random_delay_waiting";
 // The predecessor was admitted ten minutes before the round and ended two minutes before it; the
 // instance's latest recognition matched its page three minutes before the round, during its run.
 const LEAD_ADMITTED: u64 = NOW - 600_000;
@@ -237,6 +240,75 @@ fn b41_t4_when_the_chain_breaks_the_deferred_refresh_runs_at_the_next_evaluation
     assert_no_handover_reason(&second);
 }
 
+// T5 (model item 3; coordinator ruling 10-21 on B41: the random delay is part of the successor's
+// dispatch). A handover whose successor waits for its non-zero random delay keeps the expired-fact
+// refresh deferred, its own delay already over, and nothing runs on the instance; at the planned
+// start the successor is dispatched while the refresh still waits; the round after the chain step
+// ran dispatches the refresh.
+#[test]
+fn b41_t5_a_successor_waiting_for_its_random_delay_keeps_the_refresh_deferred() {
+    let catalog = chain_catalog(dependency(LEAD));
+    let planned_start = NOW + 90_000;
+    let waiting = evaluate(
+        &catalog,
+        NOW,
+        vec![lead_state()],
+        resting(RESULT, PAGE_SEEN),
+        successor_delayed(NOW, planned_start),
+    );
+    assert!(
+        tasks_on(&waiting).is_empty(),
+        "nothing runs on the instance while the successor waits for its delay: {:#?}",
+        waiting.decisions
+    );
+    assert_eq!(last_code(decision(&waiting, CLOSE)), RANDOM_DELAY);
+    let refresh = refresh_decision(&waiting);
+    assert_eq!(refresh.state, SchedulingDecisionState::Deferred);
+    assert_eq!(last_code(refresh), WAITING);
+
+    let started = evaluate(
+        &catalog,
+        planned_start,
+        vec![lead_state()],
+        resting(RESULT, PAGE_SEEN),
+        successor_delayed(planned_start, planned_start),
+    );
+    assert_eq!(
+        tasks_on(&started),
+        [CLOSE],
+        "the successor is dispatched at its planned start"
+    );
+    assert_eq!(last_code(refresh_decision(&started)), WAITING);
+
+    // The chain step ran: dispatched at its planned start, ended on another page.
+    let after = planned_start + 300_000;
+    let close_ran = TaskRuntimeSnapshot {
+        task_id: CLOSE.to_owned(),
+        instance_id: A.to_owned(),
+        last_dispatched_unix_ms: Some(planned_start + 5_000),
+        eligible_since_unix_ms: None,
+        terminal_state: Some(TaskTerminalState::Succeeded),
+        completed_window: Some(CompletedActivityWindow {
+            window_id: "window.fixture".to_owned(),
+            completed_at_unix_ms: planned_start + 60_000,
+        }),
+        last_duration_ms: None,
+        failure_streak: None,
+    };
+    let ran = evaluate(
+        &catalog,
+        after,
+        vec![lead_state(), close_ran],
+        resting(HOME, planned_start + 30_000),
+        successor_delayed(after, planned_start),
+    );
+    assert_eq!(
+        tasks_on(&ran),
+        [FACT_REFRESH_TASK_ID],
+        "the refresh runs after the chain step"
+    );
+}
+
 // ---- Fixtures ----
 
 // The chain catalog: the predecessor (in cooldown after its run), the successor triggered by
@@ -386,7 +458,8 @@ fn lead_state() -> TaskRuntimeSnapshot {
     }
 }
 
-// The instance rests on `page_id`, recorded at `observed_at_unix_ms`.
+// The instance rests on `page_id`, recorded at `observed_at_unix_ms`; the successor still goes
+// first while it waits for its random delay, as the host passes it.
 fn resting(page_id: &str, observed_at_unix_ms: u64) -> ChainHandoverInputs {
     ChainHandoverInputs {
         resting_pages: BTreeMap::from([(
@@ -396,6 +469,32 @@ fn resting(page_id: &str, observed_at_unix_ms: u64) -> ChainHandoverInputs {
                 observed_at_unix_ms,
             },
         )]),
+        successor_wait_codes: vec![
+            Code::relayed(RANDOM_DELAY).expect("the Runtime's random delay code is registered"),
+        ],
+    }
+}
+
+// The Runtime's admission at `now` with the instance's random delay on: the successor's drawn delay
+// ends at `planned_start`, every other pair's delay is over.
+fn successor_delayed(
+    now: u64,
+    planned_start: u64,
+) -> impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, PolicyEvaluationError> {
+    move |intent| {
+        Ok(if intent.task_id == CLOSE && now < planned_start {
+            CandidateEligibility::Deferred {
+                reason: DecisionReason {
+                    outcome: Outcome::relayed(RANDOM_DELAY),
+                    detail: format!(
+                        "fixture admission: {RANDOM_DELAY} next_eligible_unix_ms={planned_start}"
+                    ),
+                },
+                next_wake_unix_ms: Some(planned_start),
+            }
+        } else {
+            CandidateEligibility::Eligible
+        })
     }
 }
 
