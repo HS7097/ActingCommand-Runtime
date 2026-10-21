@@ -623,7 +623,7 @@ deadline (`contracts/emulator-control.md`, "Stuck-recovery ladder"). The page-gr
 admits it where it reported `contained_task_home_recovery_binding_missing` before: only after
 the first check did not pass, with the existing failure handling and facts, and it runs as a
 prerequisite package does (its `scheduling_outcome` without a designated operation allowed and
-ignored). On both paths the package passes, once admitted, the checks a return-home chain layer
+ignored, except a `busy` end, below). On both paths the package passes, once admitted, the checks a return-home chain layer
 passes (the table of "Prerequisite packages": no `recognize_only`, stability termination,
 post-admission OCR, OCR fields, resource readings or designated operation; the game, server and
 resolution of the failed or entering package), and it declares no `prerequisite_package_id` of
@@ -641,7 +641,17 @@ entry needs it closes the entry with the root's own code (`standard_pack_root_in
 `standard_pack_root_unreadable`); on the ladder it is recorded (`runtime.lifecycle_observed`,
 phase `standard_pack_read`) and the rung has no package (`no_recovery_package`). In the home entry, a page-graph package's final page must still be a
 page of the required entry, while a `linear_steps` package's final page (a Lab page id such as
-`<game>/step_03_home`) is not compared, and only the recheck decides. A page-graph package whose
+`<game>/step_03_home`) is not compared, and only the recheck decides. Before that comparison
+(#411 B37, slice A35-S4, [v012-register.md](v012-register.md) §1.169), a return-home package of
+either mode whose run ended on a page that exactly one of its `scheduling_outcome` mappings of
+condition `no_designated_effect` lists, a mapping it marks `busy`
+([resource-declarations.md](resource-declarations.md), "Busy outcome mappings"), ends the run
+with `contained_task_entry_busy` (warning, ladder class `planned_stop`; `package_id` the
+return-home package, `page_id` the page it ended on, `outcome_key` the mapping's key), after its
+`EntryRecoveryCompleted`, as `EntryTargetDisposition { FailClosed }` and the task terminal: the
+instance shows an activity still in progress, so neither the recheck nor a navigation follows,
+and no trigger item of the defaults matches the code, so no ladder starts. A request's own
+recovery package declares no `scheduling_outcome`, so only the registry's package can end so. A page-graph package whose
 declared final pages hold no page of the required entry is refused before it runs, with no input
 and no `EntryRecoveryPackageAdmitted`, as `contained_task_home_recovery_terminal_outside_entry`
 (Workflow #411 A16); the `linear_steps` package is not compared there either. With a request binding both

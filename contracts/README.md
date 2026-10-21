@@ -307,6 +307,9 @@ instead, whose recheck alone decides; `contracts/linear-steps.md`, "Prerequisite
 packages"); otherwise the run fails with
 `contained_task_home_recovery_terminal_non_home` naming the set's pages (`page_ids`),
 the page the recovery package ended on (`page_id`) and that package (`package_id`).
+A return-home package that ended on a mapping it marks `busy` ends the run with
+`contained_task_entry_busy` instead (#411 B37; `contracts/linear-steps.md`, "Ladder
+and page-graph home entry").
 A recovery package whose declared final pages hold no page of the set is refused
 before it runs, with no input and no `EntryRecoveryPackageAdmitted`, as
 `contained_task_home_recovery_terminal_outside_entry` with the same values (`page_id`
