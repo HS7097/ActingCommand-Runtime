@@ -157,6 +157,9 @@ const CONNECTION_PREPARATION_CONNECTION_VALUE: u64 = u64::MAX - 3;
 
 mod agent_control;
 mod backend_open;
+// Workflow #411 B41: the resting pages and package entries the chain handover reads.
+mod chain_handover;
+pub(crate) use chain_handover::chain_entry_holds_page;
 mod client_events;
 mod contained_task;
 mod device_diagnostic;

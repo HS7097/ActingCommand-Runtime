@@ -2048,6 +2048,29 @@
       "description": "Scheduling decision reason (Workflow #405): a `fact_time_reached` predicate is false because its fact gives no time: it is missing, its confidence is 0, it is older than the predicate's max_age_ms, it is past its own expiry, or its value is not a timestamp_ms value (fact_time_problem). Unlike a `fact` predicate it is false, not unknown, so no fact refresh is requested; a catalog that also names a clock in an `any` still runs the task at the clock.",
       "common_causes": "The package that publishes the time has not run since the instance facts were created, or ran longer ago than max_age_ms; the catalog names a key the package does not publish, or the package publishes it with another value type.",
       "handling": "Check that the package publishes the key as timestamp_ms and that max_age_ms covers the time between its runs. The fallback clock covers the gap."
+    },
+    "policy_chain_handover_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.9",
+      "description": "Scheduling decision reason (Workflow #411 B41, contracts/scheduling/README.md \"Chain Handover\"): the candidate waits for the chain step that goes first on its instance. A chain's predecessor run ended completed on the page the instance rests on (page_id), that page is in the entry page set of the step's package (task_id, the step), and the step is dispatched this round, so every candidate that ranked ahead of it on the instance waits, a fact refresh reading included: its run would take the instance off that page first. The candidate keeps its own due time and has no wake of its own; it takes its turn when the step is not dispatched (an admission gate or the host budget defers it) or is no longer a candidate. A step whose own trigger or selection document reads a key the fact refresh reads is no candidate, so the refresh goes first.",
+      "common_causes": "A chain step became due right after its predecessor ended on the page the step starts on, while a higher-ranked task or a fact refresh reading was due on the same instance.",
+      "handling": "None. The waiting candidate runs after the chain step."
     }
   }
 }

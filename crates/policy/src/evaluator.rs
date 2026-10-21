@@ -28,8 +28,10 @@ use crate::{
     TimelineEvent,
 };
 
+mod chain_handover;
 mod fact_refresh;
 
+pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
 use fact_refresh::{AffectedCandidate, RefreshGate, RefreshKey};
 pub use fact_refresh::{
     FACT_REFRESH_EXPECTED_DURATION_MS, FACT_REFRESH_OPERATION_ID, FACT_REFRESH_PROCEDURE_REF,
@@ -731,6 +733,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         immediate_retries,
         None,
         None,
+        None,
         eligibility,
     )
 }
@@ -760,6 +763,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         seed,
         immediate_retries,
         Some(fact_refresh),
+        None,
         None,
         eligibility,
     )
@@ -797,6 +801,44 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         immediate_retries,
         Some(fact_refresh),
         Some(remedies),
+        None,
+        eligibility,
+    )
+}
+
+/// Workflow #411 B41: `evaluate_with_remedies` with the chain handover (module
+/// `chain_handover`). On an instance resting on the page a chain's predecessor run ended on, the
+/// successor that is a candidate of the round and whose package entry holds that page goes
+/// first: the candidates that ranked ahead of it wait under `policy_chain_handover_waiting`
+/// while it is dispatched, and take their turn when it is not. `entry_holds` is the Runtime's
+/// answer whether a task's package entry holds a page (task, instance alias, page id); it is
+/// asked only for a candidate that follows its predecessor on the instance's resting page. With
+/// no resting page every evaluation is the one `evaluate_with_remedies` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_chain_handovers<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    let entry_holds: &mut ChainEntryHolds<'_, E> = &mut entry_holds;
+    evaluate_scheduling(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        Some(fact_refresh),
+        Some(remedies),
+        Some((chain_handover, entry_holds)),
         eligibility,
     )
 }
@@ -811,6 +853,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     immediate_retries: &BTreeSet<(String, String)>,
     refresh_inputs: Option<&FactRefreshInputs>,
     remedies: Option<&RemedyPlan>,
+    chain: Option<(&ChainHandoverInputs, &mut ChainEntryHolds<'_, E>)>,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -1250,6 +1293,18 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             .then_with(|| left.task_id.cmp(&right.task_id))
             .then_with(|| left.instance_id.cmp(&right.instance_id))
     });
+    // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
+    // is allocated before the candidates that ranked ahead of it.
+    let mut handovers = match chain {
+        Some((inputs, entry_holds)) => chain_handover::plan(
+            inputs,
+            entry_holds,
+            &catalog_bundle.tasks.tasks,
+            &task_states,
+            &mut candidates,
+        )?,
+        None => BTreeMap::new(),
+    };
 
     let mut remaining = host_resources;
     let mut selected_instances = BTreeSet::new();
@@ -1262,6 +1317,30 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         // Workflow #384 D2-S4: the recognition maintenance package's own deferrals are read by
         // the fact refresh's table (D2 model §3.7 rows 4 and 6).
         let refresh = candidate.task_id == FACT_REFRESH_TASK_ID;
+        // Workflow #411 B41: a candidate the instance's chain step goes before waits for it while
+        // it is dispatched; the successor counts as not dispatched until it is selected below.
+        if let Some(handover) = handovers.get_mut(candidate.instance_id.as_str()) {
+            if handover.holds(candidate.work_index) {
+                let task_work = &mut work[candidate.work_index];
+                task_work.state = SchedulingDecisionState::Deferred;
+                task_work
+                    .reasons
+                    .push(handover.waiting_reason(&candidate.instance_id));
+                if refresh {
+                    refresh_gates.insert(
+                        candidate.work_index,
+                        RefreshGate::Temporary {
+                            gate: Some(PolicyCode::PolicyChainHandoverWaiting.code()),
+                            wake: None,
+                        },
+                    );
+                }
+                continue;
+            }
+            if handover.is_successor(candidate.work_index) {
+                handover.settle(false);
+            }
+        }
         if selected_instances.contains(candidate.instance_id.as_str()) {
             work[candidate.work_index].reasons.push(reason(
                 PolicyCode::InstanceAlreadySelected,
@@ -1456,6 +1535,12 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             ),
         ]);
         host.consume(candidate.load);
+        if let Some(handover) = handovers
+            .get_mut(candidate.instance_id.as_str())
+            .filter(|handover| handover.is_successor(candidate.work_index))
+        {
+            handover.settle(true);
+        }
         selected_instances.insert(candidate.instance_id.clone());
         selected.push((reason_chains.len(), candidate.work_index));
         reason_chains.push(DecisionReasonChain {
