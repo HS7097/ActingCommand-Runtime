@@ -187,6 +187,10 @@ mod gate_411_a45;
 // #411 E2 T1 (A28): a run that exhausts its step budget ends with the step budget's own code.
 #[cfg(test)]
 mod gate_411_e2;
+// #411 A43b (exec keys 133 to 135): a wait on a still screen it cannot recognise is not
+// stretched by the pacing factor.
+#[cfg(test)]
+mod gate_411_a43b;
 // Workflow #411 B15 R1 (exec key 95): `provides` with parameters, the metadata reader of the
 // remedy declarations and the declared parameter defaults.
 #[cfg(test)]
