@@ -1572,7 +1572,7 @@ pub struct RuntimeInstanceStatus {
 /// The fenced instance gets no new dispatch; the recovery ladder, or a person's resume,
 /// emulator restart or self-check, lifts the fence only through a preparation whose self-check
 /// passes. `awaiting_person` is set once the ladder ended without that proof, or when none
-/// could start.
+/// could start; `person_wait` then says since when and how its periodic self-check stands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceResourceFence {
@@ -1580,6 +1580,29 @@ pub struct InstanceResourceFence {
     pub cause: crate::outcome::CodeStr,
     pub since_unix_ms: u64,
     pub awaiting_person: bool,
+    /// #411 A38: present exactly while the instance waits for a person: since when, and its
+    /// periodic self-check (the recheck).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_wait: Option<InstanceFencePersonWait>,
+}
+
+/// #411 A38: a fenced instance's wait for a person. While it waits, the Runtime runs the
+/// instance's self-check every `recovery_ladder.fence_recheck.interval_ms`, at most
+/// `recovery_ladder.fence_recheck.max_attempts` times; a passing one lifts the fence as a
+/// person's self-check does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceFencePersonWait {
+    /// When the instance began to wait for a person.
+    pub since_unix_ms: u64,
+    /// The rechecks started in this wait, a running one included.
+    pub recheck_attempts: u32,
+    /// The most rechecks of one wait, `max_attempts` in effect (0: the recheck is off).
+    pub recheck_max_attempts: u32,
+    /// When the next recheck is due; absent while one runs, once the last one has run, and
+    /// while the recheck is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_recheck_unix_ms: Option<u64>,
 }
 
 impl RuntimeInstanceStatus {

@@ -81,6 +81,11 @@ pub const PROFILES: &str = "recovery_ladder.profiles";
 /// Workflow #398 RD-4 (model-398 §6.2): the profile of each device kind, kind to profile name
 /// (an object); a kind it does not name climbs the section's `rungs`.
 pub const KIND_PROFILES: &str = "recovery_ladder.kind_profiles";
+/// #411 A38: while a fenced instance waits for a person, the time between the start of the wait
+/// (or the end of a failed recheck) and its next self-check (the recheck), in milliseconds.
+pub const FENCE_RECHECK_INTERVAL_MS: &str = "recovery_ladder.fence_recheck.interval_ms";
+/// #411 A38: the most rechecks of one wait for a person; `0` turns the recheck off.
+pub const FENCE_RECHECK_MAX_ATTEMPTS: &str = "recovery_ladder.fence_recheck.max_attempts";
 
 /// The shortest readiness poll a ladder may be given (§4.2: `100..=readiness_window_ms`):
 /// schema, not a threshold.
@@ -89,6 +94,13 @@ const MIN_READINESS_POLL_MS: u64 = 100;
 const MIN_ADB_PROBE_MS: u64 = 1_000;
 /// The prefix marker of a `codes` or `exclude_codes` entry (§3.1 「前缀*」).
 const PREFIX_MARKER: char = '*';
+/// #411 A38: the bounds of `fence_recheck.interval_ms`, ten seconds to a day. Schema.
+const FENCE_RECHECK_INTERVAL_RANGE: KeyRange = KeyRange::Integer {
+    min: 10_000,
+    max: 86_400_000,
+};
+/// #411 A38: the bounds of `fence_recheck.max_attempts`. Schema.
+const FENCE_RECHECK_MAX_ATTEMPTS_RANGE: KeyRange = KeyRange::Integer { min: 0, max: 1_000 };
 
 macro_rules! two_way_rule {
     (
@@ -228,6 +240,22 @@ pub struct RecoveryLadderFile {
     /// Workflow #398 RD-4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     kind_profiles: Option<Value>,
+    /// #411 A38.
+    // Interface anchor `actingd-config` revision 8 (contracts/component-interfaces.md): a Runtime
+    // before A38 refuses a file that names `fence_recheck`, because the section denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fence_recheck: Option<FenceRecheckFile>,
+}
+
+/// #411 A38: the periodic self-check of a fenced instance that waits for a person.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FenceRecheckFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interval_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_attempts: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -278,6 +306,16 @@ const fn row_of(
     range: KeyRange,
     reader: &'static str,
 ) -> KeyRow {
+    row_since(name, value_type, range, reader, "0.12.0")
+}
+
+const fn row_since(
+    name: &'static str,
+    value_type: ValueType,
+    range: KeyRange,
+    reader: &'static str,
+    since: &'static str,
+) -> KeyRow {
     KeyRow {
         name: KeyName::Exact(name),
         file_path: FilePath::Key,
@@ -286,10 +324,10 @@ const fn row_of(
         default: DefaultSource::File,
         // §5.5: every key of the section can change while the Runtime runs; a ladder climbs by
         // the snapshot it was admitted with (§4.7). Workflow #398 RD-4's keys too (model-398
-        // §6.2, §6.6).
+        // §6.2, §6.6), and #411 A38's, which the lease sweep reads at each tick.
         settable: Settable::Yes,
         reader,
-        since: "0.12.0",
+        since,
     }
 }
 
@@ -356,6 +394,20 @@ pub(crate) static ROWS: &[KeyRow] = &[
     row_of(KIND_PROFILES, ValueType::Object, KeyRange::Any, "RD-4"),
     row(CLAIM_TTL_MS, ValueType::DurationMs, KeyRange::Any),
     row(MARGIN_MS, ValueType::DurationMs, KeyRange::Any),
+    row_since(
+        FENCE_RECHECK_INTERVAL_MS,
+        ValueType::DurationMs,
+        FENCE_RECHECK_INTERVAL_RANGE,
+        "A38",
+        "0.12.9",
+    ),
+    row_since(
+        FENCE_RECHECK_MAX_ATTEMPTS,
+        ValueType::Integer,
+        FENCE_RECHECK_MAX_ATTEMPTS_RANGE,
+        "A38",
+        "0.12.9",
+    ),
 ];
 
 /// A `codes` or `exclude_codes` entry: one code, or every code under a prefix (`prefix*`).
@@ -490,6 +542,17 @@ pub struct HoldConfig {
     pub margin_ms: u64,
 }
 
+/// #411 A38: the periodic self-check (the recheck) of a fenced instance that waits for a
+/// person, read by the lease sweep at each tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FenceRecheckConfig {
+    /// From the start of the wait, then from the end of each failed recheck, to the next one
+    /// (`10000..=86400000`).
+    pub interval_ms: u64,
+    /// The most rechecks of one wait (`0..=1000`); `0` turns the recheck off.
+    pub max_attempts: u32,
+}
+
 /// Workflow #398 RD-4 (model-398 §6.2): one ladder profile, its name and its rungs, each
 /// checked as the section's `rungs` are.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,6 +585,8 @@ pub struct LadderConfig {
     /// Workflow #398 RD-4: the profile name each instance's `recovery_ladder_profile` names in
     /// effect, by the instance's registry id; a snapshot takes it with the section.
     instance_profiles: BTreeMap<String, String>,
+    /// #411 A38: the recheck of a fence that waits for a person.
+    pub fence_recheck: FenceRecheckConfig,
     digest: String,
 }
 
@@ -641,6 +706,19 @@ impl Reader<'_> {
             _ => Err(failure(key, ConfigValueProblem::WrongType)),
         }
     }
+}
+
+/// #411 A38: `number` within `range`; `out_of_range` for `key` otherwise.
+fn bounded(number: i128, key: &'static str, range: KeyRange) -> Result<u64, ConfigFailure> {
+    let fits = match range {
+        KeyRange::Integer { min, max } => (i128::from(min)..=i128::from(max)).contains(&number),
+        KeyRange::Any | KeyRange::Tokens(_) => true,
+    };
+    let refused = || failure(key, ConfigValueProblem::OutOfRange).with_range(range);
+    if !fits {
+        return Err(refused());
+    }
+    u64::try_from(number).map_err(|_| refused())
 }
 
 /// A rule's word, refused outside its two words.
@@ -1139,6 +1217,22 @@ impl LadderConfig {
             &triggers,
             default_start_rung,
         )?;
+        // #411 A38.
+        let interval_ms = reader.duration(FENCE_RECHECK_INTERVAL_MS)?;
+        let max_attempts = reader.integer(FENCE_RECHECK_MAX_ATTEMPTS)?;
+        let fence_recheck = FenceRecheckConfig {
+            interval_ms: bounded(
+                i128::from(interval_ms),
+                FENCE_RECHECK_INTERVAL_MS,
+                FENCE_RECHECK_INTERVAL_RANGE,
+            )?,
+            max_attempts: u32::try_from(bounded(
+                i128::from(max_attempts),
+                FENCE_RECHECK_MAX_ATTEMPTS,
+                FENCE_RECHECK_MAX_ATTEMPTS_RANGE,
+            )?)
+            .map_err(|_| failure(FENCE_RECHECK_MAX_ATTEMPTS, ConfigValueProblem::OutOfRange))?,
+        };
         let digest = format!(
             "{:x}",
             Sha256::digest(canonical_json(&Value::Object(reader.seen)).as_bytes())
@@ -1160,6 +1254,7 @@ impl LadderConfig {
             profiles,
             kind_profiles,
             instance_profiles: BTreeMap::new(),
+            fence_recheck,
             digest,
         })
     }
