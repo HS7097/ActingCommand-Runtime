@@ -2,7 +2,7 @@
 
 //! Runtime-owned admission and execution for contained semantic task packages.
 
-use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
+use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation, ProgramProblem};
 use crate::{
     ExecutionBundleError, ExternallyVerifiedBundle, InputFrameContext, ObservedFrame, RunDirective,
     RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
@@ -7410,8 +7410,11 @@ impl TaskProgram {
         let target_pages = self.target_pages()?;
         if self.operations.is_empty() {
             if self.schema_version != "0.8" || self.recovery.is_some() {
-                return Err(ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+                // Workflow #411 A39: the refusal names its rule and the refused member.
+                return Err(program_refusal(
+                    ProgramProblem::OperationsEmpty,
+                    bundle.operation_path(),
+                    "/operations",
                 ));
             }
             let fields: OcrFieldsDeclaration =
@@ -8956,6 +8959,15 @@ fn phase_refusal(refusal: TaskPhaseRefusal) -> ContainedTaskError {
     ContainedTaskError::with_detail(code, location.detail()).with_values(outcome)
 }
 
+/// Workflow #411 A39: a `contained_task_program_invalid` refusal that names the rule it applies
+/// (`program_problem`) and where: the task declaration's path inside the package (`path`) and the
+/// refused member (`json_pointer`), as values and in the developer detail.
+fn program_refusal(problem: ProgramProblem, path: &str, json_pointer: &str) -> ContainedTaskError {
+    // E1 red proof 1 (do not merge): today's bare code, without its rule or its place.
+    let _ = (problem, path, json_pointer);
+    ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
+}
+
 impl PageDeclaration {
     fn normalized(&self) -> Result<Vec<String>, ContainedTaskError> {
         let pages = match self {
@@ -10307,6 +10319,16 @@ fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskE
         );
         rejected.declaration_issue = Some(Box::new(issue.clone()));
         return rejected;
+    }
+    // Workflow #411 A41: a refusal located in one file of the package keeps its code and carries
+    // the file's path inside the package and the parser's position as values.
+    if let ExecutionBundleError::Containment(ContainmentError::LocatedSourceTree {
+        code,
+        outcome,
+    }) = &error
+    {
+        return ContainedTaskError::with_detail(*code, error.to_string())
+            .with_values(outcome.clone());
     }
     let code = match &error {
         ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,

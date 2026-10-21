@@ -1998,6 +1998,10 @@
         "count": "required"
       },
       "description": "The candidates of the same instance that a dispatch decision record does not list, counted by why: one record per code, in ascending code order (Workflow #411 A26)."
+    },
+    "program_problem": {
+      "type": "vocab:program_problem",
+      "description": "Which rule of a contained task's program refused it at admission (Workflow #411 A39)."
     }
   },
   "vocabularies": {
@@ -6114,6 +6118,15 @@
         },
         "unknown": {
           "description": "Not decided: a predicate is unknown, or the candidate was settled before its trigger was read."
+        }
+      }
+    },
+    "program_problem": {
+      "description": "Which rule of a contained task's program refused it at admission (Workflow #411 A39).",
+      "review": "pending",
+      "tokens": {
+        "operations_empty": {
+          "description": "The task declares no operation, which only a task schema 0.8 zero-input reading task without recovery may (contracts/ocr-fields.md)."
         }
       }
     }

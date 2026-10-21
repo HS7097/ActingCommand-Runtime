@@ -306,3 +306,14 @@ actingcommand_contract::outcome_locations! {
         SelectExpectIdentity => "select_expect_identity",
     }
 }
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Which rule of a contained task's program refused it at admission (vocabulary
+    /// `program_problem`, Workflow #411 A39): the value of `contained_task_program_invalid` where
+    /// the refusal names its rule.
+    pub enum ProgramProblem: "program_problem" {
+        /// The task declares no operation, which only a task schema `0.8` zero-input reading
+        /// task without recovery may (contracts/ocr-fields.md).
+        OperationsEmpty => "operations_empty",
+    }
+}
