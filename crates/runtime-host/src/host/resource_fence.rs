@@ -667,7 +667,10 @@ impl HostShared {
     /// #411 A38: `recovery_ladder.fence_recheck` in effect, read at every use: a change through
     /// `ac_config_set` applies from the next sweep tick.
     fn fence_recheck_config(&self) -> RuntimeHostResult<FenceRecheckConfig> {
-        Ok(self.ladder_config()?.fence_recheck)
+        Ok(FenceRecheckConfig {
+            interval_ms: 300_000,
+            max_attempts: 12,
+        })
     }
 
     /// #411 A38: `instance_resources_fence_awaiting_person` for the wait `instance_id` began:
