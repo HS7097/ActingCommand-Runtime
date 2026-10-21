@@ -2472,7 +2472,9 @@ impl HostShared {
             Some(failure.clone()),
             None,
         )?;
-        let Some((deadline_ms, wait_ms)) = rerun else {
+        // RED PROOF 2 (do not merge): no rerun after a busy end (the climb never holds; the
+        // first busy end goes to `on_exhausted`).
+        let Some((deadline_ms, wait_ms)) = rerun.filter(|_| hold.since_ms.is_none()) else {
             if hold.return_home_deadline_ms.is_some() && config.on_exhausted == OnExhausted::Stop {
                 self.append_recovery_ladder_fact(
                     pending,
