@@ -130,7 +130,7 @@ fn e1_t2_an_empty_pack_table_is_refused_as_no_packs_in_bundle_and_standard_pack_
     let root = game_root(&installed, &[]);
     let checked = check_standard_pack_root(StandardPackCheckRequest { root });
 
-    let rows: [(&str, Result<(), LabError>, &TempDir, &str, Option<&str>); 2] = [
+    let rows = [
         (
             "package bundle of an empty --packs-root",
             bundled.map(|_| ()),
