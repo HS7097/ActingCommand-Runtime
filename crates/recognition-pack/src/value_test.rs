@@ -822,6 +822,13 @@ fn validate_operand(
              repeated, affixes of 1..=64 bytes and digits within 1..=20",
         )?;
     }
+    if operand.agreement.is_some() {
+        refusal(
+            format!("{pointer}/agreement"),
+            ResourceDeclarationReason::InvalidValue,
+            "a value test side reads one frame",
+        )?;
+    }
     if let Some(member) = operand
         .agreement
         .and_then(|agreement| agreement.refused_member(false))
