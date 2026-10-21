@@ -2672,6 +2672,30 @@ package format change. Gates: policy key 59, host key 129.
 | B8-4 | `RunParameters::with_dispatch_schedule(values, admitted_at_unix_ms)` and the overlay's `session.dispatch.schedule.<key>` records | kernel interface (memory only, not persisted) (host 129) | BT-B8 | BT-B8 | after the parameter records: the key under `session.dispatch.schedule.` (D7), the value typed (`timestamp_ms` for the two instants, `boolean`, `integer`), the other members as B15R-1's, observed at the dispatch's admission; a run without a dispatch (direct, Lab, the Lab's single-step evaluations) and a dispatch without the values hold none, so a policy that reads one meets an unknown fact and its `on_unknown` decides; a reason without `run_parameters` leaves the parameters at their declared defaults (B15R-2 unchanged) |
 | B8-5 | keys `last_in_window`, `last_daily_slot` (boolean), `daily_remaining` (integer) | new key-table entries (no shape) (policy 59) | BT-B8 | BT-B8 | review of the code stays `pending`; no new code, vocabulary token, location or configuration key |
 
+### 1.154 Slice BT-B5 (0.12.x): stage end pages and entry pages; an entry that ends at once (#411 B5, B14, B20, B24, B38; B-train plan `rd-1021/train-0129/b-plan/plan.md` §2.5, D4, D5)
+
+A stage of a phased route may list its end pages and its entry pages. **No persisted ledger
+shape**: a run that ends on an end page writes the records a Completed run writes today
+(`StepFinished` with its stage not completed, or none at all for an entry that ends at once), and
+the host maps it as before. No code, location, key, vocabulary token, wire or configuration key
+is added; the refusals reuse `task_phases_invalid` (new `phase_problem` tokens of its developer
+detail only: `end_pages_count`, `end_pages_repeated`, `end_pages_invalid`, `entry_pages_count`,
+`entry_pages_repeated`, `entry_pages_invalid`), `task_phases_outcome_incomplete`,
+`contained_task_entry_pages_invalid` (`phase_start_ambiguous`) and
+`contained_task_prerequisite_incompatible`. Both members join `package` revision 6, which BT-PK6
+declares at the end of the B train; until then they are admitted by code. There is no implicit
+end on arrival at a mapped page. [README.md](README.md) ("Stage end pages and entry pages",
+"Entry page sets") and [linear-steps.md](linear-steps.md) (prerequisite checks) are the contract.
+Gates: exec keys 120 to 124, contract key K37.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B5-1 | `TaskPhase.end_pages` (`phases[]` of task schema `0.9` and of control `Lab-1y.control.v2`) | new optional member (resource file format, not a ledger shape) (exec 120, 123) | BT-B5 | resource side | 1..=16 pages of the package, none repeated, blank, `any`, a target page of the stage or an error page (`task_phases_invalid` at `/phases/<i>/end_pages/<j>`); a page an operation of the stage confirms that is one of them ends the run Completed on that page, with no further operation and the stage not completed (`TaskPhase::is_end_page`, the one test of the walk, the run and the entry); a stage entered by advancing does not test its own end pages on the advancing frame (D5); absent, the stage serializes as before and a reader before BT-B5 refuses the member (`deny_unknown_fields`) |
+| B5-2 | the static walk at an end page | rule (no shape change) (contract K37) | BT-B5 | BT-B5 | a confirmed end page is a terminal that needs exactly one mapping of its effect condition and page (`task_phases_outcome_incomplete` otherwise), and the path ends there; source parsing, build and Runtime admission share the check |
+| B5-3 | `contained_task_prerequisite_incompatible` detail `reason=phase_end_pages` | new value of an existing refusal detail (exec 124) | BT-B5 | BT-B5 | a package with a stage that lists `end_pages` serves neither as a prerequisite package nor for return-home use: an end page ends its run short of its target pages |
+| B14-1 | `TaskPhase.entry_pages` | new optional member (resource file format, not a ledger shape) (exec 121) | BT-B5 | resource side | 1..=16 pages, none repeated, blank or `any`; each a page of the task's entry page set that starts the listing stage (D4; `task_phases_invalid` at `/phases/<i>/entry_pages/<j>` otherwise; a single entry page starts the first stage); a listed page starts the stage where no operation's `from` infers one, and a page listed by two stages or also inferred to another stage is `phase_start_ambiguous` |
+| B20-1 | a start on an entry page a stage lists in `end_pages` | rule (no shape change) (exec 122) | BT-B5 | BT-B5 | a start of that stage of its own (`phase_entry_start`); the run ends on its entry observation before any step: Completed, 0 steps, final page that page, no designated effect, judged by the host on the last recognition (#411 A23); the walk needs the one mapping of that page under `no_designated_effect`; a page that is also an operation's `from` (or another start) has two starts and is refused `phase_start_ambiguous`; B38 is this rule's fixture |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
