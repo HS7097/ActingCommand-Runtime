@@ -1005,6 +1005,12 @@ fn capture_open_values(
     outcome: Outcome,
     failure: Option<&actingcommand_device::CaptureOpenFailure>,
 ) -> Outcome {
+    // A50 red proof 1: a missing package display carries no cause (before A50).
+    if failure.is_some_and(|failure| {
+        failure.cause == actingcommand_device::CaptureOpenCause::DisplayMissing
+    }) {
+        return outcome;
+    }
     let outcome =
         outcome.capture_open_cause(CaptureOpenCauseToken(failure.map(|failure| failure.cause)));
     let Some(failure) = failure else {
