@@ -255,6 +255,13 @@ fn run_package(
     package: &Path,
 ) -> (RuntimeReceipt, actingcommand_contract::CorrelationId) {
     let mut client = TestClient::connect(host);
+    // The run's receipt can take longer than the connection's 2 s read timeout. Its waits are on
+    // the process clock and bounded by what the package declares: the confirmation wait lasts its
+    // window (`step_timeout_ms`, 1000 ms) and, when an observation's sampling runs past it, one
+    // more window per observe-only retry (`scheduling.recognition.sample_timeout_retries`, 2 by
+    // default): at most 3000 ms, and every wait ends by the task timeout (`timeout_ms`, 5000 ms).
+    // The receipt read timeout (10 s) holds that bound with room for the run's records.
+    client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
@@ -640,6 +647,55 @@ fn bt_b1_fix_a_recognition_its_sampling_deadline_passed_latches_no_fatal_and_is_
     assert!(
         recognitions_after_tap >= 2,
         "the timed-out observation and its retry: {recognitions_after_tap}"
+    );
+    // Coordinator ruling of 2026-10-22 (BT-B1-FIX option C): the cut recognition, the first
+    // after the tap, is closed by the existing `recognition.failed` record under its own
+    // recognition, its outcome the observation's sampling timeout at the observation after the
+    // input; no other recognition of the run is abandoned.
+    let tap_event = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Task(TaskPayload::Semantic(payload))
+                    if matches!(payload.fact(), TaskSemanticFact::EffectCompleted { .. })
+            )
+        })
+        .expect("the tap's record");
+    let cut = events[tap_event..]
+        .iter()
+        .find(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Task(TaskPayload::Semantic(payload))
+                    if matches!(payload.fact(), TaskSemanticFact::RecognitionStarted { .. })
+            )
+        })
+        .and_then(|event| event.links().recognition_id().cloned())
+        .expect("the first recognition after the tap");
+    let abandoned = events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Recognition(actingcommand_contract::RecognitionPayload::Failed(
+                failed,
+            )) => Some((
+                event.links().recognition_id().cloned(),
+                failed.outcome().clone(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [(recognition_id, outcome)] = abandoned.as_slice() else {
+        panic!("one abandoned recognition: {abandoned:?}");
+    };
+    assert_eq!(recognition_id.as_ref(), Some(&cut));
+    assert_eq!(
+        outcome.code().as_str(),
+        "recognition_sample_deadline_exceeded"
+    );
+    assert_eq!(
+        outcome.value("stage"),
+        Some(&serde_json::json!("observation_after_input"))
     );
     host.close().expect("close the host");
 }
