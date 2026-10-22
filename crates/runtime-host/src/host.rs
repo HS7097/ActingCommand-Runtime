@@ -2194,6 +2194,16 @@ impl RuntimeHost {
             .mark(error)
     }
 
+    /// #71 FLK-07, tests: a handle to the Runtime's fatal state, which a test client keeps so a
+    /// receipt it cannot read names the latched condition and the shutdown flag.
+    #[cfg(test)]
+    pub(crate) fn fatal_state_for_test(&self) -> RuntimeHostResult<FatalState> {
+        Ok(self
+            .shared_ref(crate::codes::test_spellings::TestLocation::ReadFatalStateForTest)?
+            .fatal
+            .clone())
+    }
+
     /// Workflow #382 H-5 G15 (seam I5): what the last runtime-fact recovery on this thread (the
     /// one inside `RuntimeHost::start`) read after its snapshot set: the first sequence it read
     /// from and the number of runtime-fact events it read; taking it clears it.

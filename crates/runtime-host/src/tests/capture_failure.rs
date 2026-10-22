@@ -170,11 +170,31 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
     assert!(host.fatal_error().expect("runtime health").is_none());
 
     // Workflow #257 C-M4-v1: existing diagnostic specification across real appends.
-    for _ in 1..17 {
+    for observe in 2..=17 {
         let request = client.request(RuntimeOperation::ObserveReadonly {
             instance_alias: "node.a".to_owned(),
         });
-        assert_eq!(client.send(&request).state(), RuntimeReceiptState::Failed);
+        let receipt = client.send(&request);
+        // #71 FLK-07: every receipt is the capture failure and leaves the Runtime running, so the
+        // first wrong receipt names itself.
+        assert_eq!(
+            (
+                receipt.state(),
+                receipt.error_projection().map(|error| error.code)
+            ),
+            (
+                RuntimeReceiptState::Failed,
+                Some(RuntimeErrorCode::CaptureFailed)
+            ),
+            "observe {observe} of 17: {}",
+            receipt.outcome()
+        );
+        let latched = host.fatal_error().expect("runtime health");
+        assert!(
+            latched.is_none(),
+            "observe {observe} of 17 latched {:?}",
+            latched.as_ref().map(RuntimeHostError::daemon_outcome)
+        );
     }
     let observed = projected_events(&mut client, EventQuery::default());
     let sources = observed

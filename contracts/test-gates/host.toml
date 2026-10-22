@@ -1674,3 +1674,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a35_s5::a35_s5_t1_status_shows_the_holding_ladder_with_its_kind_time_held_and_limit",
 ]
 incident = ["#411 A35"]
+
+# #71 FLK-07 (slice HARNESS-DIAG, 0.12.x; test harness only: no persisted ledger shape, no code, no configuration key, register §1.174 unused; host keys 168 to 170 assigned by the coordinator, 169 and 170 unused): after the Runtime under test latched a fatal (artifact_directory_failed, its artifact directory blocked by a file) and ended the connection, the test client's panic for the next request's unreadable receipt names the latched fatal (`latched_fatal=artifact_directory_failed ...`) and the shutdown flag (`shutdown_requested=true`)
+[[gate]]
+key = "168"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_harness_diag::harness_diag_t1_an_unreadable_receipt_names_the_latched_fatal_and_the_shutdown_flag",
+]
+incident = ["#71 FLK-07"]

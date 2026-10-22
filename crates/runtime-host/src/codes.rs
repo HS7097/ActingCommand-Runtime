@@ -2468,6 +2468,8 @@ pub(crate) mod test_spellings {
             QueryTestPersistedEvents => "query_test_persisted_events",
             ReadContainedTaskCheckpointTestControl => "read_contained_task_checkpoint_test_control",
             ReadFailureDetailForTest => "read_failure_detail_for_test",
+            // #71 FLK-07: the test client takes a handle to the Runtime's fatal state.
+            ReadFatalStateForTest => "read_fatal_state_for_test",
             ReadInstanceClaimsForTest => "read_instance_claims_for_test",
             ReadOwnStart => "read_own_start",
             ReadPolicyOutcomeTransitionTestHook => "read_policy_outcome_transition_test_hook",
