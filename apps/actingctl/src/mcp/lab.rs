@@ -1731,4 +1731,8 @@ mod tests {
 
     // Workflow #411 E4 tail (apps key 97): the ac_pack_check result schema names its warnings.
     mod gate_411_e4_tail;
+
+    // #412 Lab B-3 S2 (apps key 92): ac_lab_do passes operation as --operation and refuses its
+    // conflicting arguments before any child runs.
+    mod gate_412_b3_s2;
 }

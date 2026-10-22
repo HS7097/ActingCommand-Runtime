@@ -346,6 +346,11 @@ mod gate_406_t12;
 // Workflow #406 T3 (host key 124), register §1.137: a run performs the path drag the kernel
 // generates, on a segmented backend and on the Nemu input.
 mod gate_406_t3;
+
+// #412 Lab B-3 S2 (host keys 152 to 155), register §1.162: the host runs one declared operation
+// over the Lab lease and writes its LR-10 records.
+mod gate_412_b3_s2;
+
 mod gate_epoch_close;
 // #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
 // fatal the Runtime under test latched and its shutdown flag.

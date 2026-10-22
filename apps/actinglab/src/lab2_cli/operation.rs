@@ -537,3 +537,8 @@ mod gate_411_e2;
 #[cfg(test)]
 #[path = "../tests/gate_lab_l3.rs"]
 mod gate_lab_l3;
+
+// #412 Lab B-3 S2 (apps key 91): how `do --operation` exits.
+#[cfg(test)]
+#[path = "../tests/gate_412_b3_s2_exit.rs"]
+mod gate_412_b3_s2_exit;

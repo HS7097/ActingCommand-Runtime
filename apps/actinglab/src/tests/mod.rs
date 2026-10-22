@@ -53,6 +53,11 @@ mod gate_411_bt_l13;
 // presses a box at its seeded hotspot point.
 #[path = "gate_406_t4.rs"]
 mod gate_406_t4;
+
+// #412 Lab B-3 S2 (apps key 91): `do --operation` refuses each conflicting form before any Runtime
+// connection.
+#[path = "gate_412_b3_s2.rs"]
+mod gate_412_b3_s2;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

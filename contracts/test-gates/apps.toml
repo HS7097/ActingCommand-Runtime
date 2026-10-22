@@ -831,3 +831,31 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_411_e4_tail::e4_tail_t1_ac_pack_check_result_schema_names_its_warnings",
 ]
 incident = ["#411 B34"]
+
+# #412 Lab B-3 S2 (0.12.x; register §1.162 B3S2-4; design rd-1021/train-0129/lab-b3-design.md §2.4, §5 S2 T2-5; apps keys 90 to 92 from the wave-3 frame): the Lab client's receipt wait of a declared operation is the package's task timeout, four backend-open allowances, the longest input, the I/O allowance and one projection transaction
+[[gate]]
+key = "90"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_412_b3_s2::b3_s2_t2_5_a_declared_operation_waits_the_design_bound_for_its_receipt",
+]
+incident = ["#412 B-3"]
+
+# #412 Lab B-3 S2 (register §1.162 B3S2-5; design §1.2, §5 S2 T2-6): actinglab do --operation refuses an element id, --tap, --swipe, --after-page, --after-timeout-ms, --record, --tap-rect, --projection-sequence, --projection-hash, --dry-run (do's and the global one), --scene and --operation without --capture with validation_failed (exit 2), argument_problem conflicting, before any Runtime connection; it exits 0 when the operation ended confirmed or run_completed, 3 (safety_blocked, the failure's code) blocked by page, guard or arrival_page as the design's exit table says, else 4
+[[gate]]
+key = "91"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_412_b3_s2::b3_s2_t2_6_do_operation_refuses_each_conflicting_form_before_connecting",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_412_b3_s2_exit::b3_s2_t2_6_do_operation_exits_by_the_design_table",
+]
+incident = ["#412 B-3"]
+
+# #412 Lab B-3 S2 (register §1.162 B3S2-6; design §1.3, §5 S2 T2-7): ac_lab_do passes operation to actinglab as --operation (with seed); operation with target, tap, swipe, after_page, after_timeout_ms, record, tap_rect, projection_sequence, projection_hash, scene, sample_scenes or dry_run, or without capture, is refused arguments_invalid {argument, argument_problem: conflicting}, class usage, before the install is located and before any child runs
+[[gate]]
+key = "92"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_412_b3_s2::b3_s2_t2_7_ac_lab_do_passes_operation_and_refuses_its_conflicts_before_the_child",
+]
+incident = ["#412 B-3"]
