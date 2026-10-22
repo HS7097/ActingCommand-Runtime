@@ -18347,6 +18347,72 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_declared_operation_page_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "page_id": "required",
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "#412 Lab B-3: a Lab operation ran the declared operation pack_operation_id, which runs from the page page_ids (its declared from), and the first page the kernel recognised was page_id. The run ended before any input.",
+      "common_causes": "The device did not show the operation's page when the Lab operation started.",
+      "handling": "Bring the device to the operation's from page, or name an operation of the page it shows."
+    },
+    "contained_task_declared_operation_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the package's entry task declares no operation of that id. Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
+      "common_causes": "A mistyped operation id, or the id of an operation of another task or package.",
+      "handling": "Name an operation id of the package's entry task."
+    },
+    "contained_task_declared_operation_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "lab_operation_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the Lab does not run it as the kernel runs a step (page-graph clicks only), for the reason lab_operation_problem: application_effect (the operation is an application effect), select_step (a select step, which needs a policy and the instance's facts), linear_steps (the package runs linear_steps), recognize_only (the package only recognises), chosen_identity (its expect_after reads the identity an earlier select step of the same run chose). Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
+      "common_causes": "The named operation is not a page-graph click: an application effect, a select step, an operation that reads a choice, or an operation of a linear_steps or recognize_only package.",
+      "handling": "Run the whole package, or exercise the input in the Lab's element or coordinate mode."
+    },
     "contained_task_designated_effect_cap_unresolved": {
       "category": "error",
       "ladder_class": "declaration_error",
