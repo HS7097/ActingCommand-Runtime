@@ -1699,6 +1699,8 @@ key = "161"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t6_the_gate_compares_the_frame_change_with_the_configured_threshold_inclusively",
+]
+incident = ["#411 A35"]
 
 # #411 B37 entry part (slice A35-S4, 0.12.x; register §1.169 B37E-1, B37E-2; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S4 T1; coordinator decision Q5; host keys 162 to 164 assigned by the coordinator): a scheduled run whose home entry runs the registry's return-home package, which completes on a scheduling outcome mapping it marks busy, fails contained_task_entry_busy (warning; package_id the return-home package, page_id the page it ended on, outcome_key the busy key) in place of contained_task_home_recovery_terminal_non_home, and under the shipped ladder defaults no ladder is admitted
 [[gate]]
