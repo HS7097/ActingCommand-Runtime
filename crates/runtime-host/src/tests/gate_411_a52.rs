@@ -80,6 +80,12 @@ impl Drop for ReleaseHold<'_> {
 /// One read-only observe of `ALIAS` whose capture fails. The capture waits in the fake while
 /// `during` runs, so `during` acts while the observe holds the instance; then the capture fails
 /// and the observe ends. Returns the observe's request, its receipt and what `during` returned.
+///
+/// The capture failure is transient, so the observe's own failure is not fatal and any fatality
+/// its receipt carries comes from its close. A fatal device error would make the receipt fatal on
+/// its own (`RuntimeHostError::readonly_capture` keeps the error's fatality) while the Runtime
+/// latches nothing; the read-only close test in `teardown.rs` injects a transient failure for the
+/// same reason.
 fn failing_observe_while<T>(
     host: &RuntimeHost,
     state: &FakeState,
@@ -98,6 +104,9 @@ fn failing_observe_while<T>(
         "the instance's session is open before the failing observe"
     );
     state.fail_capture.store(true, Ordering::Release);
+    state
+        .transient_capture_failure
+        .store(true, Ordering::Release);
     // The fake's next capture waits while `done` captures are done.
     state.capture_hold_after.store(done, Ordering::Release);
     let (receipt, during) = thread::scope(|scope| {
