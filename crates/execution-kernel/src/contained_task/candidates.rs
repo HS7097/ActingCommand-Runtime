@@ -163,12 +163,14 @@ impl TaskOperation {
 
     /// #411 B16/B22 (B-train plan §2.11 item 3): the outcome keys on which a run may end at this
     /// operation's state, on its page, each with the member that declares it: `on_empty`, a
-    /// keyed `on_max_runs`, a keyed `on_guard_refused`.
+    /// keyed `on_max_runs`, a keyed `on_guard_refused`; #411 B36/B19 (A35-S3): a wait step's
+    /// `on_timeout`.
     pub(super) fn keyed_ends(&self) -> impl Iterator<Item = (&'static str, &str)> {
         [
             ("on_empty", self.on_empty_key()),
             ("on_max_runs", self.on_max_runs_key()),
             ("on_guard_refused", self.on_guard_refused_key()),
+            ("on_timeout", self.wait_on_timeout_key()),
         ]
         .into_iter()
         .filter_map(|(member, key)| key.map(|key| (member, key)))

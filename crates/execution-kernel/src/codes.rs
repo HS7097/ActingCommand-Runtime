@@ -128,6 +128,13 @@ actingcommand_contract::outcome_codes! {
         // the run Completed (keys `pack_operation_id`, `count`, `limit_count`, `page_id`,
         // `outcome_key`); the outcome of `task.operation_capped`.
         ContainedTaskOperationRunsCapped => "contained_task_operation_runs_capped": info / none,
+        // #412 Lab B-3 S1: the kernel's refusals of a declared operation a Lab operation names
+        // (keys `pack_operation_id`, and `lab_operation_problem` for the unsupported one), and a
+        // declared operation's first frame on another page than its own (keys
+        // `pack_operation_id`, `page_id`, `page_ids`).
+        ContainedTaskDeclaredOperationUnknown => "contained_task_declared_operation_unknown": error / none,
+        ContainedTaskDeclaredOperationUnsupported => "contained_task_declared_operation_unsupported": error / none,
+        ContainedTaskDeclaredOperationPageMismatch => "contained_task_declared_operation_page_mismatch": error / none,
         ContainedTaskStepUnconfirmed => "contained_task_step_unconfirmed": error / pack_logic_mismatch,
         ContainedTaskErrorPageReached => "contained_task_error_page_reached": error / pack_logic_mismatch,
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,
@@ -328,5 +335,27 @@ actingcommand_contract::outcome_vocabulary! {
         /// The task declares no operation, which only a task schema `0.8` zero-input reading
         /// task without recovery may (contracts/ocr-fields.md).
         OperationsEmpty => "operations_empty",
+        // #411 B36/B19 (A35-S3): the rules of a wait step and of a confirmation's wait page
+        // (contracts/resource-declarations.md, "Wait steps and wait pages").
+        /// A wait step declares a member it never takes: an input or its guard, a retry, a
+        /// delay, an observation window, or a wait page of its own.
+        WaitMemberRefused => "wait_member_refused",
+        /// A wait step's `from` is not one page of the package, or is a target page or an error
+        /// page.
+        WaitFromInvalid => "wait_from_invalid",
+        /// A wait step declares no destination (`to` or `expect_after`).
+        WaitDestinationMissing => "wait_destination_missing",
+        /// A wait step's or a wait page's `max_ms` is outside 1..=1800000.
+        WaitMaxInvalid => "wait_max_invalid",
+        /// A wait step is a designated operation or a member of a designated effect set.
+        WaitDesignated => "wait_designated",
+        /// A wait step's `on_timeout` names no mapping of the task's scheduling outcome that
+        /// lists the step's `from` page.
+        WaitTimeoutUnmapped => "wait_timeout_unmapped",
+        /// The mapping a wait step's `on_timeout` names does not declare `busy`.
+        WaitTimeoutNotBusy => "wait_timeout_not_busy",
+        /// A confirmation's wait page is not one page of the package, or is a destination of its
+        /// operation or an error page.
+        WaitPageInvalid => "wait_page_invalid",
     }
 }

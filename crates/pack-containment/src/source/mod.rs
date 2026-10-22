@@ -467,10 +467,12 @@ impl OperationParser {
                 .get("unguarded_trusted_coordinate")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // #411 B36/B19 (A35-S3): a wait step keeps its `wait`; no click is inferred.
+            let wait_step = is_wait_step(operation);
             let object = operation.as_object_mut().ok_or_else(|| {
                 CliError::package_invalid(format!("task '{task_id}' operation must be an object"))
             })?;
-            if !select.is_null() {
+            if !select.is_null() || wait_step {
                 // A select step keeps its select and its declared guard; no click is inferred.
                 object.remove("click");
             } else if application.is_null() {
@@ -770,6 +772,21 @@ impl OperationParser {
                         &bundle.task_json_path(),
                         &format!(
                             "operation {:?} transition",
+                            operation.get("id").and_then(Value::as_str)
+                        ),
+                        &[page.to_owned()],
+                        &self.game,
+                        &declared_anchor_ids,
+                        &page_rule_ids,
+                        &mut errors,
+                    );
+                }
+                // #411 B36/B19 (A35-S3): a confirmation's wait page is a page of the task.
+                if let Some(page) = operation_wait_page_id(operation) {
+                    validate_declared_page_set(
+                        &bundle.task_json_path(),
+                        &format!(
+                            "operation {:?} wait_page",
                             operation.get("id").and_then(Value::as_str)
                         ),
                         &[page.to_owned()],
@@ -1156,6 +1173,17 @@ impl OperationParser {
                         &mut order,
                     );
                 }
+                // #411 B36/B19 (A35-S3): a confirmation's wait page.
+                if let Some(anchor_id) = operation_wait_page_id(operation) {
+                    add_page(
+                        &self.game,
+                        anchor_id,
+                        &declared_anchor_ids,
+                        &page_rule_ids,
+                        &mut pages,
+                        &mut order,
+                    );
+                }
             }
         }
         self.apply_page_rules(&mut pages)?;
@@ -1227,10 +1255,12 @@ impl OperationParser {
                     _ => None,
                 };
                 // An application effect is not a tap, and a select step taps a candidate chosen
-                // at run time: neither becomes a navigation edge, so no route passes one.
+                // at run time: neither becomes a navigation edge, so no route passes one. #411
+                // B36/B19 (A35-S3): nor does a wait step, which makes no input.
                 if (to_pages.is_none() && !is_page_change(operation))
                     || is_application_effect(operation)
                     || is_select_effect(operation)
+                    || is_wait_step(operation)
                 {
                     continue;
                 }
@@ -1321,6 +1351,7 @@ impl OperationParser {
                 if operation.get("to") != Some(&Value::Null)
                     || is_application_effect(operation)
                     || is_select_effect(operation)
+                    || is_wait_step(operation)
                 {
                     continue;
                 }
@@ -1575,6 +1606,10 @@ impl OperationParser {
                 Value::Null,
                 select.clone(),
             ));
+        }
+        // #411 B36/B19 (A35-S3): a wait step makes no input: no click, no guard.
+        if is_wait_step(operation) {
+            return Ok((Value::Null, Value::Null, Value::Null, Value::Null));
         }
         let Some(application) = operation
             .get("application")
@@ -2001,9 +2036,30 @@ fn is_select_effect(operation: &Value) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
+/// #411 B36/B19 (A35-S3): a wait step, which declares `wait` and no other effect; its shape is
+/// the declaration gate's, its rules Runtime admission's.
+fn is_wait_step(operation: &Value) -> bool {
+    operation.get("wait").is_some_and(|value| !value.is_null())
+        && ["click", "application", "select"]
+            .into_iter()
+            .all(|effect| operation.get(effect).is_none_or(Value::is_null))
+}
+
+/// #411 B36/B19 (A35-S3): the page a confirmation's wait page names, which no other operation
+/// field names.
+fn operation_wait_page_id(operation: &Value) -> Option<&str> {
+    operation
+        .pointer("/expect_after/wait_page/page_id")
+        .and_then(Value::as_str)
+}
+
 fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<String>) {
     let task_json_path = bundle.task_json_path();
     let path = task_json_path.as_path();
+    // #411 B36/B19 (A35-S3): a wait step has no click.
+    if is_wait_step(operation) {
+        return;
+    }
     // A select step's shape is the declaration gate's; it carries no other effect.
     if is_select_effect(operation) {
         if operation.get("click").is_some_and(|value| !value.is_null())
@@ -3188,6 +3244,10 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
             on_guard_refused_key: operation
                 .pointer("/on_guard_refused/outcome_key")
                 .and_then(Value::as_str),
+            // #411 B36/B19 (A35-S3): a wait step's `on_timeout` may end the run, still busy.
+            on_timeout_key: operation
+                .pointer("/wait/on_timeout")
+                .and_then(Value::as_str),
         });
     }
     let game = bundle.data["game"].as_str().unwrap_or_default();
@@ -3405,6 +3465,10 @@ fn declared_task_page_ids(bundle: &Bundle, game: &str) -> CliOutcome<BTreeSet<St
             pages.insert(normalize_page_rule_id(game, &page));
         }
         if let Some(page) = operation_transition_page_id(operation) {
+            pages.insert(normalize_page_rule_id(game, page));
+        }
+        // #411 B36/B19 (A35-S3): a confirmation's wait page.
+        if let Some(page) = operation_wait_page_id(operation) {
             pages.insert(normalize_page_rule_id(game, page));
         }
     }
@@ -4426,6 +4490,10 @@ fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTr
                 insert_selected_page_id(game, &page, &mut pages);
             }
             if let Some(page) = operation_transition_page_id(operation) {
+                insert_selected_page_id(game, page, &mut pages);
+            }
+            // #411 B36/B19 (A35-S3): a confirmation's wait page.
+            if let Some(page) = operation_wait_page_id(operation) {
                 insert_selected_page_id(game, page, &mut pages);
             }
         }

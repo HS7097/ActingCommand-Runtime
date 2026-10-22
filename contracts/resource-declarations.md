@@ -1233,3 +1233,69 @@ admits them by code.
   its target pages, so it is neither a prerequisite package nor a return-home package
   (`contained_task_prerequisite_incompatible`, `reason=max_runs_end` or `reason=guard_refused_end`).
   A `busy` mapping (#411 B37) is no keyed end.
+
+### Wait steps and wait pages
+
+#411 B36 and B19 (slice A35-S3, [v012-register.md](v012-register.md) §1.176; design A35 §2.3;
+coordinator decisions Q9 to Q11 of 2026-10-21). An operation of a task schema `0.9` page-graph
+task may be a wait step, which makes no input, and a step's confirmation may declare a wait page.
+One kernel wait serves both: the confirmation's. An older task schema refuses either with
+`UnconsumedField`; a `linear_steps` task refuses either at admission
+(`contained_task_linear_invalid`, `reason=wait`, [Linear steps](linear-steps.md)). A task that
+declares neither runs as before. The members join package revision 6, which the closing slice
+of the release declares; until then the Runtime admits them by code.
+
+```json
+{"id": "op_wait", "from": "page_a",
+ "wait": {"max_ms": 1500000, "on_timeout": "still_busy"},
+ "expect_after": {"page_id": "page_b", "timeout_ms": 15000, "interval_ms": 2000}}
+"expect_after": {"page_id": "page_b", "timeout_ms": 15000,
+                 "wait_page": {"page_id": "page_a", "max_ms": 1500000}}
+```
+
+| Member | Declaration gate | Runtime admission (`contained_task_program_invalid`, `program_problem` as below, the task declaration's `path` and the refused member as `json_pointer`) |
+| --- | --- | --- |
+| `wait` | an object with the unsigned member `max_ms` and the optional string member `on_timeout` (`MissingField`, `InvalidType`, `UnknownField` otherwise); it stands for the operation's effect, so the operation needs no `click` | the operation declares no `click`, `application`, `select`, `guard`, `unguarded_trusted_coordinate`, `retryable`, `max_attempts`, `retry_interval_ms`, `post_delay_ms`, `on_error`, `input_recheck`, `observation_window`, `on_guard_refused` and no wait page of its own (`wait_member_refused` at the first one); `from` is one page of the package, not `any`, no target page and no error page (`wait_from_invalid`); a destination (`to` or `expect_after`) is declared (`wait_destination_missing`); `max_ms` is 1..=1800000 (`wait_max_invalid`); the operation is no designated operation and no member of a designated effect set (`wait_designated`); `on_timeout` names the key of a mapping of the task's `scheduling_outcome` that lists `from` (`wait_timeout_unmapped`) and declares `busy` ([Busy outcome mappings](#busy-outcome-mappings); `wait_timeout_not_busy`). `when` and `max_runs` stay allowed |
+| `expect_after.wait_page` | an object with the string member `page_id` and the unsigned member `max_ms` (`MissingField`, `InvalidType`, `UnknownField` otherwise) | the page is one page of the package, no destination of its operation and no error page (`wait_page_invalid`); `max_ms` is 1..=1800000 (`wait_max_invalid`) |
+
+The source build takes a wait page's `page_id` into the task's page set, as an operation's
+destination, and infers no click and no guard for a wait step; a wait step is no navigation edge.
+
+- **A wait step's run.** The step starts on its `from` page (`StepStarted`) and makes no input: no
+  guard, no `EffectIntent`, no input, no `EffectCompleted`, as a pass-over. It takes a frame every
+  `expect_after.interval_ms`, else every capture interval (Q10: no interval of its own).
+  - A frame on exactly one destination finishes the step on it (`StepFinished`), and the run goes
+    on from that frame as after any confirmed step.
+  - A frame on `from` keeps it waiting, up to `max_ms` from the step's start on the run's budget
+    clock (Q9: paced like every kernel wait, bounded by the task deadline), and restarts the away
+    clock from zero.
+  - A frame on an error page fails the run with `contained_task_error_page_reached`, as a
+    confirmation does.
+  - A frame of neither (another page, or none) is offered to the shared interrupt pages first; a
+    handled one pauses both clocks. Otherwise it runs the away clock: `expect_after.timeout_ms`,
+    else the step timeout. The away clock running out fails the run with
+    `contained_task_step_unconfirmed` (`pack_operation_id`, `page_ids` the destinations, `attempts`
+    1, `page_id` the last frame's page when it matched one).
+  - `max_ms` reached on `from` ends the run there: with `on_timeout`, Completed on `from` with that
+    key as its scheduling outcome, the step finishing on `from` (a keyed end); without it,
+    `contained_task_step_unconfirmed` with `page_id` the wait page.
+  - The task deadline gives `contained_task_timeout`, as everywhere.
+- **A wait page.** In the confirmation of a `click`, `application` or `select` step, frames on the
+  wait page pause the confirmation clock, as a handled shared interrupt does, up to `max_ms` of
+  time on the wait page in all (the time since the confirmation's frame before each one); beyond
+  that they count as frames of no destination and the clock runs again. Everything else is
+  unchanged: the retry policy, the failure decision, the extra wait rounds.
+- **A still screen.** A frame of the page a wait holds on (a wait step's `from`, a wait page) is a
+  page the wait accepts: a still unrecognised screen counted unpaced (#411 A43b) no longer holds
+  across it.
+- **Static checks.** The walk takes a wait step as an edge from `from` to its destinations. Its
+  `on_timeout` is a keyed end at its state under the one keyed-terminal rule (section
+  [Per-run operation caps and keyed guard refusals](#per-run-operation-caps-and-keyed-guard-refusals);
+  `task_phases_outcome_incomplete` in a phased route, `contained_task_outcome_declaration_incomplete`
+  in a page graph), and its mapping declares `busy` (`task_phases_outcome_incomplete` in the
+  phased route otherwise).
+- **A layer.** A wait step's `on_timeout` ends the run on a busy mapping, which a layer may: unlike
+  the other keyed ends it keeps the package a prerequisite or return-home package. A return-home
+  package waits there through an activity and ends busy only when the activity outlasts `max_ms`.
+- No code and no record are added: the step writes `StepStarted` and `StepFinished` and the
+  frames their capture and recognition records.

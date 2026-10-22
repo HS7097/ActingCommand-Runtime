@@ -6223,6 +6223,30 @@
       "tokens": {
         "operations_empty": {
           "description": "The task declares no operation, which only a task schema 0.8 zero-input reading task without recovery may (contracts/ocr-fields.md)."
+        },
+        "wait_member_refused": {
+          "description": "A wait step (#411 B36/B19, A35-S3) declares a member it never takes: click, application, select, guard, unguarded_trusted_coordinate, retryable, max_attempts, retry_interval_ms, post_delay_ms, on_error, input_recheck, observation_window, on_guard_refused, or a wait page of its own (expect_after.wait_page)."
+        },
+        "wait_from_invalid": {
+          "description": "A wait step's from is not one page of the package (any, or a page that resolves to none or to several), or is a target page or an error page."
+        },
+        "wait_destination_missing": {
+          "description": "A wait step declares no destination (to or expect_after)."
+        },
+        "wait_max_invalid": {
+          "description": "A wait step's max_ms or a wait page's max_ms is outside 1..=1800000."
+        },
+        "wait_designated": {
+          "description": "A wait step is a designated operation or a member of a designated effect set."
+        },
+        "wait_timeout_unmapped": {
+          "description": "A wait step's on_timeout names no mapping of the task's scheduling outcome that lists the step's from page."
+        },
+        "wait_timeout_not_busy": {
+          "description": "The mapping a wait step's on_timeout names does not declare busy (#411 B37)."
+        },
+        "wait_page_invalid": {
+          "description": "A confirmation's wait page (expect_after.wait_page.page_id) is not one page of the package, or is a destination of its operation or an error page."
         }
       }
     },

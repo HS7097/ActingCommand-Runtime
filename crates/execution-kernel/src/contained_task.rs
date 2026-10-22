@@ -27,10 +27,15 @@ use actingcommand_contract::{
 };
 // #411 A20: a phased route's refusal names the refused member.
 use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
+// #411 A44: each candidate page's verdict (ledger revision 4, register §1.153 LR-8).
+use actingcommand_contract::{
+    RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
+};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
 use still_wait::StillUnrecognised;
 use timing::PaceClock;
+use wait_step::{HeldFrame, HeldPage};
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
     EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, phase_entry_starts,
@@ -67,6 +72,8 @@ use std::time::{Duration, Instant, SystemTime};
 mod candidates;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
+// #412 Lab B-3 S1: one declared operation run as the kernel runs it.
+mod declared_operation;
 mod linear;
 // Workflow #390 EXEC-2.
 mod observation_window;
@@ -86,8 +93,10 @@ mod selection;
 mod text_locate_tests;
 // Workflow #396 REC-2.
 mod timing;
+// #411 B36/B19 (A35-S3): a wait step without input, and a confirmation's wait page.
 #[cfg(test)]
 mod unique_tests;
+mod wait_step;
 // Workflow #396 REC-5.
 #[cfg(test)]
 mod scales_tests;
@@ -121,6 +130,12 @@ mod gate_308_l4b_admission;
 // Workflow #308 SEL-L4b-T (exec key 82): expect_identity through a pool of template targets.
 #[cfg(test)]
 mod gate_308_l4bt;
+
+// #412 Lab B-3 S1 (exec keys 136 to 143 and 180): the kernel runs one declared operation as a
+// run would, and returns after that one step.
+#[cfg(test)]
+mod gate_412_b3_s1;
+
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
@@ -163,6 +178,11 @@ mod gate_390_read1;
 #[cfg(test)]
 mod gate_390_r10;
 
+// #411 B36 + B19, slice A35-S3 (exec keys 175 to 179): a wait step without input, and a
+// confirmation's wait page.
+#[cfg(test)]
+mod gate_411_b36;
+
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
 mod gate_387_d1cg;
@@ -194,6 +214,10 @@ mod gate_rc2_a15;
 // #411 A45 T2: an entry check of a package without entry pages names the missing declaration.
 #[cfg(test)]
 mod gate_411_a45;
+// #411 A44 writer (exec keys 171 and 172; ledger revision 4 row LR-8): a page recognition hands
+// the host each candidate page's best score and verdict, the first 16 of them.
+#[cfg(test)]
+mod gate_411_a44;
 // #411 E2 T1 (A28): a run that exhausts its step budget ends with the step budget's own code.
 #[cfg(test)]
 mod gate_411_e2;
@@ -218,6 +242,7 @@ mod gate_406_t3;
 // #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
 #[cfg(test)]
 mod gate_411_lab_rp;
+pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -1975,6 +2000,10 @@ pub enum ContainedTaskTrace {
         width: u32,
         height: u32,
         targets: Vec<RecognizedTarget>,
+        /// #411 A44 (ledger revision 4, register §1.153 LR-8, §1.173): each candidate page's
+        /// verdict, from the evaluations this recognition made; the host writes it into
+        /// `task.recognition_completed` unchanged.
+        candidate_scores: Box<RecognitionCandidateScores>,
     },
     RecognitionStarted {
         candidate_pages: Vec<String>,
@@ -2687,6 +2716,9 @@ pub(crate) struct ContainedTaskRunOptions {
     post_admission_ocr: PostAdmissionOcrExecution,
     entry: ContainedTaskEntry,
     application_entry: ApplicationEntryRun,
+    /// #412 Lab B-3 (design §2.1): the index of the one operation a declared operation's run
+    /// executes ([`PreparedContainedTask::run_declared_operation`]); `None` for every other run.
+    declared: Option<usize>,
 }
 
 /// Workflow #390 EXEC-3 (FCM E-02): how a page-graph package's application entry (its
@@ -2715,6 +2747,7 @@ impl ContainedTaskRunOptions {
             post_admission_ocr: PostAdmissionOcrExecution::DisabledForOfflineSimulation,
             entry: ContainedTaskEntry::Ordinary,
             application_entry: ApplicationEntryRun::AfterInitialFrame,
+            declared: None,
         }
     }
 }
@@ -3914,6 +3947,8 @@ impl PreparedContainedTask {
             })?;
         let matched = evaluation.matched;
         let targets = recognized_targets(&self.evaluator, &evaluation)?;
+        let candidate_scores =
+            recognition_candidate_scores(std::slice::from_ref(&evaluation), &candidate_pages);
         runtime
             .record(ContainedTaskTrace::RecognitionCompleted {
                 candidate_pages,
@@ -3921,6 +3956,7 @@ impl PreparedContainedTask {
                 width: frame.width,
                 height: frame.height,
                 targets,
+                candidate_scores,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         Ok(if matched {
@@ -3989,6 +4025,7 @@ impl PreparedContainedTask {
             page.as_deref(),
             &candidate_pages,
         )?;
+        let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
         runtime
             .record(ContainedTaskTrace::RecognitionCompleted {
                 candidate_pages,
@@ -3996,6 +4033,7 @@ impl PreparedContainedTask {
                 width: frame.width,
                 height: frame.height,
                 targets,
+                candidate_scores,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         Ok(match page {
@@ -4157,7 +4195,12 @@ impl PreparedContainedTask {
         runtime: &mut R,
         keys: &BTreeSet<String>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        self.run_with_reading_keys(runtime, ContainedTaskRunOptions::default(), Some(keys))
+        self.run_with_reading_keys(
+            runtime,
+            ContainedTaskRunOptions::default(),
+            Some(keys),
+            &mut None,
+        )
     }
 
     pub(crate) fn run_with_options<R: ContainedTaskRuntime>(
@@ -4165,14 +4208,17 @@ impl PreparedContainedTask {
         runtime: &mut R,
         options: ContainedTaskRunOptions,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        self.run_with_reading_keys(runtime, options, None)
+        self.run_with_reading_keys(runtime, options, None, &mut None)
     }
 
+    /// #412 Lab B-3: `declared_end` receives how a declared operation's run ended after its one
+    /// step ([`Self::run_declared_operation`]); every other run leaves it `None`.
     fn run_with_reading_keys<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         options: ContainedTaskRunOptions,
         reading_keys: Option<&BTreeSet<String>>,
+        declared_end: &mut Option<DeclaredOperationOutcome>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         runtime.update_run_progress(0);
         runtime
@@ -4223,6 +4269,7 @@ impl PreparedContainedTask {
             task_timeout,
             started,
             options,
+            declared_end,
         );
         // Task and owner-classified nonfatal operation failures retain parsed facts.
         // Record failures and fatal/unknown operation failures forbid another write.
@@ -4326,6 +4373,7 @@ impl PreparedContainedTask {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_with_collector<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -4334,8 +4382,11 @@ impl PreparedContainedTask {
         task_timeout: Duration,
         started: Instant,
         options: ContainedTaskRunOptions,
+        declared_end: &mut Option<DeclaredOperationOutcome>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let entry = options.entry;
+        // #412 Lab B-3 (design §2.1): a declared operation's run executes that operation alone.
+        let declared = options.declared;
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let task_deadline = started + task_timeout;
         // #385 P-k (performance model v1.4.2 §5.3): the run's budget clock rides on its timing
@@ -4354,11 +4405,14 @@ impl PreparedContainedTask {
             },
         );
         runtime.observe_task_timing(observation_timing);
-        if self
-            .program
-            .operations
-            .iter()
-            .any(|operation| operation.application.is_some())
+        // #412 Lab B-3: a declared operation's run dispatches no other operation, and admission
+        // refuses an application effect as the declared one.
+        if declared.is_none()
+            && self
+                .program
+                .operations
+                .iter()
+                .any(|operation| operation.application.is_some())
             && self.control.execution_mode != "recognize_only"
             && !runtime.supports_application_effect()
         {
@@ -4391,8 +4445,11 @@ impl PreparedContainedTask {
                 },
             );
         }
+        // #412 Lab B-3 (design §2.1 point 2): a declared operation's run has no application entry
+        // and no required entry: it always waits for a page of the package first.
         let initial_application = self.program.operations.first().filter(|operation| {
-            operation.from == "any"
+            declared.is_none()
+                && operation.from == "any"
                 && operation.application.is_some()
                 && self.control.execution_mode != "recognize_only"
         });
@@ -4413,7 +4470,7 @@ impl PreparedContainedTask {
         let required_entry = self
             .entry_page
             .as_ref()
-            .filter(|_| entry == ContainedTaskEntry::Ordinary);
+            .filter(|_| entry == ContainedTaskEntry::Ordinary && declared.is_none());
         let mut observation = if application_first {
             None
         } else if let Some(required_entry) = required_entry {
@@ -4459,6 +4516,10 @@ impl PreparedContainedTask {
                 )
                 .into());
         }
+        // #412 Lab B-3 (design §2.1 point 2): a declared operation runs only from its own page.
+        if let Some(declared) = declared {
+            self.declared_operation_entry(declared, observation.as_ref())?;
+        }
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -4474,26 +4535,39 @@ impl PreparedContainedTask {
             });
         }
 
+        // #412 Lab B-3 (design §2.1 point 3): a declared operation's run has that operation as
+        // its only candidate, no target page, stage, designated cap (no fact is read) or per-run
+        // cap, and one step.
         let candidates = self
             .program
             .operations
             .iter()
-            .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
+            .enumerate()
+            .filter(|(index, _)| declared.is_none_or(|declared| declared == *index))
+            .map(|(_, operation)| RunOperationCandidate::new(&operation.id, &operation.from))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| {
                 ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
             })?;
         let mut config = RunStateConfig::new_with_target_pages(
             &self.control.game,
-            self.program.target_pages()?,
+            if declared.is_some() {
+                Vec::new()
+            } else {
+                self.program.target_pages()?
+            },
             self.control.stop_on_confirmation.unwrap_or(true),
             1,
-            self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS),
+            if declared.is_some() {
+                1
+            } else {
+                self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS)
+            },
         )
         .map_err(|_| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
         })?;
-        if let Some(phases) = &self.program.phases {
+        if let Some(phases) = self.program.phases.as_ref().filter(|_| declared.is_none()) {
             config = config.with_phases(
                 phases.clone(),
                 self.program
@@ -4503,17 +4577,19 @@ impl PreparedContainedTask {
                     .map(str::to_owned),
             );
         }
-        // Workflow #390 OUT-2: the caps of a designated effect set, its fact caps read now,
-        // before the run's first step.
-        config = config.with_designated_effect_caps(self.designated_effect_caps(runtime)?);
-        // #411 B16 part 1: the operations' per-run caps.
-        config = config.with_operation_run_caps(
-            self.program
-                .operations
-                .iter()
-                .filter_map(TaskOperation::run_cap)
-                .collect(),
-        );
+        if declared.is_none() {
+            // Workflow #390 OUT-2: the caps of a designated effect set, its fact caps read now,
+            // before the run's first step.
+            config = config.with_designated_effect_caps(self.designated_effect_caps(runtime)?);
+            // #411 B16 part 1: the operations' per-run caps.
+            config = config.with_operation_run_caps(
+                self.program
+                    .operations
+                    .iter()
+                    .filter_map(TaskOperation::run_cap)
+                    .collect(),
+            );
+        }
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         // Workflow #373 NAV-3b: a phased route enters at the stage its matched entry page starts.
@@ -4543,13 +4619,36 @@ impl PreparedContainedTask {
                 ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
             })?;
         }
-        let mut stability_tracker = StabilityTracker::default();
+        // #412 Lab B-3 (design §2.1 point 5): a declared operation's run compares no steps.
+        let mut stability_tracker = StabilityTracker {
+            off: declared.is_some(),
+            ..StabilityTracker::default()
+        };
         let mut recovery_timing = None;
         // Workflow #308 SEL-L4b (S0 §1.3): the business ID each select step chose in this run,
         // which an `expect_identity` reads back.
         let mut chosen_identities: BTreeMap<String, String> = BTreeMap::new();
+        // #412 Lab B-3 (design §2.1 point 4): the guard refusal a declared operation was passed
+        // over on.
+        let mut passed_over_refusal = None;
 
         loop {
+            // #412 Lab B-3 (design §2.1 point 4): a declared operation's run returns once its one
+            // step ended. Its end goes to `declared_end`; the outcome returned with it, the run so
+            // far, is not read.
+            if declared.is_some() && machine.completed_steps() == 1 {
+                *declared_end = Some(declared_operation::step_end(
+                    &machine,
+                    passed_over_refusal.take(),
+                )?);
+                return Ok(ContainedTaskOutcome {
+                    outcome: TaskOutcome::Success,
+                    final_page: machine.current_page().map(str::to_owned),
+                    executed_steps: machine.completed_steps(),
+                    selected_scheduling_outcome: None,
+                    designated_effect_caps: Vec::new(),
+                });
+            }
             if budget_elapsed_since(runtime, observation_timing.pace(), started) >= task_timeout {
                 return Err(self
                     .task_timeout_error(
@@ -4681,6 +4780,68 @@ impl PreparedContainedTask {
                                 phase: machine.phase_evidence(None),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
+                        // #411 B36/B19 (A35-S3): a wait step makes no input: no guard, no
+                        // effect intent, no input and no effect record. It waits on its own page
+                        // for one of its destinations in the confirmation's wait.
+                        if operation.wait.is_some() {
+                            match self.wait_step(
+                                runtime,
+                                ocr_collector,
+                                operation,
+                                step_index,
+                                (observation_timing, pacing),
+                            )? {
+                                wait_step::WaitStepEnd::Keyed {
+                                    page_label,
+                                    outcome_key,
+                                } => {
+                                    return self.finish_keyed_end(
+                                        runtime,
+                                        ocr_collector,
+                                        &mut machine,
+                                        (step_index, &operation_id),
+                                        page_label,
+                                        outcome_key,
+                                        pace,
+                                    );
+                                }
+                                wait_step::WaitStepEnd::Reached(reached) => {
+                                    observation = Some(*reached);
+                                    self.expect_identity(
+                                        runtime,
+                                        operation,
+                                        (step_index, &operation_id),
+                                        &mut observation,
+                                        &chosen_identities,
+                                        observation_timing,
+                                    )?;
+                                    let reached = observation.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new(
+                                            SharedCode::ContainedTaskPageUnknown.code(),
+                                        )
+                                    })?;
+                                    if let Some(reason) = self.complete_successful_step(
+                                        runtime,
+                                        ocr_collector,
+                                        &mut machine,
+                                        &mut stability_tracker,
+                                        step_index,
+                                        &operation_id,
+                                        reached,
+                                    )? {
+                                        return self.finish_stability_termination(
+                                            runtime,
+                                            ocr_collector,
+                                            &machine,
+                                            reached,
+                                            reason,
+                                            pace,
+                                        );
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                         if let Some(effect) = operation.application {
                             // Slice #316-B3: no guard, no coordinate, no `task.effect_intent`;
                             // the runtime boundary records the `application.*` chain itself.
@@ -4855,6 +5016,9 @@ impl PreparedContainedTask {
                                                     &operation_id,
                                                     &observed.page_label,
                                                 )?;
+                                                if declared.is_some() {
+                                                    passed_over_refusal = Some(error);
+                                                }
                                                 break 'attempt;
                                             }
                                             Err(ContainedTaskRunError::Task(error)) => {
@@ -5162,6 +5326,13 @@ impl PreparedContainedTask {
                                     hit_error_page,
                                     timing_failure,
                                 } => (observation, last_frame_page, hit_error_page, timing_failure),
+                                // #411 B36/B19 (A35-S3): only a wait step holds on its own page.
+                                PostconditionResolution::Held { .. } => {
+                                    return Err(ContainedTaskError::new(
+                                        SharedCode::ContainedTaskStateInvalid.code(),
+                                    )
+                                    .into());
+                                }
                             };
                         let after_page = failed_observation
                             .as_ref()
@@ -5355,6 +5526,14 @@ impl PreparedContainedTask {
                                         .with_timing(timing_failure)
                                         .into());
                                     }
+                                    // #411 B36/B19 (A35-S3): only a wait step holds on its own
+                                    // page.
+                                    PostconditionResolution::Held { .. } => {
+                                        return Err(ContainedTaskError::new(
+                                            SharedCode::ContainedTaskStateInvalid.code(),
+                                        )
+                                        .into());
+                                    }
                                 }
                                 attempt = next_attempt;
                             }
@@ -5482,7 +5661,12 @@ impl PreparedContainedTask {
         operation_label: &str,
         observation: &PageObservation,
     ) -> Result<Option<StabilityTerminalReason>, ContainedTaskRunError<R::Error>> {
-        let terminal_reason = if let Some(declaration) = &self.control.stability_termination {
+        let terminal_reason = if let Some(declaration) = self
+            .control
+            .stability_termination
+            .as_ref()
+            .filter(|_| !stability_tracker.off)
+        {
             // Every observation a step completes on carries its sample while a declaration is
             // in force; one without it is a Runtime-internal invariant (Workflow #387 D1c-F).
             let sample = observation.stability_sample.clone().ok_or_else(|| {
@@ -6771,6 +6955,7 @@ impl PreparedContainedTask {
                 page.as_deref(),
                 &candidate_pages,
             )?;
+            let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
             runtime
                 .record(ContainedTaskTrace::RecognitionCompleted {
                     candidate_pages,
@@ -6778,6 +6963,7 @@ impl PreparedContainedTask {
                     width: frame.width,
                     height: frame.height,
                     targets,
+                    candidate_scores,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             if let Some(required) = required_entry {
@@ -6884,7 +7070,11 @@ impl PreparedContainedTask {
     /// item 1): a wait that ran out of its window without an error page starts the extra rounds
     /// of `pacing`, one window each, before it fails; its observation window takes its own. #411
     /// A43b: while its latest two frames are still and neither is a destination, the rest of the
-    /// wait is counted unpaced ([`StillUnrecognised`]).
+    /// wait is counted unpaced ([`StillUnrecognised`]). #411 B36/B19 (A35-S3): the one kernel
+    /// wait of a wait step and of a confirmation with a wait page ([`HeldPage`]): a wait step's
+    /// own page keeps the wait going up to its `max_ms` and restarts the timeout, which then runs
+    /// only on frames of neither page; the wait page pauses the confirmation's timeout up to its
+    /// `max_ms`.
     #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
@@ -6914,6 +7104,11 @@ impl PreparedContainedTask {
         // #411 A43b: whether the latest two frames are still and neither is a destination, and
         // the part of the window counted unpaced.
         let mut still = StillUnrecognised::new(pace);
+        // #411 B36/B19 (A35-S3): the page the wait holds on, when the operation declares one (a
+        // wait step's own page, the confirmation's wait page), and the budget instant of the
+        // wait's latest frame.
+        let mut held = HeldPage::of(operation, started);
+        let mut last_frame_at = started;
         loop {
             let window_end = still.window_end(runtime, window_started, timeout);
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
@@ -6970,10 +7165,15 @@ impl PreparedContainedTask {
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
+            // #411 B36/B19 (A35-S3): the budget instant of this frame, and of the one before it.
+            let frame_at = budget_now(runtime, pace);
+            let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
             // Workflow #373 NAV-6 (§6.1 point 3): a frame that is no destination (and no error
             // page) is offered to the shared interrupt pages; the confirmation budget is paused
-            // while one is handled.
-            let paused = match observation {
+            // while one is handled. #411 B36/B19 (A35-S3): a frame of the page the wait holds on
+            // is not offered; it keeps the wait going, and only a wait page past its `max_ms`
+            // counts as a frame that did not confirm the step.
+            let (paused, unconfirmed) = match observation {
                 Ok(observation) => {
                     let destination_matches =
                         operation.matching_destination_count(&self.control, &observation)?;
@@ -7012,26 +7212,72 @@ impl PreparedContainedTask {
                             timing_failure: None,
                         });
                     }
-                    // #411 A43b: the frame is no destination.
-                    still.frame(runtime, &observation.scene)?;
-                    let paused = self.offer_shared_interrupt(runtime, &observation.scene)?;
+                    let on_held = match held.as_mut() {
+                        Some(held) => held.frame(
+                            &self.control.game,
+                            &observation.page_label,
+                            frame_at,
+                            previous_frame_at,
+                        ),
+                        None => HeldFrame::Away,
+                    };
+                    let (paused, unconfirmed) = match on_held {
+                        // A wait step's page after its `max_ms`: the wait ends there.
+                        HeldFrame::Ended(timing_failure) => {
+                            return Ok(PostconditionResolution::Held {
+                                observation,
+                                timing_failure,
+                            });
+                        }
+                        // A wait step's page: the away clock restarts from zero.
+                        HeldFrame::Restart => {
+                            started = frame_at;
+                            window_started = budget_observation_now(runtime, pace);
+                            missed = false;
+                            still.held(runtime);
+                            still.new_window(runtime);
+                            (None, false)
+                        }
+                        // The wait page: the confirmation clock pauses for the time on it.
+                        HeldFrame::Pause(span) => {
+                            started += span;
+                            window_started += span;
+                            still.held(runtime);
+                            (None, true)
+                        }
+                        HeldFrame::Away => {
+                            // #411 A43b: the frame is no destination.
+                            still.frame(runtime, &observation.scene)?;
+                            (
+                                self.offer_shared_interrupt(runtime, &observation.scene)?,
+                                true,
+                            )
+                        }
+                    };
                     last_frame_page = Some(observation.page_label.clone());
                     last_observation = Some(observation);
-                    paused
+                    (paused, unconfirmed)
                 }
                 Err(scene) => {
                     last_frame_page = None;
                     // #411 A43b: the frame gave no page.
                     still.frame(runtime, &scene)?;
-                    self.offer_shared_interrupt(runtime, &scene)?
+                    (self.offer_shared_interrupt(runtime, &scene)?, true)
                 }
             };
-            missed = true;
+            if unconfirmed {
+                missed = true;
+            }
             if let Some(paused) = paused {
                 let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
                 still.interrupted();
+                // #411 B36/B19 (A35-S3): a handled interrupt pauses a wait step's clock too.
+                if let Some(held) = held.as_mut() {
+                    held.interrupted(paused);
+                }
+                last_frame_at += paused;
                 continue;
             }
             let now = budget_now(runtime, pace);
@@ -7177,6 +7423,12 @@ fn confirmation_failure_detail(
 
 enum PostconditionResolution {
     Reached(PageObservation),
+    /// #411 B36/B19 (A35-S3): a wait step's `max_ms` was reached on its own page, the frame
+    /// `observation`; `timing_failure` is the step's wait and its `max_ms`.
+    Held {
+        observation: PageObservation,
+        timing_failure: TaskTimingFailure,
+    },
     Failed {
         observation: Option<PageObservation>,
         /// #411 A15: the page the last frame of the wait matched; none when that frame matched no
@@ -7292,6 +7544,9 @@ fn compare_stability_samples(
 struct StabilityTracker {
     previous: Option<StabilityFrameSample>,
     consecutive_unchanged: u32,
+    /// #412 Lab B-3 (design §2.1 point 5): the run of one declared operation compares no steps:
+    /// it records no stability trace and no step ends it by stability.
+    off: bool,
 }
 
 enum StabilityTransition {
@@ -7794,6 +8049,8 @@ impl TaskProgram {
             validate_page_references(&control.game, &terminal_pages, detector)?;
             validate_page_set_overlap(&control.game, &terminal_pages, &self.error_pages, detector)?;
         }
+        // #411 B36/B19 (A35-S3): wait steps and wait pages, before the common operation checks.
+        self.validate_wait_steps(control, detector, bundle.operation_path())?;
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
             operation.validate(control, self.defaults, &self.schema_version)?;
@@ -8171,6 +8428,7 @@ impl TaskProgram {
                     on_empty_key: operation.on_empty_key(),
                     max_runs: operation.phase_run_cap(),
                     on_guard_refused_key: operation.on_guard_refused_key(),
+                    on_timeout_key: operation.wait_on_timeout_key(),
                 })
             })
             .collect::<Result<Vec<_>, ContainedTaskError>>()
@@ -8675,6 +8933,111 @@ fn recognized_targets(
             })
         })
         .collect()
+}
+
+/// #411 A44 (ledger revision 4, register §1.153 LR-8, §1.173): each candidate page's verdict from
+/// `evaluations`, the page evaluations of one recognition: one entry per candidate page in
+/// candidate order, the first [`TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT`] of them, and `omitted`
+/// the candidate pages after them. Only what the recognition evaluated is reported: a candidate
+/// page without an evaluation has neither a score nor a failed target.
+fn recognition_candidate_scores(
+    evaluations: &[PageEvaluation],
+    candidate_pages: &[String],
+) -> Box<RecognitionCandidateScores> {
+    let pages = candidate_pages
+        .iter()
+        .take(TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT)
+        .map(|page_id| {
+            let evaluation = evaluations
+                .iter()
+                .find(|evaluation| evaluation.page_id == *page_id);
+            let passed = evaluation.is_some_and(|evaluation| evaluation.matched);
+            RecognitionCandidateScore {
+                page_id: page_id.clone(),
+                passed,
+                best_score_milli: evaluation.and_then(best_target_score_milli),
+                first_failed_target_id: evaluation
+                    .filter(|_| !passed)
+                    .and_then(first_failed_target_id),
+            }
+        })
+        .collect();
+    let omitted = candidate_pages
+        .len()
+        .saturating_sub(TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT);
+    Box::new(RecognitionCandidateScores {
+        pages,
+        // A recognition's candidate pages stay far below `u32::MAX` (the fact admits 1..=1024);
+        // a count past it would be refused by the fact's own validation when the host writes it.
+        omitted: u32::try_from(omitted).unwrap_or(u32::MAX),
+    })
+}
+
+/// The highest score among the page's evaluated targets, in milli: a template's normalised score,
+/// an OCR read's confidence and an NN target's selected score, each converted as elsewhere in the
+/// Runtime. A colour, colour digest, composite or value test target has no score, nor has a
+/// target the page recognition skipped (Workflow #396 REC-6).
+fn best_target_score_milli(evaluation: &PageEvaluation) -> Option<u32> {
+    evaluation
+        .target_results
+        .iter()
+        .filter(|target| target.skipped.is_none())
+        .filter_map(|target| target_score_milli(&target.evaluation))
+        .max()
+}
+
+fn target_score_milli(evaluation: &TargetEvaluation) -> Option<u32> {
+    match evaluation.kind {
+        TargetKind::Template => evaluation
+            .template
+            .as_ref()
+            .map(|template| actingcommand_recognition::score_milli(template.score)),
+        TargetKind::Ocr => evaluation
+            .ocr
+            .as_deref()
+            .and_then(|ocr| actingcommand_contract::ocr_confidence_milli(ocr.confidence))
+            .map(u32::from),
+        TargetKind::Nn => evaluation
+            .nn
+            .as_ref()
+            .and_then(|nn| nn.selected_score)
+            .map(actingcommand_recognition::score_milli),
+        TargetKind::Color
+        | TargetKind::ColorDigest
+        | TargetKind::Composite
+        | TargetKind::ValueTest
+        | TargetKind::ClickOnly => None,
+    }
+}
+
+/// Why the page did not match: its first target, in the page's declared order (`required`, the
+/// `any_of` groups, `forbidden`), that ruled it out: a `required` target that did not pass, the
+/// first target of an `any_of` group none of whose targets passed, or a `forbidden` target that
+/// passed. A target the page recognition skipped rules nothing out, nor does a group holding one.
+fn first_failed_target_id(evaluation: &PageEvaluation) -> Option<String> {
+    let of_role = |role: PageTargetRole| {
+        evaluation
+            .target_results
+            .iter()
+            .filter(move |target| target.role == role)
+    };
+    let required =
+        of_role(PageTargetRole::Required).find(|target| target.skipped.is_none() && !target.passed);
+    let any_of = of_role(PageTargetRole::AnyOf).collect::<Vec<_>>();
+    let any_of_group = any_of
+        .chunk_by(|left, right| left.group_index == right.group_index)
+        .find(|group| {
+            group
+                .iter()
+                .all(|target| target.skipped.is_none() && !target.passed)
+        })
+        .and_then(|group| group.first().copied());
+    let forbidden =
+        of_role(PageTargetRole::Forbidden).find(|target| target.skipped.is_none() && target.passed);
+    required
+        .or(any_of_group)
+        .or(forbidden)
+        .map(|target| target.target_id.clone())
 }
 
 /// The rectangle the evaluator actually used, in frame pixels; `None` when it used no fixed one.
@@ -9441,6 +9804,10 @@ struct TaskOperationExpectation {
     /// in this run.
     #[serde(default)]
     expect_identity: Option<TaskExpectIdentity>,
+    /// #411 B36/B19 (A35-S3): frames on this page pause the confirmation clock, up to its
+    /// `max_ms` of time on it; task schema `0.9`, page-graph tasks only.
+    #[serde(default)]
+    wait_page: Option<wait_step::TaskWaitPage>,
 }
 
 /// An `expect_after`'s `expect_identity` (Workflow #308 SEL-L4b, S0 §1.3): the select step whose
@@ -9531,7 +9898,8 @@ struct TaskOperation {
     to: Option<PageDeclaration>,
     #[serde(default)]
     expect_after: Option<TaskOperationExpectation>,
-    /// Exactly one of `click`, `application` and `select` carries the effect.
+    /// Exactly one of `click`, `application`, `select` and (#411 B36/B19) `wait` carries the
+    /// effect.
     #[serde(default)]
     click: Option<TaskClick>,
     #[serde(default)]
@@ -9590,6 +9958,10 @@ struct TaskOperation {
     /// declared exactly with `max_runs`.
     #[serde(default)]
     on_max_runs: Option<candidates::TaskOnMaxRuns>,
+    /// #411 B36/B19 (A35-S3): a wait step, an operation without input that waits on its `from`
+    /// page for one of its destinations; task schema `0.9`, page-graph tasks only.
+    #[serde(default)]
+    wait: Option<wait_step::TaskWait>,
 }
 
 impl TaskOperation {
@@ -9718,6 +10090,16 @@ impl TaskOperation {
                 };
                 guard.validate(self, control)?;
                 select.validate(&self.id)
+            }
+            // #411 B36/B19 (A35-S3): a wait step makes no input: nothing to guard, nothing to
+            // trust; the page-graph admission checked its members first
+            // (`TaskProgram::validate_wait_steps`).
+            (None, None, None)
+                if self.wait.is_some()
+                    && self.guard.is_none()
+                    && !self.unguarded_trusted_coordinate =>
+            {
+                Ok(())
             }
             _ => Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
@@ -15093,6 +15475,7 @@ mod retry_wiring_tests {
                 on_empty_key: None,
                 max_runs: None,
                 on_guard_refused_key: None,
+                on_timeout_key: None,
             })
             .collect::<Vec<_>>();
         actingcommand_contract::validate_phased_route(
