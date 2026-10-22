@@ -4674,7 +4674,7 @@ impl PreparedContainedTask {
                         // #411 B36/B19 (A35-S3): a wait step makes no input: no guard, no
                         // effect intent, no input and no effect record. It waits on its own page
                         // for one of its destinations in the confirmation's wait.
-                        if operation.wait.is_some() {
+                        if operation.wait.is_some() && operation.click.is_some() {
                             match self.wait_step(
                                 runtime,
                                 ocr_collector,
