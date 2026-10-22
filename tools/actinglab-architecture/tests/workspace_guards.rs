@@ -5480,11 +5480,11 @@ const HOST_SPLIT: &[HostModule] = &[
                 delegates: &[],
             },
             // #411 Lab L5a: the online observation reaches the read-only capture through its
-            // frame transaction.
+            // frame transaction. #411 A35-S2: so does the recovery ladder's settle probe.
             HostDefinition {
                 name: "HostShared::capture_readonly_transaction",
                 visibility: DeclaredVisibility::Super,
-                callers: &["host/online_observation.rs"],
+                callers: &["host/online_observation.rs", "host/recovery_ladder.rs"],
                 delegates: &["capture_readonly_observation"],
             },
         ],
