@@ -4499,9 +4499,7 @@ impl PreparedContainedTask {
             .program
             .operations
             .iter()
-            .enumerate()
-            .filter(|(index, _)| declared.is_none_or(|declared| declared == *index))
-            .map(|(_, operation)| RunOperationCandidate::new(&operation.id, &operation.from))
+            .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| {
                 ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
