@@ -119,6 +119,18 @@ The dedicated preparation lease of the connection preparation phase (`runtime-fa
 which names no transfer either (Workflow #191 h2; `lease.released` carries no reason field).
 The primary capture failure and any actual cleanup cause retain their existing
 typed GlobalLedger representation.
+A dedicated close lease is prepared as every resource-close lease is: an entry waiting in the
+instance's queue that the routine gate lets through refuses it (`prepare_resource_close`:
+`lease_transfer_not_safe`, Workflow #369 §5.1). #411 A52: a capture failure whose dedicated close
+lease is refused so attempts no close and ends only its own work. The refusal is recorded once
+(`runtime.failed` with lifecycle stage `runtime_lifecycle_session_close`, the instance, under the
+failed work's links) and the capture failure is answered as every capture failure is. The host
+goes on and the instance is not fenced: nothing is unconfirmed (Workflow #403 fences an
+unconfirmed close). The session keeps its backends and must close: the waiting entry is granted
+once the failed work lets the instance go, and its lease end closes the session under its lease,
+or its preparation closes it first ("Device session lifetime" below; `runtime-fact-store.md`,
+"Connection preparation phase"). Every other failure of this close keeps its fatality, a close
+attempted under an expired lease included (below).
 
 An earlier fatal does not skip other instances' permitted cleanup. A close attempted
 under an expired or otherwise invalid lease, an unresolved destructive step, or an
