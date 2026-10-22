@@ -213,10 +213,9 @@ impl TestClient {
             Ok(None) => "none".to_owned(),
             Err(read) => format!("unreadable ({read})"),
         };
-        format!(
-            "latched_fatal={latched}; shutdown_requested={}",
-            fatal.is_shutdown_requested()
-        )
+        // HARNESS-DIAG red proof 1 (do not merge): the latched fatal is dropped from the text.
+        let _ = latched;
+        format!("shutdown_requested={}", fatal.is_shutdown_requested())
     }
 
     fn send_result(&mut self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {
