@@ -173,6 +173,9 @@ mod gate_e5_linear;
 // Test plan v2.2 E-5 G7 (exec key 4): a single-frame select step.
 #[cfg(test)]
 mod gate_e5_select;
+// #411 B4, slice BT-B4 (exec key 165): a single-frame select step confirms by its decision.
+#[cfg(test)]
+mod gate_411_bt_b4;
 // Workflow #390 lpbox (exec key 76): a long press takes a click box.
 #[cfg(test)]
 mod gate_390_lpbox;

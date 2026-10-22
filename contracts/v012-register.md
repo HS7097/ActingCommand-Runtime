@@ -2902,6 +2902,30 @@ token, wire or configuration key is added. [resource-declarations.md](resource-d
 | KEY-6 | `contained_task_prerequisite_incompatible` detail `reason=max_runs_end`, `reason=guard_refused_end` | new values of an existing refusal detail (exec 157) | BT-KEY | BT-KEY | a package with a keyed `on_max_runs` or a keyed `on_guard_refused` is neither a prerequisite package nor a return-home package (coordinator decision Q9); a `busy` mapping (§1.152) is no keyed end and is unchanged |
 | KEY-7 | `TaskPhaseOperation.max_runs` (`TaskPhaseRunCap {limit, outcome_key}`), `TaskPhaseOperation.on_guard_refused_key`, `keyed_terminal_holds`, `MAX_TASK_OPERATION_RUNS` (now public) | Runtime-internal interface (memory only) | BT-KEY | BT-KEY | the walk's view of the new members, shared by source parsing, build and Runtime admission |
 
+### 1.166 Slice BT-B4 (0.12.x): a select step may confirm by its decision (#411 B4; B-train plan `rd-1021/train-0129/b-plan/plan.md` §2.4 with D3, coordinator Q8 of 2026-10-21; ledger revision 4, §1.153 LR-1)
+
+A single-frame select step may declare `confirm: "decision"`: its confirmation frame F2 is
+projected and decided again with the decision's fact snapshot and instant, and the step compares
+the two decision hashes instead of the candidate-set hashes, so a feature value that changes on
+F2 without changing the decision no longer stops the tap. Scan selects keep their identity
+confirmation and multi-select picks their own path (D3). **Persisted shape:** this slice is the
+first writer of LR-1 (§1.153), `decision_matched` and `decision_mismatched`, written as
+registered there and only as the top-level confirmation of a v1 record without `multi_select`;
+no other member. A step without `confirm`, or with `"candidate_set"`, records exactly what it
+recorded before. One new code; no location, key, vocabulary token, wire or configuration key.
+`select.confirm` joins `package` revision 6, which BT-PK6 declares at the end of the B train;
+until then this Runtime admits it by code and the declaration stays [3, 5].
+[selection-graph.md](selection-graph.md) (sections Declaration, Execution, Confirming by the
+decision, Records) and [candidate-projection.md](candidate-projection.md) are the contract.
+Gate: exec key 165 (166 to 170 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B4-1 | `select.confirm`: `"candidate_set"` (default) or `"decision"` | new optional member (resource file format, not a ledger shape) (exec 165) | BT-B4 | resource side | a single-frame select's: admission refuses `"decision"` beside `scan` (`contained_task_select_invalid`, detail `confirm=decision scan=declared`); the source gate refuses a non-string (`InvalidType`) and any other string (`InvalidValue`) at `/operations/<i>/select/confirm`, and the Runtime's typed reading refuses any other value as it refuses a malformed `select`; `null` is absent; a reader before BT-B4 refuses the member (`select` denies unknown members); joins `package` revision 6 |
+| B4-2 | the decision hash `decision_sha256` | rule (the writer's definition; no reader recomputes it) (exec 165) | BT-B4 | BT-B4 | the SHA-256, 64 lowercase hex digits, of the compact JSON `{"candidates":[{"id","click":{"x","y","width","height"},"status"}],"selected":[…],"outcome_key"}`: the projection's actionable candidates in projection order, each with its click rectangle and its verdict's status (`ranked`, `gate_rejected`, `unknown_dropped`, or `null` for an actionable candidate kept from the evaluator), the decision's selected IDs in its order and its outcome key; no feature value, score, rank or reason; the step's own comparison hash, never a package digest (option 丙) |
+| B4-3 | the decision confirmation | rule (no shape change beyond LR-1) (exec 165) | BT-B4 | BT-B4 | after F2's capture, page and guard checks and projection as before, F2 is decided with the decision's snapshot and instant; equal decision hashes record `decision_matched {candidate_set_sha256 (F2's), decision_sha256 (F2's), projection?}` and the tap follows inside the chosen candidate's click rectangle on F2, bound to F2; different ones record `decision_mismatched` with F2's hashes and fail `selection_decision_mismatch` before any input; a failure of F2's decision or of a hash records `capture_failed` with that failure's code (`selection_evaluation_failed`), as a projection failure of F2 does; the evaluated decision's own hash is not stored (a `decision_matched` hash equals it) |
+| B4-4 | `selection_decision_mismatch` (error, `ladder_class` `pack_logic_mismatch`) | new code (pending) (exec 165) | BT-B4 | BT-B4 | values as `selection_projection_mismatch`'s, all optional (`operation`, `runtime_code`, `host_halted`, `receipt_state`, `request_id`, filled where the host relays a failure); the developer detail names the operation and both decision hashes; text per the B-train working notes |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

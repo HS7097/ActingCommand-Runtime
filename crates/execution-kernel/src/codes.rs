@@ -163,6 +163,9 @@ actingcommand_contract::outcome_codes! {
         SelectionNotSelected => "selection_not_selected": error / none,
         SelectionPageChanged => "selection_page_changed": error / pack_logic_mismatch,
         SelectionProjectionMismatch => "selection_projection_mismatch": error / none,
+        // Workflow #411 B4: a select step that confirms by its decision decided otherwise on
+        // its confirmation frame.
+        SelectionDecisionMismatch => "selection_decision_mismatch": error / pack_logic_mismatch,
         SelectionConfirmationCaptureFailed => "selection_confirmation_capture_failed": error / environment_fault,
         SelectPageMismatch => "select_page_mismatch": error / pack_logic_mismatch,
         // Workflow #308 SEL-L3: the scan session of a select step (frozen selector model S0 v2.1

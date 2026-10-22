@@ -17,6 +17,14 @@
 //! `on_empty`, which ends the run normally when nobody listed is present and nothing is unknown.
 //! Admission checks both declarations; a single-frame select that declares `on_empty` also
 //! applies the unknown-instance rules before its confirmation.
+//!
+//! Workflow #411 B4 (B-train plan §2.4, D3; ledger revision 4, register §1.153 LR-1): a
+//! single-frame select may declare `confirm: "decision"`. Its confirmation frame is then projected
+//! and decided again with the same fact snapshot and instant, and only the two decisions are
+//! compared, by a hash over the actionable candidates' IDs, click rectangles and statuses, the
+//! selected IDs and the outcome key; a feature value that changes without changing the decision no
+//! longer stops the tap. Without it (`"candidate_set"`, the default) the candidate sets compare as
+//! before.
 
 use super::scan::{
     Bound, RuntimeScanSource, ScanDeclaration, ScanSelectEnd, ScanSelection, ScanSession,
@@ -56,6 +64,7 @@ use actingcommand_selection_policy::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
@@ -70,6 +79,9 @@ const SELECTION_EVALUATION_FAILED: Code = ExecutionKernelCode::SelectionEvaluati
 const SELECTION_NOT_SELECTED: Code = ExecutionKernelCode::SelectionNotSelected.code();
 const SELECTION_PAGE_CHANGED: Code = ExecutionKernelCode::SelectionPageChanged.code();
 const SELECTION_PROJECTION_MISMATCH: Code = ExecutionKernelCode::SelectionProjectionMismatch.code();
+/// Workflow #411 B4: a select step that confirms by its decision decided otherwise on its
+/// confirmation frame.
+const SELECTION_DECISION_MISMATCH: Code = ExecutionKernelCode::SelectionDecisionMismatch.code();
 /// The confirmation code a record carries when the runtime's own capture of the confirmation
 /// frame fails, nonfatally or fatally; the task then fails with the runtime's error.
 const SELECTION_CONFIRMATION_CAPTURE_FAILED: Code =
@@ -110,7 +122,7 @@ pub struct SelectionDryRun {
     pub policy_override: bool,
 }
 
-/// The `select` of a task operation: `{layout_id, policy: {path}, scan?, on_empty?}`.
+/// The `select` of a task operation: `{layout_id, policy: {path}, scan?, on_empty?, confirm?}`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TaskSelect {
@@ -123,6 +135,23 @@ pub(super) struct TaskSelect {
     /// the run normally with this outcome key.
     #[serde(default)]
     on_empty: Option<TaskSelectOnEmpty>,
+    /// Workflow #411 B4 (b-plan §2.4): how a single-frame select confirms its choice; absent is
+    /// [`SelectConfirm::CandidateSet`]. A member of `package` revision 6.
+    #[serde(default)]
+    confirm: Option<SelectConfirm>,
+}
+
+/// Workflow #411 B4 (b-plan §2.4, D3): what a single-frame select compares on its confirmation
+/// frame F2. A select over a scan confirms the chosen identity instead and declares neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SelectConfirm {
+    /// F2's candidate set hashes like the evaluated one (`matched` / `mismatched`).
+    #[default]
+    CandidateSet,
+    /// F2 is projected and decided again with the same fact snapshot and instant, and its
+    /// decision hash equals the decision's (`decision_matched` / `decision_mismatched`).
+    Decision,
 }
 
 /// A select step's `on_empty` (Workflow #308 SEL-L4b, S0 §1.4): `{outcome_key}`.
@@ -153,6 +182,11 @@ impl TaskSelect {
     /// The step's `scan`, when it declares one (Workflow #308 SEL-L4b).
     pub(super) fn scan(&self) -> Option<&ScanDeclaration> {
         self.scan.as_ref()
+    }
+
+    /// The step's `confirm`, the default when it declares none (Workflow #411 B4).
+    pub(super) fn confirm(&self) -> SelectConfirm {
+        self.confirm.unwrap_or_default()
     }
 
     /// The layout ID has the candidate layout grammar; the document is a `policies/<name>.json`
@@ -187,6 +221,8 @@ pub(super) struct PreparedSelect {
     /// `identity_feature`, or the layout's one identity feature); `expect_identity` maps its
     /// reading through it.
     identity_feature: Option<String>,
+    /// Workflow #411 B4: the admitted `confirm` of a single-frame select.
+    confirm: SelectConfirm,
 }
 
 impl PreparedSelect {
@@ -219,6 +255,16 @@ impl PreparedSelect {
             scan: None,
             on_empty_key: None,
             identity_feature: None,
+            confirm: SelectConfirm::default(),
+        }
+    }
+
+    /// Workflow #411 B4: [`Self::for_test`] for the operation's declared `select`, with its
+    /// layout and the `confirm` admission takes from it.
+    pub(super) fn for_test_declared(select: &TaskSelect, policy: SelectionPolicy) -> Self {
+        Self {
+            confirm: select.confirm(),
+            ..Self::for_test(&select.layout_id, policy)
         }
     }
 }
@@ -365,6 +411,14 @@ pub(super) fn prepare_select_steps(
             bound_inputs(layout, &policy, identity_feature.as_deref())
                 .map_err(|detail| failure(SELECT_INVALID, format!("upper_bound {detail}")))?;
         }
+        // Workflow #411 B4 (D3): the decision mode is a single-frame select's; a select over a
+        // scan confirms the chosen identity.
+        if select.scan.is_some() && select.confirm() == SelectConfirm::Decision {
+            return Err(failure(
+                SELECT_INVALID,
+                "confirm=decision scan=declared".to_owned(),
+            ));
+        }
         let prepared = PreparedSelect {
             layout_id: select.layout_id.clone(),
             path,
@@ -372,6 +426,7 @@ pub(super) fn prepare_select_steps(
             scan: select.scan.clone(),
             on_empty_key: select.on_empty_key().map(str::to_owned),
             identity_feature,
+            confirm: select.confirm(),
         };
         operation.prepared_select = Some(Box::new(prepared));
     }
@@ -796,6 +851,60 @@ fn chosen(decision: &SelectionDecision) -> Result<Option<&str>, ContainedTaskErr
     }
 }
 
+/// Workflow #411 B4 (b-plan §2.4; register §1.166): the decision hash of `decision` over
+/// `projection`, the SHA-256 as 64 lowercase hexadecimal digits of the compact JSON
+/// `{"candidates":[{"id","click":{"x","y","width","height"},"status"}],"selected","outcome_key"}`:
+/// the projection's actionable candidates in projection order, each with its click rectangle and
+/// its verdict's status (`ranked`, `gate_rejected` or `unknown_dropped`; `null` for a candidate
+/// [`decide`] keeps from the evaluator), the selected IDs in the decision's order and the outcome
+/// key. No feature value enters it, so a reading that changes without changing the decision
+/// keeps it. A reader never recomputes it.
+fn decision_hash(
+    projection: &CandidateProjection,
+    decision: &SelectionDecision,
+) -> Result<String, ContainedTaskError> {
+    #[derive(Serialize)]
+    struct DecidedCandidate<'a> {
+        id: &'a str,
+        click: CandidateRect,
+        status: Option<CandidateStatus>,
+    }
+    #[derive(Serialize)]
+    struct Decided<'a> {
+        candidates: Vec<DecidedCandidate<'a>>,
+        selected: &'a [String],
+        outcome_key: &'a str,
+    }
+    let status = |candidate_id: &str| {
+        decision
+            .candidates
+            .iter()
+            .find(|verdict| verdict.candidate_id == candidate_id)
+            .map(|verdict| verdict.status)
+    };
+    let decided = Decided {
+        candidates: projection
+            .candidates()
+            .iter()
+            .filter(|candidate| candidate.actionable)
+            .map(|candidate| DecidedCandidate {
+                id: &candidate.id,
+                click: candidate.click,
+                status: status(&candidate.id),
+            })
+            .collect(),
+        selected: &decision.selected,
+        outcome_key: &decision.outcome_key,
+    };
+    let bytes = serde_json::to_vec(&decided).map_err(|error| {
+        ContainedTaskError::with_detail(
+            SELECTION_EVALUATION_FAILED,
+            format!("decision hash: {error}"),
+        )
+    })?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 /// The `kind` of a decision outcome, as its serde tag names it.
 fn outcome_kind(outcome: &SelectionOutcome) -> &'static str {
     match outcome {
@@ -1209,7 +1318,7 @@ impl PreparedContainedTask {
                 let (confirmation, selected) = self.confirm(
                     runtime,
                     operation,
-                    &projection,
+                    (&projection, &decision, (&facts, now_unix_ms)),
                     candidate_id,
                     timing,
                     deadline,
@@ -1255,12 +1364,21 @@ impl PreparedContainedTask {
     /// `projection`. A failure of the runtime's capture that it classifies nonfatal or fatal
     /// is the confirmation `capture_failed`, returned unchanged after the record; any other
     /// boundary failure returns as the outer error.
+    ///
+    /// Workflow #411 B4: a step that declares `confirm: decision` decides the frame's projection
+    /// again with the evaluated `decision`'s facts and instant, and compares the two decision
+    /// hashes instead ([`decision_hash`]); a failure of that decision is `capture_failed` with
+    /// its code, as a projection failure of the frame is.
     #[allow(clippy::too_many_arguments)]
     fn confirm<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         operation: &TaskOperation,
-        projection: &CandidateProjection,
+        (projection, decision, (facts, now_unix_ms)): (
+            &CandidateProjection,
+            &SelectionDecision,
+            (&SelectionFactSnapshot, u64),
+        ),
         candidate_id: &str,
         timing: ContainedTaskTimingContext,
         deadline: Instant,
@@ -1416,26 +1534,77 @@ impl PreparedContainedTask {
                 Err(error) => return Err(error),
             };
         let candidate_set_sha256 = confirmed.candidate_set_sha256().to_owned();
-        if candidate_set_sha256 != projection.candidate_set_sha256() {
-            return Ok((
-                TaskSelectionConfirmation::Mismatched {
-                    candidate_set_sha256: candidate_set_sha256.clone(),
-                    projection: (!confirmed.recognition_evidence().is_empty())
-                        .then(|| Box::new(confirmed.clone())),
-                },
-                Err(ContainedTaskError::with_detail(
-                    SELECTION_PROJECTION_MISMATCH,
-                    format!(
-                        "operation={} evaluated={} confirmation={candidate_set_sha256}",
-                        operation.id,
-                        projection.candidate_set_sha256()
-                    ),
-                )
-                .into()),
-            ));
-        }
-        // Equal hashes cover every candidate's ID and click rectangle, so the confirmation
-        // frame's rectangle is the evaluated one.
+        let evidence =
+            (!confirmed.recognition_evidence().is_empty()).then(|| Box::new(confirmed.clone()));
+        let confirmation = match prepared.confirm {
+            SelectConfirm::CandidateSet => {
+                if candidate_set_sha256 != projection.candidate_set_sha256() {
+                    return Ok((
+                        TaskSelectionConfirmation::Mismatched {
+                            candidate_set_sha256: candidate_set_sha256.clone(),
+                            projection: evidence,
+                        },
+                        Err(ContainedTaskError::with_detail(
+                            SELECTION_PROJECTION_MISMATCH,
+                            format!(
+                                "operation={} evaluated={} confirmation={candidate_set_sha256}",
+                                operation.id,
+                                projection.candidate_set_sha256()
+                            ),
+                        )
+                        .into()),
+                    ));
+                }
+                TaskSelectionConfirmation::Matched {
+                    candidate_set_sha256,
+                    projection: evidence,
+                }
+            }
+            // Workflow #411 B4 (b-plan §2.4): F2 decided again with the decision's facts and
+            // instant; only the decisions compare, never the feature values.
+            SelectConfirm::Decision => {
+                let hashes = decision_hash(projection, decision).and_then(|evaluated| {
+                    let again = decide(&prepared.policy, layout, &confirmed, facts, now_unix_ms)?;
+                    Ok((evaluated, decision_hash(&confirmed, &again)?))
+                });
+                let (evaluated, decision_sha256) = match hashes {
+                    Ok(hashes) => hashes,
+                    Err(error) => {
+                        return Ok((
+                            TaskSelectionConfirmation::CaptureFailed {
+                                outcome: outcome_of(&error),
+                            },
+                            Err(error.into()),
+                        ));
+                    }
+                };
+                if decision_sha256 != evaluated {
+                    return Ok((
+                        TaskSelectionConfirmation::DecisionMismatched {
+                            candidate_set_sha256,
+                            decision_sha256: decision_sha256.clone(),
+                            projection: evidence,
+                        },
+                        Err(ContainedTaskError::with_detail(
+                            SELECTION_DECISION_MISMATCH,
+                            format!(
+                                "operation={} evaluated={evaluated} confirmation={decision_sha256}",
+                                operation.id
+                            ),
+                        )
+                        .into()),
+                    ));
+                }
+                TaskSelectionConfirmation::DecisionMatched {
+                    candidate_set_sha256,
+                    decision_sha256,
+                    projection: evidence,
+                }
+            }
+        };
+        // Equal hashes, of the candidate sets or of the decisions, cover every actionable
+        // candidate's ID and click rectangle, so the confirmation frame's rectangle is the
+        // evaluated one.
         let selected: Result<SelectedCandidate, ContainedTaskRunError<R::Error>> = confirmed
             .candidate(candidate_id)
             .map(|candidate| SelectedCandidate {
@@ -1462,14 +1631,7 @@ impl PreparedContainedTask {
                 )
                 .into()
             });
-        Ok((
-            TaskSelectionConfirmation::Matched {
-                candidate_set_sha256,
-                projection: (!confirmed.recognition_evidence().is_empty())
-                    .then(|| Box::new(confirmed.clone())),
-            },
-            selected,
-        ))
+        Ok((confirmation, selected))
     }
 }
 
@@ -2212,6 +2374,7 @@ mod tests {
             scan: None,
             on_empty_key: None,
             identity_feature: None,
+            confirm: SelectConfirm::CandidateSet,
         }));
         let mut pack: actingcommand_recognition_pack::RecognitionPack =
             serde_json::from_value(serde_json::json!({
