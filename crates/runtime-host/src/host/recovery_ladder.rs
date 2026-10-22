@@ -2713,7 +2713,9 @@ impl HostShared {
                 None,
             )?;
             let Some(wait_ms) = wait_ms else {
-                if config.on_exhausted == OnExhausted::Stop {
+                // RED PROOF 3 (do not merge): `busy.screen.on_exhausted` ignored, always
+                // escalate (`since_ms` is set by then).
+                if config.on_exhausted == OnExhausted::Stop && hold.since_ms.is_none() {
                     self.append_recovery_ladder_fact(
                         pending,
                         EventSeverity::Warning,
