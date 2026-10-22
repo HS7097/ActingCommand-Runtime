@@ -93,7 +93,7 @@ const DESTRUCTIVE_GUARD: [&str; 2] = ["allow_destructive", "destructive"];
 const OPERATION: &str = "operation";
 /// The arguments of the other paths of actinglab `do`, which `do --operation` does not read, in
 /// the order a refusal names the first one given.
-const OPERATION_CONFLICTS: [&str; 12] = [
+const OPERATION_CONFLICTS: [&str; 11] = [
     "target",
     "tap",
     "swipe",
@@ -105,7 +105,6 @@ const OPERATION_CONFLICTS: [&str; 12] = [
     "projection_hash",
     "scene",
     "sample_scenes",
-    "dry_run",
 ];
 
 // ---------------------------------------------------------------- command tables
