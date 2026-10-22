@@ -341,7 +341,7 @@ fn bt_b1_t2_frames_that_do_not_agree_leave_the_side_unread_and_the_page_unmatche
     // value and no text, and its failure names it.
     let evaluated = rows
         .iter()
-        .filter(|row| evaluation(*row))
+        .filter(|row| evaluation(row))
         .collect::<Vec<_>>();
     assert!(!evaluated.is_empty(), "page_a's frames evaluated the test");
     for row in &evaluated {
@@ -361,11 +361,11 @@ fn bt_b1_t2_frames_that_do_not_agree_leave_the_side_unread_and_the_page_unmatche
     // each with its own read.
     let first = rows
         .iter()
-        .position(|row| evaluation(row))
+        .position(evaluation)
         .expect("the first evaluation");
     let samples = rows[..first]
         .iter()
-        .filter(|row| sample(*row))
+        .filter(|row| sample(row))
         .collect::<Vec<_>>();
     assert_eq!(samples.len(), 3, "one row per frame: {samples:?}");
     for (row, (text, value)) in samples
