@@ -163,6 +163,11 @@ mod gate_390_read1;
 #[cfg(test)]
 mod gate_390_r10;
 
+// #411 B36 + B19, slice A35-S3 (exec keys 175 to 179): a wait step without input, and a
+// confirmation's wait page.
+#[cfg(test)]
+mod gate_411_b36;
+
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
 mod gate_387_d1cg;
