@@ -330,8 +330,10 @@ impl<'o> HeldPage<'o> {
 
 /// How a wait step's wait ended, when the run goes on or ends Completed.
 pub(super) enum WaitStepEnd {
-    /// A destination showed: the step finishes on it as a confirmed step does.
-    Reached(PageObservation),
+    /// A destination showed: the step finishes on it as a confirmed step does. Boxed: it holds
+    /// the destination frame, and inline it would be the one large variant (clippy
+    /// `large_enum_variant`).
+    Reached(Box<PageObservation>),
     /// `max_ms` was reached on the step's page and it declares `on_timeout`: the run ends there,
     /// on `page_label`, with `outcome_key`.
     Keyed {
@@ -364,7 +366,9 @@ impl PreparedContainedTask {
             pacing,
         )?;
         let (observation, last_frame_page, timing_failure) = match resolution {
-            PostconditionResolution::Reached(reached) => return Ok(WaitStepEnd::Reached(reached)),
+            PostconditionResolution::Reached(reached) => {
+                return Ok(WaitStepEnd::Reached(Box::new(reached)));
+            }
             PostconditionResolution::Held {
                 observation,
                 timing_failure,

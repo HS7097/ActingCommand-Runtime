@@ -4697,7 +4697,7 @@ impl PreparedContainedTask {
                                     );
                                 }
                                 wait_step::WaitStepEnd::Reached(reached) => {
-                                    observation = Some(reached);
+                                    observation = Some(*reached);
                                     self.expect_identity(
                                         runtime,
                                         operation,
