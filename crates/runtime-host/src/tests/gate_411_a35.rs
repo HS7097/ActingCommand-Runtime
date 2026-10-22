@@ -175,7 +175,7 @@ fn rung_records(events: &[PersistedEvent]) -> Vec<RungRecord<'_>> {
         .collect()
 }
 
-fn code_of(record: &RungRecord<'_>) -> Option<&str> {
+fn code_of<'r>(record: &'r RungRecord<'_>) -> Option<&'r str> {
     record
         .outcome
         .as_ref()
