@@ -4474,9 +4474,8 @@ impl PreparedContainedTask {
                 .into());
         }
         // #412 Lab B-3 (design §2.1 point 2): a declared operation runs only from its own page.
-        if let Some(declared) = declared {
-            self.declared_operation_entry(declared, observation.as_ref())?;
-        }
+        // Red proof 2: the page check is dropped.
+        let _ = Self::declared_operation_entry;
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
