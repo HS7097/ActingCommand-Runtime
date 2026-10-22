@@ -2670,6 +2670,9 @@ impl HostShared {
             let probe = self.probe_screen(pending, resolved, key)?;
             let (count, score_milli) = match (probe, held.take()) {
                 (ScreenProbe::Changing { count, score_milli }, _) => (count, score_milli),
+                // RED PROOF 5 (do not merge): a probe that could not be made after a hold
+                // counts as a changing screen.
+                (ScreenProbe::Unavailable, Some(_)) => (0, 0),
                 (ScreenProbe::Refused { interruption }, None) => {
                     return Ok(ScreenStep::AsToday {
                         interruption: Some(interruption),
@@ -2691,9 +2694,6 @@ impl HostShared {
                 (ScreenProbe::Settled, Some(failure)) => {
                     let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
                     return Ok(ScreenStep::Rerun { failure, attempt });
-                }
-                (ScreenProbe::Unavailable, Some(failure)) => {
-                    return Ok(ScreenStep::Escalate { failure });
                 }
             };
             // Read before the record is written, so a hold's end counts from before it.
