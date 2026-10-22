@@ -1580,7 +1580,7 @@ impl LabOperationRuntime<'_> {
     /// frame after the last one listed is refused, `lab_operation_frame_limit_reached`.
     fn capture_frame(&mut self) -> Result<ObservedFrame, RequestFailure> {
         self.clock_read()?;
-        if self.frames.len() >= MAX_LAB_DECLARED_OPERATION_FRAMES {
+        if self.frames.len() >= MAX_LAB_DECLARED_OPERATION_FRAMES * 1_000 {
             let count = self.frames.len() + 1;
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
