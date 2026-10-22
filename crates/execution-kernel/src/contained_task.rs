@@ -121,6 +121,11 @@ mod gate_308_l4b_admission;
 // Workflow #308 SEL-L4b-T (exec key 82): expect_identity through a pool of template targets.
 #[cfg(test)]
 mod gate_308_l4bt;
+
+// #412 Lab B-3 S1 (exec keys 136 to 143 and 180): the kernel runs one declared operation as a
+// run would, and returns after that one step.
+#[cfg(test)]
+mod gate_412_b3_s1;
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
