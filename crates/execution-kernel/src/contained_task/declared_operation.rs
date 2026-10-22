@@ -124,7 +124,7 @@ impl PreparedContainedTask {
         // Point 1: post-admission OCR, OCR fields and the reading relay are off.
         let options = ContainedTaskRunOptions {
             declared: Some(declared),
-            ..ContainedTaskRunOptions::offline_simulation()
+            ..ContainedTaskRunOptions::default()
         };
         let mut end = None;
         let outcome = self.run_with_reading_keys(runtime, options, None, &mut end)?;
