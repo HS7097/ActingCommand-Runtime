@@ -17,7 +17,8 @@
 //   step; the same frames without the wait page leave it unconfirmed.
 // - T5: admission refuses a wait step with a click, a guard or a retry member, a wait step in a
 //   `linear_steps` task, an `on_timeout` whose mapping does not list the step's page or is not
-//   busy, and a wait page that is a destination, each with its code and rule.
+//   busy, and a wait page that is a destination, each with its code and rule; Lab B-3 S1's
+//   admission of a declared operation refuses a wait step.
 //
 // Each package is a synthetic `neutral` package admitted through `PreparedContainedTask::load`: a
 // 2 x 1 frame whose left pixel names the page. The runs play scripted frames on the scripted clock
@@ -480,7 +481,10 @@ fn a35_s3_t4_a_wait_page_pauses_the_confirmation_clock() {
 // each package is refused with its code and rule. A wait step's rules are
 // `contained_task_program_invalid` naming the rule (`program_problem`), the task declaration's
 // `path` and the refused member (`json_pointer`); a `linear_steps` task refuses a wait step with
-// `contained_task_linear_invalid`, `reason=wait`.
+// `contained_task_linear_invalid`, `reason=wait`. An admitted wait step named as the declared
+// operation of a Lab operation (#412 Lab B-3 S1, register §1.161; Lab decision Q2: page-graph
+// clicks only) is `contained_task_declared_operation_unsupported` with its `pack_operation_id`
+// and `lab_operation_problem` `wait`.
 #[test]
 fn a35_s3_t5_admission_refuses_a_broken_wait_step_or_wait_page_with_its_rule() {
     let busy_elsewhere = vec![
@@ -600,6 +604,30 @@ fn a35_s3_t5_admission_refuses_a_broken_wait_step_or_wait_page_with_its_rule() {
         error
             .detail()
             .is_some_and(|detail| detail.split(' ').any(|token| token == "reason=wait")),
+        "{error}"
+    );
+
+    // The declared operation `op_wait` of an admitted page-graph package.
+    let prepared = admitted(
+        "a declared wait step",
+        &task(
+            vec![wait_step(json!({"max_ms": 5_000}), json!({})), next()],
+            "page_c",
+            Vec::new(),
+        ),
+    );
+    let error = match prepared.declared_operation("op_wait") {
+        Ok(declared) => panic!("a declared wait step: admitted as {declared:?}"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.code().as_str(),
+        ExecutionKernelCode::ContainedTaskDeclaredOperationUnsupported.as_str(),
+        "{error}"
+    );
+    assert_eq!(
+        Value::Object(error.outcome().values().clone()),
+        json!({"pack_operation_id": "op_wait", "lab_operation_problem": "wait"}),
         "{error}"
     );
 }
