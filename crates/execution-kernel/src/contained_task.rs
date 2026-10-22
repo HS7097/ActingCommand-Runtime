@@ -8687,7 +8687,6 @@ fn recognition_candidate_scores(
 ) -> Box<RecognitionCandidateScores> {
     let pages = candidate_pages
         .iter()
-        .take(TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT)
         .map(|page_id| {
             let evaluation = evaluations
                 .iter()
