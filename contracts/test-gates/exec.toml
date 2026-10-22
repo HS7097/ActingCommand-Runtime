@@ -2041,3 +2041,48 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_411_a44::a44_t2_a_recognition_lists_the_first_16_candidate_pages_and_counts_the_rest",
 ]
 incident = ["#411 A44"]
+
+# #411 B36 + B19 (slice A35-S3, 0.12.x; register §1.176; design rd-1021/train-0129/a35-design.md §2.3, §5.1 S3 test row T1; package revision 6, declared by BT-PK6; no code, no record): a wait step makes no input; from its wait page it finishes on its destination without a guard, an effect intent, an input or an effect record, and the run goes on from that frame
+[[gate]]
+key = "175"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t1_a_wait_step_finishes_on_its_destination_without_an_input",
+]
+incident = ["#411 B36", "#411 B19"]
+
+# #411 B36 + B19 (slice A35-S3; register §1.176; §5.1 S3 test row T2; coordinator decisions Q9 and Q11 of 2026-10-21): a wait step's max_ms runs on the run's budget clock from the step's start; reached on the wait page it ends the run Completed there with on_timeout, the key of a busy mapping, or else contained_task_step_unconfirmed with page_id the wait page
+[[gate]]
+key = "176"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t2_the_wait_page_beyond_max_ms_ends_on_its_key_or_unconfirmed",
+]
+incident = ["#411 B36", "#411 B19"]
+
+# #411 B36 + B19 (slice A35-S3; register §1.176; §5.1 S3 test row T3): a frame of neither the wait page nor a destination runs the away clock (expect_after.timeout_ms, else the step timeout), which restarts whenever the wait page shows; run out it ends the run with contained_task_step_unconfirmed, not after max_ms
+[[gate]]
+key = "177"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t3_another_page_ends_the_wait_after_the_away_clock_not_after_max_ms",
+]
+incident = ["#411 B36", "#411 B19"]
+
+# #411 B19 (slice A35-S3; register §1.176; §5.1 S3 test row T4): frames on a confirmation's expect_after.wait_page pause the confirmation clock up to its max_ms of time on it, so a destination after the confirmation timeout but within max_ms confirms the step; without the wait page the same frames leave it unconfirmed
+[[gate]]
+key = "178"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t4_a_wait_page_pauses_the_confirmation_clock",
+]
+incident = ["#411 B19"]
+
+# #411 B36 + B19 (slice A35-S3; register §1.176; §5.1 S3 test row T5; coordinator decision Q11 of 2026-10-21): admission refuses a wait step with an input, guard or retry member, an on_timeout whose mapping does not list the step's page or is not busy, and a wait page that is a destination, each contained_task_program_invalid with its program_problem, path and json_pointer; a linear_steps task refuses a wait step with contained_task_linear_invalid, reason=wait
+[[gate]]
+key = "179"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t5_admission_refuses_a_broken_wait_step_or_wait_page_with_its_rule",
+]
+incident = ["#411 B36", "#411 B19"]

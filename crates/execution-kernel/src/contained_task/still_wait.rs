@@ -12,7 +12,8 @@
 //!   pauses last their declared length and the wall time that passes counts in full against its
 //!   limit. Otherwise the wait is paced as every wait is (#385 P-k).
 //! - **Back at once.** A frame the wait accepts ends it as before; a frame that changed returns
-//!   it to its pacing. A handled shared interrupt page or a failed observation clears the state.
+//!   it to its pacing. A handled shared interrupt page or a failed observation clears the state,
+//!   and so (#411 B36/B19) does a frame of the page the wait holds on, which it accepts.
 //! - **Unchanged.** The run's budget clock, the task's deadline, the extra wait rounds and the
 //!   outcome of a wait that runs out (its code, and its elapsed time as the wait counts it).
 //!
@@ -81,6 +82,15 @@ impl StillUnrecognised {
     /// and the handling is no time of the wait, so the wait is paced until two later frames are
     /// still and unrecognised.
     pub(super) fn interrupted(&mut self) {
+        self.previous = None;
+        self.since = None;
+    }
+
+    /// #411 B36/B19 (A35-S3): a frame of the page the wait holds on (a wait step's own page, a
+    /// confirmation's wait page) is a page the wait accepts, so the state no longer holds; the
+    /// stretch up to it is settled first.
+    pub(super) fn held<R: ContainedTaskRuntime>(&mut self, runtime: &mut R) {
+        self.settle(runtime);
         self.previous = None;
         self.since = None;
     }

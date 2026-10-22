@@ -289,6 +289,19 @@ capped designated member; `max_runs` on a designated operation or a set member i
 is no prerequisite or return-home layer (`reason=max_runs_end`, `reason=guard_refused_end`).
 The members join `package` revision 6.
 
+Wait steps and wait pages (Workflow #411 B36, B19; [resource-declarations.md](resource-declarations.md),
+"Wait steps and wait pages"). An operation of a task schema `0.9` page-graph task may be a wait
+step, `wait: {"max_ms", "on_timeout"?}`, a fourth effect beside `click`, `application` and
+`select`: it makes no input and waits on its `from` page for one of its destinations, up to
+`max_ms` on the run's budget clock. A step's `expect_after` may declare a wait page,
+`wait_page: {"page_id", "max_ms"}`, whose frames pause the confirmation clock. The static walk
+takes a wait step as an edge from its `from` page to its destinations; its `on_timeout` is a
+keyed end under the one keyed-terminal rule above whose mapping also declares `busy` (#411 B37;
+`task_phases_outcome_incomplete` otherwise). Unlike the other keyed ends it keeps the package a
+prerequisite or return-home layer: a return-home package waits in its activity page and ends
+busy only when the activity outlasts `max_ms`. A `linear_steps` task refuses both
+(`contained_task_linear_invalid`, `reason=wait`). The members join `package` revision 6.
+
 Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed
 standard package may name shared interrupt pages (`interrupts.json`, see
 [package-reference.md](package-reference.md), "Standard package root"). A run looks
