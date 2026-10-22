@@ -7119,8 +7119,7 @@ impl PreparedContainedTask {
                         }
                         // The wait page: the confirmation clock pauses for the time on it.
                         HeldFrame::Pause(span) => {
-                            started += span;
-                            window_started += span;
+                            let _ = span;
                             still.held(runtime);
                             (None, true)
                         }
