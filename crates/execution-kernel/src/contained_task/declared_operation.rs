@@ -160,8 +160,6 @@ impl PreparedContainedTask {
             Some(LabOperationProblem::ApplicationEffect)
         } else if operation.select.is_some() {
             Some(LabOperationProblem::SelectStep)
-        } else if operation.wait.is_some() {
-            Some(LabOperationProblem::Wait)
         } else if operation
             .expect_after
             .as_ref()
