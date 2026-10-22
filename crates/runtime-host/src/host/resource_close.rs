@@ -1271,7 +1271,7 @@ impl HostShared {
 /// waits in the instance's queue (`grant_dedicated_instance_lease`: `lease_transfer_not_safe`),
 /// met before any close was attempted. Every other failure of a close keeps its fatality.
 fn close_lease_refused_by_queue(error: &RuntimeHostError) -> bool {
-    !error.is_fatal()
+    error.is_fatal()
         && error.code() == SchedulerCode::LeaseTransferNotSafe.as_str()
         && error.operation() == HostLocation::PrepareResourceCloseLease.as_str()
 }
