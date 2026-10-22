@@ -131,6 +131,9 @@ mod gate_411_a36b;
 // #411 A36c (0.12.9): a PP-OCR diagnostic archive whose seal finds its staged report changed
 // fails only the work that owns it, which records its terminal; the host keeps serving.
 mod gate_411_a36c;
+// #411 A44 writer (host key 174), register §1.173: the stored `task.recognition_completed` carries
+// each candidate page's best score and verdict (ledger revision 4 row LR-8).
+mod gate_411_a44;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.

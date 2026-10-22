@@ -194,6 +194,10 @@ mod gate_rc2_a15;
 // #411 A45 T2: an entry check of a package without entry pages names the missing declaration.
 #[cfg(test)]
 mod gate_411_a45;
+// #411 A44 writer (exec keys 171 and 172; ledger revision 4 row LR-8): a page recognition hands
+// the host each candidate page's best score and verdict, the first 16 of them.
+#[cfg(test)]
+mod gate_411_a44;
 // #411 E2 T1 (A28): a run that exhausts its step budget ends with the step budget's own code.
 #[cfg(test)]
 mod gate_411_e2;
