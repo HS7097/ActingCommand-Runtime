@@ -296,7 +296,7 @@ impl<'o> HeldPage<'o> {
         match &mut self.hold {
             Hold::Step { since } => {
                 let waited = now.saturating_duration_since(*since);
-                if waited < self.max {
+                if waited < self.max.saturating_add(Duration::MAX) {
                     return HeldFrame::Restart;
                 }
                 HeldFrame::Ended(TaskTimingFailure {
