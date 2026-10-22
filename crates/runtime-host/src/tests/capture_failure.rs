@@ -211,6 +211,37 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
         &event.payload,
         ProjectionPayload::Full(payload) if payload.device_diagnostics().is_some()
     )));
+    // #71 FLK-07 (`contracts/device-diagnostic-budget.md`): the budget counts the device detail
+    // fields that committed failures carry, and a capture failure carries one only when its
+    // capture reached the device. The third capture failure is a stability burst, so the lease
+    // sweep queues a recovery ladder's claim; queued while an observe holds the instance, it
+    // refuses that observe's close lease (#411 A52), and until its lease end closes the session an
+    // observe fails `execution_session_close_pending` without reaching the device. The count
+    // follows the captures that reached the device, not the number of observes.
+    let detailed = sources
+        .iter()
+        .copied()
+        .filter(|event| {
+            matches!(
+                &event.payload,
+                ProjectionPayload::Full(payload) if matches!(
+                    payload.as_ref(),
+                    EventPayload::Capture(CapturePayload::Failed(failure))
+                        if failure.detail().is_some()
+                )
+            )
+        })
+        .collect::<Vec<_>>();
+    // The primary failure event carries its complete detail: every capture that reached the
+    // device failed with one.
+    assert_eq!(
+        detailed.len(),
+        state.capture_count.load(Ordering::Acquire),
+        "one capture failure with its device detail per capture that reached the device"
+    );
+    let last_detailed = *detailed
+        .last()
+        .expect("the first capture reached the device");
     let epoch = host.runtime_info().owner_epoch();
     drop(client);
     host.close().expect("close host");
@@ -238,18 +269,21 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
         panic!("one close summary");
     };
     assert_eq!(budget.owner_epoch, epoch);
-    assert_eq!((budget.emitted_count, budget.folded_count), (17, 0));
+    assert_eq!(
+        (budget.emitted_count, budget.folded_count),
+        (u64::try_from(detailed.len()).expect("detail count"), 0)
+    );
     assert_eq!(
         budget.first.as_ref().unwrap().source_event_id,
         sources[0].event_id
     );
     assert_eq!(
         budget.last.as_ref().unwrap().source_event_id,
-        sources[16].event_id
+        last_detailed.event_id
     );
     assert_eq!(
         budget.last.as_ref().unwrap().source_sequence,
-        sources[16].sequence
+        last_detailed.sequence
     );
     assert_eq!(
         budget
@@ -262,7 +296,7 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
     );
     // Ledger revision 3 (#378 A3): the device's text is no longer the detail's message; it is
     // `raw_text` on the source record's outcome.
-    let ProjectionPayload::Full(last_source) = &sources[16].payload else {
+    let ProjectionPayload::Full(last_source) = &last_detailed.payload else {
         panic!("full capture failure payload")
     };
     assert!(last_source.outcome().is_some_and(|outcome| {
