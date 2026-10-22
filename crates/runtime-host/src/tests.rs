@@ -341,6 +341,9 @@ mod gate_406_t12;
 // generates, on a segmented backend and on the Nemu input.
 mod gate_406_t3;
 mod gate_epoch_close;
+// #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
+// fatal the Runtime under test latched and its shutdown flag.
+mod gate_411_harness_diag;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
 // Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's
