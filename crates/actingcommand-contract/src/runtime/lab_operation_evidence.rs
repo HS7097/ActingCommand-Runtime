@@ -302,7 +302,12 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             }
         }
     }
-    let diagnostic_limit = if prepared.after.is_some() {
+    // LR-10 (#412 B-3): a declared operation stores its prepared and terminal records and at
+    // most its after projection.
+    let declared = record.operation_result.as_ref();
+    let diagnostic_limit = if declared.is_some() {
+        3
+    } else if prepared.after.is_some() {
         MAX_LAB_ARRIVAL_FRAMES + 3
     } else {
         4
@@ -355,8 +360,15 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         {
             return Err(lab_error(RuntimeContractCode::RuntimeLabLeaseGrantMismatch));
         }
-    } else if !grants.is_empty() || prepared.before_frame.is_some() {
+    } else if !grants.is_empty()
+        || prepared.before_frame.is_some()
+        || declared.is_some_and(|result| !result.frames.is_empty())
+    {
         return Err(lab_error(RuntimeContractCode::RuntimeLabUnleasedFrame));
+    }
+    if let Some(result) = declared {
+        verify_declared_operation(source, result, &grants)?;
+        return verify_lab_final_event(source);
     }
     for (frame, projection) in [
         (&prepared.before_frame, &prepared.before_projection),
@@ -735,6 +747,175 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             ));
         }
     }
+    verify_lab_final_event(source)
+}
+
+/// LR-10 (#412 B-3): the evidence of a declared operation (the record already validated). Every
+/// capture frame of the request is a listed frame and the after projection is the last frame's;
+/// each attempt that reached its input has exactly its own intent and outcome events, the
+/// intent after the verified prepared record, and no other input event belongs to the request;
+/// a complete operation kept its lease to its last observation.
+fn verify_declared_operation(
+    source: &LabOperationEvidence,
+    result: &LabDeclaredOperationResult,
+    grants: &[&ProjectedEvent],
+) -> RuntimeContractResult<()> {
+    let events = &source.events;
+    let action_events = &source.action_events;
+    let record = &source.operation.record;
+    let prepared = &record.prepared;
+    for entry in &result.frames {
+        verify_lab_artifact(
+            source,
+            events,
+            entry.frame.observation.artifact(),
+            entry.frame.verified,
+            prepared,
+        )?;
+        if grants
+            .first()
+            .is_none_or(|grant| grant.sequence >= entry.frame.verified.sequence)
+        {
+            return Err(lab_error(RuntimeContractCode::RuntimeLabFrameBeforeLease));
+        }
+    }
+    if let (Some(frame), Some(projection)) = (&record.after_frame, &record.after_projection) {
+        verify_lab_projection(source, events, prepared, frame, projection)?;
+    }
+    let listed = result
+        .frames
+        .iter()
+        .map(|entry| entry.frame.observation.artifact().artifact_id)
+        .collect::<BTreeSet<_>>();
+    let captured = events
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .flat_map(|event| &event.artifacts)
+        .filter(|artifact| artifact.kind == ArtifactKind::CaptureFrame)
+        .map(|artifact| artifact.artifact_id)
+        .collect::<BTreeSet<_>>();
+    if listed != captured {
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabFrameBudgetMismatch,
+        ));
+    }
+    let mut intents = 0;
+    let mut inputs = 0;
+    for attempt in &result.attempts {
+        if let Some(reference) = attempt.input_intent {
+            intents += 1;
+            let intent = lab_event(events, reference)?;
+            let ProjectionPayload::Full(payload) = &intent.payload else {
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabInputIntentPayloadMissing,
+                ));
+            };
+            if intent.event_type != EventType::InputIntent
+                || intent.links.action_id() != attempt.input_action_id.as_ref()
+                || intent.links.instance_id() != Some(&prepared.instance_id)
+                || intent.links.lease_id() != prepared.lease_id.as_ref()
+                || intent.sequence <= record.prepared_artifact.verified.sequence
+                || payload.action() != attempt.action.event_action()
+            {
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabInputIntentMismatch,
+                ));
+            }
+            lab_event(action_events, reference)?;
+        }
+        if let Some(terminal) = attempt.input_event {
+            inputs += 1;
+            let input = lab_event(events, terminal)?;
+            lab_event(action_events, terminal)?;
+            if !matches!(
+                input.event_type,
+                EventType::InputCommitted | EventType::InputFailed
+            ) || input.links.lease_id() != prepared.lease_id.as_ref()
+                || input.links.instance_id() != Some(&prepared.instance_id)
+                || input.links.action_id() != attempt.input_action_id.as_ref()
+            {
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabInputIdentityMismatch,
+                ));
+            }
+            let ProjectionPayload::Full(payload) = &input.payload else {
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabInputPayloadMissing,
+                ));
+            };
+            if payload.effect_disposition() != Some(attempt.effect)
+                || payload.action() != attempt.action.event_action()
+            {
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabInputEffectMismatch,
+                ));
+            }
+            if attempt
+                .input_intent
+                .is_none_or(|intent| intent.sequence >= input.sequence)
+            {
+                return Err(lab_error(
+                    RuntimeContractCode::RuntimeLabInputIntentMismatch,
+                ));
+            }
+        }
+    }
+    let count = |events: &[ProjectedEvent], types: &[EventType]| {
+        events
+            .iter()
+            .filter(|event| types.contains(&event.event_type))
+            .count()
+    };
+    let outcomes = [EventType::InputCommitted, EventType::InputFailed];
+    if count(events, &[EventType::InputIntent]) != intents
+        || count(action_events, &[EventType::InputIntent]) != intents
+        || count(events, &outcomes) != inputs
+        || count(action_events, &outcomes) != inputs
+    {
+        return Err(lab_error(RuntimeContractCode::RuntimeLabUnreportedInput));
+    }
+    if record.failure.is_none() {
+        prepared
+            .before_frame
+            .as_ref()
+            .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabBeforeMissing))?;
+        let after = record
+            .after_frame
+            .as_ref()
+            .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabAfterMissing))?;
+        let until = record
+            .after_projection
+            .as_ref()
+            .map_or(after.verified.sequence, |projection| {
+                projection.projection_sequence
+            });
+        let grant = grants
+            .first()
+            .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabLeaseGrantMismatch))?;
+        if source.lease_events.iter().any(|event| {
+            event.sequence > grant.sequence
+                && event.sequence < until
+                && matches!(
+                    event.event_type,
+                    EventType::LeaseReleased
+                        | EventType::LeaseExpired
+                        | EventType::LeaseTransferred
+                )
+        }) {
+            return Err(lab_error(
+                RuntimeContractCode::RuntimeLabSuccessLeaseDiscontinuous,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The request's final command event: rejected exactly when the operation failed, with the
+/// record's effect and the request's identity.
+fn verify_lab_final_event(source: &LabOperationEvidence) -> RuntimeContractResult<()> {
+    let events = &source.events;
+    let record = &source.operation.record;
+    let prepared = &record.prepared;
     let final_event = lab_event(events, source.terminal)?;
     let ProjectionPayload::Full(payload) = &final_event.payload else {
         return Err(lab_error(

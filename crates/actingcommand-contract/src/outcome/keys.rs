@@ -540,6 +540,9 @@ outcome_keys! {
     expected_target_type: vocab(lab_target_type),
     received_target_type: vocab(lab_target_type),
     // ---- Workflow #411 A37: end ----
+    // ---- Workflow #412 B-3 S0 (why the Lab cannot run a declared operation): begin ----
+    lab_operation_problem: vocab(lab_operation_problem),
+    // ---- Workflow #412 B-3 S0: end ----
     // ---- Workflow #411 B8 (a dispatch's schedule values, contracts/remedies.md section 4): begin ----
     last_in_window: boolean,
     last_daily_slot: boolean,

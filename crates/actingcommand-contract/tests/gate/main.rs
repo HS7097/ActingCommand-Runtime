@@ -14,6 +14,9 @@ mod c1;
 mod lab_l3;
 mod rd1a;
 
+// #412 Lab B-3 S0 (contract keys K39 to K41): the LR-10 records of a declared Lab operation.
+mod gate_412_b3_s0;
+
 /// Installs this binary's one outcome diagnostic sink, which drops the text. Cutting an
 /// envelope sends the cut text to the sink, and a debug build panics when none is installed.
 fn diagnostic_sink() {

@@ -41,6 +41,11 @@ mod gate_e1;
 // Runtime's admission.
 #[cfg(test)]
 mod gate_e4;
+
+// Workflow #412 Lab B-3 S0, T0-4 (contract key K42): resource restore and a declared operation.
+#[cfg(test)]
+mod gate_412_b3_s0_restore;
+
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;
