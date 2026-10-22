@@ -31,8 +31,9 @@ use crate::table::{
 use crate::value::{canonical_json, scalar_json};
 use actingcommand_contract::outcome::{LadderClass, catalog_json};
 use actingcommand_contract::{
-    ContainedTaskRequest, FactScalar, InstanceDeviceKind, InstanceStuckRecovery, RecoveryRung,
-    RecoveryTriggerStage, RecoveryTriggerStart, parse_ladder_class, valid_recovery_ladder_token,
+    ContainedTaskRequest, FactScalar, InstanceDeviceKind, InstanceStuckRecovery,
+    MAX_OBSERVATION_FRAMES, ObservationFramePlan, RecoveryRung, RecoveryTriggerStage,
+    RecoveryTriggerStart, parse_ladder_class, valid_recovery_ladder_token,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -96,6 +97,24 @@ pub const BUSY_OUTCOME_RECHECK_MS: &str = "recovery_ladder.busy.outcome.recheck_
 pub const BUSY_OUTCOME_MAX_WAIT_MS: &str = "recovery_ladder.busy.outcome.max_wait_ms";
 /// #411 B37 (A35-S1): what a climb does once its busy hold reached `max_wait_ms`.
 pub const BUSY_OUTCOME_ON_EXHAUSTED: &str = "recovery_ladder.busy.outcome.on_exhausted";
+/// #411 A35 (A35-S2): the ladder classes of a return-home failure the settle gate probes (a
+/// list of unique class tokens); `[]` turns the gate off.
+pub const BUSY_SCREEN_CLASSES: &str = "recovery_ladder.busy.screen.classes";
+/// #411 A35 (A35-S2): the frames of one settle probe.
+pub const BUSY_SCREEN_PROBE_FRAMES: &str = "recovery_ladder.busy.screen.probe_frames";
+/// #411 A35 (A35-S2): the gap between two frames of a settle probe, in milliseconds.
+pub const BUSY_SCREEN_PROBE_INTERVAL_MS: &str = "recovery_ladder.busy.screen.probe_interval_ms";
+/// #411 A35 (A35-S2): two consecutive probe frames are unchanged when the Runtime's one
+/// frame-change measure between them is at most this many milli.
+pub const BUSY_SCREEN_CHANGE_MAX_MILLI: &str = "recovery_ladder.busy.screen.change_max_milli";
+/// #411 A35 (A35-S2): the wait between two probes while the screen keeps changing, in
+/// milliseconds.
+pub const BUSY_SCREEN_RECHECK_MS: &str = "recovery_ladder.busy.screen.recheck_ms";
+/// #411 A35 (A35-S2): the total hold for a changing screen in one climb, from its first
+/// "changing" verdict, in milliseconds; `0` probes only.
+pub const BUSY_SCREEN_MAX_WAIT_MS: &str = "recovery_ladder.busy.screen.max_wait_ms";
+/// #411 A35 (A35-S2): what a climb does once its screen hold reached `max_wait_ms`.
+pub const BUSY_SCREEN_ON_EXHAUSTED: &str = "recovery_ladder.busy.screen.on_exhausted";
 
 /// The shortest readiness poll a ladder may be given (§4.2: `100..=readiness_window_ms`):
 /// schema, not a threshold.
@@ -115,6 +134,12 @@ const FENCE_RECHECK_MAX_ATTEMPTS_RANGE: KeyRange = KeyRange::Integer { min: 0, m
 const MIN_BUSY_POLL_MS: u64 = 100;
 /// #411 B37 (A35-S1, design §3): the longest busy hold of one climb, a day. Schema.
 const MAX_BUSY_WAIT_MS: u64 = 86_400_000;
+/// #411 A35 (A35-S2, design §3): the frames of one settle probe, a pair up to the most one
+/// observation transaction takes (`MAX_OBSERVATION_FRAMES`). Schema.
+const MIN_PROBE_FRAMES: usize = 2;
+/// #411 A35 (A35-S2, design §3): the gap between two probe frames, a tenth of a second to ten
+/// seconds. Schema.
+const PROBE_INTERVAL_MS: std::ops::RangeInclusive<u64> = 100..=10_000;
 
 macro_rules! two_way_rule {
     (
@@ -282,6 +307,32 @@ struct BusyFile {
     poll_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     outcome: Option<BusyOutcomeFile>,
+    /// #411 A35 (A35-S2).
+    // Interface anchor `actingd-config` revision 9 (contracts/component-interfaces.md): a Runtime
+    // before A35-S2 refuses a file that names `busy.screen`, because the section denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    screen: Option<BusyScreenFile>,
+}
+
+/// #411 A35 (A35-S2): the settle gate after a listed return-home failure.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BusyScreenFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    classes: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    probe_frames: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    probe_interval_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    change_max_milli: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recheck_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_wait_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    on_exhausted: Option<Value>,
 }
 
 /// #411 B37 (A35-S1): the hold after a rung run that ended on a busy mapping.
@@ -372,8 +423,8 @@ const fn row_since(
         default: DefaultSource::File,
         // §5.5: every key of the section can change while the Runtime runs; a ladder climbs by
         // the snapshot it was admitted with (§4.7). Workflow #398 RD-4's keys too (model-398
-        // §6.2, §6.6), #411 A38's, which the lease sweep reads at each tick, and #411 B37's
-        // (A35-S1; coordinator decision Q3).
+        // §6.2, §6.6), #411 A38's, which the lease sweep reads at each tick, #411 B37's
+        // (A35-S1; coordinator decision Q3) and #411 A35's (A35-S2).
         settable: Settable::Yes,
         reader,
         since,
@@ -486,6 +537,58 @@ pub(crate) static ROWS: &[KeyRow] = &[
         KeyRange::Tokens(OnExhausted::TOKENS),
         "A35-S1",
         "0.12.9",
+    ),
+    // #411 A35 (A35-S2, design §3; `actingd-config` revision 9): the ranges are the section
+    // check's (`bound_out_of_range`, `renewal_cap_exceeded`, `code_unknown`), as the busy
+    // hold's are.
+    row_since(
+        BUSY_SCREEN_CLASSES,
+        ValueType::List,
+        KeyRange::Any,
+        "A35-S2",
+        "0.12.10",
+    ),
+    row_since(
+        BUSY_SCREEN_PROBE_FRAMES,
+        ValueType::Integer,
+        KeyRange::Any,
+        "A35-S2",
+        "0.12.10",
+    ),
+    row_since(
+        BUSY_SCREEN_PROBE_INTERVAL_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "A35-S2",
+        "0.12.10",
+    ),
+    row_since(
+        BUSY_SCREEN_CHANGE_MAX_MILLI,
+        ValueType::Integer,
+        KeyRange::Any,
+        "A35-S2",
+        "0.12.10",
+    ),
+    row_since(
+        BUSY_SCREEN_RECHECK_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "A35-S2",
+        "0.12.10",
+    ),
+    row_since(
+        BUSY_SCREEN_MAX_WAIT_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "A35-S2",
+        "0.12.10",
+    ),
+    row_since(
+        BUSY_SCREEN_ON_EXHAUSTED,
+        ValueType::String,
+        KeyRange::Tokens(OnExhausted::TOKENS),
+        "A35-S2",
+        "0.12.10",
     ),
 ];
 
@@ -653,6 +756,31 @@ pub struct BusyOutcomeConfig {
     pub on_exhausted: OnExhausted,
 }
 
+/// #411 A35 (A35-S2, design §2.1, §3, §4.3; the frame-change measure of BT-B12, decision Q8 of
+/// 2026-10-21): the settle gate. After a return-home failure whose ladder class `classes`
+/// lists, the ladder probes the screen; while consecutive probe frames change by more than
+/// `change_max_milli` it holds instead of climbing on, within `max_wait_ms`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BusyScreenConfig {
+    /// The ladder classes of a return-home failure the gate probes, each once; empty turns the
+    /// gate off.
+    pub classes: Vec<LadderClass>,
+    /// One probe: `probe_frames` read-only frames (2 to 5), `probe_interval_ms` apart (100 to
+    /// 10 000); `(frames - 1) * interval` plus `hold.margin_ms` within the longest renewal.
+    pub probe: ObservationFramePlan,
+    /// Two consecutive probe frames are unchanged when the frame-change measure between them is
+    /// at most this (an unsigned 32-bit integer, as `still_frames`' `max_distance_milli`).
+    pub change_max_milli: u32,
+    /// The wait between two probes while the screen keeps changing; at least `busy.poll_ms`,
+    /// and plus `hold.margin_ms` within the longest renewal.
+    pub recheck_ms: u64,
+    /// The total hold of one climb, from its first "changing" verdict (`0..=86400000`); `0`
+    /// probes only.
+    pub max_wait_ms: u64,
+    /// What the climb does at the limit.
+    pub on_exhausted: OnExhausted,
+}
+
 /// Workflow #398 RD-4 (model-398 §6.2): one ladder profile, its name and its rungs, each
 /// checked as the section's `rungs` are.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -689,6 +817,8 @@ pub struct LadderConfig {
     pub fence_recheck: FenceRecheckConfig,
     /// #411 B37 (A35-S1): the busy hold.
     pub busy: BusyConfig,
+    /// #411 A35 (A35-S2): the settle gate and its screen hold.
+    pub busy_screen: BusyScreenConfig,
     digest: String,
 }
 
@@ -1186,6 +1316,86 @@ fn busy(
     Ok(BusyConfig { poll_ms, outcome })
 }
 
+/// #411 A35 (A35-S2): the settle gate's values as read, before their check.
+struct BusyScreenValues {
+    classes: Vec<Value>,
+    probe_frames: i64,
+    probe_interval_ms: u64,
+    change_max_milli: i64,
+    recheck_ms: u64,
+    max_wait_ms: u64,
+    on_exhausted: OnExhausted,
+}
+
+/// #411 A35 (A35-S2, design §3): the settle gate's values, checked: each class a ladder class
+/// token (`code_unknown`; another JSON value `wrong_type`) named once (`duplicate_id`);
+/// `probe_frames` from 2 to 5, `probe_interval_ms` from 100 to 10 000, `change_max_milli` an
+/// unsigned 32-bit integer and `max_wait_ms` within a day (`bound_out_of_range`); `recheck_ms`
+/// no shorter than `busy.poll_ms` (`bound_out_of_range` on `poll_ms`, whose range ends at the
+/// shorter recheck); `recheck_ms` plus `hold.margin_ms`, and the probe's span (`frames - 1`
+/// intervals) plus `hold.margin_ms`, within the longest renewal (`renewal_cap_exceeded`), the
+/// renewals the ladder makes before it waits and before it probes.
+fn busy_screen(
+    values: BusyScreenValues,
+    poll_ms: u64,
+    margin_ms: u64,
+    renewal_cap_ms: u64,
+) -> Result<BusyScreenConfig, ConfigFailure> {
+    let mut classes = Vec::with_capacity(values.classes.len());
+    for class in &values.classes {
+        let token = class
+            .as_str()
+            .ok_or_else(|| failure(BUSY_SCREEN_CLASSES, ConfigValueProblem::WrongType))?;
+        let class = parse_ladder_class(token)
+            .ok_or_else(|| failure(BUSY_SCREEN_CLASSES, ConfigValueProblem::CodeUnknown))?;
+        if classes.contains(&class) {
+            return Err(failure(
+                BUSY_SCREEN_CLASSES,
+                ConfigValueProblem::DuplicateId,
+            ));
+        }
+        classes.push(class);
+    }
+    let bound = |key: &'static str| failure(key, ConfigValueProblem::BoundOutOfRange);
+    let probe_frames = usize::try_from(values.probe_frames)
+        .ok()
+        .filter(|frames| (MIN_PROBE_FRAMES..=MAX_OBSERVATION_FRAMES).contains(frames))
+        .ok_or_else(|| bound(BUSY_SCREEN_PROBE_FRAMES))?;
+    if !PROBE_INTERVAL_MS.contains(&values.probe_interval_ms) {
+        return Err(bound(BUSY_SCREEN_PROBE_INTERVAL_MS));
+    }
+    let probe = ObservationFramePlan::new(probe_frames, values.probe_interval_ms)
+        .ok_or_else(|| bound(BUSY_SCREEN_PROBE_FRAMES))?;
+    let change_max_milli =
+        u32::try_from(values.change_max_milli).map_err(|_| bound(BUSY_SCREEN_CHANGE_MAX_MILLI))?;
+    if values.max_wait_ms > MAX_BUSY_WAIT_MS {
+        return Err(bound(BUSY_SCREEN_MAX_WAIT_MS));
+    }
+    if poll_ms > values.recheck_ms {
+        return Err(bound(BUSY_POLL_MS));
+    }
+    let capped = |key: &'static str, step_ms: u64| {
+        if step_ms.saturating_add(margin_ms) <= renewal_cap_ms {
+            Ok(())
+        } else {
+            Err(failure(key, ConfigValueProblem::RenewalCapExceeded))
+        }
+    };
+    capped(BUSY_SCREEN_RECHECK_MS, values.recheck_ms)?;
+    let span_ms = values
+        .probe_interval_ms
+        .saturating_mul(probe_frames as u64 - 1);
+    capped(BUSY_SCREEN_PROBE_INTERVAL_MS, span_ms)?;
+    Ok(BusyScreenConfig {
+        classes,
+        probe,
+        change_max_milli,
+        recheck_ms: values.recheck_ms,
+        max_wait_ms: values.max_wait_ms,
+        on_exhausted: values.on_exhausted,
+    })
+}
+
 /// Workflow #398 RD-4: one profile of `profiles` as written (model-398 §6.2).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1371,6 +1581,21 @@ impl LadderConfig {
             on_exhausted: rule(&mut reader, BUSY_OUTCOME_ON_EXHAUSTED, OnExhausted::parse)?,
         };
         let busy = busy(busy_poll_ms, busy_outcome, margin_ms, renewal_cap_ms)?;
+        // #411 A35 (A35-S2).
+        let busy_screen = busy_screen(
+            BusyScreenValues {
+                classes: reader.list(BUSY_SCREEN_CLASSES)?,
+                probe_frames: reader.integer(BUSY_SCREEN_PROBE_FRAMES)?,
+                probe_interval_ms: reader.duration(BUSY_SCREEN_PROBE_INTERVAL_MS)?,
+                change_max_milli: reader.integer(BUSY_SCREEN_CHANGE_MAX_MILLI)?,
+                recheck_ms: reader.duration(BUSY_SCREEN_RECHECK_MS)?,
+                max_wait_ms: reader.duration(BUSY_SCREEN_MAX_WAIT_MS)?,
+                on_exhausted: rule(&mut reader, BUSY_SCREEN_ON_EXHAUSTED, OnExhausted::parse)?,
+            },
+            busy.poll_ms,
+            margin_ms,
+            renewal_cap_ms,
+        )?;
         let digest = format!(
             "{:x}",
             Sha256::digest(canonical_json(&Value::Object(reader.seen)).as_bytes())
@@ -1394,6 +1619,7 @@ impl LadderConfig {
             instance_profiles: BTreeMap::new(),
             fence_recheck,
             busy,
+            busy_screen,
             digest,
         })
     }

@@ -125,6 +125,13 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.busy.outcome.recheck_ms` | milliseconds; plus `hold.margin_ms` within the longest renewal (#411 B37) | `60000` |
 | `recovery_ladder.busy.outcome.max_wait_ms` | milliseconds 0..=86400000 (#411 B37); `0` holds nothing | `3600000` |
 | `recovery_ladder.busy.outcome.on_exhausted` | `stop` \| `escalate` (#411 B37) | `stop` |
+| `recovery_ladder.busy.screen.classes` | list of ladder class tokens, each once (#411 A35); `[]` turns the settle gate off | `["pack_logic_mismatch"]` |
+| `recovery_ladder.busy.screen.probe_frames` | integer 2..=5 (#411 A35) | `5` |
+| `recovery_ladder.busy.screen.probe_interval_ms` | milliseconds 100..=10000; `(probe_frames - 1)` intervals plus `hold.margin_ms` within the longest renewal (#411 A35) | `1000` |
+| `recovery_ladder.busy.screen.change_max_milli` | unsigned 32-bit integer, the frame-change threshold (#411 A35; [color-digest.md](color-digest.md), "Frame change") | `1500` |
+| `recovery_ladder.busy.screen.recheck_ms` | milliseconds, at least `busy.poll_ms`; plus `hold.margin_ms` within the longest renewal (#411 A35) | `15000` |
+| `recovery_ladder.busy.screen.max_wait_ms` | milliseconds 0..=86400000 (#411 A35); `0` probes only | `900000` |
+| `recovery_ladder.busy.screen.on_exhausted` | `escalate` \| `stop` (#411 A35) | `escalate` |
 
 The whole-section check (`recovery_ladder_config_invalid`, `config_key` and
 `config_value_problem`): trigger ids are tokens and unique (`duplicate_id`); an item names one or
@@ -171,6 +178,28 @@ like the section's other rules). All four keys are settable and part of the sect
 ladder holds by the values it was admitted with. The defaults (recheck every minute, at most one
 hour, then stop) bring an instance home within a minute of an activity's end and never restart
 the game while its package says it is busy; they are recalibrated after the real-device check.
+
+#411 A35 (slice A35-S2; `actingd-config` revision 9; design `a35-design.md` §3 with decision Q8
+of 2026-10-21): `busy.screen` is the settle gate after a return-home failure
+([emulator-control.md](emulator-control.md), "Settle gate"). After a return-home failure whose
+ladder class `screen.classes` lists, the ladder takes `screen.probe_frames` read-only frames
+`screen.probe_interval_ms` apart; two consecutive frames are unchanged when the Runtime's one
+frame-change measure between them ([color-digest.md](color-digest.md), "Frame change") is at
+most `screen.change_max_milli` (default and range those of the measure's threshold: 1500, an
+unsigned 32-bit integer). While the screen changes the ladder holds `screen.recheck_ms` and
+probes again, within `screen.max_wait_ms` of its first changing verdict; at that limit
+`screen.on_exhausted` goes on to the next rung (`escalate`) or ends the ladder without a restart
+(`stop`, `recovery_ladder_hold_exhausted`). The check adds: a class that is not a ladder class
+token (`code_unknown`; another JSON value `wrong_type`) or a class named twice (`duplicate_id`);
+`probe_frames` from 2 to 5, `probe_interval_ms` from 100 to 10000, `change_max_milli` from 0 to
+4294967295 and `max_wait_ms` within a day (`bound_out_of_range`); `busy.poll_ms` above
+`screen.recheck_ms` (`bound_out_of_range` on `busy.poll_ms`, whose range ends at the shorter of
+the two rechecks); `screen.recheck_ms` plus `hold.margin_ms`, and `probe_frames - 1` intervals
+plus `hold.margin_ms`, within the longest renewal, the renewals the ladder makes before it waits
+and before it probes (`renewal_cap_exceeded`); `on_exhausted` is one of its two words
+(`out_of_range`). All seven keys are settable and part of the section's digest; a ladder holds
+by the values it was admitted with. The defaults (five frames a second apart, a recheck every 15
+seconds, at most 15 minutes, then escalate) are recalibrated after the real-device check.
 
 Workflow #398 RD-4 (model-398 v1.1 §6.2, §6.6; [emulator-control.md](emulator-control.md),
 "Ladder profiles") adds to the check: a profile name is a token (1 to 64 bytes of lowercase
