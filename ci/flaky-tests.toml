@@ -16,7 +16,14 @@
 # fixed in c366b48f; from then (2026-10-14 08:02Z) to 2026-10-15 17:12Z the flaky job ran it in
 # 187 CI runs and it passed 183 times, with no ConnectionReset; the other 4 were a branch-wide
 # recovery_ladder_config_invalid at Runtime start (RD-2's branch and train 14 before its fix),
-# which failed every Runtime test of those runs.
+# which failed every Runtime test of those runs. FLK-07
+# (`readonly_failures_are_visible_and_terminal_without_fake_success`) left in 6333301365: A52
+# (PR #1250) made a refused close lease fail only that observe instead of latching a fatal, PR
+# #1276 made the test assert the diagnostic count of the captures that reached the device, and
+# draft #1277 ran it 20 times in the flaky job with 20 passes.
+#
+# No entry is left. With an empty table every module job's `CI_SKIP` is `''` and the `flaky` job's
+# `FLAKY_TESTS` is `''`: that job runs nothing and passes.
 #
 # Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
 # (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests, once per
@@ -37,12 +44,3 @@
 #   the job's default features); the `flaky` job runs it once in each.
 # - `register`: the #71 comment that holds the entry's current state.
 # - `status`: where the entry stands on #71.
-
-[[test]]
-id = "FLK-07"
-name = "actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success"
-crate = "actingcommand-runtime-host"
-job = "host-lab"
-features = ["actingcommand-runtime-host/fixture-backends"]
-register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6159396773"
-status = "cause not located (local IPC receipt read_error under load); skipped until it is"

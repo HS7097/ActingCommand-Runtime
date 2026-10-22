@@ -17,7 +17,7 @@ name: CI
 # - `needs: [...]` and `if: ${{ always() ... }}` of `gate`: every job except `gate` and the
 #   non-gating `flaky`; `gate` checks its own needs list again when it runs.
 # - job env `FLAKY_TESTS: <package>::<target>::<libtest path>[@<features>] ...` of `flaky`: each
-#   mirror entry once per configuration its module job runs it in.
+#   mirror entry once per configuration its module job runs it in, `''` when the mirror is empty.
 #
 # A push to main runs only the five jobs that save a dependency cache (lint, light, exec-core,
 # exec-tooling, apps); pull requests and pushes to stable run every job.
@@ -361,7 +361,7 @@ jobs:
       CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-actinglab
       # actinglab's dev-dependency turns it on anyway; written out so the selection says it.
       CI_FEATURES: --features actingcommand-runtime-host/fixture-backends
-      CI_SKIP: tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success
+      CI_SKIP: ''
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -608,7 +608,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      FLAKY_TESTS: actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success@actingcommand-runtime-host/fixture-backends
+      FLAKY_TESTS: ''
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
