@@ -2759,8 +2759,10 @@ impl HostShared {
     /// consecutive frames are unchanged when the Runtime's one frame-change measure between them
     /// (`frame_change_milli`, #411 B12) is at most `busy.screen.change_max_milli`, B12's own
     /// comparison. A capture that fails or is refused makes the probe `Unavailable` (the capture
-    /// path recorded why); so does a pair of frames the measure cannot compare, recorded here as
-    /// `capture_frame_invalid` caused by the measure's refusal.
+    /// path recorded why; a refusal that left no record is recorded here), whatever the device
+    /// severity of its error: only a failure that poisons the Runtime is returned. So does a pair
+    /// of frames the measure cannot compare, recorded here as `capture_frame_invalid` caused by
+    /// the measure's refusal.
     fn probe_screen(
         &self,
         pending: &PendingRecoveryLadder,
@@ -2833,11 +2835,24 @@ impl HostShared {
                 .chain(std::iter::once(current))
                 .map(|frame| frame.change_digest)
                 .collect::<Vec<ColorDigest>>(),
-            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
-                return Err(*failure.error);
+            // Only a failure that poisons the Runtime ends the climb, as it ends a read-only
+            // observe request. A capture error of fatal device severity is fatal to its frame,
+            // not to the Runtime (the observe request answers it `failed`, the Runtime healthy):
+            // the probe could not be made, and the climb goes on (design §4.3, S2 T5).
+            Err(failure) if failure.poison_runtime => return Err(*failure.error),
+            Err(failure) => {
+                // The capture path recorded why with its terminal record; a refusal that left
+                // none is recorded here.
+                if failure.terminal.is_none() {
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::OperationCleanup,
+                        RuntimeLifecycleFailure::Host(&failure.error),
+                        links,
+                        None,
+                    )?;
+                }
+                return Ok(ScreenProbe::Unavailable);
             }
-            // The capture path recorded why.
-            Err(_) => return Ok(ScreenProbe::Unavailable),
         };
         let mut score_milli = 0;
         for (previous, current) in digests.iter().zip(digests.iter().skip(1)) {
