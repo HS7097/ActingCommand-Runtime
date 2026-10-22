@@ -22,6 +22,8 @@ fn operation<'a>(id: &'a str, from: &'a str, to: &[&str]) -> TaskPhaseOperation<
         retryable: false,
         may_be_passed_over: false,
         on_empty_key: None,
+        max_runs: None,
+        on_guard_refused_key: None,
     }
 }
 

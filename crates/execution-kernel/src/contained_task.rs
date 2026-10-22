@@ -124,6 +124,10 @@ mod gate_387_d1cf;
 // Workflow #390 EXEC-1.
 #[cfg(test)]
 mod gate_390_exec1;
+// #411 B16 part 1 and B22, slice BT-KEY (exec keys 152 to 157): a per-run operation cap and a
+// keyed guard refusal.
+#[cfg(test)]
+mod gate_411_bt_key;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;
@@ -1995,6 +1999,18 @@ pub enum ContainedTaskTrace {
         step_index: u32,
         operation_label: String,
     },
+    /// #411 B16 part 1 (ledger revision 4, register §1.153 LR-7): the operation the page would
+    /// dispatch as the run's step `step_index` reached its per-run cap after `count` dispatches
+    /// of at most `limit_count`, and its keyed `on_max_runs` ends the run; `outcome` is
+    /// `contained_task_operation_runs_capped`. A run records at most one, as
+    /// `task.operation_capped`.
+    OperationCapped {
+        step_index: u32,
+        operation_label: String,
+        count: u32,
+        limit_count: u32,
+        outcome: Outcome,
+    },
     StepFinished {
         step_index: u32,
         operation_label: String,
@@ -2874,6 +2890,8 @@ impl PreparedContainedTask {
         program.validate(&control, &bundle, &detector)?;
         program.validate_text_reads(bundle.operation_path(), &evaluator)?;
         program.validate_when_targets(bundle.operation_path(), &evaluator)?;
+        // #411 B16 part 1 and B22: keyed `on_max_runs` and `on_guard_refused`.
+        program.validate_keyed_ends(&evaluator)?;
         selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
         let admission_limit = control
             .step_timeout()
@@ -3334,6 +3352,24 @@ impl PreparedContainedTask {
             // #411 B5: a stage's end page ends the run short of the package's target pages, so
             // short of a dependent package's entry page and of the home page.
             Some("phase_end_pages")
+        } else if self
+            .program
+            .operations
+            .iter()
+            .any(|operation| operation.on_max_runs_key().is_some())
+        {
+            // #411 B16 part 1 (B-train plan §2.11 item 4): a keyed cap ends the run on the
+            // operation's page, short of the target pages.
+            Some("max_runs_end")
+        } else if self
+            .program
+            .operations
+            .iter()
+            .any(|operation| operation.on_guard_refused_key().is_some())
+        {
+            // #411 B22 (B-train plan §2.11 item 4): a keyed guard refusal ends the run on the
+            // operation's page, short of the target pages.
+            Some("guard_refused_end")
         } else if self
             .scheduling_outcome
             .as_ref()
@@ -4442,6 +4478,14 @@ impl PreparedContainedTask {
         // Workflow #390 OUT-2: the caps of a designated effect set, its fact caps read now,
         // before the run's first step.
         config = config.with_designated_effect_caps(self.designated_effect_caps(runtime)?);
+        // #411 B16 part 1: the operations' per-run caps.
+        config = config.with_operation_run_caps(
+            self.program
+                .operations
+                .iter()
+                .filter_map(TaskOperation::run_cap)
+                .collect(),
+        );
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         // Workflow #373 NAV-3b: a phased route enters at the stage its matched entry page starts.
@@ -4656,6 +4700,9 @@ impl PreparedContainedTask {
                                         SharedCode::ContainedTaskPageUnknown.code(),
                                     )
                                 })?;
+                                // #411 B22: the guard target's evaluation when the guard refused
+                                // on this frame, for a keyed `on_guard_refused`.
+                                let mut refused_evaluation = None;
                                 // A select step (Workflow #308) chooses its candidate and
                                 // confirms it on a fresh frame, whose input context then binds
                                 // the tap; a click is guarded on the step's own frame.
@@ -4677,7 +4724,7 @@ impl PreparedContainedTask {
                                             outcome_key,
                                             page_label,
                                         }) => {
-                                            return self.finish_select_empty(
+                                            return self.finish_keyed_end(
                                                 runtime,
                                                 ocr_collector,
                                                 &mut machine,
@@ -4696,12 +4743,13 @@ impl PreparedContainedTask {
                                     }
                                 } else {
                                     operation
-                                        .guard_outcome(
+                                        .judged_guard_outcome(
                                             &self.control,
                                             observed,
                                             &self.evaluator,
                                             runtime,
                                             Some(step_timing),
+                                            &mut refused_evaluation,
                                         )
                                         .map(|(guard, target)| (guard, target, None))
                                 };
@@ -4709,6 +4757,14 @@ impl PreparedContainedTask {
                                     Ok(outcome) => outcome,
                                     Err(failure) => {
                                         let timed_out = sample_retry::is_timeout(&failure);
+                                        // #411 B22 (B-train plan §2.11 item 2): the key of a keyed
+                                        // `on_guard_refused` whose named target failed definitely
+                                        // on this frame.
+                                        let refusal_key =
+                                            refused_evaluation.as_ref().and_then(|evaluation| {
+                                                candidates::guard_refusal_key(operation, evaluation)
+                                                    .map(str::to_owned)
+                                            });
                                         match retries.retry(failure, step_timeout) {
                                             Ok(()) => {
                                                 let (again, timing) = self.observe_before_input(
@@ -4724,13 +4780,42 @@ impl PreparedContainedTask {
                                             // Spent retries end the run with the timeout (§2.1
                                             // item 6), not through the pack's failure decision.
                                             Err(failure) if timed_out => return Err(failure),
+                                            // #411 B22 (B-train plan §2.11 item 2): a guard that
+                                            // refused on the step's frame at attempt 1, before
+                                            // any input, with a definite fail of the named target
+                                            // ends the step without an input on the frame's page,
+                                            // and the run Completed there with the declared key.
+                                            Err(ContainedTaskRunError::Task(error))
+                                                if attempt == 1
+                                                    && refusal_key.is_some()
+                                                    && error.code().as_str()
+                                                        == ExecutionKernelCode::ContainedTaskGuardRefused
+                                                            .as_str() =>
+                                            {
+                                                return self.finish_keyed_end(
+                                                    runtime,
+                                                    ocr_collector,
+                                                    &mut machine,
+                                                    (step_index, &operation_id),
+                                                    observed.page_label.clone(),
+                                                    refusal_key.unwrap_or_default(),
+                                                    pace,
+                                                );
+                                            }
                                             // Workflow #390 EXEC-1: a guard that refused on
                                             // the step's frame before any input of the step
                                             // passes over to the page's next candidate when the
                                             // operation declares it.
                                             Err(ContainedTaskRunError::Task(error))
                                                 if attempt == 1
-                                                    && operation.on_guard_refused.is_some()
+                                                    && matches!(
+                                                        operation.on_guard_refused,
+                                                        Some(
+                                                            candidates::TaskGuardRefusal::NextCandidate(
+                                                                _
+                                                            )
+                                                        )
+                                                    )
                                                     && error.code().as_str()
                                                         == ExecutionKernelCode::ContainedTaskGuardRefused
                                                             .as_str() =>
@@ -5312,6 +5397,16 @@ impl PreparedContainedTask {
                     .into());
                 }
                 RunDirective::Terminal(RunTerminal::Completed { current_page }) => {
+                    // #411 B16 part 1: an operation's keyed cap ended the run on its page.
+                    if let Some(capped) = machine.operation_capped().cloned() {
+                        return self.finish_run_capped(
+                            runtime,
+                            ocr_collector,
+                            &machine,
+                            capped,
+                            observation_timing.pace(),
+                        );
+                    }
                     return self.finish_success(
                         runtime,
                         ocr_collector,
@@ -5467,12 +5562,15 @@ impl PreparedContainedTask {
         self.finish_success_with_key(runtime, ocr_collector, final_page, steps, None, pace)
     }
 
-    /// Workflow #308 SEL-L4b (S0 §1.4): a select step that declares `on_empty` found nobody
-    /// listed and nothing unknown. No further operation runs and no input follows: the step
-    /// finishes on its own page as recognized on its last frame, without completing its phase,
-    /// and the run is Completed there with the `on_empty` key as its scheduling outcome.
+    /// A keyed end of a step: Workflow #308 SEL-L4b (S0 §1.4), a select step that declares
+    /// `on_empty` found nobody listed and nothing unknown; #411 B22 (B-train plan §2.11 item 2),
+    /// a click's guard refused on the step's frame at attempt 1 with a definite fail of its named
+    /// target, and the operation declares a keyed `on_guard_refused`. No further operation runs
+    /// and no input follows: the step finishes on its page as recognized on its last frame,
+    /// without completing its phase, and the run is Completed there with the declared key as its
+    /// scheduling outcome.
     #[allow(clippy::too_many_arguments)]
-    fn finish_select_empty<R: ContainedTaskRuntime>(
+    fn finish_keyed_end<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
@@ -5491,7 +5589,7 @@ impl PreparedContainedTask {
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         machine
-            .operation_ended_empty(operation_label, page_label.clone())
+            .operation_ended_keyed(operation_label, page_label.clone())
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         self.finish_success_with_key(
             runtime,
@@ -5499,6 +5597,43 @@ impl PreparedContainedTask {
             Some(page_label),
             (machine.completed_steps(), machine.designated_effect_caps()),
             Some(outcome_key),
+            pace,
+        )
+    }
+
+    /// #411 B16 part 1 (B-train plan §2.11 items 1 and 5): the operation the page would dispatch
+    /// reached its per-run cap and declares `on_max_runs: {"outcome_key": K}`. No step starts;
+    /// the run records `task.operation_capped` with `contained_task_operation_runs_capped` and is
+    /// Completed on the current page with K as its scheduling outcome.
+    fn finish_run_capped<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        machine: &RunStateMachine,
+        capped: crate::RunOperationCapped,
+        pace: PaceClock,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        let outcome = Outcome::new(ExecutionKernelCode::ContainedTaskOperationRunsCapped.code())
+            .pack_operation_id(capped.operation_id.as_str())
+            .count(capped.count)
+            .limit_count(capped.limit_count)
+            .page_id(capped.page.as_str())
+            .outcome_key(capped.outcome_key.as_str());
+        runtime
+            .record(ContainedTaskTrace::OperationCapped {
+                step_index: capped.step_index,
+                operation_label: capped.operation_id,
+                count: capped.count,
+                limit_count: capped.limit_count,
+                outcome,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        self.finish_success_with_key(
+            runtime,
+            ocr_collector,
+            Some(capped.page),
+            (machine.completed_steps(), machine.designated_effect_caps()),
+            Some(capped.outcome_key),
             pace,
         )
     }
@@ -7984,6 +8119,8 @@ impl TaskProgram {
                     retryable: operation.retryable.unwrap_or(false),
                     may_be_passed_over: operation.may_be_passed_over(),
                     on_empty_key: operation.on_empty_key(),
+                    max_runs: operation.phase_run_cap(),
+                    on_guard_refused_key: operation.on_guard_refused_key(),
                 })
             })
             .collect::<Result<Vec<_>, ContainedTaskError>>()
@@ -8821,6 +8958,17 @@ fn validate_scheduling_outcome_coverage(
     // Workflow #390 OUT-2: a path's state is its page and the designated effects that completed
     // on the way (a bit mask); its mapping condition is whether any did.
     let reach = declaration.designated_effect_reach();
+    // #411 B16 part 1 (B-train plan §2.11 item 1): a designated operation and the members of a
+    // designated effect set have their own cap (`max_repeats`), so none declares `max_runs`.
+    let designated = declaration.designated_operations();
+    if let Some(operation) = operations.iter().find(|operation| {
+        operation.max_runs.is_some() && designated.contains(&operation.id.as_str())
+    }) {
+        return Err(ContainedTaskError::with_detail(
+            ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
+            format!("designated_operation={} max_runs", operation.id),
+        ));
+    }
     let candidates = operations
         .iter()
         .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
@@ -8894,14 +9042,16 @@ fn validate_scheduling_outcome_coverage(
                 ));
             }
             // Workflow #308 SEL-L4b (S0 §1.4 (d)): a select step that declares `on_empty` may end
-            // the run here, on its own page, so this state is a terminal as well.
-            if let Some(key) = operation.on_empty_key() {
-                on_empty_coverage(
+            // the run here, on its own page, so this state is a terminal as well. #411 B16/B22
+            // (B-train plan §2.11 item 3): so may a keyed `on_max_runs` and a keyed
+            // `on_guard_refused`, under the one keyed-terminal rule.
+            for (member, key) in operation.keyed_ends() {
+                keyed_end_coverage(
                     game,
                     declaration,
                     completed,
                     &page,
-                    (key, operation.id.as_str()),
+                    (operation.id.as_str(), member, key),
                 )?;
             }
             let next_completed = member.map_or(completed, |member| {
@@ -8932,7 +9082,10 @@ fn validate_scheduling_outcome_coverage(
                 };
                 pending.push_back(((*concrete_page).clone(), next_completed));
             }
-            let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed));
+            // #411 B16 part 1: an operation capped with `on_max_runs: next_candidate` is passed
+            // over like a capped designated member.
+            let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed))
+                || operation.may_be_run_capped();
             if !may_be_capped && !operation.may_be_passed_over() {
                 break;
             }
@@ -8964,37 +9117,30 @@ fn validate_scheduling_outcome_coverage(
     Ok(())
 }
 
-/// Workflow #308 SEL-L4b (S0 §1.4 (d)): the terminal an `on_empty` select step adds at its state
-/// (`page`, the designated effects `completed` on the way): exactly one mapping has that state's
-/// effect condition and lists the page, and its outcome key is the step's `on_empty` key.
-fn on_empty_coverage(
+/// Workflow #308 SEL-L4b (S0 §1.4 (d)), #411 B16/B22 (B-train plan §2.11 item 3): the terminal
+/// a keyed end (`on_empty`, a keyed `on_max_runs` or `on_guard_refused`) adds at its state
+/// (`page`, the designated effects `completed` on the way), under the one keyed-terminal rule
+/// `actingcommand_contract::keyed_terminal_holds`: exactly one mapping has that state's effect
+/// condition and lists the page, and its outcome key is the key `member` declares.
+fn keyed_end_coverage(
     game: &str,
     declaration: &SchedulingOutcomeDeclaration,
     completed: u16,
     page: &str,
-    (key, operation_id): (&str, &str),
+    (operation_id, member, key): (&str, &str, &str),
 ) -> Result<(), ContainedTaskError> {
     let condition = DesignatedEffectReach::condition(completed);
-    let mappings = declaration
-        .mappings()
-        .iter()
-        .filter(|mapping| {
-            mapping.effect() == condition
-                && mapping
-                    .terminal_pages()
-                    .iter()
-                    .any(|mapped| crate::page_anchor_matches(game, page, mapped))
-        })
-        .collect::<Vec<_>>();
-    match mappings.as_slice() {
-        [mapping] if mapping.outcome_key() == key => Ok(()),
-        _ => Err(ContainedTaskError::with_detail(
+    if actingcommand_contract::keyed_terminal_holds(declaration, condition, key, &|mapped: &str| {
+        crate::page_anchor_matches(game, page, mapped)
+    }) {
+        Ok(())
+    } else {
+        Err(ContainedTaskError::with_detail(
             ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
             format!(
-                "operation={operation_id} on_empty page={page} effect={condition:?} mappings={}",
-                mappings.len()
+                "operation={operation_id} {member} page={page} effect={condition:?} outcome_key={key}"
             ),
-        )),
+        ))
     }
 }
 
@@ -9382,9 +9528,18 @@ struct TaskOperation {
     #[serde(default)]
     when: Option<candidates::TaskWhen>,
     /// Workflow #390 EXEC-1: a guard refusal on the step's frame passes over to the page's next
-    /// candidate; task schema `0.9`, page-graph clicks with a declared guard only.
+    /// candidate; task schema `0.9`, page-graph clicks with a declared guard only. #411 B22: or,
+    /// keyed, ends the run with its key on a definite fail.
     #[serde(default)]
     on_guard_refused: Option<candidates::TaskGuardRefusal>,
+    /// #411 B16 part 1: the most dispatches of the operation per run (1..=1000); task schema
+    /// `0.9`, page-graph tasks only, never on a designated operation or set member.
+    #[serde(default)]
+    max_runs: Option<u32>,
+    /// #411 B16 part 1: what the run does once it dispatched the operation `max_runs` times;
+    /// declared exactly with `max_runs`.
+    #[serde(default)]
+    on_max_runs: Option<candidates::TaskOnMaxRuns>,
 }
 
 impl TaskOperation {
@@ -9635,6 +9790,32 @@ impl TaskOperation {
         (ContainedTaskGuardOutcome, Option<TargetEvaluation>),
         ContainedTaskRunError<R::Error>,
     > {
+        self.judged_guard_outcome(
+            control,
+            observation,
+            evaluator,
+            runtime,
+            step_timing,
+            &mut None,
+        )
+    }
+
+    /// [`Self::guard_outcome`]; #411 B22 (B-train plan §2.11 item 2): when the guard target was
+    /// evaluated and did not pass, its evaluation is handed out in `refused_on` with the
+    /// `contained_task_guard_refused` refusal, so that a keyed `on_guard_refused` reads the
+    /// failing member typed. A page mismatch evaluates no target and hands out none.
+    fn judged_guard_outcome<R: ContainedTaskRuntime>(
+        &self,
+        control: &TaskControl,
+        observation: &PageObservation,
+        evaluator: &RecognitionEvaluator,
+        runtime: &mut R,
+        step_timing: Option<ContainedTaskTimingContext>,
+        refused_on: &mut Option<TargetEvaluation>,
+    ) -> Result<
+        (ContainedTaskGuardOutcome, Option<TargetEvaluation>),
+        ContainedTaskRunError<R::Error>,
+    > {
         if self.unguarded_trusted_coordinate {
             runtime
                 .record_guard_evaluation(
@@ -9784,6 +9965,7 @@ impl TaskOperation {
                 ),
                 None => format!("operation={} target={}", self.id, guard.target_id),
             };
+            *refused_on = Some(target);
             return Err(ContainedTaskError::with_detail(
                 ExecutionKernelCode::ContainedTaskGuardRefused.code(),
                 detail,
@@ -14859,6 +15041,8 @@ mod retry_wiring_tests {
                 retryable: false,
                 may_be_passed_over: false,
                 on_empty_key: None,
+                max_runs: None,
+                on_guard_refused_key: None,
             })
             .collect::<Vec<_>>();
         actingcommand_contract::validate_phased_route(

@@ -681,3 +681,12 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_412_b3_s0_restore::b3_s0_t0_4_restore_gives_a_declared_operation_the_gap_lab_declared_operation_and_no_operation",
 ]
 incident = ["#412 B-3"]
+
+# #411 B16 part 1 (slice BT-KEY, 0.12.x B train; register §1.164 KEY-3, KEY-1; B-train plan §2.11 items 1 and 3, test row T3 of §5.3; the contract key of the slice's block): in the static walk of a phased route, the state of an operation capped with on_max_runs {outcome_key} is a terminal under the one keyed-terminal rule, needing exactly one mapping of its effect condition that lists the page with that key, task_phases_outcome_incomplete otherwise; max_runs on a designated operation is refused task_phases_designated_effect_invalid
+[[gate]]
+key = "K47"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::gate_411_bt_key::bt_key_t3_a_keyed_cap_needs_its_one_mapping_and_no_designated_operation_is_capped",
+]
+incident = ["#411 B16"]
