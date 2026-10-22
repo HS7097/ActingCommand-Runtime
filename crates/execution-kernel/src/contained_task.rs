@@ -67,6 +67,8 @@ use std::time::{Duration, Instant, SystemTime};
 mod candidates;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
+// #412 Lab B-3 S1: one declared operation run as the kernel runs it.
+mod declared_operation;
 mod linear;
 // Workflow #390 EXEC-2.
 mod observation_window;
@@ -126,6 +128,7 @@ mod gate_308_l4bt;
 // run would, and returns after that one step.
 #[cfg(test)]
 mod gate_412_b3_s1;
+
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
@@ -223,6 +226,7 @@ mod gate_406_t3;
 // #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
 #[cfg(test)]
 mod gate_411_lab_rp;
+pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -2674,6 +2678,9 @@ pub(crate) struct ContainedTaskRunOptions {
     post_admission_ocr: PostAdmissionOcrExecution,
     entry: ContainedTaskEntry,
     application_entry: ApplicationEntryRun,
+    /// #412 Lab B-3 (design §2.1): the index of the one operation a declared operation's run
+    /// executes ([`PreparedContainedTask::run_declared_operation`]); `None` for every other run.
+    declared: Option<usize>,
 }
 
 /// Workflow #390 EXEC-3 (FCM E-02): how a page-graph package's application entry (its
@@ -2702,6 +2709,7 @@ impl ContainedTaskRunOptions {
             post_admission_ocr: PostAdmissionOcrExecution::DisabledForOfflineSimulation,
             entry: ContainedTaskEntry::Ordinary,
             application_entry: ApplicationEntryRun::AfterInitialFrame,
+            declared: None,
         }
     }
 }
@@ -4144,7 +4152,12 @@ impl PreparedContainedTask {
         runtime: &mut R,
         keys: &BTreeSet<String>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        self.run_with_reading_keys(runtime, ContainedTaskRunOptions::default(), Some(keys))
+        self.run_with_reading_keys(
+            runtime,
+            ContainedTaskRunOptions::default(),
+            Some(keys),
+            &mut None,
+        )
     }
 
     pub(crate) fn run_with_options<R: ContainedTaskRuntime>(
@@ -4152,14 +4165,17 @@ impl PreparedContainedTask {
         runtime: &mut R,
         options: ContainedTaskRunOptions,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        self.run_with_reading_keys(runtime, options, None)
+        self.run_with_reading_keys(runtime, options, None, &mut None)
     }
 
+    /// #412 Lab B-3: `declared_end` receives how a declared operation's run ended after its one
+    /// step ([`Self::run_declared_operation`]); every other run leaves it `None`.
     fn run_with_reading_keys<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         options: ContainedTaskRunOptions,
         reading_keys: Option<&BTreeSet<String>>,
+        declared_end: &mut Option<DeclaredOperationOutcome>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         runtime.update_run_progress(0);
         runtime
@@ -4210,6 +4226,7 @@ impl PreparedContainedTask {
             task_timeout,
             started,
             options,
+            declared_end,
         );
         // Task and owner-classified nonfatal operation failures retain parsed facts.
         // Record failures and fatal/unknown operation failures forbid another write.
@@ -4313,6 +4330,7 @@ impl PreparedContainedTask {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_with_collector<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -4321,8 +4339,11 @@ impl PreparedContainedTask {
         task_timeout: Duration,
         started: Instant,
         options: ContainedTaskRunOptions,
+        declared_end: &mut Option<DeclaredOperationOutcome>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let entry = options.entry;
+        // #412 Lab B-3 (design §2.1): a declared operation's run executes that operation alone.
+        let declared = options.declared;
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let task_deadline = started + task_timeout;
         // #385 P-k (performance model v1.4.2 §5.3): the run's budget clock rides on its timing
@@ -4341,11 +4362,14 @@ impl PreparedContainedTask {
             },
         );
         runtime.observe_task_timing(observation_timing);
-        if self
-            .program
-            .operations
-            .iter()
-            .any(|operation| operation.application.is_some())
+        // #412 Lab B-3: a declared operation's run dispatches no other operation, and admission
+        // refuses an application effect as the declared one.
+        if declared.is_none()
+            && self
+                .program
+                .operations
+                .iter()
+                .any(|operation| operation.application.is_some())
             && self.control.execution_mode != "recognize_only"
             && !runtime.supports_application_effect()
         {
@@ -4378,8 +4402,11 @@ impl PreparedContainedTask {
                 },
             );
         }
+        // #412 Lab B-3 (design §2.1 point 2): a declared operation's run has no application entry
+        // and no required entry: it always waits for a page of the package first.
         let initial_application = self.program.operations.first().filter(|operation| {
-            operation.from == "any"
+            declared.is_none()
+                && operation.from == "any"
                 && operation.application.is_some()
                 && self.control.execution_mode != "recognize_only"
         });
@@ -4400,7 +4427,7 @@ impl PreparedContainedTask {
         let required_entry = self
             .entry_page
             .as_ref()
-            .filter(|_| entry == ContainedTaskEntry::Ordinary);
+            .filter(|_| entry == ContainedTaskEntry::Ordinary && declared.is_none());
         let mut observation = if application_first {
             None
         } else if let Some(required_entry) = required_entry {
@@ -4446,6 +4473,10 @@ impl PreparedContainedTask {
                 )
                 .into());
         }
+        // #412 Lab B-3 (design §2.1 point 2): a declared operation runs only from its own page.
+        if let Some(declared) = declared {
+            self.declared_operation_entry(declared, observation.as_ref())?;
+        }
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -4461,26 +4492,39 @@ impl PreparedContainedTask {
             });
         }
 
+        // #412 Lab B-3 (design §2.1 point 3): a declared operation's run has that operation as
+        // its only candidate, no target page, stage, designated cap (no fact is read) or per-run
+        // cap, and one step.
         let candidates = self
             .program
             .operations
             .iter()
-            .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
+            .enumerate()
+            .filter(|(index, _)| declared.is_none_or(|declared| declared == *index))
+            .map(|(_, operation)| RunOperationCandidate::new(&operation.id, &operation.from))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| {
                 ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
             })?;
         let mut config = RunStateConfig::new_with_target_pages(
             &self.control.game,
-            self.program.target_pages()?,
+            if declared.is_some() {
+                Vec::new()
+            } else {
+                self.program.target_pages()?
+            },
             self.control.stop_on_confirmation.unwrap_or(true),
             1,
-            self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS),
+            if declared.is_some() {
+                1
+            } else {
+                self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS)
+            },
         )
         .map_err(|_| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
         })?;
-        if let Some(phases) = &self.program.phases {
+        if let Some(phases) = self.program.phases.as_ref().filter(|_| declared.is_none()) {
             config = config.with_phases(
                 phases.clone(),
                 self.program
@@ -4490,17 +4534,19 @@ impl PreparedContainedTask {
                     .map(str::to_owned),
             );
         }
-        // Workflow #390 OUT-2: the caps of a designated effect set, its fact caps read now,
-        // before the run's first step.
-        config = config.with_designated_effect_caps(self.designated_effect_caps(runtime)?);
-        // #411 B16 part 1: the operations' per-run caps.
-        config = config.with_operation_run_caps(
-            self.program
-                .operations
-                .iter()
-                .filter_map(TaskOperation::run_cap)
-                .collect(),
-        );
+        if declared.is_none() {
+            // Workflow #390 OUT-2: the caps of a designated effect set, its fact caps read now,
+            // before the run's first step.
+            config = config.with_designated_effect_caps(self.designated_effect_caps(runtime)?);
+            // #411 B16 part 1: the operations' per-run caps.
+            config = config.with_operation_run_caps(
+                self.program
+                    .operations
+                    .iter()
+                    .filter_map(TaskOperation::run_cap)
+                    .collect(),
+            );
+        }
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         // Workflow #373 NAV-3b: a phased route enters at the stage its matched entry page starts.
@@ -4530,13 +4576,36 @@ impl PreparedContainedTask {
                 ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
             })?;
         }
-        let mut stability_tracker = StabilityTracker::default();
+        // #412 Lab B-3 (design §2.1 point 5): a declared operation's run compares no steps.
+        let mut stability_tracker = StabilityTracker {
+            off: declared.is_some(),
+            ..StabilityTracker::default()
+        };
         let mut recovery_timing = None;
         // Workflow #308 SEL-L4b (S0 §1.3): the business ID each select step chose in this run,
         // which an `expect_identity` reads back.
         let mut chosen_identities: BTreeMap<String, String> = BTreeMap::new();
+        // #412 Lab B-3 (design §2.1 point 4): the guard refusal a declared operation was passed
+        // over on.
+        let mut passed_over_refusal = None;
 
         loop {
+            // #412 Lab B-3 (design §2.1 point 4): a declared operation's run returns once its one
+            // step ended. Its end goes to `declared_end`; the outcome returned with it, the run so
+            // far, is not read.
+            if declared.is_some() && machine.completed_steps() == 1 {
+                *declared_end = Some(declared_operation::step_end(
+                    &machine,
+                    passed_over_refusal.take(),
+                )?);
+                return Ok(ContainedTaskOutcome {
+                    outcome: TaskOutcome::Success,
+                    final_page: machine.current_page().map(str::to_owned),
+                    executed_steps: machine.completed_steps(),
+                    selected_scheduling_outcome: None,
+                    designated_effect_caps: Vec::new(),
+                });
+            }
             if budget_elapsed_since(runtime, observation_timing.pace(), started) >= task_timeout {
                 return Err(self
                     .task_timeout_error(
@@ -4842,6 +4911,9 @@ impl PreparedContainedTask {
                                                     &operation_id,
                                                     &observed.page_label,
                                                 )?;
+                                                if declared.is_some() {
+                                                    passed_over_refusal = Some(error);
+                                                }
                                                 break 'attempt;
                                             }
                                             Err(ContainedTaskRunError::Task(error)) => {
@@ -5469,7 +5541,12 @@ impl PreparedContainedTask {
         operation_label: &str,
         observation: &PageObservation,
     ) -> Result<Option<StabilityTerminalReason>, ContainedTaskRunError<R::Error>> {
-        let terminal_reason = if let Some(declaration) = &self.control.stability_termination {
+        let terminal_reason = if let Some(declaration) = self
+            .control
+            .stability_termination
+            .as_ref()
+            .filter(|_| !stability_tracker.off)
+        {
             // Every observation a step completes on carries its sample while a declaration is
             // in force; one without it is a Runtime-internal invariant (Workflow #387 D1c-F).
             let sample = observation.stability_sample.clone().ok_or_else(|| {
@@ -7277,6 +7354,9 @@ fn compare_stability_samples(
 struct StabilityTracker {
     previous: Option<StabilityFrameSample>,
     consecutive_unchanged: u32,
+    /// #412 Lab B-3 (design §2.1 point 5): the run of one declared operation compares no steps:
+    /// it records no stability trace and no step ends it by stability.
+    off: bool,
 }
 
 enum StabilityTransition {
