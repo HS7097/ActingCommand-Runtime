@@ -10503,6 +10503,28 @@ impl RecognitionPayloadDraft {
             audit,
         )))
     }
+
+    /// Workflow #411 B1 (follow-up BT-B1-FIX): `recognition.failed` with the failure's
+    /// `outcome` (ledger revision 3), for a recognition that ended without a result.
+    pub fn failed_with_outcome(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        outcome: Outcome,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RecognitionDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_causes(
+                action,
+                diagnostic_code,
+                effect,
+                outcome,
+                None,
+                None,
+                audit,
+            ),
+        ))
+    }
 }
 
 enum ArtifactDraftKind {

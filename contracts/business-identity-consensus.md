@@ -200,7 +200,13 @@ and `attempts` (the retries made), `timeout_ms` (the window) and `stage` (which 
 `observation_page_wait`). A new window whose remaining task time cannot hold the recognition
 ends before any capture with `recognition_sample_budget_insufficient` or
 `candidate_sample_budget_insufficient` (`required_ms`, `remaining_ms`). The one sampling
-deadline check before an input precedes its effect intent.
+deadline check before an input precedes its effect intent. Workflow #411 B1 (follow-up
+BT-B1-FIX): every recognition a timed-out observation started ends before the observation is
+made again. The deadline after the frame's capture is checked before its recognition starts; a
+recognition whose evaluation finished records its completion before the timeout; one the timeout
+cut short, or that matched more than one page of an exclusive set, has no result and is closed by
+its `recognition.failed` record (`outcome` `recognition_sample_deadline_exceeded` with the retries
+made so far, the window and the stage).
 
 The kernel captures one bounded frame transaction for page detection, required-home checks
 and input guards; it checks geometry and cancellation between captures and records each
