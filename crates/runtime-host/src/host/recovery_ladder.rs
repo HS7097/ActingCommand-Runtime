@@ -2875,7 +2875,9 @@ impl HostShared {
                 }
             }
         }
-        Ok(if score_milli <= config.change_max_milli {
+        // RED PROOF 6 (do not merge): the opposite of B12's comparison at the threshold
+        // (a change equal to it counts as moved).
+        Ok(if score_milli < config.change_max_milli {
             ScreenProbe::Settled
         } else {
             ScreenProbe::Changing {
