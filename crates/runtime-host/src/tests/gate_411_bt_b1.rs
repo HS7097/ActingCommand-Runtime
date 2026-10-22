@@ -310,6 +310,30 @@ fn stream_rows(
 // evaluation as a row of the guard phase `agreement_sample` (LR-6), the frames in order.
 #[test]
 fn bt_b1_t2_frames_that_do_not_agree_leave_the_side_unread_and_the_page_unmatched() {
+    // one-off (to be reverted): BT-B1 T2 x20. Each round is the whole test on its own Runtime; a
+    // failed round's panic text (with the harness's latched_fatal and shutdown_requested) is
+    // kept, and the test then fails naming every failed round.
+    let failures = (1..=20)
+        .filter_map(|round| {
+            std::panic::catch_unwind(bt_b1_t2_round).err().map(|panic| {
+                let text = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("<panic without text>");
+                format!("round {round}: {text}")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        failures.is_empty(),
+        "BT-B1 T2 x20: {} of 20 rounds failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+fn bt_b1_t2_round() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("agreement.zip");
     fs::write(&package, agreement_package(true, None)).expect("write the agreement package");
