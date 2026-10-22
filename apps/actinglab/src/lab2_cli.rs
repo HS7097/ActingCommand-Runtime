@@ -1617,6 +1617,7 @@ const DO_OPERATION: Lab2Path = Lab2Path {
     name: "do --operation",
     reads: &[
         "--operation",
+        "--tap",
         "--capture",
         "--package",
         "--zip",
