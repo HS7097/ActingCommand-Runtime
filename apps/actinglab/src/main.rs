@@ -468,7 +468,11 @@ fn retired_digest_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
 fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let args = &invocation.args;
     if !args.iter().any(|arg| arg == "--record") {
-        if args.iter().any(|arg| arg == "--tap-rect") {
+        // #412 Lab B-3 S2 (design §1.2): with `--operation`, `do` refuses `--tap-rect` itself,
+        // naming it as `conflicting`, so this gate leaves that line to it.
+        if args.iter().any(|arg| arg == "--tap-rect")
+            && !args.iter().any(|arg| arg == "--operation")
+        {
             return Err(CliError::usage(
                 "--tap-rect is accepted only with do --capture --record",
             ));
