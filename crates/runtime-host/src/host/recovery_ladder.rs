@@ -2875,14 +2875,17 @@ impl HostShared {
                 }
             }
         }
-        Ok(if score_milli <= config.change_max_milli {
-            ScreenProbe::Settled
-        } else {
-            ScreenProbe::Changing {
-                count: digests.len(),
-                score_milli,
-            }
-        })
+        // RED PROOF 2 (do not merge): every probed screen counts as changing.
+        Ok(
+            if score_milli <= config.change_max_milli && digests.is_empty() {
+                ScreenProbe::Settled
+            } else {
+                ScreenProbe::Changing {
+                    count: digests.len(),
+                    score_milli,
+                }
+            },
+        )
     }
 
     /// R1: the failed run's bound recovery package (or the configured return-home package,
