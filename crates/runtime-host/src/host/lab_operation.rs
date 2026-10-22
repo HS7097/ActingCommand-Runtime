@@ -1927,9 +1927,8 @@ impl ContainedTaskRuntime for LabOperationRuntime<'_> {
         region: &InputSamplingRegion,
         candidates: &[(i32, i32)],
     ) -> Result<usize, Self::Error> {
-        self.host
-            .choose_touch_candidate(self.instance_alias, region, candidates)
-            .map_err(RequestFailure::poison_without_terminal)
+        let _ = (region, candidates);
+        Ok(0)
     }
 
     fn input(
