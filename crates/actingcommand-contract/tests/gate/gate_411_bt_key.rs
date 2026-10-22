@@ -29,6 +29,7 @@ fn operation<'a>(
         on_empty_key: None,
         max_runs,
         on_guard_refused_key: None,
+        on_timeout_key: None,
     }
 }
 

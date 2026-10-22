@@ -31,6 +31,7 @@ use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
 use still_wait::StillUnrecognised;
 use timing::PaceClock;
+use wait_step::{HeldFrame, HeldPage};
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
     EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, phase_entry_starts,
@@ -86,8 +87,10 @@ mod selection;
 mod text_locate_tests;
 // Workflow #396 REC-2.
 mod timing;
+// #411 B36/B19 (A35-S3): a wait step without input, and a confirmation's wait page.
 #[cfg(test)]
 mod unique_tests;
+mod wait_step;
 // Workflow #396 REC-5.
 #[cfg(test)]
 mod scales_tests;
@@ -4668,6 +4671,68 @@ impl PreparedContainedTask {
                                 phase: machine.phase_evidence(None),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
+                        // #411 B36/B19 (A35-S3): a wait step makes no input: no guard, no
+                        // effect intent, no input and no effect record. It waits on its own page
+                        // for one of its destinations in the confirmation's wait.
+                        if operation.wait.is_some() {
+                            match self.wait_step(
+                                runtime,
+                                ocr_collector,
+                                operation,
+                                step_index,
+                                (observation_timing, pacing),
+                            )? {
+                                wait_step::WaitStepEnd::Keyed {
+                                    page_label,
+                                    outcome_key,
+                                } => {
+                                    return self.finish_keyed_end(
+                                        runtime,
+                                        ocr_collector,
+                                        &mut machine,
+                                        (step_index, &operation_id),
+                                        page_label,
+                                        outcome_key,
+                                        pace,
+                                    );
+                                }
+                                wait_step::WaitStepEnd::Reached(reached) => {
+                                    observation = Some(reached);
+                                    self.expect_identity(
+                                        runtime,
+                                        operation,
+                                        (step_index, &operation_id),
+                                        &mut observation,
+                                        &chosen_identities,
+                                        observation_timing,
+                                    )?;
+                                    let reached = observation.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new(
+                                            SharedCode::ContainedTaskPageUnknown.code(),
+                                        )
+                                    })?;
+                                    if let Some(reason) = self.complete_successful_step(
+                                        runtime,
+                                        ocr_collector,
+                                        &mut machine,
+                                        &mut stability_tracker,
+                                        step_index,
+                                        &operation_id,
+                                        reached,
+                                    )? {
+                                        return self.finish_stability_termination(
+                                            runtime,
+                                            ocr_collector,
+                                            &machine,
+                                            reached,
+                                            reason,
+                                            pace,
+                                        );
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                         if let Some(effect) = operation.application {
                             // Slice #316-B3: no guard, no coordinate, no `task.effect_intent`;
                             // the runtime boundary records the `application.*` chain itself.
@@ -5149,6 +5214,13 @@ impl PreparedContainedTask {
                                     hit_error_page,
                                     timing_failure,
                                 } => (observation, last_frame_page, hit_error_page, timing_failure),
+                                // #411 B36/B19 (A35-S3): only a wait step holds on its own page.
+                                PostconditionResolution::Held { .. } => {
+                                    return Err(ContainedTaskError::new(
+                                        SharedCode::ContainedTaskStateInvalid.code(),
+                                    )
+                                    .into());
+                                }
                             };
                         let after_page = failed_observation
                             .as_ref()
@@ -5340,6 +5412,14 @@ impl PreparedContainedTask {
                                             ),
                                         )
                                         .with_timing(timing_failure)
+                                        .into());
+                                    }
+                                    // #411 B36/B19 (A35-S3): only a wait step holds on its own
+                                    // page.
+                                    PostconditionResolution::Held { .. } => {
+                                        return Err(ContainedTaskError::new(
+                                            SharedCode::ContainedTaskStateInvalid.code(),
+                                        )
                                         .into());
                                     }
                                 }
@@ -6869,7 +6949,11 @@ impl PreparedContainedTask {
     /// item 1): a wait that ran out of its window without an error page starts the extra rounds
     /// of `pacing`, one window each, before it fails; its observation window takes its own. #411
     /// A43b: while its latest two frames are still and neither is a destination, the rest of the
-    /// wait is counted unpaced ([`StillUnrecognised`]).
+    /// wait is counted unpaced ([`StillUnrecognised`]). #411 B36/B19 (A35-S3): the one kernel
+    /// wait of a wait step and of a confirmation with a wait page ([`HeldPage`]): a wait step's
+    /// own page keeps the wait going up to its `max_ms` and restarts the timeout, which then runs
+    /// only on frames of neither page; the wait page pauses the confirmation's timeout up to its
+    /// `max_ms`.
     #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
@@ -6899,6 +6983,11 @@ impl PreparedContainedTask {
         // #411 A43b: whether the latest two frames are still and neither is a destination, and
         // the part of the window counted unpaced.
         let mut still = StillUnrecognised::new(pace);
+        // #411 B36/B19 (A35-S3): the page the wait holds on, when the operation declares one (a
+        // wait step's own page, the confirmation's wait page), and the budget instant of the
+        // wait's latest frame.
+        let mut held = HeldPage::of(operation, started);
+        let mut last_frame_at = started;
         loop {
             let window_end = still.window_end(runtime, window_started, timeout);
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
@@ -6955,10 +7044,15 @@ impl PreparedContainedTask {
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
+            // #411 B36/B19 (A35-S3): the budget instant of this frame, and of the one before it.
+            let frame_at = budget_now(runtime, pace);
+            let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
             // Workflow #373 NAV-6 (§6.1 point 3): a frame that is no destination (and no error
             // page) is offered to the shared interrupt pages; the confirmation budget is paused
-            // while one is handled.
-            let paused = match observation {
+            // while one is handled. #411 B36/B19 (A35-S3): a frame of the page the wait holds on
+            // is not offered; it keeps the wait going, and only a wait page past its `max_ms`
+            // counts as a frame that did not confirm the step.
+            let (paused, unconfirmed) = match observation {
                 Ok(observation) => {
                     let destination_matches =
                         operation.matching_destination_count(&self.control, &observation)?;
@@ -6997,26 +7091,72 @@ impl PreparedContainedTask {
                             timing_failure: None,
                         });
                     }
-                    // #411 A43b: the frame is no destination.
-                    still.frame(runtime, &observation.scene)?;
-                    let paused = self.offer_shared_interrupt(runtime, &observation.scene)?;
+                    let on_held = match held.as_mut() {
+                        Some(held) => held.frame(
+                            &self.control.game,
+                            &observation.page_label,
+                            frame_at,
+                            previous_frame_at,
+                        ),
+                        None => HeldFrame::Away,
+                    };
+                    let (paused, unconfirmed) = match on_held {
+                        // A wait step's page after its `max_ms`: the wait ends there.
+                        HeldFrame::Ended(timing_failure) => {
+                            return Ok(PostconditionResolution::Held {
+                                observation,
+                                timing_failure,
+                            });
+                        }
+                        // A wait step's page: the away clock restarts from zero.
+                        HeldFrame::Restart => {
+                            started = frame_at;
+                            window_started = budget_observation_now(runtime, pace);
+                            missed = false;
+                            still.held(runtime);
+                            still.new_window(runtime);
+                            (None, false)
+                        }
+                        // The wait page: the confirmation clock pauses for the time on it.
+                        HeldFrame::Pause(span) => {
+                            started += span;
+                            window_started += span;
+                            still.held(runtime);
+                            (None, true)
+                        }
+                        HeldFrame::Away => {
+                            // #411 A43b: the frame is no destination.
+                            still.frame(runtime, &observation.scene)?;
+                            (
+                                self.offer_shared_interrupt(runtime, &observation.scene)?,
+                                true,
+                            )
+                        }
+                    };
                     last_frame_page = Some(observation.page_label.clone());
                     last_observation = Some(observation);
-                    paused
+                    (paused, unconfirmed)
                 }
                 Err(scene) => {
                     last_frame_page = None;
                     // #411 A43b: the frame gave no page.
                     still.frame(runtime, &scene)?;
-                    self.offer_shared_interrupt(runtime, &scene)?
+                    (self.offer_shared_interrupt(runtime, &scene)?, true)
                 }
             };
-            missed = true;
+            if unconfirmed {
+                missed = true;
+            }
             if let Some(paused) = paused {
                 let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
                 still.interrupted();
+                // #411 B36/B19 (A35-S3): a handled interrupt pauses a wait step's clock too.
+                if let Some(held) = held.as_mut() {
+                    held.interrupted(paused);
+                }
+                last_frame_at += paused;
                 continue;
             }
             let now = budget_now(runtime, pace);
@@ -7162,6 +7302,12 @@ fn confirmation_failure_detail(
 
 enum PostconditionResolution {
     Reached(PageObservation),
+    /// #411 B36/B19 (A35-S3): a wait step's `max_ms` was reached on its own page, the frame
+    /// `observation`; `timing_failure` is the step's wait and its `max_ms`.
+    Held {
+        observation: PageObservation,
+        timing_failure: TaskTimingFailure,
+    },
     Failed {
         observation: Option<PageObservation>,
         /// #411 A15: the page the last frame of the wait matched; none when that frame matched no
@@ -7779,6 +7925,8 @@ impl TaskProgram {
             validate_page_references(&control.game, &terminal_pages, detector)?;
             validate_page_set_overlap(&control.game, &terminal_pages, &self.error_pages, detector)?;
         }
+        // #411 B36/B19 (A35-S3): wait steps and wait pages, before the common operation checks.
+        self.validate_wait_steps(control, detector, bundle.operation_path())?;
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
             operation.validate(control, self.defaults, &self.schema_version)?;
@@ -8156,6 +8304,7 @@ impl TaskProgram {
                     on_empty_key: operation.on_empty_key(),
                     max_runs: operation.phase_run_cap(),
                     on_guard_refused_key: operation.on_guard_refused_key(),
+                    on_timeout_key: operation.wait_on_timeout_key(),
                 })
             })
             .collect::<Result<Vec<_>, ContainedTaskError>>()
@@ -9426,6 +9575,10 @@ struct TaskOperationExpectation {
     /// in this run.
     #[serde(default)]
     expect_identity: Option<TaskExpectIdentity>,
+    /// #411 B36/B19 (A35-S3): frames on this page pause the confirmation clock, up to its
+    /// `max_ms` of time on it; task schema `0.9`, page-graph tasks only.
+    #[serde(default)]
+    wait_page: Option<wait_step::TaskWaitPage>,
 }
 
 /// An `expect_after`'s `expect_identity` (Workflow #308 SEL-L4b, S0 §1.3): the select step whose
@@ -9516,7 +9669,8 @@ struct TaskOperation {
     to: Option<PageDeclaration>,
     #[serde(default)]
     expect_after: Option<TaskOperationExpectation>,
-    /// Exactly one of `click`, `application` and `select` carries the effect.
+    /// Exactly one of `click`, `application`, `select` and (#411 B36/B19) `wait` carries the
+    /// effect.
     #[serde(default)]
     click: Option<TaskClick>,
     #[serde(default)]
@@ -9575,6 +9729,10 @@ struct TaskOperation {
     /// declared exactly with `max_runs`.
     #[serde(default)]
     on_max_runs: Option<candidates::TaskOnMaxRuns>,
+    /// #411 B36/B19 (A35-S3): a wait step, an operation without input that waits on its `from`
+    /// page for one of its destinations; task schema `0.9`, page-graph tasks only.
+    #[serde(default)]
+    wait: Option<wait_step::TaskWait>,
 }
 
 impl TaskOperation {
@@ -9703,6 +9861,16 @@ impl TaskOperation {
                 };
                 guard.validate(self, control)?;
                 select.validate(&self.id)
+            }
+            // #411 B36/B19 (A35-S3): a wait step makes no input: nothing to guard, nothing to
+            // trust; the page-graph admission checked its members first
+            // (`TaskProgram::validate_wait_steps`).
+            (None, None, None)
+                if self.wait.is_some()
+                    && self.guard.is_none()
+                    && !self.unguarded_trusted_coordinate =>
+            {
+                Ok(())
             }
             _ => Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
@@ -15078,6 +15246,7 @@ mod retry_wiring_tests {
                 on_empty_key: None,
                 max_runs: None,
                 on_guard_refused_key: None,
+                on_timeout_key: None,
             })
             .collect::<Vec<_>>();
         actingcommand_contract::validate_phased_route(

@@ -328,5 +328,27 @@ actingcommand_contract::outcome_vocabulary! {
         /// The task declares no operation, which only a task schema `0.8` zero-input reading
         /// task without recovery may (contracts/ocr-fields.md).
         OperationsEmpty => "operations_empty",
+        // #411 B36/B19 (A35-S3): the rules of a wait step and of a confirmation's wait page
+        // (contracts/resource-declarations.md, "Wait steps and wait pages").
+        /// A wait step declares a member it never takes: an input or its guard, a retry, a
+        /// delay, an observation window, or a wait page of its own.
+        WaitMemberRefused => "wait_member_refused",
+        /// A wait step's `from` is not one page of the package, or is a target page or an error
+        /// page.
+        WaitFromInvalid => "wait_from_invalid",
+        /// A wait step declares no destination (`to` or `expect_after`).
+        WaitDestinationMissing => "wait_destination_missing",
+        /// A wait step's or a wait page's `max_ms` is outside 1..=1800000.
+        WaitMaxInvalid => "wait_max_invalid",
+        /// A wait step is a designated operation or a member of a designated effect set.
+        WaitDesignated => "wait_designated",
+        /// A wait step's `on_timeout` names no mapping of the task's scheduling outcome that
+        /// lists the step's `from` page.
+        WaitTimeoutUnmapped => "wait_timeout_unmapped",
+        /// The mapping a wait step's `on_timeout` names does not declare `busy`.
+        WaitTimeoutNotBusy => "wait_timeout_not_busy",
+        /// A confirmation's wait page is not one page of the package, or is a destination of its
+        /// operation or an error page.
+        WaitPageInvalid => "wait_page_invalid",
     }
 }
