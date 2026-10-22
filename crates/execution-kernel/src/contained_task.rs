@@ -27,6 +27,10 @@ use actingcommand_contract::{
 };
 // #411 A20: a phased route's refusal names the refused member.
 use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
+// #411 A44: each candidate page's verdict (ledger revision 4, register §1.153 LR-8).
+use actingcommand_contract::{
+    RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
+};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
 use still_wait::StillUnrecognised;
@@ -194,6 +198,10 @@ mod gate_rc2_a15;
 // #411 A45 T2: an entry check of a package without entry pages names the missing declaration.
 #[cfg(test)]
 mod gate_411_a45;
+// #411 A44 writer (exec keys 171 and 172; ledger revision 4 row LR-8): a page recognition hands
+// the host each candidate page's best score and verdict, the first 16 of them.
+#[cfg(test)]
+mod gate_411_a44;
 // #411 E2 T1 (A28): a run that exhausts its step budget ends with the step budget's own code.
 #[cfg(test)]
 mod gate_411_e2;
@@ -1975,6 +1983,10 @@ pub enum ContainedTaskTrace {
         width: u32,
         height: u32,
         targets: Vec<RecognizedTarget>,
+        /// #411 A44 (ledger revision 4, register §1.153 LR-8, §1.173): each candidate page's
+        /// verdict, from the evaluations this recognition made; the host writes it into
+        /// `task.recognition_completed` unchanged.
+        candidate_scores: Box<RecognitionCandidateScores>,
     },
     RecognitionStarted {
         candidate_pages: Vec<String>,
@@ -3896,6 +3908,8 @@ impl PreparedContainedTask {
             })?;
         let matched = evaluation.matched;
         let targets = recognized_targets(&self.evaluator, &evaluation)?;
+        let candidate_scores =
+            recognition_candidate_scores(std::slice::from_ref(&evaluation), &candidate_pages);
         runtime
             .record(ContainedTaskTrace::RecognitionCompleted {
                 candidate_pages,
@@ -3903,6 +3917,7 @@ impl PreparedContainedTask {
                 width: frame.width,
                 height: frame.height,
                 targets,
+                candidate_scores,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         Ok(if matched {
@@ -3971,6 +3986,7 @@ impl PreparedContainedTask {
             page.as_deref(),
             &candidate_pages,
         )?;
+        let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
         runtime
             .record(ContainedTaskTrace::RecognitionCompleted {
                 candidate_pages,
@@ -3978,6 +3994,7 @@ impl PreparedContainedTask {
                 width: frame.width,
                 height: frame.height,
                 targets,
+                candidate_scores,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         Ok(match page {
@@ -6753,6 +6770,7 @@ impl PreparedContainedTask {
                 page.as_deref(),
                 &candidate_pages,
             )?;
+            let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
             runtime
                 .record(ContainedTaskTrace::RecognitionCompleted {
                     candidate_pages,
@@ -6760,6 +6778,7 @@ impl PreparedContainedTask {
                     width: frame.width,
                     height: frame.height,
                     targets,
+                    candidate_scores,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             if let Some(required) = required_entry {
@@ -8655,6 +8674,111 @@ fn recognized_targets(
             })
         })
         .collect()
+}
+
+/// #411 A44 (ledger revision 4, register §1.153 LR-8, §1.173): each candidate page's verdict from
+/// `evaluations`, the page evaluations of one recognition: one entry per candidate page in
+/// candidate order, the first [`TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT`] of them, and `omitted`
+/// the candidate pages after them. Only what the recognition evaluated is reported: a candidate
+/// page without an evaluation has neither a score nor a failed target.
+fn recognition_candidate_scores(
+    evaluations: &[PageEvaluation],
+    candidate_pages: &[String],
+) -> Box<RecognitionCandidateScores> {
+    let pages = candidate_pages
+        .iter()
+        .take(TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT)
+        .map(|page_id| {
+            let evaluation = evaluations
+                .iter()
+                .find(|evaluation| evaluation.page_id == *page_id);
+            let passed = evaluation.is_some_and(|evaluation| evaluation.matched);
+            RecognitionCandidateScore {
+                page_id: page_id.clone(),
+                passed,
+                best_score_milli: evaluation.and_then(best_target_score_milli),
+                first_failed_target_id: evaluation
+                    .filter(|_| !passed)
+                    .and_then(first_failed_target_id),
+            }
+        })
+        .collect();
+    let omitted = candidate_pages
+        .len()
+        .saturating_sub(TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT);
+    Box::new(RecognitionCandidateScores {
+        pages,
+        // A recognition's candidate pages stay far below `u32::MAX` (the fact admits 1..=1024);
+        // a count past it would be refused by the fact's own validation when the host writes it.
+        omitted: u32::try_from(omitted).unwrap_or(u32::MAX),
+    })
+}
+
+/// The highest score among the page's evaluated targets, in milli: a template's normalised score,
+/// an OCR read's confidence and an NN target's selected score, each converted as elsewhere in the
+/// Runtime. A colour, colour digest, composite or value test target has no score, nor has a
+/// target the page recognition skipped (Workflow #396 REC-6).
+fn best_target_score_milli(evaluation: &PageEvaluation) -> Option<u32> {
+    evaluation
+        .target_results
+        .iter()
+        .filter(|target| target.skipped.is_none())
+        .filter_map(|target| target_score_milli(&target.evaluation))
+        .max()
+}
+
+fn target_score_milli(evaluation: &TargetEvaluation) -> Option<u32> {
+    match evaluation.kind {
+        TargetKind::Template => evaluation
+            .template
+            .as_ref()
+            .map(|template| actingcommand_recognition::score_milli(template.score)),
+        TargetKind::Ocr => evaluation
+            .ocr
+            .as_deref()
+            .and_then(|ocr| actingcommand_contract::ocr_confidence_milli(ocr.confidence))
+            .map(u32::from),
+        TargetKind::Nn => evaluation
+            .nn
+            .as_ref()
+            .and_then(|nn| nn.selected_score)
+            .map(actingcommand_recognition::score_milli),
+        TargetKind::Color
+        | TargetKind::ColorDigest
+        | TargetKind::Composite
+        | TargetKind::ValueTest
+        | TargetKind::ClickOnly => None,
+    }
+}
+
+/// Why the page did not match: its first target, in the page's declared order (`required`, the
+/// `any_of` groups, `forbidden`), that ruled it out: a `required` target that did not pass, the
+/// first target of an `any_of` group none of whose targets passed, or a `forbidden` target that
+/// passed. A target the page recognition skipped rules nothing out, nor does a group holding one.
+fn first_failed_target_id(evaluation: &PageEvaluation) -> Option<String> {
+    let of_role = |role: PageTargetRole| {
+        evaluation
+            .target_results
+            .iter()
+            .filter(move |target| target.role == role)
+    };
+    let required =
+        of_role(PageTargetRole::Required).find(|target| target.skipped.is_none() && !target.passed);
+    let any_of = of_role(PageTargetRole::AnyOf).collect::<Vec<_>>();
+    let any_of_group = any_of
+        .chunk_by(|left, right| left.group_index == right.group_index)
+        .find(|group| {
+            group
+                .iter()
+                .all(|target| target.skipped.is_none() && !target.passed)
+        })
+        .and_then(|group| group.first().copied());
+    let forbidden =
+        of_role(PageTargetRole::Forbidden).find(|target| target.skipped.is_none() && target.passed);
+    required
+        .or(any_of_group)
+        .or(forbidden)
+        .map(|target| target.target_id.clone())
 }
 
 /// The rectangle the evaluator actually used, in frame pixels; `None` when it used no fixed one.

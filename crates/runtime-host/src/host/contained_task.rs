@@ -4616,6 +4616,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 width,
                 height,
                 targets,
+                candidate_scores,
             } => {
                 let observed_frame_id = self.last_frame_id.map(|id| *id.transport());
                 let observed_recognition_id = self.current_recognition_id.map(|id| *id.transport());
@@ -4684,7 +4685,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 frame_width: width,
                                 frame_height: height,
                                 targets,
-                                candidate_scores: None,
+                                // #411 A44 (register §1.153 LR-8, §1.173): the kernel's verdict
+                                // on each candidate page, as it handed it over.
+                                candidate_scores: Some(candidate_scores),
                             },
                             AuditInput::new(),
                         ),

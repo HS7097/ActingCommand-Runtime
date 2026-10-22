@@ -1942,3 +1942,21 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b4::bt_b4_t3_without_confirm_the_candidate_sets_compare_as_before",
 ]
 incident = ["#411 B4"]
+
+# #411 A44 writer (0.12.x; register §1.173; ledger revision 4, the writer of §1.153 LR-8; no code, no configuration key): a page recognition hands the host each candidate page's verdict in candidate order: passed for a page that matched, best_score_milli the highest score of the targets the recognition evaluated on it (a template's normalised score, an OCR read's confidence, an NN target's selected score, in milli; a colour, colour digest, composite or value test target and a skipped target have none), first_failed_target_id the first target in the page's declared order (required, any_of groups, forbidden) that ruled it out, only on a page that did not pass; three candidate pages of which the third matches give three entries, the first two not passed, each with its best score and first failed target, the third passed
+[[gate]]
+key = "171"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a44::a44_t1_every_candidate_page_has_its_best_score_and_verdict_in_candidate_order",
+]
+incident = ["#411 A44"]
+
+# #411 A44 writer (0.12.x; register §1.173; §1.153 LR-8): the verdicts list the first 16 candidate pages (TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT) and omitted counts the candidate pages after them; 18 candidate pages of which none matches give 16 entries, none passed, omitted 2
+[[gate]]
+key = "172"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a44::a44_t2_a_recognition_lists_the_first_16_candidate_pages_and_counts_the_rest",
+]
+incident = ["#411 A44"]
