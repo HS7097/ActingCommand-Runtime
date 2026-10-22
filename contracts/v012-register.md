@@ -3035,6 +3035,26 @@ not list the numbers `300 + 10 × row`).
 |---|---|---|---|---|---|
 | A35S5-1 | `RuntimeInstanceStatus.ladder_busy_hold` (`InstanceLadderBusyHold {kind, held_ms, limit_ms}`, `deny_unknown_fields`; `kind` `LadderBusyHoldKind`: `busy_outcome`, `screen_changing`) | new optional member of the status projection (wire, served under runtime-client 2; absent unless a hold waits); the same type is the status inside the runtime state observation of `command.validated`, which no writer records since AO-4q (as F5 and A38-1) (host 410) | A35-S5 | A35-S5 | present exactly while the ladder's hold waits (`show_ladder_busy_hold` around the hold's wait), absent while the return-home rung runs again; `held_ms` is the time since the climb's first hold of the kind began, on the Runtime clock at the read; `limit_ms` the kind's configured `max_wait_ms` (the ladder's admission snapshot); A35-S1's busy hold shows `busy_outcome`; `screen_changing` is the vocabulary's second value, for A35-S2's changing-screen hold once it passes it (the coordinator re-checks it when A35-S2 has merged); `ac_overview` shows the status member verbatim as the row's `ladder_busy_hold` |
 
+### 1.175 Slice FLK07-FIX (0.12.x): a resource-close lease the instance's queue refuses fails only the capture's work and no longer halts the Runtime (#411 A52; FLK-07's cause, board #71; coordinator 10-22 11:1x)
+
+CI run 39708910434 ran FLK-07 (`capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success`)
+20 times: 4 rounds latched `lease_transfer_not_safe` (`prepare_resource_close_lease`,
+`host_halted=true`). A read-only observe holds the instance's admission guard while it captures,
+so a Runtime claim that arrives meanwhile waits in the instance's queue; when the capture failed,
+its close asked for a dedicated resource-close lease, the waiting entry refused it (Workflow #369
+§5.1) and the close path made the refusal the Runtime's fatal. In production one instance's failing
+observes could stop the whole Runtime while another request waited.
+[read-session-resource-close.md](read-session-resource-close.md) is the contract. **No persisted
+shape**: the refusal is an existing record (`runtime.failed`) of an existing code
+(`lease_transfer_not_safe`) at an existing location (`prepare_resource_close_lease`); no code,
+key, vocabulary token, configuration key, location or package member. Gates: host keys 171, 172
+(173 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A52-1 | a capture failure whose dedicated close lease is refused `lease_transfer_not_safe` (a read-only observe's or a monitor's; a run closes under its own lease) | rule (no shape change) (host 171) | FLK07-FIX | FLK07-FIX | no close is attempted; the refusal is one `runtime.failed` (stage `runtime_lifecycle_session_close`, the instance, the failed work's links), not fatal; the work fails as its capture failure; the instance is not fenced (Workflow #403 fences an unconfirmed close; nothing is unconfirmed); the session must close and is closed at the waiting entry's lease end or by its preparation (`read-session-resource-close.md`, "Device session lifetime"; `runtime-fact-store.md`, "Connection preparation phase") |
+| A52-2 | every other failure of that close | rule (unchanged) (host 172) | FLK07-FIX | — | keeps its fatality: a close attempted under an expired or otherwise invalid lease or an unresolved destructive step retains failure and owner protection, a ledger failure ends the Runtime; an unconfirmed close of the instance's own resources fences it (#403) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

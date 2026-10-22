@@ -108,6 +108,9 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+// #411 A52 (FLK-07's cause; host keys 171, 172), register §1.175: a close lease the instance's
+// queue refuses fails only the capture's work; a close under a lapsed lease still halts the host.
+mod gate_411_a52;
 // Workflow #411 A3 (R-1, v0.12.1): a routine entry the pause gate holds does not refuse a
 // shutdown.
 mod gate_0121_a3;
