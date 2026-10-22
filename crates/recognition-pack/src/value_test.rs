@@ -93,6 +93,10 @@ pub enum ValueTestPart {
 }
 
 /// `{"const": n}` or another side.
+// Workflow #411 BT-B1: the operand grew with `dictionary` and `agreement`. A side is read once at
+// pack admission and never on a hot path, so the size difference is accepted rather than boxing
+// the operand at every match site.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum ValueTestRight {
