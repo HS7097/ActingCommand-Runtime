@@ -3055,6 +3055,26 @@ is added. Gates: exec keys 171 and 172, host key 174 (exec 173 and 174 unused).
 | A44-2 | the verdicts | rule (no shape change beyond LR-8) (exec 171, 172) | A44 writer | A44 writer | one entry per candidate page in candidate order, the first 16 (`TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT`), `omitted` the candidate pages after them; `passed` is the page's own match, so the matched page's entry passed and without a matched page none did; `best_score_milli` is the highest score among the targets evaluated on the page, passed or not: a template's normalised score (`score_milli`, rounded down, 0 to 1000), an OCR read's confidence (`ocr_confidence_milli`) and an NN target's selected score (as a template's); a colour, colour digest, composite or value test target, a target the page recognition skipped and a read without a confidence give none, and a page with none has no `best_score_milli`; `first_failed_target_id`, only on a page that did not pass, is the first target in the page's declared order (`required`, the `any_of` groups, `forbidden`) that ruled it out: a `required` target that did not pass, the first target of an `any_of` group none of whose targets passed (and none skipped), or a `forbidden` target that passed; a skipped target rules nothing out; a candidate page without an evaluation would have neither |
 | A44-3 | `task.recognition_completed.candidate_scores` | writer of LR-8 (§1.153) (host 174) | BT-LR | A44 writer | the host writes the kernel's verdicts unchanged into every `task.recognition_completed` it records; the fact's own validation runs on the writer's draft as registered for LR-8 |
 
+### 1.175 Slice FLK07-FIX (0.12.x): a resource-close lease the instance's queue refuses fails only the capture's work and no longer halts the Runtime (#411 A52; FLK-07's cause, board #71; coordinator 10-22 11:1x)
+
+CI run 39708910434 ran FLK-07 (`capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success`)
+20 times: 4 rounds latched `lease_transfer_not_safe` (`prepare_resource_close_lease`,
+`host_halted=true`). A read-only observe holds the instance's admission guard while it captures,
+so a Runtime claim that arrives meanwhile waits in the instance's queue; when the capture failed,
+its close asked for a dedicated resource-close lease, the waiting entry refused it (Workflow #369
+§5.1) and the close path made the refusal the Runtime's fatal. In production one instance's failing
+observes could stop the whole Runtime while another request waited.
+[read-session-resource-close.md](read-session-resource-close.md) is the contract. **No persisted
+shape**: the refusal is an existing record (`runtime.failed`) of an existing code
+(`lease_transfer_not_safe`) at an existing location (`prepare_resource_close_lease`); no code,
+key, vocabulary token, configuration key, location or package member. Gates: host keys 171, 172
+(173 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A52-1 | a capture failure whose dedicated close lease is refused `lease_transfer_not_safe` (a read-only observe's or a monitor's; a run closes under its own lease) | rule (no shape change) (host 171) | FLK07-FIX | FLK07-FIX | no close is attempted; the refusal is one `runtime.failed` (stage `runtime_lifecycle_session_close`, the instance, the failed work's links), not fatal; the work fails as its capture failure; the instance is not fenced (Workflow #403 fences an unconfirmed close; nothing is unconfirmed); the session must close and is closed at the waiting entry's lease end or by its preparation (`read-session-resource-close.md`, "Device session lifetime"; `runtime-fact-store.md`, "Connection preparation phase") |
+| A52-2 | every other failure of that close | rule (unchanged) (host 172) | FLK07-FIX | — | keeps its fatality: a close attempted under an expired or otherwise invalid lease or an unresolved destructive step retains failure and owner protection, a ledger failure ends the Runtime; an unconfirmed close of the instance's own resources fences it (#403) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
