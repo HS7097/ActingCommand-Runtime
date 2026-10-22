@@ -1689,16 +1689,6 @@ impl LabOperationRuntime<'_> {
             });
             self.prepared.before_frame = Some(input_frame);
             self.prepared.action = Some(action.clone());
-            match self.host.persist_lab_prepared(
-                &self.prepared,
-                (self.links.clone(), self.artifact_links.clone()),
-            ) {
-                Ok(reference) => self.prepared_artifact = Some(reference),
-                Err(failure) => {
-                    self.prepared_unwritten = true;
-                    return Err(failure);
-                }
-            }
         }
         self.attempts.push(LabOperationAttempt {
             attempt,
@@ -1738,8 +1728,7 @@ impl LabOperationRuntime<'_> {
         let prepared_sequence = self
             .prepared_artifact
             .as_ref()
-            .map(|prepared| prepared.verified.sequence)
-            .ok_or_else(invalid)?;
+            .map_or(0, |prepared| prepared.verified.sequence);
         let reference = frame.map(|frame| frame.reference());
         let last_frame = self
             .frames
@@ -2026,6 +2015,13 @@ impl ContainedTaskRuntime for LabOperationRuntime<'_> {
             } => self.effect_intent(action, sampling, guard),
             ContainedTaskTrace::EffectCompleted { .. } => {
                 self.after_input = true;
+                // Red proof 1: the prepared record is persisted after the input.
+                if self.prepared_artifact.is_none() {
+                    self.prepared_artifact = Some(self.host.persist_lab_prepared(
+                        &self.prepared,
+                        (self.links.clone(), self.artifact_links.clone()),
+                    )?);
+                }
                 Ok(())
             }
             ContainedTaskTrace::StepFinished { page_label, .. } => {
