@@ -3074,6 +3074,9 @@
         },
         "join_timeout": {
           "description": "The recognition had not returned when the run's join timeout ended."
+        },
+        "no_agreement": {
+          "description": "The frames of the mark's agreement did not all read the same value (Workflow #411 B1); the mark writes no fact."
         }
       }
     },
@@ -6297,6 +6300,9 @@
         },
         "chosen_identity": {
           "description": "The operation reads the identity an earlier select step of the same run chose."
+        },
+        "wait": {
+          "description": "The operation is a wait step: it makes no input and waits on its page for its destinations, on the run's budget clock (Workflow #411 B36, B19)."
         }
       }
     },

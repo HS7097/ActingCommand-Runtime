@@ -13,9 +13,9 @@
 //! that frame to recognition for its amount, and the run joins the amounts after the readings.
 
 use super::*;
-use actingcommand_contract::ocr_confidence_milli;
+use actingcommand_contract::{IntegerAgreement, ocr_confidence_milli};
 use actingcommand_recognition_pack::{
-    OcrObservationEvaluation, RecognitionPackResult, RememberedOcrObservations,
+    OcrObservationEvaluation, RecognitionPackResult, RememberedOcrObservations, k_of_n_value,
 };
 use std::sync::mpsc;
 
@@ -44,6 +44,9 @@ actingcommand_contract::outcome_vocabulary! {
         LowConfidence => "low_confidence",
         /// The recognition had not returned when the join timeout ended.
         JoinTimeout => "join_timeout",
+        /// Workflow #411 B1 (register §1.163): the frames of the mark's agreement did not all
+        /// read the same value.
+        NoAgreement => "no_agreement",
     }
 }
 
@@ -189,6 +192,82 @@ pub fn judge_resource_reading(
     Ok(readings)
 }
 
+/// Workflow #411 B1 (B-train plan §2.1 items 2 and 3, register §1.163): a mark with an
+/// agreement, from its judgements on its frames, the handed-off frame first: it holds only when
+/// every frame read the same readings (its `k` is `frames`), and its readings are the handed-off
+/// frame's at the lowest confidence of its frames. A frame whose recognition failed or did not
+/// return gives that problem; any other difference is `no_agreement`. There is no default and
+/// no last value.
+fn agreed_readings(
+    agreement: IntegerAgreement,
+    frames: Vec<Result<Vec<ResourceReadingValue>, ResourceReadingProblem>>,
+) -> Result<Vec<ResourceReadingValue>, ResourceReadingProblem> {
+    if let Some(problem) = frames.iter().find_map(|frame| match frame {
+        Err(
+            problem
+            @ (ResourceReadingProblem::ProviderFailed | ResourceReadingProblem::JoinTimeout),
+        ) => Some(*problem),
+        _ => None,
+    }) {
+        return Err(problem);
+    }
+    let values = frames.iter().map(|frame| {
+        frame.as_ref().ok().map(|readings| {
+            readings
+                .iter()
+                .map(|reading| reading.value)
+                .collect::<Vec<_>>()
+        })
+    });
+    if frames.len() != agreement.frame_count()
+        || k_of_n_value(values, agreement.required()).is_none()
+    {
+        return Err(ResourceReadingProblem::NoAgreement);
+    }
+    let confidence_milli = frames
+        .iter()
+        .flatten()
+        .flatten()
+        .map(|reading| reading.confidence_milli)
+        .min();
+    let mut readings = frames
+        .into_iter()
+        .next()
+        .and_then(Result::ok)
+        .ok_or(ResourceReadingProblem::NoAgreement)?;
+    if let Some(confidence_milli) = confidence_milli {
+        for reading in &mut readings {
+            reading.confidence_milli = confidence_milli;
+        }
+    }
+    Ok(readings)
+}
+
+/// Workflow #411 B1: the judgement of the mark at position `mark` of its handed-off frame on one
+/// frame captured after it for its agreement: that frame's answer for the mark, judged as on any
+/// frame. A recognition that had not returned at the join is `join_timeout`; one that ended
+/// without an answer for the mark is `provider_failed`.
+fn agreement_frame_judgement(
+    declaration: &ResourceReadingDeclaration,
+    mark: usize,
+    frame: &AgreementFrame,
+    answer: &Result<MarkResults, mpsc::RecvTimeoutError>,
+) -> Result<Vec<ResourceReadingValue>, ResourceReadingProblem> {
+    match answer {
+        Ok(results) => match frame
+            .marks
+            .iter()
+            .position(|candidate| *candidate == mark)
+            .and_then(|position| results.get(position))
+        {
+            Some(result) => judge_resource_reading(declaration, result),
+            None => Err(ResourceReadingProblem::ProviderFailed),
+        },
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(ResourceReadingProblem::JoinTimeout),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(ResourceReadingProblem::ProviderFailed),
+    }
+}
+
 /// Workflow #384 D2-S2: the package id and the reading-mark keys of a package, read from its
 /// declarations without preparing it as a task (D2 model §3.2, the binding checks a Runtime
 /// start makes).
@@ -238,11 +317,23 @@ impl PreparedContainedTask {
 }
 
 /// One frame handed to recognition: its device capture time, the marks of its page and the
-/// channel its recognition answers on.
+/// channel its recognition answers on; (Workflow #411 B1) the frames captured after it for the
+/// agreements of its marks, in capture order.
 #[derive(Debug)]
 struct HandedOffFrame {
     captured_at: SystemTime,
     declarations: Vec<ResourceReadingDeclaration>,
+    results: mpsc::Receiver<MarkResults>,
+    later: Vec<AgreementFrame>,
+}
+
+/// Workflow #411 B1: one frame captured after a handed-off frame for the agreements of its marks:
+/// its device capture time, the marks (positions in the handed-off frame's marks) whose
+/// agreement reads it, and the channel its recognition answers on, one result per mark.
+#[derive(Debug)]
+struct AgreementFrame {
+    captured_at: SystemTime,
+    marks: Vec<usize>,
     results: mpsc::Receiver<MarkResults>,
 }
 
@@ -337,6 +428,8 @@ impl<'a> ReadingRelay<'a> {
     /// runs on its own thread; when no thread can be started, it runs here, so the marks are
     /// still read. Workflow #396 REC-6: a mark's target that the page gate observed on this
     /// frame (`remembered`) takes that observation instead of calling the provider again.
+    /// Workflow #411 B1: each frame of `agreement_frames` (captured after `scene`, in order) goes
+    /// to recognition for the marks whose agreement reads it.
     fn hand_off(
         &mut self,
         evaluator: &RecognitionEvaluator,
@@ -344,16 +437,46 @@ impl<'a> ReadingRelay<'a> {
         captured_at: SystemTime,
         declarations: Vec<ResourceReadingDeclaration>,
         remembered: RememberedOcrObservations,
+        agreement_frames: Vec<(SystemTime, Scene)>,
     ) -> Result<(), ContainedTaskError> {
         let targets = declarations
             .iter()
             .map(|declaration| declaration.target_id.clone())
             .collect::<Vec<_>>();
         let results = self.recognize(evaluator, scene, targets, remembered)?;
+        let mut later = Vec::with_capacity(agreement_frames.len());
+        for (index, (frame_captured_at, frame_scene)) in agreement_frames.into_iter().enumerate() {
+            let marks = declarations
+                .iter()
+                .enumerate()
+                .filter(|(_, declaration)| {
+                    declaration
+                        .agreement
+                        .is_some_and(|agreement| agreement.frame_count() > index + 1)
+                })
+                .map(|(mark, _)| mark)
+                .collect::<Vec<_>>();
+            let targets = marks
+                .iter()
+                .map(|mark| declarations[*mark].target_id.clone())
+                .collect();
+            let results = self.recognize(
+                evaluator,
+                &frame_scene,
+                targets,
+                RememberedOcrObservations::default(),
+            )?;
+            later.push(AgreementFrame {
+                captured_at: frame_captured_at,
+                marks,
+                results,
+            });
+        }
         self.frames.push(HandedOffFrame {
             captured_at,
             declarations,
             results,
+            later,
         });
         Ok(())
     }
@@ -441,6 +564,9 @@ impl PreparedContainedTask {
     /// handed off and the frame goes to recognition; the run does not wait (model §3.5).
     /// `remembered` holds the page gate's observations of the run's reading targets on that frame
     /// (Workflow #396 REC-6), which the recognition takes instead of calling the provider again.
+    /// Workflow #411 B1: a mark that declares an agreement also reads the frames captured after
+    /// this one for it ([`Self::capture_agreement_frames`]), at the step's `pace`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn hand_off_reading_frame<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -449,6 +575,7 @@ impl PreparedContainedTask {
         scene: &Scene,
         captured_at: SystemTime,
         remembered: RememberedOcrObservations,
+        pace: PaceClock,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let Some(relay) = ocr_collector.reading_relay.as_mut() else {
             return Ok(());
@@ -460,14 +587,71 @@ impl PreparedContainedTask {
         runtime
             .record(ContainedTaskTrace::ResourceReadingFrame { captured_at })
             .map_err(ContainedTaskRunError::Boundary)?;
+        let agreement_frames = self.capture_agreement_frames(runtime, &declarations, pace)?;
         relay.hand_off(
             &self.evaluator,
             scene,
             captured_at,
             declarations,
             remembered,
+            agreement_frames,
         )?;
         Ok(())
+    }
+
+    /// Workflow #411 B1 (B-train plan §2.1 items 2 and 3, register §1.163): the frames after a
+    /// handed-off frame that the agreements of its marks read: as many as the largest agreement
+    /// needs beyond that frame, each the largest declared interval after the one before (at the
+    /// step's `pace`), captured and recorded as a sample is and each recorded as a frame handed
+    /// to recognition. None without an agreement. A runtime that does not sample refuses as for
+    /// target consensus (`recognition_sampling_runtime_unsupported`); a cancellation or a capture
+    /// failure ends the run, as during a sample.
+    fn capture_agreement_frames<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        declarations: &[ResourceReadingDeclaration],
+        pace: PaceClock,
+    ) -> Result<Vec<(SystemTime, Scene)>, ContainedTaskRunError<R::Error>> {
+        let Some((frames, interval_ms)) = declarations
+            .iter()
+            .filter_map(|declaration| declaration.agreement)
+            .map(|agreement| (agreement.frame_count(), agreement.interval_ms))
+            .reduce(|(frames, interval_ms), (more, other)| {
+                (frames.max(more), interval_ms.max(other))
+            })
+        else {
+            return Ok(Vec::new());
+        };
+        if !runtime.sampling_supported() {
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::RecognitionSamplingRuntimeUnsupported.code(),
+            )
+            .into());
+        }
+        let mut captured = Vec::with_capacity(frames.saturating_sub(1));
+        for _ in 1..frames {
+            pace_pause(runtime, pace, Duration::from_millis(interval_ms));
+            runtime
+                .candidate_sampling_checkpoint()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+            let frame = runtime
+                .capture()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+            self.control.resolution.validate_frame(&frame)?;
+            runtime
+                .record(ContainedTaskTrace::CaptureCompleted {
+                    width: frame.width,
+                    height: frame.height,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            runtime
+                .record(ContainedTaskTrace::ResourceReadingFrame {
+                    captured_at: frame.captured_at,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            captured.push((frame.captured_at, scene_from_frame(&frame)?));
+        }
+        Ok(captured)
     }
 
     /// Before `Finalizing` of a successful run: waits for the readings of every handed-off
@@ -495,22 +679,54 @@ impl PreparedContainedTask {
             join_timeout.map(|timeout| runtime.monotonic_now() + pace.wall_span(timeout));
         for frame in relay.frames {
             let answer = receive(runtime, &frame.results, deadline);
+            // Workflow #411 B1: the answers of the frames captured after it for its marks'
+            // agreements, within the same join timeout.
+            let mut later = Vec::with_capacity(frame.later.len());
+            for agreement_frame in frame.later {
+                let answer = receive(runtime, &agreement_frame.results, deadline);
+                later.push((agreement_frame, answer));
+            }
             let mut readings = Vec::new();
             let mut unresolved = Vec::new();
             match answer {
                 Ok(results) => {
-                    for (declaration, result) in frame.declarations.into_iter().zip(results) {
+                    for (mark, (declaration, result)) in
+                        frame.declarations.iter().zip(&results).enumerate()
+                    {
                         runtime
                             .record_reading_evaluation(
                                 frame.captured_at,
                                 &declaration.target_id,
-                                &result,
+                                result,
                             )
                             .map_err(ContainedTaskRunError::Boundary)?;
-                        match judge_resource_reading(&declaration, &result) {
+                        let judged = judge_resource_reading(declaration, result);
+                        // Workflow #411 B1: a mark with an agreement holds on all its frames.
+                        let judged = match declaration.agreement {
+                            None => judged,
+                            Some(agreement) => agreed_readings(
+                                agreement,
+                                std::iter::once(judged)
+                                    .chain(
+                                        later
+                                            .iter()
+                                            .take(agreement.frame_count().saturating_sub(1))
+                                            .map(|(agreement_frame, answer)| {
+                                                agreement_frame_judgement(
+                                                    declaration,
+                                                    mark,
+                                                    agreement_frame,
+                                                    answer,
+                                                )
+                                            }),
+                                    )
+                                    .collect(),
+                            ),
+                        };
+                        match judged {
                             Ok(held) => readings.extend(held),
                             Err(problem) => unresolved.push(ResourceReadingMiss {
-                                declaration,
+                                declaration: declaration.clone(),
                                 problem,
                             }),
                         }
@@ -523,7 +739,7 @@ impl PreparedContainedTask {
                             ResourceReadingProblem::ProviderFailed
                         }
                     };
-                    unresolved.extend(frame.declarations.into_iter().map(|declaration| {
+                    unresolved.extend(frame.declarations.iter().cloned().map(|declaration| {
                         ResourceReadingMiss {
                             declaration,
                             problem,
@@ -538,6 +754,28 @@ impl PreparedContainedTask {
                     unresolved,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
+            // Workflow #411 B1: each later frame's evaluations, recorded against it, then its
+            // readings: none of its own, since its marks' readings are the handed-off frame's.
+            for (agreement_frame, answer) in later {
+                if let Ok(results) = answer {
+                    for (mark, result) in agreement_frame.marks.iter().zip(&results) {
+                        runtime
+                            .record_reading_evaluation(
+                                agreement_frame.captured_at,
+                                &frame.declarations[*mark].target_id,
+                                result,
+                            )
+                            .map_err(ContainedTaskRunError::Boundary)?;
+                    }
+                }
+                runtime
+                    .record(ContainedTaskTrace::ResourceReadings {
+                        captured_at: agreement_frame.captured_at,
+                        readings: Vec::new(),
+                        unresolved: Vec::new(),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+            }
         }
         // Workflow #384 D2-S3 (model §3.6): the amounts of the confirmed adjustments, within the
         // same join timeout, confirmation by confirmation.

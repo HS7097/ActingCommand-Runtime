@@ -1948,6 +1948,33 @@ tests = [
 ]
 incident = ["#412 B-3"]
 
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-1; B-train plan §2.1 item 1, test row T1 of §5.3; package revision 6, declared by BT-PK6): a value-test side's dictionary turns the confusion O into 0, so the text 1O0 reads 100 while its evidence keeps 1O0; a reading mark with the same dictionary parses 1O0 as 100
+[[gate]]
+key = "144"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::gate_411_bt_b1::bt_b1_t1_a_confusion_reads_its_digit_and_the_evidence_keeps_the_text",
+]
+incident = ["#411 B1", "#411 B40"]
+
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-1, B1-2; B-train plan §2.1 items 1 and 2, test row T4 of §5.3): the declaration gate admits a reading mark's dictionary of 32 confusion pairs and an agreement whose k is its frames, and refuses 33 pairs, a from of two characters and a mark whose k is below its frames with resource_declaration_invalid (invalid_value) at the member; the mark's shared rule refuses the last at Runtime admission
+[[gate]]
+key = "145"
+coverage = "Y"
+tests = [
+    "actingcommand-pack-containment::lib::source::gate_411_bt_b1::bt_b1_t4_too_many_pairs_a_long_from_and_k_below_frames_are_refused_at_the_member",
+]
+incident = ["#411 B1"]
+
+# Workflow #411 B1 (slice BT-B1; register §1.163 B1-2, B1-3; B-train plan §2.1 item 2, test row T5 of §5.3): a value-test side that declares an agreement is admitted and its test's consumers take its frames as for target consensus; without an agreement a target_consensus declared on a value test and a side that reads a target under target consensus are refused as before
+[[gate]]
+key = "146"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::gate_411_bt_b1::bt_b1_t5_an_agreement_is_admitted_and_the_consensus_refusals_hold_without_it",
+]
+incident = ["#411 B1"]
+
 # #411 B16 part 1 (slice BT-KEY; register §1.164 KEY-1, KEY-4, KEY-5; B-train plan §2.11 items 1 and 5, test row T1 of §5.3; ledger revision 4 LR-7, first writer; package revision 6, declared by BT-PK6): an operation with max_runs and a keyed on_max_runs that the run dispatched max_runs times ends the run Completed on the current page with its key when the page would dispatch it again, no step starting; the run writes one task.operation_capped of exactly the LR-7 shape with the info outcome contained_task_operation_runs_capped (pack_operation_id, count, limit_count, page_id, outcome_key)
 [[gate]]
 key = "152"
@@ -2078,11 +2105,11 @@ tests = [
 ]
 incident = ["#411 B19"]
 
-# #411 B36 + B19 (slice A35-S3; register §1.176; §5.1 S3 test row T5; coordinator decision Q11 of 2026-10-21): admission refuses a wait step with an input, guard or retry member, an on_timeout whose mapping does not list the step's page or is not busy, and a wait page that is a destination, each contained_task_program_invalid with its program_problem, path and json_pointer; a linear_steps task refuses a wait step with contained_task_linear_invalid, reason=wait
+# #411 B36 + B19 (slice A35-S3; register §1.176; §5.1 S3 test row T5; coordinator decision Q11 of 2026-10-21): admission refuses a wait step with an input, guard or retry member, an on_timeout whose mapping does not list the step's page or is not busy, and a wait page that is a destination, each contained_task_program_invalid with its program_problem, path and json_pointer; a linear_steps task refuses a wait step with contained_task_linear_invalid, reason=wait; Lab B-3 S1's admission of a declared operation (register §1.161, Lab decision Q2) refuses a wait step with contained_task_declared_operation_unsupported, pack_operation_id and lab_operation_problem wait
 [[gate]]
 key = "179"
 coverage = "Y"
 tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t5_admission_refuses_a_broken_wait_step_or_wait_page_with_its_rule",
 ]
-incident = ["#411 B36", "#411 B19"]
+incident = ["#411 B36", "#411 B19", "#412 B-3"]

@@ -13,6 +13,25 @@ use std::collections::BTreeMap;
 
 pub const MAX_CANDIDATE_SAMPLES: usize = 5;
 
+/// The one k-of-N value rule: the one value read on at least `k` of the samples (`None` stands
+/// for a sample that read none); `None` when no value, or more than one, reaches `k`. Candidate
+/// features aggregate their integers by it, and (Workflow #411 B1) so do the agreements of
+/// value-test sides and reading marks.
+pub fn k_of_n_value<T: Ord + Clone>(
+    values: impl IntoIterator<Item = Option<T>>,
+    k: usize,
+) -> Option<T> {
+    let mut counts = BTreeMap::new();
+    for value in values.into_iter().flatten() {
+        *counts.entry(value).or_insert(0_usize) += 1;
+    }
+    let mut winners = counts.into_iter().filter(|(_, count)| *count >= k);
+    match (winners.next(), winners.next()) {
+        (Some((value, _)), None) => Some(value),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateConsensus {
@@ -171,22 +190,13 @@ impl CandidateConsensus {
                         unknown()
                     }
                 } else {
-                    let mut counts = BTreeMap::new();
-                    for value in values {
-                        if let CandidateFeature::Integer { value, .. } = value {
-                            *counts.entry(*value).or_insert(0_usize) += 1;
-                        }
-                    }
-                    let winners = counts
-                        .into_iter()
-                        .filter(|(_, count)| *count >= usize::from(k))
-                        .collect::<Vec<_>>();
-                    match winners.as_slice() {
-                        [(value, _)] => CandidateFeature::Integer {
-                            value: *value,
-                            confidence,
-                        },
-                        _ => unknown(),
+                    let integers = values.iter().map(|value| match value {
+                        CandidateFeature::Integer { value, .. } => Some(*value),
+                        _ => None,
+                    });
+                    match k_of_n_value(integers, usize::from(k)) {
+                        Some(value) => CandidateFeature::Integer { value, confidence },
+                        None => unknown(),
                     }
                 }
             }

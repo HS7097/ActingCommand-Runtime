@@ -303,7 +303,7 @@ impl PreparedContainedTask {
                         })));
                     }
                     Err(failure) if sample_retry::is_timeout(&failure) => {
-                        retries.retry(failure, window)?;
+                        retries.retry(runtime, failure, window)?;
                     }
                     Err(ContainedTaskRunError::Task(error)) => {
                         return Ok(InputRecheck::Refused {
@@ -419,7 +419,7 @@ impl PreparedContainedTask {
                     after_page = Some(fresh.page_label);
                 }
                 Err(failure) if sample_retry::is_timeout(&failure) => {
-                    retries.retry(failure, window)?;
+                    retries.retry(runtime, failure, window)?;
                     held = 0;
                 }
                 Err(ContainedTaskRunError::Task(error))
@@ -467,7 +467,7 @@ impl PreparedContainedTask {
                 None,
             ) {
                 Ok(observed) => return Ok((observed, step_timing)),
-                Err(failure) => retries.retry(failure, window)?,
+                Err(failure) => retries.retry(runtime, failure, window)?,
             }
         }
     }
@@ -595,7 +595,7 @@ impl PreparedContainedTask {
             {
                 Ok(observed) => observed,
                 Err(failure) => {
-                    retries.retry(failure, budget)?;
+                    retries.retry(runtime, failure, budget)?;
                     latest = false;
                     held = 0;
                     continue;

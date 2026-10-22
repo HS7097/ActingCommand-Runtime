@@ -78,9 +78,9 @@ impl PreparedContainedTask {
     /// `operation_id`, an operation of the package's entry task, as one a Lab operation runs as
     /// the kernel runs it, and states it. An id the task does not declare is
     /// `contained_task_declared_operation_unknown`; a `linear_steps` or `recognize_only` package,
-    /// an application effect, a select step and an operation whose `expect_after` reads the
-    /// identity an earlier select step chose are `contained_task_declared_operation_unsupported`
-    /// with their `lab_operation_problem`.
+    /// an application effect, a select step, a wait step (#411 B36/B19) and an operation whose
+    /// `expect_after` reads the identity an earlier select step chose are
+    /// `contained_task_declared_operation_unsupported` with their `lab_operation_problem`.
     pub fn declared_operation(
         &self,
         operation_id: &str,
@@ -160,6 +160,8 @@ impl PreparedContainedTask {
             Some(LabOperationProblem::ApplicationEffect)
         } else if operation.select.is_some() {
             Some(LabOperationProblem::SelectStep)
+        } else if operation.wait.is_some() {
+            Some(LabOperationProblem::Wait)
         } else if operation
             .expect_after
             .as_ref()

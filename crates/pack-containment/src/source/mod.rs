@@ -33,6 +33,9 @@ const MAX_TASK_STEPS: u32 = 1_000;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 
 mod declarations;
+// Workflow #411 B1 (slice BT-B1): a reading mark's dictionary and agreement at the gate.
+#[cfg(test)]
+mod gate_411_bt_b1;
 pub(crate) use declarations::validate_loaded_declarations;
 pub use declarations::{
     declaration_expected_shape, declaration_file_requests, validate_bundle_declarations,

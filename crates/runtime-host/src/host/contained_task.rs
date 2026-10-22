@@ -1447,10 +1447,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
         self.inner.task_timing.record_evaluation(timing, None, None);
+        // Workflow #411 B1: a value test's agreement frame is an `agreement_sample`.
         self.inner.diagnostic_guard(
             Some(target_id),
             Some(result),
-            ContainedTaskGuardEvaluation::CandidateSample,
+            ContainedTaskGuardEvaluation::of_sample(result),
         )?;
         self.inner.ensure_active()
     }
@@ -3608,10 +3609,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
         self.task_timing.record_evaluation(timing, None, None);
+        // Workflow #411 B1: a value test's agreement frame is an `agreement_sample`.
         self.diagnostic_guard(
             Some(target_id),
             Some(result),
-            ContainedTaskGuardEvaluation::CandidateSample,
+            ContainedTaskGuardEvaluation::of_sample(result),
         )?;
         self.ensure_active()
     }
@@ -4725,6 +4727,47 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     },
                 );
                 result
+            }
+            // Workflow #411 B1 (follow-up BT-B1-FIX, coordinator ruling 2026-10-22): the
+            // recognition started last ended without a result (its observation's sampling timeout
+            // cut it short). It is the recognition's existing `recognition.failed` record, under
+            // its own frame and recognition, with the timeout as its outcome; it closes the
+            // recognition, as its completion would.
+            ContainedTaskTrace::RecognitionAbandoned { outcome } => {
+                let frame_id = self.last_frame_id.ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        HostCode::ContainedTaskFrameIdentityMissing,
+                        ContractLocation::RunContainedTask,
+                        RuntimeErrorCode::RuntimeHalted,
+                    ))
+                })?;
+                let recognition_id = self.current_recognition_id.ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        HostCode::ContainedTaskRecognitionIdentityMissing,
+                        ContractLocation::RunContainedTask,
+                        RuntimeErrorCode::RuntimeHalted,
+                    ))
+                })?;
+                let links = self
+                    .links()
+                    .with_frame_id(frame_id)
+                    .with_recognition_id(recognition_id);
+                self.host.append_event(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Recognition,
+                    EventActor::Runtime,
+                    links,
+                    RecognitionPayloadDraft::failed_with_outcome(
+                        EventAction::RecognitionObserve,
+                        DiagnosticCode::RecognitionFailed,
+                        EffectDisposition::NotPerformed,
+                        outcome,
+                        AuditInput::new(),
+                    ),
+                )?;
+                self.current_recognition_id = None;
+                Ok(())
             }
             ContainedTaskTrace::StepStarted {
                 step_index,
