@@ -9,6 +9,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{DeviceSelfCheckFailure, RuntimeErrorCode};
 use actingcommand_contract::{CONNECTION_PREPARATION_CLAIM_WAIT_MS, SchedulingResumeSelfCheck};
+use actingcommand_scheduler::codes::SchedulerCode;
 
 /// How a lease end treats the instance's device session (Workflow #191 H).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -633,6 +634,23 @@ impl HostShared {
         ) {
             Ok(Ok(())) => Ok(primary),
             Ok(Err(cleanup)) => Ok(ExecutionKernelError::merge_cleanup(primary, cleanup)),
+            // #411 A52: the dedicated close lease was refused because an entry waits in the
+            // instance's queue (`prepare_resource_close`, Workflow #369 §5.1). No close was
+            // attempted, so nothing is unconfirmed and nothing is fenced (Workflow #403 fences
+            // an unconfirmed close): the refusal is recorded once and the capture failure ends
+            // only its own work. The session keeps its backends and must close: the waiting
+            // entry, granted once this work lets the instance go, closes it at its lease end or
+            // in its preparation (`read-session-resource-close.md`).
+            Err(mut refused) if close_lease_refused_by_queue(&refused) => {
+                refused.lifecycle.instance_id = Some(instance_id);
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&refused),
+                    links,
+                    None,
+                )?;
+                Ok(primary)
+            }
             Err(cleanup) => {
                 let primary =
                     RuntimeHostError::execution(HostLocation::FinishCaptureFailure, &primary);
@@ -1247,6 +1265,15 @@ impl HostShared {
         )?;
         self.withhold_policy_instance_availability(instance_id)
     }
+}
+
+/// #411 A52: whether `error` is the refusal of a dedicated resource-close lease by an entry that
+/// waits in the instance's queue (`grant_dedicated_instance_lease`: `lease_transfer_not_safe`),
+/// met before any close was attempted. Every other failure of a close keeps its fatality.
+fn close_lease_refused_by_queue(error: &RuntimeHostError) -> bool {
+    !error.is_fatal()
+        && error.code() == SchedulerCode::LeaseTransferNotSafe.as_str()
+        && error.operation() == HostLocation::PrepareResourceCloseLease.as_str()
 }
 
 /// One connection preparation attempt (`prepare_instance_connection_with_cooldown`).

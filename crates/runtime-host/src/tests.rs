@@ -108,6 +108,9 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+// #411 A52 (FLK-07's cause; host keys 171, 172), register §1.175: a close lease the instance's
+// queue refuses fails only the capture's work; a close under a lapsed lease still halts the host.
+mod gate_411_a52;
 // Workflow #411 A3 (R-1, v0.12.1): a routine entry the pause gate holds does not refuse a
 // shutdown.
 mod gate_0121_a3;
@@ -131,6 +134,9 @@ mod gate_411_a36b;
 // #411 A36c (0.12.9): a PP-OCR diagnostic archive whose seal finds its staged report changed
 // fails only the work that owns it, which records its terminal; the host keeps serving.
 mod gate_411_a36c;
+// #411 A44 writer (host key 174), register §1.173: the stored `task.recognition_completed` carries
+// each candidate page's best score and verdict (ledger revision 4 row LR-8).
+mod gate_411_a44;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.

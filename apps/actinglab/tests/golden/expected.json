@@ -2017,6 +2017,16 @@
                         "candidate_pages": [
                           "arknights/home"
                         ],
+                        "candidate_scores": {
+                          "omitted": 0,
+                          "pages": [
+                            {
+                              "best_score_milli": 1000,
+                              "page_id": "arknights/home",
+                              "passed": true
+                            }
+                          ]
+                        },
                         "frame_height": 9,
                         "frame_width": 16,
                         "kind": "recognition_completed",
