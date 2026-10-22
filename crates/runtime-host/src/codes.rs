@@ -747,6 +747,10 @@ actingcommand_contract::outcome_codes! {
         LabInputOutcomeEffectMismatch => "lab_input_outcome_effect_mismatch": error / none,
         LabInputOutcomeMismatch => "lab_input_outcome_mismatch": error / none,
         LabInputOutcomeMissing => "lab_input_outcome_missing": error / none,
+        /// Error. #412 Lab B-3 S2 (ledger revision 4 row LR-10; decision Q7): a Lab operation
+        /// that runs a declared operation took the most frames its record lists; the next
+        /// capture is refused and ends the operation (`count`, `limit_count`).
+        LabOperationFrameLimitReached => "lab_operation_frame_limit_reached": error / none,
         LabOperationLeaseResultInvalid => "lab_operation_lease_result_invalid": error / none,
         LabOperationResultInvalid => "lab_operation_result_invalid": error / none,
         LabPackageDeadlineOverflow => "lab_package_deadline_overflow": error / none,

@@ -28,6 +28,9 @@ mod gate_c2;
 // #382 C-4: the input proxy's heartbeat on the manual timer, and test plan section 4 item 5's
 // replacement (test plan v2.2 section 3.10 C-4).
 mod gate_c4;
+
+// #412 Lab B-3 S2 (apps key 90): the receipt wait of a declared operation.
+mod gate_412_b3_s2;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,

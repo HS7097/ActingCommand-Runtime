@@ -5782,7 +5782,11 @@ fn contained_task_replay_denied(code: impl Into<Code>) -> RequestFailure {
     )
 }
 
-fn contained_task_sampling_seed<T: serde::Serialize>(value: &T) -> RuntimeHostResult<u64> {
+/// #412 Lab B-3 S2 (design §2.3, decision Q9): a Lab operation's attempts draw from seeds of
+/// this derivation too.
+pub(super) fn contained_task_sampling_seed<T: serde::Serialize>(
+    value: &T,
+) -> RuntimeHostResult<u64> {
     let bytes = serde_json::to_vec(value).map_err(|_| {
         RuntimeHostError::fatal(
             HostCode::ContainedTaskSamplingSeedEncodeFailed,

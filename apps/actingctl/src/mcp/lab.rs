@@ -88,6 +88,25 @@ const FRAME_PARTS: [&str; 4] = [
 /// #411 Lab L1: ac_lab_do's destructive guard arguments, which only offline and dry-run planning
 /// read (actinglab `do`).
 const DESTRUCTIVE_GUARD: [&str; 2] = ["allow_destructive", "destructive"];
+/// #412 Lab B-3 S2 (design §1.3): ac_lab_do's argument naming an operation the package declares
+/// (actinglab `do --operation`).
+const OPERATION: &str = "operation";
+/// The arguments of the other paths of actinglab `do`, which `do --operation` does not read, in
+/// the order a refusal names the first one given.
+const OPERATION_CONFLICTS: [&str; 12] = [
+    "target",
+    "tap",
+    "swipe",
+    "after_page",
+    "after_timeout_ms",
+    "record",
+    "tap_rect",
+    "projection_sequence",
+    "projection_hash",
+    "scene",
+    "sample_scenes",
+    "dry_run",
+];
 
 // ---------------------------------------------------------------- command tables
 
@@ -302,6 +321,13 @@ static DO: LabCommand = LabCommand {
             "--swipe",
             Kind::Text,
             "--swipe: x1,y1,x2,y2,duration-ms.",
+        ),
+        // #412 Lab B-3 S2: an operation the package declares, run as the Runtime runs it.
+        flag(
+            OPERATION,
+            "--operation",
+            Kind::Text,
+            "--operation: with capture and without dry_run, the id of an operation of the package's entry task, which the Runtime runs as a run runs it (its when, guard, input recheck, point, gesture, post_delay, expect_after and retries) and records with every attempt and frame; seed draws attempt 1's point. It takes none of target, tap, swipe, after_page, after_timeout_ms, record, tap_rect, projection_sequence, projection_hash, scene, sample_scenes or dry_run: each is refused before actinglab runs, arguments_invalid {argument, argument_problem: conflicting}, as is operation without capture. The answer adds operation, end (confirmed, run_completed, passed_over, recovery_requested or failed) and attempts.",
         ),
         flag(
             "projection_sequence",
@@ -1212,15 +1238,39 @@ fn refuse_destructive_guard_on_capture(arguments: &Map<String, Value>) -> Result
     }
 }
 
+/// #412 Lab B-3 S2 (design §1.3): `operation` is a selection of its own and runs online only. A
+/// call that gives it with any of `OPERATION_CONFLICTS` (a switch counts when set), or without
+/// `capture: true`, is refused here, before the install is located and before any child runs:
+/// `arguments_invalid {argument, argument_problem: conflicting}` naming the first conflicting
+/// argument given, else `operation`.
+fn refuse_operation_conflicts(arguments: &Map<String, Value>) -> Result<(), ToolError> {
+    if !given(arguments, OPERATION) {
+        return Ok(());
+    }
+    let set = |key: &str| match arguments.get(key) {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(_) => true,
+    };
+    if let Some(key) = OPERATION_CONFLICTS.into_iter().find(|&key| set(key)) {
+        return Err(invalid_argument(key, ArgumentProblem::Conflicting));
+    }
+    if arguments.get("capture") != Some(&Value::Bool(true)) {
+        return Err(invalid_argument(OPERATION, ArgumentProblem::Conflicting));
+    }
+    Ok(())
+}
+
 /// ac_lab_do. Workflow #411 A14: target `tap` with tap names the tap twice (target is a Runtime
 /// element id): `arguments_invalid {argument: tap, argument_problem: conflicting}`, before the
 /// install is located and before any child runs; #411 Lab L1: so is a destructive guard argument
-/// with capture and without dry_run.
+/// with capture and without dry_run; #412 Lab B-3 S2: so is `operation` with an argument it does
+/// not read, or without capture.
 pub(super) fn act(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     command_line(&DO, arguments)?;
     if arguments.get("target").and_then(Value::as_str) == Some("tap") && given(arguments, "tap") {
         return Err(invalid_argument("tap", ArgumentProblem::Conflicting));
     }
+    refuse_operation_conflicts(arguments)?;
     refuse_destructive_guard_on_capture(arguments)?;
     refuse_samples_without_scene(arguments)?;
     require_locator(arguments)?;
@@ -1731,4 +1781,8 @@ mod tests {
 
     // Workflow #411 E4 tail (apps key 97): the ac_pack_check result schema names its warnings.
     mod gate_411_e4_tail;
+
+    // #412 Lab B-3 S2 (apps key 92): ac_lab_do passes operation as --operation and refuses its
+    // conflicting arguments before any child runs.
+    mod gate_412_b3_s2;
 }
