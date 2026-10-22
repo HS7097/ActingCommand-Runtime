@@ -595,7 +595,8 @@ fn code_of(result: Result<(), actingcommand_contract::RuntimeContractError>) -> 
 
 // T0-1 (contract key K39): a record of every LR-10 member, attempts and frames encodes as the
 // register spells it, decodes to itself and passes validation; the guard's trusted-coordinate
-// form and every `lab_operation_end` token read back; element and coordinate records serialize
+// and (since Lab B-3 S2's amendment, 10-22) not-evaluated forms and every `lab_operation_end`
+// token read back; element and coordinate records serialize
 // byte for byte as before LR-10.
 #[test]
 fn b3_s0_t0_1_every_lr10_member_round_trips_and_element_and_coordinate_records_keep_their_bytes() {
@@ -635,12 +636,25 @@ fn b3_s0_t0_1_every_lr10_member_round_trips_and_element_and_coordinate_records_k
     assert_eq!(result["frames"][2]["after_input"], true);
     assert_eq!(result["frames"][4]["page"], PAGE_B);
 
-    let trusted = serde_json::to_value(LabGuardOutcome::TrustedCoordinate).expect("guard JSON");
-    assert_eq!(trusted, json!({"status": "trusted_coordinate"}));
-    assert_eq!(
-        serde_json::from_value::<LabGuardOutcome>(trusted).expect("decode the guard"),
-        LabGuardOutcome::TrustedCoordinate
-    );
+    // The guard forms without members: trusted coordinates, and (amended by Lab B-3 S2 before
+    // LR-10's first writer, 10-22) no guard decision recorded.
+    for (guard, spelled) in [
+        (
+            LabGuardOutcome::TrustedCoordinate,
+            json!({"status": "trusted_coordinate"}),
+        ),
+        (
+            LabGuardOutcome::NotEvaluated,
+            json!({"status": "not_evaluated"}),
+        ),
+    ] {
+        let value = serde_json::to_value(&guard).expect("guard JSON");
+        assert_eq!(value, spelled);
+        assert_eq!(
+            serde_json::from_value::<LabGuardOutcome>(value).expect("decode the guard"),
+            guard
+        );
+    }
     for end in LabOperationEnd::ALL {
         let spelled = serde_json::to_value(end).expect("end JSON");
         assert_eq!(spelled, json!(end.as_str()), "the token of {end}");

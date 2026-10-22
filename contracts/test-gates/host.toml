@@ -1765,12 +1765,13 @@ tests = [
 ]
 incident = ["#411 A44"]
 
-# #412 Lab B-3 S2 (0.12.x; register §1.162 B3S2-1, B3S2-2; ledger revision 4, the writer of §1.153 LR-10; design rd-1021/train-0129/lab-b3-design.md §2.3, §3, §5 S2 T2-1; host keys 152 to 155 from the wave-3 frame): a Lab operation that runs a declared operation of two attempts (a failed confirmation, the retry, a second input that arrives) on a fake device ends confirmed; its prepared record was persisted and verified before attempt 1's InputIntent, and its record passes its own validation and the shared evidence verifier
+# #412 Lab B-3 S2 (0.12.x; register §1.162 B3S2-1, B3S2-2; ledger revision 4, the writer of §1.153 LR-10; design rd-1021/train-0129/lab-b3-design.md §2.3, §3, §5 S2 T2-1; host keys 152 to 155 from the wave-3 frame): a Lab operation that runs a declared operation of two attempts (a failed confirmation, the retry, a second input that arrives) on a fake device ends confirmed; its prepared record was persisted and verified before attempt 1's InputIntent, and its record passes its own validation and the shared evidence verifier. T2-8 (coordinator rulings 1 and 2 of 10-22, LR-10 amended before its first writer): a keyed guard refusal before any input (#411 B22) ends run_completed with its key, no attempt, no before frame or action and the guard not_evaluated; its frames are listed and the records pass the shared verifier
 [[gate]]
 key = "152"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_412_b3_s2::b3_s2_t2_1_the_prepared_record_is_verified_before_attempt_1_and_two_attempts_verify",
+    "actingcommand-runtime-host::lib::tests::gate_412_b3_s2::b3_s2_t2_8_a_keyed_end_before_any_input_records_no_attempt_and_verifies",
 ]
 incident = ["#412 B-3"]
 

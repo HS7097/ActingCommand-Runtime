@@ -646,7 +646,7 @@ tests = [
 ]
 incident = ["#411 B5"]
 
-# Workflow #412 Lab B-3 S0 (ledger revision 4 row LR-10; register §1.153 LR-10, §1.159 B3-1; design rd-1021/train-0129/lab-b3-design.md §5 S0 T0-1; contract key K39 of the slice's block K39-K42): a declared Lab operation's records round-trip with every LR-10 member (the selection operation, the prepared record's operation, the terminal record's operation_result with its attempts and frames, the guard's two forms, every lab_operation_end token) and pass validation; element and coordinate records serialize byte for byte as before LR-10
+# Workflow #412 Lab B-3 S0 (ledger revision 4 row LR-10; register §1.153 LR-10, §1.159 B3-1; design rd-1021/train-0129/lab-b3-design.md §5 S0 T0-1; contract key K39 of the slice's block K39-K42): a declared Lab operation's records round-trip with every LR-10 member (the selection operation, the prepared record's operation, the terminal record's operation_result with its attempts and frames, the guard's forms, not_evaluated included since Lab B-3 S2 amended LR-10 before its first writer (10-22), every lab_operation_end token) and pass validation; element and coordinate records serialize byte for byte as before LR-10
 [[gate]]
 key = "K39"
 coverage = "Y"

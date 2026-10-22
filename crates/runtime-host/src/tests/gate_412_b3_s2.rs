@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // #412 Lab B-3 S2 (frozen design rd-1021/train-0129/lab-b3-design.md §2.3, §3, §4 and §5 "S2",
-// tests T2-1 to T2-4; register §1.162; host keys 152 to 155; ledger revision 4 row LR-10): the
-// host runs one operation a package declares as the kernel runs it, over the Lab lease, and
-// writes its LR-10 records.
+// tests T2-1 to T2-4, and T2-8 of the coordinator's rulings of 10-22; register §1.162; host keys
+// 152 to 155; ledger revision 4 row LR-10): the host runs one operation a package declares as the
+// kernel runs it, over the Lab lease, and writes its LR-10 records.
 //
 // - T2-1: the prepared record is persisted and verified before attempt 1's `InputIntent`; an
 //   operation of two attempts ends `confirmed`, its record passes its own validation and the
@@ -14,6 +14,8 @@
 //   (`count`, `limit_count` 256), and no input follows it.
 // - T2-4: two operation requests on one box land on different candidates: the press chooses
 //   through the instance's landing history, which runs share (decision Q1).
+// - T2-8: a keyed end before any input (#411 B22) records no attempt and the guard
+//   `not_evaluated`, and its records verify (host key 152).
 //
 // Every expected value comes from the design and its decisions. The fake instance's frames are
 // scripted per capture (`FakeState.pixel_script`): pixel 0 shows the page. The package is
@@ -22,7 +24,7 @@
 
 use super::*;
 use actingcommand_contract::{
-    ContainedLabOperationRequest, EffectiveDeviceConfiguration, LabOperationEnd,
+    ContainedLabOperationRequest, EffectiveDeviceConfiguration, LabGuardOutcome, LabOperationEnd,
     LabOperationSelection, LabOperationStage, LabProjectionHint, ObservationFramePlan,
 };
 use actingcommand_execution_kernel::ResolvedExecutionInstance;
@@ -41,12 +43,39 @@ const TASK_TIMEOUT_MS: u64 = 30_000;
 const FRAME_LIMIT: usize = 256;
 /// The seed both requests of T2-4 give.
 const SEED: u64 = 23;
+/// T2-8: the key `op_a`'s keyed guard refusal ends the run with.
+const KEY: &str = "key_a";
+/// The colour of the ready flag (pixel 1) a guard of `op_a` may require.
+const READY: [u8; 3] = [0, 255, 0];
 
 /// A neutral package of `width` × `height` frames whose pages `neutral/page_a` and
 /// `neutral/page_b` are told apart by pixel 0, and whose entry task declares `operation`,
 /// written into `root`.
-fn write_package(root: &TempDir, (width, height): (u32, u32), operation: Value) -> PathBuf {
+fn write_package(root: &TempDir, size: (u32, u32), operation: Value) -> PathBuf {
+    write_task_package(root, size, operation, json!({}))
+}
+
+/// [`write_package`] whose task also declares the members of `task_extra`; the pack has a ready
+/// flag on pixel 1 (`flag/ready`) a guard may require.
+fn write_task_package(
+    root: &TempDir,
+    (width, height): (u32, u32),
+    operation: Value,
+    task_extra: Value,
+) -> PathBuf {
     let space = json!({"width": width, "height": height});
+    let mut task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": space.clone(),
+        "target_page": "page_b",
+        "operations": [operation]
+    });
+    for (member, value) in task_extra.as_object().expect("task members") {
+        task[member] = value.clone();
+    }
     let page_target = |page: &str, expected: [u8; 3]| {
         json!({"type": "color", "id": format!("page/{page}"),
                "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": expected})
@@ -72,18 +101,7 @@ fn write_package(root: &TempDir, (width, height): (u32, u32), operation: Value) 
             "resources/manifest.json",
             json!({"schema_version": "0.3", "entry_task_id": "task"}),
         ),
-        (
-            "resources/operations/task/task.json",
-            json!({
-                "schema_version": "0.9",
-                "task_id": "task",
-                "game": "neutral",
-                "server_scope": ["test"],
-                "coordinate_space": space.clone(),
-                "target_page": "page_b",
-                "operations": [operation]
-            }),
-        ),
+        ("resources/operations/task/task.json", task),
         (
             "resources/recognition/neutral.test.pack.json",
             json!({
@@ -92,7 +110,13 @@ fn write_package(root: &TempDir, (width, height): (u32, u32), operation: Value) 
                 "server": "test",
                 "coordinate_space": space,
                 "defaults": {"color_max_distance": 0.0},
-                "targets": [page_target("page_a", PAGE_A), page_target("page_b", PAGE_B)]
+                "targets": [
+                    page_target("page_a", PAGE_A),
+                    page_target("page_b", PAGE_B),
+                    json!({"type": "color", "id": "flag/ready",
+                           "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+                           "expected": READY})
+                ]
             }),
         ),
         (
@@ -490,6 +514,82 @@ fn b3_s2_t2_4_two_operation_requests_on_one_box_land_on_different_candidates() {
             .parameters()
             .and_then(|parameters| parameters.chosen_candidate),
         Some(u32::try_from(elsewhere).expect("index"))
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// T2-8 (host key 152; coordinator rulings 1 and 2 of 10-22 on design §3, §3.3 item 2 and §5 S2:
+// LR-10's guard `not_evaluated` and the shared verifier amended before LR-10's first writer):
+// `op_a`'s guard requires the ready flag, which never shows; its keyed `on_guard_refused` ends the
+// run on `page_a` with `key_a` before any input (#411 B22). The operation ends `run_completed` on
+// `page_a` with `key_a`; its records state no attempt, no before frame, no action and the guard
+// `not_evaluated`, list the frames the kernel captured (the after frame the last), and pass the
+// shared verifier, which the Lab client ran; nothing is input.
+#[test]
+fn b3_s2_t2_8_a_keyed_end_before_any_input_records_no_attempt_and_verifies() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    // Pixel 1 never shows the ready flag.
+    state.refuse_guard_capture.store(true, Ordering::Release);
+    page_b_after(&state, usize::MAX);
+    let host = start(
+        &root,
+        FakeProvider::one(ALIAS, instance_id(), Arc::clone(&state)),
+    );
+    let mapping = |key: &str, page: &str| json!({"outcome_key": key, "effect": "no_designated_effect", "terminal_pages": [page]});
+    let package = write_task_package(
+        &root,
+        (2, 1),
+        json!({
+            "id": OPERATION,
+            "from": "page_a",
+            "to": "page_b",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "guard": {"page_id": "page_a", "target_id": "flag/ready",
+                      "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                      "color_probe": "flag/ready"},
+            "on_guard_refused": {"outcome_key": KEY},
+            "retryable": false
+        }),
+        json!({"scheduling_outcome": {"mappings": [
+            mapping(KEY, "page_a"),
+            mapping("done", "page_b")
+        ]}}),
+    );
+    let client = lab_client(&root);
+
+    let verified = run_operation(&client, &package, None);
+
+    let record = &verified.operation().record;
+    assert!(record.failure.is_none(), "{:?}", record.failure);
+    let result = record
+        .operation_result
+        .as_ref()
+        .expect("the declared operation's result");
+    assert_eq!(result.end, LabOperationEnd::RunCompleted);
+    assert_eq!(result.final_page.as_deref(), Some("neutral/page_a"));
+    assert_eq!(result.outcome_key.as_deref(), Some(KEY));
+    assert!(result.attempts.is_empty(), "{:?}", result.attempts);
+    assert!(!result.frames.is_empty(), "the frames the kernel captured");
+    assert_eq!(
+        record.after_frame.as_ref(),
+        result.frames.last().map(|entry| &entry.frame)
+    );
+    let prepared = &record.prepared;
+    assert_eq!(
+        prepared
+            .operation
+            .as_ref()
+            .map(|operation| &operation.guard),
+        Some(&LabGuardOutcome::NotEvaluated)
+    );
+    assert!(prepared.before_frame.is_none(), "no before frame");
+    assert!(prepared.action.is_none(), "no action");
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        0,
+        "nothing input"
     );
     drop(client);
     host.close().expect("close host");
