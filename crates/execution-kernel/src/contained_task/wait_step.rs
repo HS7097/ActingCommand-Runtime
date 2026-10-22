@@ -290,7 +290,9 @@ impl<'o> HeldPage<'o> {
         now: Instant,
         previous: Instant,
     ) -> HeldFrame {
-        if !crate::page_anchor_matches(game, page_label, self.page) {
+        if !crate::page_anchor_matches(game, page_label, self.page)
+            && matches!(self.hold, Hold::Confirmation { .. })
+        {
             return HeldFrame::Away;
         }
         match &mut self.hold {
