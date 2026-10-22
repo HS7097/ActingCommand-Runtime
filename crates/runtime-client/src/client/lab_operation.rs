@@ -72,7 +72,6 @@ pub(crate) fn lab_declared_operation_response_timeout(
 ) -> Option<Duration> {
     task_timeout
         .checked_add(backend_open.checked_mul(4)?)?
-        .checked_add(Duration::from_millis(MAX_INPUT_DURATION_MS))?
         .checked_add(io_timeout)?
         .checked_add(frames.added_allowance(backend_open)?)
 }
