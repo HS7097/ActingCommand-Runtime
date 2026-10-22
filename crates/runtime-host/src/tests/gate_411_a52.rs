@@ -163,7 +163,13 @@ fn a52_t1_a_close_lease_the_queue_refuses_fails_only_the_observe_and_the_next_ho
 
     assert_eq!(failed.state(), RuntimeReceiptState::Failed, "{failed:?}");
     let projection = failed.error_projection().expect("observe failure");
-    assert!(!projection.fatal, "the Runtime must not halt: {failed:?}");
+    // The failure names what the Runtime latched (HARNESS-DIAG's `host_fatal_context`): the
+    // receipt's `host_halted` alone does not say which fatal, or whether one was latched.
+    assert!(
+        !projection.fatal,
+        "the Runtime must not halt: {failed:?}; {}",
+        client.host_fatal_context()
+    );
     assert_eq!(
         projection.code,
         RuntimeErrorCode::CaptureFailed,
