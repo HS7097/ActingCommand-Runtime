@@ -6297,6 +6297,9 @@
         },
         "chosen_identity": {
           "description": "The operation reads the identity an earlier select step of the same run chose."
+        },
+        "wait": {
+          "description": "The operation is a wait step: it makes no input and waits on its page for its destinations, on the run's budget clock (Workflow #411 B36, B19)."
         }
       }
     },
@@ -18433,8 +18436,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.10",
-      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the Lab does not run it as the kernel runs a step (page-graph clicks only), for the reason lab_operation_problem: application_effect (the operation is an application effect), select_step (a select step, which needs a policy and the instance's facts), linear_steps (the package runs linear_steps), recognize_only (the package only recognises), chosen_identity (its expect_after reads the identity an earlier select step of the same run chose). Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
-      "common_causes": "The named operation is not a page-graph click: an application effect, a select step, an operation that reads a choice, or an operation of a linear_steps or recognize_only package.",
+      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the Lab does not run it as the kernel runs a step (page-graph clicks only), for the reason lab_operation_problem: application_effect (the operation is an application effect), select_step (a select step, which needs a policy and the instance's facts), linear_steps (the package runs linear_steps), recognize_only (the package only recognises), chosen_identity (its expect_after reads the identity an earlier select step of the same run chose), wait (a wait step, which makes no input and waits on its page; #411 B36/B19). Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
+      "common_causes": "The named operation is not a page-graph click: an application effect, a select step, a wait step, an operation that reads a choice, or an operation of a linear_steps or recognize_only package.",
       "handling": "Run the whole package, or exercise the input in the Lab's element or coordinate mode."
     },
     "contained_task_designated_effect_cap_unresolved": {
@@ -41939,6 +41942,28 @@
       "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the offline tool has no Runtime configuration with a vision section. It does not run from an installation or a single-location root, or the selected configuration has no vision section.",
       "common_causes": "actinglab was started from a copy outside the installation, or the Runtime configuration has no vision section.",
       "handling": "Run actinglab from the installation's tools folder, or add the vision section to the Runtime configuration."
+    },
+    "lab_operation_frame_limit_reached": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.11",
+      "description": "#412 Lab B-3 S2 (ledger revision 4 row LR-10): a Lab operation that runs an operation its package declares lists every frame the kernel captures in its terminal record, at most limit_count (256). The kernel asked for one more capture, count, which is refused before anything is captured: the operation ends there with this failure, at before_frame or after_frame, and no later input is made. The records list the frames taken and verify.",
+      "common_causes": "An operation whose confirmation or page wait on a short capture interval outlasts the record's frame budget, such as a long expect_after timeout while the screen does not change.",
+      "handling": "Shorten the operation's waits or lengthen its capture interval in the package, or run it as a task, whose frames are not listed in one record."
     },
     "lab_operation_lease_result_invalid": {
       "category": "error",
