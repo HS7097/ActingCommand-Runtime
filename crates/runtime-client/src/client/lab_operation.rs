@@ -6,7 +6,7 @@ use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, LabOperationEvidence,
-    MAX_INPUT_DURATION_MS, MAX_LAB_ARRIVAL_FRAMES, ObservationFramePlan,
+    LabOperationSelection, MAX_INPUT_DURATION_MS, MAX_LAB_ARRIVAL_FRAMES, ObservationFramePlan,
     verify_lab_operation_evidence,
 };
 
@@ -60,19 +60,67 @@ pub(crate) fn lab_operation_response_timeout(
         )
 }
 
+/// LR-10 (#412 B-3 S2, design §2.4): the receipt wait of a Lab operation that runs a declared
+/// operation: the package's task timeout (`task_timeout`, from the client's kernel admission of
+/// the package it sends), four backend-open allowances, the longest input, the I/O allowance and
+/// one projection transaction (what `frames` adds to the after projection). `None` on overflow.
+pub(crate) fn lab_declared_operation_response_timeout(
+    backend_open: Duration,
+    io_timeout: Duration,
+    task_timeout: Duration,
+    frames: ObservationFramePlan,
+) -> Option<Duration> {
+    task_timeout
+        .checked_add(backend_open.checked_mul(4)?)?
+        .checked_add(Duration::from_millis(MAX_INPUT_DURATION_MS))?
+        .checked_add(io_timeout)?
+        .checked_add(frames.added_allowance(backend_open)?)
+}
+
 impl RuntimeDebugSession {
     /// `frames`: what the package's target consensus makes each of the operation's observations
     /// take (#411 Lab L5), as the kernel's `observation_frame_plan` computes it from the package
-    /// sent; the receipt wait allows for it.
+    /// sent; the receipt wait allows for it. An element or coordinate selection; a declared
+    /// operation is [`Self::run_contained_lab_declared_operation`]'s.
     pub fn run_contained_lab_operation(
         &self,
         instance_alias: &str,
         request: ContainedLabOperationRequest,
         frames: ObservationFramePlan,
     ) -> RuntimeClientResult<VerifiedLabOperation> {
+        self.run_lab_operation(instance_alias, request, frames, None)
+    }
+
+    /// LR-10 (#412 B-3 S2): a Lab operation that runs an operation its package declares
+    /// (`LabOperationSelection::Operation`); `task_timeout` is the package's task timeout, from
+    /// the client's kernel admission of the package it sends, which bounds the receipt wait
+    /// (design §2.4).
+    pub fn run_contained_lab_declared_operation(
+        &self,
+        instance_alias: &str,
+        request: ContainedLabOperationRequest,
+        frames: ObservationFramePlan,
+        task_timeout: Duration,
+    ) -> RuntimeClientResult<VerifiedLabOperation> {
+        self.run_lab_operation(instance_alias, request, frames, Some(task_timeout))
+    }
+
+    /// A Lab operation; `task_timeout` is given exactly for a declared operation.
+    fn run_lab_operation(
+        &self,
+        instance_alias: &str,
+        request: ContainedLabOperationRequest,
+        frames: ObservationFramePlan,
+        task_timeout: Option<Duration>,
+    ) -> RuntimeClientResult<VerifiedLabOperation> {
         request
             .validate()
             .map_err(|_| lab_error(ClientCode::RuntimeLabOperationRequestInvalid))?;
+        if matches!(request.selection, LabOperationSelection::Operation { .. })
+            != task_timeout.is_some()
+        {
+            return Err(lab_error(ClientCode::RuntimeLabOperationRequestInvalid));
+        }
         let registry = self.client.status()?;
         let instance = registry
             .instances()
@@ -87,12 +135,20 @@ impl RuntimeDebugSession {
             .ids
             .mint_holder_id()
             .map_err(|_| lab_error(ClientCode::RuntimeLabHolderIssueFailed))?;
-        let timeout = lab_operation_response_timeout(
-            connection.backend_open_timeout,
-            connection.io_timeout,
-            &request,
-            frames,
-        )
+        let timeout = match task_timeout {
+            Some(task_timeout) => lab_declared_operation_response_timeout(
+                connection.backend_open_timeout,
+                connection.io_timeout,
+                task_timeout,
+                frames,
+            ),
+            None => lab_operation_response_timeout(
+                connection.backend_open_timeout,
+                connection.io_timeout,
+                &request,
+                frames,
+            ),
+        }
         .ok_or_else(|| lab_error(ClientCode::RuntimeLabOperationTimeoutOverflow))?;
         drop(connection);
         let receipt = self.client.execute_receipt_with_correlation(

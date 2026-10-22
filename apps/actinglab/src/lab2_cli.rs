@@ -1609,7 +1609,23 @@ const DO_CAPTURE: Lab2Path = Lab2Path {
     ],
     repeats: &[],
 };
-const DO_PATHS: [&Lab2Path; 3] = [&DO_SCENE, &DO_CAPTURE_DRY_RUN, &DO_CAPTURE];
+/// LR-10 (#412 Lab B-3 S2, design §1.2): online `do --operation`, an operation the package
+/// declares, run as the Runtime runs it: its package, `--seed` for attempt 1's draw and the
+/// preview. An element, `--tap`, `--swipe`, the arrival condition, the recording, the hints,
+/// `--dry-run` and `--scene` belong to other paths and are refused as `conflicting`.
+const DO_OPERATION: Lab2Path = Lab2Path {
+    name: "do --operation",
+    reads: &[
+        "--operation",
+        "--capture",
+        "--package",
+        "--zip",
+        "--seed",
+        "--preview",
+    ],
+    repeats: &[],
+};
+const DO_PATHS: [&Lab2Path; 4] = [&DO_SCENE, &DO_CAPTURE_DRY_RUN, &DO_CAPTURE, &DO_OPERATION];
 
 const ENSURE_SCENE: Lab2Path = Lab2Path {
     name: "ensure --scene",
@@ -1695,8 +1711,12 @@ impl Lab2Path {
     }
 }
 
-/// The path `do` takes: online with `--capture` (planned with `--dry-run`), else offline.
+/// The path `do` takes: an operation the package declares with `--operation` (#412 Lab B-3
+/// S2), online with `--capture` (planned with `--dry-run`), else offline.
 fn do_path(flags: &FlagArgs, dry_run: bool) -> &'static Lab2Path {
+    if flags.flags.contains_key(OPERATION_FLAG) {
+        return &DO_OPERATION;
+    }
     match (flags.bool("--capture"), dry_run) {
         (true, false) => &DO_CAPTURE,
         (true, true) => &DO_CAPTURE_DRY_RUN,
@@ -1798,11 +1818,48 @@ fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> Cli
     Ok(())
 }
 
+/// #412 Lab B-3 S2: the option naming the declared operation `do` runs.
+const OPERATION_FLAG: &str = "--operation";
+
+/// #412 Lab B-3 S2 (design §1.2): `do --operation` names the operation itself and runs online
+/// only. With an element id, with the global `--dry-run`, or without `--capture` it is refused
+/// with `validation_failed` (exit 2) before any Runtime connection, its details naming the
+/// argument with `argument_problem` `conflicting`, as an option its path does not read is.
+fn refuse_operation_conflicts(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<()> {
+    if !flags.flags.contains_key(OPERATION_FLAG) {
+        return Ok(());
+    }
+    let (argument, message) = if !flags.positionals.is_empty() {
+        (
+            "<element-id>",
+            "do --operation names the operation it runs; it takes no element id",
+        )
+    } else if global.dry_run {
+        (
+            "--dry-run",
+            "do --operation runs the operation on the instance; it has no dry run",
+        )
+    } else if !flags.bool("--capture") {
+        (
+            OPERATION_FLAG,
+            "do --operation runs on the instance through the Runtime and requires --capture",
+        )
+    } else {
+        return Ok(());
+    };
+    Err(CliError::usage(message).with_details(json!({
+        "argument": argument,
+        "argument_problem": UnreadFlag::Conflicting.as_str(),
+        "arguments": [{"argument": argument, "argument_problem": UnreadFlag::Conflicting.as_str()}],
+    })))
+}
+
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
     // #411 Lab L1: online `do --capture` does not read the destructive guard flags.
     refuse_unread_flags(&flags, do_path(&flags, dry_run), &DO_PATHS)?;
+    refuse_operation_conflicts(global, &flags)?;
     // Workflow #410 item 1: do's preview is of the frame after the action it performed.
     if flags.bool("--preview") && (dry_run || !flags.bool("--capture")) {
         return Err(CliError::usage(
@@ -2278,11 +2335,12 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             name: "do",
             summary: "execute one current Runtime element or explicit Tap/Swipe with lease-bound evidence; plan offline semantic targets",
             required: &[
-                "<target> with --scene <png> (repeatable: 1 to 5 frames of one screen, oldest first, the last the current frame), or <element-id>/--tap/--swipe with --capture",
+                "<target> with --scene <png> (repeatable: 1 to 5 frames of one screen, oldest first, the last the current frame), or <element-id>/--tap/--swipe/--operation with --capture",
             ],
             optional: &[
                 "--tap <x,y>",
                 "--swipe <x1,y1,x2,y2,duration-ms>",
+                "--operation <operation-id> (with --capture: run an operation of the package's entry task as the Runtime runs it, its guard, recheck, point, gesture, waits and retries; reads --seed for attempt 1's point and --preview; refuses an element, --tap, --swipe, --after-*, --record, --tap-rect, --projection-*, --dry-run and --scene)",
                 "--projection-sequence <sequence>",
                 "--projection-hash <sha256>",
                 "--after-page <full-page-id>",
@@ -2314,6 +2372,9 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "record",
                 "frame_coordinates",
                 "after_attachment",
+                "operation",
+                "end",
+                "attempts",
             ],
             requires_lease: true,
         },

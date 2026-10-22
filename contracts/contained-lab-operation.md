@@ -3,7 +3,8 @@
 `RuntimeDebugSession::run_contained_lab_operation` submits the Lab-only
 `RunContainedLabOperation` request. The request selects exactly one current
 projection element ID or an explicit `InputAction::Tap` / `InputAction::LongTap` /
-`InputAction::Swipe`.
+`InputAction::Swipe`; `run_contained_lab_declared_operation` submits the same request with an
+operation the package declares ("A declared operation" below).
 It contains an absolute package path, external expected SHA-256, and optional
 source projection sequence/content hash hints. Hints are recorded; resolution
 uses only the newly captured Runtime projection.
@@ -256,7 +257,7 @@ point from `seed` when given. The id follows the element id's rules (1 to 2048 b
 A request with this selection and an arrival condition is refused
 `invalid_lab_operation_selection`: the operation's own `expect_after` or `to` is its arrival.
 No projection resolves the selection (`resolve` refuses it, `invalid_lab_operation_selection`);
-until Lab B-3 S2 the Runtime therefore refuses it at the `selection` stage, before any input.
+the Runtime runs it as "Running a declared operation" below says (Lab B-3 S2).
 
 Its records add two optional members, absent in element and coordinate records, whose bytes are
 unchanged; the schema strings stay:
@@ -295,6 +296,65 @@ belongs to the request (`runtime_lab_unreported_input`); the selection is not re
 the final command event carries the aggregate effect. `RuntimeClient` and `resource restore`
 read each attempt's action events. `resource restore` gives such a record the gap
 `lab_declared_operation`, restores no operation from it, and its provenance names `end`.
+
+### Running a declared operation (#412 Lab B-3 S2)
+
+The online form is
+
+```
+actinglab do --operation <operation-id> --capture --package|--zip <package> [--seed <u64>] [--instance] [--preview] [--fields] [--pretty|--verbose]
+```
+
+and MCP `ac_lab_do` passes its `operation` as `--operation` (with `seed`). Before any Runtime
+connection, `do --operation` refuses an element id, `--tap`, `--swipe`, `--after-page`,
+`--after-timeout-ms`, `--record`, `--tap-rect`, `--projection-sequence`, `--projection-hash`,
+`--dry-run` (do's and the global one), `--scene` and `--operation` without `--capture`, each with
+`validation_failed` (exit 2) whose details name the argument with `argument_problem`
+`conflicting`; `ac_lab_do` refuses the same arguments (with `sample_scenes`) and `operation`
+without `capture: true` as `arguments_invalid {argument, argument_problem: conflicting}` before
+any child runs. actinglab first runs the kernel's admission of the package and of the operation,
+as the Runtime does: a package it refuses is `package_invalid` and an operation it does not run
+this way answers the kernel's code (`contained_task_declared_operation_unknown`, `_unsupported`)
+with its values, both exit 2 before any connection. The answer is online `do`'s with `operation`
+(the prepared record's), `end` and `attempts`. It exits 0 when `end` is `confirmed` or
+`run_completed`; 3 (`safety_blocked`, the failure's code) blocked by `page` (page mismatch,
+candidates exhausted), `guard` (guard refused, input stability or still unconfirmed) or
+`arrival_page` (step unconfirmed, page confirmation failed, error page reached,
+`contained_task_timeout` after an input, recovery requested); anything else 4, as today.
+
+The Runtime admits the package and the operation with its own vision provider before any lease;
+a refusal is a Denied receipt with no record. The lease lasts the package's task timeout and the
+longest input, plus the heartbeat reserve. The kernel then runs the operation in its
+declared-operation mode over the Lab lease:
+
+* every capture is the lease's, fenced before and after as an element operation's, and listed
+  as a frame entry of the record (its attempt: the attempt started last, 0 before the first;
+  the attempt's input frame is that attempt's); a fence that failed ends the operation. The
+  capture after the 256th is refused with `lab_operation_frame_limit_reached` (`count`,
+  `limit_count` 256; error, `ladder_class` `none`) and ends the operation;
+* every input is preceded by the handset keepalive, as a run's, and goes through the lease's
+  input with the frame the kernel bound it to; a frame other than the one captured last is the
+  fatal `contained_task_effect_frame_identity_mismatch`. Each attempt's intent and outcome are
+  read as an element operation's input is, from after the previous attempt's events;
+* the point is drawn with the touch keys in effect and the instance's landing history, which
+  runs share and which records the press; attempt 1 draws from the request's seed (or one
+  derived from the request), attempt k > 1 from that seed and k;
+* the Runtime clock at the factor 1000, the configured observe-only retries; no shared
+  interrupt, application effect, selection state, task, fact, reading, scheduling or ladder
+  record, and no designated effect is counted.
+
+Attempt 1's effect intent persists and verifies the prepared record before the kernel's input; a
+prepared record that cannot be persisted stops the operation before the input, without a record,
+as an element operation's. When no attempt reached its effect intent the prepared record states
+the operation as admitted, with no input frame, action or draw (its `guard` the
+trusted-coordinate form) and is persisted after the run. A failure before the current attempt's
+input is at `selection`, after it at `arrival`; a capture's at `before_frame` or `after_frame`, an
+input's at `input`; `passed_over` answers the guard's refusal, `recovery_requested` the failure
+its decision named. Once the operation ended `confirmed` or `run_completed` its last frame is
+projected (the after projection, after the run, so no recognition comes between the decision and
+the input). A request whose lease was not granted captured nothing; its records state no declared
+operation. The client's receipt wait for such a request is the package's task timeout, four
+backend-open allowances, the longest input, the I/O allowance and one projection transaction.
 
 ## The frame's coordinate system and the after-action attachment (Workflow #410 item 1)
 

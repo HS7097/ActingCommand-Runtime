@@ -60,6 +60,9 @@ mod lab_operation;
 pub use lab_operation::VerifiedLabOperation;
 #[cfg(test)]
 pub(crate) use lab_operation::lab_operation_response_timeout;
+// #412 Lab B-3 S2 (apps key 90): the receipt wait of a declared operation.
+#[cfg(test)]
+pub(crate) use lab_operation::lab_declared_operation_response_timeout;
 mod run_status;
 pub use run_status::{
     ContainedRunEvidence, ContainedRunLease, ContainedRunPage, ContainedRunProgress,
