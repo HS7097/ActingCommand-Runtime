@@ -1755,3 +1755,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_still_halts_the_host",
 ]
 incident = ["#411 A52"]
+
+# #411 A44 writer (0.12.x; register §1.173; ledger revision 4, the writer of §1.153 LR-8; no code, no configuration key; host key 174 assigned by the coordinator): the host writes the verdicts a page recognition hands it into task.recognition_completed's candidate_scores unchanged; a run whose second of two candidate pages matches stores the fact with both entries in candidate order (the first not passed, with its best score and first failed target; the second passed, with its best score; omitted 0), which passed its own validation when appended and is read back from the ledger; the paired recognition.completed payload is unchanged
+[[gate]]
+key = "174"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a44::a44_t3_the_stored_recognition_fact_carries_every_candidate_pages_verdict",
+]
+incident = ["#411 A44"]
