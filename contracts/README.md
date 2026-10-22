@@ -271,6 +271,24 @@ with end pages is no prerequisite or return-home layer
 (`contained_task_prerequisite_incompatible`, `reason=phase_end_pages`). Both members
 join `package` revision 6, which the B train's closing slice declares.
 
+Per-run operation caps and keyed guard refusals (Workflow #411 B16 part 1, B22;
+[resource-declarations.md](resource-declarations.md), "Per-run operation caps and keyed
+guard refusals"). An operation may declare `max_runs` with `on_max_runs`: once a run
+dispatched it that often, `next_candidate` passes it over like a capped member of a
+designated effect set, and `{"outcome_key": K}` ends the run Completed on the current page
+with K, recorded as `task.operation_capped`. A click's `on_guard_refused` may be keyed,
+`{"outcome_key": K, "failed"?: <target>}`: a definite fail of the named target on the
+step's first frame ends the step without an input and the run Completed there with K. A
+select step's `on_empty`, a keyed `on_max_runs` and a keyed `on_guard_refused` follow one
+keyed-terminal rule in this walk and in the page-graph coverage check: the operation's
+state is a terminal that needs exactly one mapping with its effect condition listing the
+page, and that mapping's key is K (`task_phases_outcome_incomplete` otherwise); the walk
+goes on past the operation. An operation capped with `next_candidate` is followed like a
+capped designated member; `max_runs` on a designated operation or a set member is refused
+`task_phases_designated_effect_invalid`. A package with a keyed cap or a keyed guard refusal
+is no prerequisite or return-home layer (`reason=max_runs_end`, `reason=guard_refused_end`).
+The members join `package` revision 6.
+
 Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed
 standard package may name shared interrupt pages (`interrupts.json`, see
 [package-reference.md](package-reference.md), "Standard package root"). A run looks
@@ -307,6 +325,9 @@ instead, whose recheck alone decides; `contracts/linear-steps.md`, "Prerequisite
 packages"); otherwise the run fails with
 `contained_task_home_recovery_terminal_non_home` naming the set's pages (`page_ids`),
 the page the recovery package ended on (`page_id`) and that package (`package_id`).
+A return-home package that ended on a mapping it marks `busy` ends the run with
+`contained_task_entry_busy` instead (#411 B37; `contracts/linear-steps.md`, "Ladder
+and page-graph home entry").
 A recovery package whose declared final pages hold no page of the set is refused
 before it runs, with no input and no `EntryRecoveryPackageAdmitted`, as
 `contained_task_home_recovery_terminal_outside_entry` with the same values (`page_id`

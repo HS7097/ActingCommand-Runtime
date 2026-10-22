@@ -2015,6 +2015,10 @@
       "type": "vocab:lab_target_type",
       "description": "The kind of id a Lab operation's target was (#411 A37)."
     },
+    "lab_operation_problem": {
+      "type": "vocab:lab_operation_problem",
+      "description": "Why the Lab cannot run the operation a package declares, as the kernel runs it (Workflow #412 B-3)."
+    },
     "last_in_window": {
       "type": "boolean",
       "description": "The dispatch is the last round of its activity window: no clock of its task's trigger occurs again before the window ends (Workflow #411 B8)."
@@ -2054,6 +2058,18 @@
     "layer_outcome_key": {
       "type": "name",
       "description": "The outcome key of the scheduling outcome mapping a prerequisite layer's run ended on, as the layer's package declares it (Workflow #411 B39)."
+    },
+    "pool_id": {
+      "type": "name",
+      "description": "The id of a resource pool of the scheduling catalog (Workflow #411 B16)."
+    },
+    "reserve_at_least": {
+      "type": "integer",
+      "description": "The least amount, in the pool's real units, that a task's catalog reserve says the pool must still hold after a run of the task (Workflow #411 B16)."
+    },
+    "amount_after": {
+      "type": "integer",
+      "description": "The amount, in the pool's real units, that the pool would hold after a run of the task: its projected amount less the task's declared consumption and less any consumption that goes first; negative when the consumption exceeds the amount (Workflow #411 B16)."
     }
   },
   "vocabularies": {
@@ -6215,6 +6231,48 @@
         },
         "target_id": {
           "description": "The id of a recognition target in the package's recognition pack."
+        }
+      }
+    },
+    "lab_operation_end": {
+      "description": "How a Lab operation that ran an operation its package declares ended (Workflow #412 B-3; ledger revision 4 row LR-10).",
+      "review": "pending",
+      "tokens": {
+        "confirmed": {
+          "description": "The operation's step completed on its confirmed page."
+        },
+        "run_completed": {
+          "description": "The step ended the package's run as a success, on a page and an outcome key."
+        },
+        "passed_over": {
+          "description": "The guard refused the input and the operation was passed over."
+        },
+        "recovery_requested": {
+          "description": "The operation's failure asked for recovery, which the Lab does not run."
+        },
+        "failed": {
+          "description": "The operation failed otherwise."
+        }
+      }
+    },
+    "lab_operation_problem": {
+      "description": "Why the Lab cannot run an operation its package declares, as the kernel runs it (Workflow #412 B-3).",
+      "review": "pending",
+      "tokens": {
+        "application_effect": {
+          "description": "The operation is an application effect."
+        },
+        "select_step": {
+          "description": "The operation is a select step: it needs a policy, a fact snapshot and possibly a scan."
+        },
+        "linear_steps": {
+          "description": "The package runs linear_steps, another step loop."
+        },
+        "recognize_only": {
+          "description": "The package only recognizes."
+        },
+        "chosen_identity": {
+          "description": "The operation reads the identity an earlier select step of the same run chose."
         }
       }
     },
@@ -18374,6 +18432,29 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_entry_busy": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "page_id": "required",
+        "outcome_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "A run's entry layer completed on a scheduling outcome mapping its package marks busy (#411 B37, slice A35-S4): the home entry's return-home package, or a step of the navigation recovery chain, ended on a page that shows an activity still in progress. The run ends before its own steps: in the home entry in place of contained_task_home_recovery_terminal_non_home, with no recheck of the entry and no navigation; in the navigation the run does not locate again and the chain's next step is neither admitted nor run. package_id is the layer's package, page_id the page it ended on and outcome_key the busy mapping's key. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt. Its ladder class planned_stop matches no default trigger item, so no stuck-recovery ladder starts.",
+      "common_causes": "The instance runs a long activity that ends by itself, and the return-home or recovery chain package recognised its page.",
+      "handling": "Nothing to do: a later run, or a ladder another trigger starts, brings the instance home once the activity has ended."
+    },
     "contained_task_entry_pages_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -19776,6 +19857,31 @@
       "description": "A contained task package names an operation that it does not declare.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "contained_task_operation_runs_capped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "count": "required",
+        "limit_count": "required",
+        "page_id": "required",
+        "outcome_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "Workflow #411 B16 part 1: the page-graph operation pack_operation_id declares max_runs (limit_count) and on_max_runs with an outcome_key; the run had dispatched it count times, its cap, and it was the operation the page page_id would dispatch next. No step started: the run ended Completed on page_id with outcome_key as its scheduling outcome. The outcome of the run's one task.operation_capped record (ledger revision 4, register §1.153 LR-7).",
+      "common_causes": "The operation repeats on its own page (a refresh, a claim, a page turn) and the package declared how often one run may do it.",
+      "handling": "None: the run ended normally with the declared key. Raise max_runs if the operation must run more often in one run."
     },
     "contained_task_outcome_comparison_conflict": {
       "category": "error",
@@ -64765,6 +64871,30 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "resource_reserve_insufficient": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "reserve_at_least": "required",
+        "amount_after": "optional",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "Scheduling decision reason (Workflow #411 B16 part 2, contracts/scheduling/README.md \"Task Reserves\"): the candidate is not admitted this round because running it would leave a pool below the reserve its catalog task declares (pool_id, reserve_at_least). amount_after is what the pool would hold after the run: the pool's projected amount less the task's declared consumption, and less the consumption that goes first when task_id names a task: a candidate of the same instance with a higher effective score this round, or a task dispatched on the instance since the pool's latest reading, which the reading does not show yet. Without amount_after the pool's amount is unknown, so the reserve cannot be shown to hold. The candidate is scored again at the next evaluation; a pool that regenerates wakes the evaluation at its next step.",
+      "common_causes": "The pool holds too little for the task's declared consumption and its reserve; or two tasks that each fit alone do not fit together, and the one with the higher score runs first; or the pool has not been read since a task that consumes it was dispatched.",
+      "handling": "None. The task runs when the pool holds enough, or after a reading taken since the other task ran shows enough; lower the reserve in the catalog if it is too high."
+    },
     "resource_target_applied": {
       "category": "info",
       "ladder_class": "none",
@@ -74036,6 +74166,26 @@
       "description": "A select step's confirmation frame could not be captured.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "selection_decision_mismatch": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "The confirmation frame of a select step that confirms by its decision (select.confirm decision) led to a different decision than the frame it was chosen on: the actionable candidates' IDs, click boxes or statuses, the selected candidate or the outcome key differ. No input was made.",
+      "common_causes": "The list moved or changed between the two frames.",
+      "handling": "Retry on the next frame; if it repeats, the layout's rows are unstable."
     },
     "selection_empty": {
       "category": "info",

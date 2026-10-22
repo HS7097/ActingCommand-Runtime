@@ -255,11 +255,19 @@ fn two_steps(sampling: Sampling) -> PreparedContainedTask {
 
 // The script of `two_steps` whose first confirmation fails: the run's first frame shows no page
 // and the next `home` (one page wait); after the click of `open` three frames of `home` spend the
-// confirmation, and after the retry wait `menu` confirms it; after `go`, `result`.
+// confirmation, and after the retry wait `menu` confirms it; after `go`, `result`. The three
+// frames of `home` differ in their right pixel: #411 A43b counts a wait unpaced while its latest
+// two frames are still and show no page it accepts, and this confirmation is a paced one.
 fn retried_confirmation() -> Vec<Vec<ScriptedFrame>> {
+    let moving_home = |right: u8| ScriptedFrame::rgb(2, 1, &[HOME, [right; 3]]);
     vec![
         frames(&[Screen::Blank, Screen::Home]),
-        frames(&[Screen::Home, Screen::Home, Screen::Home, Screen::Menu]),
+        vec![
+            moving_home(0),
+            moving_home(128),
+            moving_home(0),
+            shown(Screen::Menu),
+        ],
         frames(&[Screen::Result]),
     ]
 }

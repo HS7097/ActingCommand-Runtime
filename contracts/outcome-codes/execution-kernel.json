@@ -1957,6 +1957,31 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_operation_runs_capped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "count": "required",
+        "limit_count": "required",
+        "page_id": "required",
+        "outcome_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "Workflow #411 B16 part 1: the page-graph operation pack_operation_id declares max_runs (limit_count) and on_max_runs with an outcome_key; the run had dispatched it count times, its cap, and it was the operation the page page_id would dispatch next. No step started: the run ended Completed on page_id with outcome_key as its scheduling outcome. The outcome of the run's one task.operation_capped record (ledger revision 4, register §1.153 LR-7).",
+      "common_causes": "The operation repeats on its own page (a refresh, a claim, a page turn) and the package declared how often one run may do it.",
+      "handling": "None: the run ended normally with the declared key. Raise max_runs if the operation must run more often in one run."
+    },
     "contained_task_step_unconfirmed": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
@@ -2541,6 +2566,26 @@
       "description": "A select step's confirmation candidate set differs from the evaluated one.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "selection_decision_mismatch": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "The confirmation frame of a select step that confirms by its decision (select.confirm decision) led to a different decision than the frame it was chosen on: the actionable candidates' IDs, click boxes or statuses, the selected candidate or the outcome key differ. No input was made.",
+      "common_causes": "The list moved or changed between the two frames.",
+      "handling": "Retry on the next frame; if it repeats, the layout's rows are unstable."
     },
     "selection_confirmation_capture_failed": {
       "category": "error",

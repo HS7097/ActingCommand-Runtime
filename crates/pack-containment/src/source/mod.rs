@@ -908,6 +908,8 @@ impl OperationParser {
                         ),
                     ),
                 );
+                // Workflow #411 B13.
+                let target = with_luma_floor(&source, target);
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for color_probe in array_field(&bundle.data, "color_probes") {
@@ -958,6 +960,8 @@ impl OperationParser {
                         ),
                     ),
                 );
+                // Workflow #411 B13.
+                let target = with_luma_floor(&source, target);
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for operation in array_field(&bundle.data, "operations") {
@@ -2444,6 +2448,14 @@ fn with_scales(source: &Value, mut target: Value) -> Value {
     target
 }
 
+/// Workflow #411 B13: `luma_floor` passes to the pack as declared (pack schema `0.7`).
+fn with_luma_floor(source: &Value, mut target: Value) -> Value {
+    if let (Some(floor), Some(object)) = (source.get("luma_floor"), target.as_object_mut()) {
+        object.insert("luma_floor".to_string(), floor.clone());
+    }
+    target
+}
+
 /// Workflow #396 REC-2: `unique` passes to the pack as declared (pack schema `0.7`).
 fn with_unique(source: &Value, mut target: Value) -> Value {
     if let (Some(unique), Some(object)) = (source.get("unique"), target.as_object_mut()) {
@@ -2946,6 +2958,8 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
                 || target.get("unique").is_some()
                 || target.get("mask").is_some()
                 || target.get("scales").is_some()
+                // Workflow #411 B13.
+                || target.get("luma_floor").is_some()
         });
     if uses_0_7 {
         PACK_SCHEMA_0_7
@@ -3145,13 +3159,31 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 .get("retryable")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            // Workflow #390 EXEC-1: a candidate the page's next one may run instead of.
-            may_be_passed_over: ["when", "on_guard_refused"]
-                .into_iter()
-                .any(|member| operation.get(member).is_some_and(|value| !value.is_null())),
+            // Workflow #390 EXEC-1: a candidate the page's next one may run instead of (a `when`,
+            // or `on_guard_refused: next_candidate`; #411 B22: its keyed form ends the run).
+            may_be_passed_over: operation.get("when").is_some_and(|value| !value.is_null())
+                || operation
+                    .get("on_guard_refused")
+                    .and_then(Value::as_str)
+                    .is_some(),
             // Workflow #308 SEL-L4b (S0 §1.4 (c)): a select step that may end the run empty.
             on_empty_key: operation
                 .pointer("/select/on_empty/outcome_key")
+                .and_then(Value::as_str),
+            // #411 B16 part 1: a per-run cap; a keyed `on_max_runs` may end the run.
+            max_runs: operation
+                .get("max_runs")
+                .and_then(Value::as_u64)
+                .and_then(|limit| u32::try_from(limit).ok())
+                .map(move |limit| actingcommand_contract::TaskPhaseRunCap {
+                    limit,
+                    outcome_key: operation
+                        .pointer("/on_max_runs/outcome_key")
+                        .and_then(Value::as_str),
+                }),
+            // #411 B22: a keyed `on_guard_refused` may end the run.
+            on_guard_refused_key: operation
+                .pointer("/on_guard_refused/outcome_key")
                 .and_then(Value::as_str),
         });
     }

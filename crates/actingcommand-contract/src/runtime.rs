@@ -1579,6 +1579,10 @@ pub struct RuntimeInstanceStatus {
     /// answered, `{"state": "unknown"}` without a reading.
     #[serde(default)]
     emulator_state: EmulatorRunningState,
+    /// #411 A35-S5: the instance's recovery ladder while it holds instead of climbing; absent
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ladder_busy_hold: Option<InstanceLadderBusyHold>,
 }
 
 /// Workflow #403: why and since when an instance is fenced, and whether it waits for a person.
@@ -1618,6 +1622,31 @@ pub struct InstanceFencePersonWait {
     pub next_recheck_unix_ms: Option<u64>,
 }
 
+/// #411 A35-S5 (design `a35-design.md` §5.1 S5, Q7): a recovery ladder of the instance that
+/// holds instead of climbing, while its hold waits: what it waits for, how long it has held and
+/// its limit. Memory only: the ladder's own state, read at the status read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceLadderBusyHold {
+    pub kind: LadderBusyHoldKind,
+    /// The time held at the read: since the climb's first hold of this kind began, on the
+    /// Runtime clock, the reruns between holds included.
+    pub held_ms: u64,
+    /// The configured limit of the kind's holds in one climb (`max_wait_ms`).
+    pub limit_ms: u64,
+}
+
+/// #411 A35-S5: what a holding ladder waits for, a closed vocabulary. `busy_outcome`: a rung
+/// run ended on a mapping its package marks `busy` (`recovery_ladder.busy.outcome.*`);
+/// `screen_changing`: the screen still changed after a return-home failure
+/// (`recovery_ladder.busy.screen.*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LadderBusyHoldKind {
+    BusyOutcome,
+    ScreenChanging,
+}
+
 impl RuntimeInstanceStatus {
     pub fn new(
         instance_alias: impl Into<String>,
@@ -1644,6 +1673,7 @@ impl RuntimeInstanceStatus {
             pause: None,
             resource_fence: None,
             emulator_state: EmulatorRunningState::Unknown,
+            ladder_busy_hold: None,
         };
         status.validate()?;
         Ok(status)
@@ -1785,6 +1815,19 @@ impl RuntimeInstanceStatus {
 
     pub const fn emulator_state(&self) -> EmulatorRunningState {
         self.emulator_state
+    }
+
+    /// #411 A35-S5: this status with the instance's holding recovery ladder.
+    pub const fn with_ladder_busy_hold(
+        mut self,
+        ladder_busy_hold: Option<InstanceLadderBusyHold>,
+    ) -> Self {
+        self.ladder_busy_hold = ladder_busy_hold;
+        self
+    }
+
+    pub const fn ladder_busy_hold(&self) -> Option<&InstanceLadderBusyHold> {
+        self.ladder_busy_hold.as_ref()
     }
 }
 

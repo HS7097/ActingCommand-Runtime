@@ -1647,3 +1647,30 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t7_the_recovery_preparation_reads_the_status_and_recognizes_a_running_emulator",
 ]
 incident = ["#411 A50"]
+
+# #411 B37 entry part (slice A35-S4, 0.12.x; register §1.169 B37E-1, B37E-2; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S4 T1; coordinator decision Q5; host keys 162 to 164 assigned by the coordinator): a scheduled run whose home entry runs the registry's return-home package, which completes on a scheduling outcome mapping it marks busy, fails contained_task_entry_busy (warning; package_id the return-home package, page_id the page it ended on, outcome_key the busy key) in place of contained_task_home_recovery_terminal_non_home, and under the shipped ladder defaults no ladder is admitted
+[[gate]]
+key = "162"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37_entry::b37_entry_t1_a_busy_return_home_layer_ends_the_run_and_admits_no_ladder",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 B37 entry part (slice A35-S4; register §1.169 B37E-1, B37E-3; design §5.1 S4 T2): a navigation recovery chain step that completes on a scheduling outcome mapping its package marks busy ends the run with contained_task_entry_busy (warning; package_id, page_id, outcome_key); the run does not locate again and the chain's next step, an application entry package, is neither admitted nor run (no application effect)
+[[gate]]
+key = "163"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37_entry::b37_entry_t2_a_busy_recovery_chain_step_ends_the_run_before_the_next_step",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 A35 (slice A35-S5, 0.12.x; register §1.170 A35S5-1; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S5 T1, coordinator decision Q7; wave-3 row 11, host key 410 by the frame's rule for a family the row does not list): while a recovery ladder's busy hold waits, Status shows the instance's ladder_busy_hold from the ladder's state in memory: kind busy_outcome, held_ms the time since the climb's first busy end on the Runtime clock (0, then the time the clock moved inside the hold) and limit_ms the configured busy.outcome.max_wait_ms; once the ladder ended, no ladder_busy_hold
+[[gate]]
+key = "410"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35_s5::a35_s5_t1_status_shows_the_holding_ladder_with_its_kind_time_held_and_limit",
+]
+incident = ["#411 A35"]

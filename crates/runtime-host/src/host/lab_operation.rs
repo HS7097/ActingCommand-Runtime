@@ -100,6 +100,8 @@ impl HostShared {
             package_label: observer.package_label(),
             lease_id: None,
             selection: input.selection.clone(),
+            // LR-10 (#412 B-3): written by Lab B-3 S2; until then `resolve` refuses `operation`.
+            operation: None,
             projection_hint: input.projection_hint.clone(),
             after: input.after.clone(),
             before_frame: None,
@@ -213,6 +215,7 @@ impl HostShared {
                 elapsed_ms: 0,
                 samples: Vec::new(),
             }),
+            operation_result: None,
             failure,
             cleanup_failure: None,
         };

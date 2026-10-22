@@ -4117,8 +4117,9 @@ pub enum RecognizedTargetRole {
 /// `task.recognition_completed` fact lists in `candidate_scores`; `omitted` counts the rest.
 pub const TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT: usize = 16;
 /// Ledger revision 4 (register §1.153 LR-7): the highest per-run cap of an operation
-/// (Workflow #411 B16 part 1, `max_runs: 1..=1000`).
-const MAX_TASK_OPERATION_RUNS: u32 = 1_000;
+/// (Workflow #411 B16 part 1, `max_runs: 1..=1000`); the Runtime's admission of `max_runs`
+/// holds it too.
+pub const MAX_TASK_OPERATION_RUNS: u32 = 1_000;
 
 /// Ledger revision 4 (Workflow #411 A44, register §1.153 LR-8; writer: a later A44 slice): the
 /// recognised frame's verdict on one candidate page.

@@ -700,3 +700,30 @@ tests = [
     "actingcommand-policy::lib::tests::gate_411_b41::b41_t5_a_successor_waiting_for_its_random_delay_keeps_the_refresh_deferred",
 ]
 incident = ["#411 B41"]
+
+# Workflow #411 B16 part 2, slice BT-B16b (plan rd-1021/train-0129/b-plan/plan.md §2.12, §5.3 BT-B16b T1; contracts/scheduling/README.md, "Task Reserves"; register §1.167; no persisted ledger shape): a V2 catalog task that declares reserves [{pool_id, at_least}] is not admitted while after = the pool's projected amount less its declared consumption is below at_least, with resource_reserve_insufficient (info; pool_id, reserve_at_least, amount_after); an after equal to the reserve or above it runs; no selection document is needed for the gate
+[[gate]]
+key = "64"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_bt_b16b::bt_b16b_t1_a_task_that_would_leave_its_pool_below_the_reserve_is_not_admitted",
+]
+incident = ["#411 B16"]
+
+# Workflow #411 B16 part 2, slice BT-B16b (plan §2.12, §5.3 BT-B16b T2; register §1.167): of two tasks on one instance that fit their reserves alone but not together, the higher effective_milli runs this round although the other has the higher priority, and the other waits with resource_reserve_insufficient naming it (task_id) and what both would leave; while the pool's reading predates the winner's dispatch the other keeps waiting, and after a reading taken since it is scored again on that reading and runs; before the refresh never both run
+[[gate]]
+key = "65"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_bt_b16b::bt_b16b_t2_of_two_tasks_that_fit_alone_but_not_together_the_higher_score_runs_first",
+]
+incident = ["#411 B16"]
+
+# Workflow #411 B16 part 2, slice BT-B16b (plan §2.12, §5.3 BT-B16b T3; register §1.167): the score stage hands the selection document task.after.<pool> (the pool's projected amount less the task's declared consumption), so a term that scores it as it is gives the candidate that effective_milli
+[[gate]]
+key = "66"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_bt_b16b::bt_b16b_t3_the_selection_document_reads_what_a_task_leaves_in_its_pool",
+]
+incident = ["#411 B16"]

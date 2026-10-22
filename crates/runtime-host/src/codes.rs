@@ -471,6 +471,14 @@ actingcommand_contract::outcome_codes! {
         /// declares no final page in the required entry set, so the recovery is refused before it
         /// runs, with no input. The registry's `linear_steps` return-home package is not compared.
         ContainedTaskHomeRecoveryTerminalOutsideEntry => "contained_task_home_recovery_terminal_outside_entry": error / pack_logic_mismatch,
+        // #411 B37 (A35-S4) begin: a busy end of an entry layer ends the run.
+        /// Warning (#411 B37). A home entry's return-home layer, or a navigation recovery chain
+        /// step, completed on a scheduling outcome mapping its package marks `busy`: the instance
+        /// shows an activity still in progress, so the run ends before its own steps, with no
+        /// entry check after the layer, no further chain step and no ladder (keys `package_id`
+        /// the layer's package, `page_id` the page it ended on, `outcome_key` the mapping's key).
+        ContainedTaskEntryBusy => "contained_task_entry_busy": warning / planned_stop,
+        // #411 B37 (A35-S4) end
         ContainedTaskIdentityMissing => "contained_task_identity_missing": error / none,
         ContainedTaskInputResultInvalid => "contained_task_input_result_invalid": error / none,
         ContainedTaskLadderSourceStateInvalid => "contained_task_ladder_source_state_invalid": error / none,

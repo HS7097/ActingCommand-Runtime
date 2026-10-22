@@ -477,6 +477,8 @@ impl Declaration<'_> {
                 "input_recheck",
                 "when",
                 "on_guard_refused",
+                "max_runs",
+                "on_max_runs",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -662,10 +664,54 @@ impl Declaration<'_> {
                 "on_guard_refused" if !value.is_null() => {
                     self.on_guard_refused(value, &pointer)?;
                 }
+                "max_runs" if !value.is_null() => self.max_runs(value, &pointer)?,
+                "on_max_runs" if !value.is_null() => self.on_max_runs(value, &pointer)?,
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    /// #411 B16 part 1: an operation's `max_runs`, task schema `0.9` only (`UnconsumedField`
+    /// before it): an unsigned integer. Runtime admission checks 1..=1000 and that `on_max_runs`
+    /// comes with it.
+    fn max_runs(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        self.unsigned(value, pointer)
+    }
+
+    /// #411 B16 part 1: an operation's `on_max_runs`, task schema `0.9` only (`UnconsumedField`
+    /// before it): the string `next_candidate` or `{"outcome_key": "<key>"}`, nothing else.
+    fn on_max_runs(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        self.keyed_end(value, pointer, &["outcome_key"])
+    }
+
+    /// #411 B16 part 1 and B22: the string `next_candidate`, or an object with a string
+    /// `outcome_key` and, among `members`, other optional string members.
+    fn keyed_end(&self, value: &Value, pointer: &str, members: &[&str]) -> CliOutcome<()> {
+        match value {
+            Value::String(text) if text == GUARD_REFUSAL_NEXT_CANDIDATE => Ok(()),
+            Value::String(_) => Err(self.error(pointer, ResourceDeclarationReason::InvalidValue)),
+            Value::Object(_) => {
+                let object = self.object(value, pointer, members)?;
+                self.string(
+                    self.required(object, pointer, "outcome_key")?,
+                    &child(pointer, "outcome_key"),
+                )?;
+                for member in members.iter().filter(|member| **member != "outcome_key") {
+                    if let Some(value) = object.get(*member).filter(|value| !value.is_null()) {
+                        self.string(value, &child(pointer, member))?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(self.error(pointer, ResourceDeclarationReason::InvalidType)),
+        }
     }
 
     /// An optional operation (Workflow #339, `linear_steps` only): `{"settle_ms"}`, nothing
@@ -758,16 +804,14 @@ impl Declaration<'_> {
     }
 
     /// Workflow #390 EXEC-1: an operation's `on_guard_refused`, task schema `0.9` only
-    /// (`UnconsumedField` before it): the string `next_candidate`.
+    /// (`UnconsumedField` before it): the string `next_candidate`, or (#411 B22) its keyed form
+    /// `{"outcome_key": "<key>", "failed"?: "<target>"}`, nothing else. Runtime admission checks
+    /// the guard and the target.
     fn on_guard_refused(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         if self.schema != Some("0.9") {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
-        match value.as_str() {
-            Some(GUARD_REFUSAL_NEXT_CANDIDATE) => Ok(()),
-            Some(_) => Err(self.error(pointer, ResourceDeclarationReason::InvalidValue)),
-            None => Err(self.error(pointer, ResourceDeclarationReason::InvalidType)),
-        }
+        self.keyed_end(value, pointer, &["outcome_key", "failed"])
     }
 
     /// An operation's intermediate state (Workflow #336, `linear_steps` only):
@@ -833,7 +877,8 @@ impl Declaration<'_> {
     /// still carry is ignored, Workflow #336 PKG-S2). The step is guarded and confirmed: it
     /// declares its `guard` and its `expect_after`, and is never an unguarded trusted
     /// coordinate. Whether the layout and the policy fit the task is checked with the policy
-    /// document (`select_policy`).
+    /// document (`select_policy`). It may also declare `scan`, `on_empty` and (Workflow #411 B4)
+    /// `confirm`.
     fn select_step(
         &self,
         operation: &Map<String, Value>,
@@ -844,7 +889,7 @@ impl Declaration<'_> {
         let select = self.object(
             value,
             &select_pointer,
-            &["layout_id", "policy", "scan", "on_empty"],
+            &["layout_id", "policy", "scan", "on_empty", "confirm"],
         )?;
         let layout_pointer = child(&select_pointer, "layout_id");
         let layout_id = self.required(select, &select_pointer, "layout_id")?;
@@ -899,6 +944,16 @@ impl Declaration<'_> {
                 self.required(on_empty, &on_empty_pointer, "outcome_key")?,
                 &child(&on_empty_pointer, "outcome_key"),
             )?;
+        }
+        // Workflow #411 B4 (b-plan §2.4; package revision 6): how a single-frame select
+        // confirms, `candidate_set` (the default) or `decision`; Runtime admission refuses
+        // `decision` beside `scan` (D3).
+        if let Some(confirm) = select.get("confirm").filter(|value| !value.is_null()) {
+            let confirm_pointer = child(&select_pointer, "confirm");
+            self.string(confirm, &confirm_pointer)?;
+            if !matches!(confirm.as_str(), Some("candidate_set" | "decision")) {
+                return Err(self.error(&confirm_pointer, ResourceDeclarationReason::InvalidValue));
+            }
         }
         Ok(())
     }
@@ -1285,6 +1340,24 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// Workflow #411 B13: `luma_floor` of an `anchors[]` or `verify_templates[]` entry of task
+    /// schema `0.9`: `{"mean_ratio_milli"?, "contrast_ratio_milli"?}` of integers. Its values are
+    /// checked with the derived recognition pack.
+    fn luma_floor(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(
+            value,
+            pointer,
+            &["mean_ratio_milli", "contrast_ratio_milli"],
+        )?;
+        for (field, value) in object {
+            self.unsigned(value, &child(pointer, field))?;
+        }
+        Ok(())
+    }
+
     /// Workflow #396 REC-7: the `mask` (`{"type": "range", "lower", "upper"}`) or MAA
     /// `maskRange` (`[lower, upper]`) of an `anchors[]` or `verify_templates[]` entry of task
     /// schema `0.9`: integer gray bounds in 0..=255 with `lower <= upper`, one of the two forms.
@@ -1457,6 +1530,7 @@ impl Declaration<'_> {
                 "provenance",
                 "unique",
                 "scales",
+                "luma_floor",
             ],
             "verify_templates" => &[
                 "id",
@@ -1473,6 +1547,7 @@ impl Declaration<'_> {
                 "provenance",
                 "unique",
                 "scales",
+                "luma_floor",
             ],
             "color_probes" => &[
                 "id",
@@ -1538,6 +1613,8 @@ impl Declaration<'_> {
                 "unique" => self.unique(value, &pointer)?,
                 // Workflow #396 REC-5.
                 "scales" => self.scales(value, &pointer)?,
+                // Workflow #411 B13.
+                "luma_floor" => self.luma_floor(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 // Workflow #396 REC-7: a gray-range mask of task schema 0.9.

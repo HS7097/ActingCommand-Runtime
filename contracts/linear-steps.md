@@ -70,6 +70,7 @@ one operation is at fault; an existing check keeps its existing code.
 | each operation's effect is `click` or `application`; no `select` or `on_error` | `operation_effect` |
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
+| no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
 | `entry_page` declared and equal to the first operation's `from` (both `"any"` for an application entry) | `entry_page` |
@@ -420,7 +421,7 @@ one does. Layer by layer, in this order:
 | at most three prerequisite packages besides the dependent package | `contained_task_prerequisite_depth_exceeded` |
 | the package is admitted by its path (the loader's code is attached as the related failure, a resource declaration rejection travels with it) | `contained_task_prerequisite_admission_failed` |
 | the admitted package's `package_id` is the registry's | `contained_task_prerequisite_mismatch` |
-| the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3), designated scheduling operation, select step with `on_empty` (Workflow #308 SEL-L4b: its early end on its own page would leave the dependent package short of its entry page) or stage `end_pages` (Workflow #411 B5: an end page ends the run short of its target pages too); its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|select_on_empty\|phase_end_pages\|designated_operation\|game\|server\|resolution>` |
+| the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3), designated scheduling operation, select step with `on_empty` (Workflow #308 SEL-L4b: its early end on its own page would leave the dependent package short of its entry page), stage `end_pages` (Workflow #411 B5: an end page ends the run short of its target pages too), a keyed `on_max_runs` or a keyed `on_guard_refused` (Workflow #411 B16 part 1, B22: a keyed end stops the run on the operation's page, short of its target pages); its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|select_on_empty\|phase_end_pages\|max_runs_end\|guard_refused_end\|designated_operation\|game\|server\|resolution>` |
 | the maximum steps of the whole chain and the dependent package add up to at most 1000 | `contained_task_prerequisite_step_limit` |
 
 Each refusal is denied (`package_invalid`) with detail `layer=<n> package_id=<id>` (plus
@@ -623,7 +624,7 @@ deadline (`contracts/emulator-control.md`, "Stuck-recovery ladder"). The page-gr
 admits it where it reported `contained_task_home_recovery_binding_missing` before: only after
 the first check did not pass, with the existing failure handling and facts, and it runs as a
 prerequisite package does (its `scheduling_outcome` without a designated operation allowed and
-ignored). On both paths the package passes, once admitted, the checks a return-home chain layer
+ignored, except a `busy` end, below). On both paths the package passes, once admitted, the checks a return-home chain layer
 passes (the table of "Prerequisite packages": no `recognize_only`, stability termination,
 post-admission OCR, OCR fields, resource readings or designated operation; the game, server and
 resolution of the failed or entering package), and it declares no `prerequisite_package_id` of
@@ -641,7 +642,17 @@ entry needs it closes the entry with the root's own code (`standard_pack_root_in
 `standard_pack_root_unreadable`); on the ladder it is recorded (`runtime.lifecycle_observed`,
 phase `standard_pack_read`) and the rung has no package (`no_recovery_package`). In the home entry, a page-graph package's final page must still be a
 page of the required entry, while a `linear_steps` package's final page (a Lab page id such as
-`<game>/step_03_home`) is not compared, and only the recheck decides. A page-graph package whose
+`<game>/step_03_home`) is not compared, and only the recheck decides. Before that comparison
+(#411 B37, slice A35-S4, [v012-register.md](v012-register.md) §1.169), a return-home package of
+either mode whose run ended on a page that exactly one of its `scheduling_outcome` mappings of
+condition `no_designated_effect` lists, a mapping it marks `busy`
+([resource-declarations.md](resource-declarations.md), "Busy outcome mappings"), ends the run
+with `contained_task_entry_busy` (warning, ladder class `planned_stop`; `package_id` the
+return-home package, `page_id` the page it ended on, `outcome_key` the mapping's key), after its
+`EntryRecoveryCompleted`, as `EntryTargetDisposition { FailClosed }` and the task terminal: the
+instance shows an activity still in progress, so neither the recheck nor a navigation follows,
+and no trigger item of the defaults matches the code, so no ladder starts. A request's own
+recovery package declares no `scheduling_outcome`, so only the registry's package can end so. A page-graph package whose
 declared final pages hold no page of the required entry is refused before it runs, with no input
 and no `EntryRecoveryPackageAdmitted`, as `contained_task_home_recovery_terminal_outside_entry`
 (Workflow #411 A16); the `linear_steps` package is not compared there either. With a request binding both

@@ -822,6 +822,16 @@ failed with that interruption). The hold and the reruns repeat until a run ends:
   always goes on as under `escalate`. `max_wait_ms` 0 holds nothing: `on_exhausted` applies at
   the first busy end.
 
+While a hold waits, `Status` shows it as the instance's `ladder_busy_hold` (#411 A35-S5,
+coordinator decision Q7): `kind` what the ladder waits for, a closed vocabulary (`busy_outcome`
+for a busy end; `screen_changing` for A35-S2's changing-screen hold, shown once that hold passes
+it), `held_ms` the time since the climb's first hold of that kind began, on the Runtime clock at
+the read (the reruns between holds included), and `limit_ms` that kind's configured
+`max_wait_ms`. The member is absent while no hold waits, also while the return-home rung runs
+again (that run is the instance's run). It is the ladder's own state in memory: nothing is
+recorded for it and no configuration is read for it. `ac_overview` shows the same member in the
+instance's row.
+
 ### Ladder profiles (Workflow #398 RD-4)
 
 Model-398 v1.1 §6.2-§6.6, option B (coordinator ruling of 2026-10-15): a ladder climbs the rungs

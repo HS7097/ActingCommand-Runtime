@@ -57,7 +57,12 @@ width and height scale by the factor the candidate's template was resampled by
 that candidate without clipping. Color uses the existing mean RGB and Euclidean
 distance predicate with the check's `max_distance`, or `defaults.color_max_distance` when
 it declares none; with `alternatives`, any declared color within it qualifies the candidate,
-and the color evidence names the matched color as `expected`.
+and the color evidence names the matched color as `expected`. A template target's `luma_floor`
+(Workflow #411 B13, `resource-declarations.md`, section Task schema `0.9` brightness and
+contrast floors) joins this one acceptance: a candidate whose window is below a declared
+brightness or contrast floor does not qualify, and a target that declares a floor without a
+relative color check is searched the same way, its absolute color check, if any, deciding
+beside it.
 
 The joint candidate with the highest raw template score is selected; equal raw
 scores retain the first `(y, x)` position. A lower-scoring candidate with valid color can win over a

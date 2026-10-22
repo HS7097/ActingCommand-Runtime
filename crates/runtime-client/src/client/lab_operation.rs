@@ -138,17 +138,25 @@ impl RuntimeDebugSession {
             } else {
                 Vec::new()
             };
-            let action_events = if let Some(action_id) = operation.record.input_action_id {
-                self.client.query_events(
+            // LR-10 (#412 B-3): each attempt of a declared operation has its own physical action.
+            let action_ids = match &operation.record.operation_result {
+                Some(result) => result
+                    .attempts
+                    .iter()
+                    .filter_map(|attempt| attempt.input_action_id)
+                    .collect::<Vec<_>>(),
+                None => operation.record.input_action_id.into_iter().collect(),
+            };
+            let mut action_events = Vec::new();
+            for action_id in action_ids {
+                action_events.extend(self.client.query_events(
                     EventQuery {
                         action_id: Some(action_id),
                         ..EventQuery::default()
                     },
                     ProjectionProfile::Forensic,
-                )?
-            } else {
-                Vec::new()
-            };
+                )?);
+            }
             verify_lab_operation(
                 &self.client.shared.state_root,
                 &receipt,
