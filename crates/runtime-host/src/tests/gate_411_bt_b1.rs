@@ -449,3 +449,197 @@ fn bt_b1_t3_a_mark_whose_frames_do_not_agree_writes_no_fact_and_warns() {
     assert_eq!(outcome["values"]["reading_problem"], "no_agreement");
     host.close().expect("close the host");
 }
+
+// BT-B1-FIX (host key 342): the package's task timeout (`timeout_ms` of `agreement_package`).
+const FIX_TASK_TIMEOUT_MS: u64 = 5_000;
+// How far the Runtime clock is set ahead of the process clock before the run, so the recognition
+// pack's own deadline checks, which read the process clock, never decide.
+const FIX_AHEAD_OF_PROCESS_CLOCK_MS: u64 = 60_000;
+// Where the provider's one move leaves the Runtime clock: this long before the task's deadline,
+// far past the confirmation window's end and with time left for the wait to observe again.
+const FIX_BEFORE_TASK_DEADLINE_MS: u64 = 100;
+
+// Reads `texts` in turn; its first read after the instance's first input first moves the Runtime
+// clock to `to_ms`, once.
+struct ClockMovedAtFirstReadAfterInput {
+    texts: Arc<TextsInTurn>,
+    state: Arc<FakeState>,
+    clock: Arc<ManualRuntimeClock>,
+    to_ms: AtomicU64,
+    moved: AtomicBool,
+}
+
+impl std::fmt::Debug for ClockMovedAtFirstReadAfterInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClockMovedAtFirstReadAfterInput")
+            .field("texts", &self.texts)
+            .field("to_ms", &self.to_ms)
+            .field("moved", &self.moved)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ClockMovedAtFirstReadAfterInput {
+    fn move_clock_once(&self) {
+        if self.state.input_count.load(Ordering::Acquire) >= 1
+            && !self.moved.swap(true, Ordering::AcqRel)
+        {
+            let to_ms = self.to_ms.load(Ordering::Acquire);
+            self.clock
+                .advance(to_ms.saturating_sub(self.clock.monotonic_ms()));
+        }
+    }
+}
+
+impl VisionProvider for ClockMovedAtFirstReadAfterInput {
+    fn require_ocr_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        self.texts.require_ocr_model(model_ref, model_sha256)
+    }
+
+    fn require_nn_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        self.texts.require_nn_model(model_ref, model_sha256)
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        self.move_clock_once();
+        self.texts.read_text(request)
+    }
+
+    fn read_text_with_execution_evidence(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<actingcommand_recognition_pack::OcrProviderObservation, VisionProviderError> {
+        self.move_clock_once();
+        self.texts.read_text_with_execution_evidence(request)
+    }
+
+    fn classify(
+        &self,
+        request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        self.texts.classify(request)
+    }
+}
+
+// BT-B1-FIX (host key 342; #411 B1, B-train plan §2.1 items 2 and 3; Workflow #386 SR-1,
+// "Observe-only retries" in business-identity-consensus.md): T2's package, whose value test's
+// agreement makes every observation of its pack a sampled one, so the step's confirmation wait for
+// `page_a` (which never matches: its frames read 100, 100 and 180) observes in windows. The
+// Runtime clock passes the window's end while the first observation after the tap is being
+// recognised, so that observation's sampling timed out and the wait observes again in a new window
+// without any input. The Runtime latches no fatal for it (left open, the timed-out recognition made
+// the retry's start latch `contained_task_recognition_state_invalid`), the run fails as `page_a`
+// never matches, and after the tap the run started recognising at least twice: the timed-out
+// observation and its retry. Only the kernel's waits and the provider's one move advance the
+// Runtime clock.
+#[test]
+fn bt_b1_fix_a_recognition_its_sampling_deadline_passed_latches_no_fatal_and_is_observed_again() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("agreement.zip");
+    fs::write(&package, agreement_package(true, None)).expect("write the agreement package");
+    let state = Arc::new(FakeState::default());
+    // A direct run needs a device instance whose display is observed (Workflow #392 DA-A).
+    state.physical_task_geometry.store(true, Ordering::Release);
+    *state
+        .physical_task_extent
+        .lock()
+        .expect("fake physical task extent") = Some((2, 1));
+    state
+        .transition_capture_after_inputs
+        .store(1, Ordering::Release);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let vision = Arc::new(ClockMovedAtFirstReadAfterInput {
+        texts: TextsInTurn::new(&["100", "100", "180"]),
+        state: Arc::clone(&state),
+        clock: Arc::clone(&clock),
+        to_ms: AtomicU64::new(u64::MAX),
+        moved: AtomicBool::new(false),
+    });
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(
+            FakeProvider::one(AGREEMENT_ALIAS, instance_id(), Arc::clone(&state))
+                .with_vision_provider(vision.clone()),
+        ),
+    )
+    .expect("runtime host");
+    // The run's steps are unpaced, whatever load the machine is under.
+    host.pin_pacing_factor_for_test(AGREEMENT_ALIAS, 1_000)
+        .expect("pin the pacing factor");
+    clock.advance(FIX_AHEAD_OF_PROCESS_CLOCK_MS);
+    vision.to_ms.store(
+        clock.monotonic_ms() + FIX_TASK_TIMEOUT_MS - FIX_BEFORE_TASK_DEADLINE_MS,
+        Ordering::Release,
+    );
+
+    let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            AGREEMENT_ALIAS,
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string())
+                .expect("agreement task request"),
+        ),
+    );
+    let receipt = client.send_result(&request);
+    drop(client);
+
+    assert!(
+        vision.moved.load(Ordering::Acquire),
+        "the clock passed the window's end during a recognition after the tap: {receipt:?}"
+    );
+    let latched = host
+        .fatal_error()
+        .expect("runtime health")
+        .map(|fatal| fatal.code());
+    assert_eq!(latched, None, "the Runtime latched no fatal: {receipt:?}");
+    let receipt = receipt.expect("the run's receipt");
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Failed,
+        "page_a never matches: {:?}",
+        receipt.outcome()
+    );
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        })
+        .expect("run events");
+    let facts = events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let tap = facts
+        .iter()
+        .position(|fact| matches!(fact, TaskSemanticFact::EffectCompleted { .. }))
+        .expect("the tap");
+    let recognitions_after_tap = facts[tap..]
+        .iter()
+        .filter(|fact| matches!(fact, TaskSemanticFact::RecognitionStarted { .. }))
+        .count();
+    assert!(
+        recognitions_after_tap >= 2,
+        "the timed-out observation and its retry: {recognitions_after_tap}"
+    );
+    host.close().expect("close the host");
+}

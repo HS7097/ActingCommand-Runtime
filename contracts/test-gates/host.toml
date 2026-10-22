@@ -1738,6 +1738,15 @@ tests = [
 ]
 incident = ["#411 B1"]
 
+# Workflow #411 B1 (follow-up BT-B1-FIX of slice BT-B1; register §1.163 B1-3; Workflow #386 SR-1 observe-only retries; host key 342 from the slice's overflow range 340 to 349): a value test with an agreement makes each observation of its pack sampled; when the Runtime clock passes the confirmation window's end while the first observation after the tap is being recognised, that observation's sampling timed out and the wait observes again without any input; the Runtime latches no fatal (not contained_task_recognition_state_invalid), the run fails as its page never matches, and after the tap at least two recognitions started
+[[gate]]
+key = "342"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_bt_b1::bt_b1_fix_a_recognition_its_sampling_deadline_passed_latches_no_fatal_and_is_observed_again",
+]
+incident = ["#411 B1"]
+
 # #411 A35 (slice A35-S5, 0.12.x; register §1.170 A35S5-1; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S5 T1, coordinator decision Q7; wave-3 row 11, host key 410 by the frame's rule for a family the row does not list): while a recovery ladder's busy hold waits, Status shows the instance's ladder_busy_hold from the ladder's state in memory: kind busy_outcome, held_ms the time since the climb's first busy end on the Runtime clock (0, then the time the clock moved inside the hold) and limit_ms the configured busy.outcome.max_wait_ms; once the ladder ended, no ladder_busy_hold
 [[gate]]
 key = "410"

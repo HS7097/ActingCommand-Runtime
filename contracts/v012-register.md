@@ -2914,8 +2914,10 @@ covered by the per-field confusions (plan §6) and has no test of its own. The c
 [resource-declarations.md](resource-declarations.md) (value tests),
 [resource-readings.md](resource-readings.md) (Declaration, Kernel reading),
 [business-identity-consensus.md](business-identity-consensus.md) (Finite consensus). Gates: exec
-keys 144 to 146 and host keys 340 and 341 (the host family is not in the slice's row: 300 + 10 × 4,
-wave-3 frame); contract keys 43 to 46, exec keys 147 to 151 and apps keys 93 and 94 unused.
+keys 144 to 146 and host keys 340 to 342 (the host family is not in the slice's row: 300 + 10 × 4,
+wave-3 frame; 342 is follow-up BT-B1-FIX: a recognition whose sampling deadline passed latches no
+fatal and is observed again); contract keys 43 to 46, exec keys 147 to 151 and apps keys 93 and 94
+unused.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
