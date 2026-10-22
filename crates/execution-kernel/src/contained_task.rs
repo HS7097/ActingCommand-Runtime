@@ -4951,11 +4951,15 @@ impl PreparedContainedTask {
                                                 let RecheckedInput {
                                                     observation: fresh,
                                                     timing,
-                                                    guard,
-                                                    target,
+                                                    guard: fresh_guard,
+                                                    target: fresh_target,
                                                 } = *held;
                                                 step_timing = timing;
-                                                (guard, target, Some(fresh))
+                                                if declared.is_some() {
+                                                    (guard, target, None)
+                                                } else {
+                                                    (fresh_guard, fresh_target, Some(fresh))
+                                                }
                                             }
                                             InputRecheck::Refused { error, after_page } => {
                                                 Self::refuse_before_input::<R::Error>(
