@@ -2902,6 +2902,26 @@ token, wire or configuration key is added. [resource-declarations.md](resource-d
 | KEY-6 | `contained_task_prerequisite_incompatible` detail `reason=max_runs_end`, `reason=guard_refused_end` | new values of an existing refusal detail (exec 157) | BT-KEY | BT-KEY | a package with a keyed `on_max_runs` or a keyed `on_guard_refused` is neither a prerequisite package nor a return-home package (coordinator decision Q9); a `busy` mapping (§1.152) is no keyed end and is unchanged |
 | KEY-7 | `TaskPhaseOperation.max_runs` (`TaskPhaseRunCap {limit, outcome_key}`), `TaskPhaseOperation.on_guard_refused_key`, `keyed_terminal_holds`, `MAX_TASK_OPERATION_RUNS` (now public) | Runtime-internal interface (memory only) | BT-KEY | BT-KEY | the walk's view of the new members, shared by source parsing, build and Runtime admission |
 
+### 1.165 Slice BT-B13 (0.12.x): brightness and contrast floors for template targets, relative to the template itself (#411 B13; B-train plan `rd-1021/train-0129/b-plan/plan.md` §2.10, D9; coordinator decision Q8 D9 of 2026-10-21)
+
+A template target may declare floors on how bright and how contrasted the window it matched is,
+each relative to the template itself; a candidate below them does not qualify in the one joint
+acceptance of the template search, so the target does not pass. **Persisted shape:** this slice
+is the first writer of ledger revision 4 row LR-2 (§1.153), `TaskDiagnosticTemplateData.luma`,
+as registered there; no other persisted member. No code, location, key, vocabulary token, wire
+or configuration key is added; the refusals reuse `resource_declaration_invalid` reasons and the
+recognition pack's existing load refusal. The member belongs to `package` revision 6, which
+BT-PK6 declares at the end of the B train (plan §4); until then it is admitted by code.
+[resource-declarations.md](resource-declarations.md) ("Task schema `0.9` brightness and contrast
+floors") and [template-relative-color.md](template-relative-color.md) are the contract. Gate:
+exec key 160 (161 to 164 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B13-1 | `luma_floor: {mean_ratio_milli?, contrast_ratio_milli?}` on `anchors[]` and `verify_templates[]` entries; derived onto the template target | resource file format (task schema `0.9`, no version change; pack schema `0.7`) (exec 160) | BT-B13 | resource side | integers, each optional; refused `resource_declaration_invalid` at `…/luma_floor` (`UnconsumedField` before task schema `0.9`, `InvalidType` for no object, `UnknownField` for another member, `InvalidType` at a member that is no non-negative integer); a source that uses it derives pack schema `0.7`; a `0.6` pack refuses it (`UnconsumedField`), and the pack refuses a member outside `0..=u32::MAX` (`InvalidValue`); a `repeated_anchor` anchor or an offset feature that declares it is refused when the evaluator is built, and template-region batch evaluation refuses it |
+| B13-2 | the floor in the joint acceptance of a template search | rule (no shape change) (exec 160) | BT-B13 | BT-B13 | the window's mean and standard deviation over the template's scored pixels (its mask's, at its factor), each over the template's own, times 1000, rounded down; a candidate qualifies when each declared ratio reaches its floor, beside its relative color check; with `unique`, a second place counts only when it qualifies; a target without a floor evaluates as before; a template with no brightness or no contrast over its scored pixels is a recognition error when its floor is evaluated; not a frame-change measure |
+| B13-3 | `TemplateEvaluation.luma` → `TaskDiagnosticTemplateData.luma {mean_ratio_milli, contrast_ratio_milli}` | writer of LR-2 (§1.153) (exec 160) | BT-LR | BT-B13 | the chosen candidate's ratios (the accepted one, else the best template), present only when the target declares `luma_floor`; absent keeps the revision-3 bytes |
+
 ### 1.166 Slice BT-B4 (0.12.x): a select step may confirm by its decision (#411 B4; B-train plan `rd-1021/train-0129/b-plan/plan.md` §2.4 with D3, coordinator Q8 of 2026-10-21; ledger revision 4, §1.153 LR-1)
 
 A single-frame select step may declare `confirm: "decision"`: its confirmation frame F2 is

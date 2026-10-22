@@ -1894,6 +1894,17 @@ tests = [
 ]
 incident = ["#411 B16", "#411 B22"]
 
+# Workflow #411 B13 (slice BT-B13, 0.12.x; register §1.165; ledger revision 4 row LR-2, written here; B-train plan §2.10 with D9, §5.3 rows "BT-B13" T1 to T3; package revision 6, declared by BT-PK6; no outcome code): a template target's luma_floor {mean_ratio_milli?, contrast_ratio_milli?} joins the joint acceptance of its template search; the window a candidate matched is read over the template's scored pixels, its mean and its standard deviation each divided by the template's and times 1000 (rounded down), and a candidate below a declared floor is not accepted, so a target whose only scoring window is darker or flatter does not pass although its score does; the template evidence carries the chosen candidate's ratios as luma; a target without luma_floor writes no luma member and its verdict is decided by score and color only
+[[gate]]
+key = "160"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::gate_411_bt_b13::bt_b13_t1_a_window_darker_than_the_mean_floor_fails_although_its_score_passes",
+    "actingcommand-recognition-pack::lib::gate_411_bt_b13::bt_b13_t2_a_window_flatter_than_the_contrast_floor_fails_although_its_score_passes",
+    "actingcommand-recognition-pack::lib::gate_411_bt_b13::bt_b13_t3_without_a_floor_no_luma_member_is_written_and_score_and_color_decide",
+]
+incident = ["#411 B13"]
+
 # Workflow #411 B4 (slice BT-B4, 0.12.x; register §1.166 B4-1 to B4-4; ledger revision 4, the first writer of §1.153 LR-1; B-train plan §2.4 with D3, test rows BT-B4 T1 to T3 of §5.3; package revision 6, declared by BT-PK6): a single-frame select step that declares confirm decision decides its confirmation frame again with the same fact snapshot and instant and compares the decision hashes (the actionable candidates' ids, click boxes and statuses, the selected ids, the outcome key; no feature value): a changed reading of a gate-rejected row keeps the decision, records decision_matched with the confirmation frame's candidate-set hash and taps; another selected candidate records decision_mismatched and fails selection_decision_mismatch before any input; both are written as LR-1 registers them; a step without confirm records matched or mismatched as before
 [[gate]]
 key = "165"

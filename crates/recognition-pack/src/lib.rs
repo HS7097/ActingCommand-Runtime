@@ -32,6 +32,10 @@ mod target_consensus;
 mod template_mask;
 // Workflow #396 REC-5.
 mod template_scales;
+// Workflow #411 B13: brightness and contrast floors of template targets.
+#[cfg(test)]
+mod gate_411_bt_b13;
+mod template_luma;
 // Workflow #396 REC-2.
 mod target_unique;
 mod text_locate;
@@ -40,6 +44,7 @@ mod value_test;
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
+pub use template_luma::TemplateLumaFloor;
 pub use template_mask::{TEMPLATE_FLAT_FIELD_MARGIN_MILLI, TEMPLATE_MASK_MIN_PIXELS};
 pub use template_scales::{TEMPLATE_SCALED_MIN_SIDE, TemplateScales};
 pub use text_locate::{
@@ -432,6 +437,10 @@ pub struct TemplateTarget {
     /// breaks ties (Workflow #396 REC-5); absent means the template as declared.
     #[serde(default)]
     pub scales: Option<TemplateScales>,
+    /// Schema 0.7: the least brightness and contrast, relative to the template, of the window a
+    /// candidate matched (Workflow #411 B13); absent means no floor.
+    #[serde(default)]
+    pub luma_floor: Option<TemplateLumaFloor>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -973,6 +982,11 @@ pub struct TemplateEvaluation {
     /// declares `scales` (the box is the resampled template's); absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale_milli: Option<u32>,
+    /// Workflow #411 B13 (ledger revision 4, register §1.153 LR-2): the brightness and contrast
+    /// of the match's window relative to the template, for a target that declares `luma_floor`;
+    /// absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub luma: Option<actingcommand_contract::TaskDiagnosticLumaData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1172,6 +1186,14 @@ pub(crate) enum JointSearch<'a> {
         maps: &'a recognition::ScaledScoreMaps,
         stage: RecognitionPackLocation,
     },
+}
+
+/// One candidate under the joint acceptance: its relative color evidence, why that color's
+/// region is unresolved, and whether the candidate qualifies.
+pub(crate) struct JointCandidate {
+    pub(crate) color: Option<ColorEvaluation>,
+    pub(crate) unresolved: Option<OcrRegionUnresolvedReason>,
+    pub(crate) passed: bool,
 }
 
 /// A template cache bound to one immutable Scene and its admitted evaluator.
@@ -1664,6 +1686,13 @@ impl RecognitionEvaluator {
                 target.id
             )));
         }
+        // Workflow #411 B13: nor does it check a luma floor.
+        if target.luma_floor.is_some() {
+            return Err(RecognitionPackError::fatal(format!(
+                "template target '{}' declares luma_floor, which template-region batch evaluation does not check",
+                target.id
+            )));
+        }
         if !(1..=MAX_TEMPLATE_REGION_EVALUATIONS).contains(&regions.len()) {
             return Err(RecognitionPackError::fatal(format!(
                 "template target '{}' region batch must contain 1..={MAX_TEMPLATE_REGION_EVALUATIONS} regions, got {}",
@@ -2044,6 +2073,8 @@ impl RecognitionEvaluator {
         // Workflow #396 REC-2, REC-7 and REC-5: a unique, masked or scaled template is scored
         // exactly.
         let mask = template_mask::scored_mask(&self.pack.schema_version, target);
+        // Workflow #411 B13: a declared floor joins the joint acceptance of the search.
+        let luma = template_luma::LumaCheck::of(target, &template_png, mask)?;
         if target.unique.is_some() || mask.is_some() || target.scales.is_some() {
             return self.evaluate_exact_template(
                 context,
@@ -2052,14 +2083,26 @@ impl RecognitionEvaluator {
                 mask,
                 &template_png,
                 region,
+                luma.as_ref(),
             );
         }
-        if target
-            .color_check
-            .as_ref()
-            .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)))
+        if target.luma_floor.is_some()
+            || target
+                .color_check
+                .as_ref()
+                .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)))
         {
-            return self.evaluate_relative_color_template(scene, target, &template_png, region);
+            return self
+                .joint_color_evaluation(
+                    scene,
+                    target,
+                    luma.as_ref(),
+                    JointSearch::Filter {
+                        template_png: &template_png,
+                        region,
+                    },
+                )
+                .map(|(evaluation, _)| evaluation);
         }
         let matched = scene
             .match_template_with_metric(&template_png, region, self.default_match_metric())
@@ -2076,6 +2119,7 @@ impl RecognitionEvaluator {
             score: matched.score,
             threshold,
             scale_milli: None,
+            luma: None,
         };
         let template_ok = template.score >= template.threshold;
 
@@ -2117,6 +2161,7 @@ impl RecognitionEvaluator {
         self.joint_color_evaluation(
             scene,
             target,
+            None,
             JointSearch::Filter {
                 template_png,
                 region: search_region,
@@ -2187,24 +2232,66 @@ impl RecognitionEvaluator {
         )
     }
 
-    /// The joint template and relative color evaluation of `target`: the selection `search`
-    /// makes with the joint acceptance, and the accepted candidate with the factor its template
-    /// was resampled by (Workflow #396 REC-5; 1000 for the direct joint search).
+    /// The joint acceptance of one candidate of `target` (`template-relative-color.md`): its
+    /// relative color, when the target declares one, and (Workflow #411 B13) the brightness and
+    /// contrast of its window, when `luma` is given; the candidate qualifies when each holds.
+    pub(crate) fn joint_accepts(
+        &self,
+        scene: &Scene,
+        target: &TemplateTarget,
+        luma: Option<&template_luma::LumaCheck>,
+        candidate: recognition::TemplateMatch,
+        scale_milli: u32,
+    ) -> recognition::RecognitionResult<JointCandidate> {
+        let relative = target
+            .color_check
+            .as_ref()
+            .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)));
+        let (color, unresolved) = if relative {
+            self.relative_color_at(scene, target, candidate, scale_milli)?
+        } else {
+            (None, None)
+        };
+        let color_ok = !relative || color.is_some_and(|color| color.distance <= color.max_distance);
+        let luma_ok = match luma {
+            Some(check) if color_ok => {
+                check.admits(check.measure(scene, candidate, scale_milli)?)
+            }
+            _ => true,
+        };
+        Ok(JointCandidate {
+            color,
+            unresolved,
+            passed: color_ok && luma_ok,
+        })
+    }
+
+    /// The joint template evaluation of `target`: the selection `search` makes with the joint
+    /// acceptance ([`Self::joint_accepts`]), and the accepted candidate with the factor its
+    /// template was resampled by (Workflow #396 REC-5; 1000 for the direct joint search). The
+    /// target declares a relative color check, or (Workflow #411 B13) `luma` is the check of its
+    /// floor; an absolute color check beside a floor holds for every candidate alike and is
+    /// measured once.
     pub(crate) fn joint_color_evaluation(
         &self,
         scene: &Scene,
         target: &TemplateTarget,
+        luma: Option<&template_luma::LumaCheck>,
         search: JointSearch<'_>,
     ) -> RecognitionPackResult<(TargetEvaluation, Option<recognition::ScaledMatch>)> {
-        if !target
+        let relative = target
             .color_check
             .as_ref()
-            .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)))
-        {
+            .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)));
+        if !relative && luma.is_none() {
             return Err(RecognitionPackError::fatal(
                 "relative color declaration missing",
             ));
         }
+        let absolute_color = match &target.color_check {
+            Some(check) if !relative => Some(self.evaluate_color_check(scene, &target.id, check)?),
+            _ => None,
+        };
         let threshold = target
             .threshold
             .unwrap_or(self.pack.defaults.template_threshold);
@@ -2215,18 +2302,16 @@ impl RecognitionEvaluator {
         let mut accept = |candidate: recognition::TemplateMatch,
                           scale_milli: u32|
          -> recognition::RecognitionResult<bool> {
-            let (color, unresolved) =
-                self.relative_color_at(scene, target, candidate, scale_milli)?;
+            let joint = self.joint_accepts(scene, target, luma, candidate, scale_milli)?;
             if best_color_score.is_none_or(|score| candidate.raw_score > score) {
                 best_color_score = Some(candidate.raw_score);
-                best_color = color;
-                best_color_unresolved = unresolved;
+                best_color = joint.color;
+                best_color_unresolved = joint.unresolved;
             }
-            let passed = color.is_some_and(|color| color.distance <= color.max_distance);
-            if passed {
-                accepted_color = color;
+            if joint.passed {
+                accepted_color = joint.color;
             }
-            Ok(passed)
+            Ok(joint.passed)
         };
         let as_declared = |matched| recognition::ScaledMatch {
             matched,
@@ -2257,19 +2342,30 @@ impl RecognitionEvaluator {
         };
         let chosen = selection.accepted.unwrap_or(selection.best);
         let matched = chosen.matched;
-        let passed = selection.accepted.is_some();
-        let (color, unresolved) = if passed {
+        let accepted = selection.accepted.is_some();
+        let (color, unresolved) = if !relative {
+            (absolute_color, None)
+        } else if accepted {
             (accepted_color, None)
         } else {
             (best_color, best_color_unresolved)
         };
+        let color_ok = color.is_none_or(|color| color.distance <= color.max_distance);
+        // Workflow #411 B13: the chosen candidate's window, recorded only for a declared floor.
+        let luma_evidence = luma
+            .map(|check| check.measure(scene, matched, chosen.scale_milli))
+            .transpose()
+            .map_err(|err| primitive_error(&target.id, err))?;
+        let luma_ok = luma
+            .zip(luma_evidence)
+            .is_none_or(|(check, measured)| check.admits(measured));
         Ok((
             TargetEvaluation {
                 id: target.id.clone(),
                 kind: TargetKind::Template,
                 sample_evaluations: Vec::new(),
                 sampling: None,
-                passed,
+                passed: accepted && color_ok,
                 template: Some(TemplateEvaluation {
                     x: matched.x,
                     y: matched.y,
@@ -2279,6 +2375,7 @@ impl RecognitionEvaluator {
                     score: matched.score,
                     threshold,
                     scale_milli: target.scales.as_ref().map(|_| chosen.scale_milli),
+                    luma: luma_evidence,
                 }),
                 color,
                 ocr: None,
@@ -2292,10 +2389,7 @@ impl RecognitionEvaluator {
                     Some(reason) => format!(
                         "no joint template/color match; best template color region unresolved: {reason:?}"
                     ),
-                    None => template_message(
-                        matched.score >= threshold,
-                        color.is_none_or(|color| color.distance <= color.max_distance),
-                    ),
+                    None => joint_message(matched.score >= threshold, color_ok, luma_ok),
                 },
             },
             selection.accepted,
@@ -2878,6 +2972,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                     "click",
                     "unique",
                     "scales",
+                    "luma_floor",
                 ][..]
             }
             // Workflow #411 B3: `alternatives`.
@@ -2976,6 +3071,8 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
         // Workflow #396 REC-5.
         if target_type == "template" {
             template_scales::validate_scales_wire(schema, object, index)?;
+            // Workflow #411 B13.
+            template_luma::validate_luma_floor_wire(schema, object, index)?;
         }
         if let Some(locate) = object.get("locate") {
             validate_locate_wire(locate, &format!("/targets/{index}/locate"))?;
@@ -3479,6 +3576,8 @@ fn validate_pack(
     template_mask::validate_mask_declarations(pack, errors);
     // Workflow #396 REC-5.
     template_scales::validate_scales_declarations(pack, errors);
+    // Workflow #411 B13.
+    template_luma::validate_luma_floor_declarations(pack, errors);
     // Workflow #396 REC-6.
     if let Err(refusal) = value_test::validate_value_test_declarations(pack) {
         errors.push(format!("{}: {}", refusal.pointer, refusal.explanation));
@@ -4217,6 +4316,19 @@ fn template_message(template_ok: bool, color_ok: bool) -> String {
         (false, true) => "template score below threshold".to_string(),
         (true, false) => "color check failed".to_string(),
         (false, false) => "template score below threshold and color check failed".to_string(),
+    }
+}
+
+/// Workflow #411 B13: [`template_message`] of a joint evaluation, which also says when the
+/// chosen window is below its luma floor.
+fn joint_message(template_ok: bool, color_ok: bool, luma_ok: bool) -> String {
+    match (template_ok && color_ok, luma_ok) {
+        (_, true) => template_message(template_ok, color_ok),
+        (true, false) => "luma floor not met".to_string(),
+        (false, false) => format!(
+            "{} and luma floor not met",
+            template_message(template_ok, color_ok)
+        ),
     }
 }
 
@@ -5788,6 +5900,7 @@ mod tests {
                     click: Some(rect(5, 6, 7, 8)),
                     unique: None,
                     scales: None,
+                    luma_floor: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "color".to_string(),
@@ -5858,6 +5971,7 @@ mod tests {
                     click: None,
                     unique: None,
                     scales: None,
+                    luma_floor: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "".to_string(),
@@ -6024,6 +6138,7 @@ mod tests {
                     click: None,
                     unique: None,
                     scales: None,
+                    luma_floor: None,
                 })],
                 ..base_pack()
             };
@@ -6053,6 +6168,7 @@ mod tests {
                     click: None,
                     unique: None,
                     scales: None,
+                    luma_floor: None,
                 })],
                 ..base_pack()
             };
@@ -6105,6 +6221,7 @@ mod tests {
                         click: None,
                         unique: None,
                         scales: None,
+                        luma_floor: None,
                     }),
                     RecognitionTarget::Color(ColorTarget {
                         id: "color".to_string(),

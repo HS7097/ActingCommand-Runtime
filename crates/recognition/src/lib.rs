@@ -18,11 +18,14 @@ mod exact_score;
 mod gate_e1;
 // Workflow #396 REC-5: the resampling primitive (Workflow #392 reuses it).
 pub mod resample;
+// Workflow #411 B13: a matched window's brightness and contrast relative to its template.
+mod window_luma;
 
 pub use codes::ColorDigestErrorCode;
 pub use exact_score::{
     ExactScoreMap, RegionSpectra, ScaledMatch, ScaledScoreMaps, ScaledSelection, score_milli,
 };
+pub use window_luma::{LumaRatios, LumaReference};
 
 pub type RecognitionResult<T> = Result<T, RecognitionError>;
 

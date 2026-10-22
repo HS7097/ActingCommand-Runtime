@@ -1340,6 +1340,24 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// Workflow #411 B13: `luma_floor` of an `anchors[]` or `verify_templates[]` entry of task
+    /// schema `0.9`: `{"mean_ratio_milli"?, "contrast_ratio_milli"?}` of integers. Its values are
+    /// checked with the derived recognition pack.
+    fn luma_floor(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(
+            value,
+            pointer,
+            &["mean_ratio_milli", "contrast_ratio_milli"],
+        )?;
+        for (field, value) in object {
+            self.unsigned(value, &child(pointer, field))?;
+        }
+        Ok(())
+    }
+
     /// Workflow #396 REC-7: the `mask` (`{"type": "range", "lower", "upper"}`) or MAA
     /// `maskRange` (`[lower, upper]`) of an `anchors[]` or `verify_templates[]` entry of task
     /// schema `0.9`: integer gray bounds in 0..=255 with `lower <= upper`, one of the two forms.
@@ -1512,6 +1530,7 @@ impl Declaration<'_> {
                 "provenance",
                 "unique",
                 "scales",
+                "luma_floor",
             ],
             "verify_templates" => &[
                 "id",
@@ -1528,6 +1547,7 @@ impl Declaration<'_> {
                 "provenance",
                 "unique",
                 "scales",
+                "luma_floor",
             ],
             "color_probes" => &[
                 "id",
@@ -1593,6 +1613,8 @@ impl Declaration<'_> {
                 "unique" => self.unique(value, &pointer)?,
                 // Workflow #396 REC-5.
                 "scales" => self.scales(value, &pointer)?,
+                // Workflow #411 B13.
+                "luma_floor" => self.luma_floor(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 // Workflow #396 REC-7: a gray-range mask of task schema 0.9.

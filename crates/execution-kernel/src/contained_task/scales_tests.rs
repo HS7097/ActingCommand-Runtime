@@ -24,6 +24,7 @@ fn matched(scale_milli: Option<u32>) -> TargetEvaluation {
             score: 1.0,
             threshold: 0.9,
             scale_milli,
+            luma: None,
         }),
         color: None,
         ocr: None,

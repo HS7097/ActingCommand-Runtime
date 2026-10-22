@@ -908,6 +908,8 @@ impl OperationParser {
                         ),
                     ),
                 );
+                // Workflow #411 B13.
+                let target = with_luma_floor(&source, target);
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for color_probe in array_field(&bundle.data, "color_probes") {
@@ -958,6 +960,8 @@ impl OperationParser {
                         ),
                     ),
                 );
+                // Workflow #411 B13.
+                let target = with_luma_floor(&source, target);
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for operation in array_field(&bundle.data, "operations") {
@@ -2444,6 +2448,14 @@ fn with_scales(source: &Value, mut target: Value) -> Value {
     target
 }
 
+/// Workflow #411 B13: `luma_floor` passes to the pack as declared (pack schema `0.7`).
+fn with_luma_floor(source: &Value, mut target: Value) -> Value {
+    if let (Some(floor), Some(object)) = (source.get("luma_floor"), target.as_object_mut()) {
+        object.insert("luma_floor".to_string(), floor.clone());
+    }
+    target
+}
+
 /// Workflow #396 REC-2: `unique` passes to the pack as declared (pack schema `0.7`).
 fn with_unique(source: &Value, mut target: Value) -> Value {
     if let (Some(unique), Some(object)) = (source.get("unique"), target.as_object_mut()) {
@@ -2946,6 +2958,8 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
                 || target.get("unique").is_some()
                 || target.get("mask").is_some()
                 || target.get("scales").is_some()
+                // Workflow #411 B13.
+                || target.get("luma_floor").is_some()
         });
     if uses_0_7 {
         PACK_SCHEMA_0_7
