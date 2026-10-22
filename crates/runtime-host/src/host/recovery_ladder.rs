@@ -2653,9 +2653,9 @@ impl HostShared {
         rungs_tried: u8,
     ) -> RuntimeHostResult<ScreenStep> {
         let config = &pending.config.busy_screen;
-        if !ladder_class_of(failure.code().as_str())
-            .is_some_and(|class| config.classes.contains(&class))
-        {
+        // RED PROOF 4 (do not merge): the gate applies to every classified failure,
+        // whatever `busy.screen.classes` lists.
+        if ladder_class_of(failure.code().as_str()).is_none() {
             return Ok(ScreenStep::AsToday { interruption: None });
         }
         // The probe runs between rung runs, on the ladder's key: the holding check first.
