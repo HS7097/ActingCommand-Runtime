@@ -6220,6 +6220,30 @@
       "tokens": {
         "operations_empty": {
           "description": "The task declares no operation, which only a task schema 0.8 zero-input reading task without recovery may (contracts/ocr-fields.md)."
+        },
+        "wait_member_refused": {
+          "description": "A wait step (#411 B36/B19, A35-S3) declares a member it never takes: click, application, select, guard, unguarded_trusted_coordinate, retryable, max_attempts, retry_interval_ms, post_delay_ms, on_error, input_recheck, observation_window, on_guard_refused, or a wait page of its own (expect_after.wait_page)."
+        },
+        "wait_from_invalid": {
+          "description": "A wait step's from is not one page of the package (any, or a page that resolves to none or to several), or is a target page or an error page."
+        },
+        "wait_destination_missing": {
+          "description": "A wait step declares no destination (to or expect_after)."
+        },
+        "wait_max_invalid": {
+          "description": "A wait step's max_ms or a wait page's max_ms is outside 1..=1800000."
+        },
+        "wait_designated": {
+          "description": "A wait step is a designated operation or a member of a designated effect set."
+        },
+        "wait_timeout_unmapped": {
+          "description": "A wait step's on_timeout names no mapping of the task's scheduling outcome that lists the step's from page."
+        },
+        "wait_timeout_not_busy": {
+          "description": "The mapping a wait step's on_timeout names does not declare busy (#411 B37)."
+        },
+        "wait_page_invalid": {
+          "description": "A confirmation's wait page (expect_after.wait_page.page_id) is not one page of the package, or is a destination of its operation or an error page."
         }
       }
     },
@@ -18346,6 +18370,72 @@
       "description": "The Runtime host reports contained task deadline unavailable.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "contained_task_declared_operation_page_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "page_id": "required",
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "#412 Lab B-3: a Lab operation ran the declared operation pack_operation_id, which runs from the page page_ids (its declared from), and the first page the kernel recognised was page_id. The run ended before any input.",
+      "common_causes": "The device did not show the operation's page when the Lab operation started.",
+      "handling": "Bring the device to the operation's from page, or name an operation of the page it shows."
+    },
+    "contained_task_declared_operation_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the package's entry task declares no operation of that id. Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
+      "common_causes": "A mistyped operation id, or the id of an operation of another task or package.",
+      "handling": "Name an operation id of the package's entry task."
+    },
+    "contained_task_declared_operation_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "lab_operation_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the Lab does not run it as the kernel runs a step (page-graph clicks only), for the reason lab_operation_problem: application_effect (the operation is an application effect), select_step (a select step, which needs a policy and the instance's facts), linear_steps (the package runs linear_steps), recognize_only (the package only recognises), chosen_identity (its expect_after reads the identity an earlier select step of the same run chose). Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
+      "common_causes": "The named operation is not a page-graph click: an application effect, a select step, an operation that reads a choice, or an operation of a linear_steps or recognize_only package.",
+      "handling": "Run the whole package, or exercise the input in the Lab's element or coordinate mode."
     },
     "contained_task_designated_effect_cap_unresolved": {
       "category": "error",

@@ -2890,6 +2890,23 @@ Gates: exec keys 133 to 135.
 |---|---|---|---|---|---|
 | A43b-1 | a page wait (`capture_until_page`) or a step's confirmation (`await_postcondition`) on a still, unrecognised screen | rule (no shape change) (exec 133 to 135) | A43b | A43b | "still and unrecognised" holds while the wait's latest two frames are unchanged by the frame-change measure (the whole frame, still at most 1500 milli) and neither matched a page the wait accepts (any page of the package for the page wait, the step's destination for the confirmation); a wait's frame is the frame its observation recognised; while it holds, the rest of the wait is counted at the factor 1000 (its pauses last their declared length and its wall time counts in full against its limit), otherwise it is paced as before; a page it accepts or a changed frame returns to the step's pacing at once; a handled shared interrupt page or a failed observation clears it; the run's budget clock, the task deadline, the extra wait rounds and the outcome of a wait that runs out (its code, `elapsed_ms` as the wait counted it, `limit_ms`) are unchanged; at the factor 1000 nothing changes |
 
+### 1.161 Slice Lab B-3 S1 (0.12.x): the kernel runs one declared operation as a run would, and returns after that one step (#412 B-3; design `rd-1021/train-0129/lab-b3-design.md` §0 item 2, §1.1, §2.1, §2.2, §4, §5 S1; coordinator 10-21 22:2x: the design's twelve open questions as recommended, Q2 page-graph clicks only)
+
+`actinglab do --operation` (Lab B-3 S2) runs one operation its package declares as the kernel runs
+it. This slice is the kernel's half: a declared-operation mode of the page-graph run, not a copy of
+its step, so the operation's `when`, guard, input recheck (`still_frames` included), point draw and
+landing-history choice, gesture, `post_delay`, `expect_after` and retries run unchanged. The entry
+waits for a page with `capture_until_page` as a run does, A43b's rule included (§1.160). **No
+persisted shape**: the mode writes no record of its own (LR-10's writer is S2), adds no location,
+key, vocabulary token, configuration key or package member; `runtime-client` and `ledger` are
+unchanged. The Runtime-internal interface is the kernel's. Gates: exec keys 136 to 143 and 180.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B3S1-1 | `PreparedContainedTask::run_declared_operation(runtime, operation_id) -> DeclaredOperationOutcome` (`Confirmed {page}`, `RunCompleted {page, outcome_key}`, `PassedOver {refusal}`, `RecoveryRequested {failure_reason, after_page}`) | Runtime-internal interface (memory only) (exec 136, 138 to 142, 180) | Lab B-3 S1 | Lab B-3 S1 | the six points of design §2.1: no post-admission OCR, OCR fields or reading relay; the entry always `capture_until_page` (no required entry, no application entry); the declared operation is the only candidate, with no target page, stage, designated cap (no fact is read) or per-run cap, and one step; the run returns once that step ended without ending the run (confirmed on its page, passed over on a guard refusal with `on_guard_refused: next_candidate`, which keeps the refusal, or a failure decision that asked for recovery, which it does not run); no stability termination; a success that ends the package's run (a keyed end) is `RunCompleted`; a failure is the run's error with its outcome, as a run's |
+| B3S1-2 | `PreparedContainedTask::declared_operation(operation_id) -> DeclaredOperation {phase_id?, from_page, destination_pages, max_attempts}` | Runtime-internal interface (memory only) (exec 143) | Lab B-3 S1 | Lab B-3 S1 | admission before any lease: an operation of the entry task; the stage that lists it, its `from` as declared, its `to` or `expect_after` pages, its retry policy's attempts (1 without one): what LR-10's prepared `operation` states before the run |
+| B3S1-3 | `contained_task_declared_operation_unknown` (`pack_operation_id`), `contained_task_declared_operation_unsupported` (`pack_operation_id`, `lab_operation_problem`), `contained_task_declared_operation_page_mismatch` (`pack_operation_id`, `page_id`, `page_ids`); all `error`, `ladder_class` `none` (decision Q7), every value required | new codes (pending) (exec 137, 143) | Lab B-3 S1 | Lab B-3 S1 | unsupported: `application_effect`, `select_step`, `linear_steps`, `recognize_only`, `chosen_identity` (the key and vocabulary are S0's, §1.159 B3-6); page mismatch: the run's first page is not the operation's `from`, no step starts and nothing is input |
+
 ### 1.164 Slice BT-KEY (0.12.x): a per-run operation cap and a guard refusal end on a named key (#411 B16 part 1, B22, B33; B-train plan `rd-1021/train-0129/b-plan/plan.md` §2.11, D10, Q5, Q9)
 
 An operation of a task schema `0.9` page-graph task may cap how often one run dispatches it
@@ -3074,6 +3091,28 @@ key, vocabulary token, configuration key, location or package member. Gates: hos
 |---|---|---|---|---|---|
 | A52-1 | a capture failure whose dedicated close lease is refused `lease_transfer_not_safe` (a read-only observe's or a monitor's; a run closes under its own lease) | rule (no shape change) (host 171) | FLK07-FIX | FLK07-FIX | no close is attempted; the refusal is one `runtime.failed` (stage `runtime_lifecycle_session_close`, the instance, the failed work's links), not fatal; the work fails as its capture failure; the instance is not fenced (Workflow #403 fences an unconfirmed close; nothing is unconfirmed); the session must close and is closed at the waiting entry's lease end or by its preparation (`read-session-resource-close.md`, "Device session lifetime"; `runtime-fact-store.md`, "Connection preparation phase") |
 | A52-2 | every other failure of that close | rule (unchanged) (host 172) | FLK07-FIX | — | keeps its fatality: a close attempted under an expired or otherwise invalid lease or an unresolved destructive step retains failure and owner protection, a ledger failure ends the Runtime; an unconfirmed close of the instance's own resources fences it (#403) |
+
+### 1.176 Slice A35-S3 (0.12.x): a wait step without input, and a confirmation's wait page (#411 B36, B19; design `rd-1021/train-0129/a35-design.md` §2.3, §5.1 S3, §7; Alice's B19 decision of 2026-10-20; coordinator decisions Q9 to Q11 of 2026-10-21)
+
+A run that starts on a page showing an activity that ends by itself could only fail or end at once
+there (B19 problem 1, B36), and a confirmation waited out its whole timeout on any unexpected page
+(B19 problem 2). Now a page-graph operation may be a wait step that makes no input and waits on its
+page for its destinations, and a confirmation may declare a wait page that pauses its clock. One
+kernel wait serves both, the confirmation's (`await_postcondition`), and keeps A43b's rule
+(§1.160). [resource-declarations.md](resource-declarations.md) ("Wait steps and wait pages"),
+[README.md](README.md) and [linear-steps.md](linear-steps.md) are the contract. **No persisted
+ledger shape** (design §7): no code, no record, no configuration key, no location, no key; the step
+writes the existing `StepStarted`/`StepFinished` without effect records, as a pass-over does. The
+new members join `package` revision 6, which BT-PK6 declares; until then the Runtime admits them by
+code. Gates: exec keys 175 to 179.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S3-1 | `wait: {"max_ms", "on_timeout"?}` of a task operation | new optional member (resource file format, not a ledger shape) (exec 175 to 177, 179) | A35-S3 | resource side | joins package revision 6; task schema `0.9`, page-graph tasks only (`linear_steps`: `contained_task_linear_invalid`, `reason=wait`); the fourth effect beside `click`, `application` and `select`: no guard, no input, no effect record; frames every `expect_after.interval_ms`, else the capture interval (Q10); a frame on `from` keeps it waiting up to `max_ms` from the step's start on the run's budget clock (Q9) and restarts the away clock (`expect_after.timeout_ms`, else the step timeout), which runs on frames of neither page after the shared interrupt pages; a destination finishes the step and the run goes on; an error page fails `contained_task_error_page_reached`; the away clock fails `contained_task_step_unconfirmed`; `max_ms` on `from` ends the run there Completed with `on_timeout` (a keyed end), else `contained_task_step_unconfirmed` with `page_id` the wait page |
+| S3-2 | `expect_after.wait_page: {"page_id", "max_ms"}` | new optional member (resource file format) (exec 178, 179) | A35-S3 | resource side | joins package revision 6; task schema `0.9`, page-graph tasks only (`reason=wait` in `linear_steps`); frames on the page pause the confirmation clock up to `max_ms` of time on it in all, then count as frames of no destination; retry policy, failure decision and extra rounds unchanged |
+| S3-3 | `program_problem` tokens `wait_member_refused`, `wait_from_invalid`, `wait_destination_missing`, `wait_max_invalid`, `wait_designated`, `wait_timeout_unmapped`, `wait_timeout_not_busy`, `wait_page_invalid` | new tokens of an existing vocabulary (slice E1, #411 A39: `operations_empty`) on the existing `contained_task_program_invalid` (exec 179) | A35-S3 | A35-S3 | Runtime admission's refusal of a broken wait step or wait page, with `path` (the task declaration) and `json_pointer` (the refused member), checked before the operation's other checks; the source parser refuses a wrong shape (`resource_declaration_invalid`) and an older task schema (`UnconsumedField`) |
+| S3-4 | `on_timeout` in the static checks | rule (no shape change) (exec 179) | A35-S3 | A35-S3 | a keyed end under §1.164 KEY-3 (`keyed_terminal_holds`): the phased walk (`task_phases_outcome_incomplete`) and the page-graph coverage (`contained_task_outcome_declaration_incomplete`); its mapping declares `busy` (Q11, `wait_timeout_mapping_busy`); unlike KEY-6 the package stays a prerequisite or return-home layer |
+| S3-5 | `TaskPhaseOperation.on_timeout_key`, `wait_timeout_mapping_busy` | Runtime-internal interface (memory only) | A35-S3 | A35-S3 | the walk's view of the new member, shared by source parsing, build and Runtime admission |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

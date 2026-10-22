@@ -102,6 +102,9 @@ pub use actingcommand_execution_kernel::{
     RecoverySignal, RecoveryStatus, execute_recovery_graph, simulate_contained_task,
     simulate_contained_task_at,
 };
+// #412 Lab B-3 S1: a declared operation as admission states it, and how its one step ended, for
+// `actinglab do --operation` (S2).
+pub use actingcommand_execution_kernel::{DeclaredOperation, DeclaredOperationOutcome};
 // Workflow #308 SEL-L6a: the whole-package replay of `actinglab replay --frames`.
 pub use actingcommand_execution_kernel::{
     OfflineReplayEnd, OfflineReplayError, OfflineReplayFacts, OfflineReplayResult,

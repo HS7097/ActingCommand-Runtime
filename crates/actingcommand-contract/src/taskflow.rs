@@ -408,6 +408,9 @@ pub struct TaskPhaseOperation<'a> {
     /// #411 B22 (B-train plan §2.11 item 2): the outcome key of a keyed `on_guard_refused`
     /// (`{"outcome_key": K}`); the run may end there, on the operation's page, without an input.
     pub on_guard_refused_key: Option<&'a str>,
+    /// #411 B36/B19 (A35-S3): the outcome key of a wait step's `on_timeout`; the run may end
+    /// there, on the step's own page, still busy, so the key's mapping declares `busy`.
+    pub on_timeout_key: Option<&'a str>,
 }
 
 /// #411 B16 part 1 (B-train plan §2.11 item 1): an operation's `max_runs` and what its
@@ -425,12 +428,14 @@ pub struct TaskPhaseRunCap<'a> {
 impl TaskPhaseOperation<'_> {
     /// #411 B16/B22 (B-train plan §2.11 item 3): the outcome keys on which a run may end at this
     /// operation's state, on the state's page: its `on_empty`, its keyed `on_max_runs` and its
-    /// keyed `on_guard_refused`. Each is a keyed terminal ([`keyed_terminal_holds`]).
+    /// keyed `on_guard_refused`; #411 B36/B19 (A35-S3): and a wait step's `on_timeout`. Each is a
+    /// keyed terminal ([`keyed_terminal_holds`]).
     pub fn keyed_ends(&self) -> impl Iterator<Item = &str> {
         [
             self.on_empty_key,
             self.max_runs.and_then(|cap| cap.outcome_key),
             self.on_guard_refused_key,
+            self.on_timeout_key,
         ]
         .into_iter()
         .flatten()
@@ -470,6 +475,16 @@ pub fn keyed_terminal_holds(
         })
         .collect::<Vec<_>>();
     matches!(mappings.as_slice(), [mapping] if mapping.outcome_key() == key)
+}
+
+/// #411 B36/B19 (A35-S3; coordinator decision Q11 of 2026-10-21): a wait step's `on_timeout`
+/// ends the run on the step's own page while its activity still runs, so the mapping of its key
+/// declares `busy` (#411 B37). With [`keyed_terminal_holds`] this is the rule of its terminal.
+pub fn wait_timeout_mapping_busy(scheduling: &SchedulingOutcomeDeclaration, key: &str) -> bool {
+    scheduling
+        .mappings()
+        .iter()
+        .any(|mapping| mapping.outcome_key() == key && mapping.busy())
 }
 
 // --- Workflow #373 NAV-3b: entry page sets (begin) ---
@@ -825,6 +840,13 @@ fn validate_phased_route_from(
             for key in operation.keyed_ends() {
                 keyed_terminal(scheduling, completed, &page, key, canonical)?;
                 terminals += 1;
+            }
+            // #411 B36/B19 (A35-S3): a wait step's `on_timeout` ends the run still busy.
+            if operation
+                .on_timeout_key
+                .is_some_and(|key| !wait_timeout_mapping_busy(scheduling, key))
+            {
+                return Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code().into());
             }
             if operation.destinations.is_empty() {
                 return Err(TaskflowCode::TaskPhasesPostconditionMissing.code().into());

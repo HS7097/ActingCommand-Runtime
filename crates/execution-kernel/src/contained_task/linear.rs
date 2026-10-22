@@ -596,6 +596,11 @@ impl TaskProgram {
         let mut operation_ids = BTreeSet::new();
         let mut steps = Vec::with_capacity(self.operations.len());
         for (index, operation) in self.operations.iter().enumerate() {
+            // #411 B36/B19 (A35-S3): a wait step and a confirmation's wait page are page-graph
+            // declarations.
+            if operation.declares_wait() {
+                return Err(invalid("wait", Some(operation)));
+            }
             operation.validate(control, self.defaults, &self.schema_version)?;
             if !operation_ids.insert(operation.id.as_str()) {
                 return Err(ContainedTaskError::new(
