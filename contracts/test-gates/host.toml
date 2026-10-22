@@ -1648,6 +1648,60 @@ tests = [
 ]
 incident = ["#411 A50"]
 
+# #411 A35 (slice A35-S2, 0.12.x; register §1.168 A35-1, A35-2, A35-3; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §2.1, §4.3, §5.1 S2 T1, with decision Q8: the frame-change measure of #411 B12; host keys 156 to 161 from the wave-3 frame): a return-home rung that fails contained_task_page_unknown (a class recovery_ladder.busy.screen.classes lists by default) while consecutive read-only probe frames change by more than busy.screen.change_max_milli is recorded failed with recovery_rung_screen_changing (info; caused by the page-unknown code; count the frames probed, score_milli the largest change, held_ms 0, limit_ms busy.screen.max_wait_ms, retry_after_ms busy.screen.recheck_ms); no application stop is issued while the screen changes; once the frames are identical the ladder, after holding recheck_ms on the Runtime clock, runs the return-home rung again, which recovers with rungs_tried 1 and no application stop
+[[gate]]
+key = "156"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t1_a_changing_screen_holds_the_ladder_and_return_home_runs_again_once_it_settles",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3; design §2.1 A35-a settled, §5.1 S2 T2): the same failure on identical probe frames (a still unknown screen) is recorded failed with its run's own code after the probe's frames, and the application restart rung runs right after it with no hold
+[[gate]]
+key = "157"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t2_a_still_unknown_screen_is_restarted_right_after_the_probe",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-2, A35-3; design §3, §4.3 end states, §5.1 S2 T3; coordinator decision Q3): a screen that keeps changing is held recheck_ms at a time, never longer than what is left of busy.screen.max_wait_ms since the first changing verdict (the record's retry_after_ms, absent at the limit); at the limit on_exhausted stop ends the ladder exhausted with recovery_ladder_hold_exhausted (warning; held_ms at least limit_ms; caused by the last recovery_rung_screen_changing) and no application stop, and escalate goes on to the application restart rung, which stops the application
+[[gate]]
+key = "158"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t3_at_the_screen_limit_on_exhausted_stops_or_escalates",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3, A35-4; design §3 busy.screen.classes, §5.1 S2 T4): a return-home failure whose ladder class the configured busy.screen.classes does not list takes no probe frame and is recorded failed with its own code; the application restart rung runs at once
+[[gate]]
+key = "159"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t4_a_return_home_failure_of_an_unlisted_class_is_not_probed",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3; design §4.3 table row 3 probe unavailable, §5.1 S2 T5): a probe whose capture fails is neither a changing screen (no further hold) nor a settled one (no return-home run again): the climb goes on to the next rung, and the probe's capture.failed record exists under the ladder's causation id
+[[gate]]
+key = "160"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t5_a_probe_whose_capture_fails_climbs_on_and_keeps_its_failure_record",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3, A35-4; design §5.1 S2 T6 as changed by decision Q8; contracts/color-digest.md Frame change): two consecutive probe frames are unchanged when their frame-change measure is at most busy.screen.change_max_milli: frames that change by exactly the configured value are settled, and one milli less, from the configuration too, makes them changing (score_milli the change)
+[[gate]]
+key = "161"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t6_the_gate_compares_the_frame_change_with_the_configured_threshold_inclusively",
+]
+incident = ["#411 A35"]
+
 # #411 B37 entry part (slice A35-S4, 0.12.x; register §1.169 B37E-1, B37E-2; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S4 T1; coordinator decision Q5; host keys 162 to 164 assigned by the coordinator): a scheduled run whose home entry runs the registry's return-home package, which completes on a scheduling outcome mapping it marks busy, fails contained_task_entry_busy (warning; package_id the return-home package, page_id the page it ended on, outcome_key the busy key) in place of contained_task_home_recovery_terminal_non_home, and under the shipped ladder defaults no ladder is admitted
 [[gate]]
 key = "162"

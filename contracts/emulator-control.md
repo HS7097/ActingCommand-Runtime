@@ -822,6 +822,44 @@ failed with that interruption). The hold and the reruns repeat until a run ends:
   always goes on as under `escalate`. `max_wait_ms` 0 holds nothing: `on_exhausted` applies at
   the first busy end.
 
+**Settle gate (#411 A35, slice A35-S2; design `a35-design.md` §2.1, §4.3; coordinator decisions
+of 2026-10-21, Q8 revised: the frame-change measure).** A return-home rung that fails, not by a
+holding interruption, with a code whose ladder class `recovery_ladder.busy.screen.classes` lists
+(default `pack_logic_mismatch`; `[]` turns the gate off), on a climb that has a return-home
+package, does not escalate at once. Between the rung runs, with no run in flight, the ladder
+first makes its holding check (an interruption: the failure is recorded as before and the climb
+ends at its next holding check), renews its key to the probe's span plus `hold.margin_ms`, and
+probes the screen: one host-minted `ObserveReadonly` request under the ladder's causation id
+(`command.received`, `command.validated`) takes `busy.screen.probe_frames` read-only frames,
+`busy.screen.probe_interval_ms` apart, each an ordinary keyless observer's capture with its own
+records (#411 A49). Two consecutive frames are unchanged when the Runtime's one frame-change
+measure between them ([color-digest.md](color-digest.md), "Frame change", the whole frame) is at
+most `busy.screen.change_max_milli`.
+
+- **Settled** (every consecutive pair unchanged): the rung is recorded failed with its run's own
+  code and the climb goes on, as before the gate. An unknown screen that stays still is
+  restarted as before.
+- **Changing**: the rung is recorded `failed` with `recovery_rung_screen_changing` (info,
+  `planned_stop`; `count` the frames probed, `score_milli` the largest change between two
+  consecutive frames, `held_ms` the time since the climb's first changing verdict, `limit_ms` the
+  configured `busy.screen.max_wait_ms`, and `retry_after_ms` while the ladder holds; caused by the
+  run's code). While `held_ms` is below `limit_ms`, the ladder holds as after a busy end, for
+  `busy.screen.recheck_ms`, no longer than what is left, and probes again: settled, it runs the
+  return-home rung again (whose end is handled as every return-home end, this gate and the busy
+  hold included); changing, it records the verdict and holds again. At the limit
+  `busy.screen.on_exhausted` decides: `escalate` (the default; an unknown screen that never stops
+  moving may be hung) goes on to the next rung, `stop` ends the ladder `exhausted` with
+  `recovery_ladder_hold_exhausted` caused by the last `recovery_rung_screen_changing`.
+  `max_wait_ms` 0 probes only: `on_exhausted` applies at the first changing verdict.
+- **Probe unavailable**: a probe capture that fails or is refused (the capture path records its
+  own failure), or frames the measure cannot compare (recorded as `capture_frame_invalid`,
+  caused by the measure's refusal), make no verdict: the climb goes on as before the gate (after
+  a hold, to the next rung). A renewal refused before a probe is a holding interruption.
+
+The screen hold's budget is its own, counted from the first changing verdict of the climb; the
+busy hold's is the busy ends'. A climb that starts at a later rung (a start rung past
+`return_home`) is not gated (decision Q4).
+
 While a hold waits, `Status` shows it as the instance's `ladder_busy_hold` (#411 A35-S5,
 coordinator decision Q7): `kind` what the ladder waits for, a closed vocabulary (`busy_outcome`
 for a busy end; `screen_changing` for A35-S2's changing-screen hold, shown once that hold passes
@@ -891,7 +929,8 @@ the ladder's own preparation never does; shutdown and an install drain refuse a 
 a climb; a lost key ends a climb; a capacity refusal and a scheduling pause refuse a trigger and
 end a climb; an interrupted climb ends `exhausted` at warning and one whose rungs failed on their
 own at error. Once a ladder holds the key (Workflow #369 H-3, ruling Q8), every rung boundary,
-every control step, every readiness poll and every busy-hold poll (#411 B37) checks that it
+every control step, every readiness poll, every busy-hold poll (#411 B37) and the settle gate's
+probe (#411 A35) checks that it
 still holds the key and that no
 scheduling pause or capacity refusal (`recovery_admission_denied`), install drain
 (`recovery_ladder_drain_requested`) or shutdown (`recovery_ladder_shutdown_requested`)
@@ -957,8 +996,8 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 | `recovery_ladder_started` | `trigger { stage, run_id?, task_id?, preparation?, failure_code, rule?, matched?, start }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (one to three, in the configured order, no action twice; `reason` exactly when skipped), `config_digest` (64 lowercase hexadecimal digits: the SHA-256 of the section's values the ladder climbs by), `profile?` (the name of the ladder profile the instance climbs by, Workflow #398 RD-4; absent when it climbs the section's `rungs`) | info |
 | `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
-| `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info; a busy end is `failed` with the busy run's `run_id` and `recovery_rung_busy_outcome`, info, #411 B37); `environment?`. One rung may have several records in one ladder: the return-home rung's, once per run after a busy hold | its outcome's category when it has one; otherwise info |
-| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (distinct rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, `recovery_ladder_interrupted`, caused by the holding interruption, or `recovery_ladder_hold_exhausted`, caused by the last busy rung's outcome, #411 B37); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`, `recovery_ladder_hold_exhausted`) |
+| `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info; a busy end is `failed` with the busy run's `run_id` and `recovery_rung_busy_outcome`, info, #411 B37; a return-home failure on a changing screen is `failed` with `recovery_rung_screen_changing`, info, caused by the run's code, once per changing verdict, #411 A35); `environment?`. One rung may have several records in one ladder: the return-home rung's, once per run after a busy hold and once per changing verdict of the settle gate | its outcome's category when it has one; otherwise info |
+| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (distinct rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, `recovery_ladder_interrupted`, caused by the holding interruption, or `recovery_ladder_hold_exhausted`, caused by the last busy rung's outcome, #411 B37, or by the last `recovery_rung_screen_changing`, #411 A35); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`, `recovery_ladder_hold_exhausted`) |
 | `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied" \| "blackout"` (`blackout`: a trigger inside a blackout, `until_unix_ms` its end; written from SR-4a on, read from v0.12.0 on, [scheduling-blackout.md](scheduling-blackout.md)), `until_unix_ms`, `rule?` (the trigger item that matched; absent for a fence's ladder) | admission denial warning; otherwise info |
 
 Ledger revision 3 (Workflow #378 A3): a phase's severity is its `outcome`'s category, else

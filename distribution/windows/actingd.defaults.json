@@ -93,6 +93,15 @@
         "recheck_ms": 60000,
         "max_wait_ms": 3600000,
         "on_exhausted": "stop"
+      },
+      "screen": {
+        "classes": ["pack_logic_mismatch"],
+        "probe_frames": 5,
+        "probe_interval_ms": 1000,
+        "change_max_milli": 1500,
+        "recheck_ms": 15000,
+        "max_wait_ms": 900000,
+        "on_exhausted": "escalate"
       }
     },
     "profiles": {

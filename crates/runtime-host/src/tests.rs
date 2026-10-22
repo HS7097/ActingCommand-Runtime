@@ -289,6 +289,9 @@ mod gate_411_a45;
 mod gate_411_a46;
 // #411 A47: a ladder whose application stop fails keeps its key and climbs to its next rung.
 mod gate_411_a47;
+// #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
+// the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
+mod gate_411_a35;
 // #411 A48: a self-check reads the emulator status first: a running emulator the Runtime holds
 // stopped is recognized again, a stopped one is `instance_not_running`, an unrecognized device
 // says why.
