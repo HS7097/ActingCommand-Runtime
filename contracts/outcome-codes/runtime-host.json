@@ -8746,7 +8746,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.10",
+      "since": "0.12.11",
       "description": "#412 Lab B-3 S2 (ledger revision 4 row LR-10): a Lab operation that runs an operation its package declares lists every frame the kernel captures in its terminal record, at most limit_count (256). The kernel asked for one more capture, count, which is refused before anything is captured: the operation ends there with this failure, at before_frame or after_frame, and no later input is made. The records list the frames taken and verify.",
       "common_causes": "An operation whose confirmation or page wait on a short capture interval outlasts the record's frame budget, such as a long expect_after timeout while the screen does not change.",
       "handling": "Shorten the operation's waits or lengthen its capture interval in the package, or run it as a task, whose frames are not listed in one record."
