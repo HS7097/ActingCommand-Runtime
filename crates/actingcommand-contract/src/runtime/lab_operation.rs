@@ -83,6 +83,9 @@ crate::outcome_vocabulary! {
         RecognizeOnly => "recognize_only",
         /// The operation reads the identity an earlier select step of the same run chose.
         ChosenIdentity => "chosen_identity",
+        /// The operation is a wait step: it makes no input and waits on its page for its
+        /// destinations (#411 B36/B19, A35-S3).
+        Wait => "wait",
     }
 }
 

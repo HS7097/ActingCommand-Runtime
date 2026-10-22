@@ -2078,11 +2078,11 @@ tests = [
 ]
 incident = ["#411 B19"]
 
-# #411 B36 + B19 (slice A35-S3; register §1.176; §5.1 S3 test row T5; coordinator decision Q11 of 2026-10-21): admission refuses a wait step with an input, guard or retry member, an on_timeout whose mapping does not list the step's page or is not busy, and a wait page that is a destination, each contained_task_program_invalid with its program_problem, path and json_pointer; a linear_steps task refuses a wait step with contained_task_linear_invalid, reason=wait
+# #411 B36 + B19 (slice A35-S3; register §1.176; §5.1 S3 test row T5; coordinator decision Q11 of 2026-10-21): admission refuses a wait step with an input, guard or retry member, an on_timeout whose mapping does not list the step's page or is not busy, and a wait page that is a destination, each contained_task_program_invalid with its program_problem, path and json_pointer; a linear_steps task refuses a wait step with contained_task_linear_invalid, reason=wait; Lab B-3 S1's admission of a declared operation (register §1.161, Lab decision Q2) refuses a wait step with contained_task_declared_operation_unsupported, pack_operation_id and lab_operation_problem wait
 [[gate]]
 key = "179"
 coverage = "Y"
 tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t5_admission_refuses_a_broken_wait_step_or_wait_page_with_its_rule",
 ]
-incident = ["#411 B36", "#411 B19"]
+incident = ["#411 B36", "#411 B19", "#412 B-3"]
