@@ -2021,8 +2021,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.10",
-      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the Lab does not run it as the kernel runs a step (page-graph clicks only), for the reason lab_operation_problem: application_effect (the operation is an application effect), select_step (a select step, which needs a policy and the instance's facts), linear_steps (the package runs linear_steps), recognize_only (the package only recognises), chosen_identity (its expect_after reads the identity an earlier select step of the same run chose). Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
-      "common_causes": "The named operation is not a page-graph click: an application effect, a select step, an operation that reads a choice, or an operation of a linear_steps or recognize_only package.",
+      "description": "#412 Lab B-3: a Lab operation named pack_operation_id as the declared operation to run, and the Lab does not run it as the kernel runs a step (page-graph clicks only), for the reason lab_operation_problem: application_effect (the operation is an application effect), select_step (a select step, which needs a policy and the instance's facts), linear_steps (the package runs linear_steps), recognize_only (the package only recognises), chosen_identity (its expect_after reads the identity an earlier select step of the same run chose), wait (a wait step, which makes no input and waits on its page; #411 B36/B19). Refused by the kernel's admission of the declared operation, before any lease, capture or input.",
+      "common_causes": "The named operation is not a page-graph click: an application effect, a select step, a wait step, an operation that reads a choice, or an operation of a linear_steps or recognize_only package.",
       "handling": "Run the whole package, or exercise the input in the Lab's element or coordinate mode."
     },
     "contained_task_declared_operation_page_mismatch": {
