@@ -5101,13 +5101,17 @@ impl PreparedContainedTask {
                         let boundary = actingcommand_contract::TaskTimingBoundary::PostInputWait;
                         let identity = runtime.task_boundary_identity(boundary);
                         let wait_started = runtime.monotonic_now();
-                        let waited = Self::wait_paced_post_input_delay(
-                            runtime,
-                            operation,
-                            started,
-                            task_timeout,
-                            pace,
-                        );
+                        let waited = if declared.is_some() {
+                            Ok(())
+                        } else {
+                            Self::wait_paced_post_input_delay(
+                                runtime,
+                                operation,
+                                started,
+                                task_timeout,
+                                pace,
+                            )
+                        };
                         let wait_ended = runtime.monotonic_now();
                         runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                             boundary,
