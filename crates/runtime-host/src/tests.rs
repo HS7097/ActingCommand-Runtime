@@ -158,6 +158,9 @@ mod gate_373_nav3a;
 mod gate_373_nav3b;
 // Workflow #373 NAV-5: the entry gate's full-match routing (host key 97).
 mod gate_373_nav5;
+// #411 B37 (A35-S4, host keys 162 and 163), register §1.169: a home entry's return-home layer or
+// a navigation recovery chain step that ends busy ends the run with `contained_task_entry_busy`.
+mod gate_411_b37_entry;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
 mod gate_375_r3;

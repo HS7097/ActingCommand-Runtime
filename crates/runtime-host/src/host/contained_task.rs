@@ -632,6 +632,35 @@ fn busy_end_of(
         })
 }
 
+/// #411 B37 (A35-S4, design §2.2 "Entry extension"): the `contained_task_entry_busy` outcome of
+/// an entry layer of `package` (a home entry's return-home layer, a navigation recovery chain
+/// step) whose run completed on `final_page`, when that page is a terminal page of exactly one of
+/// the package's `no_designated_effect` mappings (a layer declares no designated operation, so
+/// its run reaches no other condition) and that mapping is `busy`; `None` otherwise.
+pub(super) fn entry_busy_outcome(
+    package: &PreparedContainedTask,
+    final_page: &str,
+) -> Option<Outcome> {
+    let declaration = package.scheduling_outcome()?;
+    let mut mapped = declaration.mappings().iter().filter(|mapping| {
+        mapping.effect() == actingcommand_contract::SchedulingEffectCondition::NoDesignatedEffect
+            && mapping
+                .terminal_pages()
+                .iter()
+                .any(|page| page_anchor_matches(package.game(), final_page, page))
+    });
+    let mapping = mapped.next().filter(|mapping| mapping.busy())?;
+    if mapped.next().is_some() {
+        return None;
+    }
+    Some(
+        Outcome::new(HostCode::ContainedTaskEntryBusy)
+            .package_id(package.package_label())
+            .page_id(final_page)
+            .outcome_key(mapping.outcome_key()),
+    )
+}
+
 impl ContainedRunControl {
     const NONE: u8 = 0;
     const CLIENT_REQUESTED: u8 = 1;
@@ -8099,6 +8128,16 @@ impl HostShared {
                 package_version: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        // #411 B37 (A35-S4, design §2.2 "Entry extension"): a return-home layer that completed on
+        // a `busy` mapping ends the run in place of the check below: the instance shows an
+        // activity still in progress, so neither the recheck, a navigation nor a ladder follows.
+        if let Some(outcome) = entry_busy_outcome(&recovery, &final_page) {
+            return fail_contained_task_entry_with(
+                runtime,
+                HostCode::ContainedTaskEntryBusy,
+                outcome,
+            );
+        }
         // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry
         // (a configured `linear_steps` package is not compared, above).
         // Workflow #411 A1: the failure names the required entry pages, the page the recovery

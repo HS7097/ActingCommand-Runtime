@@ -718,7 +718,14 @@ data files beside its package directories, one directory per game below the conf
     package and a ladder rung: a page-graph application entry begins with its effect (Workflow
     #390 EXEC-3, wave-17 ruling 1). Then the run locates again. A spent chain ends the run with
     `contained_task_navigation_recovery_exhausted` (`count` the steps run, caused by the last
-    verdict that sent the run to the chain).
+    verdict that sent the run to the chain). A step whose run ended on a page that exactly one of
+    its `scheduling_outcome` mappings of condition `no_designated_effect` lists, a mapping it
+    marks `busy` ([resource-declarations.md](resource-declarations.md), "Busy outcome mappings"),
+    ends the run instead with `contained_task_entry_busy` (warning, ladder class `planned_stop`;
+    `package_id` the step's package, `page_id` the page it ended on, `outcome_key` the mapping's
+    key; #411 B37, slice A35-S4), after its `EntryRecoveryCompleted`: the run does not locate
+    again and the chain's next step is neither admitted nor run, so an instance that shows an
+    activity still in progress is never followed by a step that may restart its application.
   - **Arrival.** On an entry page of the page list, the run's package's own recheck decides,
     for its step timeout: it starts (its steps after the navigation's layers'), or the run ends
     with `contained_task_navigation_entry_unconfirmed`.

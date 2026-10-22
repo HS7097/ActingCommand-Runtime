@@ -2975,6 +2975,26 @@ Workflow #367 (multi-dispatch) and are not handled. Gates: policy keys 64 to 66 
 | B16b-3 | `resource_reserve_insufficient` (info, `none`; `pool_id`, `reserve_at_least`; optional `amount_after`, `task_id`) | new code of existing decision reasons (policy 64, 65) | BT-B16b | BT-B16b | the last reason of a candidate the reserve gate holds this round, its decision deferred: on each instance the ranked candidates are taken by `effective_milli`, the higher first, and a candidate with reserves is held when for one reserved pool the amount is unknown (no `amount_after`), or `after < at_least`, or `after` less the consumption of other tasks dispatched on the instance at or after the pool's latest observation is below it (`task_id` the first such task), or that less the consumption of a candidate taken before it and not held is below it (`task_id` that candidate's task); a regenerating pool wakes the evaluation at its next projection step; review `pending` |
 | B16b-4 | keys `pool_id` (name), `reserve_at_least`, `amount_after` (integers) | new key-table entries (no shape) (policy 64) | BT-B16b | BT-B16b | used by `resource_reserve_insufficient` only |
 
+### 1.169 Slice A35-S4 (0.12.x): a busy end of an entry layer ends the run (#411 A35, B37 entry part; design `rd-1021/train-0129/a35-design.md` §2.2 "Entry extension", §5.1 S4, §5.3; coordinator decision Q5 of 2026-10-21)
+
+A35 seen from a run's entry: a run that starts while its instance shows an activity that ends by
+itself runs its home entry's return-home layer, or a step of its navigation recovery chain, and
+that layer ends on the activity page under a `busy` mapping (§1.152 B37-1). Before, the home entry
+failed `contained_task_home_recovery_terminal_non_home` (`pack_logic_mismatch`, which starts the
+ladder) and the navigation located again and ran the chain's next step, which may restart the
+application. Now such an end ends the run. [linear-steps.md](linear-steps.md) ("Ladder and
+page-graph home entry") and [package-reference.md](package-reference.md) (the navigation's
+"Recovery chain") are the contract. **No persisted ledger shape**: the existing
+`EntryRecoveryCompleted`, fail-closed `EntryTargetDisposition` and terminal records carry one new
+code; no configuration key, no location, no package member (S1's `busy` is read). Gates: host
+keys 162, 163 (164 unused).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B37E-1 | `contained_task_entry_busy` (warning, `planned_stop`; `package_id`, `page_id`, `outcome_key` required) | new code of existing records (host 162, 163) | A35-S4 | A35-S4 | the outcome of the fail-closed `EntryTargetDisposition`, the run's `task.failed` terminal and its receipt; `package_id` the layer's package, `page_id` the page it ended on, `outcome_key` the busy mapping's key; it matches no default trigger item, so no ladder starts; not in `scheduling.rerun.condition_codes` (Q5: only after SR-2b's writer); review `pending` |
+| B37E-2 | a home entry's return-home layer that completed on a `busy` mapping | rule (no shape change) (host 162) | A35-S4 | A35-S4 | the run ends with B37E-1 after the layer's `EntryRecoveryCompleted`, in place of `contained_task_home_recovery_terminal_non_home`: no recheck, no navigation; the mapping is the one `no_designated_effect` mapping that lists the final page (the condition a layer reaches); a `linear_steps` return-home package too; a request's own recovery package declares no `scheduling_outcome`, so only the registry's package can end so |
+| B37E-3 | a navigation recovery chain step that completed on a `busy` mapping | rule (no shape change) (host 163) | A35-S4 | A35-S4 | the run ends with B37E-1 after the step's `EntryRecoveryCompleted`, the gate closed fail-closed: the run does not locate again and the chain's next step is neither admitted nor run; a hop's layer and every other layer are unchanged |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

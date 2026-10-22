@@ -1647,3 +1647,21 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t7_the_recovery_preparation_reads_the_status_and_recognizes_a_running_emulator",
 ]
 incident = ["#411 A50"]
+
+# #411 B37 entry part (slice A35-S4, 0.12.x; register §1.169 B37E-1, B37E-2; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S4 T1; coordinator decision Q5; host keys 162 to 164 assigned by the coordinator): a scheduled run whose home entry runs the registry's return-home package, which completes on a scheduling outcome mapping it marks busy, fails contained_task_entry_busy (warning; package_id the return-home package, page_id the page it ended on, outcome_key the busy key) in place of contained_task_home_recovery_terminal_non_home, and under the shipped ladder defaults no ladder is admitted
+[[gate]]
+key = "162"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37_entry::b37_entry_t1_a_busy_return_home_layer_ends_the_run_and_admits_no_ladder",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 B37 entry part (slice A35-S4; register §1.169 B37E-1, B37E-3; design §5.1 S4 T2): a navigation recovery chain step that completes on a scheduling outcome mapping its package marks busy ends the run with contained_task_entry_busy (warning; package_id, page_id, outcome_key); the run does not locate again and the chain's next step, an application entry package, is neither admitted nor run (no application effect)
+[[gate]]
+key = "163"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37_entry::b37_entry_t2_a_busy_recovery_chain_step_ends_the_run_before_the_next_step",
+]
+incident = ["#411 A35", "#411 B37"]
