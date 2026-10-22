@@ -3111,6 +3111,28 @@ key, vocabulary token, configuration key, location or package member. Gates: hos
 | A52-1 | a capture failure whose dedicated close lease is refused `lease_transfer_not_safe` (a read-only observe's or a monitor's; a run closes under its own lease) | rule (no shape change) (host 171) | FLK07-FIX | FLK07-FIX | no close is attempted; the refusal is one `runtime.failed` (stage `runtime_lifecycle_session_close`, the instance, the failed work's links), not fatal; the work fails as its capture failure; the instance is not fenced (Workflow #403 fences an unconfirmed close; nothing is unconfirmed); the session must close and is closed at the waiting entry's lease end or by its preparation (`read-session-resource-close.md`, "Device session lifetime"; `runtime-fact-store.md`, "Connection preparation phase") |
 | A52-2 | every other failure of that close | rule (unchanged) (host 172) | FLK07-FIX | — | keeps its fatality: a close attempted under an expired or otherwise invalid lease or an unresolved destructive step retains failure and owner protection, a ledger failure ends the Runtime; an unconfirmed close of the instance's own resources fences it (#403) |
 
+### 1.176 Slice A35-S3 (0.12.x): a wait step without input, and a confirmation's wait page (#411 B36, B19; design `rd-1021/train-0129/a35-design.md` §2.3, §5.1 S3, §7; Alice's B19 decision of 2026-10-20; coordinator decisions Q9 to Q11 of 2026-10-21)
+
+A run that starts on a page showing an activity that ends by itself could only fail or end at once
+there (B19 problem 1, B36), and a confirmation waited out its whole timeout on any unexpected page
+(B19 problem 2). Now a page-graph operation may be a wait step that makes no input and waits on its
+page for its destinations, and a confirmation may declare a wait page that pauses its clock. One
+kernel wait serves both, the confirmation's (`await_postcondition`), and keeps A43b's rule
+(§1.160). [resource-declarations.md](resource-declarations.md) ("Wait steps and wait pages"),
+[README.md](README.md) and [linear-steps.md](linear-steps.md) are the contract. **No persisted
+ledger shape** (design §7): no code, no record, no configuration key, no location, no key; the step
+writes the existing `StepStarted`/`StepFinished` without effect records, as a pass-over does. The
+new members join `package` revision 6, which BT-PK6 declares; until then the Runtime admits them by
+code. Gates: exec keys 175 to 179.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S3-1 | `wait: {"max_ms", "on_timeout"?}` of a task operation | new optional member (resource file format, not a ledger shape) (exec 175 to 177, 179) | A35-S3 | resource side | joins package revision 6; task schema `0.9`, page-graph tasks only (`linear_steps`: `contained_task_linear_invalid`, `reason=wait`); the fourth effect beside `click`, `application` and `select`: no guard, no input, no effect record; frames every `expect_after.interval_ms`, else the capture interval (Q10); a frame on `from` keeps it waiting up to `max_ms` from the step's start on the run's budget clock (Q9) and restarts the away clock (`expect_after.timeout_ms`, else the step timeout), which runs on frames of neither page after the shared interrupt pages; a destination finishes the step and the run goes on; an error page fails `contained_task_error_page_reached`; the away clock fails `contained_task_step_unconfirmed`; `max_ms` on `from` ends the run there Completed with `on_timeout` (a keyed end), else `contained_task_step_unconfirmed` with `page_id` the wait page |
+| S3-2 | `expect_after.wait_page: {"page_id", "max_ms"}` | new optional member (resource file format) (exec 178, 179) | A35-S3 | resource side | joins package revision 6; task schema `0.9`, page-graph tasks only (`reason=wait` in `linear_steps`); frames on the page pause the confirmation clock up to `max_ms` of time on it in all, then count as frames of no destination; retry policy, failure decision and extra rounds unchanged |
+| S3-3 | `program_problem` tokens `wait_member_refused`, `wait_from_invalid`, `wait_destination_missing`, `wait_max_invalid`, `wait_designated`, `wait_timeout_unmapped`, `wait_timeout_not_busy`, `wait_page_invalid` | new tokens of an existing vocabulary (slice E1, #411 A39: `operations_empty`) on the existing `contained_task_program_invalid` (exec 179) | A35-S3 | A35-S3 | Runtime admission's refusal of a broken wait step or wait page, with `path` (the task declaration) and `json_pointer` (the refused member), checked before the operation's other checks; the source parser refuses a wrong shape (`resource_declaration_invalid`) and an older task schema (`UnconsumedField`) |
+| S3-4 | `on_timeout` in the static checks | rule (no shape change) (exec 179) | A35-S3 | A35-S3 | a keyed end under §1.164 KEY-3 (`keyed_terminal_holds`): the phased walk (`task_phases_outcome_incomplete`) and the page-graph coverage (`contained_task_outcome_declaration_incomplete`); its mapping declares `busy` (Q11, `wait_timeout_mapping_busy`); unlike KEY-6 the package stays a prerequisite or return-home layer |
+| S3-5 | `TaskPhaseOperation.on_timeout_key`, `wait_timeout_mapping_busy` | Runtime-internal interface (memory only) | A35-S3 | A35-S3 | the walk's view of the new member, shared by source parsing, build and Runtime admission |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

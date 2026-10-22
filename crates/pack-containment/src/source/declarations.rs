@@ -479,6 +479,7 @@ impl Declaration<'_> {
                 "on_guard_refused",
                 "max_runs",
                 "on_max_runs",
+                "wait",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -506,12 +507,18 @@ impl Declaration<'_> {
             )?;
         }
         // Exactly one effect: `click`, the `application` effect of slice #316-B3, or a select
-        // step (Workflow #308; task schema `0.6` and later).
+        // step (Workflow #308; task schema `0.6` and later). #411 B36/B19 (A35-S3): or a wait
+        // step (task schema `0.9`), which makes no input; Runtime admission refuses a wait step
+        // that declares another effect (`wait_member_refused`).
         if object.contains_key("select") && !self.schema_0_6_or_later() {
             return Err(self.error(
                 &child(pointer, "select"),
                 ResourceDeclarationReason::UnconsumedField,
             ));
+        }
+        let wait = object.get("wait").filter(|value| !value.is_null());
+        if let Some(wait) = wait {
+            self.wait(wait, &child(pointer, "wait"))?;
         }
         match (
             object.get("click").filter(|value| !value.is_null()),
@@ -535,6 +542,7 @@ impl Declaration<'_> {
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }
+            (None, None, None) if wait.is_some() => {}
             (None, None, None) => {
                 let click = self.required(object, pointer, "click")?;
                 self.click(click, &child(pointer, "click"), canonical)?;
@@ -548,8 +556,20 @@ impl Declaration<'_> {
                     let expected = self.object(
                         value,
                         &pointer,
-                        &["page_id", "timeout_ms", "interval_ms", "expect_identity"],
+                        &[
+                            "page_id",
+                            "timeout_ms",
+                            "interval_ms",
+                            "expect_identity",
+                            "wait_page",
+                        ],
                     )?;
+                    // #411 B36/B19 (A35-S3): `{page_id, max_ms}`, task schema `0.9` only.
+                    if let Some(wait_page) =
+                        expected.get("wait_page").filter(|value| !value.is_null())
+                    {
+                        self.wait_page(wait_page, &child(&pointer, "wait_page"))?;
+                    }
                     self.page(
                         self.required(expected, &pointer, "page_id")?,
                         &child(&pointer, "page_id"),
@@ -670,6 +690,42 @@ impl Declaration<'_> {
             }
         }
         Ok(())
+    }
+
+    /// #411 B36/B19 (A35-S3): a wait step's `wait`, task schema `0.9` only (`UnconsumedField`
+    /// before it): `{"max_ms": <unsigned>, "on_timeout"?: "<key>"}`, nothing else. Runtime
+    /// admission checks the values and the operation's other members.
+    fn wait(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(value, pointer, &["max_ms", "on_timeout"])?;
+        self.unsigned(
+            self.required(object, pointer, "max_ms")?,
+            &child(pointer, "max_ms"),
+        )?;
+        if let Some(key) = object.get("on_timeout").filter(|value| !value.is_null()) {
+            self.string(key, &child(pointer, "on_timeout"))?;
+        }
+        Ok(())
+    }
+
+    /// #411 B36/B19 (A35-S3): a confirmation's `expect_after.wait_page`, task schema `0.9` only
+    /// (`UnconsumedField` before it): `{"page_id": "<page>", "max_ms": <unsigned>}`, nothing
+    /// else. Runtime admission checks the page and the value.
+    fn wait_page(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(value, pointer, &["page_id", "max_ms"])?;
+        self.string(
+            self.required(object, pointer, "page_id")?,
+            &child(pointer, "page_id"),
+        )?;
+        self.unsigned(
+            self.required(object, pointer, "max_ms")?,
+            &child(pointer, "max_ms"),
+        )
     }
 
     /// #411 B16 part 1: an operation's `max_runs`, task schema `0.9` only (`UnconsumedField`
