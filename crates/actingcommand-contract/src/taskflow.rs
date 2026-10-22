@@ -1309,7 +1309,7 @@ impl IntegerDictionary {
                     .map(|character| {
                         confusions
                             .iter()
-                            .find(|(from, _)| from.chars().next() == Some(character))
+                            .find(|(from, _)| from.starts_with(character))
                             .and_then(|(_, to)| to.chars().next())
                             .unwrap_or(character)
                     })
