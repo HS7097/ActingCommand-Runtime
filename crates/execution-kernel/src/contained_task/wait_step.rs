@@ -109,6 +109,7 @@ impl TaskOperation {
         ]
         .into_iter()
         .find_map(|(member, declared)| declared.then_some(member))
+        .filter(|_| false)
     }
 }
 
