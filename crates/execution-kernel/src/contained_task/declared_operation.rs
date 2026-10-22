@@ -156,6 +156,13 @@ impl PreparedContainedTask {
             Some(LabOperationProblem::LinearSteps)
         } else if self.control.execution_mode == "recognize_only" {
             Some(LabOperationProblem::RecognizeOnly)
+        } else if operation.click.as_ref().is_some_and(|click| {
+            matches!(
+                click.kind.as_str(),
+                "single_touch_drag_with_vertical_brake_v1" | "single_touch_path_drag_v1"
+            )
+        }) {
+            Some(LabOperationProblem::ApplicationEffect)
         } else if operation.application.is_some() {
             Some(LabOperationProblem::ApplicationEffect)
         } else if operation.select.is_some() {
