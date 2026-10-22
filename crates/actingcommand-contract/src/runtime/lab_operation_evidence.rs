@@ -878,12 +878,10 @@ fn verify_declared_operation(
         // A recorded input has its before frame (attempt 1's input frame). Amended by Lab B-3
         // S2 before LR-10's first writer (10-22): an operation that completed before any input
         // (a keyed end) records no attempt and no before frame, only its captured frames.
-        if !result.attempts.is_empty() {
-            prepared
-                .before_frame
-                .as_ref()
-                .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabBeforeMissing))?;
-        }
+        prepared
+            .before_frame
+            .as_ref()
+            .ok_or_else(|| lab_error(RuntimeContractCode::RuntimeLabBeforeMissing))?;
         let after = record
             .after_frame
             .as_ref()
