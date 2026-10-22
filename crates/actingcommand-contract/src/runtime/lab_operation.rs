@@ -395,6 +395,10 @@ pub enum LabGuardOutcome {
         target_id: String,
         target_kind: String,
     },
+    /// No attempt reached its input, so no guard decision is recorded: the prepared record of a
+    /// declared operation without attempts, only (amended by Lab B-3 S2 before LR-10's first
+    /// writer, 10-22).
+    NotEvaluated,
 }
 
 /// LR-10 (#412 B-3): what the prepared record of a declared operation states, as known at
@@ -412,7 +416,7 @@ pub struct LabDeclaredOperation {
     pub max_attempts: u32,
     /// The fresh frames of attempt 1's input recheck.
     pub recheck_frames: u32,
-    /// Attempt 1's guard decision.
+    /// Attempt 1's guard decision; `not_evaluated` exactly when no attempt is recorded.
     pub guard: LabGuardOutcome,
     /// Attempt 1's draw: seed, regions, rule and chosen candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -718,6 +722,13 @@ impl ContainedLabOperationResult {
             || first.is_some_and(|attempt| {
                 attempt.guard != operation.guard || attempt.sampling != operation.sampling
             })
+            // Amended by Lab B-3 S2 before LR-10's first writer (10-22): the guard is
+            // `not_evaluated` exactly when no attempt is recorded, and no attempt records it.
+            || (operation.guard == LabGuardOutcome::NotEvaluated) != result.attempts.is_empty()
+            || result
+                .attempts
+                .iter()
+                .any(|attempt| attempt.guard == LabGuardOutcome::NotEvaluated)
             // The after frame is the last frame the kernel captured.
             || record.after_frame.as_ref() != result.frames.last().map(|entry| &entry.frame)
         {

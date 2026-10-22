@@ -905,8 +905,8 @@ impl HostShared {
         let prepared_artifact = match prepared_artifact {
             Some(prepared_artifact) => prepared_artifact,
             // No attempt reached its effect intent: the prepared record states the operation as
-            // admitted, with no input frame, action or draw. LR-10 has no guard decision for an
-            // attempt that never came; the record names the trusted-coordinate form.
+            // admitted, with no input frame, action or draw, and no guard decision
+            // (`not_evaluated`).
             None => {
                 prepared.operation = Some(LabDeclaredOperation {
                     phase_id: declared.phase_id.clone(),
@@ -914,7 +914,7 @@ impl HostShared {
                     destination_pages: declared.destination_pages.clone(),
                     max_attempts: declared.max_attempts,
                     recheck_frames,
-                    guard: LabGuardOutcome::TrustedCoordinate,
+                    guard: LabGuardOutcome::NotEvaluated,
                     sampling: None,
                 });
                 self.persist_lab_prepared(&prepared, (links.clone(), artifact_links.clone()))?

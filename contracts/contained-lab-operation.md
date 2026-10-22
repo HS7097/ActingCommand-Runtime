@@ -265,7 +265,9 @@ unchanged; the schema strings stay:
 * the prepared record's `operation`: `phase_id?`, `from_page` (as declared), `destination_pages`
   (0 to 16), `max_attempts` (1 without a retry policy), `recheck_frames` (attempt 1's fresh
   recheck frames), `guard` (attempt 1's: `{status: "trusted_coordinate"}` or `{status:
-  "passed", page_id, target_id, target_kind}`) and `sampling?` (attempt 1's draw);
+  "passed", page_id, target_id, target_kind}`; `{status: "not_evaluated"}` when no attempt is
+  recorded, which Lab B-3 S2 added before LR-10's first writer, 10-22) and `sampling?` (attempt
+  1's draw);
 * the terminal record's `operation_result`: `end` (vocabulary `lab_operation_end`: `confirmed`,
   `run_completed`, `passed_over`, `recovery_requested`, `failed`), `final_page?`,
   `outcome_key?`, `attempts` (one per effect intent: `attempt`, `input_frame_index`, `guard`,
@@ -286,14 +288,19 @@ in capture order; the record's `input_*` members are not the last attempt's; `ef
 aggregate (`performed` if an attempt performed, else `indeterminate` if one was, else
 `not_performed`); `end` is `confirmed` or `run_completed` other than exactly when there is no
 failure or only one at `release`; the prepared record does not state attempt 1 or the after
-frame is not the last frame.
+frame is not the last frame; the guard is `not_evaluated` other than exactly when no attempt is
+recorded, or an attempt's guard is `not_evaluated`.
 
 The shared verifier checks such a record's own way: every capture frame of the request is a
 listed frame (in place of the transaction accounting); the diagnostics are the prepared and
 terminal records and at most the after projection; each attempt that reached its input has
 exactly its own `InputIntent` and outcome event, matching its action, and no other input event
 belongs to the request (`runtime_lab_unreported_input`); the selection is not resolved again;
-the final command event carries the aggregate effect. `RuntimeClient` and `resource restore`
+the final command event carries the aggregate effect. A complete record without attempts (an
+operation that ended before any input, such as a keyed end) records no before frame and
+verifies with its listed frames; `runtime_lab_before_missing` is only for a complete record whose
+attempts recorded an input and whose before frame is missing (amended by Lab B-3 S2 before
+LR-10's first writer, 10-22). `RuntimeClient` and `resource restore`
 read each attempt's action events. `resource restore` gives such a record the gap
 `lab_declared_operation`, restores no operation from it, and its provenance names `end`.
 
@@ -346,8 +353,9 @@ declared-operation mode over the Lab lease:
 Attempt 1's effect intent persists and verifies the prepared record before the kernel's input; a
 prepared record that cannot be persisted stops the operation before the input, without a record,
 as an element operation's. When no attempt reached its effect intent the prepared record states
-the operation as admitted, with no input frame, action or draw (its `guard` the
-trusted-coordinate form) and is persisted after the run. A failure before the current attempt's
+the operation as admitted, with no input frame, action or draw, its `guard` `not_evaluated`, and
+is persisted after the run; a keyed end before any input (#411 B22) is such a `run_completed`
+record. A failure before the current attempt's
 input is at `selection`, after it at `arrival`; a capture's at `before_frame` or `after_frame`, an
 input's at `input`; `passed_over` answers the guard's refusal, `recovery_requested` the failure
 its decision named. Once the operation ended `confirmed` or `run_completed` its last frame is
