@@ -4686,10 +4686,14 @@ impl PreparedContainedTask {
                                 ExecutionKernelCode::ContainedTaskOperationMissing.code(),
                             )
                         })?;
-                    let retry_policy = operation.retry_policy(
-                        self.program.defaults,
-                        self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
-                    )?;
+                    let retry_policy = if declared.is_some() {
+                        None
+                    } else {
+                        operation.retry_policy(
+                            self.program.defaults,
+                            self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
+                        )?
+                    };
                     // Workflow #386 SR-1 (scheduling model §2.1 item 4): the step's pacing, taken
                     // once at its start.
                     pacing = runtime
