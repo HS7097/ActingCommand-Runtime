@@ -746,6 +746,11 @@ fn instance_row(
     if let Some(fence) = instance.resource_fence() {
         row.insert("resource_fence".to_owned(), json!(fence));
     }
+    // #411 A35-S5: the instance's recovery ladder while it holds instead of climbing (what it
+    // waits for, how long it has held, its limit), the status member as the Runtime answers it.
+    if let Some(hold) = instance.ladder_busy_hold() {
+        row.insert("ladder_busy_hold".to_owned(), json!(hold));
+    }
     // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4): whether the
     // instance's emulator runs, as the Runtime last read it, with the time of that reading;
     // `{state: unknown}` without one. Always answered and never cut.

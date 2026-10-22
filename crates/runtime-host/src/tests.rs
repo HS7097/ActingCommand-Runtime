@@ -266,6 +266,9 @@ mod gate_403;
 // #411 A38: a fence that waits for a person re-checks itself; an emulator control command that
 // times out reads the status first; the wait is visible in status.
 mod gate_411_a38;
+// #411 A35-S5 (host key 410), register §1.170: the status shows a recovery ladder that holds
+// instead of climbing: what it waits for, how long it has held and its limit.
+mod gate_411_a35_s5;
 // Workflow #405 D1 (host key 122), register §1.135: once an instance has its random delay
 // enabled, every task the scheduler dispatches there first waits a random time.
 mod gate_405_d1;
