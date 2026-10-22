@@ -4978,6 +4978,10 @@ impl PreparedContainedTask {
                                     .and_then(|selected| selected.draw)
                                 {
                                     Some(draw) => draw,
+                                    None if declared.is_some() => PointDraw {
+                                        action_seed: None,
+                                        touch: None,
+                                    },
                                     None => step_point_draw(runtime, step_index, &operation_id)?,
                                 };
                                 let (action, sampling, input_context) = match selected {
