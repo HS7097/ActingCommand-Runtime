@@ -128,6 +128,13 @@ actingcommand_contract::outcome_codes! {
         // the run Completed (keys `pack_operation_id`, `count`, `limit_count`, `page_id`,
         // `outcome_key`); the outcome of `task.operation_capped`.
         ContainedTaskOperationRunsCapped => "contained_task_operation_runs_capped": info / none,
+        // #412 Lab B-3 S1: the kernel's refusals of a declared operation a Lab operation names
+        // (keys `pack_operation_id`, and `lab_operation_problem` for the unsupported one), and a
+        // declared operation's first frame on another page than its own (keys
+        // `pack_operation_id`, `page_id`, `page_ids`).
+        ContainedTaskDeclaredOperationUnknown => "contained_task_declared_operation_unknown": error / none,
+        ContainedTaskDeclaredOperationUnsupported => "contained_task_declared_operation_unsupported": error / none,
+        ContainedTaskDeclaredOperationPageMismatch => "contained_task_declared_operation_page_mismatch": error / none,
         ContainedTaskStepUnconfirmed => "contained_task_step_unconfirmed": error / pack_logic_mismatch,
         ContainedTaskErrorPageReached => "contained_task_error_page_reached": error / pack_logic_mismatch,
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,

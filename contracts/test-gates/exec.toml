@@ -1867,6 +1867,87 @@ tests = [
 ]
 incident = ["#411 A43"]
 
+# Workflow #412 Lab B-3 S1 (0.12.x; register §1.161 B3S1-1, B3S1-2; design rd-1021/train-0129/lab-b3-design.md §2.1 points 3 and 4, §5 "S1" T1-1; no persisted shape): the kernel runs one declared operation of a page with two operations: only the named one is the page's candidate, only it is pressed, its step is step 0, and the run returns Confirmed on its destination after that one step
+[[gate]]
+key = "136"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_1_only_the_named_operation_of_the_page_runs_and_is_confirmed",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-3; design §2.1 point 2, §4, §5 "S1" T1-2): a declared operation's first frame on another page than its declared from ends the run before any step or input with contained_task_declared_operation_page_mismatch (pack_operation_id, page_id the frame's page, page_ids the declared from)
+[[gate]]
+key = "137"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_2_another_page_ends_the_run_without_an_input",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-1; design §2.2 "point", decision Q1, §5 "S1" T1-3): a declared rect click with the runtime's touch keys at candidate_count 3 offers the runtime's landing history three candidates of its box and presses the one it chooses; the effect intent's draw names the step's action seed, the box, center_hotspot_least_recent_v1 and the chosen candidate
+[[gate]]
+key = "138"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_3_a_box_press_lands_on_the_candidate_the_runtime_chooses",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-1; design §2.2 "gesture", §5 "S1" T1-4): a declared vertical-brake drag, path drag and long press are each input as the action their click declares (without a seed, box points at their boxes' centres; the path drag in its box with turns + 2 points and its durations summing to its own), the effect intent carrying that same action
+[[gate]]
+key = "139"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_4_brake_drag_path_drag_and_long_press_are_input_as_declared",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-1; design §2.2 "post_delay" and "arrival", §5 "S1" T1-5): on the runtime's clock a declared operation's first confirmation frame is captured post_delay_ms after its input and each next one expect_after.interval_ms after the one before, until its destination shows
+[[gate]]
+key = "140"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_5_the_confirmation_waits_post_delay_then_the_declared_interval",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-1; design §2.2 "retries", §5 "S1" T1-6): a declared operation with max_attempts 2 whose first confirmation fails waits its retry delay, guards its second attempt again on a frame captured after the delay, inputs again and returns Confirmed
+[[gate]]
+key = "141"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_6_a_failed_confirmation_is_retried_with_a_fresh_guard_and_a_second_input",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-1; design §2.1 points 1, 3 and 5, §2.5, §5 "S1" T1-7): the run of a declared operation of a package with reading marks, stability termination and a designated set capped by a fact records no reading and no stability trace and asks no selection_state
+[[gate]]
+key = "142"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_7_readings_stability_and_designated_caps_stay_out_of_the_run",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-2, B3S1-3; design §1.1 "Refused by the kernel before any lease", §4, decision Q2, §5 "S1" T1-8): admission of a declared operation refuses an id the entry task does not declare (contained_task_declared_operation_unknown) and, with their lab_operation_problem, an application effect, a select step, an operation reading an earlier choice and any operation of a linear_steps or recognize_only package (contained_task_declared_operation_unsupported); it admits a page-graph click and states its stage, declared from, destination and attempts
+[[gate]]
+key = "143"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_8_admission_refuses_unknown_ids_and_unsupported_operations",
+]
+incident = ["#412 B-3"]
+
+# Workflow #412 Lab B-3 S1 (register §1.161 B3S1-1; design §2.2 "input recheck" with BT-B12's still_frames, §5 "S1" T1-9; exec key 180, added to the slice's block 10-22): a declared click on its guard's template with the recheck still_frames is drawn from and bound to the last frame that held: the press lands on the template's centre in that frame, not in the step's frame
+[[gate]]
+key = "180"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_412_b3_s1::b3_s1_t1_9_the_input_binds_to_the_last_still_frame",
+]
+incident = ["#412 B-3"]
+
 # #411 B16 part 1 (slice BT-KEY; register §1.164 KEY-1, KEY-4, KEY-5; B-train plan §2.11 items 1 and 5, test row T1 of §5.3; ledger revision 4 LR-7, first writer; package revision 6, declared by BT-PK6): an operation with max_runs and a keyed on_max_runs that the run dispatched max_runs times ends the run Completed on the current page with its key when the page would dispatch it again, no step starting; the run writes one task.operation_capped of exactly the LR-7 shape with the info outcome contained_task_operation_runs_capped (pack_operation_id, count, limit_count, page_id, outcome_key)
 [[gate]]
 key = "152"
