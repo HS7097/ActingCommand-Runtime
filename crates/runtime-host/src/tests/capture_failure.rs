@@ -135,6 +135,32 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
 
 #[test]
 fn readonly_failures_are_visible_and_terminal_without_fake_success() {
+    // one-off (to be reverted): FLK-07 x20. Each round is the whole test on its own Runtime; a
+    // failed round's panic text (with the harness's latched_fatal and shutdown_requested) is
+    // kept, and the test then fails naming every failed round.
+    let failures = (1..=20)
+        .filter_map(|round| {
+            std::panic::catch_unwind(readonly_failures_round)
+                .err()
+                .map(|panic| {
+                    let text = panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("<panic without text>");
+                    format!("round {round}: {text}")
+                })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        failures.is_empty(),
+        "FLK-07 x20: {} of 20 rounds failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+fn readonly_failures_round() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture.store(true, Ordering::Release);
