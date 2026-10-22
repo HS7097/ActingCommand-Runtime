@@ -158,8 +158,6 @@ impl PreparedContainedTask {
             Some(LabOperationProblem::RecognizeOnly)
         } else if operation.application.is_some() {
             Some(LabOperationProblem::ApplicationEffect)
-        } else if operation.select.is_some() {
-            Some(LabOperationProblem::SelectStep)
         } else if operation
             .expect_after
             .as_ref()
