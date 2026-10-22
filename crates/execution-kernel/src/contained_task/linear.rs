@@ -617,6 +617,11 @@ impl TaskProgram {
             if operation.on_guard_refused.is_some() {
                 return Err(invalid("on_guard_refused", Some(operation)));
             }
+            // #411 B16 part 1: a per-run cap is a page-graph declaration; a step plan runs each
+            // operation once.
+            if operation.max_runs.is_some() || operation.on_max_runs.is_some() {
+                return Err(invalid("max_runs", Some(operation)));
+            }
             let effect = match (&operation.click, &operation.application) {
                 (Some(_), None) => LinearEffect::Click,
                 (None, Some(application)) => LinearEffect::Application(application.action),

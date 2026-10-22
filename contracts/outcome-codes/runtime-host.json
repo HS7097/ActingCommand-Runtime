@@ -4132,6 +4132,29 @@
       "common_causes": "A return-to-home package bound to, or registered for, a target whose entry is another page; an entry set that leaves out the page the recovery package ends on.",
       "handling": "Bind a recovery package that ends on one of the entry pages, add its final page to the entry set, or start the run on its entry."
     },
+    "contained_task_entry_busy": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "page_id": "required",
+        "outcome_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "A run's entry layer completed on a scheduling outcome mapping its package marks busy (#411 B37, slice A35-S4): the home entry's return-home package, or a step of the navigation recovery chain, ended on a page that shows an activity still in progress. The run ends before its own steps: in the home entry in place of contained_task_home_recovery_terminal_non_home, with no recheck of the entry and no navigation; in the navigation the run does not locate again and the chain's next step is neither admitted nor run. package_id is the layer's package, page_id the page it ended on and outcome_key the busy mapping's key. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt. Its ladder class planned_stop matches no default trigger item, so no stuck-recovery ladder starts.",
+      "common_causes": "The instance runs a long activity that ends by itself, and the return-home or recovery chain package recognised its page.",
+      "handling": "Nothing to do: a later run, or a ladder another trigger starts, brings the instance home once the activity has ended."
+    },
     "contained_task_identity_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -19851,9 +19874,34 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.9",
-      "description": "A stuck-recovery ladder's busy hold reached its limit (#411 B37): held_ms since the climb's first busy end is at least limit_ms (recovery_ladder.busy.outcome.max_wait_ms), and recovery_ladder.busy.outcome.on_exhausted is stop, so the ladder ended without restarting the application or the emulator. The outcome of the recovery_ladder_finished record (ladder_result exhausted), caused by the last busy rung's recovery_rung_busy_outcome. The instance is not fenced; the next trigger may start a new ladder once the cool-down allows.",
-      "common_causes": "The activity the return-home package recognised lasted longer than recovery_ladder.busy.outcome.max_wait_ms.",
+      "description": "A stuck-recovery ladder's hold reached its limit, and its on_exhausted is stop, so the ladder ended without restarting the application or the emulator. The busy hold (#411 B37): held_ms since the climb's first busy end is at least limit_ms (recovery_ladder.busy.outcome.max_wait_ms) under recovery_ladder.busy.outcome.on_exhausted, caused by the last busy rung's recovery_rung_busy_outcome. The screen hold (#411 A35): held_ms since the climb's first changing screen is at least limit_ms (recovery_ladder.busy.screen.max_wait_ms) under recovery_ladder.busy.screen.on_exhausted, caused by the last recovery_rung_screen_changing. The outcome of the recovery_ladder_finished record (ladder_result exhausted). The instance is not fenced; the next trigger may start a new ladder once the cool-down allows.",
+      "common_causes": "The activity the return-home package recognised lasted longer than recovery_ladder.busy.outcome.max_wait_ms; or, under recovery_ladder.busy.screen.on_exhausted stop, an unknown screen kept changing longer than recovery_ladder.busy.screen.max_wait_ms.",
       "handling": "Nothing to do when the activity ends by itself; otherwise bring the instance home by hand, or raise max_wait_ms or set on_exhausted to escalate."
+    },
+    "recovery_rung_screen_changing": {
+      "category": "info",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "score_milli": "required",
+        "held_ms": "required",
+        "limit_ms": "required",
+        "retry_after_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.10",
+      "description": "A stuck-recovery ladder's return-home rung failed with a code whose ladder class recovery_ladder.busy.screen.classes lists, and the ladder's read-only probe found the screen still changing (#411 A35): two consecutive probe frames changed by more than recovery_ladder.busy.screen.change_max_milli by the Runtime's one frame-change measure (contracts/color-digest.md, Frame change). The outcome of that rung's recovery_rung_finished record (rung_result failed), caused by the run's own failure code. count is the frames probed and score_milli the largest change between two consecutive ones; held_ms is the time since the climb's first changing verdict and limit_ms is recovery_ladder.busy.screen.max_wait_ms. While the limit is not reached, the ladder holds its key for retry_after_ms (recovery_ladder.busy.screen.recheck_ms, no longer than what is left) and probes again: once the screen has settled it runs the return-home rung again. retry_after_ms is absent when the hold ends, and recovery_ladder.busy.screen.on_exhausted then decides.",
+      "common_causes": "The instance shows a screen the return-home package does not know and that is still moving, such as a loading screen or a long self-running activity.",
+      "handling": "Nothing to do: the ladder goes on once the screen settles. When the probe misreads a screen, change recovery_ladder.busy.screen.change_max_milli, probe_frames or probe_interval_ms; when the hold is too short or too long, change recheck_ms or max_wait_ms; a package that knows the page can mark it busy instead."
     },
     "channel_binding_missing": {
       "category": "error",

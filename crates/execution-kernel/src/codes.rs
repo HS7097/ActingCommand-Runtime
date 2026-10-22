@@ -124,6 +124,10 @@ actingcommand_contract::outcome_codes! {
         // Workflow #390 EXEC-1: every candidate operation of the page was passed over (keys
         // `page_id`, `count`).
         ContainedTaskOperationCandidatesExhausted => "contained_task_operation_candidates_exhausted": error / pack_logic_mismatch,
+        // #411 B16 part 1: an operation reached its per-run cap and its keyed `on_max_runs` ended
+        // the run Completed (keys `pack_operation_id`, `count`, `limit_count`, `page_id`,
+        // `outcome_key`); the outcome of `task.operation_capped`.
+        ContainedTaskOperationRunsCapped => "contained_task_operation_runs_capped": info / none,
         ContainedTaskStepUnconfirmed => "contained_task_step_unconfirmed": error / pack_logic_mismatch,
         ContainedTaskErrorPageReached => "contained_task_error_page_reached": error / pack_logic_mismatch,
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,
@@ -159,6 +163,9 @@ actingcommand_contract::outcome_codes! {
         SelectionNotSelected => "selection_not_selected": error / none,
         SelectionPageChanged => "selection_page_changed": error / pack_logic_mismatch,
         SelectionProjectionMismatch => "selection_projection_mismatch": error / none,
+        // Workflow #411 B4: a select step that confirms by its decision decided otherwise on
+        // its confirmation frame.
+        SelectionDecisionMismatch => "selection_decision_mismatch": error / pack_logic_mismatch,
         SelectionConfirmationCaptureFailed => "selection_confirmation_capture_failed": error / environment_fault,
         SelectPageMismatch => "select_page_mismatch": error / pack_logic_mismatch,
         // Workflow #308 SEL-L3: the scan session of a select step (frozen selector model S0 v2.1

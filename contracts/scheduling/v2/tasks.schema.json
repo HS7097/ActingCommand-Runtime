@@ -24,6 +24,15 @@
       },
       "additionalProperties": false
     },
+    "reserve": {
+      "type": "object",
+      "required": ["pool_id", "at_least"],
+      "properties": {
+        "pool_id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "at_least": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
     "loadProfile": {
       "oneOf": [
         {
@@ -156,7 +165,13 @@
           "uniqueItems": true,
           "items": { "$ref": "./common.schema.json#/$defs/identifier" }
         },
-        "dispatch_parameters": { "type": "boolean" }
+        "dispatch_parameters": { "type": "boolean" },
+        "reserves": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/reserve" }
+        }
       },
       "additionalProperties": false
     }

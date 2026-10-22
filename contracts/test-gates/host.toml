@@ -1648,6 +1648,78 @@ tests = [
 ]
 incident = ["#411 A50"]
 
+# #411 A35 (slice A35-S2, 0.12.x; register §1.168 A35-1, A35-2, A35-3; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §2.1, §4.3, §5.1 S2 T1, with decision Q8: the frame-change measure of #411 B12; host keys 156 to 161 from the wave-3 frame): a return-home rung that fails contained_task_page_unknown (a class recovery_ladder.busy.screen.classes lists by default) while consecutive read-only probe frames change by more than busy.screen.change_max_milli is recorded failed with recovery_rung_screen_changing (info; caused by the page-unknown code; count the frames probed, score_milli the largest change, held_ms 0, limit_ms busy.screen.max_wait_ms, retry_after_ms busy.screen.recheck_ms); no application stop is issued while the screen changes; once the frames are identical the ladder, after holding recheck_ms on the Runtime clock, runs the return-home rung again, which recovers with rungs_tried 1 and no application stop
+[[gate]]
+key = "156"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t1_a_changing_screen_holds_the_ladder_and_return_home_runs_again_once_it_settles",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3; design §2.1 A35-a settled, §5.1 S2 T2): the same failure on identical probe frames (a still unknown screen) is recorded failed with its run's own code after the probe's frames, and the application restart rung runs right after it with no hold
+[[gate]]
+key = "157"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t2_a_still_unknown_screen_is_restarted_right_after_the_probe",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-2, A35-3; design §3, §4.3 end states, §5.1 S2 T3; coordinator decision Q3): a screen that keeps changing is held recheck_ms at a time, never longer than what is left of busy.screen.max_wait_ms since the first changing verdict (the record's retry_after_ms, absent at the limit); at the limit on_exhausted stop ends the ladder exhausted with recovery_ladder_hold_exhausted (warning; held_ms at least limit_ms; caused by the last recovery_rung_screen_changing) and no application stop, and escalate goes on to the application restart rung, which stops the application
+[[gate]]
+key = "158"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t3_at_the_screen_limit_on_exhausted_stops_or_escalates",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3, A35-4; design §3 busy.screen.classes, §5.1 S2 T4): a return-home failure whose ladder class the configured busy.screen.classes does not list takes no probe frame and is recorded failed with its own code; the application restart rung runs at once
+[[gate]]
+key = "159"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t4_a_return_home_failure_of_an_unlisted_class_is_not_probed",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3; design §4.3 table row 3 probe unavailable, §5.1 S2 T5): a probe whose capture fails is neither a changing screen (no further hold) nor a settled one (no return-home run again): the climb goes on to the next rung, and the probe's capture.failed record exists under the ladder's causation id
+[[gate]]
+key = "160"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t5_a_probe_whose_capture_fails_climbs_on_and_keeps_its_failure_record",
+]
+incident = ["#411 A35"]
+
+# #411 A35 (slice A35-S2; register §1.168 A35-3, A35-4; design §5.1 S2 T6 as changed by decision Q8; contracts/color-digest.md Frame change): two consecutive probe frames are unchanged when their frame-change measure is at most busy.screen.change_max_milli: frames that change by exactly the configured value are settled, and one milli less, from the configuration too, makes them changing (score_milli the change)
+[[gate]]
+key = "161"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a35_t6_the_gate_compares_the_frame_change_with_the_configured_threshold_inclusively",
+]
+incident = ["#411 A35"]
+
+# #411 B37 entry part (slice A35-S4, 0.12.x; register §1.169 B37E-1, B37E-2; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S4 T1; coordinator decision Q5; host keys 162 to 164 assigned by the coordinator): a scheduled run whose home entry runs the registry's return-home package, which completes on a scheduling outcome mapping it marks busy, fails contained_task_entry_busy (warning; package_id the return-home package, page_id the page it ended on, outcome_key the busy key) in place of contained_task_home_recovery_terminal_non_home, and under the shipped ladder defaults no ladder is admitted
+[[gate]]
+key = "162"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37_entry::b37_entry_t1_a_busy_return_home_layer_ends_the_run_and_admits_no_ladder",
+]
+incident = ["#411 A35", "#411 B37"]
+
+# #411 B37 entry part (slice A35-S4; register §1.169 B37E-1, B37E-3; design §5.1 S4 T2): a navigation recovery chain step that completes on a scheduling outcome mapping its package marks busy ends the run with contained_task_entry_busy (warning; package_id, page_id, outcome_key); the run does not locate again and the chain's next step, an application entry package, is neither admitted nor run (no application effect)
+[[gate]]
+key = "163"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b37_entry::b37_entry_t2_a_busy_recovery_chain_step_ends_the_run_before_the_next_step",
+]
+incident = ["#411 A35", "#411 B37"]
+
 # Workflow #411 B1 (slice BT-B1; register §1.163 B1-3 and §1.153 LR-5, LR-6, first writer; B-train plan §2.1 items 2 and 3, Q6, test row T2 of §5.3; the host family is outside the slice's row: 300 + 10 x 4, wave-3 frame): a value test whose agreement of three frames reads 100, 100 and 180 leaves its side unread, so its page does not match and the run fails; the run's task diagnostic stream carries the side's problem no_agreement and one agreement_sample row per frame, as registered
 [[gate]]
 key = "340"
@@ -1665,3 +1737,39 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_bt_b1::bt_b1_t3_a_mark_whose_frames_do_not_agree_writes_no_fact_and_warns",
 ]
 incident = ["#411 B1"]
+
+# #411 A35 (slice A35-S5, 0.12.x; register §1.170 A35S5-1; no persisted ledger shape; design rd-1021/train-0129/a35-design.md §5.1 S5 T1, coordinator decision Q7; wave-3 row 11, host key 410 by the frame's rule for a family the row does not list): while a recovery ladder's busy hold waits, Status shows the instance's ladder_busy_hold from the ladder's state in memory: kind busy_outcome, held_ms the time since the climb's first busy end on the Runtime clock (0, then the time the clock moved inside the hold) and limit_ms the configured busy.outcome.max_wait_ms; once the ladder ended, no ladder_busy_hold
+[[gate]]
+key = "410"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35_s5::a35_s5_t1_status_shows_the_holding_ladder_with_its_kind_time_held_and_limit",
+]
+incident = ["#411 A35"]
+
+# #71 FLK-07 (slice HARNESS-DIAG, 0.12.x; test harness only: no persisted ledger shape, no code, no configuration key, register §1.174 unused; host keys 168 to 170 assigned by the coordinator, 169 and 170 unused): after the Runtime under test latched a fatal (artifact_directory_failed, its artifact directory blocked by a file) and ended the connection, the test client's panic for the next request's unreadable receipt names the latched fatal (`latched_fatal=artifact_directory_failed ...`) and the shutdown flag (`shutdown_requested=true`)
+[[gate]]
+key = "168"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_harness_diag::harness_diag_t1_an_unreadable_receipt_names_the_latched_fatal_and_the_shutdown_flag",
+]
+incident = ["#71 FLK-07"]
+
+# #411 A52 (FLK-07's cause, 0.12.x; register §1.175; no persisted ledger shape; host keys 171 to 173 assigned by the coordinator): a Runtime claim that waits in the instance's queue while a read-only observe holds the instance refuses that observe's dedicated resource-close lease (prepare_resource_close: lease_transfer_not_safe); the observe fails only as a capture failure (capture_failed, not fatal), the Runtime is not fatal, the refusal is one runtime.failed record of lease_transfer_not_safe under the observe's request naming the instance, nothing is closed and the instance is not fenced; the waiting claim is granted after the observe, its lease end closes the session under its fenced close (one confirmed close), and the next observe completes
+[[gate]]
+key = "171"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t1_a_close_lease_the_queue_refuses_fails_only_the_observe_and_the_next_holder_closes",
+]
+incident = ["#411 A52"]
+
+# #411 A52 (register §1.175): a close on the same capture-failure path that the contract keeps fatal still halts the host: a client lease that ran out while a failing observe held the instance is reused by the observe's close, which is refused lease_expired; the observe's failure is fatal, the latched fatal is that refusal (begin_destructive_resource_close) and no instance is fenced
+[[gate]]
+key = "172"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_still_halts_the_host",
+]
+incident = ["#411 A52"]

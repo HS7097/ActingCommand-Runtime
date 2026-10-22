@@ -198,6 +198,14 @@ actingcommand_contract::outcome_codes! {
         /// dispatched this round (keys `instance_id`, `task_id` the step, `page_id` the page).
         PolicyChainHandoverWaiting => "policy_chain_handover_waiting": info / none,
         // ---- Workflow #411 B41: end ----
+        // ---- Workflow #411 B16 part 2 (task reserves, `contracts/scheduling/README.md`, "Task
+        // Reserves"): begin ----
+        /// Info. A candidate is not admitted this round: running it would leave a pool below the
+        /// reserve its task declares, alone or after the consumption that goes first (keys
+        /// `pool_id`, `reserve_at_least`; optional `amount_after`, absent when the pool's amount
+        /// is unknown, and `task_id`, the task whose consumption goes first).
+        ResourceReserveInsufficient => "resource_reserve_insufficient": info / none,
+        // ---- Workflow #411 B16 part 2: end ----
     }
 }
 

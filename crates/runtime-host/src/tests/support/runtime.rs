@@ -75,11 +75,18 @@ struct TestClient {
     ids: IdentifierIssuer,
     /// One governance identity card per connection (Workflow #318 cfg4).
     governance_declared: bool,
+    /// #71 FLK-07: the fatal state of the host this client connected to ([`Self::connect`]), so
+    /// a receipt it cannot read names what the Runtime under test latched; `None` for a client
+    /// connected by address or state root.
+    host_fatal: Option<FatalState>,
 }
 
 impl TestClient {
     fn connect(host: &RuntimeHost) -> Self {
-        Self::connect_address(host.runtime_info().socket_addr().expect("runtime address"))
+        let mut client =
+            Self::connect_address(host.runtime_info().socket_addr().expect("runtime address"));
+        client.host_fatal = Some(host.fatal_state_for_test().expect("runtime fatal state"));
+        client
     }
 
     fn connect_state_root(root: &Path) -> Self {
@@ -102,6 +109,7 @@ impl TestClient {
             stream,
             ids: IdentifierIssuer::new().expect("identifier issuer"),
             governance_declared: false,
+            host_fatal: None,
         }
     }
 
@@ -178,13 +186,37 @@ impl TestClient {
     fn send(&mut self, request: &RuntimeRequest) -> RuntimeReceipt {
         self.send_result(request).unwrap_or_else(|error| {
             panic!(
-                "runtime receipt: {error:?}; native read context: {}",
+                "runtime receipt: {error:?}; native read context: {}; {}",
                 error
                     .diagnostics()
                     .native_detail()
                     .map_or("unavailable", |detail| detail.text()),
+                self.host_fatal_context(),
             )
         })
+    }
+
+    /// #71 FLK-07: what the Runtime under test had latched when a receipt could not be read:
+    /// `latched_fatal=<code> during <operation> (<the condition as actingd's daemon line carries
+    /// it, with its causes>)`, or `latched_fatal=none`; then `shutdown_requested=<flag>`.
+    fn host_fatal_context(&self) -> String {
+        let Some(fatal) = &self.host_fatal else {
+            return "latched_fatal=unavailable; shutdown_requested=unavailable".to_owned();
+        };
+        let latched = match fatal.current() {
+            Ok(Some(error)) => format!(
+                "{} during {} ({})",
+                error.code(),
+                error.operation(),
+                error.daemon_outcome()
+            ),
+            Ok(None) => "none".to_owned(),
+            Err(read) => format!("unreadable ({read})"),
+        };
+        format!(
+            "latched_fatal={latched}; shutdown_requested={}",
+            fatal.is_shutdown_requested()
+        )
     }
 
     fn send_result(&mut self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {

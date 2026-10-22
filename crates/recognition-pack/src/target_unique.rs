@@ -104,7 +104,9 @@ impl RecognitionEvaluator {
     /// selects, or (REC-5) `scales`, whose template is resampled by each factor and searched on
     /// one map per factor. Its best match and its pass decision follow the ordinary rules on these
     /// exact scores over every map; a target that declares `unique` and passes is then checked
-    /// for a second place on every map.
+    /// for a second place on every map. Workflow #411 B13: `luma`, the check of a declared
+    /// `luma_floor`, joins the joint acceptance.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn evaluate_exact_template(
         &self,
         context: &SceneEvaluation<'_>,
@@ -113,6 +115,7 @@ impl RecognitionEvaluator {
         mask: Option<recognition::TemplateMask>,
         template_png: &[u8],
         region: Option<recognition::Rect>,
+        luma: Option<&crate::template_luma::LumaCheck>,
     ) -> RecognitionPackResult<TargetEvaluation> {
         let scene = context.scene;
         let stage = if unique.is_some() {
@@ -129,7 +132,7 @@ impl RecognitionEvaluator {
                 template_png,
                 region,
                 self.default_match_metric(),
-                if relative {
+                if relative || target.luma_floor.is_some() {
                     TemplateMatchTimingStage::JointTemplateColor
                 } else {
                     TemplateMatchTimingStage::Exact
@@ -140,24 +143,29 @@ impl RecognitionEvaluator {
                 &self.search_clock,
             )
             .map_err(|error| search_error(&target.id, stage, error))?;
-        if relative {
+        // Workflow #411 B13: a declared floor joins the joint acceptance, here and for a second
+        // place.
+        if relative || target.luma_floor.is_some() {
             let (mut evaluation, accepted) = self.joint_color_evaluation(
                 scene,
                 target,
+                luma,
                 JointSearch::Map { maps: &maps, stage },
             )?;
-            if let (Some(unique), Some(accepted)) = (unique, accepted) {
+            if let (Some(unique), Some(accepted)) = (unique, accepted)
+                && evaluation.passed
+            {
                 let second = maps
                     .second_within(accepted.matched, unique.margin_milli, |candidate| {
                         Ok(self
-                            .relative_color_at(
+                            .joint_accepts(
                                 scene,
                                 target,
+                                luma,
                                 candidate.matched,
                                 candidate.scale_milli,
                             )?
-                            .0
-                            .is_some_and(|color| color.distance <= color.max_distance))
+                            .passed)
                     })
                     .map_err(|error| search_error(&target.id, stage, error))?;
                 apply_uniqueness(
@@ -206,6 +214,7 @@ impl RecognitionEvaluator {
                 score: best.score,
                 threshold,
                 scale_milli: target.scales.as_ref().map(|_| found.scale_milli),
+                luma: None,
             }),
             color,
             ocr: None,

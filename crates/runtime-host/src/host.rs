@@ -184,6 +184,8 @@ mod instance_discovery;
 // Workflow #389 MCP-4: the instance fact read (register W2).
 mod instance_fact_read;
 mod lab_operation;
+// #411 A35-S5: a recovery ladder that holds instead of climbing is visible in the status.
+mod ladder_busy_hold;
 mod lease;
 mod lifecycle;
 mod material_read;
@@ -1703,6 +1705,7 @@ impl RuntimeHost {
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
+            ladder_busy_holds: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
             device_states: Mutex::new(device_state::DeviceStates::default()),
@@ -2189,6 +2192,16 @@ impl RuntimeHost {
         self.shared_ref(crate::codes::test_spellings::TestLocation::MarkRuntimeFatalForTest)?
             .fatal
             .mark(error)
+    }
+
+    /// #71 FLK-07, tests: a handle to the Runtime's fatal state, which a test client keeps so a
+    /// receipt it cannot read names the latched condition and the shutdown flag.
+    #[cfg(test)]
+    pub(crate) fn fatal_state_for_test(&self) -> RuntimeHostResult<FatalState> {
+        Ok(self
+            .shared_ref(crate::codes::test_spellings::TestLocation::ReadFatalStateForTest)?
+            .fatal
+            .clone())
     }
 
     /// Workflow #382 H-5 G15 (seam I5): what the last runtime-fact recovery on this thread (the
@@ -4648,6 +4661,9 @@ struct HostShared {
     // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
     recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
+    // #411 A35-S5: the ladders whose busy hold waits, by instance, as the status shows them
+    // (memory only). A leaf lock.
+    ladder_busy_holds: Mutex<BTreeMap<InstanceId, ladder_busy_hold::LadderBusyHoldState>>,
     // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
     // only; a restart prepares and self-checks every instance again). A leaf lock.
     resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,

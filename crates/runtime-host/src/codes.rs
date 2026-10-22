@@ -278,9 +278,21 @@ actingcommand_contract::outcome_codes! {
         /// Warning (#411 B37). A climb's busy hold reached `recovery_ladder.busy.outcome.max_wait_ms`
         /// under `on_exhausted = stop`: the ladder ended without a restart (the
         /// `recovery_ladder_finished` outcome, `exhausted`; keys `held_ms`, `limit_ms`; caused by
-        /// the last busy rung's outcome).
+        /// the last busy rung's outcome). #411 A35 (A35-S2): the screen hold's limit,
+        /// `busy.screen.max_wait_ms` under `busy.screen.on_exhausted = stop`, ends the same way,
+        /// caused by the last `recovery_rung_screen_changing`.
         RecoveryLadderHoldExhausted => "recovery_ladder_hold_exhausted": warning / planned_stop,
         // #411 B37 (A35-S1) end
+        // #411 A35 (A35-S2) begin: the settle gate after a return-home failure.
+        /// Info (#411 A35). A return-home rung failed with a code whose ladder class
+        /// `recovery_ladder.busy.screen.classes` lists, and the ladder's read-only probe found the
+        /// screen still changing, so the ladder holds instead of climbing on (the rung's
+        /// `recovery_rung_finished` outcome, `failed`; keys `count` the frames probed,
+        /// `score_milli` the largest frame change between two consecutive ones, `held_ms` since
+        /// the climb's first "changing" verdict, `limit_ms` the configured hold, `retry_after_ms`
+        /// the wait before the next probe, absent when the hold ends; caused by the run's code).
+        RecoveryRungScreenChanging => "recovery_rung_screen_changing": info / planned_stop,
+        // #411 A35 (A35-S2) end
         // Workflow #390 DRILL-1 begin: a person's drill of an instance's ladder.
         /// Info. The trigger of a drill's ladder: a person asked for it (`DrillRecoveryLadder`);
         /// its `recovery_ladder_started` names it as the trigger's `failure_code`, stage `drill`.
@@ -471,6 +483,14 @@ actingcommand_contract::outcome_codes! {
         /// declares no final page in the required entry set, so the recovery is refused before it
         /// runs, with no input. The registry's `linear_steps` return-home package is not compared.
         ContainedTaskHomeRecoveryTerminalOutsideEntry => "contained_task_home_recovery_terminal_outside_entry": error / pack_logic_mismatch,
+        // #411 B37 (A35-S4) begin: a busy end of an entry layer ends the run.
+        /// Warning (#411 B37). A home entry's return-home layer, or a navigation recovery chain
+        /// step, completed on a scheduling outcome mapping its package marks `busy`: the instance
+        /// shows an activity still in progress, so the run ends before its own steps, with no
+        /// entry check after the layer, no further chain step and no ladder (keys `package_id`
+        /// the layer's package, `page_id` the page it ended on, `outcome_key` the mapping's key).
+        ContainedTaskEntryBusy => "contained_task_entry_busy": warning / planned_stop,
+        // #411 B37 (A35-S4) end
         ContainedTaskIdentityMissing => "contained_task_identity_missing": error / none,
         ContainedTaskInputResultInvalid => "contained_task_input_result_invalid": error / none,
         ContainedTaskLadderSourceStateInvalid => "contained_task_ladder_source_state_invalid": error / none,
@@ -2460,6 +2480,8 @@ pub(crate) mod test_spellings {
             QueryTestPersistedEvents => "query_test_persisted_events",
             ReadContainedTaskCheckpointTestControl => "read_contained_task_checkpoint_test_control",
             ReadFailureDetailForTest => "read_failure_detail_for_test",
+            // #71 FLK-07: the test client takes a handle to the Runtime's fatal state.
+            ReadFatalStateForTest => "read_fatal_state_for_test",
             ReadInstanceClaimsForTest => "read_instance_claims_for_test",
             ReadOwnStart => "read_own_start",
             ReadPolicyOutcomeTransitionTestHook => "read_policy_outcome_transition_test_hook",

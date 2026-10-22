@@ -108,6 +108,9 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+// #411 A52 (FLK-07's cause; host keys 171, 172), register §1.175: a close lease the instance's
+// queue refuses fails only the capture's work; a close under a lapsed lease still halts the host.
+mod gate_411_a52;
 // Workflow #411 A3 (R-1, v0.12.1): a routine entry the pause gate holds does not refuse a
 // shutdown.
 mod gate_0121_a3;
@@ -158,6 +161,9 @@ mod gate_373_nav3a;
 mod gate_373_nav3b;
 // Workflow #373 NAV-5: the entry gate's full-match routing (host key 97).
 mod gate_373_nav5;
+// #411 B37 (A35-S4, host keys 162 and 163), register §1.169: a home entry's return-home layer or
+// a navigation recovery chain step that ends busy ends the run with `contained_task_entry_busy`.
+mod gate_411_b37_entry;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
 mod gate_375_r3;
@@ -265,6 +271,9 @@ mod gate_403;
 // #411 A38: a fence that waits for a person re-checks itself; an emulator control command that
 // times out reads the status first; the wait is visible in status.
 mod gate_411_a38;
+// #411 A35-S5 (host key 410), register §1.170: the status shows a recovery ladder that holds
+// instead of climbing: what it waits for, how long it has held and its limit.
+mod gate_411_a35_s5;
 // Workflow #405 D1 (host key 122), register §1.135: once an instance has its random delay
 // enabled, every task the scheduler dispatches there first waits a random time.
 mod gate_405_d1;
@@ -285,6 +294,9 @@ mod gate_411_a45;
 mod gate_411_a46;
 // #411 A47: a ladder whose application stop fails keeps its key and climbs to its next rung.
 mod gate_411_a47;
+// #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
+// the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
+mod gate_411_a35;
 // #411 A48: a self-check reads the emulator status first: a running emulator the Runtime holds
 // stopped is recognized again, a stopped one is `instance_not_running`, an unrecognized device
 // says why.
@@ -334,6 +346,9 @@ mod gate_406_t12;
 // generates, on a segmented backend and on the Nemu input.
 mod gate_406_t3;
 mod gate_epoch_close;
+// #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
+// fatal the Runtime under test latched and its shutdown flag.
+mod gate_411_harness_diag;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
 // Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's

@@ -1840,6 +1840,33 @@ tests = [
 ]
 incident = ["#411 B28"]
 
+# Workflow #411 A43 (slice A43b, 0.12.x; register §1.160 A43b-1; no persisted ledger shape, no outcome code, no configuration key): a page wait or a step's confirmation whose latest two frames are unchanged by the one frame-change measure (the whole frame, 1500 milli) and match no page the wait accepts counts the rest of the wait at the factor 1000; at the factor 1250 a still screen of no page ends the wait after one paced and four unpaced intervals, with the wait's own code, elapsed time and limit
+[[gate]]
+key = "133"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a43b::a43b_t1_a_still_unrecognised_screen_ends_the_wait_at_the_unpaced_budget",
+]
+incident = ["#411 A43"]
+
+# Workflow #411 A43 (slice A43b, 0.12.x; register §1.160 A43b-1): frames of no page that change on every frame keep the page wait and the confirmation paced as #385 P-k paces them, five intervals of 375 ms at the factor 1250, ending with the wait's own code, elapsed time and limit
+[[gate]]
+key = "134"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a43b::a43b_t2_a_changing_unrecognised_screen_ends_the_wait_at_the_paced_budget",
+]
+incident = ["#411 A43"]
+
+# Workflow #411 A43 (slice A43b, 0.12.x; register §1.160 A43b-1): after two still frames of no page, a frame that changed returns the wait to its pacing at once, so the page it accepts, arriving after the unpaced budget but within the paced one, is reached
+[[gate]]
+key = "135"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a43b::a43b_t3_a_change_toward_the_page_returns_the_wait_to_its_pacing",
+]
+incident = ["#411 A43"]
+
 # Workflow #411 B1 (slice BT-B1; register §1.163 B1-1; B-train plan §2.1 item 1, test row T1 of §5.3; package revision 6, declared by BT-PK6): a value-test side's dictionary turns the confusion O into 0, so the text 1O0 reads 100 while its evidence keeps 1O0; a reading mark with the same dictionary parses 1O0 as 100
 [[gate]]
 key = "144"
@@ -1866,3 +1893,79 @@ tests = [
     "actingcommand-recognition-pack::lib::gate_411_bt_b1::bt_b1_t5_an_agreement_is_admitted_and_the_consensus_refusals_hold_without_it",
 ]
 incident = ["#411 B1"]
+
+# #411 B16 part 1 (slice BT-KEY; register §1.164 KEY-1, KEY-4, KEY-5; B-train plan §2.11 items 1 and 5, test row T1 of §5.3; ledger revision 4 LR-7, first writer; package revision 6, declared by BT-PK6): an operation with max_runs and a keyed on_max_runs that the run dispatched max_runs times ends the run Completed on the current page with its key when the page would dispatch it again, no step starting; the run writes one task.operation_capped of exactly the LR-7 shape with the info outcome contained_task_operation_runs_capped (pack_operation_id, count, limit_count, page_id, outcome_key)
+[[gate]]
+key = "152"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t1_a_keyed_cap_ends_the_run_on_its_page_and_writes_the_capped_record",
+]
+incident = ["#411 B16"]
+
+# #411 B16 part 1 (slice BT-KEY; register §1.164 KEY-1; B-train plan §2.11 item 1, test row T2 of §5.3): an operation with max_runs and on_max_runs next_candidate that the run dispatched max_runs times is passed over like a capped designated member, and the page's next operation runs
+[[gate]]
+key = "153"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t2_a_capped_operation_with_next_candidate_gives_way_to_the_next_operation",
+]
+incident = ["#411 B16"]
+
+# #411 B22 (slice BT-KEY; register §1.164 KEY-2; B-train plan §2.11 item 2, test row T4 of §5.3; no code, no record): a guard value test read and not met (value_test_not_met) at attempt 1 with a keyed on_guard_refused ends the step without an input on the frame's page and the run Completed there with the key, no failure counted
+[[gate]]
+key = "154"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t4_a_guard_value_test_not_met_ends_the_run_on_the_keyed_refusal",
+]
+incident = ["#411 B22"]
+
+# #411 B22 (slice BT-KEY; register §1.164 KEY-2; B-train plan §2.11 item 2, test row T5 of §5.3): a guard value test that is not read (value_test_unresolved) is no definite fail; the keyed on_guard_refused does not apply and the run fails with contained_task_guard_refused
+[[gate]]
+key = "155"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t5_an_unread_value_test_keeps_the_guard_refusal_a_failure",
+]
+incident = ["#411 B22"]
+
+# #411 B22 and B33 (slice BT-KEY; register §1.164 KEY-2; B-train plan §2.11 item 2 and §6 (B33 merged into B22), test row T6 of §5.3): a keyed on_guard_refused whose failed names one member of the guard's composite applies only to that member's definite fail; another member failing alone keeps contained_task_guard_refused
+[[gate]]
+key = "156"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t6_another_member_failing_alone_keeps_the_guard_refusal_a_failure",
+]
+incident = ["#411 B22", "#411 B33"]
+
+# #411 B16 part 1 and B22 (slice BT-KEY; register §1.164 KEY-6; B-train plan §2.11 item 4 and coordinator decision Q9, test row T7 of §5.3): a package with a keyed on_max_runs or a keyed on_guard_refused is neither a prerequisite package nor a return-home package, contained_task_prerequisite_incompatible reasons max_runs_end and guard_refused_end
+[[gate]]
+key = "157"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_key::bt_key_t7_a_package_with_a_keyed_end_is_no_prerequisite_or_return_home_layer",
+]
+incident = ["#411 B16", "#411 B22"]
+
+# Workflow #411 B13 (slice BT-B13, 0.12.x; register §1.165; ledger revision 4 row LR-2, written here; B-train plan §2.10 with D9, §5.3 rows "BT-B13" T1 to T3; package revision 6, declared by BT-PK6; no outcome code): a template target's luma_floor {mean_ratio_milli?, contrast_ratio_milli?} joins the joint acceptance of its template search; the window a candidate matched is read over the template's scored pixels, its mean and its standard deviation each divided by the template's and times 1000 (rounded down), and a candidate below a declared floor is not accepted, so a target whose only scoring window is darker or flatter does not pass although its score does; the template evidence carries the chosen candidate's ratios as luma; a target without luma_floor writes no luma member and its verdict is decided by score and color only
+[[gate]]
+key = "160"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::gate_411_bt_b13::bt_b13_t1_a_window_darker_than_the_mean_floor_fails_although_its_score_passes",
+    "actingcommand-recognition-pack::lib::gate_411_bt_b13::bt_b13_t2_a_window_flatter_than_the_contrast_floor_fails_although_its_score_passes",
+    "actingcommand-recognition-pack::lib::gate_411_bt_b13::bt_b13_t3_without_a_floor_no_luma_member_is_written_and_score_and_color_decide",
+]
+incident = ["#411 B13"]
+
+# Workflow #411 B4 (slice BT-B4, 0.12.x; register §1.166 B4-1 to B4-4; ledger revision 4, the first writer of §1.153 LR-1; B-train plan §2.4 with D3, test rows BT-B4 T1 to T3 of §5.3; package revision 6, declared by BT-PK6): a single-frame select step that declares confirm decision decides its confirmation frame again with the same fact snapshot and instant and compares the decision hashes (the actionable candidates' ids, click boxes and statuses, the selected ids, the outcome key; no feature value): a changed reading of a gate-rejected row keeps the decision, records decision_matched with the confirmation frame's candidate-set hash and taps; another selected candidate records decision_mismatched and fails selection_decision_mismatch before any input; both are written as LR-1 registers them; a step without confirm records matched or mismatched as before
+[[gate]]
+key = "165"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b4::bt_b4_t1_a_changed_reading_of_a_gate_rejected_row_keeps_the_decision_and_taps",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b4::bt_b4_t2_a_confirmation_frame_that_selects_another_candidate_is_a_decision_mismatch",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_bt_b4::bt_b4_t3_without_confirm_the_candidate_sets_compare_as_before",
+]
+incident = ["#411 B4"]

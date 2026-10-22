@@ -380,6 +380,14 @@ listed is present (section Ending empty), and lets the `expect_after` of any ope
   single-frame select may declare it only when its layout is `fixed_slots`: one frame of a
   `repeated_anchor` list cannot show that the list ends, so a list that fits one screen declares
   `scan`, whose start and end checks then both pass on its first viewport.
+- A single-frame select may also declare `confirm` (Workflow #411 B4, register §1.166):
+  `"candidate_set"`, the default, compares the candidate sets of the two frames (section
+  Execution); `"decision"` compares their decisions (section Confirming by the decision). A
+  select over a scan confirms the chosen identity, and admission refuses it with
+  `confirm: "decision"` (`contained_task_select_invalid`, detail `confirm=decision
+  scan=declared`). The source gate refuses a `confirm` that is no string (`InvalidType`) or
+  another string (`InvalidValue`) at `/operations/<i>/select/confirm`; `null` is absent. The
+  member belongs to `package` revision 6.
 - The `expect_after` of any operation may add `expect_identity: {"target_id", "choice_of"}`,
   or from SEL-L4b-T `expect_identity: {"choice_of", "templates": [{"id", "target_id"}]}`
   (section Expected identity).
@@ -559,7 +567,8 @@ One attempt of a single-frame select runs, before any input:
    F2 is captured and recognized like every frame, with its capture and recognition records and
    the `CapturePage` timing boundary, but it feeds neither the stability sampling nor the
    post-admission OCR collector. F2 must be the step's page, the step's guard must pass on F2,
-   and the projection P2 of F2 must hash to H1.
+   and the projection P2 of F2 must hash to H1 (a step that declares `confirm: "decision"`
+   compares the decisions instead, section Confirming by the decision).
 5. The decision is recorded once as `task.selection_evaluated` (section Records). A step that
    declares `on_empty` adds `unknown_check` to its v1 record.
 6. On a match, one tap is sampled inside the chosen candidate's `click` rectangle (taken from
@@ -597,6 +606,8 @@ before its tap, so its failures follow other rules (section Select over a scan).
 | F2 cannot be captured, validated or recognized, or projected | that failure's code | `capture_failed` with that code |
 | The runtime's capture of F2 fails, nonfatally or fatally | the runtime's own error, unchanged | `capture_failed` with `selection_confirmation_capture_failed` |
 | P2 hashes differently | `selection_projection_mismatch` | `mismatched` |
+| `confirm: "decision"`: F2 cannot be decided, or its decision hash cannot be formed | that failure's code (`selection_evaluation_failed`) | `capture_failed` with that code |
+| `confirm: "decision"`: F2's decision hashes differently | `selection_decision_mismatch` | `decision_mismatched` |
 | The record exceeds 64 KiB or is invalid | `selection_record_too_large`, or the record's own validation code | none |
 
 A failure before the decision writes no `task.selection_evaluated` record, because the record
@@ -620,6 +631,42 @@ poisoned when the refusal poisons it. Only when the ledger refuses that record a
 host join the refusal to the run's failure as the related failure `selection_record` in its
 native detail, and poison the runtime. A capture failure its runtime cannot classify forbids
 further records and returns without one.
+
+### Confirming by the decision
+
+Workflow #411 B4 (B-train plan §2.4, D3; register §1.166). A row's reading may change between
+F1 and F2 without changing what the step would choose, for example a counter on a row the
+gates reject; its candidate set then hashes differently, and the default comparison taps
+nothing. A single-frame select that declares `confirm: "decision"` compares only the decisions:
+
+1. Steps 1 to 3 and F2's capture, page and guard checks and projection P2 run as in section
+   Execution.
+2. P2 is decided again by the step's policy with the same instance fact snapshot and the same
+   instant as P1, over P2's actionable candidates as in step 3.
+3. The decision hash of each decision is formed over its own projection: the SHA-256, as 64
+   lowercase hexadecimal digits, of the compact JSON
+
+   ```text
+   {"candidates":[{"id","click":{"x","y","width","height"},"status"}],"selected":[…],"outcome_key"}
+   ```
+
+   in exactly this member order: the projection's actionable candidates in projection order,
+   each with its click rectangle and its verdict's `status` (`ranked`, `gate_rejected` or
+   `unknown_dropped`; `null` for an actionable candidate the kernel keeps from the evaluator,
+   an unresolved consensus feature or an identity feature that read no identity), the
+   decision's `selected` IDs in its order and its `outcome_key`. No feature value, score, rank,
+   gate result or reason enters it. It is the step's own comparison hash, never a package
+   digest; the writer forms it and no reader recomputes it.
+4. Equal hashes record `decision_matched` (section Records) and the tap of step 6 follows,
+   inside the chosen candidate's click rectangle on P2, bound to F2. Different hashes record
+   `decision_mismatched` and the step fails `selection_decision_mismatch` before any input,
+   as every other failure of a single-frame select does. A failure of F2's decision, or of a
+   hash, records `capture_failed` with that failure's code, as a projection failure of F2 does.
+
+The decision of record is P1's in either case; the record keeps F2's candidate-set hash and
+F2's decision hash in its confirmation, and P1's decision hash equals the latter exactly when the
+confirmation is `decision_matched`. A step without `confirm`, or with `"candidate_set"`,
+compares and records as before.
 
 ### Select over a scan
 
@@ -928,6 +975,8 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `not_attempted` | The outcome is not `selected`. |
 | `matched` `{candidate_set_sha256}` | The confirmation frame's candidate set hashes like the evaluated one. |
 | `mismatched` `{candidate_set_sha256}` | It hashes differently; no input follows. |
+| `decision_matched` `{candidate_set_sha256, decision_sha256}` | A step with `confirm: "decision"` (ledger revision 4, register §1.153 LR-1; written since §1.166): the confirmation frame's decision hashes like the evaluated decision. `candidate_set_sha256` is the confirmation frame's own and may differ from the evaluated projection's; `decision_sha256` is its decision hash (section Confirming by the decision). |
+| `decision_mismatched` `{candidate_set_sha256, decision_sha256}` | As `decision_matched`, but the confirmation frame's decision hashes differently; no input follows. |
 | `page_changed` | The confirmation frame is not the step's page. |
 | `guard_failed` `{code}` | The step's guard failed on the confirmation frame. |
 | `capture_failed` `{code}` | The confirmation frame could not be captured. |

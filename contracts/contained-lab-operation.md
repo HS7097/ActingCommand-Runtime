@@ -247,6 +247,55 @@ artifacts, and the shared resource privacy merge controls public target/field
 values and details. Geometry remains available as operation information. This
 entry creates no local recording authority or persistent session fact store.
 
+## A declared operation (#412 Lab B-3, ledger revision 4 row LR-10)
+
+The selection `{mode: "operation", operation_id, seed?}` names an operation the package
+declares: an `id` of its entry task's operations, run as the kernel runs it (its `when`, guard,
+input recheck, point, gesture, `post_delay`, `expect_after` and retries); attempt 1 draws its
+point from `seed` when given. The id follows the element id's rules (1 to 2048 bytes, no NUL).
+A request with this selection and an arrival condition is refused
+`invalid_lab_operation_selection`: the operation's own `expect_after` or `to` is its arrival.
+No projection resolves the selection (`resolve` refuses it, `invalid_lab_operation_selection`);
+until Lab B-3 S2 the Runtime therefore refuses it at the `selection` stage, before any input.
+
+Its records add two optional members, absent in element and coordinate records, whose bytes are
+unchanged; the schema strings stay:
+
+* the prepared record's `operation`: `phase_id?`, `from_page` (as declared), `destination_pages`
+  (0 to 16), `max_attempts` (1 without a retry policy), `recheck_frames` (attempt 1's fresh
+  recheck frames), `guard` (attempt 1's: `{status: "trusted_coordinate"}` or `{status:
+  "passed", page_id, target_id, target_kind}`) and `sampling?` (attempt 1's draw);
+* the terminal record's `operation_result`: `end` (vocabulary `lab_operation_end`: `confirmed`,
+  `run_completed`, `passed_over`, `recovery_requested`, `failed`), `final_page?`,
+  `outcome_key?`, `attempts` (one per effect intent: `attempt`, `input_frame_index`, `guard`,
+  `action`, `sampling?`, `input_returned`, `input_action_id?`, `input_intent?`, `input_event?`,
+  `effect`, `end_page?`) and `frames` (every frame the kernel captured, in order, at most 256:
+  `frame`, `attempt` (0 before the first attempt), `after_input`, `page?`).
+
+In such a record `before_frame` and `action` are attempt 1's input frame and action,
+`after_frame` is the last frame and `after_projection` its projection; `geometry`,
+`selected_element`, `before_projection`, `after` and `arrival` are absent. The record's
+validation refuses (`invalid_lab_operation_record`) a record where: the two members are not
+together, or not with the selection `operation`, except that a selection `operation` without
+them is a request that failed before any input; attempts do not run 1, 2, …, exceed
+`max_attempts`, or an attempt's intent is not after the previous attempt's outcome (the first
+after the verified prepared record) and before its own outcome; an attempt's
+`input_frame_index` names no frame of that attempt before its input; frames exceed 256 or are not
+in capture order; the record's `input_*` members are not the last attempt's; `effect` is not the
+aggregate (`performed` if an attempt performed, else `indeterminate` if one was, else
+`not_performed`); `end` is `confirmed` or `run_completed` other than exactly when there is no
+failure or only one at `release`; the prepared record does not state attempt 1 or the after
+frame is not the last frame.
+
+The shared verifier checks such a record's own way: every capture frame of the request is a
+listed frame (in place of the transaction accounting); the diagnostics are the prepared and
+terminal records and at most the after projection; each attempt that reached its input has
+exactly its own `InputIntent` and outcome event, matching its action, and no other input event
+belongs to the request (`runtime_lab_unreported_input`); the selection is not resolved again;
+the final command event carries the aggregate effect. `RuntimeClient` and `resource restore`
+read each attempt's action events. `resource restore` gives such a record the gap
+`lab_declared_operation`, restores no operation from it, and its provenance names `end`.
+
 ## The frame's coordinate system and the after-action attachment (Workflow #410 item 1)
 
 Every `do` answer (online, `--capture --dry-run` and offline `--scene --dry-run`)
