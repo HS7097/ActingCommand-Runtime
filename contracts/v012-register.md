@@ -2877,6 +2877,19 @@ member, so `package` is unaffected. [contained-lab-operation.md](contained-lab-o
 | B3-5 | the action events of such a record | reader (no shape) | Lab B-3 S0 | Lab B-3 S0 | `RuntimeClient` and actinglab's `resource restore` query each attempt's `input_action_id` |
 | B3-6 | key `lab_operation_problem` (`vocab:lab_operation_problem`); vocabularies `lab_operation_end` (`confirmed`, `run_completed`, `passed_over`, `recovery_requested`, `failed`) and `lab_operation_problem` (`application_effect`, `select_step`, `linear_steps`, `recognize_only`, `chosen_identity`) | new key-table and vocabulary entries (no shape) | Lab B-3 S0 | Lab B-3 S1 (the problem), S2 (the end) | both vocabularies `pending`; the enums `LabOperationEnd` and `LabOperationProblem` are the contract's; S1's `contained_task_declared_operation_unsupported` carries the key |
 
+### 1.160 Slice A43b (0.12.x): a wait that sees a still screen it cannot recognise is not stretched by the pacing factor (#411 A43; coordinator 10-21, Q8 of 10-21 20:2x)
+
+The production run of 10-21 00:2x waited for a page that never came at the pressure floor's
+factor 1250 with its extra round; the factor only made the empty wait longer. The rule uses the
+one frame-change measure of §1.155 B12-5 at its default; it adds no captured frame.
+[performance-control.md](performance-control.md) ("Step pacing") is the contract. **No persisted
+ledger shape**: no code, key, vocabulary token, configuration key, location or package member.
+Gates: exec keys 133 to 135.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A43b-1 | a page wait (`capture_until_page`) or a step's confirmation (`await_postcondition`) on a still, unrecognised screen | rule (no shape change) (exec 133 to 135) | A43b | A43b | "still and unrecognised" holds while the wait's latest two frames are unchanged by the frame-change measure (the whole frame, still at most 1500 milli) and neither matched a page the wait accepts (any page of the package for the page wait, the step's destination for the confirmation); a wait's frame is the frame its observation recognised; while it holds, the rest of the wait is counted at the factor 1000 (its pauses last their declared length and its wall time counts in full against its limit), otherwise it is paced as before; a page it accepts or a changed frame returns to the step's pacing at once; a handled shared interrupt page or a failed observation clears it; the run's budget clock, the task deadline, the extra wait rounds and the outcome of a wait that runs out (its code, `elapsed_ms` as the wait counted it, `limit_ms`) are unchanged; at the factor 1000 nothing changes |
+
 ### 1.164 Slice BT-KEY (0.12.x): a per-run operation cap and a guard refusal end on a named key (#411 B16 part 1, B22, B33; B-train plan `rd-1021/train-0129/b-plan/plan.md` §2.11, D10, Q5, Q9)
 
 An operation of a task schema `0.9` page-graph task may cap how often one run dispatches it

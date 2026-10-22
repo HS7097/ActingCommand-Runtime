@@ -1840,6 +1840,33 @@ tests = [
 ]
 incident = ["#411 B28"]
 
+# Workflow #411 A43 (slice A43b, 0.12.x; register §1.160 A43b-1; no persisted ledger shape, no outcome code, no configuration key): a page wait or a step's confirmation whose latest two frames are unchanged by the one frame-change measure (the whole frame, 1500 milli) and match no page the wait accepts counts the rest of the wait at the factor 1000; at the factor 1250 a still screen of no page ends the wait after one paced and four unpaced intervals, with the wait's own code, elapsed time and limit
+[[gate]]
+key = "133"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a43b::a43b_t1_a_still_unrecognised_screen_ends_the_wait_at_the_unpaced_budget",
+]
+incident = ["#411 A43"]
+
+# Workflow #411 A43 (slice A43b, 0.12.x; register §1.160 A43b-1): frames of no page that change on every frame keep the page wait and the confirmation paced as #385 P-k paces them, five intervals of 375 ms at the factor 1250, ending with the wait's own code, elapsed time and limit
+[[gate]]
+key = "134"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a43b::a43b_t2_a_changing_unrecognised_screen_ends_the_wait_at_the_paced_budget",
+]
+incident = ["#411 A43"]
+
+# Workflow #411 A43 (slice A43b, 0.12.x; register §1.160 A43b-1): after two still frames of no page, a frame that changed returns the wait to its pacing at once, so the page it accepts, arriving after the unpaced budget but within the paced one, is reached
+[[gate]]
+key = "135"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_a43b::a43b_t3_a_change_toward_the_page_returns_the_wait_to_its_pacing",
+]
+incident = ["#411 A43"]
+
 # #411 B16 part 1 (slice BT-KEY; register §1.164 KEY-1, KEY-4, KEY-5; B-train plan §2.11 items 1 and 5, test row T1 of §5.3; ledger revision 4 LR-7, first writer; package revision 6, declared by BT-PK6): an operation with max_runs and a keyed on_max_runs that the run dispatched max_runs times ends the run Completed on the current page with its key when the page would dispatch it again, no step starting; the run writes one task.operation_capped of exactly the LR-7 shape with the info outcome contained_task_operation_runs_capped (pack_operation_id, count, limit_count, page_id, outcome_key)
 [[gate]]
 key = "152"

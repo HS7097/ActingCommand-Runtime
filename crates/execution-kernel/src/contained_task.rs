@@ -29,6 +29,7 @@ use actingcommand_contract::{
 use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
+use still_wait::StillUnrecognised;
 use timing::PaceClock;
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
@@ -75,6 +76,8 @@ mod readings;
 mod remedies;
 // Workflow #386 SR-1.
 mod sample_retry;
+// #411 A43b: a wait on a still screen it cannot recognise is counted unpaced.
+mod still_wait;
 // Workflow #308 SEL-L3: the scan session engine.
 mod scan;
 mod selection;
@@ -194,6 +197,10 @@ mod gate_411_a45;
 // #411 E2 T1 (A28): a run that exhausts its step budget ends with the step budget's own code.
 #[cfg(test)]
 mod gate_411_e2;
+// #411 A43b (exec keys 133 to 135): a wait on a still screen it cannot recognise is not
+// stretched by the pacing factor.
+#[cfg(test)]
+mod gate_411_a43b;
 // Workflow #411 B15 R1 (exec key 95): `provides` with parameters, the metadata reader of the
 // remedy declarations and the declared parameter defaults.
 #[cfg(test)]
@@ -6022,7 +6029,9 @@ impl PreparedContainedTask {
 
     /// A wait for any page of the package, up to `timeout`. Workflow #386 SR-1 (scheduling model
     /// §2.1): an observation whose sampling timed out is made again in a new window of
-    /// `timeout`, as `retries` (the step's pacing and which observation this is) allows.
+    /// `timeout`, as `retries` (the step's pacing and which observation this is) allows. #411
+    /// A43b: while its latest two frames are still and gave no page, the rest of the wait is
+    /// counted unpaced ([`StillUnrecognised`]).
     fn capture_until_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -6044,11 +6053,15 @@ impl PreparedContainedTask {
         let mut window_started = budget_observation_now(runtime, pace);
         // Whether the window has seen a frame that gave no page of the package.
         let mut missed = false;
+        // #411 A43b: whether the latest two frames are still and gave no page, and the part of
+        // the window counted unpaced.
+        let mut still = StillUnrecognised::new(pace);
         loop {
+            let window_end = still.window_end(runtime, window_started, timeout);
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
             } else {
-                base_timing.with_deadline(window_started + timeout)
+                base_timing.with_deadline(window_end)
             };
             if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
@@ -6064,13 +6077,7 @@ impl PreparedContainedTask {
             // Test plan E-3 G3 (exec key 21): after frames that gave no page, a window too short
             // for the next sampled frame is spent, as an elapsed one is.
             if missed
-                && self.consensus_window_spent(
-                    runtime,
-                    None,
-                    window_started + timeout,
-                    task_deadline,
-                    pace,
-                )?
+                && self.consensus_window_spent(runtime, None, window_end, task_deadline, pace)?
             {
                 if !rounds.another(runtime, Some((pace, task_deadline))) {
                     break;
@@ -6078,6 +6085,7 @@ impl PreparedContainedTask {
                 started = budget_now(runtime, pace);
                 window_started = budget_observation_now(runtime, pace);
                 missed = false;
+                still.new_window(runtime);
                 continue;
             }
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
@@ -6087,6 +6095,7 @@ impl PreparedContainedTask {
                     started = budget_now(runtime, pace);
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
+                    still.observation_failed();
                     continue;
                 }
             };
@@ -6106,6 +6115,8 @@ impl PreparedContainedTask {
                 Err(scene) => scene,
             };
             missed = true;
+            // #411 A43b: the frame gave no page of the package.
+            still.frame(runtime, &scene)?;
             // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame is
             // offered to the shared interrupt pages before the wait goes on, its budget paused
             // while one is handled.
@@ -6113,10 +6124,11 @@ impl PreparedContainedTask {
                 let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
+                still.interrupted();
                 continue;
             }
             let now = budget_now(runtime, pace);
-            if now.saturating_duration_since(started) >= timeout {
+            if now.saturating_duration_since(started) >= still.limit(runtime, timeout) {
                 // The next round keeps the interval: its first frame comes one interval on.
                 if !rounds.another(runtime, Some((pace, task_deadline))) {
                     break;
@@ -6124,15 +6136,18 @@ impl PreparedContainedTask {
                 started = now;
                 window_started = budget_observation_now(runtime, pace);
                 missed = false;
+                still.new_window(runtime);
             }
+            let limit = still.limit(runtime, timeout);
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
             let now = pace.budget(wait_started);
-            let wait = interval
-                .min(timeout.saturating_sub(now.saturating_duration_since(started)))
-                .min(task_deadline.saturating_duration_since(now));
-            pace_pause(runtime, pace, wait);
+            still.pause(
+                runtime,
+                interval.min(limit.saturating_sub(now.saturating_duration_since(started))),
+                task_deadline.saturating_duration_since(now),
+            );
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
@@ -6143,11 +6158,13 @@ impl PreparedContainedTask {
                 succeeded: true,
             });
         }
+        // #411 A43b: the elapsed time as the wait counted it.
+        let elapsed = budget_elapsed_since(runtime, pace, started) + still.credit(runtime);
         Err(ContainedTaskError::timed(
             SharedCode::ContainedTaskPageUnknown.code(),
             TaskTimingScope::PageRecognition,
             TaskTimingStage::PageRecognition,
-            budget_elapsed_since(runtime, pace, started),
+            elapsed,
             timeout,
             None,
         )
@@ -6845,7 +6862,9 @@ impl PreparedContainedTask {
     /// §2.1 item 1): an observation whose sampling timed out is made again in a new window of
     /// `timeout`, as the step's `pacing` allows; the input is never repeated. #385 P-k (§5.4
     /// item 1): a wait that ran out of its window without an error page starts the extra rounds
-    /// of `pacing`, one window each, before it fails; its observation window takes its own.
+    /// of `pacing`, one window each, before it fails; its observation window takes its own. #411
+    /// A43b: while its latest two frames are still and neither is a destination, the rest of the
+    /// wait is counted unpaced ([`StillUnrecognised`]).
     #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
@@ -6872,11 +6891,15 @@ impl PreparedContainedTask {
         let mut last_frame_page = None;
         // Whether the window has seen a frame that did not confirm the step.
         let mut missed = false;
+        // #411 A43b: whether the latest two frames are still and neither is a destination, and
+        // the part of the window counted unpaced.
+        let mut still = StillUnrecognised::new(pace);
         loop {
+            let window_end = still.window_end(runtime, window_started, timeout);
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
             } else {
-                base_timing.with_deadline(window_started + timeout)
+                base_timing.with_deadline(window_end)
             };
             if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
@@ -6893,13 +6916,7 @@ impl PreparedContainedTask {
             // Test plan E-3 G3 (exec key 21): after frames that did not confirm the step, a window
             // too short for the next sampled frame is spent, as an elapsed one is.
             if missed
-                && self.consensus_window_spent(
-                    runtime,
-                    None,
-                    window_started + timeout,
-                    task_deadline,
-                    pace,
-                )?
+                && self.consensus_window_spent(runtime, None, window_end, task_deadline, pace)?
             {
                 if !rounds.another(runtime, Some((pace, task_deadline))) {
                     break;
@@ -6907,6 +6924,7 @@ impl PreparedContainedTask {
                 started = budget_now(runtime, pace);
                 window_started = budget_observation_now(runtime, pace);
                 missed = false;
+                still.new_window(runtime);
                 continue;
             }
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
@@ -6916,6 +6934,7 @@ impl PreparedContainedTask {
                     started = budget_now(runtime, pace);
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
+                    still.observation_failed();
                     continue;
                 }
             };
@@ -6973,6 +6992,8 @@ impl PreparedContainedTask {
                             timing_failure: None,
                         });
                     }
+                    // #411 A43b: the frame is no destination.
+                    still.frame(runtime, &observation.scene)?;
                     let paused = self.offer_shared_interrupt(runtime, &observation.scene)?;
                     last_frame_page = Some(observation.page_label.clone());
                     last_observation = Some(observation);
@@ -6980,6 +7001,8 @@ impl PreparedContainedTask {
                 }
                 Err(scene) => {
                     last_frame_page = None;
+                    // #411 A43b: the frame gave no page.
+                    still.frame(runtime, &scene)?;
                     self.offer_shared_interrupt(runtime, &scene)?
                 }
             };
@@ -6988,10 +7011,11 @@ impl PreparedContainedTask {
                 let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
+                still.interrupted();
                 continue;
             }
             let now = budget_now(runtime, pace);
-            if now.saturating_duration_since(started) >= timeout {
+            if now.saturating_duration_since(started) >= still.limit(runtime, timeout) {
                 // The next round keeps the interval: its first frame comes one interval on.
                 if !rounds.another(runtime, Some((pace, task_deadline))) {
                     break;
@@ -6999,18 +7023,19 @@ impl PreparedContainedTask {
                 started = now;
                 window_started = budget_observation_now(runtime, pace);
                 missed = false;
+                still.new_window(runtime);
             }
-            let remaining = timeout.saturating_sub(budget_elapsed_since(runtime, pace, started));
+            let remaining = still
+                .limit(runtime, timeout)
+                .saturating_sub(budget_elapsed_since(runtime, pace, started));
             let boundary = actingcommand_contract::TaskTimingBoundary::PostconditionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
             let now = pace.budget(wait_started);
-            pace_pause(
+            still.pause(
                 runtime,
-                pace,
-                interval
-                    .min(remaining)
-                    .min(task_deadline.saturating_duration_since(now)),
+                interval.min(remaining),
+                task_deadline.saturating_duration_since(now),
             );
             let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
@@ -7022,6 +7047,8 @@ impl PreparedContainedTask {
                 succeeded: true,
             });
         }
+        // #411 A43b: the elapsed time as the wait counted it.
+        let elapsed = budget_elapsed_since(runtime, pace, started) + still.credit(runtime);
         Ok(PostconditionResolution::Failed {
             observation: last_observation,
             last_frame_page,
@@ -7029,7 +7056,7 @@ impl PreparedContainedTask {
             timing_failure: Some(TaskTimingFailure {
                 scope: TaskTimingScope::Postcondition,
                 stage: TaskTimingStage::Postcondition,
-                elapsed_ms: budget_elapsed_since(runtime, pace, started).as_millis() as u64,
+                elapsed_ms: elapsed.as_millis() as u64,
                 limit_ms: timeout.as_millis() as u64,
                 required_delay_ms: None,
             }),

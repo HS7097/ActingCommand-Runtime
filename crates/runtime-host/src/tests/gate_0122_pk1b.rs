@@ -288,6 +288,24 @@ fn three_pages(state: &FakeState) {
     ));
 }
 
+/// The device stays on `home` (pixel 0) while pixel 1 changes on every frame. #411 A43b: a wait
+/// whose latest two frames are still and show no page it accepts counts the rest of its time
+/// unpaced; on this screen the waits for `terminal` stay paced, as tests 3, 7 and 9 require.
+fn moving_home(state: &FakeState) {
+    *state.pixel_script.lock().expect("pixel script") = Some(Arc::new(
+        |capture: usize, _inputs: usize| -> Vec<(usize, [u8; 3])> {
+            vec![(
+                1,
+                if capture.is_multiple_of(2) {
+                    [0, 0, 0]
+                } else {
+                    [128, 128, 128]
+                },
+            )]
+        },
+    ));
+}
+
 /// A host whose one physical instance `ALIAS` shows a 2x1 frame (Workflow #392 DA-A: a direct
 /// run needs an observed display), on `clock`, which samples capacity after each move.
 fn direct_host(root: &TempDir, clock: &Arc<WaitClock>, state: &Arc<FakeState>) -> RuntimeHost {
@@ -501,8 +519,9 @@ fn pk1b_the_host_deadline_does_not_move_under_a_factor() {
         let root = TempDir::new().expect("tempdir");
         let path = root.path().join("never-arrives.zip");
         fs::write(&path, &never_arrives).expect("write package");
-        // The device stays on `home` after the tap.
+        // The device stays on `home` after the tap, its screen moving (#411 A43b).
         let state = Arc::new(FakeState::default());
+        moving_home(&state);
         let clock = Arc::new(WaitClock::new(1_000));
         // The shipped scheduler (`SchedulerConfig::default()`; no configuration file member sets
         // it). A direct run's lease ends one heartbeat reserve after its host deadline
@@ -973,8 +992,9 @@ fn pk2_a_paced_wait_ends_by_the_host_deadline() {
     let root = TempDir::new().expect("tempdir");
     let path = root.path().join("never-arrives.zip");
     fs::write(&path, never_arrives_package()).expect("write package");
-    // The device stays on `home` after the tap.
+    // The device stays on `home` after the tap, its screen moving (#411 A43b).
     let state = Arc::new(FakeState::default());
+    moving_home(&state);
     let clock = Arc::new(WaitClock::new(1_000));
     let host = direct_host_with(
         config(&root).with_scheduler(SchedulerConfig::default()),
@@ -1097,8 +1117,9 @@ fn pk2_a_scheduled_runs_paced_wait_ends_by_its_deadline() {
     let root = TempDir::new().expect("tempdir");
     let path = root.path().join("scheduled-never-arrives.zip");
     fs::write(&path, &package).expect("write package");
-    // The device stays on `home` after the tap.
+    // The device stays on `home` after the tap, its screen moving (#411 A43b).
     let state = Arc::new(FakeState::default());
+    moving_home(&state);
     let clock = Arc::new(WaitClock::new(POLICY_NOW_UNIX_MS));
     let host = RuntimeHost::start(
         config(&root)
