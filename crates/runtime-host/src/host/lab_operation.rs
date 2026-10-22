@@ -1769,8 +1769,8 @@ impl LabOperationRuntime<'_> {
             RuntimeInputContext {
                 run_links: self.run_links,
                 source_step_action_id: None,
-                before_frame_id: reference.map(|reference| reference.frame_id),
-                input_frame: reference,
+                before_frame_id: None,
+                input_frame: None,
                 input_control: None,
             },
         ) {
