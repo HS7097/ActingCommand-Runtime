@@ -200,6 +200,8 @@ mod gate_383_sh1;
 mod gate_384_d2s2;
 // Workflow #384 D2-S3: resource adjustments.
 mod gate_384_d2s3;
+// Workflow #411 B1 (slice BT-B1): frames that do not agree give no value, end to end.
+mod gate_411_bt_b1;
 // Workflow #384 D2-CHAIN and D2-S4: the fact refresh end to end, and the dispatch's reader check.
 mod gate_384_d2s4;
 // Workflow #384 D2-S5 and D2-S4's T31, T32: the transition recorder, its read, the stale intent

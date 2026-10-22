@@ -935,6 +935,7 @@ impl PreparedContainedTask {
                 &observed.scene,
                 observed.captured_at,
                 RememberedOcrObservations::default(),
+                run.timing.pace(),
             )?;
         }
         // Workflow #384 D2-S2 (model §3.4): with a requested key set, a segment that reaches no
@@ -993,6 +994,7 @@ impl PreparedContainedTask {
                 &reached.scene,
                 reached.captured_at,
                 RememberedOcrObservations::default(),
+                run.timing.pace(),
             )?;
             // Workflow #384 D2-S3 (model §3.6): the step's operation is confirmed on the frame
             // it arrived on.
@@ -1312,7 +1314,7 @@ impl PreparedContainedTask {
             let (guard, target) = match guarded {
                 Ok(guarded) => guarded,
                 Err(failure) => {
-                    retries.retry(failure, run.step_timeout)?;
+                    retries.retry(runtime, failure, run.step_timeout)?;
                     let (frame, timing) =
                         self.linear_observe_before_input(runtime, run, &page, &mut retries)?;
                     again = Some(frame);
@@ -1367,6 +1369,7 @@ impl PreparedContainedTask {
                     ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                 );
                 retries.retry(
+                    runtime,
                     ContainedTaskRunError::<R::Error>::Task(timeout),
                     run.step_timeout,
                 )?;
@@ -1436,7 +1439,7 @@ impl PreparedContainedTask {
                     )
                     .into());
                 }
-                Err(failure) => retries.retry(failure, run.step_timeout)?,
+                Err(failure) => retries.retry(runtime, failure, run.step_timeout)?,
             }
         }
     }
@@ -1716,7 +1719,7 @@ impl PreparedContainedTask {
                 Err(failure) => {
                     // Workflow #386 SR-1 (scheduling model §2.1 item 1): a sampling timeout
                     // starts the wait over in a new window, without any input.
-                    retries.retry(failure, budget)?;
+                    retries.retry(runtime, failure, budget)?;
                     started = budget_now(runtime, pace);
                     seen = None;
                     round_end = None;
@@ -1937,7 +1940,7 @@ impl PreparedContainedTask {
             let observation = match self.linear_observe_scene(runtime, candidates, timing) {
                 Ok(observation) => observation,
                 Err(failure) => {
-                    retries.retry(failure, budget)?;
+                    retries.retry(runtime, failure, budget)?;
                     started = budget_now(runtime, pace);
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;

@@ -41,6 +41,9 @@ mod target_unique;
 mod text_locate;
 // Workflow #396 REC-6.
 mod value_test;
+// Workflow #411 B1 (slice BT-B1): a number's dictionary, and an agreement admitted.
+#[cfg(test)]
+mod gate_411_bt_b1;
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
@@ -57,7 +60,9 @@ pub use value_test::{
     ValueTestTarget, ValueTestValue,
 };
 
-pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, CandidateSampleVariant};
+pub use candidate_consensus::{
+    CandidateAggregation, CandidateConsensus, CandidateSampleVariant, k_of_n_value,
+};
 
 pub use candidate_identity::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
@@ -1271,7 +1276,13 @@ impl SceneEvaluation<'_> {
             if let Some(result) = self.consensus_results.borrow().get(target_id) {
                 return result.clone();
             }
-            let result = self.evaluate_consensus(target_id, consensus);
+            // Workflow #411 B1: a value test's entry is its agreement's; the test reads its
+            // frames itself and its agreement decides each side's value.
+            let result = if self.evaluator.target_kind(target_id)? == TargetKind::ValueTest {
+                self.evaluator.evaluate_target_in_scene(self, target_id)
+            } else {
+                self.evaluate_consensus(target_id, consensus)
+            };
             self.consensus_results
                 .borrow_mut()
                 .insert(target_id.to_owned(), result.clone());
@@ -1563,7 +1574,7 @@ impl RecognitionEvaluator {
     }
 
     fn with_optional_vision_provider(
-        pack: RecognitionPack,
+        mut pack: RecognitionPack,
         asset_resolver: Arc<dyn AssetResolver>,
         vision_provider: Option<Arc<dyn VisionProvider>>,
     ) -> RecognitionPackResult<Self> {
@@ -1572,6 +1583,20 @@ impl RecognitionEvaluator {
         if !errors.is_empty() {
             return Err(RecognitionPackError::fatal(errors.join("; ")));
         }
+        // Workflow #411 B1: a value test whose side declares an agreement is sampled as target
+        // consensus is, under the entry its agreement derives (a declared pack holds none for a
+        // value test: refused above), so every observation of its consumers takes its frames.
+        let agreements = pack
+            .targets
+            .iter()
+            .filter_map(|target| match target {
+                RecognitionTarget::ValueTest(test) => test
+                    .agreement_consensus()
+                    .map(|consensus| (test.id.clone(), consensus)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        pack.target_consensus.extend(agreements);
 
         let target_indexes = pack
             .targets

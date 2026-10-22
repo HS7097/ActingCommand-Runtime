@@ -379,6 +379,10 @@ pub struct ContainedTaskError {
     /// kernel attached them (a sampling timeout's `attempts`, `timeout_ms` and `stage`; a
     /// sampling budget's `required_ms` with `remaining_ms` or `limit_ms`).
     values: Option<Box<Outcome>>,
+    /// Workflow #411 B1 (follow-up BT-B1-FIX): a sampling timeout that cut its observation's
+    /// recognition short, so that recognition has no result; the observation's retry decision
+    /// closes it as abandoned ([`SampleRetries::retry`]).
+    recognition_abandoned: bool,
 }
 
 impl ContainedTaskError {
@@ -396,6 +400,7 @@ impl ContainedTaskError {
             declaration_package: None,
             ppocr_diagnostics: Vec::new(),
             values: None,
+            recognition_abandoned: false,
         }
     }
 
@@ -409,6 +414,7 @@ impl ContainedTaskError {
             declaration_package: None,
             ppocr_diagnostics: Vec::new(),
             values: None,
+            recognition_abandoned: false,
         }
     }
 
@@ -454,6 +460,19 @@ impl ContainedTaskError {
     /// Workflow #386 SR-1: whether the kernel attached the values the code declares.
     pub fn has_values(&self) -> bool {
         self.values.is_some()
+    }
+
+    /// Workflow #411 B1 (follow-up BT-B1-FIX): the sampling timeout `self` cut its observation's
+    /// recognition short; that recognition has no result to record.
+    fn abandoning_recognition(mut self) -> Self {
+        self.recognition_abandoned = true;
+        self
+    }
+
+    /// Workflow #411 B1 (follow-up BT-B1-FIX): whether the failure left its observation's
+    /// recognition without a result ([`Self::abandoning_recognition`]).
+    fn abandons_recognition(&self) -> bool {
+        self.recognition_abandoned
     }
 
     /// The failure as an outcome: its code with the values the kernel attached (Workflow #386
@@ -2010,6 +2029,14 @@ pub enum ContainedTaskTrace {
         width: u32,
         height: u32,
     },
+    /// Workflow #411 B1 (follow-up BT-B1-FIX, coordinator ruling 2026-10-22): the recognition
+    /// started last ended without a result, its observation's sampling timeout having cut its
+    /// evaluation short. `outcome` is that timeout (`recognition_sample_deadline_exceeded` with
+    /// the observation's `attempts`, `timeout_ms` and `stage`); the runtime closes the
+    /// recognition as failed, and the observation is then made again or the run ends with it.
+    RecognitionAbandoned {
+        outcome: Outcome,
+    },
     StepStarted {
         step_index: u32,
         operation_label: String,
@@ -2159,6 +2186,9 @@ pub enum ContainedTaskGuardEvaluation {
     PageMismatch,
     /// Workflow #390 EXEC-1: the target of a candidate operation's `when` was evaluated.
     When,
+    /// Workflow #411 B1 (register §1.153 LR-6): one frame of a value test whose side declares
+    /// an agreement was evaluated.
+    AgreementSample,
 }
 
 impl ContainedTaskGuardEvaluation {
@@ -2168,6 +2198,20 @@ impl ContainedTaskGuardEvaluation {
             Self::CandidateSample => "candidate_sample",
             Self::Evaluated | Self::TrustedCoordinate | Self::PageMismatch => "guard",
             Self::When => "when",
+            Self::AgreementSample => actingcommand_contract::TASK_DIAGNOSTIC_PHASE_AGREEMENT_SAMPLE,
+        }
+    }
+
+    /// Workflow #411 B1 (register §1.153 LR-6): how one sample of a sampled evaluation is
+    /// recorded: a value test's evaluation on one frame of its agreement as an
+    /// [`Self::AgreementSample`], every other sample (target consensus, candidate layouts) as a
+    /// [`Self::CandidateSample`].
+    pub fn of_sample(
+        result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
+    ) -> Self {
+        match result {
+            Ok(evaluation) if evaluation.kind == TargetKind::ValueTest => Self::AgreementSample,
+            _ => Self::CandidateSample,
         }
     }
 
@@ -2175,7 +2219,7 @@ impl ContainedTaskGuardEvaluation {
     /// target, `None` for those that evaluate one.
     pub const fn unexecuted_code(self) -> Option<Code> {
         match self {
-            Self::CandidateSample | Self::Evaluated | Self::When => None,
+            Self::CandidateSample | Self::Evaluated | Self::When | Self::AgreementSample => None,
             Self::TrustedCoordinate => Some(ExecutionKernelCode::ContainedTaskGuardSkipped.code()),
             Self::PageMismatch => Some(ExecutionKernelCode::ContainedTaskGuardPageMismatch.code()),
         }
@@ -2506,10 +2550,11 @@ pub trait ContainedTaskRuntime {
         result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
         _timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
+        // Workflow #411 B1: a value test's agreement frame is an `agreement_sample`.
         self.record_guard_evaluation(
             Some(target_id),
             Some(result),
-            ContainedTaskGuardEvaluation::CandidateSample,
+            ContainedTaskGuardEvaluation::of_sample(result),
         )
     }
 
@@ -3523,7 +3568,7 @@ impl PreparedContainedTask {
                     Ok(Ok(observation)) => return Ok(Some(observation.page_label)),
                     Ok(Err(scene)) => scene,
                     Err(failure) => {
-                        retries.retry(failure, budget)?;
+                        retries.retry(runtime, failure, budget)?;
                         timing = window(budget_observation_now(runtime, pace), pace);
                         continue;
                     }
@@ -3640,7 +3685,7 @@ impl PreparedContainedTask {
                         return Ok(None);
                     }
                 }
-                Err(failure) => retries.retry(failure, window)?,
+                Err(failure) => retries.retry(runtime, failure, window)?,
             }
         }
     }
@@ -3760,7 +3805,7 @@ impl PreparedContainedTask {
                 }
                 Ok(EntryFrame::Unmatched(scene)) => scene,
                 Err(failure) => {
-                    retries.retry(failure, budget)?;
+                    retries.retry(runtime, failure, budget)?;
                     started = budget_now(runtime, pace);
                     window_started = budget_observation_now(runtime, pace);
                     timing = ContainedTaskTimingContext::new(
@@ -4474,7 +4519,7 @@ impl PreparedContainedTask {
                     entry_timing(budget_observation_now(runtime, observation_timing.pace()));
                 match self.capture_page(runtime, ocr_collector, None, timing) {
                     Ok(observed) => break observed,
-                    Err(failure) => retries.retry(failure, step_timeout)?,
+                    Err(failure) => retries.retry(runtime, failure, step_timeout)?,
                 }
             }
         } else {
@@ -4936,7 +4981,7 @@ impl PreparedContainedTask {
                                                 candidates::guard_refusal_key(operation, evaluation)
                                                     .map(str::to_owned)
                                             });
-                                        match retries.retry(failure, step_timeout) {
+                                        match retries.retry(runtime, failure, step_timeout) {
                                             Ok(()) => {
                                                 let (again, timing) = self.observe_before_input(
                                                     runtime,
@@ -5109,6 +5154,7 @@ impl PreparedContainedTask {
                                             .code(),
                                     );
                                     retries.retry(
+                                        runtime,
                                         ContainedTaskRunError::<R::Error>::Task(timeout),
                                         step_timeout,
                                     )?;
@@ -6275,7 +6321,7 @@ impl PreparedContainedTask {
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
                 Ok(observation) => observation,
                 Err(failure) => {
-                    retries.retry(failure, timeout)?;
+                    retries.retry(runtime, failure, timeout)?;
                     started = budget_now(runtime, pace);
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
@@ -6438,7 +6484,7 @@ impl PreparedContainedTask {
                 Ok(Ok(observation)) => return Ok(observation),
                 Ok(Err(scene)) => scene,
                 Err(failure) => {
-                    retries.retry(failure, budget)?;
+                    retries.retry(runtime, failure, budget)?;
                     window = entry_window(budget_observation_now(runtime, pace));
                     continue;
                 }
@@ -6527,7 +6573,7 @@ impl PreparedContainedTask {
                 timing.with_deadline(budget_observation_now(runtime, timing.pace()) + window);
             match self.capture_frame_scene(runtime, None, None, step_timing, None, None) {
                 Ok(observed) => return Ok((observed, step_timing)),
-                Err(failure) => retries.retry(failure, window)?,
+                Err(failure) => retries.retry(runtime, failure, window)?,
             }
         }
     }
@@ -6767,6 +6813,14 @@ impl PreparedContainedTask {
                     .map(str::to_string)
                     .collect::<Vec<_>>(),
             };
+            // Workflow #411 B1 (follow-up BT-B1-FIX): the deadline after the frame's capture is
+            // checked before its recognition starts, so this timeout leaves no recognition open.
+            if sampled && budget_observation_now(runtime, pace) >= sample_deadline {
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                )
+                .into());
+            }
             runtime
                 .record(ContainedTaskTrace::RecognitionStarted {
                     candidate_pages: candidate_pages.clone(),
@@ -6775,12 +6829,6 @@ impl PreparedContainedTask {
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             let evaluation_started = runtime.monotonic_now();
-            if sampled && budget_observation_now(runtime, pace) >= sample_deadline {
-                return Err(ContainedTaskError::new(
-                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
-                )
-                .into());
-            }
             let budget_before = timing.budget_at(evaluation_started);
             let mut recording_error = None;
             // Workflow #386 SR-1 (§2.1): a sample recognition that ran past the deadline is the
@@ -6878,9 +6926,12 @@ impl PreparedContainedTask {
                 .record_page_evaluations("page", &results, Some(evaluation_timing))
                 .map_err(ContainedTaskRunError::Boundary)?;
             if deadline_passed {
+                // Workflow #411 B1 (follow-up BT-B1-FIX): the timeout cut the frame's evaluation
+                // short, so its recognition has no result; the retry decision closes it.
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                 )
+                .abandoning_recognition()
                 .into());
             }
             let ppocr_diagnostics = match &results {
@@ -6904,25 +6955,32 @@ impl PreparedContainedTask {
                     ContainedTaskError::with_detail(failure_code, error.to_string())
                         .with_ppocr_diagnostics(error.ppocr_diagnostics())
                 })?;
-            if sampled {
-                // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code;
-                // past the deadline the observation's sampling timed out.
+            // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code; past the
+            // deadline the observation's sampling timed out. Workflow #411 B1 (follow-up
+            // BT-B1-FIX): a timed-out recognition that has its result records it first.
+            let timed_out = if sampled {
                 runtime
                     .candidate_sampling_checkpoint()
                     .map_err(ContainedTaskRunError::operation::<R>)?;
-                if budget_observation_now(runtime, pace) >= sample_deadline {
-                    return Err(ContainedTaskError::new(
-                        ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
-                    )
-                    .into());
-                }
-            }
+                budget_observation_now(runtime, pace) >= sample_deadline
+            } else {
+                false
+            };
             let matched_pages = evaluations
                 .iter()
                 .filter(|evaluation| evaluation.matched)
                 .map(|evaluation| evaluation.page_id.clone())
                 .collect::<Vec<_>>();
             if exclusive && matched_pages.len() > 1 {
+                // Workflow #411 B1 (follow-up BT-B1-FIX): a timed-out recognition that matched
+                // more than one page has no one result to record.
+                if timed_out {
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                    )
+                    .abandoning_recognition()
+                    .into());
+                }
                 return Err(ContainedTaskError::with_detail(
                     ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
                     matched_pages.join(","),
@@ -6948,6 +7006,12 @@ impl PreparedContainedTask {
                     candidate_scores,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
+            if timed_out {
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                )
+                .into());
+            }
             if let Some(required) = required_entry {
                 // Workflow #373 NAV-3b: the frame's one page is any page of the required entry.
                 let matched = page
@@ -7013,6 +7077,7 @@ impl PreparedContainedTask {
             // Workflow #384 D2-S2 (model §3.5): a frame on which the run reaches a page it reads
             // marks on goes to recognition; the run does not wait for it. Workflow #396 REC-6:
             // the page gate's observations of its marks' targets on this frame go with it.
+            // Workflow #411 B1: the frames its marks' agreements read follow it at `pace`.
             self.hand_off_reading_frame(
                 runtime,
                 ocr_collector,
@@ -7020,6 +7085,7 @@ impl PreparedContainedTask {
                 &scene,
                 frame.captured_at,
                 remembered_ocr,
+                pace,
             )?;
             Ok(Ok(PageObservation {
                 page_label,
@@ -7125,7 +7191,7 @@ impl PreparedContainedTask {
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
                 Ok(observation) => observation,
                 Err(failure) => {
-                    retries.retry(failure, timeout)?;
+                    retries.retry(runtime, failure, timeout)?;
                     started = budget_now(runtime, pace);
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;

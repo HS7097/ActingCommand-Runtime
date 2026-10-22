@@ -17,8 +17,8 @@
 //! of captures, never an input, as many times as the step's stage says.
 
 use super::{
-    ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, PaceClock, StepPacing,
-    budget_now,
+    ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, PaceClock,
+    StepPacing, budget_now,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use actingcommand_contract::outcome::Outcome;
@@ -98,19 +98,33 @@ impl SampleRetries {
     /// sampling timeout and a retry is left, so the caller opens a new window and observes
     /// again without any input; the failure otherwise. A sampling timeout whose retries are
     /// spent carries `attempts`, `timeout_ms` and `stage`.
-    pub(super) fn retry<E>(
+    ///
+    /// Workflow #411 B1 (follow-up BT-B1-FIX): a timeout that cut its observation's recognition
+    /// short first closes that recognition on `runtime` as abandoned
+    /// ([`ContainedTaskTrace::RecognitionAbandoned`]), its outcome the timeout with the retries
+    /// made so far, `window` and the stage, so a retry's recognition never starts while it is
+    /// open.
+    pub(super) fn retry<R: ContainedTaskRuntime>(
         &mut self,
-        failure: ContainedTaskRunError<E>,
+        runtime: &mut R,
+        failure: ContainedTaskRunError<R::Error>,
         window: Duration,
-    ) -> Result<(), ContainedTaskRunError<E>> {
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let ContainedTaskRunError::Task(error) = failure else {
             return Err(failure);
         };
         let Some(code) = timeout_code(&error) else {
             return Err(error.into());
         };
+        let outcome = self.timeout_outcome(code, window);
+        if error.abandons_recognition() {
+            runtime
+                .record(ContainedTaskTrace::RecognitionAbandoned {
+                    outcome: outcome.clone(),
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+        }
         if self.left == 0 {
-            let outcome = self.timeout_outcome(code, window);
             return Err(error.with_values(outcome).into());
         }
         self.left -= 1;
