@@ -480,7 +480,7 @@ impl PolicyEvaluationError {
         }
     }
 
-    fn overflow(message: impl Into<String>) -> Self {
+    pub(crate) fn overflow(message: impl Into<String>) -> Self {
         Self {
             code: PolicyCode::PolicyEvaluationNumericOverflow.code(),
             message: message.into(),
@@ -1240,7 +1240,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     let (mut candidates, scored_affected) = apply_priority_selection(
         catalog,
         facts,
-        time,
+        &placement_context,
         candidates,
         &mut work,
         &target_policies,
@@ -2677,16 +2677,21 @@ struct StagedCandidate {
 /// Workflow #384 D2-S4: with `refreshing`, a candidate whose document read unknown realistic
 /// keys only is deferred and returned as affected, for the fact refresh to give its reasons;
 /// without it, it is deferred under `fact_refresh_unbound` (D2-S1).
+///
+/// Workflow #411 B16 part 2: a catalog whose tasks declare `reserves` runs the stage too; the
+/// document reads each reserve's fields, and the reserve gate holds the ranked candidates last
+/// (`apply_reserves`).
 #[allow(clippy::type_complexity)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
-    time: EvaluationTime,
+    context: &PlacementContext<'_>,
     candidates: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
     refreshing: bool,
 ) -> PolicyEvaluationResult<(Vec<PlacementCandidate>, Vec<AffectedCandidate>)> {
+    let time = context.time;
     let policy = catalog.selection_policy();
     // The utility fields join the `score_computed` detail only once the catalog can score or
     // value a task, so an offset-only evaluation keeps its detail byte for byte.
@@ -2697,7 +2702,17 @@ fn apply_priority_selection(
             .tasks
             .iter()
             .any(|task| task.value_milli.is_some());
-    if !utility_fields && facts.priority_offsets.is_empty() && target_policies.is_empty() {
+    let reserves_declared = catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .any(|task| task.reserves.is_some());
+    if !utility_fields
+        && facts.priority_offsets.is_empty()
+        && target_policies.is_empty()
+        && !reserves_declared
+    {
         return Ok((candidates, Vec::new()));
     }
     // Each instance's stored policy is resolved once: every target's pool and named tasks
@@ -2725,8 +2740,14 @@ fn apply_priority_selection(
     }
     let selection = catalog.catalog().tasks.priority_selection;
     let aging_ms_per_milli = selection.and_then(|selection| selection.aging_ms_per_milli);
+    // Workflow #411 B16 part 2: each candidate's reserves, by work index.
+    let reserves = if reserves_declared {
+        reserve_views(catalog, context, &candidates)?
+    } else {
+        BTreeMap::new()
+    };
     let scores = match policy {
-        Some(policy) => score_candidates(policy, facts, time, &candidates)?,
+        Some(policy) => score_candidates(policy, facts, time, &candidates, &reserves)?,
         None => vec![None; candidates.len()],
     };
     let mut ranked = Vec::with_capacity(candidates.len());
@@ -3108,7 +3129,136 @@ fn apply_priority_selection(
             ScoreDisposition::Neutral => ranked.push(candidate),
         }
     }
+    if reserves_declared {
+        ranked = apply_reserves(catalog, facts, context, ranked, work, &reserves)?;
+    }
     Ok((ranked, affected))
+}
+
+/// Workflow #411 B16 part 2: the reserve views of every candidate whose task declares
+/// `reserves`, by work index; a pool's amount is its projection at the evaluation, as the
+/// `resource_projection` predicate reads it.
+fn reserve_views(
+    catalog: &CompiledCatalog,
+    context: &PlacementContext<'_>,
+    candidates: &[PlacementCandidate],
+) -> PolicyEvaluationResult<BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>> {
+    let mut views = BTreeMap::new();
+    for candidate in candidates {
+        let task = catalog_task(catalog, &candidate.task_id)?;
+        let reserved = crate::resource_targets::reserve_views(task, |pool_id| {
+            let spec = context.pool_specs.get(pool_id).ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "compiled catalog references missing pool '{pool_id}'"
+                ))
+            })?;
+            let Some(snapshot) = context.pool_values.get(pool_id) else {
+                return Ok(None);
+            };
+            Ok(Some((
+                project_pool_value(spec, snapshot, context.time.unix_ms)?,
+                next_pool_projection_change(spec, snapshot, context.time.unix_ms)?,
+            )))
+        })?;
+        if let Some(reserved) = reserved {
+            views.insert(candidate.work_index, reserved);
+        }
+    }
+    Ok(views)
+}
+
+fn catalog_task<'a>(
+    catalog: &'a CompiledCatalog,
+    task_id: &str,
+) -> PolicyEvaluationResult<&'a TaskSpec> {
+    catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| {
+            PolicyEvaluationError::invalid(format!(
+                "candidate task '{task_id}' is missing from the catalog"
+            ))
+        })
+}
+
+/// Workflow #411 B16 part 2: the reserve gate over the ranked candidates
+/// (`crate::resource_targets::hold_reserves`), in allocation order. A held candidate is deferred
+/// with its `resource_reserve_insufficient` reason, and wakes at the next step of a regenerating
+/// pool; it takes no part in the allocation.
+fn apply_reserves(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    context: &PlacementContext<'_>,
+    ranked: Vec<PlacementCandidate>,
+    work: &mut [TaskWork],
+    reserves: &BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
+) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
+    // The allocation order (the round's own sort), without moving the candidates.
+    let mut order = (0..ranked.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        let (left, right) = (&ranked[*left], &ranked[*right]);
+        right
+            .promoted
+            .cmp(&left.promoted)
+            .then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
+            .then_with(|| right.affinity.cmp(&left.affinity))
+            .then_with(|| left.tie_breaker.cmp(&right.tie_breaker))
+            .then_with(|| left.task_id.cmp(&right.task_id))
+            .then_with(|| left.instance_id.cmp(&right.instance_id))
+    });
+    let tasks = &catalog.catalog().tasks.tasks;
+    let pools = reserves
+        .values()
+        .flatten()
+        .map(|view| view.pool_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let unshown =
+        crate::resource_targets::unshown_consumption(tasks, &facts.tasks, &pools, |pool_id| {
+            context
+                .pool_values
+                .get(pool_id)
+                .map(|snapshot| snapshot.observed_at_unix_ms)
+        })?;
+    let candidates = order
+        .iter()
+        .map(|&index| -> PolicyEvaluationResult<_> {
+            let candidate = &ranked[index];
+            Ok(crate::resource_targets::ReserveCandidate {
+                task: catalog_task(catalog, &candidate.task_id)?,
+                instance_id: candidate.instance_id.as_str(),
+                effective_milli: candidate.rank.effective_milli,
+                views: reserves.get(&candidate.work_index).map(Vec::as_slice),
+            })
+        })
+        .collect::<PolicyEvaluationResult<Vec<_>>>()?;
+    let mut held = order
+        .into_iter()
+        .zip(crate::resource_targets::hold_reserves(
+            &candidates,
+            &unshown,
+        )?)
+        .filter_map(|(index, hold)| hold.map(|hold| (index, hold)))
+        .collect::<BTreeMap<_, _>>();
+    let mut admitted = Vec::with_capacity(ranked.len());
+    for (index, candidate) in ranked.into_iter().enumerate() {
+        let Some(hold) = held.remove(&index) else {
+            admitted.push(candidate);
+            continue;
+        };
+        let task_work = &mut work[candidate.work_index];
+        task_work.state = SchedulingDecisionState::Deferred;
+        task_work.reasons.push(hold.reason);
+        if let Some(wake) = hold
+            .wake_unix_ms
+            .filter(|wake| *wake > context.time.unix_ms)
+        {
+            task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
+        }
+    }
+    Ok(admitted)
 }
 
 /// Runs the selection document once per instance over that instance's eligible candidates
@@ -3121,6 +3271,7 @@ fn score_candidates(
     facts: &EvaluationFacts,
     time: EvaluationTime,
     candidates: &[PlacementCandidate],
+    reserves: &BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
 ) -> PolicyEvaluationResult<Vec<Option<CandidateScore>>> {
     let mut by_instance: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (index, candidate) in candidates.iter().enumerate() {
@@ -3148,7 +3299,15 @@ fn score_candidates(
         };
         let selection_candidates = indices
             .iter()
-            .map(|&index| selection_candidate(&candidates[index], &projection.fields))
+            .map(|&index| {
+                selection_candidate(
+                    &candidates[index],
+                    &projection.fields,
+                    reserves
+                        .get(&candidates[index].work_index)
+                        .map(Vec::as_slice),
+                )
+            })
             .collect::<PolicyEvaluationResult<Vec<_>>>()?;
         let collected = actingcommand_selection_policy::evaluate_collect(
             policy,
@@ -3393,9 +3552,13 @@ fn selection_scalar(value: &FactValue) -> Result<ScalarValue, UnknownReason> {
     }
 }
 
+/// Workflow #411 B16 part 2: a candidate whose task declares reserves also carries, per reserved
+/// pool, `task.consumes.<pool>` and, while the pool's amount is known, `task.after.<pool>` and
+/// `task.reserve_gap.<pool>`.
 fn selection_candidate(
     candidate: &PlacementCandidate,
     instance_fields: &BTreeMap<String, ScalarValue>,
+    reserves: Option<&[crate::resource_targets::ReserveView]>,
 ) -> PolicyEvaluationResult<Candidate> {
     let aging_ms = i64::try_from(candidate.rank.aging_ms).map_err(|_| {
         PolicyEvaluationError::overflow(format!(
@@ -3428,6 +3591,11 @@ fn selection_candidate(
         ),
     ] {
         fields.insert(name.to_owned(), value);
+    }
+    for view in reserves.into_iter().flatten() {
+        for (name, value) in view.fields()? {
+            fields.insert(name, ScalarValue::Integer(value));
+        }
     }
     Ok(Candidate {
         candidate_id: format!("{}@{}", candidate.task_id, candidate.instance_id),

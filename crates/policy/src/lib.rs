@@ -52,4 +52,8 @@ mod tests {
     // Workflow #411 B41 (policy keys 60 to 63): a chain step that hands over on its page goes
     // first.
     mod gate_411_b41;
+
+    // Workflow #411 B16 part 2, slice BT-B16b (policy keys 64 to 66): a task's reserves gate it,
+    // and of two tasks that fit alone but not together the higher score runs first.
+    mod gate_411_bt_b16b;
 }

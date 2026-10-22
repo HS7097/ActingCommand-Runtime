@@ -557,4 +557,9 @@ outcome_keys! {
     box_height: integer,
     layer_outcome_key: name,
     // ---- Workflow #411 E4: end ----
+    // ---- Workflow #411 B16 part 2 (task reserves, contracts/scheduling/README.md): begin ----
+    pool_id: name,
+    reserve_at_least: integer,
+    amount_after: integer,
+    // ---- Workflow #411 B16 part 2: end ----
 }
