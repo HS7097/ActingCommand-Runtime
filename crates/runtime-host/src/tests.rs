@@ -191,6 +191,9 @@ mod gate_383_ao1;
 // #411 A51 (host key 130): a ledger read the writer does not answer in time latches nothing,
 // and the first latched fatal reaches the daemon's log at once.
 mod gate_411_a51;
+// P0-LO: the start's ledger open runs under its configured deadline, and an open slower than
+// its warning line gives `ledger_open_slow`.
+mod gate_p0_lo;
 // Workflow #383 AO-4q, test row AO4-c: status reads append no ledger record.
 mod gate_383_ao4q;
 // Workflow #383 SH-1, register §1.18: the reserved single-touch path drag was refused; its test

@@ -1138,6 +1138,8 @@ pub struct RuntimeHost {
     owner_released_by_exit: Option<crate::PriorOwnerReleasedByExit>,
     /// Workflow #378 A6a (model section 7.4, N1): `ledger_opened` with the open's phases.
     ledger_opened: Outcome,
+    /// P0-LO: `ledger_open_slow` when the open's measured time exceeded its warning line.
+    ledger_open_slow: Option<Outcome>,
     /// Workflow #361 B1: one outcome per scheduling pause this start restored or dropped
     /// (Workflow #378 A6a: was one line each).
     scheduling_pause_restore: Vec<Outcome>,
@@ -1286,10 +1288,14 @@ impl RuntimeHost {
         );
         let artifacts =
             Arc::new(ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?);
+        // Workflow #383 AO-1, P0-LO: the `ledger_observer` section in effect, read once; the
+        // open's deadline and its warning line come from it, the writer's failure plan below too.
+        let observer = ledger_observer_section(&config)?;
         // At startup these limits bound only acquire, a fresh root's material listing and
         // the writer open's deadline, plus the deadlines FrameRetention and prior-epoch
-        // recovery each take afresh; they never bound the length of the history.
-        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        // recovery each take afresh; they never bound the length of the history. P0-LO: their
+        // deadline is `ledger_observer.open_timeout_ms`; the other limits keep their defaults.
+        let limits = ledger_open_limits(&observer);
         let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
             &config.state_root,
             fresh_storage,
@@ -1344,14 +1350,15 @@ impl RuntimeHost {
         // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9, §12 step 2): the writer reads
         // back and retries a failed write by `ledger_observer.*`, dumps and stops when it gives
         // up, and the open imports a dump an earlier run left before any new record.
-        let plan = ledger_failure_plan(&config, owner_epoch, started_at_unix_ms)?;
+        let plan = ledger_failure_plan(&config, &observer, owner_epoch, started_at_unix_ms)?;
         let opened = maintenance.open_writer_timed(
             Arc::clone(&database),
             ledger_owner,
             Some(plan),
             &mut timing,
         );
-        let timeout_ms = limits.timeout_seconds.saturating_mul(1000);
+        // P0-LO: the open's values report the configured deadline.
+        let timeout_ms = observer.open_timeout_ms;
         let ledger = opened.map_err(|error| {
             RuntimeHostError::relayed_fatal(
                 error.code(),
@@ -1366,6 +1373,8 @@ impl RuntimeHost {
             ))
         })?;
         let ledger_opened = ledger_open_outcome(HostCode::LedgerOpened, &timing, timeout_ms);
+        let ledger_open_slow =
+            ledger_open_slow_outcome(&timing, timeout_ms, observer.open_warn_ratio_milli);
         let recovery = limits
             .deadline()
             .map_err(|error| {
@@ -1754,6 +1763,7 @@ impl RuntimeHost {
             info_path,
             owner_released_by_exit: released_by_exit,
             ledger_opened,
+            ledger_open_slow,
             scheduling_pause_restore: Vec::new(),
             emulator_autostart_reports: shared.emulator_autostart_reports(),
             shared: Some(Arc::clone(&shared)),
@@ -2257,6 +2267,13 @@ impl RuntimeHost {
     /// this start's ledger open, which actingd writes as its daemon line.
     pub fn ledger_opened(&self) -> &Outcome {
         &self.ledger_opened
+    }
+
+    /// P0-LO: `ledger_open_slow` (warning) when this start's ledger open took longer than
+    /// `ledger_observer.open_warn_ratio_milli` thousandths of its deadline; actingd writes it as
+    /// a daemon line right after `ledger_opened`.
+    pub fn ledger_open_slow(&self) -> Option<&Outcome> {
+        self.ledger_open_slow.as_ref()
     }
 
     /// Workflow #369 S6c (model-369-queue H-5): enqueues one autostart claim per configured
@@ -5488,6 +5505,40 @@ pub(crate) fn ledger_open_outcome(
         .timeout_ms(timeout_ms)
 }
 
+/// P0-LO: `ledger_open_slow` (warning) when the open's measured time, the sum of the phases
+/// [`actingcommand_ledger::LedgerOpenTiming`] reports, exceeds `timeout_ms` × `ratio_milli` /
+/// 1000; `None` otherwise.
+pub(crate) fn ledger_open_slow_outcome(
+    timing: &actingcommand_ledger::LedgerOpenTiming,
+    timeout_ms: u64,
+    ratio_milli: u64,
+) -> Option<Outcome> {
+    let elapsed_ms = timing
+        .sql_read_ms
+        .saturating_add(timing.verify_ms)
+        .saturating_add(timing.material_ms)
+        .saturating_add(timing.restore_ms);
+    let warn_ms = timeout_ms.saturating_mul(ratio_milli) / 1000;
+    (elapsed_ms > warn_ms).then(|| {
+        Outcome::new(HostCode::LedgerOpenSlow)
+            .elapsed_ms(elapsed_ms)
+            .timeout_ms(timeout_ms)
+            .event_count(timing.events)
+    })
+}
+
+/// P0-LO: the maintenance limits of the start's ledger open, whose deadline is
+/// `ledger_observer.open_timeout_ms` (in whole seconds, rounded up, as the limits count it); the
+/// other limits keep their defaults.
+fn ledger_open_limits(
+    section: &actingcommand_runtime_config::LedgerObserverConfig,
+) -> actingcommand_runtime_database::MaintenanceLimits {
+    actingcommand_runtime_database::MaintenanceLimits {
+        timeout_seconds: section.open_timeout_ms.div_ceil(1000),
+        ..actingcommand_runtime_database::MaintenanceLimits::default()
+    }
+}
+
 /// Workflow #390 DISC-1: the `startup_discovery` section the provider startup reads once (the
 /// defaults file's for a host started without actingd's manifest), before any instruction value
 /// is restored.
@@ -5511,16 +5562,12 @@ fn startup_discovery_config(
     .map_err(refused)
 }
 
-/// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure
-/// plan from the configuration in effect (`ledger_observer.*`; the defaults file's values for a
-/// host started without actingd's manifest): its write policy, its dump file in the state root
-/// and in `%LOCALAPPDATA%\ActingCommand\ledger-dumps` when the variable is set, and the sink
-/// that stops the Runtime.
-fn ledger_failure_plan(
+/// Workflow #383 AO-1 (`contracts/ledger-observer.md` §15): the `ledger_observer` section in
+/// effect (the defaults file's values for a host started without actingd's manifest), read and
+/// checked whole once at start, before the ledger opens.
+fn ledger_observer_section(
     config: &RuntimeHostConfig,
-    owner_epoch: actingcommand_contract::OwnerEpoch,
-    started_at_unix_ms: u64,
-) -> RuntimeHostResult<actingcommand_ledger::LedgerFailurePlan> {
+) -> RuntimeHostResult<actingcommand_runtime_config::LedgerObserverConfig> {
     let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
         RuntimeHostError::fatal(
             failure.failure_code(),
@@ -5534,10 +5581,22 @@ fn ledger_failure_plan(
             .map_err(refused)?,
         None => actingcommand_runtime_config::EffectiveConfig::default(),
     };
-    let section = effective.ledger_observer().map_err(refused)?;
+    effective.ledger_observer().map_err(refused)
+}
+
+/// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure
+/// plan from the `ledger_observer` section in effect: its write policy, its dump file in the
+/// state root and in `%LOCALAPPDATA%\ActingCommand\ledger-dumps` when the variable is set, and
+/// the sink that stops the Runtime.
+fn ledger_failure_plan(
+    config: &RuntimeHostConfig,
+    section: &actingcommand_runtime_config::LedgerObserverConfig,
+    owner_epoch: actingcommand_contract::OwnerEpoch,
+    started_at_unix_ms: u64,
+) -> RuntimeHostResult<actingcommand_ledger::LedgerFailurePlan> {
     let policy = actingcommand_ledger::LedgerWritePolicy::new(
         section.write_attempts,
-        section.write_retry_backoff_ms,
+        section.write_retry_backoff_ms.clone(),
         section.flush_attempt_stall_ms,
         section.health_probe_interval_ms,
         section.dump_max_bytes,
@@ -5598,7 +5657,7 @@ fn ledger_failure_plan(
             flush_batch_records: section.flush_batch_records,
             flush_batch_records_busy: section.flush_batch_records_busy,
             request_index_records: section.request_index_records,
-            workbench_patterns: section.tag_workbench_patterns,
+            workbench_patterns: section.tag_workbench_patterns.clone(),
         }),
     )
 }

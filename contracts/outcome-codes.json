@@ -43614,6 +43614,29 @@
       "common_causes": "A ledger open or verify that failed partway.",
       "handling": "None by itself; handle the failure it is attached to."
     },
+    "ledger_open_slow": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "elapsed_ms": "required",
+        "timeout_ms": "required",
+        "event_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.11",
+      "description": "The start's ledger open succeeded but took longer than ledger_observer.open_warn_ratio_milli thousandths of its deadline ledger_observer.open_timeout_ms (P0-LO): elapsed_ms is the open's measured time, the sum of the phases ledger_opened reports (SQL read, verify, material and restore), timeout_ms the deadline and event_count the events read. actingd writes it as a daemon line right after ledger_opened, at most once per start.",
+      "common_causes": "A ledger that has grown large, a slow volume, or a start while the machine is busy (for example several emulators starting at boot).",
+      "handling": "TBD"
+    },
     "ledger_opened": {
       "category": "info",
       "ladder_class": "none",

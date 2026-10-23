@@ -9,6 +9,26 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## Unreleased (v0.12.11)
+
+账本打开时限进入配置（P0-LO）：启动时打开账本的时限由固定 120 秒改为配置键
+`ledger_observer.open_timeout_ms`，默认 600 秒（可设 10 到 600 秒，只在启动时读取）。
+打开的实际耗时超过该时限的 `ledger_observer.open_warn_ratio_milli` 千分之（默认 500，
+即一半）时，actingd 紧跟 `ledger_opened` 写一条警告 `ledger_open_slow`（`elapsed_ms`、
+`timeout_ms`、`event_count`）。原因：账本持续增长，打开耗时随之增长，按原来 120 秒的时限，
+开机时的打开很快会超时，Runtime 就无法启动。`actingd-config` 升到 [5, 10]；没有写这两个键的
+配置文件照常读取。
+
+Ledger open deadline in configuration (P0-LO): the deadline of the ledger open at
+start is the configuration key `ledger_observer.open_timeout_ms`, default 600 s
+instead of the fixed 120 s (10 to 600 s, read only at start). When the open takes
+longer than `ledger_observer.open_warn_ratio_milli` thousandths of it (default 500,
+half), actingd writes the warning `ledger_open_slow` (`elapsed_ms`, `timeout_ms`,
+`event_count`) right after `ledger_opened`. Why: the ledger keeps growing and the
+open's time with it; under the old 120 s deadline an open at boot would soon run
+out of time and the Runtime would not start. `actingd-config` rises to [5, 10]; a
+configuration that names neither key is read as before.
+
 The Windows `x86_64-pc-windows-msvc` release-profile Runtime artifact includes the
 resident `actingcommand-actingd.exe`, the `actingctl.exe` command client, an
 editable configuration template, `INSTALL.md` and these notes. The manifest's
