@@ -431,6 +431,8 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.status_gap_window_ms` | milliseconds, at least 1 | `86400000` | yes |
 | `ledger_observer.read_budget_ms` (#411 A51) | milliseconds `1..=9999` | `1000` | no |
 | `ledger_observer.close_timeout_ms` (#411 A51) | milliseconds, above `read_budget_ms` | `60000` | no |
+| `ledger_observer.open_timeout_ms` (P0-LO) | milliseconds `10000..=600000` | `600000` | no |
+| `ledger_observer.open_warn_ratio_milli` (P0-LO) | integer `100..=1000` (thousandths) | `500` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -444,6 +446,18 @@ the tiers rise strictly within (0, 1] (`tier1_ratio` above 0 and below `tier2_ra
 `write_retry_backoff_ms` lists exactly `write_attempts` waits; the tag lists hold non-empty texts
 without spaces or control characters; `read_budget_ms` lies below the writer's 10 s reply limit
 and `close_timeout_ms` above `read_budget_ms` (#411 A51). A ratio or a wait of the wrong type is `wrong_type`.
+
+P0-LO (Runtime v0.12.11, `actingd-config` revision 10): `open_timeout_ms` is the deadline of the
+start's ledger open (it was a fixed 120 s): the host's own open takes it as its maintenance
+deadline, in whole seconds rounded up, and so does the frame retention recovery right after the
+open; the offline `ledger-maintenance` and `unlock-owner` keep their own 120 s.
+`ledger_opened` and `ledger_open_measured` report it as `timeout_ms`. When the open's measured
+time (the sum of the phases `ledger_opened` reports) exceeds `open_timeout_ms` ×
+`open_warn_ratio_milli` / 1000, actingd writes one warning `ledger_open_slow` (`elapsed_ms`,
+`timeout_ms`, `event_count`) right after `ledger_opened`
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). Both keys
+are read when the ledger opens (not settable); a value outside its range is `config_value_invalid`
+(`out_of_range`).
 
 ## The `device_link` section (Workflow #398 RD-2)
 

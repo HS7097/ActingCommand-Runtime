@@ -162,7 +162,9 @@ open, the started daemon writes the daemon lines of `ledger_opened` (info) on
 stderr, never as a Ledger event (Workflow #378 A6a; it replaced the stdout line
 `actingd ledger_open …`), with the values `event_count`, `artifact_count`,
 `artifact_bytes`, `worker_count`, `sql_read_ms`, `verify_ms`, `material_ms`,
-`restore_ms` and `timeout_ms` (the deadline). A failed open carries the same
+`restore_ms` and `timeout_ms` (the deadline; from P0-LO the configured
+`ledger_observer.open_timeout_ms`, and a slow open's warning `ledger_open_slow` follows
+it, [ledger-observer.md](ledger-observer.md) §15). A failed open carries the same
 values as the `note` link `ledger_open_measured` of its failure. Material is never
 read, so `artifact_count`, `artifact_bytes`, `worker_count` and `material_ms` are
 always 0. A failed formal `verify` carries the same `ledger_open_measured` note
