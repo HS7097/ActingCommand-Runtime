@@ -5,7 +5,9 @@
 //! the keys only 0.12.x slices read included (order-v012 R4): the write path's retries, stall
 //! limit, probe period and dump limit take effect with AO-1; the capture queue's budget, tiers,
 //! batches and request ring with AO-2; the tag lists with AO-2 and AO-5; the probes' periods,
-//! sample size, lag threshold and gap window with AO-8.
+//! sample size, lag threshold and gap window with AO-8. P0-LO (`actingd-config` revision 10) adds
+//! the deadline of the start's ledger open and the share of it above which the open writes the
+//! warning `ledger_open_slow`; both are read when the ledger opens.
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -71,6 +73,11 @@ pub const TAG_REOBSERVE_PREFIXES: &str = "ledger_observer.tag.reobserve_prefixes
 pub const READ_BUDGET_MS: &str = "ledger_observer.read_budget_ms";
 /// #411 A51: how long the Runtime's close waits for the ledger writer, in milliseconds.
 pub const CLOSE_TIMEOUT_MS: &str = "ledger_observer.close_timeout_ms";
+/// P0-LO: the deadline of the ledger open at start, in milliseconds.
+pub const OPEN_TIMEOUT_MS: &str = "ledger_observer.open_timeout_ms";
+/// P0-LO: the share of `open_timeout_ms`, in thousandths, above which the open's measured time
+/// writes the warning `ledger_open_slow`.
+pub const OPEN_WARN_RATIO_MILLI: &str = "ledger_observer.open_warn_ratio_milli";
 
 /// #411 A51: how long a caller waits for one reply of the ledger writer (the ledger's
 /// `GlobalLedger::REPLY_TIMEOUT`, 10 s). A read's budget stays below it, so a read stops before
@@ -81,6 +88,18 @@ pub const WRITER_REPLY_TIMEOUT_MS: i64 = 10_000;
 const READ_BUDGET_RANGE: KeyRange = KeyRange::Integer {
     min: 1,
     max: WRITER_REPLY_TIMEOUT_MS - 1,
+};
+
+/// P0-LO: the open's deadline lies within 10 s and the 600 s the maintenance limits accept.
+const OPEN_TIMEOUT_RANGE: KeyRange = KeyRange::Integer {
+    min: 10_000,
+    max: 600_000,
+};
+
+/// P0-LO: the warning line lies within a tenth of the deadline and the deadline itself.
+const OPEN_WARN_RATIO_RANGE: KeyRange = KeyRange::Integer {
+    min: 100,
+    max: 1_000,
 };
 
 /// The largest attempt count a configuration may name: the write path counts in `u32`.
@@ -132,6 +151,13 @@ pub struct LedgerObserverFile {
     read_budget_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     close_timeout_ms: Option<Value>,
+    // Interface anchor `actingd-config` revision 10 (contracts/component-interfaces.md): a Runtime
+    // before P0-LO refuses a file that names either, because the section denies unknown members;
+    // a file that names neither keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_timeout_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_warn_ratio_milli: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -337,6 +363,18 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // #411 A51: read when the ledger opens, as the writer's other limits are.
     row_since(READ_BUDGET_MS, READ_BUDGET_RANGE, "A51", "0.12.9"),
     row_since(CLOSE_TIMEOUT_MS, POSITIVE, "A51", "0.12.9"),
+    // P0-LO: the start's ledger open reads both before any instruction value is restored.
+    row_since(OPEN_TIMEOUT_MS, OPEN_TIMEOUT_RANGE, "P0-LO", "0.12.11"),
+    KeyRow {
+        name: KeyName::Exact(OPEN_WARN_RATIO_MILLI),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: OPEN_WARN_RATIO_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "P0-LO",
+        since: "0.12.11",
+    },
 ];
 
 /// A milliseconds key read when the ledger opens, with the release that added its row.
@@ -391,6 +429,11 @@ pub struct LedgerObserverConfig {
     /// #411 A51.
     pub read_budget_ms: u64,
     pub close_timeout_ms: u64,
+    /// P0-LO: the deadline of the start's ledger open.
+    pub open_timeout_ms: u64,
+    /// P0-LO: an open whose measured time exceeds `open_timeout_ms` × this / 1000 writes
+    /// `ledger_open_slow`.
+    pub open_warn_ratio_milli: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -551,6 +594,8 @@ impl LedgerObserverConfig {
             tag_reobserve_prefixes: reader.keys(TAG_REOBSERVE_PREFIXES)?,
             read_budget_ms,
             close_timeout_ms,
+            open_timeout_ms: reader.duration(OPEN_TIMEOUT_MS)?,
+            open_warn_ratio_milli: reader.count(OPEN_WARN_RATIO_MILLI)?,
         })
     }
 }

@@ -821,6 +821,11 @@ actingcommand_contract::outcome_codes! {
         /// Info. What a ledger open or a maintenance read measured before it failed: the same
         /// keys as `ledger_opened`, as a `note` link of the failure (N1).
         LedgerOpenMeasured => "ledger_open_measured": info / none,
+        /// Warning (P0-LO). The start's ledger open took longer than
+        /// `ledger_observer.open_warn_ratio_milli` thousandths of its deadline (keys `elapsed_ms`:
+        /// the sum of the open's phases, `timeout_ms`: the deadline, `event_count`); actingd
+        /// writes it as a daemon line right after `ledger_opened`.
+        LedgerOpenSlow => "ledger_open_slow": warning / none,
         /// Info. The start released the previous owner, whose process had exited (keys
         /// `owner_pid`, `at_unix_ms`: when that owner started).
         OwnerReleased => "owner_released": info / none,

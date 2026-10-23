@@ -622,6 +622,9 @@ pub(super) fn open_formal(
     timing: &mut LedgerOpenTiming,
 ) -> GlobalLedgerResult<SqliteLedgerStore> {
     let started = Instant::now();
+    // P0-LO: a test gate may make this open slower by a delay it does not wait out.
+    #[cfg(any(test, feature = "test-hooks"))]
+    let (started, deadline) = crate::open_delay::slowed(database.root(), started, deadline);
     let raw = read_formal_snapshot(&database, deadline);
     timing.sql_read_ms = elapsed_ms(started);
     let raw = raw?;

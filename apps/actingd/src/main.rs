@@ -402,6 +402,10 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
     // the host closes.
     let autostart_reports = host.emulator_autostart_reports();
     let mut lines = daemon_lines(host.ledger_opened(), None);
+    // P0-LO: an open slower than its warning line is one warning right after `ledger_opened`.
+    if let Some(slow) = host.ledger_open_slow() {
+        lines.push_str(&daemon_lines(slow, None));
+    }
     // Slice #315-B2c-2: the same decision the Ledger records as a lifecycle observation.
     if let Some(released) = host.owner_released_by_exit() {
         lines.push_str(&daemon_lines(

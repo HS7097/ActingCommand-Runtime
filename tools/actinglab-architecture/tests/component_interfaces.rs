@@ -26,7 +26,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   §1.148): revision 8 adds the optional `recovery_ladder.fence_recheck` member; revisions 5
 ///   to 7 are still read, so [5, 8]. The 0.12.x release after v0.12.9 (#411 wave 3, register
 ///   §1.168 A35-5): revision 9 adds that release's configuration keys; revisions 5 to 8 are
-///   still read, so [5, 9].
+///   still read, so [5, 9]. P0-LO (v0.12.11): revision 10 adds
+///   `ledger_observer.open_timeout_ms` and `ledger_observer.open_warn_ratio_milli`; revisions 5
+///   to 9 are still read, so [5, 10].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -40,7 +42,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused.
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 9]),
+    ("actingd-config", [5, 10]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 4]),
