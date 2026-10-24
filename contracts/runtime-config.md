@@ -87,7 +87,8 @@ options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file na
 only when it is `true`, and only the installer's Lab transaction writes them. Until U-6 they are
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
 `startup_discovery` section below (default `file`, not settable, read once at assembly).
-Workflow #406 T12's rows: the `touch` section below (default `file`, settable). A
+Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
+the `execution` section below (default `file`, settable). A
 manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -607,6 +608,43 @@ A value outside its range is `config_value_invalid` (`out_of_range`, with `range
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
 `wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
 a restart adds the range's maximum (745 s).
+
+## The `execution` section (PERF-B1, Workflow #407 B1)
+
+PERF-B1 ([v012-register.md](v012-register.md) §1.177; [resource-declarations.md](resource-declarations.md),
+"Capture cadence"): the keys the contained-task kernel takes from the configuration, so far its
+capture cadence (`execution.capture.*`), how often a run captures while a step waits for a page; the
+planned `execution.defaults.*` (register §5) would join the section. A package
+declares its capture interval for every wait (`control.capture_interval_ms`, 50 ms when it declares
+none) and for one step's wait (`expect_after.interval_ms`; a `linear_steps` transition's
+`interval_ms`). The run refuses a package that declares an interval above
+`capture.max_interval_ms` before its first capture, with the code admission gives a broken
+interval (`contained_task_control_invalid`; `contained_task_linear_invalid`,
+`reason=transition_interval`, for a transition); admission itself bounds an interval only by the
+key's range maximum. While a step waits for a page (the page wait and the confirmation of the
+page-graph path, the waits of a `linear_steps` step), each frame unchanged from the wait's frame
+before it by the Runtime's frame-change measure (#411 B12, the whole frame) doubles the next pause,
+up to `capture.idle_ceiling_ms` or the declared interval, whichever is longer, and the first changed frame
+returns it to the declared interval; the pause is still cut at the wait's remaining time and the
+task's deadline. Host-wide. The host hands the three keys to the kernel with each step's pacing, so
+an instruction may change each while the Runtime runs: the ceiling takes effect at the next run, the
+back-off at the next step. A runtime without the configuration (offline simulation, fixtures) uses
+the default ceiling and no back-off. `actingd-config` revision 11
+([component-interfaces.md](component-interfaces.md)) adds the section; a file that does not name it
+keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `execution.capture.max_interval_ms` | milliseconds `5000..=1800000`, the largest capture interval a package may declare (at least the bound every package was held to before PERF-B1; at most the longest wait a step may declare) | `60000` | yes |
+| `execution.capture.backoff_enabled` | boolean, whether a step's wait for a page lengthens its pause over unchanged frames | `true` | yes |
+| `execution.capture.idle_ceiling_ms` | milliseconds `50..=60000`, the longest pause the back-off reaches unless the declared interval is longer | `5000` | yes |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at start, in `check-config` and in `ConfigureSettings`; a value of another type is
+`wrong_type`. The rows are those of `config.parameters.execution`. Each run's effective
+intervals stay where they were recorded (`EffectiveTaskTiming.capture_interval`, each operation's
+`interval`); a pause the back-off lengthened is the span of its wait boundary
+(`page_recognition_wait`, `postcondition_wait`).
 
 ## Facts
 

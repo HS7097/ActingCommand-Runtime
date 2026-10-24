@@ -79,7 +79,7 @@ one operation is at fault; an existing check keeps its existing code.
 | `target_page` names one page, equal to the last operation's destination | `target_page` |
 | a `page` transition names a page other than its operation's `from` and destination | `transition_page` |
 | a `page` transition's `timeout_ms` is in `1..=1800000` | `transition_timeout` |
-| a `page` transition's `interval_ms` is in `1..=5000` | `transition_interval` |
+| a `page` transition's `interval_ms` is in `1..=1800000`; a run refuses one above the configured ceiling `execution.capture.max_interval_ms` (default 60000) before its first capture, with the same reason (PERF-B1, [resource-declarations.md](resource-declarations.md), "Capture cadence") | `transition_interval` |
 | a `window` has `0 <= min_ms <= max_ms`, `1 <= max_ms <= 1800000`, and `min_ms` below the task timeout | `transition_window` |
 | a `scheduling_outcome`, when declared, has no designated operation and no designated effect set (Workflow #390 OUT-2) | `designated_operation` |
 | every terminal page of that outcome is the target page | `terminal_page` |

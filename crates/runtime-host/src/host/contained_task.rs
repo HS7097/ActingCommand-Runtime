@@ -3642,6 +3642,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// extra wait rounds in effect (0 under `observe`) and the pre-input wait
     /// `pre_input_wait_base_ms × (f − 1000) / 1000`, whose base is read only for a factor above
     /// 1000.
+    ///
+    /// PERF-B1 (Workflow #407 B1): and the `execution.capture` keys in effect, the ceiling of a
+    /// declared capture interval and the back-off of the step's waits for a page.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
@@ -3659,12 +3662,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } else {
                 0
             };
+        // PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, with the step.
+        let capture_cadence = self
+            .host
+            .capture_cadence()
+            .map_err(RequestFailure::poison_without_terminal)?;
         let now = self
             .pacing
             .reads_clock(effective.factor_milli)
             .then(|| self.monotonic_now());
         self.pacing.hand(effective.factor_milli, now);
-        Ok(effective.step_pacing(retries, pre_input_wait_base_ms))
+        Ok(effective
+            .step_pacing(retries, pre_input_wait_base_ms)
+            .with_capture_cadence(capture_cadence))
     }
 
     /// #385 P-k (PERF v1.4.2 §5.4 item 1, register P5): a wait of the run started one more
