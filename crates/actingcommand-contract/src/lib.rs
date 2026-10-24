@@ -12,6 +12,8 @@ pub mod agent;
 pub mod backend_open;
 pub mod candidate_projection;
 pub mod capture_geometry;
+// Workflow #357 DB-1: canonical JSON, moved here from selection-policy (M-357a v1.1 §2.2).
+pub mod canonical;
 pub mod codes;
 pub mod device_binding;
 pub mod emulator;

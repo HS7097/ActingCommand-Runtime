@@ -758,7 +758,11 @@ pub fn read_standard_pack_root(
     game: &str,
 ) -> Result<Option<StandardPackRoot>, StandardPackRootIssue> {
     let Some(bundle) = files.bundle else {
-        if files.pages.is_none() && files.interrupts.is_none() && files.navigation.is_none() {
+        if files.pages.is_none()
+            && files.interrupts.is_none()
+            && files.navigation.is_none()
+            && !files.tables
+        {
             return Ok(None);
         }
         return Err(StandardPackRootIssue::new(

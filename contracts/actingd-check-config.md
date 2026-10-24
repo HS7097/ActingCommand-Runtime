@@ -710,6 +710,23 @@ package admitted, and reports `standard_packs`:
 `root_files` lists the root files present: `bundle.json`, `pages.json`,
 `interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, which is checked
 against `pages.json` and the registry as a run's preparation checks it.
+
+Workflow #357 DB-1 (model M-357a v1.1 §2.3; `v012-register.md` §1.65 TB3): each
+sound game root also lists `tables`, its `tables/` files in file name order as
+the Runtime's startup reads them (`package-reference.md`, "Standard package
+root", "Tables"), each `{table_id, path, row_count?, problem?, expired_columns?}`:
+`row_count` when the table is read; `problem` (`standard_pack_table_invalid` or
+`standard_pack_table_unreadable`) when it is refused; `expired_columns` when a
+column's `valid_until_unix_s` has passed on the system clock. `tables` is empty
+without a `tables/` directory and `null` for a broken root, whose tables are not
+read. Each refused table adds its problem as a `note` link, each expired column
+one `standard_pack_table_column_expired` (warning; `game`, `path`,
+`table_column`), and a `tables/` that cannot be listed its
+`standard_pack_table_unreadable`; the outcome stays `check_config_passed`:
+
+```json
+{"game":"neutral","bundle_version":4,"pack_count":1,"root_files":["bundle.json"],"problem":null,"tables":[{"table_id":"unit_scores","path":"D:/runtime/packages/neutral/tables/unit_scores.json","row_count":3,"expired_columns":["secondary_milli"]},{"table_id":"unit_ranks","path":"D:/runtime/packages/neutral/tables/unit_ranks.json","problem":{"code":"standard_pack_table_invalid","category":"error","values":{"operation":"standard_pack_read","game":"neutral","path":"D:/runtime/packages/neutral/tables/unit_ranks.json","standard_pack_problem":"table_row_duplicate","json_pointer":"/rows/1"}}}]}
+```
 A directory that holds none of the root files is not a game root and is not
 listed. A broken game root is listed with its `problem` and adds that problem as
 one `note` link of the outcome; the outcome stays `check_config_passed`, because

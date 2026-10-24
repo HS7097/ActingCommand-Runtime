@@ -41,6 +41,7 @@ and `operation explain` keep their existing behavior.
 | `declaration-exclusions.json` (repository root only) | Resource tooling's `DeclarationExclusions::parse` (`actingcommand.declaration-exclusions.v1`, Workflow #396 TOOL-2); reported with family `declaration_exclusions` |
 | `interrupts.json` (repository root only) | The shared interrupt pages (`actingcommand.interrupts.v1`, Workflow #373 NAV-6): `parse_standard_pack_interrupts` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_interrupts` |
 | `navigation.json` (repository root only) | The edges and the recovery chain (`actingcommand.navigation.v1`, Workflow #373 NAV-5): `parse_standard_pack_navigation` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_navigation` |
+| `tables/<table_id>.json` (repository root's `tables/` only) | A shared table (`actingcommand.table.v1`, Workflow #357 DB-1, M-357a v1.1 §2): `parse_standard_pack_table`, the Runtime reader's own check (the table names its game itself), and `table_too_large` for the directory's 65th file or later by file name; reported with family `standard_pack_tables`. The binding and coverage checks of the family come with DB-2 |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
 A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
