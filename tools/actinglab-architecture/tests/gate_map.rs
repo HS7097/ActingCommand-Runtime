@@ -20,7 +20,9 @@
 //!
 //! Guards 2 and 3 (Batch 0b):
 //! - `gate_map_names_live_tests`: the gate map `contracts/test-gates/<module>.toml` has only the
-//!   six inventory fragments, well-formed rows, and every name it holds is a live `#[test]`.
+//!   six inventory fragments, well-formed rows, and every name it holds is a live `#[test]`. A
+//!   row's `key` is optional history (Workflow #420 S6): a new row carries none, so parallel
+//!   pull requests never pick the same number.
 //! - `gate_tests_are_deterministic`: the gate files read no wall clock and sleep nowhere; their
 //!   bounded waits take only `GATE_WAIT`.
 
@@ -451,14 +453,20 @@ fn gate_ci_jobs_cover_every_member() {
 /// The gate map: one fragment per inventory group (contracts/README.md, "test-gates/").
 const GATE_MAP: &str = "contracts/test-gates";
 const GATE_FRAGMENTS: &[&str] = &["contract", "ledger", "host", "policy", "exec", "apps"];
-const GATE_ROW_KEYS: &[&str] = &["coverage", "incident", "key", "tests"];
+/// The members every row has.
+const GATE_ROW_KEYS: &[&str] = &["coverage", "incident", "tests"];
+/// Workflow #420 S6: the inventory id a row created before #420 keeps as history. A new row has
+/// none: its tests name it, so no number is assigned by hand and none collides.
+const GATE_ROW_KEY: &str = "key";
 /// The contract inventory numbers its keys per kind (`K1`, `R1`, `O1`, `A1`); the other five
 /// inventories use plain numbers.
 const CONTRACT_KEY_KINDS: [char; 4] = ['K', 'R', 'O', 'A'];
 
 /// Test plan v2.2 §2.1 guard 2: every name of the gate map is a live `#[test]` (not `#[ignore]`)
-/// of its package and target, and every fragment is well-formed. A key row leaves only when its
-/// feature retires (said in the PR body); `ci/gate_check.py` holds the key count against the base.
+/// of its package and target, and every fragment is well-formed. A row leaves only when its
+/// feature retires (said in the PR body); `ci/gate_check.py` holds the row count against the
+/// base and refuses a key the base does not hold (#420 S6). A key a row keeps is an inventory id,
+/// once per fragment.
 #[test]
 fn gate_map_names_live_tests() {
     let root = workspace_root();
@@ -493,6 +501,7 @@ fn gate_map_names_live_tests() {
     }
 
     let wanted: BTreeSet<&str> = GATE_ROW_KEYS.iter().copied().collect();
+    let allowed: BTreeSet<&str> = wanted.iter().copied().chain([GATE_ROW_KEY]).collect();
     for (module, path) in &fragments {
         let fragment = format!("{GATE_MAP}/{module}.toml");
         let document = match toml::from_str::<toml::Table>(&read(path)) {
@@ -519,24 +528,32 @@ fn gate_map_names_live_tests() {
                 continue;
             };
             let found: BTreeSet<&str> = row.keys().map(String::as_str).collect();
-            if found != wanted {
-                violations.push(format!("{at} has keys {found:?}, not exactly {wanted:?}"));
-                continue;
-            }
-            let Some(key) = row.get("key").and_then(toml::Value::as_str) else {
-                violations.push(format!("{at}: `key` is not a string"));
-                continue;
-            };
-            let at = format!("{fragment} key `{key}`");
-            if !gate_key_form(module, key) {
+            if !found.is_superset(&wanted) || !found.is_subset(&allowed) {
                 violations.push(format!(
-                    "{at} is not an id of inventory-{module} (`K1`, `R1`, `O1` or `A1` for \
-                     contract, a plain number such as `31` for the other five)"
+                    "{at} has keys {found:?}, not {wanted:?} and at most an old `{GATE_ROW_KEY}`"
                 ));
+                continue;
             }
-            if !keys.insert(key.to_owned()) {
-                violations.push(format!("{at} has a second row"));
-            }
+            let at = match row.get(GATE_ROW_KEY) {
+                None => at,
+                Some(key) => {
+                    let Some(key) = key.as_str() else {
+                        violations.push(format!("{at}: `key` is not a string"));
+                        continue;
+                    };
+                    let at = format!("{fragment} key `{key}`");
+                    if !gate_key_form(module, key) {
+                        violations.push(format!(
+                            "{at} is not an id of inventory-{module} (`K1`, `R1`, `O1` or `A1` \
+                             for contract, a plain number such as `31` for the other five)"
+                        ));
+                    }
+                    if !keys.insert(key.to_owned()) {
+                        violations.push(format!("{at} has a second row"));
+                    }
+                    at
+                }
+            };
             match row.get("coverage").and_then(toml::Value::as_str) {
                 Some("Y" | "P") => {}
                 other => {
