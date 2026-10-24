@@ -265,11 +265,17 @@ impl HostShared {
     ) -> Result<(), RequestFailure> {
         let closed = match self.close_instance_resources_result(token, connection_id, links.clone())
         {
-            // #411 A64: the lease lapsed before its close could begin.
-            Err(failure) if close_lease_lapsed(&failure.error) => {
-                return self.fence_lapsed_lease_close(token, failure, links);
+            Ok(closed) => closed,
+            Err(failure) => {
+                // #411 A64: the lease lapsed before its close could begin.
+                if self
+                    .close_lease_lapsed(token, &failure.error)
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    return self.fence_lapsed_lease_close(token, failure, links);
+                }
+                return Err(failure);
             }
-            closed => closed?,
         };
         match closed {
             Ok(()) => Ok(()),
@@ -287,9 +293,35 @@ impl HostShared {
         }
     }
 
+    /// #411 A64: whether `error` is the refusal of a lease end's resource close because its lease
+    /// has lapsed (`retire_instance_resources`: `begin_resource_close` answered `lease_expired`),
+    /// met before any close was attempted. Ruling C-43: also when the lease is already gone
+    /// (`lease_missing`, `lease_mismatch`) and a run in its end phase holds it: the sweep expired
+    /// it after the run's end grace.
+    fn close_lease_lapsed(
+        &self,
+        token: &LeaseToken,
+        error: &RuntimeHostError,
+    ) -> RuntimeHostResult<bool> {
+        if error.operation() != HostLocation::BeginDestructiveResourceClose.as_str() {
+            return Ok(false);
+        }
+        if error.code() == RuntimeErrorCode::LeaseExpired.as_str() {
+            return Ok(true);
+        }
+        if error.code() != RuntimeErrorCode::LeaseMissing.as_str()
+            && error.code() != RuntimeErrorCode::LeaseMismatch.as_str()
+        {
+            return Ok(false);
+        }
+        Ok(self.run_end_phase_of_lease(token.lease_id())?.is_some())
+    }
+
     /// #411 A64 (the 10-24 incident): the close at a lease end met its lease already lapsed, so
-    /// `begin_resource_close` refused its write authority (`lease_expired`): nothing was closed
-    /// and the instance's resources stay as they are. Outside shutdown they count as an
+    /// `begin_resource_close` refused its write authority (`lease_expired`; ruling C-43: or the
+    /// lease of a run in its end phase was already expired by the sweep after the end grace,
+    /// `lease_missing` or `lease_mismatch`): nothing was closed and the instance's resources stay
+    /// as they are. Outside shutdown they count as an
     /// unconfirmed close of the lease's instance only (Workflow #403): the refusal is recorded
     /// (it names the lease; its stage is the session close), the instance is fenced by it, and
     /// the lease end goes on. The preparation that proves the fence's close closes them first,
@@ -1324,14 +1356,6 @@ fn close_lease_refused_by_queue(error: &RuntimeHostError) -> bool {
     !error.is_fatal()
         && error.code() == SchedulerCode::LeaseTransferNotSafe.as_str()
         && error.operation() == HostLocation::PrepareResourceCloseLease.as_str()
-}
-
-/// #411 A64: whether `error` is the refusal of a resource close's write authority because its
-/// lease has lapsed (`retire_instance_resources`: `begin_resource_close` answered
-/// `lease_expired`), met before any close was attempted.
-fn close_lease_lapsed(error: &RuntimeHostError) -> bool {
-    error.code() == RuntimeErrorCode::LeaseExpired.as_str()
-        && error.operation() == HostLocation::BeginDestructiveResourceClose.as_str()
 }
 
 /// One connection preparation attempt (`prepare_instance_connection_with_cooldown`).

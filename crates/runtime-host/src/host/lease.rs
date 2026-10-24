@@ -2902,6 +2902,11 @@ impl HostShared {
             self.persist_active_instances()?;
         }
         for token in due {
+            // #411 A64 (ruling C-43): a run in its end phase keeps its lease until its end grace
+            // ends.
+            if self.run_end_keeps_lease(&token, now)? {
+                continue;
+            }
             let connection_id = lock(&self.scheduler, HostLocation::ReadLeaseConnection)?
                 .connection_for_token(&token)
                 .map_err(|error| {
@@ -2929,6 +2934,14 @@ impl HostShared {
             .into_iter()
             .find(|token| token.instance_id() == instance_id);
         if let Some(token) = due {
+            // #411 A64 (ruling C-43): a run in its end phase keeps its lease until its end grace
+            // ends.
+            if self
+                .run_end_keeps_lease(&token, now)
+                .map_err(RequestFailure::poison_without_terminal)?
+            {
+                return Ok(());
+            }
             let connection_id = lock(&self.scheduler, HostLocation::ReadLeaseConnection)?
                 .connection_for_token(&token)
                 .map_err(|error| {

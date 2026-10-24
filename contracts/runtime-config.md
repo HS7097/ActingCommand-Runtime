@@ -230,11 +230,21 @@ function.
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
 | `host_claims.renewal_slack_ms` | milliseconds, settable (read at the next renewal) | `1000` |
+| `host_claims.run_end_grace_ms` | milliseconds, `10000..=600000`, settable (read when a run reaches its deadline) | `120000` |
 
 Before a step a Runtime-held key renews to the step's bound (capped at a task's longest deadline
 plus the heartbeat bound, as every claim TTL), unless its remaining time plus
 `renewal_slack_ms` already covers that bound. The value is read at each renewal; a value that is
 not milliseconds is refused (`config_value_invalid`, `wrong_type`).
+
+#411 A64 (ruling C-43, `actingd-config` revision 11): a contained run that reaches its deadline
+enters its end phase. Before any of its end work (the diagnostic seal, the capture summary, the
+terminal, the close) its lease is renewed once to `run_end_grace_ms` from then, and every step of
+its end runs under that lease. The lease sweep leaves the lease of a run inside its end grace
+alone, also when that renewal was refused; after the grace it may expire it as any lapsed lease.
+A close that meets the lapsed lease fences only that instance (Workflow #403), and a terminal
+that finds its lease already expired by the sweep is still recorded, its outcome carrying
+`lease_expired`, and fences the instance; neither stops the Runtime.
 
 ## The `standard_packs` section (Workflow #373 NAV-6; moved by D1c)
 
