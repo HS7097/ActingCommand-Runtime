@@ -3551,7 +3551,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "actingctl install update or rollback refused before any change; install_refusal says why (a running Runtime, a held owner lock, a failed interface edge listed in the result's edges, the target's check-config refusing the configuration, a build that is not kept or does not verify, a failed ledger verification). A check's own outcome is the caused_by link.",
+      "description": "An installer command (adopt, release stage, update, rollback, undo) refused before any change; install_refusal says why (the root's layout or install state, the live build, the configuration or its install section, a kept build that is missing or does not verify, a running Runtime, a held owner lock, a failed interface edge listed in the result's edges, the target's check-config refusing the configuration, a failed ledger verification, the ledger head, the writer lock). A check's own outcome is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -6344,7 +6344,7 @@
       }
     },
     "install_refusal": {
-      "description": "Why an installer update or rollback refused before any change (contracts/install-cli.md).",
+      "description": "Why an installer command (adopt, stage, update, rollback, undo) refused before any change (contracts/install-cli.md).",
       "tokens": {
         "not_single_location": {
           "description": "The root is no single-location root: runtime\\BUILD-MANIFEST.json is not a file."
@@ -6357,6 +6357,12 @@
         },
         "live_build_invalid": {
           "description": "The live runtime\\ and tools\\ manifests are unreadable or name different commits."
+        },
+        "config_unreadable": {
+          "description": "The root's actingd.config.json cannot be read or is not JSON."
+        },
+        "install_section_invalid": {
+          "description": "The configuration's install section breaks its rules (config_value_invalid is the link)."
         },
         "build_not_kept": {
           "description": "The named build is not kept under install\\builds."

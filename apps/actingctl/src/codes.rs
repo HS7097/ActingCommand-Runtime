@@ -471,13 +471,16 @@ impl MaterialLimit {
 // ---- Workflow #421 INST-0 (begin): the vocabularies of `actingctl install`. ----
 
 actingcommand_contract::outcome_vocabulary! {
-    /// Why an installer update or rollback refused before any change (vocabulary
-    /// `install_refusal`, the value of `install_update_refused`; Workflow #421 INST-0).
+    /// Why an installer command (adopt, stage, update, rollback, undo) refused before any change
+    /// (vocabulary `install_refusal`, the value of `install_update_refused`; Workflow #421
+    /// INST-0).
     pub enum InstallRefusal: "install_refusal" {
         NotSingleLocation => "not_single_location",
         NotAdopted => "not_adopted",
         StateInvalid => "state_invalid",
         LiveBuildInvalid => "live_build_invalid",
+        ConfigUnreadable => "config_unreadable",
+        InstallSectionInvalid => "install_section_invalid",
         BuildNotKept => "build_not_kept",
         BuildInvalid => "build_invalid",
         RuntimeRunning => "runtime_running",

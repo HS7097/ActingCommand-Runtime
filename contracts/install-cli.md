@@ -114,8 +114,9 @@ Checks (every failure is listed, not only the first; each is a `release_check` t
    `SHA256SUMS` lists both (`sums_missing`) with their SHA-256 (`sums_mismatch`).
 2. With facts: the file reads (`facts_invalid`); each zip's and `SHA256SUMS`' SHA-256 equals its
    asset digest (`digest_mismatch`); `facts.commit` is `<c>` (`facts_commit_mismatch`);
-   `--expect-tag` equals `facts.tag` (`tag_mismatch`). Without facts the result is the warning
-   `install_release_verified_local`: tag and digests not checked.
+   `--expect-tag` equals `facts.tag` (`tag_mismatch`; `--expect-tag` without `--facts` is a
+   usage error). Without facts the result is the warning `install_release_verified_local`: tag
+   and digests not checked.
 3. Each zip is extracted (`zip_unreadable`) into the stage's `.part` folder, or a work folder
    under `%TEMP%` for `verify`: its root `BUILD-MANIFEST.json` reads (`manifest_invalid`); its
    layout is `distribution-v1` (Runtime) or `platform-tools-v3` (Tools) (`manifest_layout`); its
@@ -139,7 +140,10 @@ result (`work_dir`).
 journalled. Steps: `extract` into `install\builds\<c>.new-<ms>.part\{runtime,tools}`, then
 `verify_tree`, then `place_build` (the part folder renamed `install\builds\<c>` with
 `release.json`: the facts, the verification result and `local_build`), then `record_state` (the
-build added to `state.json`). Staging a build that is already kept and verifies answers
+build added to `state.json`). The checks that need no extraction run before the operation
+opens, so their refusal writes nothing; a check of the extracted files that fails renames the
+part folder `installuilds\<c>.abandoned-<ms>` and finishes the operation with the refusal.
+Staging a build that is already kept and verifies answers
 `install_build_staged` with `unchanged: true` and opens no operation. A root that
 `release stage` writes need not be adopted yet: it writes only `install\`.
 
