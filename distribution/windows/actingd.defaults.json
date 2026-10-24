@@ -114,7 +114,8 @@
     }
   },
   "host_claims": {
-    "renewal_slack_ms": 1000
+    "renewal_slack_ms": 1000,
+    "run_end_grace_ms": 120000
   },
   "performance": {
     "monitor": {
@@ -443,5 +444,12 @@
   },
   "emulator_control": {
     "restart_exit_wait_ms": 60000
+  },
+  "execution": {
+    "capture": {
+      "max_interval_ms": 60000,
+      "backoff_enabled": true,
+      "idle_ceiling_ms": 5000
+    }
   }
 }

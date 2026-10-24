@@ -160,7 +160,10 @@ impl std::fmt::Display for StandardPackTableIssue {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTable {
-    schema_version: StandardPackTableVersion,
+    /// Checked by decoding alone: another version than `actingcommand.table.v1` does not
+    /// decode (`malformed`); nothing reads it after that.
+    #[serde(rename = "schema_version")]
+    _schema_version: StandardPackTableVersion,
     game: String,
     table_id: String,
     row_key: Vec<String>,
