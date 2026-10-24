@@ -3195,6 +3195,26 @@ emits them only when check-config names `condition_edges`.
 | CF1-4 | keys `predecessor_task_id` (name), `served_by_dispatch_unix_ms` (unix_ms) | new key-table entries (no shape) | CF-1 | CF-1 | — |
 | CF1-5 | `config.subsystems` row `condition_edges` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-1 | CF-1 | [actingd-check-config.md](actingd-check-config.md); the generator's capability check for both members |
 
+### 1.181 Slice CF-2 (0.12.x): a reading mark publishes a completion time, its frame time plus the countdown it shows (SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.3 D-9, §6 row CF-2; #405)
+
+CF-2: a package can publish the time some work completes, `*_ready_at`, read from the screen as a
+countdown, so the catalog predicate `fact_time_reached` (§1.134) has a time to wake at.
+[resource-readings.md](resource-readings.md) ("Completion times", "Version gate", "Kernel
+reading", "Host") and [ocr-fields.md](ocr-fields.md) are the contract. **No persisted ledger
+shape**: the record is the existing `fact.published` with an inline `timestamp_ms` content, a
+value type the fact record already holds; no code, key, location or configuration key is added
+(declaration refusals reuse `resource_declaration_invalid`, and a frame disagreement the reading
+problem `no_agreement`). The value joins `package` revision 6, which BT-PK6 declares; until then
+it is admitted by code. The subsystem row is a value of the existing `config.subsystems` fact.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF2-1 | `resource_readings[].value` `{"type": "timestamp_ms", "format": "clock_hms", "base": "observation"}` (`ResourceReadingType::TimestampMs`, `ResourceReadingTimeBase`) | new value type (resource file format, not a ledger shape) | CF-2 | CF-P (resource side) | `format` and `base` required; another format `InvalidValue` @ `…/value/format`, another base `InvalidValue` @ `…/value/base`; `min`, `max`, `dictionary` `UnknownField` at the member (and `base` on `unsigned_integer`); `capacity_fact_key` refused as for every non-fraction mark; the shared `validate` refuses another format with `resource_declaration_invalid`; a Runtime before CF-2 refuses the value (`UnknownField` @ `…/value/base`), never silently |
+| CF2-2 | the record of a completion-time reading | existing `fact.published`, inline `timestamp_ms` content (no shape change) | CF-2 | CF-2 | `observed_at_unix_ms` + countdown seconds × 1000, the frame's capture time as `observed_at_unix_ms`, `expires_at_unix_ms` = `observed_at_unix_ms` + `valid_for_ms`, every other field as for a reading; the kernel trace carries the countdown in seconds |
+| CF2-3 | a completion-time mark with an agreement | rule (no shape) | CF-2 | CF-2 | holds when each frame gives its reading and the instants (frame capture time + countdown) lie within (`frames` − 1) × `interval_ms` + 1000 ms, latest minus earliest; else `no_agreement`; the reading is the handed-off frame's |
+| CF2-4 | `config.subsystems` row `resource_reading_time` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-2 | CF-2 | [actingd-check-config.md](actingd-check-config.md); packs that declare the value are placed only on a Runtime that names it |
+| CF2-5 | a `resource_adjustments` entry naming a completion-time mark's key | rule (no shape) | CF-2 | CF-2 | coordinator ruling of 2026-10-24: refused at declaration, with or without `amount`, `InvalidValue` @ `/resource_adjustments/<i>`; the shared `validate_resource_adjustments` gives the existing `resource_declaration_invalid` (no new code) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

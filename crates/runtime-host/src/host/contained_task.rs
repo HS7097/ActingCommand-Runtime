@@ -269,7 +269,8 @@ pub(super) struct JoinedReadingFrame {
 /// beyond `i64`, an expiry beyond `u64`). Workflow #390 READ-1: the key is the reading's own,
 /// so a mark's capacity is written under its `capacity_fact_key`, with the mark's detector and
 /// a snapshot of its own (`resource_reading_capacity_snapshot_id`): one observation per reading,
-/// as for two marks read on one frame.
+/// as for two marks read on one frame. SCH-M CF-2: a completion-time mark (`timestamp_ms`)
+/// writes the frame's capture time plus its countdown, in Unix ms, as a `timestamp_ms` value.
 fn resource_reading_fact_record(
     readings: &ContainedTaskResourceReadings,
     reading: &ResourceReadingValue,
@@ -278,14 +279,19 @@ fn resource_reading_fact_record(
     frame_text: &str,
 ) -> Option<FactRecord> {
     let declaration = &reading.declaration;
+    let value = if declaration.value.is_timestamp() {
+        ContractFactValue::TimestampMs(
+            observed_at_unix_ms.checked_add(reading.value.checked_mul(1_000)?)?,
+        )
+    } else {
+        ContractFactValue::Integer(i64::try_from(reading.value).ok()?)
+    };
     Some(FactRecord {
         scope: FactScope::Instance {
             instance_id: readings.instance_alias.clone(),
         },
         key: reading.fact_key.clone(),
-        content: FactContent::Inline {
-            value: ContractFactValue::Integer(i64::try_from(reading.value).ok()?),
-        },
+        content: FactContent::Inline { value },
         observed_at_unix_ms,
         expires_at_unix_ms: Some(observed_at_unix_ms.checked_add(declaration.valid_for_ms)?),
         ttl_policy: Some(actingcommand_contract::FactTtlPolicy {
