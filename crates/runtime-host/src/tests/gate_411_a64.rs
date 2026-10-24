@@ -4,22 +4,30 @@
 //! deadline, and the close of its instance's resources began only after its lease (the deadline
 //! plus the heartbeat reserve) had lapsed. `begin_resource_close` refused the lapsed lease
 //! (`lease_expired`, operation `begin_destructive_resource_close`), the refusal was a poison
-//! without terminal and the whole Runtime stopped. Requirements of the slice brief (R1, R3 (a)):
-//! meeting the lapsed lease there never stops the Runtime; the run keeps its own terminal
-//! (`contained_task_deadline_exceeded`); the instance's resources count as an unconfirmed close
-//! of that instance only (the Workflow #403 fence, with the refusal as its cause), and the
-//! refusal is recorded naming the lease and the stage; every other instance keeps working.
+//! without terminal and the whole Runtime stopped.
 //!
-//! The fixture is the incident's shape on fakes. Both registered instances capture through the
-//! Nemu IPC, so every lease end closes the instance's session (the multi-Nemu gate,
-//! `keeps_device_session`), as on the production host. The policy instance's scheduled run taps
-//! and then waits for a page that never comes; the Runtime clock moves only when the kernel waits,
-//! and the first wait after the tap reaches the run's deadline, so the run ends
-//! `contained_task_deadline_exceeded` inside its reserve. At the run's lease end, after its
-//! terminal and before its close, the clock moves on to the lease's expiry: the closeout begins
-//! after the lease lapsed, as the incident's did. The lease sweep's expiry scan is held meanwhile,
-//! so the run's own lease end, not the sweep, meets the lapsed lease. The instance's stuck
-//! recovery is off, so its fence waits for a person instead of starting a ladder.
+//! Requirements (slice brief R1, R3; coordinator ruling C-43 of 10-24):
+//! - a run that reaches its deadline enters an end phase: before any end work its lease is
+//!   renewed once by the end grace (`host_claims.run_end_grace_ms`, default 120 000 ms), and every
+//!   step of its end runs under that lease;
+//! - the lease sweep never expires the lease of a run inside its end grace; after the grace it
+//!   may;
+//! - no lapsed lease anywhere in a run's end stops the Runtime: a close that meets its lapsed
+//!   lease fences only that instance (cause `lease_expired`, the refusal recorded naming the
+//!   lease and the stage); a terminal that finds its lease already expired by the sweep is still
+//!   recorded, carrying `lease_expired`, and the instance is fenced; every other instance keeps
+//!   working.
+//!
+//! The fixture is the incident's shape on fakes, on the shipped scheduler (a heartbeat reserve of
+//! 5 s). Both registered instances capture through the Nemu IPC, so every lease end closes the
+//! instance's session (the multi-Nemu gate, `keeps_device_session`), as on the production host.
+//! The policy instance's scheduled run taps and then waits for a page that never comes; the
+//! Runtime clock moves only when the kernel waits, and the first wait after the tap reaches the
+//! run's deadline, so the run ends `contained_task_deadline_exceeded`. A checkpoint hook then
+//! moves the clock on inside the run's end: at its lease end (`FailedRunLeaseEnd`, after its
+//! terminal and before its close) or at the start of its end work (`EndWork`, before the diagnostic
+//! seal, the capture summary and the terminal). The instance's stuck recovery is off, so its fence
+//! waits for a person instead of starting a ladder.
 //!
 //! Existing tests missed this because every lapse test (the #670 lapse points in
 //! `instance_workers.rs`, the PK2 deadline tests in `gate_0122_pk1b.rs`) runs on instances that
@@ -38,11 +46,15 @@ const FENCED_ALIAS: &str = POLICY_INSTANCE_ALIAS;
 const OTHER_ALIAS: &str = "a64.instance.other";
 /// The scheduled run's response deadline.
 const RESPONSE_DEADLINE_MS: u64 = 50_000;
+/// Ruling C-43: the end grace in effect, the default of `host_claims.run_end_grace_ms`.
+const END_GRACE_MS: u64 = 120_000;
+/// Test (c): end work longer than the old reserve (5 s) and shorter than the end grace.
+const LONG_END_WORK_MS: u64 = 60_000;
 
 /// Samples business capacity once and records it (`RuntimeHost::capacity_sampler_for_test`).
 type CapacitySampler = Box<dyn Fn() -> RuntimeHostResult<()> + Send>;
 
-/// The Runtime clock of this test. It moves only when the contained-task kernel waits, by the
+/// The Runtime clock of these tests. It moves only when the contained-task kernel waits, by the
 /// wait's length rounded up to the millisecond (test plan E-3, §3.10), or when the test moves it.
 /// Once armed with the run's deadline, the first wait after the fenced instance's tap moves it to
 /// that deadline instead: the run has waited for its page until its deadline. Every move samples
@@ -136,33 +148,26 @@ fn nemu_capture(serial: &str) -> EffectiveDeviceConfiguration {
     }
 }
 
-/// The code of the run's committed terminal outcome, one per terminal among `records`.
-fn terminal_codes(records: &[PersistedEvent]) -> Vec<Option<String>> {
-    records
-        .iter()
-        .filter_map(|event| match event.payload() {
-            EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
-                TaskSemanticFact::TerminalCommitted { outcome, .. } => Some(
-                    outcome
-                        .as_ref()
-                        .map(|outcome| outcome.code().as_str().to_owned()),
-                ),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
+/// The started host with both instances and the fenced instance's scheduled run admitted.
+struct Fixture {
+    _root: TempDir,
+    host: Arc<RuntimeHost>,
+    clock: Arc<DeadlineClock>,
+    fenced: InstanceId,
+    fenced_state: Arc<FakeState>,
+    other_package: String,
+    context: Box<PolicyRunContext>,
+    request: ContainedTaskRequest,
+    /// The run's lease as its admission granted it.
+    lease: LeaseToken,
+    /// The run's deadline on the Runtime clock.
+    deadline_ms: u64,
 }
 
-/// R1, R3 (a): the policy instance's scheduled run reaches its deadline and its resource close
-/// begins after its lease's expiry. The Runtime still runs (no fatal state); the run ends with its
-/// own terminal, `contained_task_deadline_exceeded`, which the host also returns; the instance is
-/// fenced with the refusal `lease_expired` as its cause (in the status and in its one fence record,
-/// which names the instance), and the refusal is recorded once, naming the run's lease and the
-/// stage `runtime_lifecycle_session_close`; the other instance is not fenced and its direct run
-/// completes.
-#[test]
-fn a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance() {
+/// Starts the policy instance (the fenced one) and the other instance, both capturing through
+/// the Nemu IPC, on the shipped scheduler; admits the fenced instance's scheduled run, whose page
+/// never comes, and arms the clock with its deadline.
+fn fixture() -> Fixture {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("a64-deadline-task.zip");
     fs::write(&package, neutral_contained_task_package(true)).expect("write package");
@@ -204,6 +209,7 @@ fn a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance() {
     let host = RuntimeHost::start(
         config(&root)
             .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig::default())
             .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources()))
             .with_scheduled_procedures(["procedure.observe".to_owned()])
             .with_stuck_recovery(BTreeMap::from([(
@@ -263,76 +269,236 @@ fn a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance() {
     };
     let lease = context.lease_token().clone();
     let deadline_ms = clock.monotonic_ms() + RESPONSE_DEADLINE_MS;
-    let expires_at = lease.expires_at_monotonic_ms();
-    assert!(
-        expires_at > deadline_ms,
-        "the lease lasts its reserve past the run's deadline"
+    assert_eq!(
+        lease.expires_at_monotonic_ms(),
+        deadline_ms + reserve_ms(),
+        "the admitted lease lasts the reserve past the run's deadline"
     );
     clock.arm_deadline(deadline_ms);
-    // At the run's lease end, after its terminal and before its close, the clock reaches the
-    // lease's expiry.
-    let lease_end_clock = Arc::clone(&clock);
-    let lease_end = host
-        .run_at_leased_checkpoint_for_test(
-            ContainedTaskCheckpointPoint::FailedRunLeaseEnd,
-            fenced,
-            lease.lease_id(),
-            move |_| {
-                let now = lease_end_clock.monotonic_ms();
-                lease_end_clock.advance(expires_at.saturating_sub(now));
-            },
-        )
-        .expect("arm the late closeout");
-    let scan = host
-        .hold_lease_expiry_scan_for_test()
-        .expect("hold the lease sweep's expiry scan");
+    Fixture {
+        _root: root,
+        host: Arc::new(host),
+        clock,
+        fenced,
+        fenced_state,
+        other_package,
+        context,
+        request,
+        lease,
+        deadline_ms,
+    }
+}
 
-    let error = host
-        .run_scheduled_contained_task(&context, &request)
-        .expect_err("the run reaches its deadline");
+/// The shipped heartbeat reserve: how long an admitted run's lease lasts past its deadline.
+fn reserve_ms() -> u64 {
+    SchedulerConfig::default().maximum_client_heartbeat_interval_ms
+}
 
-    assert!(
-        host.fatal_error().expect("runtime health").is_none(),
-        "a closeout that met its lapsed lease ended the Runtime: {error:?}"
-    );
-    assert_eq!(lease_end.consumed(), 1, "the run reached its lease end");
-    assert!(
-        clock.monotonic_ms() >= expires_at,
-        "the close began after the lease's expiry"
-    );
-    let deadline_exceeded = RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str();
-    assert!(!error.is_fatal(), "{error:?}");
-    assert_eq!(error.code(), deadline_exceeded, "{error:?}");
-    let run_records = host
-        .query_persisted_events_for_test(EventQuery {
-            run_id: Some(context.run_id()),
-            ..EventQuery::default()
-        })
-        .expect("the run's records");
-    assert_eq!(
-        run_records
+impl Fixture {
+    /// Runs the scheduled run, which reaches its deadline: the host returns its failure.
+    fn run_to_deadline(&self) -> RuntimeHostError {
+        self.host
+            .run_scheduled_contained_task(&self.context, &self.request)
+            .expect_err("the run reaches its deadline")
+    }
+
+    /// The Runtime still runs, and the host returned the run's own failure.
+    fn assert_runtime_runs_and_returns_the_deadline(&self, error: &RuntimeHostError) {
+        assert!(
+            self.host.fatal_error().expect("runtime health").is_none(),
+            "a lapsed lease in the run's end ended the Runtime: {error:?}"
+        );
+        assert!(!error.is_fatal(), "{error:?}");
+        assert_eq!(
+            error.code(),
+            RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str(),
+            "{error:?}"
+        );
+    }
+
+    /// The run's records.
+    fn run_records(&self) -> Vec<PersistedEvent> {
+        self.host
+            .query_persisted_events_for_test(EventQuery {
+                run_id: Some(self.context.run_id()),
+                ..EventQuery::default()
+            })
+            .expect("the run's records")
+    }
+
+    /// The run has one failed terminal whose outcome is `contained_task_deadline_exceeded`;
+    /// returns the terminal's record and every code its outcome carries.
+    fn deadline_terminal(&self) -> (PersistedEvent, Vec<String>) {
+        let records = self.run_records();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|event| event.event_type() == EventType::TaskFailed)
+                .count(),
+            1,
+            "one failed terminal"
+        );
+        let terminals = records
             .iter()
-            .filter(|event| event.event_type() == EventType::TaskFailed)
-            .count(),
-        1,
-        "one failed terminal"
-    );
-    assert_eq!(
-        terminal_codes(&run_records),
-        vec![Some(deadline_exceeded.to_owned())],
-        "the run keeps its own terminal"
-    );
+            .filter_map(|event| match event.payload() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                    TaskSemanticFact::TerminalCommitted { outcome, .. } => {
+                        Some((event.clone(), outcome.clone()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [(terminal, Some(outcome))] = terminals.as_slice() else {
+            panic!("one committed terminal with an outcome: {terminals:#?}");
+        };
+        assert_eq!(
+            outcome.code().as_str(),
+            RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str(),
+            "the run keeps its own terminal: {outcome:?}"
+        );
+        let codes = outcome
+            .codes()
+            .iter()
+            .map(|code| code.as_str().to_owned())
+            .collect();
+        (terminal.clone(), codes)
+    }
+
+    /// The run's lease was renewed once, by the end grace, before its terminal.
+    fn assert_renewed_once_before(&self, terminal: &PersistedEvent) {
+        let renewals = all_events(&self.host)
+            .into_iter()
+            .filter(|event| {
+                event.event_type() == EventType::LeaseRenewed
+                    && event.links().lease_id() == Some(&self.lease.lease_id())
+            })
+            .collect::<Vec<_>>();
+        let [renewal] = renewals.as_slice() else {
+            panic!("one renewal of the run's lease: {renewals:#?}");
+        };
+        assert!(
+            renewal.sequence() < terminal.sequence(),
+            "the end grace precedes the terminal"
+        );
+    }
+
+    /// The `lease.expired` records of the run's lease.
+    fn lease_expiries(&self) -> usize {
+        lease_expiries(&self.host, self.lease.lease_id())
+    }
+
+    /// The other instance is not fenced, and its direct run is dispatched and completes.
+    fn assert_other_instance_runs(&self) {
+        assert_eq!(status_fence(&self.host, OTHER_ALIAS), None);
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let other_run = runtime_request(
+            &ids,
+            RuntimeOperation::run_contained_task(
+                OTHER_ALIAS,
+                ids.mint_holder_id().expect("holder"),
+                ContainedTaskRequest::new(self.other_package.clone()).expect("task request"),
+            ),
+        );
+        let receipt = self
+            .host
+            .process_request_for_test(&other_run, ConnectionId::new(641).expect("connection"))
+            .expect("the other instance's run receipt");
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{receipt:?}"
+        );
+        assert!(
+            matches!(
+                receipt.result(),
+                Some(RuntimeResult::ContainedTaskCompleted {
+                    task_result: TaskOutcome::Success,
+                    ..
+                })
+            ),
+            "{receipt:?}"
+        );
+        assert!(self.host.fatal_error().expect("runtime health").is_none());
+    }
+
+    /// Closes the host once every hook that shared it has run.
+    fn close(self) {
+        let Ok(host) = Arc::try_unwrap(self.host) else {
+            panic!("a hook still holds the host");
+        };
+        host.close().expect("close host");
+    }
+}
+
+/// The `lease.expired` records of `lease_id`.
+fn lease_expiries(host: &RuntimeHost, lease_id: LeaseId) -> usize {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(EventType::LeaseExpired),
+        lease_id: Some(lease_id),
+        ..EventQuery::default()
+    })
+    .expect("the lease's expiries")
+    .len()
+}
+
+/// The instance is fenced with `lease_expired` as its cause, in the status and in its one fence
+/// record, which names it.
+fn assert_fenced_by_the_lapse(fixture: &Fixture) {
     let lease_expired = RuntimeErrorCode::LeaseExpired.as_str();
-    let fence = status_fence(&host, FENCED_ALIAS).expect("the instance's fence in the status");
+    let fence = status_fence(&fixture.host, FENCED_ALIAS).expect("the instance's fence");
     assert_eq!(fence.cause.as_str(), lease_expired, "{fence:?}");
-    assert_eq!(status_fence(&host, OTHER_ALIAS), None);
-    let events = all_events(&host);
+    let events = all_events(&fixture.host);
     let fences = fence_records(&events);
     let [(fence_record, fence_outcome)] = fences.as_slice() else {
         panic!("one fence record: {fences:#?}");
     };
-    assert_eq!(fence_record.links().instance_id(), Some(&fenced));
-    assert_fence(fence_outcome, fenced, lease_expired);
+    assert_eq!(fence_record.links().instance_id(), Some(&fixture.fenced));
+    assert_fence(fence_outcome, fixture.fenced, lease_expired);
+}
+
+/// R1, R3 (a), adapted by ruling C-43 (the end grace now covers the end; this test keeps the end
+/// that overruns it): the run reaches its deadline, its lease is renewed once by the end grace
+/// before its terminal, and its resource close at its lease end begins after the grace ended (the
+/// lease sweep's expiry scan is held, so the run's own lease end meets the lapsed lease). The
+/// Runtime still runs; the run keeps its own terminal, `contained_task_deadline_exceeded`, which
+/// the host also returns; the instance is fenced with the refusal `lease_expired` as its cause,
+/// and the refusal is recorded once, naming the run's lease and the stage
+/// `runtime_lifecycle_session_close`; the other instance is not fenced and its direct run
+/// completes.
+#[test]
+fn a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance() {
+    let fixture = fixture();
+    // At the run's lease end, after its terminal and before its close, the end grace runs out.
+    let lease_end_clock = Arc::clone(&fixture.clock);
+    let lease_end = fixture
+        .host
+        .run_at_leased_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::FailedRunLeaseEnd,
+            fixture.fenced,
+            fixture.lease.lease_id(),
+            move |_| lease_end_clock.advance(END_GRACE_MS + 1),
+        )
+        .expect("arm the late closeout");
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+
+    let error = fixture.run_to_deadline();
+
+    fixture.assert_runtime_runs_and_returns_the_deadline(&error);
+    assert_eq!(lease_end.consumed(), 1, "the run reached its lease end");
+    assert!(
+        fixture.clock.monotonic_ms() > fixture.deadline_ms + END_GRACE_MS,
+        "the close began after the end grace"
+    );
+    let (terminal, _) = fixture.deadline_terminal();
+    fixture.assert_renewed_once_before(&terminal);
+    assert_fenced_by_the_lapse(&fixture);
+    let lease_expired = RuntimeErrorCode::LeaseExpired.as_str();
+    let events = all_events(&fixture.host);
     let refusals = events
         .iter()
         .filter_map(|event| match event.payload() {
@@ -349,7 +515,7 @@ fn a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance() {
     };
     assert_eq!(
         refusal.value("lease_id"),
-        Some(&serde_json::to_value(lease.lease_id()).expect("lease id")),
+        Some(&serde_json::to_value(fixture.lease.lease_id()).expect("lease id")),
         "{refusal:?}"
     );
     assert_eq!(
@@ -359,34 +525,129 @@ fn a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance() {
     );
     drop(scan);
 
-    // Every other instance keeps working.
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let other_run = runtime_request(
-        &ids,
-        RuntimeOperation::run_contained_task(
-            OTHER_ALIAS,
-            ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(other_package).expect("task request"),
-        ),
+    fixture.assert_other_instance_runs();
+    fixture.close();
+}
+
+/// Ruling C-43 test (c): the run reaches its deadline and its end work takes longer than the old
+/// reserve (5 s) but less than the end grace (here 60 s, from the start of its end work, before
+/// its diagnostic seal, capture summary and terminal). The lease sweep runs as it does. The run
+/// ends normally: the Runtime runs, its one terminal is `contained_task_deadline_exceeded` with
+/// no lapse, its lease was renewed once before that terminal, never expired and released once,
+/// its instance's session was closed, and no instance is fenced.
+#[test]
+fn a64_c_end_work_longer_than_the_reserve_and_inside_the_grace_ends_normally() {
+    let fixture = fixture();
+    let end_work_clock = Arc::clone(&fixture.clock);
+    let end_work = fixture
+        .host
+        .run_at_leased_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::EndWork,
+            fixture.fenced,
+            fixture.lease.lease_id(),
+            move |_| end_work_clock.advance(LONG_END_WORK_MS),
+        )
+        .expect("arm the long end work");
+    assert!(LONG_END_WORK_MS > reserve_ms() && LONG_END_WORK_MS < END_GRACE_MS);
+
+    let error = fixture.run_to_deadline();
+
+    fixture.assert_runtime_runs_and_returns_the_deadline(&error);
+    assert_eq!(end_work.consumed(), 1, "the run's end work ran");
+    let (terminal, codes) = fixture.deadline_terminal();
+    assert!(
+        !codes
+            .iter()
+            .any(|code| code == RuntimeErrorCode::LeaseExpired.as_str()),
+        "no lapse: {codes:?}"
     );
-    let receipt = host
-        .process_request_for_test(&other_run, ConnectionId::new(641).expect("connection"))
-        .expect("the other instance's run receipt");
+    fixture.assert_renewed_once_before(&terminal);
+    assert_eq!(fixture.lease_expiries(), 0, "the lease never lapsed");
     assert_eq!(
-        receipt.state(),
-        RuntimeReceiptState::Completed,
-        "{receipt:?}"
+        all_events(&fixture.host)
+            .iter()
+            .filter(|event| {
+                event.event_type() == EventType::LeaseReleased
+                    && event.links().lease_id() == Some(&fixture.lease.lease_id())
+            })
+            .count(),
+        1,
+        "the run released its lease once"
     );
     assert!(
-        matches!(
-            receipt.result(),
-            Some(RuntimeResult::ContainedTaskCompleted {
-                task_result: TaskOutcome::Success,
-                ..
-            })
-        ),
-        "{receipt:?}"
+        fixture.fenced_state.close_count.load(Ordering::Acquire) > 0,
+        "the lease end closed the instance's session"
     );
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    host.close().expect("close host");
+    assert_eq!(status_fence(&fixture.host, FENCED_ALIAS), None);
+    assert!(fence_records(&all_events(&fixture.host)).is_empty());
+    fixture.close();
+}
+
+/// Ruling C-43 test (d), the 10-24 order: the run reaches its deadline and is still at its end
+/// work (before its diagnostic seal, capture summary and terminal) when a lease sweep tick comes
+/// after the deadline plus the old reserve: inside the end grace the sweep leaves the lease alone.
+/// The end work then runs past the grace and the next tick expires the lease (its expiry end
+/// fences the instance). The run's later terminal is still recorded: its outcome is
+/// `contained_task_deadline_exceeded` and carries `lease_expired`; the instance is fenced with
+/// `lease_expired` as its cause; the Runtime runs; the other instance is not fenced and its direct
+/// run completes.
+#[test]
+fn a64_d_the_sweep_leaves_the_end_alone_inside_the_grace_and_the_late_terminal_is_kept() {
+    let fixture = fixture();
+    let expiries = Arc::new(Mutex::new(Vec::new()));
+    let (hook_host, hook_clock, hook_expiries) = (
+        Arc::clone(&fixture.host),
+        Arc::clone(&fixture.clock),
+        Arc::clone(&expiries),
+    );
+    let lease_id = fixture.lease.lease_id();
+    let end_work = fixture
+        .host
+        .run_at_leased_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::EndWork,
+            fixture.fenced,
+            lease_id,
+            move |_| {
+                // The incident's tick: after the deadline plus the old reserve.
+                hook_clock.advance(reserve_ms() + 1);
+                hook_host
+                    .expire_due_leases_for_test()
+                    .expect("a sweep tick inside the end grace");
+                hook_expiries
+                    .lock()
+                    .expect("expiries")
+                    .push(lease_expiries(&hook_host, lease_id));
+                // The end work runs past the end grace.
+                hook_clock.advance(END_GRACE_MS);
+                hook_host
+                    .expire_due_leases_for_test()
+                    .expect("a sweep tick after the end grace");
+                hook_expiries
+                    .lock()
+                    .expect("expiries")
+                    .push(lease_expiries(&hook_host, lease_id));
+            },
+        )
+        .expect("arm the sweep ticks in the end work");
+
+    let error = fixture.run_to_deadline();
+
+    assert_eq!(end_work.consumed(), 1, "the run's end work ran");
+    assert_eq!(
+        *expiries.lock().expect("expiries"),
+        vec![0, 1],
+        "the sweep left the lease alone inside the end grace and expired it after"
+    );
+    fixture.assert_runtime_runs_and_returns_the_deadline(&error);
+    let (_, codes) = fixture.deadline_terminal();
+    assert!(
+        codes
+            .iter()
+            .any(|code| code == RuntimeErrorCode::LeaseExpired.as_str()),
+        "the late terminal says its lease had lapsed: {codes:?}"
+    );
+    assert_eq!(fixture.lease_expiries(), 1);
+    assert_fenced_by_the_lapse(&fixture);
+    fixture.assert_other_instance_runs();
+    fixture.close();
 }

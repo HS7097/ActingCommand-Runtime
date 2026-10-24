@@ -145,6 +145,9 @@ pub(crate) enum ContainedTaskCheckpointPoint {
     /// Workflow #369 E3 (#670 final review M-1): a failed scheduled run's lease end, after its
     /// terminal and before the admission guard is taken.
     FailedRunLeaseEnd,
+    /// #411 A64 (ruling C-43): a run's end work, after its execution ended and before the
+    /// diagnostic seal, the capture summary and the terminal.
+    EndWork,
 }
 
 #[cfg(test)]
@@ -7192,6 +7195,16 @@ impl HostShared {
         if let Some(reduction) = runtime.pacing.reduction {
             control.note_paced_reduction(reduction);
         }
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::EndWork,
+            ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
