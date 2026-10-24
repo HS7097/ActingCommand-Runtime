@@ -592,7 +592,7 @@ coverage = "Y"
 tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end",
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window",
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
