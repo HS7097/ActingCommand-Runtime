@@ -84,7 +84,7 @@ impl super::HostShared {
                     EffectDisposition::NotPerformed,
                     warning,
                     DiagnosticDetailDraft::new(
-                        "frame_store",
+                        StoreLocation::FrameStore.as_str(),
                         StoreLocation::FrameStore,
                         "artifact_store",
                         StoreLocation::FrameStore.as_str(),
