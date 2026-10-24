@@ -2,7 +2,7 @@
 
 use crate::codes::{StoreCode, StoreLocation};
 use crate::{ArtifactStore, ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{ArtifactReference, CapturePressureState, PinnedFrameReason};
 use actingcommand_device::{Frame, FrameMemoryBudget, FrameMemoryCharge, PixelFormat};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,9 @@ const DEFAULT_TIER2_RATIO: f64 = 0.75;
 const DEFAULT_TIER3_RATIO: f64 = 0.90;
 const DEFAULT_HYSTERESIS_RATIO: f64 = 0.10;
 const DEFAULT_OS_RESERVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// #411 A67 (R5): the budget the store opens with when its memory sample leaves less than this
+/// after the OS reserve (`frame_store.floor_mem_bytes`).
+const DEFAULT_FLOOR_MEM_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
 const ENTRY_BASE_METADATA_BYTES: u64 = 512;
 const WRITER_BUFFER_BYTES: u64 = 64 * 1024;
@@ -44,6 +47,9 @@ pub struct FrameStoreControl {
     pub os_reserve_bytes: Option<u64>,
     #[serde(default)]
     pub flush_workspace_reserve_bytes: Option<u64>,
+    /// #411 A67 (R5): the budget when the memory sample leaves less after the OS reserve.
+    #[serde(default)]
+    pub floor_mem_bytes: Option<u64>,
 }
 
 /// A refused frame store setting (Workflow #378): its registered code, and the English text
@@ -104,6 +110,12 @@ impl FrameStoreControl {
                     .to_string(),
             ));
         }
+        if self.floor_mem_bytes == Some(0) {
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreMemoryLimitInvalid,
+                "frame_store.floor_mem_bytes must be positive when provided".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -132,6 +144,9 @@ impl FrameStoreControl {
         if let Some(value) = self.flush_workspace_reserve_bytes {
             config.flush_workspace_reserve_bytes = value;
         }
+        if let Some(value) = self.floor_mem_bytes {
+            config.floor_mem_bytes = value;
+        }
     }
 }
 
@@ -145,6 +160,8 @@ pub struct FrameStoreConfig {
     pub max_mem_bytes: Option<u64>,
     pub os_reserve_bytes: u64,
     pub flush_workspace_reserve_bytes: u64,
+    /// #411 A67 (R5): the budget when the memory sample leaves less after the OS reserve.
+    pub floor_mem_bytes: u64,
     memory_source: Option<MemorySampleSource>,
 }
 
@@ -159,6 +176,7 @@ impl Default for FrameStoreConfig {
             max_mem_bytes: None,
             os_reserve_bytes: DEFAULT_OS_RESERVE_BYTES,
             flush_workspace_reserve_bytes: DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES,
+            floor_mem_bytes: DEFAULT_FLOOR_MEM_BYTES,
             memory_source: None,
         }
     }
@@ -187,6 +205,12 @@ impl FrameStoreConfig {
             return Err(FrameStoreConfigRefusal::new(
                 StoreCode::FrameStoreFlushReserveInvalid,
                 "flush_workspace_reserve_bytes must be positive".to_string(),
+            ));
+        }
+        if self.floor_mem_bytes == 0 {
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreMemoryLimitInvalid,
+                "floor_mem_bytes must be positive".to_string(),
             ));
         }
         Ok(())
@@ -255,6 +279,10 @@ struct MemoryBudget {
     tier2_release_bytes: u64,
     tier3_release_bytes: u64,
     flush_workspace_reserve_bytes: u64,
+    /// #411 A67 (R5): the floor (`floor_mem_bytes`, never above `max_mem_bytes`), and whether
+    /// this budget stands on it.
+    floor_bytes: u64,
+    floor_applied: bool,
 }
 
 impl MemoryBudget {
@@ -272,10 +300,16 @@ impl MemoryBudget {
             .available_bytes
             .saturating_sub(config.os_reserve_bytes);
         let total_after_reserve = sample.total_bytes.saturating_sub(config.os_reserve_bytes);
-        let requested = config.max_mem_bytes.unwrap_or(available_after_reserve);
-        let budget_bytes = requested
-            .min(available_after_reserve)
-            .min(total_after_reserve);
+        let sampled = available_after_reserve.min(total_after_reserve);
+        let computed = config.max_mem_bytes.map_or(sampled, |cap| cap.min(sampled));
+        // #411 A67 (R5; Codex's counterexample on #420): a budget the sample leaves below the
+        // floor, not only a zero one, gets the floor, which is never above `max_mem_bytes`; a
+        // budget at or above the floor is unchanged.
+        let floor = config.max_mem_bytes.map_or(config.floor_mem_bytes, |cap| {
+            cap.min(config.floor_mem_bytes)
+        });
+        let floor_applied = computed < floor;
+        let budget_bytes = if floor_applied { floor } else { computed };
         // Workflow #383 AO-2 (`contracts/ledger-observer.md` §7.1): the lines come from the
         // shared watermark module.
         let lines = crate::WatermarkRatios {
@@ -297,7 +331,19 @@ impl MemoryBudget {
             tier2_release_bytes: lines.tier2_release,
             tier3_release_bytes: lines.tier3_release,
             flush_workspace_reserve_bytes: config.flush_workspace_reserve_bytes,
+            floor_bytes: floor,
+            floor_applied,
         }
+    }
+
+    /// #411 A67 (R5): `frame_store_budget_floor_applied` with the sample, the reserve and the
+    /// floor this budget stands on.
+    fn floor_warning(&self) -> Outcome {
+        Outcome::new(StoreCode::FrameStoreBudgetFloorApplied)
+            .memory_total_bytes(self.total_bytes)
+            .memory_available_bytes(self.available_bytes)
+            .memory_reserve_bytes(self.os_reserve_bytes)
+            .memory_floor_bytes(self.floor_bytes)
     }
 
     fn lines(&self) -> crate::WatermarkLines {
@@ -595,6 +641,16 @@ impl FrameStore {
 
     pub fn memory_budget(&self) -> FrameMemoryBudget {
         self.memory.clone()
+    }
+
+    /// #411 A67 (R5): `frame_store_budget_floor_applied` (warning) while the store's budget stands
+    /// on the floor: its memory sample left less than the floor after the OS reserve, so the
+    /// store opened (or refreshed its budget) with `floor_mem_bytes` instead of failing. It
+    /// carries the sampled total and available memory, the reserve and the floor.
+    pub fn budget_floor_warning(&self) -> Option<Outcome> {
+        self.budget
+            .floor_applied
+            .then(|| self.budget.floor_warning())
     }
 
     /// Configure before accepting frames; the window keeps each original materializable.
@@ -1812,6 +1868,90 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
+
+    /// #411 A67 (R5; production 10-24: a start whose memory sample left no budget after the
+    /// 2 GiB OS reserve failed with `frame_store_usage`): a memory sample below the OS reserve
+    /// opens the store on the floor budget, 256 MiB by default, with the registered warning that
+    /// carries the sampled total and available memory, the reserve and the floor.
+    ///
+    /// Codex's counterexample on #420: the floor applies whenever the budget the sample leaves is
+    /// below it, not only when that budget is zero; the store's watermarks and flush workspace
+    /// then validate (the store opens). Boundary cases: a budget of 0, 1 MiB and the floor less
+    /// one byte open on the floor with the warning; a budget of exactly the floor is unchanged
+    /// and carries no warning.
+    #[test]
+    fn a_memory_sample_below_the_os_reserve_opens_the_store_on_its_floor_with_a_warning() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        const MIB: u64 = 1024 * 1024;
+        const RESERVE: u64 = 2 * GIB;
+        const FLOOR: u64 = 256 * MIB;
+        // (case, available memory, whether the floor applies)
+        let cases = [
+            ("budget 0 (available below the reserve)", GIB, true),
+            ("budget 1 MiB", RESERVE + MIB, true),
+            ("budget floor - 1", RESERVE + FLOOR - 1, true),
+            ("budget floor", RESERVE + FLOOR, false),
+        ];
+        for (case, available, floor_applies) in cases {
+            let config = FrameStoreConfig {
+                os_reserve_bytes: RESERVE,
+                ..Default::default()
+            }
+            .with_memory_sample(MemorySample {
+                total_bytes: 64 * GIB,
+                available_bytes: available,
+            });
+            let root = TempDir::new().expect("tempdir");
+
+            let store = FrameStore::new(root.path().to_path_buf(), config)
+                .unwrap_or_else(|error| panic!("{case}: the store opens: {error:?}"));
+
+            assert_eq!(store.budget.budget_bytes, FLOOR, "{case}");
+            assert!(
+                store
+                    .budget
+                    .lines()
+                    .validate(store.budget.flush_workspace_reserve_bytes)
+                    .is_ok(),
+                "{case}: the watermarks and the flush workspace validate"
+            );
+            let Some(warning) = store.budget_floor_warning() else {
+                assert!(!floor_applies, "{case}: the floor warning");
+                continue;
+            };
+            assert!(floor_applies, "{case}: no floor warning at the floor");
+            assert_eq!(
+                warning.code().as_str(),
+                "frame_store_budget_floor_applied",
+                "{case}"
+            );
+            assert_eq!(
+                warning.category(),
+                actingcommand_contract::outcome::Category::Warning,
+                "{case}"
+            );
+            assert_eq!(
+                warning.value("memory_total_bytes"),
+                Some(&json!(64 * GIB)),
+                "{case}"
+            );
+            assert_eq!(
+                warning.value("memory_available_bytes"),
+                Some(&json!(available)),
+                "{case}"
+            );
+            assert_eq!(
+                warning.value("memory_reserve_bytes"),
+                Some(&json!(RESERVE)),
+                "{case}"
+            );
+            assert_eq!(
+                warning.value("memory_floor_bytes"),
+                Some(&json!(FLOOR)),
+                "{case}"
+            );
+        }
+    }
 
     #[test]
     fn memory_budget_uses_available_total_and_os_reserve() {

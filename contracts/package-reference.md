@@ -601,6 +601,7 @@ data files beside its package directories, one directory per game below the conf
   pages.json         actingcommand.pages.v1: the game's page ids and its feature packages
   interrupts.json    actingcommand.interrupts.v1: the shared interrupt pages
   navigation.json    actingcommand.navigation.v1: the edges and the recovery chain (NAV-5)
+  tables/            actingcommand.table.v1: the shared tables, <table_id>.json (#357 DB-1)
   <directory>/       one package directory per bundle pack
 ```
 
@@ -635,6 +636,33 @@ data files beside its package directories, one directory per game below the conf
   (`edge_duplicate`); `recovery_chain` names 1–8 distinct packages (`recovery_chain_count`,
   `recovery_chain_duplicate`). Every package is a package of the registry; both lists may name
   packages of every server, and a run uses those of its own. The file requires `pages.json`.
+- **Tables** (Workflow #357 DB-1, model M-357a v1.1 §2; `v012-register.md` §1.65 TB1).
+  `tables/` is a reserved directory of the game root; its files are table files, not
+  packages, and it makes a directory a game root as the root files do (`tables/` without
+  `bundle.json` is `standard_pack_root_invalid` `bundle_missing`). A table is
+  `tables/<table_id>.json`, `table_id` 1–64 bytes of `[a-z][a-z0-9_]*`, in canonical JSON (no
+  floating point number, no integer outside the safe range, no duplicate key: `malformed`) of
+  at most 2 MiB: `{schema_version: "actingcommand.table.v1", game, table_id, row_key, columns,
+  rows}`, unknown members refused. `table_id` equals the file name without `.json`
+  (`table_id_mismatch`). `columns` are 2–32 `{name, type, nullable?, valid_until_unix_s?}`
+  with distinct names of `[a-z][a-z0-9_]*` (1–64 bytes); `type` is `key` (exactly one column,
+  `row_key[0]`, never nullable: non-empty strings of at most 128 bytes without a control
+  character), `integer` (with `min` ≤ `max`, safe integers), `boolean` or `enum_string` (with
+  `allowed`: 1–1024 distinct values of 1–128 bytes of `[a-z0-9_.:-]`); `nullable` (default
+  `false`) lets a cell be `null` (required data missing, nothing is chosen by it);
+  `valid_until_unix_s` (nullable columns only) makes every cell of the column read `null` from
+  the second after it (`table_column_invalid` otherwise). `row_key` is 1–8 distinct declared
+  columns led by the key column, none nullable (`table_row_key_invalid`). `rows` are 1–8192
+  arrays as long as `columns` with each cell of its column's type (`table_row_invalid`), within
+  its range or `allowed` and `null` only in a nullable column (`table_value_out_of_range`),
+  unique on the row key (`table_row_duplicate`). More than 8192 rows or 2 MiB, or a game root's
+  65th table or later by file name, is `table_too_large`; the first 64 are read. A refused table
+  is `standard_pack_table_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`);
+  one that cannot be read, or a `tables/` that cannot be listed, is
+  `standard_pack_table_unreadable` with its OS error as the cause. A refused table never breaks
+  its game root; the tables of a broken root are neither read nor listed. In a resource
+  repository the tables are `tables/*.json` at the repository root only. The Runtime names no
+  table, column or value: they are resource data, final values only.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`,
   `validate_standard_pack_references`, `validate_standard_pack_navigation_references`,
@@ -644,11 +672,17 @@ data files beside its package directories, one directory per game below the conf
   `actinglab standard-pack check` run alike ("Content-directory tools and the bundle index"). A refused file is
   `standard_pack_root_invalid` with `game`, `path`, `standard_pack_problem` and `json_pointer`
   (empty for the whole document); a file that cannot be read for another reason than its
-  absence is `standard_pack_root_unreadable`, its OS error the cause.
+  absence is `standard_pack_root_unreadable`, its OS error the cause. Workflow #357 DB-1: a table
+  is checked by `parse_standard_pack_table` and a game root's `tables/` read by
+  `read_standard_pack_tables`, shared by the Runtime's startup, check-config, `actingctl packs`
+  (`ac_packs`) and `actinglab resource validate` (family `standard_pack_tables`).
 - **When the Runtime reads it.** At startup every game root, root files only and no package
   admitted: each is recorded as a `runtime.lifecycle_observed` `standard_pack_read` record
   (`standard_pack_registered` with the package count, or the root's failure); a broken root
-  never stops the Runtime. In a run's preparation, the root of the run's game when it holds
+  never stops the Runtime. Workflow #357 DB-1: at startup every table of a sound game root is
+  also read, only to report the refused ones, one more `standard_pack_read` record each
+  (`standard_pack_table_invalid` or `standard_pack_table_unreadable`); nothing is kept and a run
+  reads no table (DB-2 binds them to runs). In a run's preparation, the root of the run's game when it holds
   `interrupts.json` or (Workflow #373 NAV-5) `navigation.json`, and (Workflow #373 NAV-3a)
   when the run resolves a prerequisite package
   or the return-home package: a broken root refuses the run before any lease and any task

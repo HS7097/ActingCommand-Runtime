@@ -393,7 +393,8 @@
         "host.install_transition.pauses",
         "host.perf_baseline.*",
         "host.perf_calibration.*",
-        "host.config_overrides"
+        "host.config_overrides",
+        "host.contained_settlement"
       ],
       "reobserve_prefixes": [
         "device.",
@@ -450,6 +451,9 @@
   },
   "emulator_control": {
     "restart_exit_wait_ms": 60000
+  },
+  "watchdog": {
+    "start_window_ms": 900000
   },
   "execution": {
     "capture": {

@@ -1266,6 +1266,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "frame_store_budget_floor_applied": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "artifact-store",
+      "layer": "store",
+      "uncertain": false,
+      "values": {
+        "memory_total_bytes": "required",
+        "memory_available_bytes": "required",
+        "memory_reserve_bytes": "required",
+        "memory_floor_bytes": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The frame store's memory sample left a budget below the floor after the OS reserve (zero included: available or total memory at or below os_reserve_bytes), so the store opened, or refreshed its budget, on the floor frame_store.floor_mem_bytes (default 256 MiB, never above max_mem_bytes) instead of failing with frame_store_usage or on its watermarks (#411 A67). memory_total_bytes and memory_available_bytes are the sample, memory_reserve_bytes the OS reserve and memory_floor_bytes the floor. A sample that leaves at least the floor is used unchanged.",
+      "common_causes": "The host's available memory below the 2 GiB OS reserve when a capture opens its frame store: another large process on the host, or the Runtime's own start-up recovery holding memory while the daemon-start preparation captures.",
+      "handling": "TBD"
+    },
     "frame_store_device": {
       "category": "error",
       "ladder_class": "none",

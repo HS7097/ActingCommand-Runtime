@@ -571,6 +571,20 @@ pub struct RuntimeHostConfig {
     /// test releases it.
     #[cfg(test)]
     pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
+    /// #411 A65, test only: the ledger writer's read budget in place of
+    /// `ledger_observer.read_budget_ms` (whose configured value is at least 1 ms), and the
+    /// writer's clock it is measured on in place of the process's monotonic clock.
+    #[cfg(test)]
+    ledger_read_budget_for_test: Option<(Duration, actingcommand_ledger::LedgerMonotonicClock)>,
+    /// #411 A65, test only: the start fails right after it appended its start event and the
+    /// `runtime.instance_bound` events.
+    #[cfg(test)]
+    fail_after_start_event_for_test: bool,
+    /// #411 A65 (Codex's counterexample on #420), test only: the start settles the direct runs
+    /// of earlier epochs but records no `host.contained_settlement`, as a build before A65 did,
+    /// so its ledger is an old one without the anchor.
+    #[cfg(test)]
+    contained_settlement_unrecorded_for_test: bool,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -625,7 +639,41 @@ impl RuntimeHostConfig {
             network_connectivity_for_test: None,
             #[cfg(test)]
             pack_admission_hold_for_test: None,
+            #[cfg(test)]
+            ledger_read_budget_for_test: None,
+            #[cfg(test)]
+            fail_after_start_event_for_test: false,
+            #[cfg(test)]
+            contained_settlement_unrecorded_for_test: false,
         }
+    }
+
+    /// #411 A65, test only: every read on the ledger writer gets `budget` in place of
+    /// `ledger_observer.read_budget_ms`, measured on `clock` (the writer's clock, which the
+    /// close bound and the stall watch read too).
+    #[cfg(test)]
+    pub(crate) fn with_ledger_read_budget_for_test(
+        mut self,
+        budget: Duration,
+        clock: actingcommand_ledger::LedgerMonotonicClock,
+    ) -> Self {
+        self.ledger_read_budget_for_test = Some((budget, clock));
+        self
+    }
+
+    /// #411 A65, test only: the start fails right after it appended its start event.
+    #[cfg(test)]
+    pub(crate) fn with_start_failure_after_start_event_for_test(mut self) -> Self {
+        self.fail_after_start_event_for_test = true;
+        self
+    }
+
+    /// #411 A65 (Codex's counterexample on #420), test only: the start records no
+    /// `host.contained_settlement`, as a build before A65 did.
+    #[cfg(test)]
+    pub(crate) fn with_contained_settlement_unrecorded_for_test(mut self) -> Self {
+        self.contained_settlement_unrecorded_for_test = true;
+        self
     }
 
     /// Workflow #386 SR-3, test only: the task package admission after start waits for `hold`.
@@ -1703,6 +1751,9 @@ impl RuntimeHost {
             emulator_autostart_reports: EmulatorAutostartReports::default(),
             #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
+            #[cfg(test)]
+            contained_settlement_unrecorded_for_test: config
+                .contained_settlement_unrecorded_for_test,
             host_claim_work: Mutex::new(BTreeMap::new()),
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
             #[cfg(test)]
@@ -2012,6 +2063,14 @@ impl RuntimeHost {
                 config.device_diagnostic_mode,
             )?;
             append_instance_binding_events(&shared.ledger, &shared.events, &registered_instances)?;
+            #[cfg(test)]
+            if config.fail_after_start_event_for_test {
+                return Err(RuntimeHostError::fatal(
+                    crate::codes::test_spellings::TestCode::StartFailedAfterStartEventForTest,
+                    crate::codes::test_spellings::TestLocation::FailStartAfterStartEventForTest,
+                    RuntimeErrorCode::RuntimeHalted,
+                ));
+            }
             installation::set_prepared(&shared.policy, Mutex::new(policy))?;
             installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
             installation::set_prepared(&shared.startup_packages, startup_packages)?;
@@ -4670,6 +4729,10 @@ struct HostShared {
     emulator_autostart_reports: EmulatorAutostartReports,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// #411 A65 (Codex's counterexample on #420), test only: see
+    /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
+    #[cfg(test)]
+    contained_settlement_unrecorded_for_test: bool,
     // Workflow #369 W-2: what each queued or handed-off host claim runs once granted, by the
     // claim's request id (like `queued_requests`, with no state of its own), and the
     // per-instance workers that run it.
@@ -5437,6 +5500,24 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     )
 }
 
+/// #411 A65 (R2): [`ledger_error`] of `operation` with the ledger's own failure as its outcome's
+/// `caused_by` link: the ledger's code with the values the ledger attached and its operation
+/// (`ledger_read_budget_exceeded` of `query_event_page`, for example).
+fn ledger_error_caused_by(
+    operation: impl Into<Location>,
+    error: &actingcommand_ledger::GlobalLedgerError,
+) -> RuntimeHostError {
+    let cause = error
+        .outcome_values()
+        .cloned()
+        .unwrap_or_else(|| Outcome::relayed(error.code()));
+    let cause = match Location::relayed(error.operation()) {
+        Some(location) if cause.value("operation").is_none() => cause.operation(location),
+        _ => cause,
+    };
+    ledger_error(operation).with_caused_by(cause)
+}
+
 /// #411 A51 (R3): the ledger codes of a read the writer did not answer in time
 /// (`writer_response_timeout`) or stopped at its work budget (`ledger_read_budget_exceeded`).
 /// Neither is a ledger failure: the Runtime goes on, and the read's caller reads again at its
@@ -5650,6 +5731,10 @@ fn ledger_failure_plan(
     plan = plan
         .with_read_budget(Duration::from_millis(section.read_budget_ms))
         .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
+    #[cfg(test)]
+    if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
+        plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
+    }
     if let Some(timeout) = config.ledger_reply_timeout {
         plan = plan.with_reply_timeout(timeout);
     }

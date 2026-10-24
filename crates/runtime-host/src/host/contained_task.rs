@@ -7,6 +7,7 @@ use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_F
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
+use crate::recovery_read::{LedgerPages, RECOVERY_PAGE_EVENTS};
 use crate::resource_adjustment::{
     AdjustmentPlan, ConfirmationInput, PlannedAdjustment, PlannedBase, PlannedPublication,
     PreRunRecord, ReadingFrameInput,
@@ -36,6 +37,9 @@ const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str =
     SharedCode::ContainedTaskPostAdmissionOcrFailed.as_str();
 const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: HostLocation =
     HostLocation::SettlePreviousEpochContainedRuns;
+/// #411 A65 (R3): the runtime fact (Runtime scope, an integer) that names the start event
+/// sequence of the start that last completed the previous-epoch settlement of direct runs.
+pub(super) const CONTAINED_SETTLEMENT_FACT_KEY: &str = "host.contained_settlement";
 /// Workflow #369 Q-2: the longest a direct task run (CLI, console, MCP `ac_run_pack`) waits in
 /// its instance's queue before it is refused `lease_queue_expired`.
 const DIRECT_TASK_RUN_CLAIM_WAIT_MS: u64 = 60_000;
@@ -8890,68 +8894,168 @@ impl HostShared {
         )
     }
 
-    /// Workflow #338 R3 (#343-1): at start, settles the direct contained runs the previous
-    /// owner epoch first recorded and never terminated: `task.terminal_intent` and
-    /// `task.cancelled` (`contained_task_recovered_after_restart`) on the run's original links,
-    /// then a lease release when an actual grant has no terminal. The scan is bounded to the previous
-    /// epoch, the events between the last two `runtime.started` / `runtime.takeover` events
-    /// (the later one is this start's); older epochs are not reached. A run of the scheduler
-    /// chain (one with a `policy.dispatch_intent` on its run or request) keeps the policy dispatch
-    /// reconciliation, and a run of an instance this start did not register stays open. A run
-    /// settled once has its terminal and lies before the next start's previous epoch, so no
-    /// restart settles it again. Any failure fails the start.
+    /// Workflow #338 R3 (#343-1): at start, settles the direct contained runs first recorded
+    /// since the last start that completed this settlement and never terminated:
+    /// `task.terminal_intent` and `task.cancelled` (`contained_task_recovered_after_restart`) on
+    /// the run's original links, then a lease release when an actual grant has no terminal. A
+    /// run of the scheduler chain (one with a `policy.dispatch_intent` on its run or request)
+    /// keeps the policy dispatch reconciliation, and a run of an instance this start did not
+    /// register stays open. Any failure fails the start.
+    ///
+    /// #411 A65:
+    /// - R3: the scan begins after the start event of the last start that completed this
+    ///   settlement, which `host.contained_settlement` names; a start that failed after
+    ///   appending its own start event recorded no such fact, so the epochs before it are
+    ///   scanned again. Without the fact (an old ledger no start of this build settled, also
+    ///   when its first start of this build failed before it settled) one paged scan reads the
+    ///   task semantic events of the whole ledger, never only the last two starts' epoch
+    ///   (Codex's counterexample on #420), and the fact is then written. The scan ends before
+    ///   this start's start event (the last one). A run settled once has its terminal, so a
+    ///   later scan that reaches it again leaves it.
+    /// - R1: every read is a ledger page; a page the writer's read budget stopped is read again
+    ///   smaller ([`LedgerPages`]).
+    /// - R2: a ledger failure keeps the ledger's own failure as its cause.
     pub(super) fn settle_previous_epoch_contained_runs(&self) -> RuntimeHostResult<()> {
+        let through = self
+            .ledger
+            .latest_sequence()
+            .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?;
         let mut starts = Vec::new();
         for event_type in [EventType::RuntimeStarted, EventType::RuntimeTakeover] {
             starts.extend(
-                self.ledger
-                    .query(EventQuery {
+                LedgerPages::new(
+                    &self.ledger,
+                    EventQuery {
                         event_type: Some(event_type),
                         ..EventQuery::default()
-                    })
-                    .map_err(|_| ledger_error(PREVIOUS_EPOCH_SETTLEMENT_OPERATION))?
-                    .iter()
-                    .map(PersistedEvent::sequence),
+                    },
+                    0,
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+                .read_all()
+                .map_err(|error| {
+                    ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error)
+                })?
+                .iter()
+                .map(PersistedEvent::sequence),
             );
         }
-        starts.sort_unstable();
-        let [.., previous, current] = starts.as_slice() else {
+        let Some(current) = starts.into_iter().max() else {
             return Ok(());
         };
-        if current.saturating_sub(*previous) < 2 {
+        // Without the anchor the scan begins at the ledger's start (sequence 0 precedes every
+        // event), so no earlier start's own start event can hide an older epoch.
+        let previous = self.contained_settlement_anchor(current)?.unwrap_or(0);
+        if current.saturating_sub(previous) >= 2 {
+            self.settle_contained_runs_between(previous, current)?;
+        }
+        #[cfg(test)]
+        if self.contained_settlement_unrecorded_for_test {
             return Ok(());
         }
-        let events = self
-            .ledger
-            .query(EventQuery {
-                from_sequence: Some(previous + 1),
+        self.record_contained_settlement(current)
+    }
+
+    /// The direct contained runs whose first task semantic fact lies after the event at
+    /// `previous` (a start event, or 0 for the ledger's start) and before the start event at
+    /// `current`, settled in ledger order, the range read page by page.
+    fn settle_contained_runs_between(&self, previous: u64, current: u64) -> RuntimeHostResult<()> {
+        let mut pages = LedgerPages::new(
+            &self.ledger,
+            EventQuery {
+                from_sequence: Some(previous.saturating_add(1)),
                 to_sequence: Some(current - 1),
                 ..EventQuery::default()
-            })
-            .map_err(|_| ledger_error(PREVIOUS_EPOCH_SETTLEMENT_OPERATION))?;
+            },
+            previous,
+            current - 1,
+            RECOVERY_PAGE_EVENTS,
+        );
         let mut requests = BTreeSet::new();
-        for event in &events {
-            if !matches!(
-                event.payload(),
-                EventPayload::Task(TaskPayload::Semantic(_))
-            ) {
-                continue;
+        while let Some(page) = pages
+            .next_page()
+            .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?
+        {
+            for event in &page {
+                if !matches!(
+                    event.payload(),
+                    EventPayload::Task(TaskPayload::Semantic(_))
+                ) {
+                    continue;
+                }
+                let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
+                    .ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            HostCode::ContainedTaskIdentityMissing,
+                            PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                            RuntimeErrorCode::RuntimeHalted,
+                        )
+                    })?;
+                if !requests.insert(identity.request_id) {
+                    continue;
+                }
+                self.settle_previous_epoch_contained_run(event)
+                    .map_err(|failure| *failure.error)?;
             }
-            let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
-                .ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        HostCode::ContainedTaskIdentityMissing,
-                        PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                        RuntimeErrorCode::RuntimeHalted,
-                    )
-                })?;
-            if !requests.insert(identity.request_id) {
-                continue;
-            }
-            self.settle_previous_epoch_contained_run(event)
-                .map_err(|failure| *failure.error)?;
         }
         Ok(())
+    }
+
+    /// #411 A65 (R3): the start event sequence `host.contained_settlement` names, the start
+    /// that last completed this settlement; `None` without the fact. A fact that is not the
+    /// Runtime's integer, or names no start before `current`, is
+    /// `contained_settlement_anchor_invalid`.
+    fn contained_settlement_anchor(&self, current: u64) -> RuntimeHostResult<Option<u64>> {
+        let recorded = lock(&self.runtime_facts, PREVIOUS_EPOCH_SETTLEMENT_OPERATION)?
+            .get(&RuntimeFactScope::Runtime, CONTAINED_SETTLEMENT_FACT_KEY)
+            .cloned();
+        let Some(recorded) = recorded else {
+            return Ok(None);
+        };
+        let anchor = match &recorded.value {
+            ContractFactValue::Integer(anchor) if recorded.source == OriginModule::Runtime => {
+                u64::try_from(*anchor).ok()
+            }
+            _ => None,
+        };
+        anchor
+            .filter(|anchor| *anchor < current)
+            .map(Some)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::ContainedSettlementAnchorInvalid,
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+            })
+    }
+
+    /// #411 A65 (R3): records `host.contained_settlement`, the start event sequence of this
+    /// start (`current`), once its settlement has completed.
+    fn record_contained_settlement(&self, current: u64) -> RuntimeHostResult<()> {
+        let anchor = i64::try_from(current).map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::ContainedSettlementAnchorInvalid,
+                PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let now = self.clock.sample()?.unix_ms;
+        let previous = lock(&self.runtime_facts, PREVIOUS_EPOCH_SETTLEMENT_OPERATION)?
+            .get(&RuntimeFactScope::Runtime, CONTAINED_SETTLEMENT_FACT_KEY)
+            .map(|record| record.observed_at_unix_ms);
+        let observed_at_unix_ms =
+            previous.map_or(now, |previous| now.max(previous.saturating_add(1)));
+        self.record_runtime_fact_with_event(RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONTAINED_SETTLEMENT_FACT_KEY.to_owned(),
+            value: ContractFactValue::Integer(anchor),
+            observed_at_unix_ms,
+            source: OriginModule::Runtime,
+            ttl_ms: None,
+        })
+        .map(|_| ())
     }
 
     fn settle_previous_epoch_contained_run(
@@ -8971,34 +9075,34 @@ impl HostShared {
         let instance_id = *links.instance_id().ok_or_else(identity_missing)?;
         let task_id = *links.task_id().ok_or_else(identity_missing)?;
         let run_id = *links.run_id().ok_or_else(identity_missing)?;
-        let events = self
-            .ledger
-            .query(EventQuery {
-                request_id: Some(request_id),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                ))
-            })?;
+        // #411 A65: each read is paged on one index (R1) and keeps the ledger's cause (R2).
+        let read = |query: EventQuery| -> Result<Vec<PersistedEvent>, RequestFailure> {
+            self.ledger
+                .latest_sequence()
+                .and_then(|through| {
+                    LedgerPages::new(&self.ledger, query, 0, through, RECOVERY_PAGE_EVENTS)
+                        .read_all()
+                })
+                .map_err(|error| {
+                    RequestFailure::poison_without_terminal(ledger_error_caused_by(
+                        PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                        &error,
+                    ))
+                })
+        };
+        let events = read(EventQuery {
+            request_id: Some(request_id),
+            ..EventQuery::default()
+        })?;
         // The scheduler chain: the run of a policy dispatch keeps `reconcile_policy_dispatches`.
-        let policy_intents = self
-            .ledger
-            .query(EventQuery {
-                run_id: Some(run_id),
-                event_type: Some(EventType::PolicyDispatchIntent),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                ))
-            })?;
-        if !policy_intents.is_empty()
-            || events
-                .iter()
-                .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
+        let run_events = read(EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        })?;
+        if run_events
+            .iter()
+            .chain(&events)
+            .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
         {
             return Ok(());
         }
@@ -9088,17 +9192,10 @@ impl HostShared {
         let Some(lease_id) = lease_id else {
             return Ok(());
         };
-        let lease_events = self
-            .ledger
-            .query(EventQuery {
-                lease_id: Some(lease_id),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                ))
-            })?;
+        let lease_events = read(EventQuery {
+            lease_id: Some(lease_id),
+            ..EventQuery::default()
+        })?;
         let granted = lease_events.iter().any(|event| {
             event.event_type() == EventType::LeaseGranted
                 && event.links().instance_id() == Some(&run_identity.instance_id)

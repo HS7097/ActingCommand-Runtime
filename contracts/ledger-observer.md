@@ -978,7 +978,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `close_timeout_ms` | 60 000 | ms | how long the Runtime's close waits for the writer's answer and its end; then `ledger_close_timeout` (#411 A51) | A51, 0.12.9 |
 | `open_timeout_ms` | 600 000 | ms | the deadline of the start's ledger open (was a fixed 120 s); `10000..=600000` (P0-LO) | P0-LO, 0.12.11 |
 | `open_warn_ratio_milli` | 500 | integer | an open whose measured time exceeds `open_timeout_ms` × it / 1000 writes `ledger_open_slow`; `100..=1000` (P0-LO) | P0-LO, 0.12.11 |
-| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
+| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
 - `settable` as fixed by AO-1: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys` and
@@ -1012,6 +1012,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   record. Both keys are read when the ledger opens (`false`). The open's time grows with the
   ledger; archive and rotation (AO-3, AO-5, AO-6) are to bound the open's work itself.
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
+  `host.contained_settlement` joins it in #411 A65 (0.12.12; see
+  [runtime-fact-store.md](runtime-fact-store.md));
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
   (#387) and `config.catalog` (MCP-9a) fall under the existing `config.` prefix.
 - These defaults are a starting point; AO-2's first round fills them from a real-machine copy.
