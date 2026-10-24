@@ -98,7 +98,8 @@ actingctl install release stage  --root <root> --dir <dir> [--facts …] [--expe
 `--dir` holds `actingcommand-runtime-<c>.zip`, `actingcommand-tools-<c>.zip` and `SHA256SUMS`
 (`<sha256 hex>  <file name>` lines), as the Release workflow publishes them. `--facts` is the
 release-facts file `actingcommand.release-facts.v1` that a fetch script or a UI downloader
-writes from the release (Tools reads no token and opens no network connection):
+writes from the release (Tools reads no token; its network access is only the downloads of
+"Downloads" below):
 
 ```json
 {"repository": "<owner>/<name>", "tag": "<tag>", "commit": "<40 hex>", "prerelease": true,
@@ -107,6 +108,16 @@ writes from the release (Tools reads no token and opens no network connection):
 
 An optional `schema_version` member, when present, is `actingcommand.release-facts.v1`. The
 assets name both zips and `SHA256SUMS`.
+
+**Downloads** (Alice, ruling 45, #421 comment 6380164338). `release stage` and `install new` may
+download a release's files, and the vision and OCR models of a fresh root, from fixed GitHub
+release URLs. The URLs and the expected SHA-256 values come from the configuration or from the
+release metadata (the release-facts file, its asset digests), never from the program: nothing in
+Tools names a URL. A downloaded file is used only after its SHA-256 matches its expected value;
+a mismatch refuses as the local checks do (`digest_mismatch`). No other network access: Tools
+reads no token and no `gh` configuration. INST-1 does not download: its `release verify` and
+`release stage` read a folder the fetch script or a downloader filled; the download comes in a
+later slice (with INST-6's fresh root, whose vision models need it).
 
 Checks (every failure is listed, not only the first; each is a `release_check` token):
 
@@ -320,7 +331,7 @@ actingctl install config show|diff     --root <root>
 actingctl install config set           --root <root> KEY=JSON...
 actingctl install config bind          --root <root> --instance <alias> (--maintenance | --startup <id> | --recognition <id> | --resource-package <id>) [--replace]
 actingctl install config policy        --root <root> --section <file> [--catalog-dir <dir> --catalog-name <name>] [--transition replace]
-actingctl install config lab-options   --root <root> --authoring true|false --debugging true|false --acknowledge <label id>
+actingctl install config lab-options   --root <root> [--authoring true|false] [--debugging true|false]
 actingctl install config commit plan|apply --root <root> [--plan <id>] [--while-running]
 actingctl install config discard       --root <root>
 actingctl install config restore       --root <root> --prev <actingd.config.json.prev-<ms>>
@@ -330,15 +341,14 @@ actingctl install pack plan    --root <root> --zip <bundle.zip> --sums <SHA256SU
 actingctl install pack place   --root <root> --zip … --sums … [--facts …] --plan <id> [--hot [--known-pause …]] [--accept-restart-needed] [--ack-guard <id>]...
 actingctl install pack remove  plan|apply --root <root> --game <game> [--plan <id>] [--hot]
 actingctl install pack restore --root <root> --operation <id>
-actingctl install new --root <new root> --build <kept build dir or verified release dir> [--state-root <dir>] [--vision-from <dir>] [--mumu-root <dir>] [--watchdog]
+actingctl install new --root <new root> --build <kept build dir or verified release dir> [--state-root <dir>] [--vision-from <dir>] [--mumu-root <dir>] [--watchdog] [--lab-authoring true|false] [--lab-debugging true|false]
 ```
 
 - **Configuration** (INST-3). Every write goes to the candidate; the first write copies the live
   file and records its SHA-256 in `base.json` (`install_config_base_changed` once the live file
   changed). `set` takes only keys of the running installer's key table; the Lab options are
-  written only by `lab-options` (`install_config_lab_options_locked`), which needs the option's
-  registered label as `--acknowledge`; `secret_fingerprint_salt` is never accepted, printed,
-  diffed or journalled. `commit` plans with the check-config of the build that will run
+  written only by `lab-options` (`install_config_lab_options_locked`); `secret_fingerprint_salt`
+  is never accepted, printed, diffed or journalled. `commit` plans with the check-config of the build that will run
   (`--install-root <root>`; `install_config_refused`, `install_catalog_plan_unexpected`), then
   applies under the writer lock: candidate → `actingd.config.json.part`, live →
   `.prev-<ms>`, part → live, read back (`install_config_committed`; with the Runtime running
@@ -357,8 +367,17 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   `packages\<game>.old-<ms>`; `restore` puts one pack operation's kept items back.
 - **Fresh root** (INST-6). `new` refuses a non-empty root or state root, copies and verifies the
   build into `runtime\`, `tools\` and `install\builds\<c>\`, writes the first configuration (the
-  salt 32 bytes from the OS CSPRNG, never shown; no Lab keys), runs its check-config and writes
-  `state.json`; nothing is started (`install_root_created`).
+  salt 32 bytes from the OS CSPRNG, never shown), runs its check-config and writes `state.json`;
+  nothing is started (`install_root_created`). The vision and OCR models come from
+  `--vision-from` or from the downloads above.
+- **Lab options** (Alice, ruling 44, #421 comment 6380164338; INST-3 and INST-6). The CLI install
+  asks for each Lab option (`lab_module_authoring`, `lab_module_debugging`) in the middle of
+  `install new` when it runs interactively (its console is a terminal), with the labels of the
+  UI installer's Lab page. Run non-interactively it installs with full permissions: every Lab
+  option on, unless `--lab-authoring false` or `--lab-debugging false` names it off. Every option
+  an installer command turns on is listed in its JSON result (`lab_options_enabled`). `config
+  lab-options` changes them later through the candidate and a commit, and lists the same way.
+  Updates keep the values a root has.
 
 ## Interface checks
 
