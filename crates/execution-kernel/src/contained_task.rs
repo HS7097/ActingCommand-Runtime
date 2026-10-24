@@ -70,6 +70,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 // Workflow #390 EXEC-1: ordered candidate operations on one page.
 mod candidates;
+// PERF-B1 (Workflow #407 B1): a wait's capture cadence.
+mod capture_cadence;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
 // #412 Lab B-3 S1: one declared operation run as the kernel runs it.
@@ -246,6 +248,10 @@ mod gate_411_lab_rp;
 // ceiling of a declared interval, and the back-off on unchanged frames.
 #[cfg(test)]
 mod gate_407_b1;
+pub use capture_cadence::{
+    CaptureCadence, DEFAULT_IDLE_CEILING_MS as DEFAULT_CAPTURE_IDLE_CEILING_MS,
+    DEFAULT_MAX_DECLARED_INTERVAL_MS as DEFAULT_MAX_DECLARED_CAPTURE_INTERVAL_MS,
+};
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
 pub use readings::{
@@ -2296,10 +2302,14 @@ pub struct StepPacing {
     /// kernel waits exactly this long, on the budget clock like any wait, and recognizes nothing
     /// again after it. Zero (the default) is no pause.
     pub pre_input_wait: Duration,
+    /// PERF-B1 (Workflow #407 B1): the `capture_cadence` keys in effect for the step
+    /// ([`Self::with_capture_cadence`]); [`CaptureCadence::UNCONFIGURED`] by default.
+    pub capture_cadence: CaptureCadence,
 }
 
 impl Default for StepPacing {
-    /// No observe-only retry, factor 1000, no extra round and no pre-input wait.
+    /// No observe-only retry, factor 1000, no extra round, no pre-input wait and the unconfigured
+    /// capture cadence.
     fn default() -> Self {
         Self::new(0)
     }
@@ -2307,13 +2317,22 @@ impl Default for StepPacing {
 
 impl StepPacing {
     /// `sample_timeout_retries` observe-only retries at the factor 1000, without an extra round
-    /// or a pre-input wait.
+    /// or a pre-input wait, at the unconfigured capture cadence.
     pub const fn new(sample_timeout_retries: u32) -> Self {
         Self {
             sample_timeout_retries,
             factor_milli: actingcommand_contract::MIN_PACING_FACTOR_MILLI,
             extra_wait_rounds: 0,
             pre_input_wait: Duration::ZERO,
+            capture_cadence: CaptureCadence::UNCONFIGURED,
+        }
+    }
+
+    /// PERF-B1: the same pacing with the capture cadence `capture_cadence`.
+    pub const fn with_capture_cadence(self, capture_cadence: CaptureCadence) -> Self {
+        Self {
+            capture_cadence,
+            ..self
         }
     }
 
