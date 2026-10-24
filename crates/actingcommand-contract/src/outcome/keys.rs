@@ -562,4 +562,7 @@ outcome_keys! {
     reserve_at_least: integer,
     amount_after: integer,
     // ---- Workflow #411 B16 part 2: end ----
+    // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §6.1): begin ----
+    table_column: token,
+    // ---- Workflow #357 DB-1: end ----
 }

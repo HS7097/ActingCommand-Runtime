@@ -20582,6 +20582,25 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "standard_pack_table_column_expired": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "table_column": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A column of a standard-pack table declares valid_until_unix_s and that second has passed, so every cell of the column reads null (Workflow #357 DB-1, M-357a v1.1). A note of check-config, one per expired column.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_navigation_package_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
