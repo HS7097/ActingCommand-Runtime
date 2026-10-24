@@ -6,6 +6,7 @@
 """
 
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -74,6 +75,39 @@ class AttributeTests(unittest.TestCase):
         self.assertTrue(failures[0].startswith("line 8: "), failures)
         self.assertIn("outside any session", failures[0])
         self.assertIn("test tests::stray ... ok", failures[0])
+
+
+def gate_row(*tests):
+    return {"key": "A3", "coverage": "Y", "incident": [], "tests": list(tests)}
+
+
+RETIRED_ONE = """
+[[retired]]
+fragment = "contract"
+test = "sample::lib::tests::retired_guard"
+ruling = "a ruling"
+reason = "why it goes"
+covered_by = "what covers its risk"
+"""
+
+
+class RetirementTests(unittest.TestCase):
+    def test_a_name_leaves_the_gate_map_only_when_the_retirement_list_holds_it(self):
+        # Alice 10-09: a retirement needs its mapping table (PR #1322, Workflow #420 S5).
+        base = {"contract": [gate_row("sample::lib::tests::kept", "sample::lib::tests::retired_guard")]}
+        head = {"contract": [gate_row("sample::lib::tests::kept")]}
+
+        problems = []
+        listed = gate_check.load_retired(tomllib, RETIRED_ONE, "retired-gates.toml", problems)
+        self.assertEqual(problems, [])
+        self.assertEqual(gate_check.retirement_violations(base, head, listed, "base"), [])
+
+        problems = []
+        unlisted = gate_check.load_retired(tomllib, "", "retired-gates.toml", problems)
+        self.assertEqual(problems, [])
+        violations = gate_check.retirement_violations(base, head, unlisted, "base")
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("contract.toml: test sample::lib::tests::retired_guard is at base", violations[0])
 
 
 if __name__ == "__main__":

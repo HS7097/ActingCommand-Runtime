@@ -450,5 +450,12 @@
   },
   "emulator_control": {
     "restart_exit_wait_ms": 60000
+  },
+  "execution": {
+    "capture": {
+      "max_interval_ms": 60000,
+      "backoff_enabled": true,
+      "idle_ceiling_ms": 5000
+    }
   }
 }

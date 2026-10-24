@@ -9,6 +9,7 @@ use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
+use crate::execution::CaptureCadenceConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
@@ -20,7 +21,7 @@ use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, f
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, emulator_control, host_claims, instance, ledger_observer,
+    device_link, device_state, emulator_control, execution, host_claims, instance, ledger_observer,
     performance, recovery_ladder, scheduling, startup_discovery, touch,
 };
 use actingcommand_contract::outcome::Outcome;
@@ -482,6 +483,12 @@ impl EffectiveConfig {
         TouchConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, the kernel's capture
+    /// cadence, which the host hands the kernel with each step's pacing.
+    pub fn capture_cadence(&self) -> Result<CaptureCadenceConfig, ConfigFailure> {
+        CaptureCadenceConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -681,6 +688,9 @@ impl EffectiveConfig {
         }
         if sections.contains(emulator_control::SECTION) {
             self.restart_exit_wait_ms()?;
+        }
+        if sections.contains(execution::SECTION) {
+            self.capture_cadence()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

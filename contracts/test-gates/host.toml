@@ -826,7 +826,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t3_a_main_package_changed_in_place_lifts_after_the_interval_without_a_restart",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t4_only_a_package_the_pause_names_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t5_actingd_suspended_reports_the_paused_and_current_hash_prefixes",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t9_a_restart_rebuilds_the_recorded_hashes_from_the_failure_identity",
 ]
@@ -1856,6 +1855,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_412_b3_s2::b3_s2_t2_4_two_operation_requests_on_one_box_land_on_different_candidates",
 ]
 incident = ["#412 B-3"]
+
+# PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177 B1-2, B1-3; test row (d); requirements R2, R3): execution.capture.max_interval_ms (60 000, 5 000..=1 800 000), execution.capture.backoff_enabled (true) and execution.capture.idle_ceiling_ms (5 000, 50..=60 000) default from the defaults file and are settable; a value outside its bounds is config_value_invalid (out_of_range) when the file is rendered, in the whole-section check and in an instruction, and a switch that is no boolean is wrong_type
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_407_b1::b1_d_the_capture_keys_default_from_the_file_and_their_bounds_are_checked",
+]
+incident = ["#407 B1"]
 
 # SCH-M ED-1 (frozen model v1.0 §3.4 "Configuration", §6 row ED-1; contracts/runtime-config.md, "Expected duration"; register §1.178 ED1-3): scheduling.expected_runtime.enabled, runs and margin_ms default to true, 5 and 300000 and scheduling.fact_refresh.expected_duration_ms to 60000, all settable; each instance's expected_runtime keys default to the section's, an instance's own key overrides the section for that instance only (from the file and through an instruction), and a change of the section's key reaches every instance that names none
 [[gate]]
