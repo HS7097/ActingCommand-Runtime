@@ -182,9 +182,9 @@ impl HostShared {
                         boundary_instance,
                         links,
                     )? {
-                        Contained::Latched(error) => failure.error = Box::new(error),
+                        Contained::Latched(error) => *failure.error = error,
                         Contained::Fenced(error) | Contained::Failed(error) => {
-                            failure.error = Box::new(error);
+                            *failure.error = error;
                             failure.poison_runtime = false;
                         }
                     }
@@ -197,11 +197,21 @@ impl HostShared {
                     )?
                     .insert(request.request_id(), failure.error.outcome());
                 }
-                // #411 A54: `host_halted` says whether the Runtime latched, not how severe the
-                // failure was for this request.
-                let outcome = failure
-                    .error
-                    .receipt_outcome_latched(self.fatal.current()?.is_some());
+                // #411 A54: `host_halted` is true only when the Runtime latched, not because the
+                // failure was severe for this request. A direct contained run's receipt keeps its
+                // failure's severity: the client reads it to know whether the run kept its fields
+                // report, which the host aborts for a fatal failure. The run's device failures
+                // are ISO-2's (ISO-M rows E02, A01, A03).
+                let outcome = if matches!(
+                    request.operation(),
+                    RuntimeOperation::RunContainedTask { .. }
+                ) {
+                    failure.error.receipt_outcome()
+                } else {
+                    failure
+                        .error
+                        .receipt_outcome_latched(self.fatal.current()?.is_some())
+                };
                 if let Some(rejection) = failure.error.resource_declaration().cloned() {
                     let rejected = if let Some(event) =
                         failure.error.lifecycle.resource_declaration_event

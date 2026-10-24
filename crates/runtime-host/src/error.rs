@@ -569,12 +569,13 @@ impl RuntimeHostError {
         self.projection.with_receipt_values(self.outcome())
     }
 
-    /// ISO-M (#419; #411 A54): [`Self::receipt_outcome`] with `host_halted` as the Runtime's
-    /// fatal state says, `true` only when the Runtime latched. How severe the failure was for
-    /// its own work does not make the receipt say the host halted.
-    pub(crate) fn receipt_outcome_latched(&self, host_halted: bool) -> Outcome {
+    /// ISO-M (#419; #411 A54): [`Self::receipt_outcome`] whose `host_halted` is `true` only when
+    /// the Runtime latched (`runtime_latched`, its fatal state when the receipt is written). How
+    /// severe the failure was for its own work does not make the receipt say the host halted;
+    /// on a host that latched, the receipt is [`Self::receipt_outcome`] unchanged.
+    pub(crate) fn receipt_outcome_latched(&self, runtime_latched: bool) -> Outcome {
         let mut projection = self.projection.as_ref().clone();
-        projection.fatal = host_halted;
+        projection.fatal &= runtime_latched;
         projection.with_receipt_values(self.outcome())
     }
 

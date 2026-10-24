@@ -303,11 +303,15 @@ containment never fails silently.
 | each per-instance step of a shared loop | the sweep, pump, fence and monitor loops | ISO-4a |
 | actingd's policy driver, per intent (through `halts_runtime()`) | `apps/actingd/src/main.rs` | ISO-6 |
 
-**Receipts** (#411 A54, §5.4): a denied or failed receipt's `host_halted` says whether the
-Runtime latched (it holds a fatal state when the receipt is written), not how severe the
-failure was for its request. A failure that latched nothing (a read-only observe whose capture
-failed, an IPC input whose backend failed, a contained `Instance` failure) answers
-`host_halted: false`, with its own `runtime_code`.
+**Receipts** (#411 A54, §5.4): a denied or failed receipt says `host_halted: true` only when the
+Runtime latched (it holds a fatal state when the receipt is written); how severe the failure
+was for its request does not make it say so. A failure that latched nothing (a read-only
+observe whose capture failed, an IPC input or safe reset whose backend failed, a contained
+`Instance` failure) answers `host_halted: false`, with its own `runtime_code`. On a host that
+latched, a receipt is as before. A direct contained run's failed receipt keeps its failure's
+severity as `host_halted` until ISO-2 classifies the run's device failures (ISO-M rows E02,
+A01, A03): the client reads it to know whether the run kept its OCR fields report, which the
+host aborts for a fatal failure.
 
 **A lock of one instance alone** that guards no data (its admission guard, its queue-order lock;
 R8) is taken through `lock_instance`: when a panic left it poisoned, the poison is cleared and
