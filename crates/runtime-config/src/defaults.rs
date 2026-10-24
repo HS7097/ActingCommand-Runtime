@@ -8,7 +8,8 @@
 //! Workflow #385 P-c adds `performance`; Workflow #386 SR-1 adds `scheduling`; Workflow #383
 //! AO-1 adds `ledger_observer`; Workflow #398 RD-2 adds `device_link`; Workflow #398 RD-5b adds
 //! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
-//! `touch`; #411 A50 adds `emulator_control`; PERF-B1 adds `execution`).
+//! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
+//! `execution`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
@@ -24,6 +25,7 @@ use crate::startup_discovery::StartupDiscoveryFile;
 use crate::table::find_row;
 use crate::touch::TouchFile;
 use crate::value::parse_value;
+use crate::watchdog::WatchdogFile;
 use actingcommand_contract::FactScalar;
 use serde::Deserialize;
 use serde_json::Value;
@@ -66,6 +68,9 @@ pub struct DefaultsFile {
     /// #411 A50.
     #[serde(default)]
     pub emulator_control: Option<EmulatorControlFile>,
+    /// #411 A66.
+    #[serde(default)]
+    pub watchdog: Option<WatchdogFile>,
     /// PERF-B1 (Workflow #407 B1).
     #[serde(default)]
     pub execution: Option<ExecutionFile>,

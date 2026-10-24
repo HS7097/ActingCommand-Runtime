@@ -17262,6 +17262,44 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "standard_pack_table_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "standard_pack_problem": "required",
+        "json_pointer": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A table file of a standard-pack game root's tables directory (actingcommand.table.v1) breaks its shape or a limit, or is the root's 65th table or later by file name (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs list it with the table, and actinglab resource validate shares the same check. A refused table never breaks its game root or stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "standard_pack_table_unreadable": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "game": "optional",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A table file of a standard-pack game root's tables directory, or that directory itself, could not be read; the OS error is the cause (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs report it. Shared because actingctl packs reports it beside the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "invalid_task_interrupt": {
       "category": "error",
       "ladder_class": "none",

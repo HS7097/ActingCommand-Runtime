@@ -6,11 +6,13 @@ use crate::codes::ActinglabCode;
 use crate::{CliError, CliOutcome, FlagArgs};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    BundleMaintenance, LabErrorClass, ResourceAdjustmentDeclaration, ResourceDeclarationIssue,
-    ResourceReadingDeclaration, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_PAGES_FILE, page_projection::ProjectionMetadata, parse_standard_pack_interrupts,
-    parse_standard_pack_navigation, parse_standard_pack_pages,
-    resource_declaration::ProcedureBindingConfigFile, validate_bundle_maintenance_declarations,
+    BundleMaintenance, LabErrorClass, MAX_STANDARD_PACK_TABLES, ResourceAdjustmentDeclaration,
+    ResourceDeclarationIssue, ResourceReadingDeclaration, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY,
+    StandardPackProblem, StandardPackTableIssue, page_projection::ProjectionMetadata,
+    parse_standard_pack_interrupts, parse_standard_pack_navigation, parse_standard_pack_pages,
+    parse_standard_pack_table, resource_declaration::ProcedureBindingConfigFile,
+    validate_bundle_maintenance_declarations,
 };
 use actingcommand_lab::{parse_environment_catalog_value, validate_control_declaration};
 use actingcommand_pack_containment::source::{
@@ -408,7 +410,12 @@ impl DeclarationReader {
         let bytes = self.read(path, MAX_DOCUMENT_BYTES)?;
         let text =
             std::str::from_utf8(&bytes).map_err(|_| invalid(path, "declaration is not UTF-8"))?;
-        let family = if name == "task.json"
+        let family = if parent == Path::new(STANDARD_PACK_TABLES_DIRECTORY) {
+            // Workflow #357 DB-1 (M-357a v1.1 §2.3; register §1.65 TB5, the files part): a shared
+            // table of the repository root's `tables/`, before any family named by file name.
+            self.standard_pack_table(path, name, &bytes)?;
+            "standard_pack_tables"
+        } else if name == "task.json"
             && parent
                 .parent()
                 .and_then(Path::file_name)
@@ -534,6 +541,32 @@ impl DeclarationReader {
             return self.unmapped(path, "program declaration family has no mapped parser");
         };
         Ok(json!({"path": path_text(path), "status": "valid", "family": family}))
+    }
+
+    /// Workflow #357 DB-1 (M-357a v1.1 §2.2, §2.3): one table file of the repository root's
+    /// `tables/`, checked as the Runtime checks it (the repository's table names its game
+    /// itself), and refused as `table_too_large` when it is the directory's 65th or later by file
+    /// name, as the Runtime reads only the first 64.
+    fn standard_pack_table(&self, path: &Path, name: &str, bytes: &[u8]) -> CliOutcome<()> {
+        let directory = Path::new(STANDARD_PACK_TABLES_DIRECTORY);
+        let absolute = self.checked_path(directory)?;
+        let mut names = fs::read_dir(&absolute)
+            .map_err(|error| invalid(directory, &format!("read tables directory: {error}")))?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| invalid(directory, &format!("read tables entry: {error}")))?;
+        names.sort();
+        let rank = names.iter().position(|entry| entry.to_str() == Some(name));
+        if rank.is_some_and(|rank| rank >= MAX_STANDARD_PACK_TABLES) {
+            let issue = StandardPackTableIssue {
+                problem: StandardPackProblem::TableTooLarge,
+                pointer: String::new(),
+            };
+            return Err(invalid(path, &issue.to_string()));
+        }
+        parse_standard_pack_table(bytes, None, name)
+            .map_err(|issue| invalid(path, &issue.to_string()))?;
+        Ok(())
     }
 
     fn operation_paths(&self, scope: &Path) -> CliOutcome<Vec<PathBuf>> {

@@ -42,7 +42,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// `ledger_observer.tag.workbench_patterns`' default (§15).
-pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 10] = [
+pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 11] = [
     "task.*.last_duration_ms",
     "task.*.last_outcome",
     "task.*.failure_streak",
@@ -53,6 +53,7 @@ pub const DEFAULT_TAG_WORKBENCH_PATTERNS: [&str; 10] = [
     "host.perf_baseline.*",
     "host.perf_calibration.*",
     "host.config_overrides",
+    "host.contained_settlement",
 ];
 
 /// The preparation work the spill thread takes at once.

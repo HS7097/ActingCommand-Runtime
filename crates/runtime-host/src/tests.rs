@@ -169,6 +169,9 @@ mod gate_373_nav5;
 mod gate_411_b37_entry;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
+// Workflow #357 DB-1: the shared tables of a standard-pack game root at startup and in
+// check-config's report.
+mod gate_357_db1;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
@@ -363,6 +366,9 @@ mod gate_406_t3;
 mod gate_412_b3_s2;
 
 mod gate_epoch_close;
+// #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
+// read, and of the epochs before a start that failed after appending its start event.
+mod gate_411_a65;
 // #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
 // fatal the Runtime under test latched and its shutdown flag.
 mod gate_411_harness_diag;
