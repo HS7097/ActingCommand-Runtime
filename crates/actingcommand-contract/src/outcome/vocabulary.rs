@@ -207,6 +207,21 @@ crate::outcome_vocabulary! {
 }
 // ---- Workflow #411 B15 R0: end ----
 
+crate::outcome_vocabulary! {
+    /// Where a blackout comes from (vocabulary `blackout_source`; Workflow #386 SR-4a1, SCH-M
+    /// §3.2 D-1). The configuration crate names the list a refused entry is in; the policy
+    /// crate's blackout judgement and the host's deferrals name the source of the entry they
+    /// report.
+    pub enum BlackoutSource: "blackout_source" {
+        /// The machine-wide list `scheduling.blackout.host`.
+        Host => "host",
+        /// The instance's own list `instance.<instance id>.scheduling.blackout`.
+        Instance => "instance",
+        /// A `maintenance` event of the active catalog's timeline.
+        Catalog => "catalog",
+    }
+}
+
 impl IoKind {
     /// The token of a Rust error kind; a kind this vocabulary does not list is `uncategorized`.
     pub fn from_error_kind(kind: std::io::ErrorKind) -> Self {

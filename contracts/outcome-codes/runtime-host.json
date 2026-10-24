@@ -17515,7 +17515,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports runtime monitor spawn failed.",
+      "description": "A Runtime monitor thread could not be spawned: the monitor probe at the host's start, or the emulator watch (emu-watch, operation emulator_watch) that actingd starts after the configured emulator starts are enqueued. The Runtime halts; a restart may succeed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20430,6 +20430,7 @@
       "values": {
         "instance_id": "required",
         "blackout_id": "required",
+        "blackout_source": "required",
         "next_eligible_unix_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
@@ -20440,7 +20441,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate on the instance is deferred because a blackout (blackout_id: a catalog maintenance event or a host blackout entry) is active; it wakes at the blackout's end (next_eligible_unix_ms). Admission refuses an intent that crossed into the blackout with the same code.",
+      "description": "A candidate on the instance is deferred because a blackout (blackout_id: a catalog maintenance event, a host blackout entry or an entry of the instance's own list; blackout_source: which of the three) is active; it wakes at the blackout's end (next_eligible_unix_ms), the end of the union of the overlapping or adjacent intervals. Admission refuses an intent that crossed into the blackout with the same code.",
       "common_causes": "A configured maintenance or reset period, or a host blackout such as a planned machine restart.",
       "handling": "Nothing to repair."
     },
@@ -20453,6 +20454,7 @@
       "values": {
         "instance_id": "required",
         "blackout_id": "required",
+        "blackout_source": "required",
         "blackout_start_unix_ms": "required",
         "required_ms": "required",
         "operation": "optional",
@@ -20464,7 +20466,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate is deferred because its response deadline (required_ms) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms); it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually.",
+      "description": "A candidate is deferred because its response deadline (required_ms) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms; blackout_id and blackout_source name the entry that covers the start); it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually.",
       "common_causes": "A blackout starts soon.",
       "handling": "Nothing to repair."
     },
@@ -21657,6 +21659,9 @@
       "uncertain": false,
       "values": {
         "count": "required",
+        "alias": "optional",
+        "attempts": "optional",
+        "limit_count": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -21666,7 +21671,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line.",
+      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line. emu-watch (Alice's ruling 35, R3): the emulator watch found a configured instance's emulator stopped, its key free and no autostart or emulator control claim waiting, and enqueued one autostart claim for it, paused or not: count is 1, alias the instance, attempts this restart's place among the watch's restarts of the instance within emulator_control.restart_window_ms, limit_count emulator_control.restart_attempts; also a device_state_observed record under the instance. The claim's Start and its result follow as every configured start's.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21836,9 +21841,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A scheduling pause holds the instance or the global gate: the autostart claim queues again as a gated entry and releases its key; the resume grants it again (Workflow #369 S6c, H-5). A report line.",
+      "retired_in": "0.12.12",
+      "description": "Retired (emu-watch, Alice's ruling 35: a scheduling pause never holds the emulator start). A scheduling pause holds the instance or the global gate: the autostart claim queues again as a gated entry and releases its key; the resume grants it again (Workflow #369 S6c, H-5). A report line.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21859,7 +21865,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). A report line.",
+      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). emu-watch: for the emulator watch's claim, the status read just before its Start found the emulator process running. A report line.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22216,6 +22222,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "alias": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -22225,7 +22232,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.9",
-      "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links.",
+      "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links. emu-watch: also a status read of the emulator watch that failed (operation emulator_watch, alias the instance): the instance's reading stays as it was and no restart is requested at that poll; recorded once per failing streak as a device_state_observed record under the instance and the same report line. And the cause of emulator_autostart_failed when the watch's autostart claim could not read the status just before its Start (operation run_emulator_autostart).",
       "common_causes": "MuMuManager did not answer within its bound or printed an answer of an unknown shape.",
       "handling": "TBD"
     },
@@ -22255,6 +22262,54 @@
       "description": "A restart (an operator's emulator restart, or the stuck-recovery ladder's emulator-restart rung) launches only after the old VM has exited (#411 A50). Its Stop's readiness wait had expired, so it read the emulator status as a self-check does (MuMuManager info: the bounded read after the Stop's failure, then one read every 500 ms on the Runtime clock) for at most emulator_control.restart_exit_wait_ms, and every read that answered still showed the emulator process running. The restart fails and launches nothing, so the new instance never comes up on another ADB port beside the old one. elapsed_ms is the time waited, timeout_ms the bound in effect, config_key the bound's key; process_started, android_started and adb_port_present are the last read that answered. The Stop's failure (emulator_control_wait_timeout) is the caused_by link. Recorded as the request's command.rejected and runtime.failed under the restart's links (the ladder's rung fails with this code).",
       "common_causes": "The emulator's VM process stays alive after its shutdown (it is still stopping, or its manager lost track of it) and keeps the instance's ADB port.",
       "handling": "Wait until the old emulator process has exited, or end it, then restart again; raise emulator_control.restart_exit_wait_ms when the emulator needs longer to stop."
+    },
+    "emulator_watch_state_changed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "process_started": "required",
+        "android_started": "required",
+        "adb_port_present": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A poll of the emulator watch (emu-watch, Alice's ruling 35) read the instance's emulator in another running state than the Runtime held (on: the process runs with Android and an ADB port; off otherwise; or the Runtime held no reading): the instance's emulator_state takes the reading. The status read's process_started, android_started and adb_port_present. A device_state_observed record under the instance and the same report line, which actingd writes as a daemon line.",
+      "common_causes": "The emulator stopped or crashed behind the Runtime's back, or a person started it outside the Runtime; the first reading after the Runtime's start.",
+      "handling": "None needed. A configured instance (start_emulator) found stopped is started again by the watch within its bound; any other instance is only recorded."
+    },
+    "emulator_watch_restart_exhausted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "attempts": "required",
+        "limit_count": "required",
+        "retry_after_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A poll of the emulator watch (emu-watch, R3) found the configured instance's emulator stopped, but the watch already started it emulator_control.restart_attempts times (limit_count; attempts in the window) within emulator_control.restart_window_ms: it starts it no more until the oldest of those restarts leaves the window (retry_after_ms) or a person's emulator control of the instance clears the count. Once per streak; a device_state_observed record under the instance and the same report line.",
+      "common_causes": "The emulator stops again soon after each start, or its Start keeps failing.",
+      "handling": "Look at the instance's emulator and the failures of the watch's starts (emulator_autostart_failed and their causes). Start it by hand with actingctl emulator start (or ac_emulator), which also clears the count, or wait for the window to pass."
     }
   },
   "locations": {
@@ -29155,6 +29210,14 @@
       "status": "active",
       "since": "0.12.4",
       "description": "A Runtime host operation or stage: check that no input reached the instance while a keyless online Lab observation took the frames its package's target consensus needs (#411 Lab L5)."
+    },
+    "emulator_watch": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A Runtime host operation: the emulator watch (emu-watch, Alice's ruling 35): its start, which actingd asks for after the configured emulator starts are enqueued, its polls (the emulator status read of every discovery-bound instance and the restarts it requests) and its end with the host."
     }
   }
 }
