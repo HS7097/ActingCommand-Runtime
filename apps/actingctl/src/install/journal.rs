@@ -9,7 +9,7 @@
 use super::files;
 use super::host::{Host, Installer};
 use super::state::{self, Current, CurrentState, InstallState, OperationKind, Paths};
-use crate::codes::{ActingctlCode, InstallRefusal};
+use crate::codes::{ActingctlCode, InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -142,26 +142,31 @@ pub(crate) fn operation_ms(operation_id: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// `install_operation_unfinished` for the operation `current.json` names, or the root's
-/// install state refusal when it cannot be read; `Ok` when no operation is unfinished.
-pub(crate) fn refuse_unfinished(paths: &Paths) -> Result<(), Outcome> {
+/// The refusal `operation_unfinished` of the command `operation` for the operation
+/// `current.json` names, or the root's install state refusal when it cannot be read; `Ok` when no
+/// operation is unfinished.
+pub(crate) fn refuse_unfinished(operation: InstallLocation, paths: &Paths) -> Result<(), Outcome> {
     match state::read_current(paths) {
         CurrentState::None => Ok(()),
-        CurrentState::Unfinished(current) if operation_ms(&current.operation_id).is_some() => {
-            Err(Outcome::new(ActingctlCode::InstallOperationUnfinished)
-                .install_operation_id(current.operation_id))
+        CurrentState::Unfinished(current) if operation_ms(&current.operation_id).is_some() => Err(
+            super::refusal(operation, InstallRefusal::OperationUnfinished)
+                .install_operation_id(current.operation_id),
+        ),
+        CurrentState::Unfinished(_) => Err(state_invalid(operation, paths.current(), None)),
+        CurrentState::Unreadable(cause) => {
+            Err(state_invalid(operation, paths.current(), Some(cause)))
         }
-        CurrentState::Unfinished(_) => Err(state_invalid(paths.current(), None)),
-        CurrentState::Unreadable(cause) => Err(state_invalid(paths.current(), Some(cause))),
     }
 }
 
-/// `install_update_refused` (`state_invalid`) for an install file that is not what this build
-/// writes, with its failure when there is one.
-pub(crate) fn state_invalid(path: PathBuf, cause: Option<Outcome>) -> Outcome {
-    let refusal = Outcome::new(ActingctlCode::InstallUpdateRefused)
-        .install_refusal(InstallRefusal::StateInvalid)
-        .path(path);
+/// The refusal `state_invalid` of the command `operation` for an install file that is not what
+/// this build writes, with its failure when there is one.
+pub(crate) fn state_invalid(
+    operation: InstallLocation,
+    path: PathBuf,
+    cause: Option<Outcome>,
+) -> Outcome {
+    let refusal = super::refusal(operation, InstallRefusal::StateInvalid).path(path);
     match cause {
         Some(cause) => refusal.caused_by(cause),
         None => refusal,
@@ -184,7 +189,8 @@ impl<'h> Operation<'h> {
         opening: Opening,
         steps: impl FnOnce(u64) -> Vec<PlannedStep>,
     ) -> Result<Self, Outcome> {
-        refuse_unfinished(paths)?;
+        let command = opening.kind.location();
+        refuse_unfinished(command, paths)?;
         files::create_dir_all(&paths.operations())?;
         let mut ms = host.now_unix_ms();
         while paths.journal(&operation_id(ms)).exists() {
@@ -237,9 +243,9 @@ impl<'h> Operation<'h> {
             serde_json::to_vec_pretty(&current).map_err(|error| files::json_failure(&error))?;
         if !files::create_new(&paths.current(), &bytes)? {
             // Another installer opened an operation between the check and here.
-            let refusal = match refuse_unfinished(paths) {
+            let refusal = match refuse_unfinished(command, paths) {
                 Err(refusal) => refusal,
-                Ok(()) => state_invalid(paths.current(), None),
+                Ok(()) => state_invalid(command, paths.current(), None),
             };
             operation.journal.result = Some(envelope(&refusal)?);
             operation.journal.finished_at_unix_ms = Some(host.now_unix_ms());
@@ -249,19 +255,21 @@ impl<'h> Operation<'h> {
         Ok(operation)
     }
 
-    /// The journal of `operation_id`, for `resume` and `undo`.
+    /// The journal of `operation_id`, for `resume` and `undo`; a journal that cannot be used is
+    /// the refusal `state_invalid` of `command`, the command that loads it.
     pub(crate) fn load(
         host: &'h dyn Host,
         paths: &Paths,
         operation_id: &str,
+        command: InstallLocation,
     ) -> Result<Self, Outcome> {
         let ms = operation_ms(operation_id)
-            .ok_or_else(|| state_invalid(paths.journal(operation_id), None))?;
+            .ok_or_else(|| state_invalid(command, paths.journal(operation_id), None))?;
         let path = paths.journal(operation_id);
-        let journal: Journal =
-            files::read_json(&path).map_err(|cause| state_invalid(path.clone(), Some(cause)))?;
+        let journal: Journal = files::read_json(&path)
+            .map_err(|cause| state_invalid(command, path.clone(), Some(cause)))?;
         if journal.schema_version != OPERATION_SCHEMA || journal.operation_id != operation_id {
-            return Err(state_invalid(path, None));
+            return Err(state_invalid(command, path, None));
         }
         Ok(Self {
             host,
@@ -293,6 +301,7 @@ impl<'h> Operation<'h> {
         let step = &self.journal.steps[n - 1];
         serde_json::from_value(step.intent.clone()).map_err(|error| {
             state_invalid(
+                self.journal.kind.location(),
                 self.paths.journal(self.id()),
                 Some(files::json_failure(&error)),
             )
@@ -334,9 +343,11 @@ impl<'h> Operation<'h> {
     }
 
     /// `install_operation_interrupted`: a step failed after the operation changed the disk; the
-    /// journal and `current.json` stay for `resume` and `undo`.
+    /// journal and `current.json` stay for `resume` and `undo`. `operation` is the journalled
+    /// command.
     pub(crate) fn interrupted(&self, cause: Outcome) -> Outcome {
         Outcome::new(ActingctlCode::InstallOperationInterrupted)
+            .operation(self.journal.kind.location())
             .install_operation_id(self.id())
             .caused_by(cause)
     }

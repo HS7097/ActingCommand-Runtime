@@ -8,8 +8,11 @@
 //! edits and daemon restarts belong to the person, so no MCP tool drives it.
 //!
 //! Every exit prints one result line through `crate::cli_line`: `{…result, "outcome": …}`, the
-//! process exiting by the top outcome's category. Nothing here deletes anything: replaced and
-//! abandoned files are renamed aside and kept.
+//! process exiting by the top outcome's category. The outcome is one of the family's folded codes
+//! (ruling 54): `install_command_done`, `install_caveat_noted` or `install_command_refused`, its
+//! `operation` the command; a step that fails after a change on disk is
+//! `install_operation_interrupted`. Nothing here deletes anything: replaced and abandoned files
+//! are renamed aside and kept.
 
 mod adopt;
 pub(crate) mod files;
@@ -29,8 +32,8 @@ mod gate_inst1_release;
 pub(crate) use host::{Host, SystemHost};
 
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem};
-use actingcommand_contract::outcome::{Category, Outcome};
+use crate::codes::{ActingctlCode, ArgumentProblem, InstallLocation, InstallRefusal};
+use actingcommand_contract::outcome::{Category, CauseRelation, Outcome};
 use journal::Operation;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -203,11 +206,24 @@ pub(crate) fn resolve_root(flags: &Flags<'_>) -> Result<Paths, Outcome> {
     Paths::resolve(Path::new(root)).map_err(|cause| unusable("--root").caused_by(cause))
 }
 
-/// `install_layout_ab_unsupported` for a root that holds acsetup's A/B selection.
-pub(crate) fn refuse_ab(paths: &Paths) -> Result<(), Outcome> {
+/// `install_command_done` of the command `operation`.
+pub(crate) fn done(operation: InstallLocation) -> Outcome {
+    Outcome::new(ActingctlCode::InstallCommandDone).operation(operation)
+}
+
+/// `install_command_refused` of the command `operation`, `refusal` saying why.
+pub(crate) fn refusal(operation: InstallLocation, refusal: InstallRefusal) -> Outcome {
+    Outcome::new(ActingctlCode::InstallCommandRefused)
+        .operation(operation)
+        .install_refusal(refusal)
+}
+
+/// `install_command_refused` (`layout_ab_unsupported`) for a root that holds acsetup's A/B
+/// selection.
+pub(crate) fn refuse_ab(operation: InstallLocation, paths: &Paths) -> Result<(), Outcome> {
     let selection = paths.selection();
     if selection.exists() {
-        return Err(Outcome::new(ActingctlCode::InstallLayoutAbUnsupported).path(selection));
+        return Err(refusal(operation, InstallRefusal::LayoutAbUnsupported).path(selection));
     }
     Ok(())
 }
@@ -221,12 +237,12 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     match state::read_current(&paths) {
         CurrentState::Unfinished(current) if current.operation_id == operation_id => {}
         CurrentState::Unfinished(_) | CurrentState::Unreadable(_) => {
-            journal::refuse_unfinished(&paths)?;
+            journal::refuse_unfinished(InstallLocation::Resume, &paths)?;
             return Err(unusable("--operation"));
         }
         CurrentState::None => return Err(unusable("--operation")),
     }
-    let operation = Operation::load(host, &paths, operation_id)?;
+    let operation = Operation::load(host, &paths, operation_id, InstallLocation::Resume)?;
     if operation.journal().finished() || operation.journal().undo.is_some() {
         return Err(unusable("--operation"));
     }
@@ -237,18 +253,16 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     Ok(resumed(operation_id, answer))
 }
 
-/// `install_operation_resumed` over the resumed operation's own answer: its members, and its
-/// outcome as the `related` link. An operation that ended refused answers its refusal.
+/// `install_command_done` of `install resume` over the resumed operation's own answer: its
+/// members, and its outcome (the operation's own done) as the `related` link. An operation that
+/// ended refused answers its refusal.
 fn resumed(operation_id: &str, answer: Answer) -> Answer {
     if answer.outcome.category() > Category::Info {
         return answer;
     }
-    let outcome = Outcome::new(ActingctlCode::InstallOperationResumed)
+    let outcome = done(InstallLocation::Resume)
         .install_operation_id(operation_id)
-        .link(
-            actingcommand_contract::outcome::CauseRelation::Related,
-            answer.outcome,
-        );
+        .link(CauseRelation::Related, answer.outcome);
     Answer {
         members: answer.members,
         outcome,

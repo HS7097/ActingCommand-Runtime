@@ -11,7 +11,7 @@ use super::journal::{self, Opening, Operation, PlannedStep, Previous, StepKind, 
 use super::manifest::{self, BuildManifest, BuildProblem, Half};
 use super::state::{self, BuildOrigin, KeptBuild, LiveBuild, OperationKind, PackEntry, Paths};
 use super::{Answer, Flags, Host};
-use crate::codes::{ActingctlCode, InstallRefusal};
+use crate::codes::{InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,28 +21,38 @@ use std::path::{Path, PathBuf};
 const KEPT_MARKERS: [&str; 4] = [".old-", ".abandoned-", ".rolledback-", ".part"];
 const BUNDLE_FILE: &str = "bundle.json";
 
-/// `install_update_refused` with `refusal`.
+/// The refusal of `install adopt` with `refusal`.
 fn refusal(refusal: InstallRefusal) -> Outcome {
-    Outcome::new(ActingctlCode::InstallUpdateRefused).install_refusal(refusal)
+    super::refusal(InstallLocation::Adopt, refusal)
 }
 
-/// The live build verified against its own manifests: `install_update_refused`
-/// (`live_build_invalid`) when a manifest cannot be read or the two name different commits,
-/// `install_live_build_modified` (`count`, `files`) when a listed file differs.
-pub(crate) fn verify_live(paths: &Paths) -> Result<manifest::Build, Outcome> {
+/// The refusal `live_build_modified` (`count`, `files`) of the command `operation`.
+fn live_build_modified(operation: InstallLocation, problems: &[manifest::FileProblem]) -> Outcome {
+    super::refusal(operation, InstallRefusal::LiveBuildModified)
+        .count(problems.len())
+        .files(problems.iter().map(manifest::FileProblem::record))
+}
+
+/// The live build verified against its own manifests, for the command `operation`: the refusal
+/// `live_build_invalid` when a manifest cannot be read or the two name different commits,
+/// `live_build_modified` (`count`, `files`) when a listed file differs.
+pub(crate) fn verify_live(
+    operation: InstallLocation,
+    paths: &Paths,
+) -> Result<manifest::Build, Outcome> {
     manifest::verify_build(&paths.root).map_err(|problem| match problem {
         BuildProblem::Manifest(half, cause) => {
-            let outcome = refusal(InstallRefusal::LiveBuildInvalid)
+            let outcome = super::refusal(operation, InstallRefusal::LiveBuildInvalid)
                 .path(paths.root.join(half.dir()).join(manifest::MANIFEST_FILE));
             match cause {
                 Some(cause) => outcome.caused_by(cause),
                 None => outcome,
             }
         }
-        BuildProblem::Commits => refusal(InstallRefusal::LiveBuildInvalid).path(&paths.root),
-        BuildProblem::Files(problems) => Outcome::new(ActingctlCode::InstallLiveBuildModified)
-            .count(problems.len())
-            .files(problems.iter().map(manifest::FileProblem::record)),
+        BuildProblem::Commits => {
+            super::refusal(operation, InstallRefusal::LiveBuildInvalid).path(&paths.root)
+        }
+        BuildProblem::Files(problems) => live_build_modified(operation, &problems),
     })
 }
 
@@ -158,14 +168,15 @@ fn adopt_steps(commit: &str, ms: u64) -> Vec<PlannedStep> {
 pub(crate) fn adopt(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     let flags = Flags::parse(words, &["--root"], &[])?;
     let paths = super::resolve_root(&flags)?;
-    super::refuse_ab(&paths)?;
+    super::refuse_ab(InstallLocation::Adopt, &paths)?;
     if !paths.is_single_location() {
         return Err(refusal(InstallRefusal::NotSingleLocation).path(&paths.root));
     }
-    let live = verify_live(&paths)?;
+    let live = verify_live(InstallLocation::Adopt, &paths)?;
     read_config(&paths)?;
-    let previous = state::load_state_or_default(&paths)
-        .map_err(|cause| journal::state_invalid(paths.state(), Some(cause)))?;
+    let previous = state::load_state_or_default(&paths).map_err(|cause| {
+        journal::state_invalid(InstallLocation::Adopt, paths.state(), Some(cause))
+    })?;
     let build = paths.build(&live.commit);
     let kept = manifest::verify_build(&build).is_ok_and(|kept| kept.commit == live.commit);
     if kept
@@ -176,7 +187,9 @@ pub(crate) fn adopt(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
             .is_some_and(|current| current.commit == live.commit)
     {
         return Answer::new(
-            Outcome::new(ActingctlCode::InstallRootAdopted).commit_sha(live.commit.clone()),
+            super::done(InstallLocation::Adopt)
+                .commit_sha(live.commit.clone())
+                .installation_changed(false),
         )
         .with("commit", live.commit.as_str())?
         .with("unchanged", true)?
@@ -205,7 +218,8 @@ pub(crate) fn adopt(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
 
 /// Continues an unfinished adopt: the live build is verified again first.
 pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
-    let live = verify_live(operation.paths()).map_err(|cause| operation.interrupted(cause))?;
+    let live = verify_live(InstallLocation::Adopt, operation.paths())
+        .map_err(|cause| operation.interrupted(cause))?;
     run(operation, &live)
 }
 
@@ -249,9 +263,7 @@ fn run(mut operation: Operation<'_>, live: &manifest::Build) -> Result<Answer, O
                 // ends refused, as a changed live file refuses it.
                 let refused = match problem {
                     BuildProblem::Files(problems) => {
-                        Outcome::new(ActingctlCode::InstallLiveBuildModified)
-                            .count(problems.len())
-                            .files(problems.iter().map(manifest::FileProblem::record))
+                        live_build_modified(InstallLocation::Adopt, &problems)
                     }
                     BuildProblem::Manifest(..) | BuildProblem::Commits => {
                         refusal(InstallRefusal::LiveBuildInvalid).path(&paths.root)
@@ -318,9 +330,10 @@ fn run(mut operation: Operation<'_>, live: &manifest::Build) -> Result<Answer, O
             .map_err(|cause| operation.interrupted(cause))?;
     }
     let operation_id = operation.id().to_owned();
-    let outcome = Outcome::new(ActingctlCode::InstallRootAdopted)
+    let outcome = super::done(InstallLocation::Adopt)
         .commit_sha(live.commit.clone())
-        .install_operation_id(operation_id.clone());
+        .install_operation_id(operation_id.clone())
+        .installation_changed(true);
     operation.finish(&outcome)?;
     Answer::new(outcome)
         .with("commit", live.commit.as_str())?

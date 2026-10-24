@@ -5,6 +5,7 @@
 //! (`actingcommand.install-state.v1`) and `current.json`, the one unfinished operation.
 
 use super::files;
+use crate::codes::InstallLocation;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -212,6 +213,16 @@ pub(crate) fn write_state(paths: &Paths, state: &InstallState) -> Result<(), Out
 pub(crate) enum OperationKind {
     ReleaseStage,
     Adopt,
+}
+
+impl OperationKind {
+    /// The command that opens an operation of this kind: the `operation` of its outcomes.
+    pub(crate) fn location(self) -> InstallLocation {
+        match self {
+            Self::ReleaseStage => InstallLocation::ReleaseStage,
+            Self::Adopt => InstallLocation::Adopt,
+        }
+    }
 }
 
 /// `install\current.json`: the one unfinished operation.
