@@ -357,6 +357,9 @@ mod gate_406_t3;
 mod gate_412_b3_s2;
 
 mod gate_epoch_close;
+// #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
+// read, and of the epochs before a start that failed after appending its start event.
+mod gate_411_a65;
 // #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
 // fatal the Runtime under test latched and its shutdown flag.
 mod gate_411_harness_diag;

@@ -571,6 +571,14 @@ pub struct RuntimeHostConfig {
     /// test releases it.
     #[cfg(test)]
     pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
+    /// #411 A65, test only: the ledger writer's read budget in place of
+    /// `ledger_observer.read_budget_ms` (whose configured value is at least 1 ms).
+    #[cfg(test)]
+    ledger_read_budget_for_test: Option<Duration>,
+    /// #411 A65, test only: the start fails right after it appended its start event and the
+    /// `runtime.instance_bound` events.
+    #[cfg(test)]
+    fail_after_start_event_for_test: bool,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -625,7 +633,26 @@ impl RuntimeHostConfig {
             network_connectivity_for_test: None,
             #[cfg(test)]
             pack_admission_hold_for_test: None,
+            #[cfg(test)]
+            ledger_read_budget_for_test: None,
+            #[cfg(test)]
+            fail_after_start_event_for_test: false,
         }
+    }
+
+    /// #411 A65, test only: every read on the ledger writer gets `budget` in place of
+    /// `ledger_observer.read_budget_ms`.
+    #[cfg(test)]
+    pub(crate) fn with_ledger_read_budget_for_test(mut self, budget: Duration) -> Self {
+        self.ledger_read_budget_for_test = Some(budget);
+        self
+    }
+
+    /// #411 A65, test only: the start fails right after it appended its start event.
+    #[cfg(test)]
+    pub(crate) fn with_start_failure_after_start_event_for_test(mut self) -> Self {
+        self.fail_after_start_event_for_test = true;
+        self
     }
 
     /// Workflow #386 SR-3, test only: the task package admission after start waits for `hold`.
@@ -2012,6 +2039,14 @@ impl RuntimeHost {
                 config.device_diagnostic_mode,
             )?;
             append_instance_binding_events(&shared.ledger, &shared.events, &registered_instances)?;
+            #[cfg(test)]
+            if config.fail_after_start_event_for_test {
+                return Err(RuntimeHostError::fatal(
+                    crate::codes::test_spellings::TestCode::StartFailedAfterStartEventForTest,
+                    crate::codes::test_spellings::TestLocation::FailStartAfterStartEventForTest,
+                    RuntimeErrorCode::RuntimeHalted,
+                ));
+            }
             installation::set_prepared(&shared.policy, Mutex::new(policy))?;
             installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
             installation::set_prepared(&shared.startup_packages, startup_packages)?;
@@ -5638,6 +5673,10 @@ fn ledger_failure_plan(
     plan = plan
         .with_read_budget(Duration::from_millis(section.read_budget_ms))
         .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
+    #[cfg(test)]
+    if let Some(budget) = config.ledger_read_budget_for_test {
+        plan = plan.with_read_budget(budget);
+    }
     if let Some(timeout) = config.ledger_reply_timeout {
         plan = plan.with_reply_timeout(timeout);
     }
