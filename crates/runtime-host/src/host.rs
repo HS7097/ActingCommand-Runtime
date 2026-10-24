@@ -572,9 +572,10 @@ pub struct RuntimeHostConfig {
     #[cfg(test)]
     pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
     /// #411 A65, test only: the ledger writer's read budget in place of
-    /// `ledger_observer.read_budget_ms` (whose configured value is at least 1 ms).
+    /// `ledger_observer.read_budget_ms` (whose configured value is at least 1 ms), and the
+    /// writer's clock it is measured on in place of the process's monotonic clock.
     #[cfg(test)]
-    ledger_read_budget_for_test: Option<Duration>,
+    ledger_read_budget_for_test: Option<(Duration, actingcommand_ledger::LedgerMonotonicClock)>,
     /// #411 A65, test only: the start fails right after it appended its start event and the
     /// `runtime.instance_bound` events.
     #[cfg(test)]
@@ -641,10 +642,15 @@ impl RuntimeHostConfig {
     }
 
     /// #411 A65, test only: every read on the ledger writer gets `budget` in place of
-    /// `ledger_observer.read_budget_ms`.
+    /// `ledger_observer.read_budget_ms`, measured on `clock` (the writer's clock, which the
+    /// close bound and the stall watch read too).
     #[cfg(test)]
-    pub(crate) fn with_ledger_read_budget_for_test(mut self, budget: Duration) -> Self {
-        self.ledger_read_budget_for_test = Some(budget);
+    pub(crate) fn with_ledger_read_budget_for_test(
+        mut self,
+        budget: Duration,
+        clock: actingcommand_ledger::LedgerMonotonicClock,
+    ) -> Self {
+        self.ledger_read_budget_for_test = Some((budget, clock));
         self
     }
 
@@ -5692,8 +5698,8 @@ fn ledger_failure_plan(
         .with_read_budget(Duration::from_millis(section.read_budget_ms))
         .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
     #[cfg(test)]
-    if let Some(budget) = config.ledger_read_budget_for_test {
-        plan = plan.with_read_budget(budget);
+    if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
+        plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
     }
     if let Some(timeout) = config.ledger_reply_timeout {
         plan = plan.with_reply_timeout(timeout);

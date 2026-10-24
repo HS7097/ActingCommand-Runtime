@@ -13,10 +13,13 @@
 //!   start that succeeds: the run is settled.
 //!
 //! The previous epoch is the epoch-close child process, killed hard with its direct run in
-//! flight. The test read budget is zero: a writer read that is no page stops at its 256th row
-//! (`READ_BUDGET_CHECK_ROWS`), so "more than one unpaged read returns" is a row count, not a
-//! wall clock. Existing tests missed this: the epoch-close gates restart a ledger of a few hundred
-//! records under the default 1 s budget, and no test started again after a start that failed.
+//! flight. Test (a) restarts under a 1 ms read budget, the smallest
+//! `ledger_observer.read_budget_ms` takes, on a writer clock whose readings lie at least 1 ms
+//! apart: every look at the clock finds the budget spent, so a writer read that is no page stops
+//! at its 256th row (`READ_BUDGET_CHECK_ROWS`) however fast it reads, and "more than one unpaged
+//! read returns" is a row count, not a wall clock. Existing tests missed this: the epoch-close
+//! gates restart a ledger of a few hundred records under the default 1 s budget, and no test
+//! started again after a start that failed.
 
 use super::gate_epoch_close::{
     ALIAS, crash_mid_run_with, epoch_config, run_terminal, start_host_with,
@@ -25,10 +28,28 @@ use super::instance_workers::closed_ledger_events;
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::test_spellings::TestCode;
+use actingcommand_ledger::LedgerMonotonicClock;
 
 /// Test (a): the ordinary records the previous epoch holds before its run, two startup-read
-/// pages' worth and more than one unpaged read returns within a zero read budget.
+/// pages' worth and more than one unpaged read returns within `READ_BUDGET` on
+/// `one_ms_per_reading_clock`.
 const FILLER_RECORDS: usize = 2 * crate::recovery_read::RECOVERY_PAGE_EVENTS;
+
+/// Test (a): the restart's read budget, the smallest `ledger_observer.read_budget_ms` takes.
+const READ_BUDGET: Duration = Duration::from_millis(1);
+
+/// Test (a): the restart's ledger writer clock, the process's monotonic milliseconds plus one
+/// for every reading before. Two readings lie at least 1 ms apart, so a read under
+/// `READ_BUDGET` stops at its first look at the clock however fast its rows are read; the close
+/// bound and the stall watch, on the same clock, run no slower than the process's clock.
+fn one_ms_per_reading_clock() -> LedgerMonotonicClock {
+    let origin = Instant::now();
+    let readings = Arc::new(AtomicU64::new(0));
+    Arc::new(move || {
+        let elapsed_ms = u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+        elapsed_ms.saturating_add(readings.fetch_add(1, Ordering::SeqCst))
+    })
+}
 
 /// The settlement the requirement asks for: one terminal of `run`, cancelled with
 /// `contained_task_recovered_after_restart`.
@@ -89,7 +110,8 @@ fn a65_a_a_previous_epoch_beyond_one_unpaged_read_is_settled_and_the_start_succe
     );
 
     let host = start_host_with(
-        epoch_config(crashed.root.path()).with_ledger_read_budget_for_test(Duration::ZERO),
+        epoch_config(crashed.root.path())
+            .with_ledger_read_budget_for_test(READ_BUDGET, one_ms_per_reading_clock()),
         crashed.instance_id,
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
