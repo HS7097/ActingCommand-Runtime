@@ -11,6 +11,7 @@
 
 use super::*;
 use crate::codes::AdjustmentReason;
+use crate::fact_store::{FactOrder, FactTrigger};
 use crate::resource_adjustment::{
     AdjustmentPlan, ConfirmationInput, PlannedAdjustment, PlannedBase, PlannedInvalidation,
     PlannedPublication, PreRunRecord, ReadingFrameInput, plan_resource_adjustments,
@@ -516,7 +517,6 @@ fn d2s3_t15_t16_t17_t40_confirmed_adjustments_write_or_drop_their_keys() {
 }
 
 const CONFIRMED_AT_MS: u64 = 10_000;
-const STEP_SEQUENCE: u64 = 50;
 const NOW_MS: u64 = 20_000;
 
 fn at(unix_ms: u64) -> SystemTime {
@@ -525,6 +525,18 @@ fn at(unix_ms: u64) -> SystemTime {
 
 fn event(n: u8) -> EventId {
     serde_json::from_value(serde_json::json!(format!("evt_{:032x}", n))).expect("an event id")
+}
+
+// The confirmed step's `task.step_finished`, captured in this epoch, after every record the start
+// replayed (Workflow #383 AO-3: places in the store's history, no ledger positions).
+fn step() -> FactTrigger {
+    FactTrigger {
+        event_type: EventType::TaskStepFinished,
+        event_id: event(2),
+        instance_id: None,
+        at_unix_ms: CONFIRMED_AT_MS,
+        order: Some(FactOrder::Captured(50)),
+    }
 }
 
 fn consume(amount: Result<u64, ResourceReadingProblem>) -> ResourceAdjustmentResult {
@@ -583,7 +595,7 @@ fn reading(value: u64) -> ResourceReadingValue {
 }
 
 // `resource.k1` before the run: `value`, observed at `observed_at_ms`, until `expires_at_ms`,
-// published at ledger sequence 10.
+// published by `event(1)`, which the start replayed at ledger sequence 10.
 fn k1_before(
     value: i64,
     observed_at_ms: u64,
@@ -601,7 +613,7 @@ fn k1_before(
         "resource.k1".to_owned(),
         PreRunRecord {
             record,
-            sequence: 10,
+            order: FactOrder::Replayed(10),
             event_id: event(1),
         },
     )])
@@ -636,7 +648,7 @@ fn plan(
         &[ConfirmationInput {
             captured_at: at(CONFIRMED_AT_MS),
             observed_at_unix_ms: CONFIRMED_AT_MS,
-            step_sequence: STEP_SEQUENCE,
+            step: step(),
             adjustments: &adjustments,
         }],
         pre_run,
@@ -695,11 +707,11 @@ fn skipped(reason: AdjustmentReason) -> Option<(String, Option<String>)> {
 #[test]
 fn d2s3_t16_t40_the_plan_writes_skips_or_drops_as_the_model_says() {
     let none = BTreeMap::new();
-    let dropped = |base_sequence: u64, adjustment_id: &str| PlannedInvalidation {
+    let dropped = |base_event: EventId, adjustment_id: &str| PlannedInvalidation {
         adjustment_id: adjustment_id.to_owned(),
         fact_key: "resource.k1".to_owned(),
-        base_sequence,
-        step_sequence: STEP_SEQUENCE,
+        base_event,
+        step: step(),
     };
 
     let missing = plan(consume(Ok(20)), &[], &none);
@@ -748,7 +760,7 @@ fn d2s3_t16_t40_the_plan_writes_skips_or_drops_as_the_model_says() {
         actingcommand_contract::outcome::Category::Warning
     );
     assert!(underflow.publications.is_empty());
-    assert_eq!(underflow.invalidations, [dropped(10, "used")]);
+    assert_eq!(underflow.invalidations, [dropped(event(1), "used")]);
 
     let unreadable = plan(
         consume(Err(ResourceReadingProblem::LowConfidence)),
@@ -764,7 +776,7 @@ fn d2s3_t16_t40_the_plan_writes_skips_or_drops_as_the_model_says() {
         Some("count/used")
     );
     assert!(unreadable.publications.is_empty());
-    assert_eq!(unreadable.invalidations, [dropped(10, "used")]);
+    assert_eq!(unreadable.invalidations, [dropped(event(1), "used")]);
 
     let written = plan(consume(Ok(20)), &[], &k1_before(100, 1_000, 100_000));
     assert_eq!(outcome_of(&written), None);
@@ -780,7 +792,7 @@ fn d2s3_t16_t40_the_plan_writes_skips_or_drops_as_the_model_says() {
             observed_at_unix_ms: CONFIRMED_AT_MS,
             expires_at_unix_ms: Some(100_000),
             base: PlannedBase::PreRun {
-                sequence: 10,
+                order: FactOrder::Replayed(10),
                 event_id: event(1),
             },
         })]
@@ -796,5 +808,5 @@ fn d2s3_t16_t40_the_plan_writes_skips_or_drops_as_the_model_says() {
         skipped(AdjustmentReason::AfterReadMissing)
     );
     assert!(unread.publications.is_empty());
-    assert_eq!(unread.invalidations, [dropped(10, "spent")]);
+    assert_eq!(unread.invalidations, [dropped(event(1), "spent")]);
 }

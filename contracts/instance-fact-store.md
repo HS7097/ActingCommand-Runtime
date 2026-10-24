@@ -70,6 +70,11 @@ AO-3 implements the entry, the revisions and the gate order; AO-6 the start load
   the ledger; `latest_observed`, tombstones and the input boundary are derived from the same
   records. Tombstones stay in the store (at most 256). History at a ledger position
   (`at_position`) remains for forensics only.
+- **As built (AO-3)**: the entry is three methods, `apply_publication`, `observe_trigger` and
+  `apply_adjustment_invalidation` (seed and add/subtract changes come with AO-4 to AO-6); the
+  lineage is the owner epoch and opens when business opens, the start segment still replaying the
+  ledger (the base record `tagged_state_loaded` is AO-6's). Details and the departures in
+  [ledger-observer.md](ledger-observer.md) §3 ("As built (AO-3)").
 - The projection below reads the store at the evaluation's revision pair instead of a
   `ledger_position` (AO-4; the `input_ledger_position` member of the dispatch intent follows
   [the v0.12.0 plan](v012-register.md)).

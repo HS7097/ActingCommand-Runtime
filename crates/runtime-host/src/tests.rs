@@ -196,6 +196,9 @@ mod gate_411_a51;
 mod gate_p0_lo;
 // Workflow #383 AO-4q, test row AO4-c: status reads append no ledger record.
 mod gate_383_ao4q;
+// Workflow #383 AO-3, test rows AO3-a to AO3-i: the fan-out point, the instance fact store's one
+// entry with its revisions, snapshot ids by revision pair and the start records through capture.
+mod gate_383_ao3;
 // Workflow #383 SH-1, register §1.18: the reserved single-touch path drag was refused; its test
 // retired with Workflow #406 T3 (its replacements are in gate_406_t3).
 mod gate_383_sh1;

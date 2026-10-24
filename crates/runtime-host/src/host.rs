@@ -258,10 +258,7 @@ use lease::{LeaseExpiryTestCheckpoint, lease_token_identity_match_count};
 use lease::{
     QueueTerminalStore, QueuedRequestContext, RuntimeLeaseAcquisition, instance_not_running,
 };
-use lifecycle::{
-    append_instance_binding_events, append_runtime_start_event, instance_bound_payload,
-    record_failure,
-};
+use lifecycle::{instance_bound_payload, record_failure};
 use monitor_control::monitor_probe_loop;
 use observation::CompletedReadonlyObservation;
 use performance::{CapacityUse, performance_monitor_loop, performance_probe_loop};
@@ -1526,7 +1523,7 @@ impl RuntimeHost {
         database.take_connection_wait_peak();
         let prepared = (|| {
             let facts = timed(&mut startup_recovery.fact_store_ms, || {
-                InstanceFactStore::recover(&ledger, Arc::clone(&state))
+                InstanceFactStore::recover(&ledger, Arc::clone(&state), owner_epoch)
             })?;
             let performance_interval = performance.sample_interval().or_else(|| {
                 config
@@ -1614,6 +1611,9 @@ impl RuntimeHost {
         // Workflow #390 DISC-1: read the `startup_discovery` section while `config` is whole;
         // `HostShared` below moves some of its fields, and the provider startup uses this.
         let startup_discovery = startup_discovery_config(&config);
+        // Workflow #383 AO-3 (`contracts/ledger-observer.md` §2): the capture interface the
+        // ledger hands the host; its captures are sanitized with the host's own fingerprinter.
+        let ledger_capture = ledger.capture_handle(Arc::new(events.fingerprinter().clone()));
         let shared = Arc::new(HostShared {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
@@ -1650,6 +1650,11 @@ impl RuntimeHost {
             facts: Mutex::new(facts),
             runtime_facts: Mutex::new(runtime_facts),
             runtime_facts_dirty: AtomicBool::new(runtime_facts_dirty),
+            runtime_facts_revision: AtomicU64::new(0),
+            ledger_capture,
+            deferred_observations: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            ledger_captures_for_test: Mutex::new(Vec::new()),
             maximum_frame_bytes: config.maximum_frame_bytes,
             policy_inputs: Mutex::new(config.policy_inputs),
             authoritative_policy_outcomes: Mutex::new(BTreeMap::new()),
@@ -2004,14 +2009,13 @@ impl RuntimeHost {
             }
 
             shared.check_install_preparation()?;
-            append_runtime_start_event(
-                &shared.ledger,
-                &shared.events,
+            // Workflow #383 AO-3, G16: the start records pass the host's capture point.
+            shared.append_runtime_start_event(
                 &config.state_root,
                 takeover,
                 config.device_diagnostic_mode,
             )?;
-            append_instance_binding_events(&shared.ledger, &shared.events, &registered_instances)?;
+            shared.append_instance_binding_events(&registered_instances)?;
             installation::set_prepared(&shared.policy, Mutex::new(policy))?;
             installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
             installation::set_prepared(&shared.startup_packages, startup_packages)?;
@@ -2153,6 +2157,9 @@ impl RuntimeHost {
                         )
                     })?,
             );
+            // Workflow #383 AO-3 (`contracts/ledger-observer.md` §3): business opens; from here
+            // on the instance fact store reads no ledger and observes every record at capture.
+            shared.open_live_fact_stores()?;
             shared.finish_install_preparation()?;
             if !held_startup {
                 publish_runtime_info(&host.info_path, &host.info)?;
@@ -2261,6 +2268,20 @@ impl RuntimeHost {
     /// Workflow #378 A6a: actingd writes each as a daemon line.
     pub fn scheduling_pause_restore(&self) -> &[Outcome] {
         &self.scheduling_pause_restore
+    }
+
+    /// Workflow #383 AO-3, tests: the records the host's capture point handed the ledger since
+    /// the host started, in order, each with whether its hand-off waited for the commit.
+    #[cfg(test)]
+    pub(crate) fn ledger_captures_for_test(
+        &self,
+    ) -> RuntimeHostResult<Vec<facts::LedgerCaptureForTest>> {
+        Ok(self
+            .shared_ref(HostLocation::ReadInstanceFactSnapshot)?
+            .ledger_captures_for_test
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone())
     }
 
     /// Workflow #378 A6a (model section 7.4, N1): `ledger_opened` (info) with the phases of
@@ -4577,6 +4598,19 @@ struct HostShared {
     // The Runtime's own facts: ledger-first, memory-only, sealed periodically while dirty.
     runtime_facts: Mutex<RuntimeFactStore>,
     runtime_facts_dirty: AtomicBool,
+    /// Workflow #383 AO-3 (§13, register W1): the scheduler workbench's revision in this epoch's
+    /// lineage, +1 per change it accepts once business is open; changed under `fact_write_gate`.
+    runtime_facts_revision: AtomicU64,
+    /// Workflow #383 AO-3 (`contracts/ledger-observer.md` §2 call 1): the ledger's capture
+    /// interface, handed to the host at start; only the host's capture point holds it
+    /// (`host/facts.rs`, architecture guard AO3-j).
+    ledger_capture: actingcommand_ledger::LedgerCaptureHandle,
+    /// Workflow #383 AO-3 (§3): records committed outside the fan-out point that the instance
+    /// fact store observes, in ledger order, at the next holder of `fact_write_gate`. A leaf lock.
+    deferred_observations: Mutex<Vec<PersistedEvent>>,
+    /// Workflow #383 AO-3, tests: what the host's capture point handed the ledger, in order.
+    #[cfg(test)]
+    ledger_captures_for_test: Mutex<Vec<facts::LedgerCaptureForTest>>,
     // The IPC frame bound a `RuntimeFactSnapshot` read reply must fit (Workflow #308 5d-1).
     maximum_frame_bytes: usize,
     policy_inputs: Mutex<Option<PolicyInputSnapshot>>,

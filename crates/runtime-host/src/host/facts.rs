@@ -2,11 +2,16 @@
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
-use crate::fact_store::{priority_offset_milli, valid_priority_offset_task_id};
+use crate::fact_store::{
+    AppliedInvalidation, FactOrder, FactTrigger, priority_offset_milli,
+    valid_priority_offset_task_id,
+};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
-    CaptureExtent, CaptureGeometryObservation, CaptureRotation, CaptureRotationObservation,
-    RESOURCE_TARGETS_FACT_KEY, priority_offset_task_id,
+    CaptureExtent, CaptureGeometryObservation, CaptureItem, CaptureRotation,
+    CaptureRotationObservation, EventOrigin, IssuedEventId, LedgerCapture, LedgerSource,
+    RESOURCE_TARGETS_FACT_KEY, RuntimeStateStoreRevision, SanitizedEventDraft, SourceRevision,
+    priority_offset_task_id,
 };
 
 /// `source_detector` of the three configuration-seeded policy instance facts.
@@ -171,18 +176,22 @@ pub(super) enum FactPublicationPurpose {
     /// `ApplyResourceTargets`: exactly one instance-scoped `session.resource_targets` record.
     ResourceTargets,
     /// Workflow #384 D2-S3 (D2 model §3.6, A-1): one record a run's resource adjustment wrote
-    /// from the key's active record, which the `fact.published` at ledger sequence
-    /// `base_sequence` carried. Under `fact_write_gate` the record is refused when another
-    /// record of the key has replaced that one since.
-    ResourceAdjustment { base_sequence: u64 },
+    /// from the key's active record, which the `fact.published` `base_event` carried (Workflow
+    /// #383 AO-3: identified by its publication, not its ledger position). Under
+    /// `fact_write_gate` the record is refused when another record of the key has replaced that
+    /// one since.
+    ResourceAdjustment { base_event: EventId },
 }
 
-/// Where one publication landed: the event that holds its records, the sequence of the
-/// record active before it (resource target policies only) and whether nothing was appended.
+/// Where one publication landed: the event that holds its records, its place in the instance
+/// store's history, its ledger sequence when its capture waited for the commit (a resource
+/// target policy, whose receipt carries it until AO-4), the sequence of the record active before
+/// it (resource target policies only) and whether nothing was appended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FactPublication {
     pub(super) event_id: EventId,
-    pub(super) sequence: u64,
+    pub(super) order: FactOrder,
+    pub(super) sequence: Option<u64>,
     pub(super) previous_version: Option<u64>,
     pub(super) replayed: bool,
 }
@@ -421,15 +430,15 @@ impl HostShared {
                 self.synchronize_fact_store_under_gate()?;
                 // Workflow #384 D2-S3: the adjustment's base is read and its record written in
                 // this one hold of the gate.
-                if let FactPublicationPurpose::ResourceAdjustment { base_sequence } = purpose {
+                if let FactPublicationPurpose::ResourceAdjustment { base_event } = purpose {
                     let facts = lock(&self.facts, ContractLocation::PublishFact)?;
                     let current = match observation.records.as_slice() {
                         [record] => facts
                             .active_revision(&record.scope, &record.key)
-                            .map(|(_, sequence, _)| sequence),
+                            .map(|active| active.event_id),
                         _ => None,
                     };
-                    if current != Some(base_sequence) {
+                    if current != Some(base_event) {
                         return Err(RuntimeHostError::request(
                             HostCode::FactObservationVersionConflict,
                             ContractLocation::PublishFacts,
@@ -444,30 +453,29 @@ impl HostShared {
                 if purpose == FactPublicationPurpose::ResourceTargets {
                     let record = &observation.records[0];
                     let facts = lock(&self.facts, ContractLocation::PublishFact)?;
-                    if let Some((active, sequence, event_id)) =
-                        facts.active_revision(&record.scope, &record.key)
-                    {
-                        if active.resource_bundle_hash == record.resource_bundle_hash
-                            && !active.is_expired(now)
+                    if let Some(active) = facts.active_revision(&record.scope, &record.key) {
+                        if active.record.resource_bundle_hash == record.resource_bundle_hash
+                            && !active.record.is_expired(now)
                         {
                             return Ok(FactPublication {
-                                event_id,
-                                sequence,
-                                previous_version: Some(sequence),
+                                event_id: active.event_id,
+                                order: active.order,
+                                sequence: active.sequence,
+                                previous_version: active.sequence,
                                 replayed: true,
                             });
                         }
-                        previous_version = Some(sequence);
+                        previous_version = active.sequence;
                     }
                 }
                 let preview = lock(&self.facts, ContractLocation::PublishFact)?
-                    .preview_observation(&observation, now, &self.ledger)?;
+                    .preview_observation(&observation, now)?;
                 if let Some(event_id) = preview {
                     let record = &observation.records[0];
                     let facts = lock(&self.facts, ContractLocation::PublishFact)?;
-                    let (_, sequence, _) = facts
+                    let active = facts
                         .active_revision(&record.scope, &record.key)
-                        .filter(|(_, _, active_event)| *active_event == event_id)
+                        .filter(|active| active.event_id == event_id)
                         .ok_or_else(|| {
                             RuntimeHostError::fatal(
                                 HostCode::FactPublicationSequenceMissing,
@@ -477,8 +485,9 @@ impl HostShared {
                         })?;
                     return Ok(FactPublication {
                         event_id,
-                        sequence,
-                        previous_version: Some(sequence),
+                        order: active.order,
+                        sequence: active.sequence,
+                        previous_version: active.sequence,
                         replayed: true,
                     });
                 }
@@ -511,30 +520,65 @@ impl HostShared {
                         ContractLocation::PublishFacts,
                     ));
                 }
-                let payload =
-                    FactPayloadDraft::observation(observation, scope_instances, AuditInput::new())
-                        .map_err(|_| {
-                            policy_admission_request(
-                                HostCode::FactObservationInvalid,
-                                ContractLocation::PublishFacts,
-                            )
-                        })?;
+                let records = observation.records.clone();
+                let payload = FactPayloadDraft::observation(
+                    observation,
+                    scope_instances.clone(),
+                    AuditInput::new(),
+                )
+                .map_err(|_| {
+                    policy_admission_request(
+                        HostCode::FactObservationInvalid,
+                        ContractLocation::PublishFacts,
+                    )
+                })?;
                 let links = match source_request {
                     Some(request) => self.events.request_links(request, None, None, None),
                     None => self.events.system_links()?,
                 };
-                let event = self.append_event_under_fact_gate(
-                    EventSeverity::Info,
-                    event_source,
-                    OriginModule::FactStore,
-                    event_actor,
+                if !lock(&self.facts, ContractLocation::PublishFact)?.is_live() {
+                    // Workflow #383 AO-3: until business opens the store follows the ledger, so
+                    // the publication is appended and the store takes it from there.
+                    let event = self.append_event_under_fact_gate(
+                        EventSeverity::Info,
+                        event_source,
+                        OriginModule::FactStore,
+                        event_actor,
+                        links,
+                        payload,
+                    )?;
+                    self.synchronize_fact_store_under_gate()?;
+                    return Ok(FactPublication {
+                        event_id: *event.event_id(),
+                        order: FactOrder::Replayed(event.sequence()),
+                        sequence: Some(event.sequence()),
+                        previous_version,
+                        replayed: false,
+                    });
+                }
+                // Workflow #383 AO-3 (`contracts/ledger-observer.md` §3, G2): the store's one
+                // entry applies the publication first; the gate copies it to the ledger without
+                // waiting. A resource target policy's receipt still carries the ledger sequence
+                // until AO-4, so that capture waits for its commit.
+                let event_id = self.events.issue_event_id()?;
+                let published = *event_id.transport();
+                let revision = lock(&self.facts, ContractLocation::PublishFact)?
+                    .apply_publication(&records, &scope_instances, event_actor, published)?;
+                let (order, sequence) = self.capture_store_change_under_gate(
+                    event_id,
+                    EventType::FactPublished,
+                    EventOrigin::new(event_source, OriginModule::FactStore, event_actor),
                     links,
-                    payload,
+                    payload.into(),
+                    revision,
+                    purpose == FactPublicationPurpose::ResourceTargets,
                 )?;
-                self.synchronize_fact_store_under_gate()?;
+                lock(&self.facts, ContractLocation::PublishFact)?
+                    .settle_publication(published, order, sequence);
                 Ok(FactPublication {
-                    event_id: *event.event_id(),
-                    sequence: event.sequence(),
+                    event_id: published,
+                    order,
+                    sequence,
                     previous_version,
                     replayed: false,
                 })
@@ -569,20 +613,20 @@ impl HostShared {
         .map_err(crate::remedy_choices::Refusal::into_error)
     }
 
-    /// Workflow #384 D2-S3 (D2 model §3.6): `key`'s active record in `scope`, with the ledger
-    /// sequence and the id of the `fact.published` that carried it, read under
-    /// `fact_write_gate`; `None` when the key has none.
+    /// Workflow #384 D2-S3 (D2 model §3.6): `key`'s active record in `scope`, with its place in
+    /// the store's history and the id of the `fact.published` that carried it (Workflow #383
+    /// AO-3), read under `fact_write_gate`; `None` when the key has none.
     pub(super) fn active_fact_revision(
         &self,
         scope: &FactScope,
         key: &str,
-    ) -> RuntimeHostResult<Option<(FactRecord, u64, EventId)>> {
-        let result: RuntimeHostResult<Option<(FactRecord, u64, EventId)>> = (|| {
+    ) -> RuntimeHostResult<Option<(FactRecord, FactOrder, EventId)>> {
+        let result: RuntimeHostResult<Option<(FactRecord, FactOrder, EventId)>> = (|| {
             let _gate = lock(&self.fact_write_gate, HostLocation::PublishResourceReadings)?;
             self.synchronize_fact_store_under_gate()?;
             Ok(lock(&self.facts, HostLocation::PublishResourceReadings)?
                 .active_revision(scope, key)
-                .map(|(record, sequence, event_id)| (record.clone(), sequence, event_id)))
+                .map(|active| (active.record.clone(), active.order, active.event_id)))
         })();
         if let Err(error) = &result
             && error.is_fatal()
@@ -592,58 +636,38 @@ impl HostShared {
         result
     }
 
-    /// Workflow #384 D2-S3 (D2 model §3.6): drops `key`'s active record in `scope`, published at
-    /// ledger sequence `base_sequence`, because a run confirmed an operation that declares an
-    /// adjustment of the key and read no new value: one `fact.invalidated` under
-    /// `fact_write_gate`, whose trigger is that step's `task.step_finished`, the event at
-    /// `trigger_sequence`. A key without an active record is left as it is; another record than
-    /// that one is refused (`fact_observation_version_conflict`).
+    /// Workflow #384 D2-S3 (D2 model §3.6): drops `key`'s active record in `scope`, the one
+    /// `fact.published` `base_event` carried, because a run confirmed an operation that declares
+    /// an adjustment of the key and read no new value: one `fact.invalidated` under
+    /// `fact_write_gate`, whose trigger is that step's `task.step_finished`, `trigger`. A key
+    /// without an active record is left as it is; another record than that one is refused
+    /// (`fact_observation_version_conflict`). Workflow #383 AO-3: the store's one entry applies it
+    /// and the gate copies it (G2).
     pub(super) fn invalidate_adjusted_fact(
         &self,
         scope: &FactScope,
         key: &str,
-        base_sequence: u64,
-        trigger_sequence: u64,
+        base_event: EventId,
+        trigger: FactTrigger,
     ) -> RuntimeHostResult<()> {
         let result: RuntimeHostResult<()> = (|| {
             let _gate = lock(&self.fact_write_gate, HostLocation::PublishResourceReadings)?;
             self.synchronize_fact_store_under_gate()?;
-            let prepared = {
-                let facts = lock(&self.facts, HostLocation::PublishResourceReadings)?;
+            let applied = {
+                let mut facts = lock(&self.facts, HostLocation::PublishResourceReadings)?;
                 if facts.active_revision(scope, key).is_none() {
                     return Ok(());
                 }
-                facts.prepare_adjustment_invalidation(
-                    &self.ledger,
-                    scope,
-                    key,
-                    base_sequence,
-                    trigger_sequence,
-                )?
+                facts.apply_adjustment_invalidation(scope, key, base_event, &trigger)?
             };
-            let Some((data, work)) = prepared else {
+            let Some(applied) = applied else {
                 return Err(RuntimeHostError::request(
                     HostCode::FactObservationVersionConflict,
                     ContractLocation::PublishFacts,
                     RuntimeErrorCode::InvalidRequest,
                 ));
             };
-            let draft = self.events.draft(
-                EventSeverity::Info,
-                EventSource::Runtime,
-                OriginModule::FactStore,
-                EventActor::Runtime,
-                self.events.system_links()?,
-                FactPayloadDraft::invalidated(data, AuditInput::new()),
-            )?;
-            let draft = self.events.sanitize(draft)?;
-            let persisted = self
-                .ledger
-                .append_transaction(draft, Box::new(work))
-                .map_err(crate::fact_store::fact_transaction_error)?;
-            // Workflow #383 AO-7: a committed invalidation changes the instance fact store.
-            self.policy_wakes.raise(persisted.event_type());
-            self.synchronize_fact_store_under_gate()
+            self.capture_invalidations_under_gate(vec![applied])
         })();
         if let Err(error) = &result
             && error.is_fatal()
@@ -898,8 +922,13 @@ impl HostShared {
             .ledger
             .latest_sequence()
             .map_err(|error| ledger_read_error(&error, HostLocation::ReadInstanceFactPosition))?;
-        lock(&self.facts, HostLocation::ReadInstanceFactSnapshot)?
-            .snapshot(context, ledger_position)
+        // Workflow #383 AO-3 (§13): the snapshot id is the two stores' revisions and the records.
+        let workbench = self.runtime_facts_revision();
+        lock(&self.facts, HostLocation::ReadInstanceFactSnapshot)?.snapshot(
+            context,
+            ledger_position,
+            workbench,
+        )
     }
 
     pub(super) fn append_event(
@@ -1057,22 +1086,29 @@ impl HostShared {
         if let Some(value) = observation.as_mut() {
             value.writer_response.begin();
         }
-        let appended = if let Some(value) = observation.as_mut() {
-            let (result, ledger_observation) = self.ledger.append_with_observation(draft);
-            value.ledger = ledger_observation;
-            result
-        } else {
-            self.ledger.append(draft)
-        };
+        // Workflow #383 AO-3 (`contracts/ledger-observer.md` §3, G1): the fan-out point hands the
+        // record to the host's one capture point. Its callers still read its ledger sequence
+        // (receipts, projections) until AO-4, so the hand-off waits for the commit; inside the
+        // gate it is the only writer round trip: the store no longer reads the ledger back.
+        let mut ledger_observation = None;
+        let observing = observation.is_some();
+        let appended = self.capture_committed_under_gate(draft, |ledger, draft| {
+            let result = if observing {
+                let (result, observed) = ledger.append_with_observation(draft);
+                ledger_observation = observed;
+                result
+            } else {
+                ledger.append(draft)
+            };
+            // Workflow #383 AO-1: no latch refuses the later appends; a write the ledger gave up
+            // on stops the Runtime by its dump (`contracts/ledger-observer.md` §9.2).
+            result.map_err(|_| ledger_error(HostLocation::AppendRuntimeEvent))
+        });
         if let Some(value) = observation.as_mut() {
+            value.ledger = ledger_observation;
             value.writer_response.finish(appended.is_ok());
         }
-        // Workflow #383 AO-1: no latch refuses the later appends; a write the ledger gave up on
-        // stops the Runtime by its dump (`contracts/ledger-observer.md` §9.2).
-        let event = appended.map_err(|_| ledger_error(HostLocation::AppendRuntimeEvent))?;
-        // Workflow #383 AO-7: the record is committed; its wake, if any, reaches the driver
-        // from here, not from the ledger.
-        self.policy_wakes.raise(event.event_type());
+        let event = appended?;
         if let Some(value) = observation.as_mut() {
             value.device_diagnostics.begin();
         }
@@ -1084,14 +1120,302 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
             return Err(error);
         }
-        // Workflow #387 D1c (M387 §3.4): direction ①'s count of the committed record, in memory
-        // under its own leaf lock; nothing is recorded and no ladder is admitted on the write
-        // path (the lease sweep admits what it registered).
-        if let Err(error) = self.count_stability_record(&event) {
-            self.fatal.mark(error.clone())?;
-            return Err(error);
-        }
         Ok(event)
+    }
+
+    /// Workflow #383 AO-3, `contracts/ledger-observer.md` §3: the host's one capture point for a
+    /// record whose caller needs it committed (until AO-4 its ledger sequence still reaches
+    /// receipts and projections), under `fact_write_gate`. `hand_off` gives the sanitized record
+    /// to the ledger and waits for its commit; the capture then observes it
+    /// ([`Self::observe_committed_under_gate`]).
+    pub(super) fn capture_committed_under_gate(
+        &self,
+        draft: SanitizedEventDraft,
+        hand_off: impl FnOnce(&GlobalLedger, SanitizedEventDraft) -> RuntimeHostResult<PersistedEvent>,
+    ) -> RuntimeHostResult<PersistedEvent> {
+        let event = hand_off(&self.ledger, draft)?;
+        #[cfg(test)]
+        self.count_capture_for_test(event.event_type(), true);
+        self.observe_committed_under_gate(&event)?;
+        Ok(event)
+    }
+
+    /// Workflow #383 AO-3, `contracts/ledger-observer.md` §3: one committed record passes the
+    /// capture's observation step, under `fact_write_gate`: the instance fact store observes it
+    /// ([`Self::observe_store_under_gate`]), then the record's business notification is raised
+    /// (AO-7) and the recovery ladder's direction ① counts it (#387 D1c, moved here from the
+    /// append path).
+    pub(super) fn observe_committed_under_gate(
+        &self,
+        event: &PersistedEvent,
+    ) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            self.observe_store_under_gate(event)?;
+            // Workflow #383 AO-7: the record is committed; its wake, if any, reaches the driver
+            // from here, not from the ledger.
+            self.policy_wakes.raise(event.event_type());
+            // Workflow #387 D1c (M387 §3.4): direction ①'s count of the committed record, in
+            // memory under its own leaf lock; nothing is recorded and no ladder is admitted here
+            // (the lease sweep admits what it registered).
+            self.count_stability_record(event)
+        })();
+        if let Err(error) = &result {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Workflow #383 AO-3 (§3): the store's half of the observation step, under
+    /// `fact_write_gate`. Once the instance fact store is live it observes the record
+    /// (`observe_trigger`: the input boundary, then the `invalidate_on` invalidations it causes,
+    /// applied at once) and the invalidations are captured after it. Records committed before it
+    /// outside the fan-out point are observed first, in ledger order.
+    fn observe_store_under_gate(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        self.drain_deferred_observations_under_gate(Some(event.sequence()))?;
+        let applied = {
+            let mut facts = lock(&self.facts, HostLocation::DeriveFactInvalidation)?;
+            if facts.is_live() {
+                facts.observe_trigger(&FactTrigger::committed(event))?
+            } else {
+                Vec::new()
+            }
+        };
+        self.capture_invalidations_under_gate(applied)
+    }
+
+    /// Workflow #383 AO-3 (§3): a record committed outside the fan-out point, by a writer that
+    /// AO-4 moves to its gate (a critical execution, a joint transaction, an artifact sink, a
+    /// direct append) or by the ledger itself (the settlement continuation, the Lab pin release).
+    /// Its business notification is raised and the recovery ladder's direction ① counts it at
+    /// once; the instance fact store observes it, in ledger order, at the next holder of
+    /// `fact_write_gate` before that holder reads or changes the store
+    /// ([`Self::synchronize_fact_store_under_gate`], [`Self::observe_store_under_gate`]). Takes no
+    /// gate, so a writer may call it whatever it holds.
+    pub(super) fn defer_observation(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            self.policy_wakes.raise(event.event_type());
+            self.count_stability_record(event)?;
+            lock(
+                &self.deferred_observations,
+                HostLocation::DeriveFactInvalidation,
+            )?
+            .push(event.clone());
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Workflow #383 AO-3 (§3): the deferred records committed before ledger sequence `before`
+    /// (all of them when `None`), observed in ledger order by a live store. A replaying store
+    /// takes them from the ledger itself.
+    fn drain_deferred_observations_under_gate(&self, before: Option<u64>) -> RuntimeHostResult<()> {
+        let mut drained = {
+            let mut deferred = lock(
+                &self.deferred_observations,
+                HostLocation::DeriveFactInvalidation,
+            )?;
+            let (earlier, later): (Vec<_>, Vec<_>) = std::mem::take(&mut *deferred)
+                .into_iter()
+                .partition(|event| before.is_none_or(|before| event.sequence() < before));
+            *deferred = later;
+            earlier
+        };
+        let replayed_through = {
+            let facts = lock(&self.facts, HostLocation::DeriveFactInvalidation)?;
+            if !facts.is_live() {
+                return Ok(());
+            }
+            facts.replayed_through()
+        };
+        // A record the start's replay already followed (committed before the store went live,
+        // deferred after) is not observed twice.
+        drained.retain(|event| event.sequence() > replayed_through);
+        drained.sort_by_key(PersistedEvent::sequence);
+        for event in &drained {
+            let applied = lock(&self.facts, HostLocation::DeriveFactInvalidation)?
+                .observe_trigger(&FactTrigger::committed(event))?;
+            self.capture_invalidations_under_gate(applied)?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #383 AO-3, G16 (§3): the close's device diagnostic summary, whose append is
+    /// deferred and confirmed at the close boundary, under `fact_write_gate`. The store observes
+    /// it at its capture, from its draft (its record's time is the draft's), and the invalidations
+    /// it causes are captured after it.
+    pub(super) fn capture_deferred_under_gate(
+        &self,
+        draft: SanitizedEventDraft,
+        operation: HostLocation,
+    ) -> RuntimeHostResult<()> {
+        self.drain_deferred_observations_under_gate(None)?;
+        let applied = {
+            let mut facts = lock(&self.facts, HostLocation::DeriveFactInvalidation)?;
+            if facts.is_live() {
+                facts.observe_trigger(&FactTrigger::at_capture(&draft))?
+            } else {
+                Vec::new()
+            }
+        };
+        #[cfg(test)]
+        let event_type = draft.event_type();
+        self.ledger
+            .append_deferred(draft)
+            .map(|_| ())
+            .map_err(|_| ledger_error(operation))?;
+        #[cfg(test)]
+        self.count_capture_for_test(event_type, true);
+        self.capture_invalidations_under_gate(applied)
+    }
+
+    /// Workflow #383 AO-3 (`contracts/ledger-observer.md` §2 call 1, §4 G2, §8.3): copies one
+    /// change of the instance fact store, which its entry applied already, to the ledger: the
+    /// record of `revision` in the store's lineage. It is captured through the capture interface
+    /// without a wait; `committed` hands it over with a wait for its commit instead, for a caller
+    /// whose receipt still carries the ledger sequence until AO-4 (a resource target policy).
+    /// The capture interface is held here only (architecture guard AO3-j). Returns the record's
+    /// place and, when it waited, its ledger sequence.
+    #[allow(clippy::too_many_arguments)]
+    fn capture_store_change_under_gate(
+        &self,
+        event_id: IssuedEventId,
+        event_type: EventType,
+        origin: EventOrigin,
+        links: EventLinksDraft,
+        payload: actingcommand_contract::EventPayloadDraft,
+        revision: u64,
+        committed: bool,
+    ) -> RuntimeHostResult<(FactOrder, Option<u64>)> {
+        let source = SourceRevision {
+            source: LedgerSource::InstanceFacts,
+            lineage: self.owner_epoch,
+            revision,
+        };
+        let placed = if committed {
+            let draft = actingcommand_contract::EventDraft::new(
+                event_id,
+                self.clock.sample()?.unix_ms,
+                EventSeverity::Info,
+                origin,
+                links,
+                payload,
+            );
+            let draft = self.events.sanitize(draft)?;
+            let event = self
+                .ledger
+                .append_with_source(draft, source)
+                .map_err(|_| ledger_error(HostLocation::AppendRuntimeEvent))?;
+            #[cfg(test)]
+            self.count_capture_for_test(event_type, true);
+            let order = FactOrder::of_live_event(&event).ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::FactPublicationSequenceMissing,
+                    HostLocation::AppendRuntimeEvent,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+            })?;
+            (order, Some(event.sequence()))
+        } else {
+            let ticket = self.ledger_capture.capture(CaptureItem {
+                event_id,
+                severity: EventSeverity::Info,
+                payload,
+                links,
+                origin,
+                source: Some(source),
+            });
+            #[cfg(test)]
+            self.count_capture_for_test(event_type, false);
+            (FactOrder::Captured(ticket.capture_seq), None)
+        };
+        // Workflow #383 AO-7: an instance fact publication or invalidation wakes the driver.
+        self.policy_wakes.raise(event_type);
+        Ok(placed)
+    }
+
+    /// Workflow #383 AO-3 (§3 step 3): captures, in order and after their trigger, the
+    /// invalidations the store applied for it; each is one change of the store (G2).
+    pub(super) fn capture_invalidations_under_gate(
+        &self,
+        applied: Vec<AppliedInvalidation>,
+    ) -> RuntimeHostResult<()> {
+        for invalidation in applied {
+            let event_id = self.events.issue_event_id()?;
+            let links = self.events.system_links()?;
+            let (order, _) = self.capture_store_change_under_gate(
+                event_id,
+                EventType::FactInvalidated,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::FactStore,
+                    EventActor::Runtime,
+                ),
+                links,
+                FactPayloadDraft::invalidated(invalidation.data.clone(), AuditInput::new()).into(),
+                invalidation.revision,
+                false,
+            )?;
+            lock(&self.facts, HostLocation::DeriveFactInvalidation)?
+                .settle_invalidation(&invalidation.data, order);
+        }
+        Ok(())
+    }
+
+    /// Workflow #383 AO-3 (§13, register W1): the scheduler workbench's lineage (the owner
+    /// epoch) and its revision, +1 per change it accepts once business is open. Read under
+    /// `fact_write_gate` for a pair consistent with the instance fact store's.
+    pub(super) fn runtime_facts_revision(&self) -> RuntimeStateStoreRevision {
+        RuntimeStateStoreRevision {
+            lineage: self.owner_epoch,
+            revision: self.runtime_facts_revision.load(Ordering::Acquire),
+        }
+    }
+
+    /// Workflow #383 AO-3: one change the scheduler workbench accepted, under `fact_write_gate`.
+    pub(super) fn count_runtime_fact_change(&self) {
+        self.runtime_facts_revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Workflow #383 AO-3 (`contracts/ledger-observer.md` §3): business opens. The instance fact
+    /// store follows the ledger one last time, writes what the start's replay derived, and goes
+    /// live: from here on it reads no ledger and every recorded event reaches it at capture. Both
+    /// stores start their revisions at 0 in this epoch's lineage. Fails Loud when the replay
+    /// does not settle.
+    pub(super) fn open_live_fact_stores(&self) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            let _gate = lock(&self.fact_write_gate, HostLocation::SynchronizeFactStore)?;
+            // A written invalidation settles when the store follows the ledger past it; writing
+            // one derives nothing new, so two rounds settle a quiet start. Writers outside the
+            // gate may append meanwhile; a few more rounds let them settle too.
+            for _ in 0..8 {
+                self.synchronize_fact_store_under_gate()?;
+                if !lock(&self.facts, HostLocation::SynchronizeFactStore)?.has_pending() {
+                    break;
+                }
+            }
+            lock(&self.facts, HostLocation::SynchronizeFactStore)?.go_live()?;
+            self.runtime_facts_revision.store(0, Ordering::Release);
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Workflow #383 AO-3, tests: what the host's capture point handed the ledger so far.
+    #[cfg(test)]
+    fn count_capture_for_test(&self, event_type: EventType, committed: bool) {
+        self.ledger_captures_for_test
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(LedgerCaptureForTest {
+                event_type,
+                committed,
+            });
     }
 
     pub(super) fn synchronize_fact_store(&self) -> RuntimeHostResult<()> {
@@ -1099,31 +1423,37 @@ impl HostShared {
         self.synchronize_fact_store_under_gate()
     }
 
+    /// Until business opens, the instance fact store follows the ledger tail, and the
+    /// invalidations it derives are written here (Workflow #383 AO-3: as plain records; the store
+    /// keeps its tombstones and the next start rebuilds their projection from the ledger). A live
+    /// store reads no ledger: it has seen every record of the fan-out point at its capture, and
+    /// here it observes the records committed outside it (Workflow #383 AO-3, §3).
     pub(super) fn synchronize_fact_store_under_gate(&self) -> RuntimeHostResult<()> {
         let result: RuntimeHostResult<()> = (|| {
-            let mut facts = lock(&self.facts, HostLocation::SynchronizeFactStore)?;
-            facts.synchronize(&self.ledger)?;
-            for invalidation in facts.pending_invalidations() {
-                let work = facts.prepare_invalidation(&self.ledger, &invalidation)?;
+            self.drain_deferred_observations_under_gate(None)?;
+            let pending = {
+                let mut facts = lock(&self.facts, HostLocation::SynchronizeFactStore)?;
+                facts.synchronize(&self.ledger)?;
+                facts.pending_invalidations()
+            };
+            for invalidation in pending {
                 let links = self.events.system_links()?;
                 let draft = self.events.draft(
                     EventSeverity::Info,
                     EventSource::Runtime,
                     OriginModule::FactStore,
                     EventActor::Runtime,
-                    links.clone(),
+                    links,
                     FactPayloadDraft::invalidated(invalidation.data.clone(), AuditInput::new()),
                 )?;
                 let draft = self.events.sanitize(draft)?;
-                let persisted = self
-                    .ledger
-                    .append_transaction(draft, Box::new(work))
-                    .map_err(crate::fact_store::fact_transaction_error)?;
-                // Workflow #383 AO-7: a committed invalidation changes the instance fact store.
-                self.policy_wakes.raise(persisted.event_type());
-                facts
-                    .acknowledge_generated_invalidation(&invalidation.data, persisted.sequence())
-                    .and_then(|()| self.observe_device_diagnostics_under_fact_gate(&persisted))
+                let persisted = self.capture_committed_under_gate(draft, |ledger, draft| {
+                    ledger
+                        .append(draft)
+                        .map_err(|_| ledger_error(HostLocation::AppendFactTransaction))
+                })?;
+                lock(&self.facts, HostLocation::SynchronizeFactStore)?
+                    .acknowledge_generated_invalidation(&invalidation.data)
                     .inspect_err(|error| {
                         let _ = error
                             .diagnostics()
@@ -1140,4 +1470,62 @@ impl HostShared {
         }
         result
     }
+}
+
+/// Workflow #383 AO-3 (`contracts/ledger-observer.md` §3): a critical execution's appender. The
+/// execution still waits for each of its records' commit (until AO-4 lets it go on without);
+/// every record it appended then passes the capture's observation step
+/// ([`CapturingAppender::observe_under_gate`] for a caller that holds `fact_write_gate`,
+/// [`CapturingAppender::defer`] otherwise).
+pub(super) struct CapturingAppender<'a> {
+    shared: &'a HostShared,
+    appended: std::cell::RefCell<Vec<PersistedEvent>>,
+}
+
+impl HostShared {
+    pub(super) fn capturing_appender(&self) -> CapturingAppender<'_> {
+        CapturingAppender {
+            shared: self,
+            appended: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl actingcommand_ledger::critical::EventAppender for CapturingAppender<'_> {
+    fn append_durable(
+        &self,
+        draft: SanitizedEventDraft,
+    ) -> actingcommand_ledger::GlobalLedgerResult<PersistedEvent> {
+        let event = self.shared.ledger.append_durable(draft)?;
+        self.appended.borrow_mut().push(event.clone());
+        Ok(event)
+    }
+}
+
+impl CapturingAppender<'_> {
+    /// The appended records pass the observation step now; the caller holds `fact_write_gate`.
+    pub(super) fn observe_under_gate(self) -> RuntimeHostResult<()> {
+        for event in self.appended.into_inner() {
+            self.shared.observe_committed_under_gate(&event)?;
+        }
+        Ok(())
+    }
+
+    /// The appended records pass the observation step at the next holder of `fact_write_gate`.
+    pub(super) fn defer(self) -> RuntimeHostResult<()> {
+        for event in self.appended.into_inner() {
+            self.shared.defer_observation(&event)?;
+        }
+        Ok(())
+    }
+}
+
+/// Workflow #383 AO-3, tests: one record the host's capture point handed the ledger: its type,
+/// and whether the hand-off waited for its commit (a synchronous ledger call) or was captured
+/// without a wait.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LedgerCaptureForTest {
+    pub(crate) event_type: EventType,
+    pub(crate) committed: bool,
 }

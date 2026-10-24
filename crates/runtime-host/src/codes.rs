@@ -665,6 +665,10 @@ actingcommand_contract::outcome_codes! {
         FactSourceSnapshotInvalidated => "fact_source_snapshot_invalidated": error / none,
         FactSourceSnapshotRepublished => "fact_source_snapshot_republished": error / none,
         FactStoreCapacityExceeded => "fact_store_capacity_exceeded": error / none,
+        /// Error (Workflow #383 AO-3). An invariant of the instance fact store's mode broke: a
+        /// live change reached the store before it went live, or it went live twice or with a
+        /// replayed invalidation still unwritten. Fatal.
+        FactStoreNotLive => "fact_store_not_live": error / none,
         FactStoreQueryFailed => "fact_store_query_failed": error / none,
         FactStoreRecoveryFailed => "fact_store_recovery_failed": error / none,
         FactStoreSyncFailed => "fact_store_sync_failed": error / none,

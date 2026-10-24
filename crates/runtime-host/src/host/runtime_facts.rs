@@ -728,6 +728,10 @@ impl HostShared {
         let change = lock(&self.runtime_facts, HostLocation::RecordRuntimeFact)?
             .record(record)
             .map_err(|error| runtime_fact_desync(&error, HostLocation::RecordRuntimeFact))?;
+        // Workflow #383 AO-3 (§13): one accepted change of the workbench.
+        if change != RuntimeFactChange::Unchanged {
+            self.count_runtime_fact_change();
+        }
         self.runtime_facts_dirty.store(true, Ordering::Release);
         self.synchronize_fact_store_under_gate()?;
         Ok((change, Some(*event.event_id())))
@@ -930,6 +934,8 @@ impl HostShared {
                 .map_err(|error| {
                     runtime_fact_desync(&error, HostLocation::InvalidateRuntimeFact)
                 })?;
+            // Workflow #383 AO-3 (§13): one accepted change of the workbench.
+            self.count_runtime_fact_change();
             self.runtime_facts_dirty.store(true, Ordering::Release);
             self.synchronize_fact_store_under_gate()?;
             Ok(invalidation)

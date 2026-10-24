@@ -1451,10 +1451,14 @@ impl HostShared {
                 }
             }
         }
+        // Workflow #383 AO-3 (§13): the snapshot id takes the two stores' revisions, read under
+        // `fact_write_gate`, which the caller holds.
+        let workbench = self.runtime_facts_revision();
         let facts = fact_projection.overlay_policy_facts(
             &base_facts,
             inputs.resources(),
             ledger_position,
+            workbench,
         )?;
         let resources = if let Some(catalog) = catalog {
             fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
@@ -1464,8 +1468,12 @@ impl HostShared {
         } else {
             inputs.resources().clone()
         };
-        let facts =
-            fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
+        let facts = fact_projection.overlay_policy_facts(
+            &base_facts,
+            &resources,
+            ledger_position,
+            workbench,
+        )?;
         Ok((
             facts,
             resources,
@@ -1536,8 +1544,12 @@ impl HostShared {
                 .ledger
                 .latest_sequence()
                 .map_err(|_| ledger_error(HostLocation::ProjectForwardFactPosition))?;
-            let facts =
-                fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?;
+            let facts = fact_projection.overlay_external_policy_facts(
+                facts,
+                resources,
+                ledger_position,
+                self.runtime_facts_revision(),
+            )?;
             (facts, fact_projection)
         };
         let (catalog, workloads) = {
@@ -2164,6 +2176,11 @@ impl HostShared {
             // with the whole ledger. Consuming the appender first releases a fact write gate
             // an intent append failure left held.
             let appended = appender.into_appended();
+            // Workflow #383 AO-3 (§3, G5 until AO-4): the intent and its outcome pass the host's
+            // capture point's observation step.
+            for event in &appended {
+                self.defer_observation(event)?;
+            }
             let applied = match &result {
                 // Whole-event equality, so the sequence and the event id match too.
                 Ok(receipt) => match appended.as_slice() {

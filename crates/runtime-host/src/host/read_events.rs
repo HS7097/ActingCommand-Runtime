@@ -360,8 +360,9 @@ impl HostShared {
 
     /// Samples a status read from memory (Workflow #383 AO-4q). It appends no ledger record:
     /// the source names the ledger's committed head, read inside the sampling interval, and the
-    /// interval itself (register W1). The two stores' (lineage, revision) stay absent until
-    /// AO-3 gives the stores their revisions. Workflow #389 MCP-4: the instance fact read samples
+    /// interval itself (register W1). Workflow #383 AO-3: it also names the two stores' (lineage,
+    /// revision), read together under `fact_write_gate`, once business is open (the stores are
+    /// live); before that they stay absent. Workflow #389 MCP-4: the instance fact read samples
     /// its answer the same way.
     pub(super) fn observe_runtime_state<T>(
         &self,
@@ -373,6 +374,17 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
         let state = sample()?;
+        let (instance_facts, runtime_facts) = {
+            let _gate = lock(&self.fact_write_gate, HostLocation::RuntimeStateSource)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            let facts = lock(&self.facts, HostLocation::RuntimeStateSource)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            if facts.is_live() {
+                (Some(facts.revision()), Some(self.runtime_facts_revision()))
+            } else {
+                (None, None)
+            }
+        };
         // #411 A51 (R3): a head the writer did not answer in time fails only this read; the
         // next status reads it again.
         let ledger_committed_head = self
@@ -385,8 +397,8 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
         let source = actingcommand_contract::RuntimeStateSource {
-            instance_facts: None,
-            runtime_facts: None,
+            instance_facts,
+            runtime_facts,
             ledger_committed_head,
             sampled_started_at_unix_ms,
             sampled_completed_at_unix_ms,
