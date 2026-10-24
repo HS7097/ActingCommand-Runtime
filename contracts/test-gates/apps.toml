@@ -582,7 +582,8 @@ tests = [
 incident = ["#381 B", "#382 A-4"]
 
 # Tick orchestration on the APPS-I3 seams: a start that answers is started, one whose process exits
-# first is start_failed exited_during_startup, one that never answers is start_timeout after 180 s,
+# first is start_failed exited_during_startup, one that never answers is start_timeout after its
+# start window (#411 A66: watchdog.start_window_ms, 900 s by default; it was 180 s),
 # a held writer lock is installer_busy; the pending start record is on disk before the spawn, the
 # free writer lock is held shared through the start, and the result and last_tick are saved at the
 # tick's end (Workflow #382 A-4, test plan v2.2 A-4 G12)

@@ -593,6 +593,27 @@ A value outside its range is `config_value_invalid` (`out_of_range`, with `range
 `wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
 a restart adds the range's maximum (745 s).
 
+## The `watchdog` section (#411 A66)
+
+#411 A66 ([runtime-watchdog.md](runtime-watchdog.md), "Start window"; coordinator ruling 10-24):
+how long a start may take before the watchdog, or `actingctl start` and `restart` without
+`--ready-timeout-s`, calls it `start_timeout`. The same window bounds which open watchdog start an
+answering owner belongs to, and a waiter for the watchdog's `run.lock` waits it plus 20 s. actingd
+parses and checks the section with the rest of the file (its row is that of
+`config.parameters.watchdog`) but never uses it. The watchdog and `actingctl` read it from the
+configuration file they already read for the state root, at every tick or command, through this
+crate (`watchdog::start_window_ms`), never from the configuration in effect, so it is not settable.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the section;
+a file that does not name it keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `watchdog.start_window_ms` | milliseconds `60000..=3600000`, the longest a start may take | `900000` | no (read from the file by the watchdog and `actingctl`) |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at actingd's start, in `check-config`, and on every watchdog tick or `actingctl start`
+or `restart` (the tick's `watchdog_misconfigured`); a value that is no integer is `wrong_type`.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |

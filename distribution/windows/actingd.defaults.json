@@ -444,5 +444,8 @@
   },
   "emulator_control": {
     "restart_exit_wait_ms": 60000
+  },
+  "watchdog": {
+    "start_window_ms": 900000
   }
 }
