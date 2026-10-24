@@ -52,12 +52,15 @@ and `install` refuses with it. The state root is the config's `state_root` and m
 be absolute (`watchdog_state_root_invalid`). The report names the layout and the
 config (`layout`, `config`; see "Exit codes").
 
-A single-location root has no installer of its own. A deploy or successor script that
-replaces its `runtime\` or `tools\` must hold `install\writer.lock` exclusively for the
-whole replacement (creating the file when it is missing), or disable the task first.
+A single-location root's installer is `actingctl install` (Workflow #421,
+[install-cli.md](install-cli.md)). It, and any deploy or successor script that replaces
+the root's `runtime\` or `tools\`, holds `install\writer.lock` exclusively for the
+whole replacement (creating the file when it is missing), or disables the task first.
 While the lock is held the launcher runs nothing and a tick answers
-`watchdog_installer_busy` (row 7a). `actingctl start` and `restart` without `--config`
-still need an A/B selection: on a single-location root they refuse with
+`watchdog_installer_busy` (row 7a). While `install\current.json` names an unfinished
+installer operation, a tick that would consider a start answers
+`watchdog_installer_unfinished` (row 7a″). `actingctl start` and `restart` without
+`--config` still need an A/B selection: on a single-location root they refuse with
 `watchdog_layout_unknown`; pass `--config`.
 
 ## Observation
@@ -92,6 +95,11 @@ still need an A/B selection: on a single-location root they refuse with
    - **Selection**: `install\active.json` read again under that shared lock; a
      different selection stands aside for one tick. On a single-location root an
      `install\active.json` that appeared is a changed selection too (row 7a′).
+   - **U** (Workflow #421 INST-1), `install\current.json` read under that shared lock:
+     an installer operation that is unfinished, named by its `operation_id`. The file is
+     absent when none is; one that cannot be read or names no operation id is
+     `watchdog_installer_unfinished` too, without the id: the watchdog never starts a
+     root whose installer state it cannot read.
    - **P**, processes named `actingcommand-actingd.exe` whose executable path is under
      `<root>\` (case-insensitive), or whose path cannot be read, through a CIM query
      in a hidden Windows PowerShell. The same query reads the last boot time
@@ -118,6 +126,7 @@ Each decision is one registered code; its category sets the exit (Workflow #378 
 | 6 | J inactive otherwise | `watchdog_formal_close` | 0 | INFO, once per epoch |
 | 7a | W held | `watchdog_installer_busy` | 0 | INFO |
 | 7a′ | selection changed | `watchdog_selection_changed` | 0 | INFO |
+| 7a″ | U present: an unfinished installer operation (Workflow #421 INST-1) | `watchdog_installer_unfinished` (warning; `install_operation_id` when U names one) | 0 | WARN |
 | 7b | P present, under 10 minutes | `watchdog_runtime_process_present` | 0 | INFO |
 | 7b′ | P present for 10 minutes or more | `watchdog_runtime_process_without_owner` | 1 | ERROR |
 | 7c | exhaustion recorded | `watchdog_budget_exhausted` or `panic_unrecovered` (see "Budget") | 1 or 2 | ERROR |
@@ -365,7 +374,7 @@ the launcher's 20–23; their conditions are outcome codes now.
 
 | Exit | `run-once` and `status` |
 |---|---|
-| 0 | healthy or a deliberate stand-aside: `watchdog_alive`, `watchdog_owner_lock_held`, `watchdog_never_started`, `watchdog_formal_close`, `watchdog_installer_busy`, `watchdog_selection_changed`, `watchdog_runtime_process_present`, `watchdog_grace`; `run-once` also `watchdog_run_in_progress` and `watchdog_started_runtime`; `status` also `watchdog_start_due` (gone without a formal close, the next tick starts it) |
+| 0 | healthy or a deliberate stand-aside: `watchdog_alive`, `watchdog_owner_lock_held`, `watchdog_never_started`, `watchdog_formal_close`, `watchdog_installer_busy`, `watchdog_selection_changed`, `watchdog_installer_unfinished` (a warning: the installer must `resume` or `undo`), `watchdog_runtime_process_present`, `watchdog_grace`; `run-once` also `watchdog_run_in_progress` and `watchdog_started_runtime`; `status` also `watchdog_start_due` (gone without a formal close, the next tick starts it) |
 | 1 | `watchdog_misconfigured`, `watchdog_owner_retained_unconfirmed`, `watchdog_runtime_process_without_owner`, `watchdog_budget_exhausted`, `watchdog_start_failed` |
 | 2 | `watchdog_fatal_hold`; `run-once` also `panic_unrecovered` |
 
@@ -380,6 +389,7 @@ the launcher's 20–23; their conditions are outcome codes now.
 | `watchdog_restarts_repeated` | 2 or more watchdog starts within 24 hours and since the last formal start |
 | `watchdog_formal_close_unlogged` | no candidate log was written between the closed epoch's start and its close plus 2 s, so the terminal outcome of an unlogged start would be invisible |
 | `watchdog_misconfigured` | the log directories for the close evidence, or the task, could not be read |
+| `watchdog_installer_unfinished` | `install\current.json` names an unfinished installer operation and the decision is another one (Workflow #421 INST-1; row 7a″ decides it when a start would be considered) |
 
 `install` exits 0 with `watchdog_installed`, else 1 with its failure; a refusal by an
 info decision (acsetup's writer lock, a tick's run lock) is `watchdog_install_refused`
@@ -400,7 +410,7 @@ the Runtime must write stdout and stderr to such a log (X3):
 | the console | `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log` |
 | a logon script | `<root>\actingd-autostart-<stamp>.out.log` and `.err.log` |
 | an operator's WMI restart script | `<root>\actingd-wmi-<stamp>.log` |
-| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`; while acsetup holds `install\writer.lock` both refuse as row 7a does, with `start_runtime_refused` caused by `watchdog_installer_busy`, `restart` before it stops anything; `restart --wait-idle` reads Status every 10 s while it waits for idle, since each Status records a ledger observation) | `<root>\actingd-<ms>.log` |
+| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`; while acsetup or `actingctl install` holds `install\writer.lock` both refuse as row 7a does, with `start_runtime_refused` caused by `watchdog_installer_busy`, and while `install\current.json` names an unfinished installer operation as row 7a″ does, caused by `watchdog_installer_unfinished` (Workflow #421 INST-1), `restart` before it stops anything; `restart --wait-idle` reads Status every 10 s while it waits for idle, since each Status records a ledger observation) | `<root>\actingd-<ms>.log` |
 | the watchdog | `<root>\watchdog\actingd-<ms>.log` |
 | acsetup's Startup-folder launcher | the UI's side: the UI major's launcher has acforward write its own and actingd's output to `<root>\actingd-autostart-<stamp>.log` (Workflow #378, model §16 A-3). A launcher start that writes no log is, for the Runtime, a hand start (next row). |
 | a hand start in a terminal | actingd's fallback log, for a start refusal only: when its stderr is a console or absent, actingd also appends the refusal's daemon lines to `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log`, with `install_root` once it resolved its installation (Workflow #378 A6a). A stop after the start has no log: it shows only as `watchdog_formal_close_unlogged` in `status`. |

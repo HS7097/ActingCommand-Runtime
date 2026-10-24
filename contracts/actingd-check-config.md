@@ -22,16 +22,29 @@ hashed only when the model is first used.
 ## Invocation
 
 ```text
-actingd check-config --config <path>
+actingd check-config --config <path> [--install-root <root>]
 ```
 
-`--config <path>` is the only option. Argument errors print the report with
-their outcome alone, without `stage` or `report` (see "Result"):
-`check_config_usage_invalid` (more than one option pair),
-`check_config_option_invalid` (an option other than `--config`, a repeated
-`--config`, a dangling flag or an empty path) and `check_config_config_missing`
-(no `--config`), each with its developer line `ERROR actingd: <code> <text>` on
-stderr and exit code 1.
+`--config <path>` is required. `--install-root <root>` (Workflow #421 INST-1,
+[install-cli.md](install-cli.md)) judges the install root as `<root>` instead of
+from the running executable: the install root's adb (see "Default ADB") and the
+default vision root `<root>\vision` (see "Vision root"), exactly as a daemon
+running from `<root>\runtime` would. `actingctl install` runs a kept build's
+check-config with it, because from `<root>\install\builds\<commit>\runtime\` the
+executable's own root is the kept build's folder. `<root>` must be an install
+root itself (it holds `runtime\BUILD-MANIFEST.json`); otherwise the check ends
+with `check_config_install_root_invalid` (`path`, the given root) as an argument
+error. A relative `standard_packs.root`, a relative vision `root` and every other
+relative path still resolve against the configuration file's directory, as at
+startup. The daemon start has no such option.
+
+Argument errors print the report with their outcome alone, without `stage` or
+`report` (see "Result"): `check_config_usage_invalid` (more than two option
+pairs), `check_config_option_invalid` (an option other than `--config` and
+`--install-root`, a repeated option, a dangling flag or an empty path),
+`check_config_config_missing` (no `--config`) and
+`check_config_install_root_invalid`, each with its developer line
+`ERROR actingd: <code> <text>` on stderr and exit code 1.
 
 Policy sections are assembled as at startup: catalog documents are read and
 resource packages are stat'ed from disk. A procedure binding names its package by its path
@@ -606,7 +619,8 @@ Workflow #360 replaces `vision_provider_manifest` with the optional top-level
 { ordinal, expected_stable_identity }` and `cpu` refuses it
 (`vision_config_invalid`, stage `config_assemble`). `root` is optional: without it the
 vision root is `<install root>\vision` when the daemon runs from an install
-root, else `vision` next to the configuration file; a relative `root` resolves
+root (for check-config, also the root `--install-root` names), else `vision`
+next to the configuration file; a relative `root` resolves
 against the configuration file's directory. A file that still names
 `vision_provider_manifest`, whatever its value, fails with
 `vision_provider_manifest_retired`, and an install selection that still names a
@@ -963,7 +977,8 @@ installed as `<install root>\tools\platform-tools\`. An instance without
 root; an empty or blank `adb_path` is still refused.
 
 The install root is judged once per assembly from the running executable
-alone: `R` is two levels above the canonical path of the `actingd` executable,
+alone (check-config's `--install-root <root>` names it instead: `<root>`, its adb
+`<root>\tools\platform-tools\adb.exe`; Workflow #421 INST-1): `R` is two levels above the canonical path of the `actingd` executable,
 and `R` is an install root only when `R\runtime\BUILD-MANIFEST.json` is a file
 (the same evidence acsetup takes for "installed"). The install root's adb is
 then `R\tools\platform-tools\adb.exe`. Under the A/B layout an `actingd` in

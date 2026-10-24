@@ -593,6 +593,51 @@ A value outside its range is `config_value_invalid` (`out_of_range`, with `range
 `wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
 a restart adds the range's maximum (745 s).
 
+## The `install` section (Workflow #421 INST-1)
+
+Workflow #421 ([install-cli.md](install-cli.md)): the tunables of `actingctl install`, the
+installer of a single-location root (Alice 10-09: 「绝不硬编码」). actingd parses and checks the
+section with the rest of the file (its rows are those of `config.parameters.install`) but never
+uses it. `actingctl install` reads it from the root's configuration file at every command,
+through this crate (`install::settings`), never from the configuration in effect, so no key is
+settable. `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds
+the section; a file that does not name it keeps its revision. The section and each of its
+objects deny unknown members.
+
+| Key | Type | Default (`actingd.defaults.json`) | Read by |
+|---|---|---|---|
+| `install.lock_wait_ms` | milliseconds `1000..=600000` | `60000` | the wait for `install\writer.lock` |
+| `install.stop.drain_timeout_ms` | milliseconds `1000..=3600000` | `300000` | the hold's drain (INST-2) |
+| `install.stop.shutdown_wait_ms` | milliseconds `10000..=600000` | `60000` | the close (INST-2) |
+| `install.start.ready_timeout_ms` | milliseconds `60000..=3600000` | `900000` | the installer start's readiness (INST-2) |
+| `install.start.attempts` | integer `1..=5` | `2` | start attempts after an error terminal outcome (INST-2) |
+| `install.hold_after_start` | boolean | `true` | a composite update ends held (INST-2) |
+| `install.hot.idle_wait_ms` | milliseconds `0..=3600000` | `600000` | hot placement's idle wait (INST-4) |
+| `install.rollback.open_margin_ms` | milliseconds `0..=600000` | `20000` | the rollback gate's open-time part |
+| `install.guard.min_available_memory_mb` | integer `0..=1048576` | `10000` | guard `memory` (INST-2) |
+| `install.guard.before_next_start_ms` | milliseconds `0..=86400000` | `900000` | guard `schedule_near` (INST-2) |
+| `install.guard.blocked_windows` | list of windows (below) | `[]` | guard `blocked_window` (INST-2) |
+| `install.guard.adb_timeout_ms` | milliseconds `1000..=60000` | `15000` | guard `adb` (INST-2) |
+
+A window of `install.guard.blocked_windows` is one object, in host local time, `[from, to)`,
+wrapping past the end of its day or hour when `to` is less than `from`:
+
+- `{"kind": "daily", "from": "HH:MM", "to": "HH:MM"}`;
+- `{"kind": "weekly", "weekdays": [1..7], "from": "HH:MM", "to": "HH:MM"}`: the days the window
+  starts on, 1 Monday to 7 Sunday, at least one, each once;
+- `{"kind": "hourly", "from": <minute>, "to": <minute>}`: minutes `0..=59` of every hour.
+
+`HH:MM` is `00:00` to `23:59`; `from` equals `to` in no window. No slot and no game is built
+in: the default is empty, and a restart window or an hourly quiet time is data the person writes
+into a root's configuration (#386, Alice 10-24).
+
+A value outside its type or range is `config_value_invalid` (`out_of_range` with `range_min` and
+`range_max`, or `wrong_type`) at actingd's start, in `check-config` and for every `actingctl
+install` command that reads the section; a window that breaks the rules above, and an unknown
+member of the section or of one of its objects for `actingctl install`, is `config_value_invalid`
+(`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
+unknown member of the file (`config_decode_failed`).
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
