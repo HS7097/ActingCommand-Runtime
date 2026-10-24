@@ -2349,8 +2349,7 @@ impl HostShared {
         let instance_guard = self
             .instance_guard(token.instance_id())
             .map_err(|failure| *failure.error)?;
-        let Some(_admission) = self.try_lock_admission(&instance_guard, token.instance_id())?
-        else {
+        let Some(admission) = self.try_lock_admission(&instance_guard, token.instance_id())? else {
             return Ok(false);
         };
         self.cleanup_token_guarded(
@@ -2360,6 +2359,9 @@ impl HostShared {
             None,
             &resolved,
         )?;
+        // #411 A64 (ruling C-43): an expiry of the lease of a run in its end phase whose close
+        // met the lapsed lease left the session open; with the lease ended, it is closed now.
+        self.close_lapsed_run_session_guarded(token, &admission)?;
         Ok(true)
     }
 
