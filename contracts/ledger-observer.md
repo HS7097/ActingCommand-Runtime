@@ -978,6 +978,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `close_timeout_ms` | 60 000 | ms | how long the Runtime's close waits for the writer's answer and its end; then `ledger_close_timeout` (#411 A51) | A51, 0.12.9 |
 | `open_timeout_ms` | 600 000 | ms | the deadline of the start's ledger open (was a fixed 120 s); `10000..=600000` (P0-LO) | P0-LO, 0.12.11 |
 | `open_warn_ratio_milli` | 500 | integer | an open whose measured time exceeds `open_timeout_ms` × it / 1000 writes `ledger_open_slow`; `100..=1000` (P0-LO) | P0-LO, 0.12.11 |
+| `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.12 |
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
@@ -1011,6 +1012,24 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `timeout_ms`, `event_count`) right after `ledger_opened`; it is a daemon line, not a ledger
   record. Both keys are read when the ledger opens (`false`). The open's time grows with the
   ledger; archive and rotation (AO-3, AO-5, AO-6) are to bound the open's work itself.
+- #422 LN-5 (LEAN-L, the release after v0.12.11, `actingd-config` revision 11): the ledger's
+  history is on disk. The writer keeps no list and no index of its records: every read of the
+  history (`query`, `query_page`, `project`, `project_page`, a subscription's replay, the
+  scheduling outcome projection, the barrier's committed sequence) reads SQLite on the writer's
+  thread after its drain, one page of `history_page_rows` rows at a time, each row authenticated
+  on its own (hash, keyed tag, predecessor link, link and artifact rows), within `read_budget_ms`.
+  The selection uses the sequence key, the view indexes (type, module, source, time, severity), the
+  link indexes and, new, `ledger_artifacts(artifact_id, sequence)`, created once at the first
+  writer open of the build; conditions without a column (`diagnostic_code`, `fact_key`,
+  `maximum_severity` beside the severity column, the Lab view's relation) are checked on the
+  decoded rows. The checks an append makes look up the store's indexes and the records its batch
+  has staged: the event id (`event_id` unique index), a task fact's run (`run_id` link), the
+  scheduled-settlement continuation's chain (the decision's dispatch and execution records by
+  their payload's decision, then `run_id`, `lease_id` and `instance_id` links), retention's sources
+  by position and its Lab relation from the view and link indexes. A refused batch drops its
+  staged records with nothing to rebuild; every refusal of a batch write ends the writer (§9.2).
+  The open still reads every record (until LN-8) and keeps only the retention state.
+  `history_page_rows` is read when the ledger opens (`false`).
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
   [runtime-fact-store.md](runtime-fact-store.md));

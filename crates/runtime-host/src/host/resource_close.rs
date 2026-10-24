@@ -1188,7 +1188,7 @@ impl HostShared {
         let frame_store = actingcommand_artifact_store::FrameStore::new(
             frame_retention::spill_root(self.artifacts.root(), frame_owner.transport())
                 .map_err(RuntimeHostError::artifact)?,
-            frame_retention::capture_frame_store_config(),
+            self.capture_frame_store_config(),
         )
         .map_err(RuntimeHostError::artifact)?;
         let held = matches!(lease, PreparationLease::Held { .. });
