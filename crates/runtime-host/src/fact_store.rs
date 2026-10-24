@@ -531,17 +531,22 @@ impl InstanceFactStore {
                 HostLocation::ProjectFactHistory,
             ));
         }
-        let events = ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the history is read from the store page by page.
+        let events = read_pages(
+            ledger,
+            &EventQuery {
                 to_sequence: Some(ledger_position),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                fact_fatal(
-                    HostCode::FactStoreQueryFailed,
-                    HostLocation::ProjectFactHistory,
-                )
-            })?;
+            },
+            ledger_position,
+            ledger.history_page_events(),
+        )
+        .map_err(|_| {
+            fact_fatal(
+                HostCode::FactStoreQueryFailed,
+                HostLocation::ProjectFactHistory,
+            )
+        })?;
         let mut projection = HistoricalFactProjection::default();
         for event in events {
             projection.replay(&event)?;
@@ -692,18 +697,22 @@ impl InstanceFactStore {
             ));
         }
         let mut history = HistoricalFactProjection::default();
-        for event in ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the history is read from the store page by page.
+        for event in read_pages(
+            ledger,
+            &EventQuery {
                 to_sequence: Some(position),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                fact_fatal(
-                    HostCode::FactHistoryReadFailed,
-                    HostLocation::ProjectFactHistory,
-                )
-            })?
-        {
+            },
+            position,
+            ledger.history_page_events(),
+        )
+        .map_err(|_| {
+            fact_fatal(
+                HostCode::FactHistoryReadFailed,
+                HostLocation::ProjectFactHistory,
+            )
+        })? {
             history.replay(&event)?;
         }
         let active = history

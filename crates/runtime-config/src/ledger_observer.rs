@@ -7,7 +7,9 @@
 //! batches and request ring with AO-2; the tag lists with AO-2 and AO-5; the probes' periods,
 //! sample size, lag threshold and gap window with AO-8. P0-LO (`actingd-config` revision 10) adds
 //! the deadline of the start's ledger open and the share of it above which the open writes the
-//! warning `ledger_open_slow`; both are read when the ledger opens.
+//! warning `ledger_open_slow`; both are read when the ledger opens. LN-5 (#422, LEAN-L,
+//! `actingd-config` revision 11) adds the rows of one page of a history read, read when the
+//! ledger opens.
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -78,6 +80,9 @@ pub const OPEN_TIMEOUT_MS: &str = "ledger_observer.open_timeout_ms";
 /// P0-LO: the share of `open_timeout_ms`, in thousandths, above which the open's measured time
 /// writes the warning `ledger_open_slow`.
 pub const OPEN_WARN_RATIO_MILLI: &str = "ledger_observer.open_warn_ratio_milli";
+/// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; the ledger reads its
+/// history from the store a page at a time.
+pub const HISTORY_PAGE_ROWS: &str = "ledger_observer.history_page_rows";
 
 /// #411 A51: how long a caller waits for one reply of the ledger writer (the ledger's
 /// `GlobalLedger::REPLY_TIMEOUT`, 10 s). A read's budget stays below it, so a read stops before
@@ -101,6 +106,9 @@ const OPEN_WARN_RATIO_RANGE: KeyRange = KeyRange::Integer {
     min: 100,
     max: 1_000,
 };
+
+/// LN-5: a history page holds one row at least and 4096 at most.
+const HISTORY_PAGE_ROWS_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 4_096 };
 
 /// The largest attempt count a configuration may name: the write path counts in `u32`.
 const MAX_ATTEMPTS: i64 = u32::MAX as i64;
@@ -158,6 +166,11 @@ pub struct LedgerObserverFile {
     open_timeout_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     open_warn_ratio_milli: Option<Value>,
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+    // before LN-5 refuses a file that names it, because the section denies unknown members; a
+    // file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_page_rows: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -375,6 +388,17 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "P0-LO",
         since: "0.12.11",
     },
+    // LN-5: read when the ledger opens, as the writer's other limits are.
+    KeyRow {
+        name: KeyName::Exact(HISTORY_PAGE_ROWS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: HISTORY_PAGE_ROWS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-5",
+        since: "0.12.12",
+    },
 ];
 
 /// A milliseconds key read when the ledger opens, with the release that added its row.
@@ -434,6 +458,8 @@ pub struct LedgerObserverConfig {
     /// P0-LO: an open whose measured time exceeds `open_timeout_ms` × this / 1000 writes
     /// `ledger_open_slow`.
     pub open_warn_ratio_milli: u64,
+    /// LN-5 (#422): the rows of one page of a history read.
+    pub history_page_rows: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -596,6 +622,7 @@ impl LedgerObserverConfig {
             close_timeout_ms,
             open_timeout_ms: reader.duration(OPEN_TIMEOUT_MS)?,
             open_warn_ratio_milli: reader.count(OPEN_WARN_RATIO_MILLI)?,
+            history_page_rows: reader.count(HISTORY_PAGE_ROWS)?,
         })
     }
 }

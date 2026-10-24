@@ -5649,7 +5649,10 @@ fn ledger_failure_plan(
     // (`ledger_observer.read_budget_ms`, `close_timeout_ms`); both on the plan's clock.
     plan = plan
         .with_read_budget(Duration::from_millis(section.read_budget_ms))
-        .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
+        .with_close_timeout(Duration::from_millis(section.close_timeout_ms))
+        // LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; a value the ledger
+        // does not take is refused when it opens (`invalid_ledger_config`).
+        .with_history_page_rows(usize::try_from(section.history_page_rows).unwrap_or(usize::MAX));
     if let Some(timeout) = config.ledger_reply_timeout {
         plan = plan.with_reply_timeout(timeout);
     }

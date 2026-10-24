@@ -554,14 +554,18 @@ impl HostShared {
             .ledger
             .latest_sequence()
             .map_err(|_| ledger_error(HostLocation::SelectPolicySettlements))?;
-        let dispatch_intents = self
-            .ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the type's history is read from the store page by page.
+        let dispatch_intents = crate::recovery_read::read_pages(
+            &self.ledger,
+            &EventQuery {
                 to_sequence: Some(through),
                 event_type: Some(EventType::PolicyDispatchIntent),
                 ..EventQuery::default()
-            })
-            .map_err(|_| ledger_error(HostLocation::SelectPolicySettlements))?;
+            },
+            through,
+            self.ledger.history_page_events(),
+        )
+        .map_err(|_| ledger_error(HostLocation::SelectPolicySettlements))?;
         let leases = lock(&self.scheduler, HostLocation::SelectPolicySettlements)?.active_tokens();
         let runs = lock(&self.contained_runs, HostLocation::SelectPolicySettlements)?;
         let mut eligible = Vec::new();
@@ -1628,11 +1632,20 @@ impl HostShared {
                     HostLocation::ReadPolicyDispatchCompletion,
                     completes_decision,
                 )?,
+                // LN-5 (#422, LEAN-L §3.3): the type's history is read page by page.
                 None => self
                     .ledger
-                    .query(EventQuery {
-                        event_type: Some(EventType::PolicyDispatchCompleted),
-                        ..EventQuery::default()
+                    .latest_sequence()
+                    .and_then(|through| {
+                        crate::recovery_read::read_pages(
+                            &self.ledger,
+                            &EventQuery {
+                                event_type: Some(EventType::PolicyDispatchCompleted),
+                                ..EventQuery::default()
+                            },
+                            through,
+                            self.ledger.history_page_events(),
+                        )
                     })
                     .map_err(|_| ledger_error(HostLocation::ReadPolicyDispatchCompletion))?
                     .into_iter()

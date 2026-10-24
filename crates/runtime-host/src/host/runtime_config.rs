@@ -644,11 +644,20 @@ impl HostShared {
             let Some(generation) = self.active_policy_catalog()? else {
                 return Ok(());
             };
+            // LN-5 (#422, LEAN-L §3.3): each type's history is read from the store page by page.
             let read = |event_type| {
                 self.ledger
-                    .query(EventQuery {
-                        event_type: Some(event_type),
-                        ..EventQuery::default()
+                    .latest_sequence()
+                    .and_then(|through| {
+                        crate::recovery_read::read_pages(
+                            &self.ledger,
+                            &EventQuery {
+                                event_type: Some(event_type),
+                                ..EventQuery::default()
+                            },
+                            through,
+                            self.ledger.history_page_events(),
+                        )
                     })
                     .map_err(|error| crate::policy_host::catalog_ledger_error(&error))
             };

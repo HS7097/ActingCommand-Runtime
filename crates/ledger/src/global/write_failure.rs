@@ -154,6 +154,9 @@ pub struct LedgerFailurePlan {
     read_budget: Option<Duration>,
     close_timeout: Option<Duration>,
     reply_timeout: Option<Duration>,
+    /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read
+    /// (`ledger_observer.history_page_rows`).
+    history_page_rows: Option<usize>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -168,6 +171,7 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("read_budget", &self.read_budget)
             .field("close_timeout", &self.close_timeout)
             .field("reply_timeout", &self.reply_timeout)
+            .field("history_page_rows", &self.history_page_rows)
             .finish()
     }
 }
@@ -201,6 +205,7 @@ impl LedgerFailurePlan {
             read_budget: None,
             close_timeout: None,
             reply_timeout: None,
+            history_page_rows: None,
         }
     }
 
@@ -225,8 +230,19 @@ impl LedgerFailurePlan {
         self
     }
 
+    /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read
+    /// (`ledger_observer.history_page_rows`).
+    pub fn with_history_page_rows(mut self, rows: usize) -> Self {
+        self.history_page_rows = Some(rows);
+        self
+    }
+
     pub(super) fn read_budget(&self) -> Option<Duration> {
         self.read_budget
+    }
+
+    pub(super) fn history_page_rows(&self) -> Option<usize> {
+        self.history_page_rows
     }
 
     pub(super) fn close_timeout(&self) -> Option<Duration> {
@@ -1204,7 +1220,7 @@ fn import_dump<B: DurableStorage>(
     let mut end = read.end;
     for (capture_seq, draft) in read.records {
         let captured_at = draft.timestamp_unix_ms();
-        if store.indexes.contains_event_id(draft.event_id()) {
+        if store.history().contains_event_id(draft.event_id())? {
             duplicates += 1;
             latest_verified_unix_ms = latest_verified_unix_ms.max(Some(captured_at));
             continue;
@@ -1303,11 +1319,10 @@ pub(super) fn append_tail_gap<B: DurableStorage>(
     store: &mut EventStore<B>,
 ) -> GlobalLedgerResult<()> {
     let now = unix_ms_now()?;
+    // LN-5 (#422, LEAN-L §3.2 step 3): the latest time through the store's time index.
     let gap_start = store
-        .events
-        .iter()
-        .map(PersistedEvent::timestamp_unix_ms)
-        .max()
+        .backend
+        .latest_timestamp()?
         .unwrap_or(now)
         .clamp(1, now);
     let draft = ledger_draft(

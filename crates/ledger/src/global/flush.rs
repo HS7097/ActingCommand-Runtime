@@ -10,7 +10,8 @@
 //! commits alone with its state work. A capture that fails assembly, sanitizing or the checks is
 //! not written: a single-record gap stands in its place (§10); a direct append's refusal goes
 //! back to its caller as before. Per (source, lineage) the revisions are checked to be
-//! contiguous (§8.3).
+//! contiguous (§8.3). LN-5 (#422, LEAN-L §3.4): the staged records are the batch's own; the
+//! checks look them up beside the store's indexes, and a committed batch leaves only the store.
 
 use super::capture::{Captured, CapturedRecord, Reply, rejected_gap};
 use super::index::{IndexPolicy, IndexRows, is_tagged};
@@ -86,11 +87,12 @@ struct Staged {
     reply: Option<Reply>,
 }
 
-/// The records staged in memory since the last commit.
+/// The records staged in memory since the last commit (the records themselves are the store's
+/// `staged`).
 #[derive(Default)]
 struct Pending {
-    /// `events.len()`, the next sequence and the revisions before the first staged record.
-    start: Option<(usize, u64, Revisions)>,
+    /// The next sequence and the revisions before the first staged record.
+    start: Option<(u64, Revisions)>,
     staged: Vec<Staged>,
 }
 
@@ -130,7 +132,7 @@ impl<B: DurableStorage> EventStore<B> {
                 continue;
             }
             if captured.work.is_some() {
-                self.commit_pending(&mut pending, &mut report, identifiers);
+                self.commit_pending(&mut pending, &mut report);
                 match report.terminal.clone() {
                     None => self.commit_joint(captured, &mut report),
                     Some(error) => report.answer(captured.reply, Err(error)),
@@ -139,10 +141,10 @@ impl<B: DurableStorage> EventStore<B> {
             }
             if self.stage_captured(captured, &mut pending, &mut report, identifiers) {
                 // A tagged record commits on arrival: the batch ends at it (rule 13).
-                self.commit_pending(&mut pending, &mut report, identifiers);
+                self.commit_pending(&mut pending, &mut report);
             }
         }
-        self.commit_pending(&mut pending, &mut report, identifiers);
+        self.commit_pending(&mut pending, &mut report);
         report
     }
 
@@ -224,7 +226,7 @@ impl<B: DurableStorage> EventStore<B> {
                 if error.terminal() {
                     // A refusal that ends the writer, as a direct append's did: what is staged
                     // commits first.
-                    self.commit_pending(pending, report, identifiers);
+                    self.commit_pending(pending, report);
                     report.answer(reply, Err(error.clone()));
                     report.stop(error);
                     return false;
@@ -300,7 +302,7 @@ impl<B: DurableStorage> EventStore<B> {
             Err(error) => {
                 // Not even the gap can be written: the writer stops, and the dump keeps the
                 // record in flight.
-                self.commit_pending(pending, report, identifiers);
+                self.commit_pending(pending, report);
                 report.stop(error);
                 false
             }
@@ -308,9 +310,10 @@ impl<B: DurableStorage> EventStore<B> {
     }
 
     /// Checks one record as the store checks every append (event id, retention) and stages it
-    /// in memory; whether it is tagged.
+    /// in memory; whether it is tagged. LN-5 (§3.4): the event id is looked up in the store's
+    /// unique index and among the staged records.
     fn stage(&mut self, event: PersistedEvent, pending: &mut Pending) -> GlobalLedgerResult<bool> {
-        if self.indexes.contains_event_id(event.event_id()) {
+        if self.history().contains_event_id(event.event_id())? {
             return Err(GlobalLedgerError::request(
                 LedgerCode::DuplicateEventId.code(),
                 LedgerLocation::AppendEvent.location(),
@@ -319,16 +322,11 @@ impl<B: DurableStorage> EventStore<B> {
         self.validate_retention_admission(&event, false)?;
         let following = increment_sequence(self.next_sequence)?;
         if pending.start.is_none() {
-            pending.start = Some((
-                self.events.len(),
-                self.next_sequence,
-                self.revisions.clone(),
-            ));
+            pending.start = Some((self.next_sequence, self.revisions.clone()));
         }
         let tagged = is_tagged(&event, &self.index_policy);
         self.retention.apply(&event);
-        self.indexes.insert(&event, self.events.len());
-        self.events.push(event);
+        self.staged.push(event);
         self.next_sequence = following;
         Ok(tagged)
     }
@@ -369,22 +367,21 @@ impl<B: DurableStorage> EventStore<B> {
         }
     }
 
-    /// Commits what is staged as one batch with its index rows (§8.1, §11.4). A refusal that
-    /// does not end the writer rolls the memory back; its direct appends are answered and its
-    /// captures are written as gaps.
-    fn commit_pending(
-        &mut self,
-        pending: &mut Pending,
-        report: &mut FlushReport,
-        identifiers: &IdentifierIssuer,
-    ) {
-        let Some((start, start_sequence, revisions)) = pending.start.take() else {
+    /// Commits what is staged as one batch with its index rows (§8.1, §11.4). LN-5 (#422,
+    /// LEAN-L §3.4): a refused batch rolls back without a rebuild: its staged records were its
+    /// own and go with it, and the sequence and the revisions return to the last commit; its
+    /// direct appends are answered with the refusal. Every refusal of a batch write ends the
+    /// writer (§9.2: the write gave up, or the store met an integrity or format failure), and its
+    /// captures stay in flight for the dump; the retention state, which took the staged records
+    /// in as they were checked, is never asked again.
+    fn commit_pending(&mut self, pending: &mut Pending, report: &mut FlushReport) {
+        let Some((start_sequence, revisions)) = pending.start.take() else {
             return;
         };
         let mut staged = std::mem::take(&mut pending.staged);
-        let events = &self.events[start..];
-        let rows = IndexRows::of(events, &self.index_policy);
-        let sync = batch_sync(events, &self.index_policy);
+        let events = std::mem::take(&mut self.staged);
+        let rows = IndexRows::of(&events, &self.index_policy);
+        let sync = batch_sync(&events, &self.index_policy);
         // Each waiting append's `ledger_durable` span starts here, at the batch's persist call.
         let durable_started = Instant::now();
         for reply in staged.iter_mut().filter_map(|entry| entry.reply.as_mut()) {
@@ -394,7 +391,7 @@ impl<B: DurableStorage> EventStore<B> {
             &mut self.backend,
             self.write_failure.as_ref(),
             &BatchWrite {
-                events,
+                events: &events,
                 rows: &rows,
                 work: None,
                 sync,
@@ -403,9 +400,8 @@ impl<B: DurableStorage> EventStore<B> {
         );
         match written {
             Ok(write_sync_ns) => {
-                let committed = self.events[start..].to_vec();
-                let last = committed.len().saturating_sub(1);
-                for (at, event) in committed.iter().enumerate() {
+                let last = events.len().saturating_sub(1);
+                for (at, event) in events.iter().enumerate() {
                     // The batch's sync time is its last record's; a batch read back as
                     // committed has none, as a single record's had.
                     let elapsed = write_sync_ns.map(|ns| if at == last { ns } else { 0 });
@@ -416,54 +412,23 @@ impl<B: DurableStorage> EventStore<B> {
                         report.stop(error);
                     }
                 }
-                for (staged, event) in staged.into_iter().zip(committed.iter()) {
+                for (staged, event) in staged.into_iter().zip(events.iter()) {
                     report.done.push(staged.origin.capture_seq);
                     report.answer(staged.reply, Ok(event.clone()));
                 }
-                report.committed.extend(committed);
+                report.committed.extend(events);
             }
             Err(error) => {
-                self.roll_back(start, start_sequence, revisions);
-                let terminal = error.terminal();
-                let mut refused = Vec::new();
+                self.next_sequence = start_sequence;
+                self.revisions = revisions;
                 for staged in staged {
-                    match staged.reply {
-                        Some(reply) => {
-                            if !terminal {
-                                report.done.push(staged.origin.capture_seq);
-                            }
-                            report.answer(Some(reply), Err(error.clone()));
-                        }
-                        None if !terminal => refused.push(staged.origin),
-                        None => {}
+                    if let Some(reply) = staged.reply {
+                        report.answer(Some(reply), Err(error.clone()));
                     }
                 }
-                if terminal {
-                    report.stop(error);
-                    return;
-                }
-                // A refusal of the batch that does not end the writer: each capture is written
-                // as its gap.
-                for origin in refused {
-                    self.stage_gap(origin, cause(error.code()), pending, report, identifiers);
-                }
-                if pending.start.is_some() {
-                    self.commit_pending(pending, report, identifiers);
-                }
+                report.stop(error);
             }
         }
-    }
-
-    /// Rolls the memory back to the last commit after a refused batch: the records, the
-    /// indexes, the retention state and the revisions.
-    fn roll_back(&mut self, start: usize, start_sequence: u64, revisions: Revisions) {
-        self.events.truncate(start);
-        self.next_sequence = start_sequence;
-        self.indexes = super::projection::EventIndexes::from_events(&self.events);
-        if let Ok(retention) = super::retention::RetentionIndex::from_events(&self.events) {
-            self.retention = retention;
-        }
-        self.revisions = revisions;
     }
 
     /// Commits one joint record alone with its state work (G15).
@@ -527,7 +492,7 @@ impl<B: DurableStorage> EventStore<B> {
                     )
                 })?;
         let following = increment_sequence(self.next_sequence)?;
-        if self.indexes.contains_event_id(event.event_id()) {
+        if self.history().contains_event_id(event.event_id())? {
             return Err(GlobalLedgerError::request(
                 LedgerCode::DuplicateEventId.code(),
                 LedgerLocation::AppendTransaction.location(),
@@ -538,11 +503,9 @@ impl<B: DurableStorage> EventStore<B> {
         self.publish_committed(event, following, write_sync_ns)
     }
 
-    /// The ledger sequence of a committed record, for the flush barrier (§8.4).
-    pub(super) fn committed_sequence(&self, event_id: &EventId) -> Option<u64> {
-        self.indexes
-            .position_of(event_id)
-            .and_then(|position| self.events.get(position))
-            .map(PersistedEvent::sequence)
+    /// The ledger sequence of a committed record, for the flush barrier (§8.4). LN-5: by the
+    /// store's unique index of event ids.
+    pub(super) fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>> {
+        self.backend.committed_sequence(event_id)
     }
 }

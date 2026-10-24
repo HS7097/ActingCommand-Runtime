@@ -2919,3 +2919,6 @@ mod gate_0121_a4;
 // its position.
 #[path = "tests/gate_411_a24.rs"]
 mod gate_411_a24;
+// LN-5 (#422, LEAN-L): the writer's reads and its append checks read the history from the store.
+#[path = "tests/gate_ln5.rs"]
+mod gate_ln5;
