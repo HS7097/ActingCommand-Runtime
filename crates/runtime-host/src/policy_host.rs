@@ -1426,6 +1426,9 @@ impl PolicyHost {
                                 .unwrap_or(u16::MAX)
                                 .min(MAX_TASK_FAILURE_STREAK)
                         }),
+                        // SCH-M ED-1: filled from the instance's samples by ED-2.
+                        expected_runtime_ms: None,
+                        expected_runtime_runs: None,
                     },
                 ))
             })
@@ -1446,6 +1449,8 @@ impl PolicyHost {
                         completed_window: None,
                         last_duration_ms: None,
                         failure_streak: None,
+                        expected_runtime_ms: None,
+                        expected_runtime_runs: None,
                     })
                     .eligible_since_unix_ms = Some(*since);
             }

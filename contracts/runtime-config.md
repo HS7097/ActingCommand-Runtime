@@ -362,6 +362,10 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.fact_refresh.daily_limit`, `.max_consecutive_failures` (Workflow #384 D2-S4) | integer `0..=4294967295` | `96`, `3` |
 | `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
 | `scheduling.fact_refresh.overdue_ms` (Workflow #384 D2-S5) | milliseconds | none (unset: not reported) |
+| `scheduling.fact_refresh.expected_duration_ms` (SCH-M ED-1) | milliseconds `1..=1800000` | `60000` |
+| `scheduling.expected_runtime.enabled` (SCH-M ED-1) | boolean | `true` |
+| `scheduling.expected_runtime.runs` (SCH-M ED-1) | integer `1..=16` | `5` |
+| `scheduling.expected_runtime.margin_ms` (SCH-M ED-1) | milliseconds `0..=3600000` | `300000` |
 | `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
 | `scheduling.pack_admission.check_in_check_config`, `.check_after_start` (Workflow #386 SR-3) | boolean | `true`, `true` |
 | `scheduling.pack_admission.suspend_codes` (Workflow #386 SR-3) | list of codes, as `rerun.condition_codes` | `["recognition_sample_budget_invalid"]` |
@@ -390,6 +394,20 @@ dispatches to it ([scheduling-blackout.md](scheduling-blackout.md), "Order of th
 position 9). Every member is settable while the Runtime runs; a change applies to the draws made
 after it (a draw already made keeps its delay), and `enabled = false` releases the instance's
 waiting tasks at the next evaluation.
+
+**Expected duration (SCH-M slice ED-1, frozen model v1.0 §3.4; `actingd-config` revision
+11).** `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms` set the expected duration E
+of a task package on an instance: the mean of its latest `runs` successful scheduled runs, rounded
+up, plus `margin_ms`, at most the task's `loop_budget.max_runtime_ms`; with no run, or with
+`enabled` false, the declared value ([scheduling/README.md](scheduling/README.md), "Settlement
+Feedback And Eligibility Age"). Each is also per instance,
+`instance.<instance id>.scheduling.expected_runtime.<member>`, in the file the entry's
+`scheduling.expected_runtime` member, settable, default `section:scheduling.expected_runtime.<member>`;
+`EffectiveConfig::expected_runtime(instance_id)` returns each member's value in effect, the
+instance's own or the section's. `scheduling.fact_refresh.expected_duration_ms` is the declared
+duration D of a fact refresh read. ED-1 parses and checks the keys; slice ED-2 reads them (the
+sample store, the projection into the evaluation, and the fact refresh's declared duration at
+admission and replay, which today still read the fact refresh spec's own value).
 
 **Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
 v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
@@ -619,6 +637,27 @@ watch reads its four keys at every tick, so an instruction changes them while th
 `watch_enabled` false stops the polls (and so the watch's restarts) until it is true again.
 `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
 keys; a file that names none of them keeps its revision.
+
+## The `watchdog` section (#411 A66)
+
+#411 A66 ([runtime-watchdog.md](runtime-watchdog.md), "Start window"; coordinator ruling 10-24):
+how long a start may take before the watchdog, or `actingctl start` and `restart` without
+`--ready-timeout-s`, calls it `start_timeout`. The same window bounds which open watchdog start an
+answering owner belongs to, and a waiter for the watchdog's `run.lock` waits it plus 20 s. actingd
+parses and checks the section with the rest of the file (its row is that of
+`config.parameters.watchdog`) but never uses it. The watchdog and `actingctl` read it from the
+configuration file they already read for the state root, at every tick or command, through this
+crate (`watchdog::start_window_ms`), never from the configuration in effect, so it is not settable.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the section;
+a file that does not name it keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `watchdog.start_window_ms` | milliseconds `60000..=3600000`, the longest a start may take | `900000` | no (read from the file by the watchdog and `actingctl`) |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at actingd's start, in `check-config`, and on every watchdog tick or `actingctl start`
+or `restart` (the tick's `watchdog_misconfigured`); a value that is no integer is `wrong_type`.
 
 ## The `execution` section (PERF-B1, Workflow #407 B1)
 

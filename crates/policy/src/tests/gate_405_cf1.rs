@@ -411,6 +411,8 @@ fn ran(task_id: &str, at: u64, terminal_state: TaskTerminalState) -> TaskRuntime
         completed_window: None,
         last_duration_ms: None,
         failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
     }
 }
 

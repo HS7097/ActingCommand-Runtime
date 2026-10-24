@@ -135,3 +135,12 @@ test = "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_a
 ruling = "Alice's ruling 35 (emu-watch; #414 option 3)"
 reason = "A pause no longer gates an autostart claim, so the gated routine entry the shutdown idle test must not count is now a Runtime-internal ladder claim."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_routine_claim, in host row 102."
+
+# apps.toml, row 7f (#411 A66, PR #1298): the watchdog's start timeout is the configured start
+# window, so the gate's name no longer says 180 s.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s"
+ruling = "#411 A66 (coordinator ruling 10-24: watchdog.start_window_ms, 900 s by default)"
+reason = "Renamed with the requirement it pins: a start that never answers is start_timeout after the configured start window, no longer after a fixed 180 s."
+covered_by = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window, in the same apps.toml row."
