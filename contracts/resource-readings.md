@@ -45,7 +45,7 @@ file. The following is the member only, not a complete task:
 | `page_id` | an identifier like `id` (not `any`) naming a page the task declares: its entry, target, error or `scheduling_outcome` pages, or a page one of its operations leaves, reaches or passes through (Workflow #384 D2-S2; it was a terminal page only); the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id`; before any input the Runtime refuses a page its detector does not hold (`page_undeclared`) |
 | `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the frame handed to recognition is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
-| `value` | `type` `unsigned_integer` only; `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`, `times_prefixed`, `clock_hms`; `min <= max <= 2^53-1` | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`) |
+| `value` | `type` `unsigned_integer` or (SCH-M CF-2) `timestamp_ms`. `unsigned_integer`: `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`, `times_prefixed`, `clock_hms`; `min <= max <= 2^53-1`; no `base`. `timestamp_ms` ("Completion times" below): exactly `type`, `format` `clock_hms` and `base` `observation`, both required | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`), `…/value/base`; a member of the other type: `UnknownField` @ `…/value/<member>` |
 | `value.dictionary` | optional (Workflow #411 B1): the number's dictionary, applied after the trim and before the parser ([ocr-fields.md](ocr-fields.md), the paragraph of Workflow #411 B1) | `InvalidValue` @ `…/value/dictionary/<member>` as listed there |
 | `minimum_confidence_milli` | `1..=1000` | `InvalidValue` @ `…/minimum_confidence_milli` |
 | `valid_for_ms` | `1..=31_536_000_000` | `InvalidValue` @ `…/valid_for_ms` |
@@ -101,6 +101,40 @@ writes (its `fact_key`, then its `capacity_fact_key`), which is what "the keys o
 mark" means everywhere below: a requested key set, an adjustment's mark of its key, the
 recognition maintenance package's marked keys and their checks.
 
+### Completion times
+
+SCH-M CF-2 (frozen model `rd-1024/sched-design/model.md` D-9). A mark may read a completion time:
+a countdown the screen shows, the time left until some work is done. Its `value` is
+
+```json
+{ "type": "timestamp_ms", "format": "clock_hms", "base": "observation" }
+```
+
+- `format` is required and is `clock_hms` only ([ocr-fields.md](ocr-fields.md)): `H:MM:SS`,
+  the time left in seconds. Any other format is `InvalidValue` @ `…/value/format`.
+- `base` is required and is `observation` only: the countdown is added to the device capture
+  time of the frame the reading was taken on. Any other value is `InvalidValue` @
+  `…/value/base`.
+- `min`, `max` and `dictionary` are members of `unsigned_integer` only (`UnknownField` at the
+  member), and `capacity_fact_key` is refused as for every mark that is not a fraction.
+- **The published value** is `timestamp_ms` = the frame's `observed_at_unix_ms` + the seconds ×
+  1000 ("Host" below). The fact key keeps the mark key rule (`resource.` or `inventory.`) and
+  `valid_for_ms` stays as declared. The catalog predicate `fact_time_reached` reads it
+  ([scheduling/README.md](scheduling/README.md), "Fact-time wake").
+- **An agreement** compares the instants its frames convert to, not the countdowns ("Kernel
+  reading" below), so a running countdown agrees with itself.
+- **No adjustment.** A completion time is no amount: a `resource_adjustments` entry that names
+  the key of a completion-time mark, with or without `amount`, is refused at declaration,
+  `InvalidValue` @ `/resource_adjustments/<i>` (coordinator ruling of 2026-10-24; the shared
+  rule's reason is `resource_declaration_invalid`, and Runtime admission refuses it as
+  `contained_task_resource_reading_invalid` with that reason).
+- **An absent countdown.** A slot whose region shows no countdown gives no reading (the mark's
+  miss and its warning, as today); nothing is published for it. A catalog covers an emptied slot
+  with `once_per_reading` and a free-slot count fact (SCH-M CF-1).
+- A resource side that keys completion times uses a sub-prefix that no reset invalidates
+  (`resource.<…>.ready.<name>`) and lists the counter prefixes its daily resets clear (model
+  D-10, data side).
+
 ### Version gate
 
 The family is accepted in task schema `0.8` and `0.9` only; in `0.3`–`0.7` it is
@@ -117,6 +151,12 @@ revision 3, which Runtime v0.12.0 declares once ([component-interfaces.md](compo
 Workflow #411 B1's `agreement` and `value.dictionary` join `package` revision 6, which the B
 train declares at its end (register §1.163); until then they are admitted by code, and a
 Runtime before them refuses them with `UnknownField` at the member.
+SCH-M CF-2's `value` `timestamp_ms` joins `package` revision 6 as well (BT-PK6 declares it;
+until then it is admitted by code). A Runtime before CF-2 refuses such a mark at its value,
+never silently: its declaration gate knows neither the member `base` nor the type
+`timestamp_ms`, and refuses the first with `UnknownField` @ `…/value/base`. So a pack that
+declares one is placed only on a Runtime that names the subsystem `resource_reading_time` in
+its `config.subsystems` ([actingd-check-config.md](actingd-check-config.md)).
 
 ### Two uses, one declaration
 
@@ -161,7 +201,8 @@ the frames it reaches their pages on:
   when the parse succeeds and the confidence is present and at least `minimum_confidence_milli`.
   For each frame the kernel then records the in-memory trace `ContainedTaskTrace::ResourceReadings
   { captured_at, readings, unresolved }`: per reading that holds the declaration, the key it
-  writes, the integer value and the confidence milli (a mark with a second reading key gives two,
+  writes, the integer value (SCH-M CF-2: a completion-time mark's countdown in seconds) and
+  the confidence milli (a mark with a second reading key gives two,
   its value then its capacity); per mark that gave no reading the declaration and its
   `reading_problem` (`empty`, `invalid_integer`, `overflow`, `out_of_range`,
   `region_unresolved`, `provider_failed`, `confidence_missing`, `low_confidence`, and
@@ -182,6 +223,10 @@ the frames it reaches their pages on:
   does not sample refuses the pass with `recognition_sampling_runtime_unsupported`, and a
   capture failure or a cancellation between these captures ends the run, as during target
   consensus sampling. Without an agreement a pass hands off its one frame, as before.
+  SCH-M CF-2: a completion-time mark's frames agree when each gives its reading and the
+  instants they convert to (each frame's capture time plus the countdown it shows) lie within
+  (`frames` - 1) × `interval_ms` + 1000 ms of one another, the latest minus the earliest;
+  otherwise the miss is `no_agreement`. Its reading is the handed-off frame's countdown.
 - **A miss never fails the run.** Each mark that gave no reading is the warning
   `contained_task_resource_reading_unresolved` (`reading_id`, `fact_key`, `reading_problem`;
   [Host](#host) writes it), the run settles as it would without the mark, and an earlier fact of
@@ -255,7 +300,7 @@ readings.
 | --- | --- |
 | `scope` | `{"kind": "instance", "instance_id": <the run's registered instance alias>}` |
 | `key` | `fact_key`; for a mark's capacity, its `capacity_fact_key` (Workflow #390 READ-1; every other field but `source_snapshot_id` is as for the mark's value, `source_detector` included) |
-| `content` | inline `integer`, the reading |
+| `content` | inline `integer`, the reading; SCH-M CF-2: for a completion-time mark inline `timestamp_ms`, `observed_at_unix_ms` + the countdown's seconds × 1000 (a sum beyond `u64` is a record the fact record cannot hold: `contained_task_resource_reading_rejected`, `<id>:fact_observation_invalid`) |
 | `observed_at_unix_ms` | the device capture time of the frame the reading was taken on, in Unix ms. It is wall clock time, the clock domain of the Runtime clock that refuses an observation in the future |
 | `expires_at_unix_ms` | `observed_at_unix_ms + valid_for_ms` |
 | `ttl_policy` | `{"minimum_ms": valid_for_ms, "maximum_ms": valid_for_ms, "source": "detector_contract"}` |
@@ -388,7 +433,7 @@ shows after the operation; the amount is never written in the package.
 | --- | --- | --- |
 | the array | `1..=16` entries; the task declares `scheduling_outcome` | empty or longer: `InvalidValue` @ `/resource_adjustments`; no outcome: `MissingField` @ `/scheduling_outcome` |
 | `id` | the identifier rule of a mark's `id`, unique in the task | `InvalidValue` @ `/resource_adjustments/<i>/id` |
-| `fact_key` | the key rule of a mark (`resource.` or `inventory.`); one operation adjusts a key at most once; without `amount`, the task has a mark of the key (one that writes it, as `fact_key` or as `capacity_fact_key`) | `InvalidValue` @ `…/fact_key` |
+| `fact_key` | the key rule of a mark (`resource.` or `inventory.`); one operation adjusts a key at most once; without `amount`, the task has a mark of the key (one that writes it, as `fact_key` or as `capacity_fact_key`); SCH-M CF-2: not the key of a completion-time (`timestamp_ms`) mark, with or without `amount` | `InvalidValue` @ `…/fact_key`; a completion-time key: `InvalidValue` @ `/resource_adjustments/<i>` (the shared rule's reason `resource_declaration_invalid`) |
 | `operation_id` | an operation of the task | `InvalidValue` @ `…/operation_id` |
 | `amount` | absent: the new value is read after the operation (a mark of the key); present: `{target_id, direction}` only | an amount source other than `target_id` (a constant, for example): `UnknownField` @ `…/amount/<member>` |
 | `amount.target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; the same target qualification as a mark's (`target_not_ocr`, `target_locates_text`, `target_personal`) | `InvalidValue` @ `…/amount/target_id`; cross-reference: `package_invalid` naming `…/amount/target_id` |

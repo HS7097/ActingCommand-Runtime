@@ -12,3 +12,7 @@ publish = false
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+
+[build-dependencies]
+# Workflow #420 S2: build.rs merges the outcome catalog fragments into OUT_DIR.
+serde_json = { workspace = true }

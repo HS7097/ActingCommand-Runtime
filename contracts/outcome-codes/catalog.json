@@ -2071,6 +2071,14 @@
       "type": "integer",
       "description": "The amount, in the pool's real units, that the pool would hold after a run of the task: its projected amount less the task's declared consumption and less any consumption that goes first; negative when the consumption exceeds the amount (Workflow #411 B16)."
     },
+    "predecessor_task_id": {
+      "type": "name",
+      "description": "The task a dependency_completed predicate names: the predecessor whose terminal state it reads (SCH-M CF-1)."
+    },
+    "served_by_dispatch_unix_ms": {
+      "type": "unix_ms",
+      "description": "When the task's latest successful run that served a fact_time_reached time was dispatched, in Unix milliseconds (SCH-M CF-1)."
+    },
     "install_operation_id": {
       "type": "id",
       "description": "An installer operation's id, op-<unix_ms> (contracts/install-cli.md)."

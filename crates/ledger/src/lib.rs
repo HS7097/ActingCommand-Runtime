@@ -38,6 +38,9 @@ mod read_hold;
 // P0-LO: a slower writer open of a state root, for tests in other crates.
 #[cfg(any(test, feature = "test-hooks"))]
 mod open_delay;
+// LN-1 (Workflow #422): the scale harness's synthetic ledger and process measures.
+#[cfg(any(test, feature = "test-hooks"))]
+mod synthetic;
 pub use codes::{LedgerCode, LedgerLocation};
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
@@ -55,6 +58,13 @@ pub use writer_stall::WriterStallGate;
 // P0-LO: the slower writer open of a state root, for tests in other crates.
 #[cfg(any(test, feature = "test-hooks"))]
 pub use open_delay::LedgerOpenDelayGate;
+
+// LN-1 (Workflow #422): the synthetic ledger and process measures of the scale harness.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use synthetic::{
+    ProcessMemory, SyntheticInstance, SyntheticLedgerReport, SyntheticLedgerSpec, SyntheticMix,
+    process_age_ms, process_memory, write_synthetic_ledger,
+};
 
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";
 const LEDGER_HEADER_SCHEMA_VERSION: &str = "actingcommand.ledger.session.v0.1";

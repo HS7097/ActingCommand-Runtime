@@ -236,8 +236,11 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
         ("delay", 5_000, true),
         ("delay", 5_001, false),
         ("delay", 0, false),
-        ("interval", 5_000, true),
-        ("interval", 5_001, false),
+        // PERF-B1 (Workflow #407 B1, R2): admission bounds a declared interval by the largest
+        // ceiling `execution.capture.max_interval_ms` may set, 1 800 000 ms; the 5 000 ms bound
+        // went. Neither side reads the configuration.
+        ("interval", 1_800_000, true),
+        ("interval", 1_800_001, false),
         ("interval", 0, false),
     ] {
         let mut candidate_entries = entries.clone();
