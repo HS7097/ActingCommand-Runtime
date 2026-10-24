@@ -7,50 +7,34 @@ name: Lean scale
 # private bytes at ready and 10 s later (crates/runtime-host/src/tests/lean_scale.rs).
 #
 # It reports only and is not a required check: ci.yml's `gate` does not need it, so it never
-# holds a merge; LN-8 turns the numbers into a gate. The 1M case takes a long time, so it runs
-# here, apart from ci.yml: on pull requests that touch the ledger, the database, the State store
-# or the host's start, and on demand. It builds in release, as production does.
+# holds a merge; LN-8 turns the numbers into a gate. The 1M case takes a long time and the Actions
+# budget is $20 a month (ruling 10-19), so it never runs by itself: run it on demand (Actions ->
+# Lean scale -> Run workflow, on the branch to measure), or add the label `lean-scale` to a pull
+# request, which runs it once on that pull request. It builds in release, as production does.
 
 on:
-  pull_request:
-    paths:
-      - 'crates/ledger/**'
-      - 'crates/runtime-database/**'
-      - 'crates/runtime-state/**'
-      - 'crates/runtime-host/src/host.rs'
-      - 'crates/runtime-host/src/fact_store.rs'
-      - 'crates/runtime-host/src/monitor.rs'
-      - 'crates/runtime-host/src/approval.rs'
-      - 'crates/runtime-host/src/agent_dispatcher.rs'
-      - 'crates/runtime-host/src/owner.rs'
-      - 'crates/runtime-host/src/policy_host.rs'
-      - 'crates/runtime-host/src/policy_host/**'
-      - 'crates/runtime-host/src/recovery_read.rs'
-      - 'crates/runtime-host/src/recovery_timing.rs'
-      - 'crates/runtime-host/src/host/runtime_facts.rs'
-      - 'crates/runtime-host/src/host/state_control.rs'
-      - 'crates/runtime-host/src/host/policy_outcome.rs'
-      - 'crates/runtime-host/src/host/frame_retention.rs'
-      - 'crates/runtime-host/src/host/frame_retention/**'
-      - 'crates/runtime-host/src/tests/lean_scale.rs'
-      - '.github/workflows/lean-scale.yml'
   workflow_dispatch:
     inputs:
       sizes:
         description: History sizes in records, comma separated
         required: false
         default: '10000,1000000'
+  # Only the `lean-scale` label starts a run; any other label leaves the job skipped.
+  pull_request:
+    types: [labeled]
 
-# A new push to a pull request cancels its older run; every dispatch gets its own group.
+# One group per dispatch, and per pull request and label; nothing is cancelled, so adding another
+# label never stops a measurement.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.label.name || 'dispatch' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   scale:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'lean-scale' }}
     runs-on: windows-latest
     timeout-minutes: 150
     env:
