@@ -26,6 +26,9 @@ const TAKEOVER_COOLDOWN_MS: u64 = 40;
 const CRASH_ROOT_ENV: &str = "ACTINGCOMMAND_EPOCH_CLOSE_CRASH_ROOT";
 /// #411 A65 test (a): how many ordinary records the child writes before its run.
 const FILLER_ENV: &str = "ACTINGCOMMAND_EPOCH_CLOSE_FILLER";
+/// #411 A65 (Codex's counterexample on #420): `1` when the child's start records no
+/// `host.contained_settlement`, as a build before A65 did (an old ledger without the anchor).
+const UNANCHORED_ENV: &str = "ACTINGCOMMAND_EPOCH_CLOSE_UNANCHORED";
 /// The line the child prints once its run is in flight and the run's identity is on disk.
 const CRASH_POINT_LINE: &str = "epoch-close crash point: run in flight";
 const INSTANCE_FILE: &str = "epoch-close-instance.json";
@@ -147,7 +150,8 @@ fn await_an_input_commit(host: &RuntimeHost) {
 /// flight with its lease held and the device in use. Once that input is recorded the child
 /// notes the epoch, the run and its lease, prints `CRASH_POINT_LINE` and waits to be killed.
 /// Before the run it records `FILLER_ENV` client actions, the epoch's ordinary records (#411
-/// A65 test (a); none when the variable is unset).
+/// A65 test (a); none when the variable is unset). With `UNANCHORED_ENV` set to `1` its start
+/// records no `host.contained_settlement` (#411 A65, Codex's counterexample on #420).
 // Test plan v2.2 §4 #15: a child-process entry, not a test; its parent runs it with
 // `--ignored --exact`.
 #[test]
@@ -162,8 +166,12 @@ fn epoch_close_crash_child_process() {
             .expect("instance identifier");
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
+    let mut config = epoch_config(&root);
+    if std::env::var(UNANCHORED_ENV).is_ok_and(|value| value == "1") {
+        config = config.with_contained_settlement_unrecorded_for_test();
+    }
     let host = RuntimeHost::start(
-        epoch_config(&root),
+        config,
         Arc::new(FakeProvider::one(ALIAS, registered, Arc::clone(&state))),
     )
     .expect("child runtime host");
@@ -277,6 +285,18 @@ fn crash_mid_run() -> CrashedRun {
 
 /// [`crash_mid_run`] whose child records `filler` client actions before its run (#411 A65).
 pub(super) fn crash_mid_run_with(filler: usize) -> CrashedRun {
+    crash_mid_run_child(filler, true)
+}
+
+/// [`crash_mid_run`] on an old ledger: the child's start records no
+/// `host.contained_settlement`, as a build before #411 A65 did (Codex's counterexample on #420).
+pub(super) fn crash_mid_run_without_anchor() -> CrashedRun {
+    crash_mid_run_child(0, false)
+}
+
+/// The crash child with `filler` client actions before its run; `anchored` is false when its
+/// start records no `host.contained_settlement`.
+fn crash_mid_run_child(filler: usize, anchored: bool) -> CrashedRun {
     let root = TempDir::new().expect("tempdir");
     let instance_id = instance_id();
     fs::write(
@@ -293,6 +313,7 @@ pub(super) fn crash_mid_run_with(filler: usize) -> CrashedRun {
         ])
         .env(CRASH_ROOT_ENV, root.path())
         .env(FILLER_ENV, filler.to_string())
+        .env(UNANCHORED_ENV, if anchored { "0" } else { "1" })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

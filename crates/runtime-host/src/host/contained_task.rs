@@ -8890,10 +8890,12 @@ impl HostShared {
     /// - R3: the scan begins after the start event of the last start that completed this
     ///   settlement, which `host.contained_settlement` names; a start that failed after
     ///   appending its own start event recorded no such fact, so the epochs before it are
-    ///   scanned again. Without the fact (a start on a ledger no start of this build settled)
-    ///   the scan begins after the start event before this start's, the previous epoch. It ends
-    ///   before this start's start event (the last one). A run settled once has its terminal,
-    ///   so a later scan that reaches it again leaves it.
+    ///   scanned again. Without the fact (an old ledger no start of this build settled, also
+    ///   when its first start of this build failed before it settled) one paged scan reads the
+    ///   task semantic events of the whole ledger, never only the last two starts' epoch
+    ///   (Codex's counterexample on #420), and the fact is then written. The scan ends before
+    ///   this start's start event (the last one). A run settled once has its terminal, so a
+    ///   later scan that reaches it again leaves it.
     /// - R1: every read is a ledger page; a page the writer's read budget stopped is read again
     ///   smaller ([`LedgerPages`]).
     /// - R2: a ledger failure keeps the ledger's own failure as its cause.
@@ -8923,24 +8925,25 @@ impl HostShared {
                 .map(PersistedEvent::sequence),
             );
         }
-        starts.sort_unstable();
-        let Some(&current) = starts.last() else {
+        let Some(current) = starts.into_iter().max() else {
             return Ok(());
         };
-        let previous = match self.contained_settlement_anchor(current)? {
-            Some(anchor) => Some(anchor),
-            None => starts.iter().rev().nth(1).copied(),
-        };
-        if let Some(previous) = previous
-            && current.saturating_sub(previous) >= 2
-        {
+        // Without the anchor the scan begins at the ledger's start (sequence 0 precedes every
+        // event), so no earlier start's own start event can hide an older epoch.
+        let previous = self.contained_settlement_anchor(current)?.unwrap_or(0);
+        if current.saturating_sub(previous) >= 2 {
             self.settle_contained_runs_between(previous, current)?;
+        }
+        #[cfg(test)]
+        if self.contained_settlement_unrecorded_for_test {
+            return Ok(());
         }
         self.record_contained_settlement(current)
     }
 
-    /// The direct contained runs whose first task semantic fact lies between the start events
-    /// at `previous` and `current`, settled in ledger order, the range read page by page.
+    /// The direct contained runs whose first task semantic fact lies after the event at
+    /// `previous` (a start event, or 0 for the ledger's start) and before the start event at
+    /// `current`, settled in ledger order, the range read page by page.
     fn settle_contained_runs_between(&self, previous: u64, current: u64) -> RuntimeHostResult<()> {
         let mut pages = LedgerPages::new(
             &self.ledger,

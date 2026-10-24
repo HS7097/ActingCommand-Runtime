@@ -580,6 +580,11 @@ pub struct RuntimeHostConfig {
     /// `runtime.instance_bound` events.
     #[cfg(test)]
     fail_after_start_event_for_test: bool,
+    /// #411 A65 (Codex's counterexample on #420), test only: the start settles the direct runs
+    /// of earlier epochs but records no `host.contained_settlement`, as a build before A65 did,
+    /// so its ledger is an old one without the anchor.
+    #[cfg(test)]
+    contained_settlement_unrecorded_for_test: bool,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -638,6 +643,8 @@ impl RuntimeHostConfig {
             ledger_read_budget_for_test: None,
             #[cfg(test)]
             fail_after_start_event_for_test: false,
+            #[cfg(test)]
+            contained_settlement_unrecorded_for_test: false,
         }
     }
 
@@ -658,6 +665,14 @@ impl RuntimeHostConfig {
     #[cfg(test)]
     pub(crate) fn with_start_failure_after_start_event_for_test(mut self) -> Self {
         self.fail_after_start_event_for_test = true;
+        self
+    }
+
+    /// #411 A65 (Codex's counterexample on #420), test only: the start records no
+    /// `host.contained_settlement`, as a build before A65 did.
+    #[cfg(test)]
+    pub(crate) fn with_contained_settlement_unrecorded_for_test(mut self) -> Self {
+        self.contained_settlement_unrecorded_for_test = true;
         self
     }
 
@@ -1736,6 +1751,9 @@ impl RuntimeHost {
             emulator_autostart_reports: EmulatorAutostartReports::default(),
             #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
+            #[cfg(test)]
+            contained_settlement_unrecorded_for_test: config
+                .contained_settlement_unrecorded_for_test,
             host_claim_work: Mutex::new(BTreeMap::new()),
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
             #[cfg(test)]
@@ -4711,6 +4729,10 @@ struct HostShared {
     emulator_autostart_reports: EmulatorAutostartReports,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// #411 A65 (Codex's counterexample on #420), test only: see
+    /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
+    #[cfg(test)]
+    contained_settlement_unrecorded_for_test: bool,
     // Workflow #369 W-2: what each queued or handed-off host claim runs once granted, by the
     // claim's request id (like `queued_requests`, with no state of its own), and the
     // per-instance workers that run it.
