@@ -306,6 +306,9 @@ mod gate_411_a47;
 // #411 A64: a run's resource close that meets its lapsed lease fences only its instance; the
 // Runtime, the run's own terminal and the other instances go on.
 mod gate_411_a64;
+// ISO-1 (#419, ISO-M): the failure scope core: the scope classification, `contain_failure` at a
+// boundary (fence, fail, latch, a failed fence latches) and the receipt's `host_halted` (A54).
+mod gate_419_iso1;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;

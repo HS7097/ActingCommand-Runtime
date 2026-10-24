@@ -6,12 +6,13 @@
 //!
 //! - **The closed Global list** ([`GLOBAL_CODES`]; `contracts/runtime-outcomes.md`, "Failure
 //!   scope"): the codes whose failure is the Runtime's as a whole, by family (R0.3), and every
-//!   catalog code of category `fatal`. A failure with one of these codes is `Global`, whatever
-//!   its constructor said.
+//!   catalog code of category `fatal`. A failure with one of these codes stays `Global` even when
+//!   its constructor tagged it as one instance's.
 //! - **The scope rule** ([`RuntimeHostError::scope_at`]): constructors carry the scope. An
-//!   untagged failure is `Global` when it is fatal (fail-safe, R0.4) and `Operation` otherwise;
-//!   the slices that own a path tag it (`RuntimeHostError::instance_fault`,
-//!   `RuntimeHostError::instance_scoped`, [`lock_instance`]). The wrappers keep the scope.
+//!   untagged failure is `Global` when it is fatal (fail-safe, R0.4: an unclassified failure
+//!   keeps halting) and `Operation` otherwise; the slices that own a path tag it
+//!   (`RuntimeHostError::instance_fault`, `RuntimeHostError::instance_scoped`,
+//!   [`lock_instance`]). The wrappers keep the scope.
 //! - **One decision point** ([`HostShared::contain_failure`], R0.5): `Global` latches the
 //!   Runtime, `Instance` fences the instance, `Operation` fails only the operation; a fence that
 //!   fails latches (R0.7).
@@ -20,9 +21,9 @@
 //!   (ISO-2), the instance worker (ISO-3), each per-instance step of a shared loop (ISO-4a), and
 //!   actingd's driver per intent (ISO-6, through [`RuntimeHostError::halts_runtime`]).
 //!
-//! The architecture guard `tools/actinglab-architecture/tests/failure_scope.rs` keeps the
-//! latches, poisons and fatal constructors outside this module from growing
-//! (`contracts/failure-scope-ratchet.toml`).
+//! No source-text guard holds this (#420 S5 retired them): the fail-safe default keeps an
+//! unclassified failure `Global`, and reviews catch a new path that latches outside
+//! `contain_failure`.
 
 use super::*;
 use crate::FailureScope;
@@ -74,8 +75,8 @@ const fn global(family: GlobalFamily, code: Code) -> GlobalCode {
 }
 
 /// ISO-M (#419, R0.3): the closed Global list. Every catalog code of category `fatal` is on it
-/// too ([`global_family`]). `RuntimeHostError::fatal` is meant for these codes only; the
-/// ratchet holds the exceptions, which the slices convert.
+/// too ([`global_family`]). `RuntimeHostError::fatal` is meant for these codes only; the ISO
+/// slices convert the other fatal constructors of their paths.
 pub(crate) const GLOBAL_CODES: &[GlobalCode] = &[
     // The ledger.
     global(GlobalFamily::Ledger, RuntimeErrorCode::LedgerFailure.code()),
@@ -578,6 +579,7 @@ pub(crate) fn is_global_code(spelling: &'static str) -> bool {
 }
 
 /// What [`HostShared::contain_failure`] did with a failure (ISO-M §6).
+#[derive(Debug)]
 pub(crate) enum Contained {
     /// `Global`: the Runtime latched this failure (the first latched condition stays the
     /// Runtime's).
