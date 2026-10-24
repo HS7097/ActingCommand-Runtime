@@ -463,10 +463,10 @@ const GATE_ROW_KEY: &str = "key";
 const CONTRACT_KEY_KINDS: [char; 4] = ['K', 'R', 'O', 'A'];
 
 /// Test plan v2.2 §2.1 guard 2: every name of the gate map is a live `#[test]` (not `#[ignore]`)
-/// of its package and target, and every fragment is well-formed. A row leaves only when its
-/// feature retires (said in the PR body); `ci/gate_check.py` holds the row count against the
-/// base and refuses a key the base does not hold (#420 S6). A key a row keeps is an inventory id,
-/// once per fragment.
+/// of its package and target, and every fragment is well-formed. A name or a key leaves only
+/// when `ci/retired-gates.toml` lists it; `ci/gate_check.py` holds that against the merge base and
+/// refuses a key the base does not hold (#420 S6). A key a row keeps is an inventory id, once per
+/// fragment.
 #[test]
 fn gate_map_names_live_tests() {
     let root = workspace_root();

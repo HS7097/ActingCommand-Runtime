@@ -221,6 +221,15 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     watchdog: Option<actingcommand_runtime_config::watchdog::WatchdogFile>,
+    /// PERF-B1 (Workflow #407 B1): the kernel's keys (`execution.*`), so far its capture cadence:
+    /// the largest capture interval a package may declare and the back-off of a step's wait over
+    /// unchanged frames (`execution.capture.*`), each member optional; the defaults file holds
+    /// every default.
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+    // before PERF-B1 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    execution: Option<actingcommand_runtime_config::ExecutionFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1431,6 +1440,8 @@ impl ActingdConfigFile {
             "emulator_control": serde_json::to_value(&self.emulator_control)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "watchdog": serde_json::to_value(&self.watchdog)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "execution": serde_json::to_value(&self.execution)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self

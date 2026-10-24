@@ -448,5 +448,12 @@
   },
   "watchdog": {
     "start_window_ms": 900000
+  },
+  "execution": {
+    "capture": {
+      "max_interval_ms": 60000,
+      "backoff_enabled": true,
+      "idle_ceiling_ms": 5000
+    }
   }
 }
