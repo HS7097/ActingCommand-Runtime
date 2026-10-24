@@ -184,8 +184,11 @@ or capture from the task terminal's outcome or step count.
 Explicit operation `expect_after.timeout_ms` is a polling budget in
 `1..=1800000` milliseconds. Package build, Runtime admission and Lab validation
 share this bound. Omission retains the existing step-timeout fallback. The
-Runtime control step timeout remains at most 60000 ms; post-input delay and
-postcondition interval remain at most 5000 ms.
+Runtime control step timeout remains at most 60000 ms; the post-input delay remains at most
+5000 ms. PERF-B1 ([resource-declarations.md](resource-declarations.md), "Capture cadence"): the
+control capture interval and the postcondition interval (`expect_after.interval_ms`) are admitted
+up to 1800000 ms, and a run refuses one above the configured ceiling
+`execution.capture.max_interval_ms` (default 60000 ms) before its first capture.
 
 After the declared input, postcondition polling only captures and recognizes.
 Each iteration includes capture/recognition cost and a bounded interval. A

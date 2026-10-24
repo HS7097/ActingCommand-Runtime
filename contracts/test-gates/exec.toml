@@ -2123,7 +2123,7 @@ tests = [
 ]
 incident = ["#407 B1"]
 
-# PERF-B1 (register §1.177; test row (b); requirements R3, R4): while a step waits for a page, each unchanged frame (#411 B12's whole-frame measure) doubles the pause from the declared interval (50 ms for a package that declares none) up to the idle ceiling (capture_cadence.idle_ceiling_ms, default 5 000); the first changed frame returns it to the declared interval; capture_cadence.backoff_enabled false keeps every pause at the declared interval
+# PERF-B1 (register §1.177; test row (b); requirements R3, R4): while a step waits for a page, each unchanged frame (#411 B12's whole-frame measure) doubles the pause from the declared interval (50 ms for a package that declares none) up to the idle ceiling (execution.capture.idle_ceiling_ms, default 5 000); the first changed frame returns it to the declared interval; execution.capture.backoff_enabled false keeps every pause at the declared interval
 [[gate]]
 key = "182"
 coverage = "Y"
@@ -2138,5 +2138,14 @@ key = "183"
 coverage = "Y"
 tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_c_the_back_off_never_passes_the_steps_remaining_time",
+]
+incident = ["#407 B1"]
+
+# PERF-B1 (register §1.177 B1-1, B1-2; test row (d); requirement R2): with a configured ceiling (execution.capture.max_interval_ms) of 20 000 ms a run refuses, before any capture, a package that declares a longer interval: contained_task_control_invalid for the control's capture_interval_ms and a step's expect_after.interval_ms, contained_task_linear_invalid for a transition's interval_ms; 20 000 ms runs; admission takes an interval up to the key's maximum, 1 800 000 ms, and refuses one above it with the same codes
+[[gate]]
+key = "184"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_d_a_declared_interval_above_the_configured_ceiling_is_refused",
 ]
 incident = ["#407 B1"]

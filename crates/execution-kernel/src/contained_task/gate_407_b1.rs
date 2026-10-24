@@ -368,3 +368,180 @@ fn b1_c_the_back_off_never_passes_the_steps_remaining_time() {
         assert_eq!(total_ms(&pauses[1]), limit_ms, "{case}");
     }
 }
+
+// The `linear_steps` task of one click from `home` to `result` through the intermediate page
+// `lobby`, whose wait takes a frame every `transition_interval_ms`, admitted as the linear
+// admission admits it.
+fn linear_task(transition_interval_ms: u64) -> PreparedContainedTask {
+    let control: TaskControl = serde_json::from_value(control(
+        json!({"execution_mode": "linear_steps", "max_steps": 1}),
+    ))
+    .expect("task control");
+    control.validate().expect("an admitted control");
+    let program: TaskProgram = serde_json::from_value(json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "result",
+        "max_steps": 1,
+        "operations": [{
+            "id": "open", "from": "home", "to": "result",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "transition": {"kind": "page", "page_id": "lobby",
+                           "interval_ms": transition_interval_ms}
+        }]
+    }))
+    .expect("task program");
+    let evaluator =
+        RecognitionEvaluator::new(PathBuf::new(), pack()).expect("recognition evaluator");
+    let detector = PageDetector::new(page_set()).expect("page detector");
+    detector
+        .validate(&evaluator)
+        .expect("page detector targets");
+    let task = PreparedContainedTask {
+        control,
+        program,
+        evaluator,
+        detector,
+        entry_page: None,
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        post_admission_fields: None,
+        entry_count: 1,
+        task_count: 1,
+    };
+    task.program
+        .validate_linear(&task.control, &task.detector)
+        .map(drop)
+        .expect("an admitted linear task");
+    task
+}
+
+// (d) R2 (exec key 184): with a configured ceiling of 20 000 ms, a run refuses a package that
+// declares a longer interval before its first capture, with the registered code its admission
+// gives a broken interval: `contained_task_control_invalid` for the control's
+// `capture_interval_ms` and for a step's `expect_after.interval_ms`, `contained_task_linear_invalid`
+// for a `linear_steps` transition's `interval_ms`. A package that declares 20 000 ms on both runs
+// and succeeds. Admission, which knows no configuration, takes a declared interval up to the
+// largest ceiling the configuration may set, 1 800 000 ms (the longest wait a step may declare),
+// and refuses one above it with the same codes.
+#[test]
+fn b1_d_a_declared_interval_above_the_configured_ceiling_is_refused() {
+    const CEILING_MS: u64 = 20_000;
+    const KEY_MAX_MS: u64 = 1_800_000;
+    let control_invalid = ExecutionKernelCode::ContainedTaskControlInvalid.as_str();
+    let linear_invalid = ExecutionKernelCode::ContainedTaskLinearInvalid.as_str();
+    let ceiling = CaptureCadence::new(CEILING_MS, true, 5_000);
+    let screens = || vec![vec![shown(HOME)], vec![shown(RESULT)]];
+
+    // Above the ceiling in effect: refused before any capture.
+    for (case, package, code) in [
+        (
+            "the control's capture interval",
+            task(
+                control(json!({"capture_interval_ms": CEILING_MS + 1})),
+                vec![click("open", "home", "result")],
+            ),
+            control_invalid,
+        ),
+        (
+            "a step's own interval",
+            task(
+                control(json!({})),
+                vec![confirmed_click(
+                    "open",
+                    "home",
+                    json!({"page_id": "result", "timeout_ms": 60_000,
+                           "interval_ms": CEILING_MS + 1}),
+                )],
+            ),
+            control_invalid,
+        ),
+        (
+            "a transition's interval",
+            linear_task(CEILING_MS + 1),
+            linear_invalid,
+        ),
+    ] {
+        let (result, runtime) = run(&package, screens(), ceiling);
+        assert_eq!(failed(result).code().as_str(), code, "{case}");
+        assert_eq!(runtime.captures(), 0, "{case}: refused before any capture");
+    }
+
+    // At the ceiling: the run goes on.
+    let at_ceiling = task(
+        control(json!({"capture_interval_ms": CEILING_MS})),
+        vec![confirmed_click(
+            "open",
+            "home",
+            json!({"page_id": "result", "timeout_ms": 60_000, "interval_ms": CEILING_MS}),
+        )],
+    );
+    let (result, runtime) = run(&at_ceiling, screens(), ceiling);
+    succeeded(result);
+    assert_eq!(runtime.inputs().len(), 1, "the run clicked once");
+
+    // Admission: up to the largest ceiling, and refused above it.
+    for (interval_ms, admitted) in [(KEY_MAX_MS, true), (KEY_MAX_MS + 1, false)] {
+        let case = format!("an interval of {interval_ms} ms at admission");
+        let declared = control(json!({"capture_interval_ms": interval_ms}));
+        let operation: TaskOperation = serde_json::from_value(confirmed_click(
+            "open",
+            "home",
+            json!({"page_id": "result", "timeout_ms": KEY_MAX_MS, "interval_ms": interval_ms}),
+        ))
+        .expect("task operation");
+        let base: TaskControl = serde_json::from_value(control(json!({}))).expect("task control");
+        let checks = [
+            (
+                validate_control_declaration(declared).err(),
+                control_invalid,
+            ),
+            (
+                operation
+                    .validate(&base, TaskOperationDefaults::default(), "0.9")
+                    .err(),
+                control_invalid,
+            ),
+            (linear_admission(interval_ms).err(), linear_invalid),
+        ];
+        for (refusal, code) in checks {
+            match (refusal, admitted) {
+                (None, true) => {}
+                (Some(error), false) => assert_eq!(error.code().as_str(), code, "{case}"),
+                (refusal, _) => panic!("{case}: expected admitted={admitted}, got {refusal:?}"),
+            }
+        }
+    }
+}
+
+// The linear admission of `linear_task`'s program with a transition interval of `interval_ms`.
+fn linear_admission(interval_ms: u64) -> Result<(), ContainedTaskError> {
+    let control: TaskControl = serde_json::from_value(control(
+        json!({"execution_mode": "linear_steps", "max_steps": 1}),
+    ))
+    .expect("task control");
+    let program: TaskProgram = serde_json::from_value(json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "result",
+        "max_steps": 1,
+        "operations": [{
+            "id": "open", "from": "home", "to": "result",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "transition": {"kind": "page", "page_id": "lobby", "interval_ms": interval_ms}
+        }]
+    }))
+    .expect("task program");
+    let detector = PageDetector::new(page_set()).expect("page detector");
+    program.validate_linear(&control, &detector).map(drop)
+}

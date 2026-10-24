@@ -18,7 +18,8 @@
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
 //!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8);
 //!   `startup_discovery` (Workflow #390 DISC-1); `touch` (Workflow #406 T12);
-//!   `emulator_control` (#411 A50).
+//!   `emulator_control` (#411 A50); `execution` (PERF-B1, Workflow #407 B1: the kernel's capture
+//!   cadence).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -31,6 +32,7 @@ pub mod device_link;
 pub mod device_state;
 mod effective;
 pub mod emulator_control;
+pub mod execution;
 mod existing;
 mod host_claims;
 mod instance;
@@ -62,6 +64,7 @@ pub use emulator_control::{
     EmulatorControlFile, RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };
+pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
 pub use instance::{
     DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR,
@@ -132,3 +135,7 @@ mod touch_tests;
 // #411 B37 (A35-S1, host key 137): the busy hold's configuration keys.
 #[cfg(test)]
 mod gate_411_b37;
+
+// PERF-B1 (Workflow #407 B1, host key 411): the `execution.capture` keys.
+#[cfg(test)]
+mod gate_407_b1;
