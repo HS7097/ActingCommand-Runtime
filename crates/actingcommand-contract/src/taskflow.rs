@@ -1991,6 +1991,17 @@ pub fn validate_resource_adjustments(
         if !operation_ids.contains(&adjustment.operation_id.as_str()) {
             return Err(TaskflowCode::ResourceAdjustmentOperationIdInvalid.code());
         }
+        // SCH-M CF-2 (coordinator ruling of 2026-10-24): a completion time is no amount, so an
+        // adjustment of a key a `timestamp_ms` mark writes is refused, with or without `amount`.
+        // No code of its own: the declaration gate refuses the entry.
+        if readings.unwrap_or_default().iter().any(|reading| {
+            reading.value.is_timestamp()
+                && reading
+                    .fact_keys()
+                    .any(|key| key == adjustment.fact_key.as_str())
+        }) {
+            return Err(SharedCode::ResourceDeclarationInvalid.code());
+        }
         // Workflow #390 READ-1: a mark of the key is one that writes it, its capacity key
         // included.
         if adjustment.amount.is_none()

@@ -3192,6 +3192,7 @@ it is admitted by code. The subsystem row is a value of the existing `config.sub
 | CF2-2 | the record of a completion-time reading | existing `fact.published`, inline `timestamp_ms` content (no shape change) | CF-2 | CF-2 | `observed_at_unix_ms` + countdown seconds × 1000, the frame's capture time as `observed_at_unix_ms`, `expires_at_unix_ms` = `observed_at_unix_ms` + `valid_for_ms`, every other field as for a reading; the kernel trace carries the countdown in seconds |
 | CF2-3 | a completion-time mark with an agreement | rule (no shape) | CF-2 | CF-2 | holds when each frame gives its reading and the instants (frame capture time + countdown) lie within (`frames` − 1) × `interval_ms` + 1000 ms, latest minus earliest; else `no_agreement`; the reading is the handed-off frame's |
 | CF2-4 | `config.subsystems` row `resource_reading_time` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-2 | CF-2 | [actingd-check-config.md](actingd-check-config.md); packs that declare the value are placed only on a Runtime that names it |
+| CF2-5 | a `resource_adjustments` entry naming a completion-time mark's key | rule (no shape) | CF-2 | CF-2 | coordinator ruling of 2026-10-24: refused at declaration, with or without `amount`, `InvalidValue` @ `/resource_adjustments/<i>`; the shared `validate_resource_adjustments` gives the existing `resource_declaration_invalid` (no new code) |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

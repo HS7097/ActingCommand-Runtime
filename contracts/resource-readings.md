@@ -123,6 +123,11 @@ a countdown the screen shows, the time left until some work is done. Its `value`
   ([scheduling/README.md](scheduling/README.md), "Fact-time wake").
 - **An agreement** compares the instants its frames convert to, not the countdowns ("Kernel
   reading" below), so a running countdown agrees with itself.
+- **No adjustment.** A completion time is no amount: a `resource_adjustments` entry that names
+  the key of a completion-time mark, with or without `amount`, is refused at declaration,
+  `InvalidValue` @ `/resource_adjustments/<i>` (coordinator ruling of 2026-10-24; the shared
+  rule's reason is `resource_declaration_invalid`, and Runtime admission refuses it as
+  `contained_task_resource_reading_invalid` with that reason).
 - **An absent countdown.** A slot whose region shows no countdown gives no reading (the mark's
   miss and its warning, as today); nothing is published for it. A catalog covers an emptied slot
   with `once_per_reading` and a free-slot count fact (SCH-M CF-1).
@@ -428,7 +433,7 @@ shows after the operation; the amount is never written in the package.
 | --- | --- | --- |
 | the array | `1..=16` entries; the task declares `scheduling_outcome` | empty or longer: `InvalidValue` @ `/resource_adjustments`; no outcome: `MissingField` @ `/scheduling_outcome` |
 | `id` | the identifier rule of a mark's `id`, unique in the task | `InvalidValue` @ `/resource_adjustments/<i>/id` |
-| `fact_key` | the key rule of a mark (`resource.` or `inventory.`); one operation adjusts a key at most once; without `amount`, the task has a mark of the key (one that writes it, as `fact_key` or as `capacity_fact_key`) | `InvalidValue` @ `…/fact_key` |
+| `fact_key` | the key rule of a mark (`resource.` or `inventory.`); one operation adjusts a key at most once; without `amount`, the task has a mark of the key (one that writes it, as `fact_key` or as `capacity_fact_key`); SCH-M CF-2: not the key of a completion-time (`timestamp_ms`) mark, with or without `amount` | `InvalidValue` @ `…/fact_key`; a completion-time key: `InvalidValue` @ `/resource_adjustments/<i>` (the shared rule's reason `resource_declaration_invalid`) |
 | `operation_id` | an operation of the task | `InvalidValue` @ `…/operation_id` |
 | `amount` | absent: the new value is read after the operation (a mark of the key); present: `{target_id, direction}` only | an amount source other than `target_id` (a constant, for example): `UnknownField` @ `…/amount/<member>` |
 | `amount.target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; the same target qualification as a mark's (`target_not_ocr`, `target_locates_text`, `target_personal`) | `InvalidValue` @ `…/amount/target_id`; cross-reference: `package_invalid` naming `…/amount/target_id` |
