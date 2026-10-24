@@ -24,14 +24,18 @@
 //! `scheduling` member (default none: an instance whose entry names none has no entries of its
 //! own; settable; its entries checked as the host list's are, refused as `blackout_config_invalid`
 //! with `blackout_source` `instance`), and `scheduling.day_boundary.quiet`, default the section's
-//! `scheduling.day_boundary.quiet`, settable.
+//! `scheduling.day_boundary.quiet`, settable. SCH-M ED-1 (§3.4 "Configuration") adds
+//! `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms`, in the entry's `scheduling`
+//! member, each defaulting to the `scheduling` section's key of the same name, settable.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder;
 use crate::scheduling::{
-    self, DAY_BOUNDARY_QUIET, DELAY, INSTANCE_BLACKOUT, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS,
-    RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
+    self, DAY_BOUNDARY_QUIET, DELAY, EXPECTED_RUNTIME_ENABLED, EXPECTED_RUNTIME_MARGIN_MS,
+    EXPECTED_RUNTIME_MARGIN_RANGE, EXPECTED_RUNTIME_RUNS, EXPECTED_RUNTIME_RUNS_RANGE,
+    INSTANCE_BLACKOUT, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS,
+    REMEDY_CHOICES,
 };
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
@@ -165,7 +169,39 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "SR-4a2",
         since: "0.12.12",
     },
+    // SCH-M ED-1 (§3.4 "Configuration"): the instance's own expected-duration keys; the
+    // section's values in effect are their defaults.
+    expected_runtime_row(EXPECTED_RUNTIME_ENABLED, ValueType::Boolean, KeyRange::Any),
+    expected_runtime_row(
+        EXPECTED_RUNTIME_RUNS,
+        ValueType::Integer,
+        EXPECTED_RUNTIME_RUNS_RANGE,
+    ),
+    expected_runtime_row(
+        EXPECTED_RUNTIME_MARGIN_MS,
+        ValueType::DurationMs,
+        EXPECTED_RUNTIME_MARGIN_RANGE,
+    ),
 ];
+
+/// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose
+/// value in effect is its default.
+const fn expected_runtime_row(
+    member: &'static str,
+    value_type: ValueType,
+    range: KeyRange,
+) -> KeyRow {
+    KeyRow {
+        name: KeyName::PerInstance(member),
+        file_path: FilePath::InstanceMember,
+        value_type,
+        range,
+        default: DefaultSource::Section(member),
+        settable: Settable::Yes,
+        reader: "ED-2",
+        since: "0.12.12",
+    }
+}
 
 /// Workflow #405: one instance's random delay member, named as the section-level key whose value
 /// in effect is its default.

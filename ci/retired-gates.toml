@@ -111,3 +111,12 @@ test = "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_conte
 ruling = "Workflow #420 S5 (Alice 10-24)"
 reason = "A caller-file table and an occurrence count (measure_package_hash spelled exactly twice in suspension_lift.rs), and the absence of names from 6 named files."
 covered_by = "The behaviour rows of host row 75 (S3-T1 to S3-T5, S3-T8, S3-T9)."
+
+# apps.toml, row 7f (#411 A66, PR #1298): the watchdog's start timeout is the configured start
+# window, so the gate's name no longer says 180 s.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s"
+ruling = "#411 A66 (coordinator ruling 10-24: watchdog.start_window_ms, 900 s by default)"
+reason = "Renamed with the requirement it pins: a start that never answers is start_timeout after the configured start window, no longer after a fixed 180 s."
+covered_by = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window, in the same apps.toml row."

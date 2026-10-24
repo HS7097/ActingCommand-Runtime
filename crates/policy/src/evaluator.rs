@@ -31,6 +31,8 @@ use crate::{
 // Workflow #386 SR-4a1 (SCH-M §3.2 D-1, D-6): the pure blackout and day-boundary judgements.
 mod blackout;
 mod chain_handover;
+// SCH-M ED-1 (Workflow #405; SCH-M §3.4 D-12): the expected duration E.
+mod expected_runtime;
 mod fact_refresh;
 
 pub use blackout::{
@@ -38,6 +40,11 @@ pub use blackout::{
     day_boundary_fit, next_blackout_start,
 };
 pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
+pub(crate) use expected_runtime::snapshot_expected_runtime;
+pub use expected_runtime::{
+    ExpectedRuntime, ExpectedRuntimeSettings, ExpectedRuntimeSource, MAX_EXPECTED_RUNTIME_RUNS,
+    expected_runtime,
+};
 use fact_refresh::{AffectedCandidate, RefreshGate, RefreshKey};
 pub use fact_refresh::{
     FACT_REFRESH_EXPECTED_DURATION_MS, FACT_REFRESH_OPERATION_ID, FACT_REFRESH_PROCEDURE_REF,
@@ -117,6 +124,14 @@ pub struct TaskRuntimeSnapshot {
     /// Consecutive failed runs since the last success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_streak: Option<u16>,
+    /// SCH-M ED-1 (§3.4 D-12, D-15): the expected duration E of the pair, from the instance's
+    /// samples of the task's package (`expected_runtime`); absent, the declared value applies.
+    /// It replaces the declared value as the dispatch's duration and as the cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_runtime_ms: Option<u64>,
+    /// SCH-M ED-1: how many samples E is the mean of; absent with `expected_runtime_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_runtime_runs: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2290,6 +2305,9 @@ struct PlacementCandidate {
     value_milli: Option<u32>,
     /// The last settled run's duration for this task on this instance.
     last_duration_ms: Option<u64>,
+    /// SCH-M ED-1: the pair's expected duration E, when its snapshot carries one; then
+    /// `expected_duration_ms` is E and the cost is E.
+    expected_runtime_ms: Option<u64>,
     tie_breaker: u64,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
@@ -2426,7 +2444,8 @@ fn build_candidate(
         host_id: instance.host_id.clone(),
         operation_id: task.entrypoint.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
-        expected_duration_ms: task.expected_duration_ms,
+        expected_duration_ms: snapshot_expected_runtime(task, task_state)
+            .unwrap_or(task.expected_duration_ms),
         yield_points: task.yield_points.clone(),
         load_profile,
         load,
@@ -2438,6 +2457,7 @@ fn build_candidate(
         promoted: false,
         value_milli: task.value_milli,
         last_duration_ms: task_state.and_then(|state| state.last_duration_ms),
+        expected_runtime_ms: snapshot_expected_runtime(task, task_state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms,
         activity_profile_id: activity_profile.id.clone(),
@@ -2530,10 +2550,14 @@ fn candidate_utility(
             cost_unknown: false,
         });
     };
-    let cost_ms = candidate
-        .last_duration_ms
-        .filter(|duration| *duration > 0)
-        .unwrap_or(candidate.expected_duration_ms);
+    // SCH-M ED-1 (D-15): E when the pair's snapshot carries one; otherwise, as before, the last
+    // settled run's duration, else the declared value.
+    let cost_ms = candidate.expected_runtime_ms.unwrap_or_else(|| {
+        candidate
+            .last_duration_ms
+            .filter(|duration| *duration > 0)
+            .unwrap_or(candidate.expected_duration_ms)
+    });
     if cost_ms == 0 {
         return Ok(CandidateUtility {
             utility_milli: 0,
@@ -6899,6 +6923,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             },
             TaskRuntimeSnapshot {
                 task_id: "fixture.observe-secondary".to_owned(),
@@ -6909,6 +6935,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             },
         ];
         let result =
@@ -7524,6 +7552,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             });
             let result = evaluate(
                 &catalog,
@@ -7614,6 +7644,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         });
         assert_eq!(
             evaluate(&unmapped, &unmapped_facts, &base_resources(), time, 9)
@@ -7988,6 +8020,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         });
 
         let result = evaluate(
@@ -8057,6 +8091,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         });
 
         let result = evaluate(
@@ -8238,6 +8274,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             };
             let time = EvaluationTime {
                 unix_ms: now,
@@ -8292,6 +8330,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         }
     }
 

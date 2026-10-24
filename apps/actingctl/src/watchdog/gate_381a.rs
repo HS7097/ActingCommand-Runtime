@@ -23,6 +23,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use tempfile::TempDir;
 
 const T0: u64 = 1_800_000_000_000;
+/// #411 A66: the start window by default (`watchdog.start_window_ms`); these rows read no live
+/// owner, so it decides nothing here.
+const START_WINDOW_MS: u64 = 900_000;
 
 /// actingd's daemon lines of one outcome: its developer line and its `OUTCOME actingd:` line.
 fn daemon_lines(level: &str, envelope: &serde_json::Value) -> String {
@@ -137,8 +140,13 @@ impl Fixture {
     }
 
     fn observed(&self) -> decide::Observed {
-        observe::observe_owner(&self.state, std::slice::from_ref(&self.logs), None)
-            .unwrap_or_else(|failure| panic!("observe: {failure}"))
+        observe::observe_owner(
+            &self.state,
+            std::slice::from_ref(&self.logs),
+            None,
+            START_WINDOW_MS,
+        )
+        .unwrap_or_else(|failure| panic!("observe: {failure}"))
     }
 
     /// One owner whose start stopped: its journal closed, then its log's last daemon lines.
@@ -377,7 +385,7 @@ fn gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start() {
     )
     .expect("write the stop's log");
     let read_root = || {
-        observe::observe_owner(&state, std::slice::from_ref(&logs), None)
+        observe::observe_owner(&state, std::slice::from_ref(&logs), None, START_WINDOW_MS)
             .unwrap_or_else(|failure| panic!("observe: {failure}"))
     };
     assert_eq!(

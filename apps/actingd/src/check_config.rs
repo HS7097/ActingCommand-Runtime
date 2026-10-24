@@ -623,14 +623,23 @@ fn summarize(
     });
     // Workflow #373 NAV-6 (M-373 §7): the standard-pack root as startup reads it (root files
     // only, no package admitted). A broken game root is that game's problem and one note, its
-    // problem's outcome; the configuration itself is not refused.
-    let standard_packs = inspect_standard_packs(checked.host.standard_packs_root());
+    // problem's outcome; the configuration itself is not refused. Workflow #357 DB-1 (register
+    // §1.65 TB3): each sound root lists its tables; a refused table and an expired column are
+    // notes too, judged on the system clock.
+    let now_unix_ms = system_unix_ms().map_err(|_| {
+        registered(
+            SharedCode::SystemClockInvalid,
+            ActingdLocation::ConfigAssemble,
+        )
+    })?;
+    let standard_packs = inspect_standard_packs(checked.host.standard_packs_root(), now_unix_ms);
     notes.extend(standard_packs.root_problem.iter().cloned());
     notes.extend(
         standard_packs
             .problems()
             .map(|(_, problem)| problem.clone()),
     );
+    notes.extend(standard_packs.table_notes());
     report["standard_packs"] = serde_json::to_value(&standard_packs).map_err(|_| {
         registered(
             ActingdCode::CheckConfigReportEncodeFailed,

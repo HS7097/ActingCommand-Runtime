@@ -720,7 +720,7 @@
               "payload_schema": "actingcommand.payload.client.v2",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 6,
+              "sequence": 7,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -759,7 +759,7 @@
               "payload_schema": "actingcommand.payload.command.v2",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 7,
+              "sequence": 8,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -799,7 +799,7 @@
               "payload_schema": "actingcommand.payload.command.v2",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 8,
+              "sequence": 9,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -840,7 +840,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 9,
+              "sequence": 10,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -881,7 +881,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 10,
+              "sequence": 11,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -924,7 +924,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 11,
+              "sequence": 12,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -968,7 +968,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 12,
+              "sequence": 13,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1026,7 +1026,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 13,
+              "sequence": 14,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1083,7 +1083,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 14,
+              "sequence": 15,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1131,7 +1131,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 15,
+              "sequence": 16,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1176,7 +1176,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 18,
+              "sequence": 19,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1219,7 +1219,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 19,
+              "sequence": 20,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1288,7 +1288,7 @@
               "payload_schema": "actingcommand.payload.runtime.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 20,
+              "sequence": 21,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1334,7 +1334,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 25,
+              "sequence": 26,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1394,7 +1394,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 26,
+              "sequence": 27,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1453,7 +1453,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 27,
+              "sequence": 28,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1515,7 +1515,7 @@
                           "reason": "lab",
                           "trigger": {
                             "event_id": "<EVENT_ID>",
-                            "sequence": 27
+                            "sequence": 28
                           }
                         },
                         "kind": "pin_recorded"
@@ -1528,7 +1528,7 @@
               "payload_schema": "actingcommand.payload.artifact_retention.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 28,
+              "sequence": 29,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1587,7 +1587,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 29,
+              "sequence": 30,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1646,7 +1646,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 30,
+              "sequence": 31,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1739,7 +1739,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 31,
+              "sequence": 32,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1785,7 +1785,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 32,
+              "sequence": 33,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1833,7 +1833,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 33,
+              "sequence": 34,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1877,7 +1877,7 @@
               "payload_schema": "actingcommand.payload.recognition.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 34,
+              "sequence": 35,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1929,7 +1929,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 35,
+              "sequence": 36,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1977,7 +1977,7 @@
               "payload_schema": "actingcommand.payload.recognition.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 36,
+              "sequence": 37,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2053,7 +2053,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 37,
+              "sequence": 38,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2099,7 +2099,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 39,
+              "sequence": 40,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2157,7 +2157,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "secret",
-              "sequence": 40,
+              "sequence": 41,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2214,7 +2214,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "secret",
-              "sequence": 41,
+              "sequence": 42,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2322,7 +2322,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 42,
+              "sequence": 43,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -3871,7 +3871,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 43,
+              "sequence": 44,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -3913,7 +3913,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 44,
+              "sequence": 45,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -3958,7 +3958,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 45,
+              "sequence": 46,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -4004,7 +4004,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 46,
+              "sequence": 47,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -4038,7 +4038,7 @@
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
-              "sequence": 43
+              "sequence": 44
             }
           }
         }

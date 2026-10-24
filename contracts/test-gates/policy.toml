@@ -760,3 +760,51 @@ tests = [
     "actingcommand-policy::lib::tests::gate_sr4a1::sr4a1_t4_an_instance_entry_covers_only_its_instance",
 ]
 incident = ["#386 SR-4a1"]
+
+# SCH-M ED-1 (frozen model v1.0 §3.4 D-12, D-15, §6 row ED-1; contracts/scheduling/README.md, "Settlement Feedback And Eligibility Age"; register §1.178; no persisted ledger shape): with no sample E is the declared value and the snapshot carries no member
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ed1::ed1_t1_no_sample_is_the_declared_value",
+]
+incident = ["#405 ED-1"]
+
+# SCH-M ED-1 (frozen model v1.0 §3.4 D-12, D-15, §6 row ED-1; contracts/scheduling/README.md, "Settlement Feedback And Eligibility Age"; register §1.178; no persisted ledger shape): one to four samples give their mean, rounded up, plus the margin, with the number of samples
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ed1::ed1_t2_one_to_four_runs_are_their_mean_plus_the_margin",
+]
+incident = ["#405 ED-1"]
+
+# SCH-M ED-1 (frozen model v1.0 §3.4 D-12, D-15, §6 row ED-1; contracts/scheduling/README.md, "Settlement Feedback And Eligibility Age"; register §1.178; no persisted ledger shape): more samples than runs: only the latest runs, newest first, count
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ed1::ed1_t3_more_runs_than_the_setting_use_the_latest_only",
+]
+incident = ["#405 ED-1"]
+
+# SCH-M ED-1 (frozen model v1.0 §3.4 D-12, D-15, §6 row ED-1; contracts/scheduling/README.md, "Settlement Feedback And Eligibility Age"; register §1.178; no persisted ledger shape): E is never above the task's loop_budget.max_runtime_ms
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ed1::ed1_t4_e_is_capped_at_the_task_runtime_ceiling",
+]
+incident = ["#405 ED-1"]
+
+# SCH-M ED-1 (frozen model v1.0 §3.4 D-12, D-15, §6 row ED-1; contracts/scheduling/README.md, "Settlement Feedback And Eligibility Age"; register §1.178; no persisted ledger shape): with enabled false the snapshot and the evaluation are byte-identical to those without samples; with it on the dispatch intent carries E
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ed1::ed1_t5_with_the_switch_off_the_evaluation_is_byte_identical",
+]
+incident = ["#405 ED-1"]
+
+# SCH-M ED-1 (frozen model v1.0 §3.4 D-12, D-15, §6 row ED-1; contracts/scheduling/README.md, "Settlement Feedback And Eligibility Age"; register §1.178; no persisted ledger shape): the same snapshot with E evaluated twice gives the same evaluation, and the intent carries E
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ed1::ed1_t6_the_same_snapshot_evaluated_twice_is_identical",
+]
+incident = ["#405 ED-1"]

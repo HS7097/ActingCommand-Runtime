@@ -21,9 +21,14 @@ use actingcommand_contract::{
 use std::io::{BufRead, BufReader};
 
 const GATE_WAIT: Duration = Duration::from_secs(120);
-const ALIAS: &str = "node.a";
+pub(super) const ALIAS: &str = "node.a";
 const TAKEOVER_COOLDOWN_MS: u64 = 40;
 const CRASH_ROOT_ENV: &str = "ACTINGCOMMAND_EPOCH_CLOSE_CRASH_ROOT";
+/// #411 A65 test (a): how many ordinary records the child writes before its run.
+const FILLER_ENV: &str = "ACTINGCOMMAND_EPOCH_CLOSE_FILLER";
+/// #411 A65 (Codex's counterexample on #420): `1` when the child's start records no
+/// `host.contained_settlement`, as a build before A65 did (an old ledger without the anchor).
+const UNANCHORED_ENV: &str = "ACTINGCOMMAND_EPOCH_CLOSE_UNANCHORED";
 /// The line the child prints once its run is in flight and the run's identity is on disk.
 const CRASH_POINT_LINE: &str = "epoch-close crash point: run in flight";
 const INSTANCE_FILE: &str = "epoch-close-instance.json";
@@ -31,7 +36,7 @@ const RUN_FILE: &str = "epoch-close-run.json";
 const PACKAGE_FILE: &str = "epoch-close-task.zip";
 
 /// The test `config` on a state root given as a path (the child process has no `TempDir`).
-fn epoch_config(root: &Path) -> RuntimeHostConfig {
+pub(super) fn epoch_config(root: &Path) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root, b"runtime-host-test-salt")
         .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
         .with_procedure_manifest(procedure_manifest())
@@ -48,7 +53,7 @@ fn start_host(root: &Path, registered: InstanceId) -> RuntimeHost {
     start_host_with(epoch_config(root), registered)
 }
 
-fn start_host_with(config: RuntimeHostConfig, registered: InstanceId) -> RuntimeHost {
+pub(super) fn start_host_with(config: RuntimeHostConfig, registered: InstanceId) -> RuntimeHost {
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     RuntimeHost::start(
@@ -59,7 +64,7 @@ fn start_host_with(config: RuntimeHostConfig, registered: InstanceId) -> Runtime
 }
 
 /// The task result and the failure code (its outcome's code) of a task terminal of `run`.
-fn run_terminal<'a>(
+pub(super) fn run_terminal<'a>(
     event: &'a PersistedEvent,
     run: &RunId,
 ) -> Option<(TaskOutcome, Option<&'a str>)> {
@@ -144,6 +149,9 @@ fn await_an_input_commit(host: &RuntimeHost) {
 /// through and every later capture waits, so the run commits its first input and then stays in
 /// flight with its lease held and the device in use. Once that input is recorded the child
 /// notes the epoch, the run and its lease, prints `CRASH_POINT_LINE` and waits to be killed.
+/// Before the run it records `FILLER_ENV` client actions, the epoch's ordinary records (#411
+/// A65 test (a); none when the variable is unset). With `UNANCHORED_ENV` set to `1` its start
+/// records no `host.contained_settlement` (#411 A65, Codex's counterexample on #420).
 // Test plan v2.2 §4 #15: a child-process entry, not a test; its parent runs it with
 // `--ignored --exact`.
 #[test]
@@ -158,8 +166,12 @@ fn epoch_close_crash_child_process() {
             .expect("instance identifier");
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
+    let mut config = epoch_config(&root);
+    if std::env::var(UNANCHORED_ENV).is_ok_and(|value| value == "1") {
+        config = config.with_contained_settlement_unrecorded_for_test();
+    }
     let host = RuntimeHost::start(
-        epoch_config(&root),
+        config,
         Arc::new(FakeProvider::one(ALIAS, registered, Arc::clone(&state))),
     )
     .expect("child runtime host");
@@ -171,6 +183,28 @@ fn epoch_close_crash_child_process() {
     let package_path = root.join(PACKAGE_FILE);
     fs::write(&package_path, package).expect("write the task package");
     let mut client = TestClient::connect(&host);
+    let filler = std::env::var(FILLER_ENV).map_or(0, |count| {
+        count.parse::<usize>().expect("filler record count")
+    });
+    for _ in 0..filler {
+        let action = client.request(RuntimeOperation::RecordClientAction {
+            action: ClientActionRecord::new(
+                "settings",
+                "save",
+                ClientActionKind::Button,
+                None,
+                None,
+            )
+            .expect("client action"),
+        });
+        assert!(
+            matches!(
+                client.send(&action).result(),
+                Some(RuntimeResult::ClientActionRecorded)
+            ),
+            "the child records its client actions"
+        );
+    }
     let request = client.request(RuntimeOperation::run_contained_task(
         ALIAS,
         client.ids.mint_holder_id().expect("holder"),
@@ -234,18 +268,35 @@ fn epoch_close_crash_child_process() {
 }
 
 /// A state root whose Runtime was killed hard while a direct run was in flight.
-struct CrashedRun {
-    root: TempDir,
-    instance_id: InstanceId,
+pub(super) struct CrashedRun {
+    pub(super) root: TempDir,
+    pub(super) instance_id: InstanceId,
     /// The killed process's owner epoch.
     owner_epoch: OwnerEpoch,
-    run_id: RunId,
+    pub(super) run_id: RunId,
     lease_id: LeaseId,
     /// The ledger as the killed process left it.
-    prefix: Vec<PersistedEvent>,
+    pub(super) prefix: Vec<PersistedEvent>,
 }
 
 fn crash_mid_run() -> CrashedRun {
+    crash_mid_run_with(0)
+}
+
+/// [`crash_mid_run`] whose child records `filler` client actions before its run (#411 A65).
+pub(super) fn crash_mid_run_with(filler: usize) -> CrashedRun {
+    crash_mid_run_child(filler, true)
+}
+
+/// [`crash_mid_run`] on an old ledger: the child's start records no
+/// `host.contained_settlement`, as a build before #411 A65 did (Codex's counterexample on #420).
+pub(super) fn crash_mid_run_without_anchor() -> CrashedRun {
+    crash_mid_run_child(0, false)
+}
+
+/// The crash child with `filler` client actions before its run; `anchored` is false when its
+/// start records no `host.contained_settlement`.
+fn crash_mid_run_child(filler: usize, anchored: bool) -> CrashedRun {
     let root = TempDir::new().expect("tempdir");
     let instance_id = instance_id();
     fs::write(
@@ -261,6 +312,8 @@ fn crash_mid_run() -> CrashedRun {
             "--nocapture",
         ])
         .env(CRASH_ROOT_ENV, root.path())
+        .env(FILLER_ENV, filler.to_string())
+        .env(UNANCHORED_ENV, if anchored { "0" } else { "1" })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

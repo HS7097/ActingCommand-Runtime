@@ -26,8 +26,12 @@ pub(crate) const GRACE_MS: u64 = 300 * 1000;
 /// A Runtime process under the root without the owner lock for this long is an error, and so
 /// is (in `status`) an owner lock held this long without an answering owner.
 pub(crate) const PROCESS_WITHOUT_OWNER_MS: u64 = 10 * 60 * 1000;
-/// A start that has not answered within this window is a start timeout.
-pub(crate) const READY_TIMEOUT_MS: u64 = 180 * 1000;
+// #411 A66: a start that has not answered within the installation's start window
+// (`watchdog.start_window_ms`, `observe::Installation::start_window_ms`) is a start timeout;
+// there is no fixed window any more.
+/// A waiter for the watchdog's run lock waits the start window and this much more, for the
+/// tick's probes.
+pub(crate) const RUN_LOCK_MARGIN_MS: u64 = 20 * 1000;
 /// Clock slack between a spawn and the started owner's recorded start.
 pub(crate) const CLOCK_SLACK_MS: u64 = 2 * 1000;
 
@@ -99,6 +103,8 @@ pub(crate) struct Observed {
     /// Workflow #381 A R5b: with J closed but no log covering its epoch, the terminal outcome
     /// of the last earlier owner whose epoch a log covers, if that log holds one.
     pub(crate) earlier_terminal: Option<Terminal>,
+    /// #411 A66: the installation's start window, in milliseconds.
+    pub(crate) start_window_ms: u64,
 }
 
 /// Rows 7a-7b: the probes taken only when a start is considered.
@@ -292,7 +298,11 @@ pub(crate) fn decide_observed(observed: &Observed, state: &WatchdogState) -> Sta
     if observed.lock == OwnerLock::Locked {
         return Stage::Decided(match &observed.live {
             Some(Ok(owner)) => Decision::Alive {
-                started_by_watchdog: started_by_watchdog(owner, &state.starts),
+                started_by_watchdog: started_by_watchdog(
+                    owner,
+                    &state.starts,
+                    observed.start_window_ms,
+                ),
                 owner: owner.clone(),
             },
             Some(Err(failure)) => Decision::OwnerLockHeld {
@@ -419,16 +429,21 @@ pub(crate) fn decide_start(
 
 /// A live owner is the watchdog's own when a start record names its epoch, or when a start
 /// whose result is still open (`watchdog_start_pending` or `start_timeout`) spawned it: its
-/// recorded start falls in `[at - 2 s, at + 180 s]`. Every other live owner is a formal start
+/// recorded start falls in `[at - 2 s, at + start window]` (#411 A66: the installation's
+/// `watchdog.start_window_ms`, `start_window_ms`). Every other live owner is a formal start
 /// (review M1: decided from a live, answering owner only, and again on every tick).
-pub(crate) fn started_by_watchdog(owner: &LiveOwner, starts: &[StartRecord]) -> bool {
+pub(crate) fn started_by_watchdog(
+    owner: &LiveOwner,
+    starts: &[StartRecord],
+    start_window_ms: u64,
+) -> bool {
     starts.iter().any(|start| {
         start.owner_epoch.as_deref() == Some(owner.owner_epoch.as_str())
             || (start.owner_epoch.is_none()
                 && (start.start_result.is(ActingctlCode::WatchdogStartPending)
                     || start.start_result.is(ActingctlCode::StartTimeout))
                 && owner.started_at_unix_ms >= start.at_unix_ms.saturating_sub(CLOCK_SLACK_MS)
-                && owner.started_at_unix_ms <= start.at_unix_ms.saturating_add(READY_TIMEOUT_MS))
+                && owner.started_at_unix_ms <= start.at_unix_ms.saturating_add(start_window_ms))
     })
 }
 
@@ -487,6 +502,9 @@ mod tests {
     use actingcommand_runtime_client::ClientCode;
 
     const NOW: u64 = 1_800_000_000_000;
+    /// #411 A66: the start window by default (`watchdog.start_window_ms`, coordinator ruling
+    /// 10-24).
+    const START_WINDOW_MS: u64 = 900_000;
 
     fn record(active: bool, disposition: Option<&str>) -> OwnerRecord {
         OwnerRecord {
@@ -507,6 +525,7 @@ mod tests {
             journal,
             terminal,
             earlier_terminal: None,
+            start_window_ms: START_WINDOW_MS,
         }
     }
 
@@ -755,12 +774,14 @@ mod tests {
                 NOW - 600_000,
                 ActingctlCode::WatchdogStartedRuntime,
                 Some("epoch_c")
-            )]
+            )],
+            START_WINDOW_MS
         ));
         // An open start that spawned it shortly before.
         assert!(started_by_watchdog(
             &owner,
-            &[start(NOW - 30_000, ActingctlCode::StartTimeout, None)]
+            &[start(NOW - 30_000, ActingctlCode::StartTimeout, None)],
+            START_WINDOW_MS
         ));
         assert!(started_by_watchdog(
             &owner,
@@ -768,7 +789,8 @@ mod tests {
                 NOW + 1_000,
                 ActingctlCode::WatchdogStartPending,
                 None
-            )]
+            )],
+            START_WINDOW_MS
         ));
         // A failed start's process is gone; another epoch's start is not this owner.
         assert!(!started_by_watchdog(
@@ -780,12 +802,9 @@ mod tests {
                     ActingctlCode::WatchdogStartedRuntime,
                     Some("epoch_d")
                 ),
-                start(
-                    NOW - READY_TIMEOUT_MS - 1,
-                    ActingctlCode::StartTimeout,
-                    None
-                ),
-            ]
+                start(NOW - START_WINDOW_MS - 1, ActingctlCode::StartTimeout, None),
+            ],
+            START_WINDOW_MS
         ));
     }
 

@@ -146,6 +146,8 @@ impl RootFileInputs {
                 pages: self.pages.as_ref().map(|file| file.bytes.as_slice()),
                 interrupts: self.interrupts.as_ref().map(|file| file.bytes.as_slice()),
                 navigation: self.navigation.as_ref().map(|file| file.bytes.as_slice()),
+                // Workflow #357 DB-1: the bundle is given, so the tables never decide here.
+                tables: false,
             },
             game,
         )
@@ -195,6 +197,8 @@ pub fn check_standard_pack_root(
             pages: bytes(STANDARD_PACK_PAGES_FILE),
             interrupts: bytes(STANDARD_PACK_INTERRUPTS_FILE),
             navigation: bytes(STANDARD_PACK_NAVIGATION_FILE),
+            // Workflow #357 DB-1: a root without bundle.json is refused below either way.
+            tables: false,
         },
         &game,
     )

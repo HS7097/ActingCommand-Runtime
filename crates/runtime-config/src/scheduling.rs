@@ -31,6 +31,11 @@
 //! no default: an instance whose entry names none has no entries of its own);
 //! `blackout.quiet_horizon` (`deadline` | `expected`) and `day_boundary.quiet` (also per
 //! instance) are parsed and checked here; SR-4a2 reads them.
+//! SCH-M slice ED-1 (frozen model v1.0 §3.4 D-12; Alice 10-22 「近5次该任务包的平均时间加5分钟」):
+//! `expected_runtime.enabled`, `expected_runtime.runs` (`1..=16`) and `expected_runtime.margin_ms`
+//! (`0..=3600000`), each also per instance (`instance.<instance id>.scheduling.expected_runtime.*`,
+//! defaulting to the section's), and `fact_refresh.expected_duration_ms` (`1..=1800000`), the
+//! declared duration D of a fact refresh read; parsed and checked here, read by slice ED-2.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, `blackout_source`
@@ -124,6 +129,16 @@ pub const FACT_REFRESH_FAILURE_BACKOFF_MS: &str = "scheduling.fact_refresh.failu
 /// the activity day.
 pub const FACT_REFRESH_MAX_CONSECUTIVE_FAILURES: &str =
     "scheduling.fact_refresh.max_consecutive_failures";
+/// SCH-M ED-1 (§3.4 D-12): the declared duration D of a fact refresh read, in milliseconds.
+pub const FACT_REFRESH_EXPECTED_DURATION_MS: &str = "scheduling.fact_refresh.expected_duration_ms";
+/// SCH-M ED-1 (§3.4 D-12): whether the expected duration E is the mean of a pair's latest
+/// successful runs plus the margin (`false`: always the declared value). Also the member of an
+/// instance's own value (`instance.<instance id>.scheduling.expected_runtime.enabled`).
+pub const EXPECTED_RUNTIME_ENABLED: &str = "scheduling.expected_runtime.enabled";
+/// SCH-M ED-1: the most latest runs the mean reads (also a per-instance member).
+pub const EXPECTED_RUNTIME_RUNS: &str = "scheduling.expected_runtime.runs";
+/// SCH-M ED-1: what is added to the mean, in milliseconds (also a per-instance member).
+pub const EXPECTED_RUNTIME_MARGIN_MS: &str = "scheduling.expected_runtime.margin_ms";
 /// Workflow #384 D2-S5 (D2 model §3.4, §3.9 item 6): how long one instance's candidates may wait
 /// for one key before the transition recorder reports `fact_reader_overdue`. No default: unset,
 /// nothing is reported.
@@ -252,6 +267,11 @@ pub struct SchedulingFile {
     // denies unknown fields; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     day_boundary: Option<DayBoundaryFile>,
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md; SCH-M
+    // ED-1): a Runtime before ED-1 refuses a file that names it, because the section denies
+    // unknown fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_runtime: Option<ExpectedRuntimeFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -273,6 +293,11 @@ pub struct InstanceSchedulingFile {
     blackout: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     day_boundary: Option<DayBoundaryFile>,
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md; SCH-M
+    // ED-1): the instance's own expected-duration keys. A Runtime before ED-1 refuses a file that
+    // names them, because the entry denies unknown fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_runtime: Option<ExpectedRuntimeFile>,
 }
 
 file_struct!(RecognitionFile {
@@ -315,6 +340,8 @@ file_struct!(
         max_consecutive_failures,
         recognition_join_timeout_ms,
         overdue_ms,
+        // Interface anchor `actingd-config` revision 11 (SCH-M ED-1).
+        expected_duration_ms,
     }
 );
 file_struct!(
@@ -356,6 +383,14 @@ file_struct!(
     /// instance's.
     DayBoundaryFile { quiet }
 );
+file_struct!(
+    /// SCH-M ED-1 (§3.4 D-12): the expected-duration keys, section-level or one instance's.
+    ExpectedRuntimeFile {
+        enabled,
+        runs,
+        margin_ms
+    }
+);
 
 const fn row(
     name: &'static str,
@@ -395,6 +430,20 @@ const JOIN_TIMEOUT: KeyRange = KeyRange::Integer {
 /// Workflow #411 B15 R3: the remedy requests per blocked layer and round, `1..=8` (model-b15
 /// §5.2; coordinator decision 5 of 2026-10-19). Schema, not a threshold.
 const REMEDY_REQUESTS: KeyRange = KeyRange::Integer { min: 1, max: 8 };
+/// SCH-M ED-1 (§3.4, "Configuration"): the latest runs the mean reads, `1..=16`, the bound of a
+/// `health.run_duration` row (`d1` … `d16`). Schema, not a threshold.
+pub(crate) const EXPECTED_RUNTIME_RUNS_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 16 };
+/// SCH-M ED-1: the margin added to the mean, `0..=3600000` ms.
+pub(crate) const EXPECTED_RUNTIME_MARGIN_RANGE: KeyRange = KeyRange::Integer {
+    min: 0,
+    max: 3_600_000,
+};
+/// SCH-M ED-1: the declared duration of a fact refresh read, `1..=1800000` ms: no longer than the
+/// longest task budget.
+const FACT_REFRESH_EXPECTED_DURATION: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS as i64,
+};
 
 /// Workflow #411 B15 R3: a remedy key's row, read by R4 from v0.12.3 on.
 const fn remedy_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
@@ -410,6 +459,15 @@ const fn sr4a1_row(name: &'static str, value_type: ValueType, range: KeyRange) -
     KeyRow {
         since: "0.12.12",
         ..row(name, value_type, range, "SR-4a2")
+    }
+}
+
+/// SCH-M ED-1: a key of SCH-M §3.4, parsed and checked from the release that joins
+/// `actingd-config` revision 11, read by ED-2.
+const fn ed1_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        since: "0.12.12",
+        ..row(name, value_type, range, "ED-2")
     }
 }
 
@@ -566,6 +624,22 @@ pub(crate) static ROWS: &[KeyRow] = &[
     remedy_row(REMEDY_ENABLED, ValueType::Boolean, KeyRange::Any),
     remedy_row(REMEDY_MAX_PER_ROUND, ValueType::Integer, REMEDY_REQUESTS),
     remedy_row(REMEDY_CHOICES, ValueType::List, KeyRange::Any),
+    ed1_row(EXPECTED_RUNTIME_ENABLED, ValueType::Boolean, KeyRange::Any),
+    ed1_row(
+        EXPECTED_RUNTIME_RUNS,
+        ValueType::Integer,
+        EXPECTED_RUNTIME_RUNS_RANGE,
+    ),
+    ed1_row(
+        EXPECTED_RUNTIME_MARGIN_MS,
+        ValueType::DurationMs,
+        EXPECTED_RUNTIME_MARGIN_RANGE,
+    ),
+    ed1_row(
+        FACT_REFRESH_EXPECTED_DURATION_MS,
+        ValueType::DurationMs,
+        FACT_REFRESH_EXPECTED_DURATION,
+    ),
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -689,6 +763,20 @@ pub struct FactRefreshConfig {
     pub max_consecutive_failures: u32,
     /// Workflow #384 D2-S5: when one key's wait is reported overdue; `None` when unset.
     pub overdue_ms: Option<u64>,
+    /// SCH-M ED-1 (§3.4 D-12): the declared duration D of a fact refresh read.
+    pub expected_duration_ms: u64,
+}
+
+/// SCH-M ED-1 (§3.4 D-12, "Configuration"): the expected-duration keys in effect, the section's
+/// or, from `EffectiveConfig::expected_runtime`, one instance's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedRuntimeConfig {
+    /// `false`: E is the declared value, and every evaluation is the one without samples.
+    pub enabled: bool,
+    /// The most latest successful runs the mean reads: `1..=16`.
+    pub runs: u8,
+    /// What is added to the mean, in milliseconds: `0..=3600000`.
+    pub margin_ms: u64,
 }
 
 /// Workflow #386 SR-3 (§2.4): the task package admission check of `check-config` and of the
@@ -745,6 +833,8 @@ pub struct SchedulingConfig {
     pub remedy: RemedyConfig,
     /// Workflow #386 SR-4a1 (SCH-M §3.2 D-6): the section's day-boundary switch.
     pub day_boundary_quiet: bool,
+    /// SCH-M ED-1: the section's expected-duration keys.
+    pub expected_runtime: ExpectedRuntimeConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1171,6 +1261,14 @@ impl SchedulingConfig {
             pack_admission: pack_admission_from(&reader)?,
             remedy: remedy_from(&reader)?,
             day_boundary_quiet: reader.boolean(DAY_BOUNDARY_QUIET)?,
+            expected_runtime: expected_runtime_from(
+                &reader,
+                [
+                    EXPECTED_RUNTIME_ENABLED,
+                    EXPECTED_RUNTIME_RUNS,
+                    EXPECTED_RUNTIME_MARGIN_MS,
+                ],
+            )?,
         })
     }
 }
@@ -1372,7 +1470,51 @@ fn fact_refresh_from(reader: &Reader<'_>) -> Result<FactRefreshConfig, ConfigFai
         failure_backoff_ms: reader.duration(FACT_REFRESH_FAILURE_BACKOFF_MS)?,
         max_consecutive_failures: reader.count(FACT_REFRESH_MAX_CONSECUTIVE_FAILURES)?,
         overdue_ms: reader.optional_duration(FACT_REFRESH_OVERDUE_MS)?,
+        expected_duration_ms: reader.duration(FACT_REFRESH_EXPECTED_DURATION_MS)?,
     })
+}
+
+/// SCH-M ED-1: the expected-duration keys spelled by `keys` (`enabled`, `runs`, `margin_ms`).
+/// Each range is the key table's, checked wherever a value enters.
+fn expected_runtime_from(
+    reader: &Reader<'_>,
+    keys: [&str; 3],
+) -> Result<ExpectedRuntimeConfig, ConfigFailure> {
+    let [enabled, runs, margin_ms] = keys;
+    Ok(ExpectedRuntimeConfig {
+        enabled: reader.boolean(enabled)?,
+        runs: u8::try_from(reader.count(runs)?)
+            .map_err(|_| invalid(runs, ConfigValueProblem::OutOfRange))?,
+        margin_ms: reader.duration(margin_ms)?,
+    })
+}
+
+/// SCH-M ED-1 (§3.4 "Configuration"): the expected-duration keys in effect for the instance whose
+/// registry id is `instance_id`: each member the instance's own key
+/// (`instance.<instance_id>.scheduling.expected_runtime.<member>`) when the configuration carries
+/// it, otherwise the section's.
+pub(crate) fn instance_expected_runtime(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<ExpectedRuntimeConfig, ConfigFailure> {
+    let keys = [
+        EXPECTED_RUNTIME_ENABLED,
+        EXPECTED_RUNTIME_RUNS,
+        EXPECTED_RUNTIME_MARGIN_MS,
+    ]
+    .map(|member| {
+        let own = instance_key(instance_id, member);
+        if value(&own).is_some() {
+            own
+        } else {
+            member.to_owned()
+        }
+    });
+    let [enabled, runs, margin_ms] = &keys;
+    expected_runtime_from(
+        &Reader { value },
+        [enabled.as_str(), runs.as_str(), margin_ms.as_str()],
+    )
 }
 
 /// Workflow #384 D2-S4: the fact refresh keys in effect, read alone (the host reads them at

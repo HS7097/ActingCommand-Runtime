@@ -335,7 +335,8 @@
       "daily_limit": 96,
       "failure_backoff_ms": 600000,
       "max_consecutive_failures": 3,
-      "recognition_join_timeout_ms": 10000
+      "recognition_join_timeout_ms": 10000,
+      "expected_duration_ms": 60000
     },
     "suspension": {
       "lift_check_min_interval_ms": 60000
@@ -352,6 +353,11 @@
     },
     "day_boundary": {
       "quiet": true
+    },
+    "expected_runtime": {
+      "enabled": true,
+      "runs": 5,
+      "margin_ms": 300000
     }
   },
   "ledger_observer": {
@@ -391,7 +397,8 @@
         "host.install_transition.pauses",
         "host.perf_baseline.*",
         "host.perf_calibration.*",
-        "host.config_overrides"
+        "host.config_overrides",
+        "host.contained_settlement"
       ],
       "reobserve_prefixes": [
         "device.",
@@ -448,6 +455,9 @@
   },
   "emulator_control": {
     "restart_exit_wait_ms": 60000
+  },
+  "watchdog": {
+    "start_window_ms": 900000
   },
   "execution": {
     "capture": {

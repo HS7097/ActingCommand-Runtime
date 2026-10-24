@@ -61,4 +61,7 @@ mod tests {
 
     // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the pure blackout judgement over its three sources.
     mod gate_sr4a1;
+
+    // SCH-M ED-1 (Workflow #405; SCH-M §3.4 D-12, D-15): the expected duration E.
+    mod gate_ed1;
 }

@@ -27,7 +27,7 @@
 //! the started process's state, the owner's health probe and the clock. [`System`] is the
 //! machine; the tick tests put a fake in its place, so a whole tick runs in memory.
 
-use super::decide::{CLOCK_SLACK_MS, LiveOwner, OwnerLock, READY_TIMEOUT_MS};
+use super::decide::{CLOCK_SLACK_MS, LiveOwner, OwnerLock};
 use super::observe::{self, HostProbe, Installation, RUNTIME_IMAGE};
 use super::powershell::{self, CREATE_NO_WINDOW};
 use super::{io_failure, json_failure};
@@ -220,13 +220,14 @@ pub(crate) struct Target<'a> {
 }
 
 impl<'a> Target<'a> {
-    /// The tick's target: the installation's selection and the fixed readiness window.
+    /// The tick's target: the installation's selection and its start window (#411 A66,
+    /// `watchdog.start_window_ms`).
     pub(crate) fn of(installation: &'a Installation) -> Self {
         Self {
             root_plain: &installation.root_plain,
             config_plain: &installation.config_plain,
             state_root: &installation.state_root,
-            ready_timeout: Duration::from_millis(READY_TIMEOUT_MS),
+            ready_timeout: Duration::from_millis(installation.start_window_ms),
         }
     }
 
