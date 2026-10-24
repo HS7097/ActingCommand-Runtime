@@ -587,11 +587,22 @@ a file that does not name it keeps its revision.
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
 | `emulator_control.restart_exit_wait_ms` | milliseconds `1000..=300000`, the longest wait for the old VM to exit, on the Runtime clock | `60000` | yes |
+| `emulator_control.watch_enabled` | boolean: whether the emulator watch polls the emulator status of the discovery-bound instances (emu-watch R2) | `true` | yes |
+| `emulator_control.watch_interval_ms` | milliseconds `5000..=3600000`, the time between two polls, on the Runtime clock | `60000` | yes |
+| `emulator_control.restart_attempts` | integer `1..=100`, the most starts of one configured instance's stopped emulator by the watch within `restart_window_ms` (emu-watch R3) | `3` | yes |
+| `emulator_control.restart_window_ms` | milliseconds `60000..=86400000`, the window `restart_attempts` counts in | `1800000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
-`wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
-a restart adds the range's maximum (745 s).
+`wrong_type` (`watch_enabled`: no boolean). The rows are those of
+`config.parameters.emulator_control`. The client's receipt wait of a restart adds the range's
+maximum of `restart_exit_wait_ms` (745 s).
+
+emu-watch (Alice's ruling 35; [emulator-control.md](emulator-control.md), "Emulator watch"): the
+watch reads its four keys at every tick, so an instruction changes them while the Runtime runs;
+`watch_enabled` false stops the polls (and so the watch's restarts) until it is true again.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
+keys; a file that names none of them keeps its revision.
 
 ## Facts
 
