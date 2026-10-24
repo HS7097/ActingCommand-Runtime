@@ -262,7 +262,7 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
                 "max_mem_bytes": "optional lab frame-store cap; CLI --max-mem-bytes",
                 "os_reserve_bytes": "physical-memory reserve left for the OS; CLI --os-reserve-bytes",
                 "flush_workspace_reserve_bytes": "required byte gap between tier2 and tier3; CLI --flush-workspace-reserve-bytes",
-                "floor_mem_bytes": "frame-store budget when the memory sample leaves none after the OS reserve; default 256 MiB",
+                "floor_mem_bytes": "frame-store budget when the memory sample leaves less after the OS reserve; default 256 MiB",
                 "tier3_mode": "synchronous graceful partial-output failure; no runtime pause/resume wait is performed in this CLI"
             },
             "rules": [

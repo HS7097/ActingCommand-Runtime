@@ -133,12 +133,14 @@ Already published frames release resident memory without another write.
 
 A frame store's memory budget is the sampled available and total memory less
 `os_reserve_bytes` (2 GiB), capped by `max_mem_bytes`. #411 A67 (0.12.12): a sample
-that leaves no budget after the reserve no longer fails the open with
-`frame_store_usage`; the store opens, and refreshes its budget, on
-`floor_mem_bytes` (default 256 MiB, never above `max_mem_bytes`) and holds the
+that leaves a budget below the floor after the reserve, zero or not, no longer fails
+the open (with `frame_store_usage` or on its watermarks); the store opens, and
+refreshes its budget, on `floor_mem_bytes` (default 256 MiB, never above
+`max_mem_bytes`), whose watermarks and flush workspace validate, and holds the
 warning `frame_store_budget_floor_applied` (`memory_total_bytes`,
 `memory_available_bytes`, `memory_reserve_bytes`, `memory_floor_bytes`) while its
-budget stands on the floor. A sample that leaves any budget is used as before.
+budget stands on the floor. A sample that leaves at least the floor is used as
+before.
 
 The original memory budget admits the live frame/copy, PNG workspace and material
 verification buffer before allocation or publication. Host copies run inside one

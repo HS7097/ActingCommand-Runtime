@@ -292,7 +292,7 @@
     },
     "memory_floor_bytes": {
       "type": "integer",
-      "description": "The budget, in bytes, a memory budget falls back to when its sample leaves none after the reserve (frame_store.floor_mem_bytes)."
+      "description": "The budget, in bytes, a memory budget falls back to when its sample leaves less after the reserve (frame_store.floor_mem_bytes)."
     },
     "carried_bytes": {
       "type": "integer",
