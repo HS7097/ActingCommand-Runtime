@@ -20,6 +20,9 @@ const DEFAULT_TIER2_RATIO: f64 = 0.75;
 const DEFAULT_TIER3_RATIO: f64 = 0.90;
 const DEFAULT_HYSTERESIS_RATIO: f64 = 0.10;
 const DEFAULT_OS_RESERVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// #411 A67 (R5): the budget the store opens with when its memory sample leaves none after the
+/// OS reserve (`frame_store.floor_mem_bytes`).
+const DEFAULT_FLOOR_MEM_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
 const ENTRY_BASE_METADATA_BYTES: u64 = 512;
 const WRITER_BUFFER_BYTES: u64 = 64 * 1024;
@@ -44,6 +47,9 @@ pub struct FrameStoreControl {
     pub os_reserve_bytes: Option<u64>,
     #[serde(default)]
     pub flush_workspace_reserve_bytes: Option<u64>,
+    /// #411 A67 (R5): the budget when the memory sample leaves none after the OS reserve.
+    #[serde(default)]
+    pub floor_mem_bytes: Option<u64>,
 }
 
 /// A refused frame store setting (Workflow #378): its registered code, and the English text
@@ -104,6 +110,12 @@ impl FrameStoreControl {
                     .to_string(),
             ));
         }
+        if self.floor_mem_bytes == Some(0) {
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreMemoryLimitInvalid,
+                "frame_store.floor_mem_bytes must be positive when provided".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -132,6 +144,9 @@ impl FrameStoreControl {
         if let Some(value) = self.flush_workspace_reserve_bytes {
             config.flush_workspace_reserve_bytes = value;
         }
+        if let Some(value) = self.floor_mem_bytes {
+            config.floor_mem_bytes = value;
+        }
     }
 }
 
@@ -145,6 +160,8 @@ pub struct FrameStoreConfig {
     pub max_mem_bytes: Option<u64>,
     pub os_reserve_bytes: u64,
     pub flush_workspace_reserve_bytes: u64,
+    /// #411 A67 (R5): the budget when the memory sample leaves none after the OS reserve.
+    pub floor_mem_bytes: u64,
     memory_source: Option<MemorySampleSource>,
 }
 
@@ -159,6 +176,7 @@ impl Default for FrameStoreConfig {
             max_mem_bytes: None,
             os_reserve_bytes: DEFAULT_OS_RESERVE_BYTES,
             flush_workspace_reserve_bytes: DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES,
+            floor_mem_bytes: DEFAULT_FLOOR_MEM_BYTES,
             memory_source: None,
         }
     }
@@ -187,6 +205,12 @@ impl FrameStoreConfig {
             return Err(FrameStoreConfigRefusal::new(
                 StoreCode::FrameStoreFlushReserveInvalid,
                 "flush_workspace_reserve_bytes must be positive".to_string(),
+            ));
+        }
+        if self.floor_mem_bytes == 0 {
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreMemoryLimitInvalid,
+                "floor_mem_bytes must be positive".to_string(),
             ));
         }
         Ok(())
@@ -255,6 +279,9 @@ struct MemoryBudget {
     tier2_release_bytes: u64,
     tier3_release_bytes: u64,
     flush_workspace_reserve_bytes: u64,
+    /// #411 A67 (R5): the configured floor, and whether this budget stands on it.
+    floor_bytes: u64,
+    floor_applied: bool,
 }
 
 impl MemoryBudget {
@@ -272,10 +299,16 @@ impl MemoryBudget {
             .available_bytes
             .saturating_sub(config.os_reserve_bytes);
         let total_after_reserve = sample.total_bytes.saturating_sub(config.os_reserve_bytes);
-        let requested = config.max_mem_bytes.unwrap_or(available_after_reserve);
-        let budget_bytes = requested
-            .min(available_after_reserve)
-            .min(total_after_reserve);
+        let sampled = available_after_reserve.min(total_after_reserve);
+        // #411 A67 (R5): a sample that leaves no budget after the OS reserve gets the floor, and
+        // never more than `max_mem_bytes`; any other sample is unchanged.
+        let floor_applied = sampled == 0;
+        let room = if floor_applied {
+            config.floor_mem_bytes
+        } else {
+            sampled
+        };
+        let budget_bytes = config.max_mem_bytes.map_or(room, |cap| cap.min(room));
         // Workflow #383 AO-2 (`contracts/ledger-observer.md` §7.1): the lines come from the
         // shared watermark module.
         let lines = crate::WatermarkRatios {
@@ -297,7 +330,19 @@ impl MemoryBudget {
             tier2_release_bytes: lines.tier2_release,
             tier3_release_bytes: lines.tier3_release,
             flush_workspace_reserve_bytes: config.flush_workspace_reserve_bytes,
+            floor_bytes: config.floor_mem_bytes,
+            floor_applied,
         }
+    }
+
+    /// #411 A67 (R5): `frame_store_budget_floor_applied` with the sample, the reserve and the
+    /// floor this budget stands on.
+    fn floor_warning(&self) -> Outcome {
+        Outcome::new(StoreCode::FrameStoreBudgetFloorApplied)
+            .memory_total_bytes(self.total_bytes)
+            .memory_available_bytes(self.available_bytes)
+            .memory_reserve_bytes(self.os_reserve_bytes)
+            .memory_floor_bytes(self.floor_bytes)
     }
 
     fn lines(&self) -> crate::WatermarkLines {
@@ -597,9 +642,14 @@ impl FrameStore {
         self.memory.clone()
     }
 
-    /// #411 A67 (R5): the warning the store records while its budget stands on the floor.
+    /// #411 A67 (R5): `frame_store_budget_floor_applied` (warning) while the store's budget stands
+    /// on the floor: its memory sample left no budget after the OS reserve, so the store opened
+    /// (or refreshed its budget) with `floor_mem_bytes` instead of failing. It carries the
+    /// sampled total and available memory, the reserve and the floor.
     pub fn budget_floor_warning(&self) -> Option<Outcome> {
-        None
+        self.budget
+            .floor_applied
+            .then(|| self.budget.floor_warning())
     }
 
     /// Configure before accepting frames; the window keeps each original materializable.

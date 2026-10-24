@@ -76,6 +76,11 @@ actingcommand_contract::outcome_codes! {
         FrameMaterialHashMismatch => "frame_material_hash_mismatch": error / none,
         FrameMaterialUnavailable => "frame_material_unavailable": error / none,
         FrameSpillMaterialPending => "frame_spill_material_pending": error / none,
+        /// Warning (#411 A67). The frame store's memory sample left no budget after the OS
+        /// reserve, so the store opened, or refreshed its budget, on the floor
+        /// `frame_store.floor_mem_bytes` instead of failing (keys `memory_total_bytes`,
+        /// `memory_available_bytes`, `memory_reserve_bytes`, `memory_floor_bytes`).
+        FrameStoreBudgetFloorApplied => "frame_store_budget_floor_applied": warning / none,
         FrameStoreDevice => "frame_store_device": error / none,
         FrameStoreFlushReserveInvalid => "frame_store_flush_reserve_invalid": error / none,
         FrameStoreInvalid => "frame_store_invalid": error / none,
