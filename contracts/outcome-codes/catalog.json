@@ -278,6 +278,22 @@
       "type": "integer",
       "description": "Free space on a volume, in bytes."
     },
+    "memory_total_bytes": {
+      "type": "integer",
+      "description": "Physical memory in total, in bytes, as a memory sample read it."
+    },
+    "memory_available_bytes": {
+      "type": "integer",
+      "description": "Physical memory available, in bytes, as a memory sample read it."
+    },
+    "memory_reserve_bytes": {
+      "type": "integer",
+      "description": "The memory, in bytes, a budget leaves to the operating system (the frame store OS reserve)."
+    },
+    "memory_floor_bytes": {
+      "type": "integer",
+      "description": "The budget, in bytes, a memory budget falls back to when its sample leaves less after the reserve (frame_store.floor_mem_bytes)."
+    },
     "carried_bytes": {
       "type": "integer",
       "description": "The size of the release an offline installer carries, in bytes."
