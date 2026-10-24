@@ -103,6 +103,8 @@ fn b41_t1_the_successor_goes_before_the_refresh_and_the_refresh_runs_after_it() 
         }),
         last_duration_ms: None,
         failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
     };
     let second = evaluate(
         &catalog,
@@ -294,6 +296,8 @@ fn b41_t5_a_successor_waiting_for_its_random_delay_keeps_the_refresh_deferred() 
         }),
         last_duration_ms: None,
         failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
     };
     let ran = evaluate(
         &catalog,
@@ -455,6 +459,8 @@ fn lead_state() -> TaskRuntimeSnapshot {
         }),
         last_duration_ms: None,
         failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
     }
 }
 

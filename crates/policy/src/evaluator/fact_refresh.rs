@@ -31,7 +31,7 @@ use super::{
     PolicyEvaluationResult, RankRecord, ResourceLoad, SchedulingDecisionState, TaskRank,
     TaskRuntimeSnapshot, TaskWork, UnknownReasonToken, activity_window_at,
     deterministic_tie_breaker, min_wake, reason, reason_with, select_activity_profile,
-    unknown_token,
+    snapshot_expected_runtime, unknown_token,
 };
 use crate::codes::{PolicyCode, RefreshLimit};
 use crate::{
@@ -603,7 +603,8 @@ fn refresh_candidate(
         host_id: instance.host_id.clone(),
         operation_id: task.entrypoint.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
-        expected_duration_ms: task.expected_duration_ms,
+        expected_duration_ms: snapshot_expected_runtime(task, state)
+            .unwrap_or(task.expected_duration_ms),
         yield_points: task.yield_points.clone(),
         load_profile: task.load_profile.clone(),
         load: ResourceLoad::new(&task.load_profile, host.heavy_threshold_milli),
@@ -612,6 +613,7 @@ fn refresh_candidate(
         promoted: false,
         value_milli: None,
         last_duration_ms: state.and_then(|state| state.last_duration_ms),
+        expected_runtime_ms: snapshot_expected_runtime(task, state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms: None,
         activity_profile_id: profile.id.clone(),

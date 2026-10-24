@@ -80,9 +80,9 @@ pub use recovery_ladder::{
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
-    BlackoutConfig, CostCommitConfig, FactRefreshConfig, FeatureLockConfig, HostBlackout,
-    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay, RemedyChoiceRow,
-    RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+    BlackoutConfig, CostCommitConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
+    HostBlackout, InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay,
+    RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
 pub use startup_discovery::{StartupDiscoveryConfig, StartupDiscoveryFile};
@@ -113,6 +113,9 @@ mod device_link_tests;
 // Workflow #398 RD-5b.
 #[cfg(test)]
 mod device_state_tests;
+// SCH-M ED-1.
+#[cfg(test)]
+mod ed1_tests;
 #[cfg(test)]
 mod ladder_tests;
 // Workflow #383 AO-1.
