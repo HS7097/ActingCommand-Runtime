@@ -97,8 +97,8 @@ Between Runtime modules outcomes always travel full.
 |---|---|
 | `contracts/outcome-codes/catalog.json` | the header: `schema_version` `actingcommand.outcome-codes.v1`, `keys`, `vocabularies`, `domains`, `fragments` |
 | `contracts/outcome-codes/<owner>.json` | one owner's `codes` and `locations` (`{owner, codes, locations}`) |
-| `contracts/outcome-codes.json` | the merged file every reader uses, generated; never edited by hand |
-| `contracts/outcome-codes/released/<version>.json` | per-release snapshot, written by the release PR (`0.12.0.json` first, #378 A8b) |
+| (merged catalog, not committed) | the header and every fragment merged into one document, the one every reader uses: the contract crate's `build.rs` generates it into its `OUT_DIR` and embeds it, and `outcome-guard merge` prints the same text (Workflow #420 S2) |
+| `contracts/outcome-codes/released/<version>.json` | per-release release file in the compact form, written by the release PR with `ci/outcome_release.py` (`0.12.0.json` first, #378 A8b; compact since #420 S3) |
 
 - **`fragments`** maps each owner to its workspace member (`"runtime-host": "crates/runtime-host"`).
   Every workspace member has exactly one owner; an owner's fragment file exists once it
@@ -145,31 +145,30 @@ Between Runtime modules outcomes always travel full.
   condition decided from the declarations alone is row 3, one that needs the screen is row 4.
   A receipt or projection code takes the class of the outcome it projects: `recognition_failed`
   is `pack_logic_mismatch`, `capture_failed` is `environment_fault`.
-- **Release snapshot**: `{schema_version: "actingcommand.outcome-codes.release.v1", release,
-  codes: {name: {category, ladder_class, review, status, values: {key: {type, required}}}},
-  locations: {name: {review, status}}}`. It holds every code and location of the catalog at
-  the commit the release tags, retired ones included, in name order; `type` is the key's type in
-  the key table and `required` whether the entry requires the key. The release PR writes it for
-  `X.Y.Z` and nothing edits it afterwards; G9 holds every later catalog to its settled entries,
-  and G10 stops a release whose snapshot is missing. A release candidate `X.Y.Z-rc.N` has no
-  snapshot of its own.
+- **Release files** (compact since Workflow #420 S3): `{schema_version:
+  "actingcommand.outcome-codes.release.v2", release, codes: {name: {category, ladder_class,
+  review, status, values: {key: {type, required}}}}, locations: {name: {review, status}}}`, one
+  entry per line, in name order. An entry's signature is these members; `type` is the key's type
+  in the key table and `required` whether the entry requires the key. A release file holds only
+  the entries its release binds, the settled and the retired ones, and of those only the ones
+  whose signature no earlier release file holds; a release that changed none has a file with
+  empty `codes` and `locations`. Together the release files hold every signature any release
+  bound, so G9 checking each file is G9 checking each release's full snapshot. The release PR
+  writes `X.Y.Z.json` with `py -3 -I -B ci/outcome_release.py X.Y.Z`, from the header and the
+  fragments, and nothing edits it afterwards; G9 holds every later catalog to the signatures,
+  and G10 stops a release whose file is missing. A release candidate `X.Y.Z-rc.N` has no file
+  of its own.
 
-### Regenerating the merged file
+### The merged catalog is generated, not committed (Workflow #420 S2)
 
-Never run the merge locally, and never merge the file by hand.
-
-1. Push the fragment change. CI's `Outcome catalog merge` step runs `outcome-guard merge` after
-   every test step, whenever the Test step ran (pass or fail; G9 fails on the first push by
-   design), and uploads `contracts/outcome-codes.json` as the artifact `outcome-codes-<sha>` of
-   the pushed head.
-2. Download it into an empty temporary folder,
-   `gh run download <run-id> -n outcome-codes-<sha> -D <empty temp dir>` (the artifact holds a
-   bare `outcome-codes.json`), copy that file over `contracts/outcome-codes.json`, commit it
-   unchanged and push again; G9 then passes.
-3. A pull request's CI checks out GitHub's merge of the head into `main`, and `main` requires
-   branches to be up to date. After every rebase or merge from `main`, and on any conflict in
-   this file, keep both sides' entries in the fragments and the header, then repeat steps 1
-   and 2.
+A code change edits only the header and the owner fragments; nothing regenerates, downloads or
+commits a merged file. The contract crate's `build.rs` merges the fragments with the guard's own
+loader (`tools/outcome-guard/src/catalog.rs`) into its `OUT_DIR` at every build, and a header or
+fragment that does not load fails the build with every error. So a pull request that changes
+codes is green on its first push, and two pull requests that change different fragments never
+meet in one file. After a rebase or merge from `main`, keep both sides' entries in the fragments
+and the header. `contracts/outcome-codes.json` is no longer tracked: a branch that still carries
+it deletes it when it merges `main` (accept the deletion) and keeps only its fragment changes.
 
 ### Reading the catalog: `actingledger codes`
 
@@ -183,7 +182,8 @@ lists the codes in name order, or only the code `--code` names.
 | `--markdown` | the line ``Outcome catalog SHA-256 `<hex>`.``, an empty line, then a table of the same columns, the code in backticks and a pipe in a cell escaped with a backslash |
 | `--json` | one line `{schema_version: "actingcommand.actingledger.codes.v1", catalog_sha256, codes: {name: entry}}`, each entry as the catalog holds it |
 
-`catalog_sha256` is the SHA-256 of the embedded `contracts/outcome-codes.json`, the content half
+`catalog_sha256` is the SHA-256 of the embedded merged catalog (the text `outcome-guard merge`
+prints for the same fragments), the content half
 of the catalog's version; the Runtime release is the other half and lives only in the release
 tag, so no binary prints it. A code the catalog does not list is `outcome_code_unknown`, and a
 catalog that does not parse, has no codes table or holds an entry without one of the row's text
@@ -211,8 +211,8 @@ scanned. An unparsable registry macro fails G1.
 | G6 | persisted prose fields in contract types | A3 |
 | G7 | `outcome_keys!` differs from the catalog `keys`; a vocabulary enum (`outcome_vocabulary!` or a `source` enum) differs from its catalog vocabulary | A1 |
 | G8 | an entry since 0.12.0 that breaks `^[a-z][a-z0-9]*(_[a-z0-9]+)+$` (3-64 bytes); a prefix outside its owners; a reserved prefix | A1 |
-| G9 | the merged file is not the merge of the fragments; a released settled entry missing or changed (category, ladder class, key types, required set); a released retired entry active again | A1; ladder class #387 D1a |
-| G10 | a settled entry without text (`description`, and for a code `common_causes` and `handling`, empty or `TBD`); at a release `X.Y.Z`, no `released/X.Y.Z.json`, or, from v0.13.0 on, a pending entry (a final of the 0.12 series may carry pending entries; coordinator decision of 2026-10-19) | A8b; boundary v0.13.0 (2026-10-19) |
+| G9 | the header and fragments do not parse or merge (a spelling registered twice included); a released settled entry missing or changed (category, ladder class, key types, required set); a released retired entry active again. Read from the fragments and the compact release files only: no merged file is committed or compared (#420 S2, S3) | A1; ladder class #387 D1a; #420 S2 |
+| G10 | a settled entry without text (`description`, and for a code `common_causes` and `handling`, empty or `TBD`); at a release `X.Y.Z`, no release file `released/X.Y.Z.json`, or, from v0.13.0 on, a pending entry (a final of the 0.12 series may carry pending entries; coordinator decision of 2026-10-19) | A8b; boundary v0.13.0 (2026-10-19) |
 
 Loading the catalog, which every check does first, refuses a code entry without a
 `ladder_class`, with a class that is not a token of the vocabulary `ladder_class`, or a

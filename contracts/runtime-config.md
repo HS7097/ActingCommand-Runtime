@@ -231,11 +231,26 @@ function.
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
 | `host_claims.renewal_slack_ms` | milliseconds, settable (read at the next renewal) | `1000` |
+| `host_claims.run_end_grace_ms` | milliseconds, `10000..=600000`, settable (read when a run reaches its deadline) | `120000` |
 
 Before a step a Runtime-held key renews to the step's bound (capped at a task's longest deadline
 plus the heartbeat bound, as every claim TTL), unless its remaining time plus
 `renewal_slack_ms` already covers that bound. The value is read at each renewal; a value that is
 not milliseconds is refused (`config_value_invalid`, `wrong_type`).
+
+#411 A64 (ruling C-43, `actingd-config` revision 11): a contained run that reaches its deadline
+while it still holds its lease enters its end phase. Before any of its end work (the diagnostic
+seal, the capture summary, the terminal, the close) its lease is renewed once to
+`run_end_grace_ms` from then, and every step of its end runs under that lease. The lease sweep
+leaves the lease of a run inside its end grace alone, also when that renewal was refused; after
+the grace it may expire it as any lapsed lease. A close in the end phase that meets the lapsed
+lease fences only that instance (Workflow #403; the refusal is recorded once per run), and once
+the lapsed lease has ended the instance's session, which the multi-Nemu rule closes at every lease
+end, is closed under a dedicated resource-close lease (left to a holder that took the key on). A
+terminal that finds its lease already expired by the sweep is still recorded, its outcome
+carrying `lease_expired`, and fences the instance; neither stops the Runtime. A run whose lease
+ended before its end began enters no end phase, and every other lease (an ordinary client lease
+included) keeps its behaviour from before C-43.
 
 ## The `standard_packs` section (Workflow #373 NAV-6; moved by D1c)
 
@@ -635,7 +650,7 @@ intervals stay where they were recorded (`EffectiveTaskTiming.capture_interval`,
 
 | Fact (scope `runtime`) | Rows | Recorded |
 |---|---|---|
-| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without | at start |
+| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without; SCH-M CF-1 adds the always-on row `condition_edges` (the catalog edge members, [actingd-check-config.md](actingd-check-config.md)) | at start |
 | `config.selection` | one: `config_sha256`, `defaults_sha256` (`sha256:<hex>`), `config_generation` (decimal text, installed Runtime only) | at start |
 | `config.catalog` (Workflow #389 MCP-9a, register A5) | one, the active policy catalog generation: `catalog_id`, `catalog_version` (decimal text), `catalog_hash`, `activated_event_id` (the event id of the `catalog.activated` or `catalog.rolled_back` record that made it active), and when known `approval_id` and `approval_disposition` (the latest approval decision whose target is that generation), `previous_catalog_id` and `previous_catalog_version` (decimal text; the generation that record replaced); no fact while no generation is active | at start, after each committed catalog transition and after each approval decision, each time only when it changed |
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |

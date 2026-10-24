@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// PERF-B1 (Workflow #407 B1; host gate key 411; coordinator brief rd-1024/brief-perf-b1-capture.md,
+// PERF-B1 (Workflow #407 B1; coordinator brief rd-1024/brief-perf-b1-capture.md,
 // test row (d); requirements R2, R3): the kernel's capture keys are configuration keys of the key
 // table. `execution.capture.max_interval_ms`, the largest capture interval a package may declare,
 // defaults to 60 000 ms (R2); `execution.capture.backoff_enabled`, the back-off's switch, to on

@@ -65,7 +65,7 @@ pub use emulator_control::{
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };
 pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
-pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
+pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
 pub use instance::{
     DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR,
     STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS,
@@ -136,6 +136,6 @@ mod touch_tests;
 #[cfg(test)]
 mod gate_411_b37;
 
-// PERF-B1 (Workflow #407 B1, host key 411): the `execution.capture` keys.
+// PERF-B1 (Workflow #407 B1): the `execution.capture` keys.
 #[cfg(test)]
 mod gate_407_b1;

@@ -19,7 +19,7 @@
 // wait (`with_step_extras`; without them none); it counts the extra rounds the kernel starts and
 // keeps, in order, the frames' recognitions, the pauses, the effect intents and the inputs.
 //
-// PERF-B1 (exec keys 181 to 184): every answer may also carry a capture cadence
+// PERF-B1: every answer may also carry a capture cadence
 // (`with_capture_cadence`; without one the kernel's unconfigured cadence), and it counts the
 // frames it showed after each number of inputs.
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // PERF-B1 (Workflow #407 B1; coordinator brief rd-1024/brief-perf-b1-capture.md, requirements R1
-// to R4 frozen for the slice; exec keys 181 to 184): the cadence of a step's captures while it
+// to R4 frozen for the slice): the cadence of a step's captures while it
 // waits for a page.
 //
 // - R1: a package declares a capture interval for one wait, its step's `expect_after.interval_ms`
