@@ -311,6 +311,31 @@ impl HostShared {
         self.fence_instance(instance_id, error, links).map(Some)
     }
 
+    /// ISO-M (#419, R0.5, R0.7): the fence entry of `contain_failure` for `error`, an
+    /// `Instance` failure of `instance_id`. The instance is fenced as an unconfirmed close fences
+    /// it (one `runtime.failed` record of `instance_resources_fenced` caused by the failure when
+    /// it is newly fenced, its policy availability withheld) and the fence's non-fatal failure is
+    /// returned. `None`: no registered instance owns the failure, or it is a ledger failure; the
+    /// caller latches the Runtime. `Err`: the fence itself failed (`contain_failure` latches it).
+    pub(super) fn fence_contained_failure(
+        &self,
+        error: &RuntimeHostError,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        #[cfg(test)]
+        if self
+            .fence_failure_for_test
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Err(ledger_error(HostLocation::FenceInstanceResources));
+        }
+        let Some(instance_id) = self.fence_owner(error, Some(instance_id))? else {
+            return Ok(None);
+        };
+        self.fence_instance(instance_id, error, links).map(Some)
+    }
+
     /// The instance a fence for `error` takes: the failure's own instance, else `instance_id`
     /// (the instance whose work met it), when it is registered and the failure is no ledger
     /// failure.

@@ -3561,26 +3561,39 @@ fn capture_failure_is_reported_to_runtime_and_never_returns_fake_success() {
     host.close().expect("close host");
 }
 
+/// #411 A54 (ISO-1, #419): a read-only observe whose capture fails with a fatal device error
+/// latches nothing, so its receipt does not say the host halted and the daemon session stays
+/// usable. The failed observe is not retried and takes no fallback; the next observe is a new
+/// request that opens the capture again.
 #[test]
-fn capture_failure_latches_the_daemon_session_without_retry_or_fallback() {
+fn capture_failure_is_not_retried_and_leaves_the_daemon_session_usable() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture.store(true, Ordering::Release);
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
-    client
+    let first = client
         .observe_readonly("node.a")
         .expect_err("first capture must fail");
-    state.fail_capture.store(false, Ordering::Release);
 
-    let second = client
-        .observe_readonly("node.a")
-        .expect_err("latched session must not reopen");
-
-    assert!(second.is_fatal());
+    assert_eq!(
+        first.projection().expect("runtime projection").code,
+        RuntimeErrorCode::CaptureFailed
+    );
+    assert!(!first.is_fatal());
+    assert!(!first.is_fallback_eligible());
+    assert!(host.fatal_error().expect("runtime health").is_none());
     assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
     assert_eq!(state.captures.load(Ordering::Acquire), 1);
     assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
+    state.fail_capture.store(false, Ordering::Release);
+
+    client
+        .observe_readonly("node.a")
+        .expect("the session is not latched by an instance's capture failure");
+
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 2);
+    assert_eq!(state.captures.load(Ordering::Acquire), 2);
     drop(client);
     host.close().expect("close host");
 }
@@ -3738,8 +3751,10 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
             error.projection().expect("Host failure").code,
             RuntimeErrorCode::BackendOpenFailed
         );
-        assert!(error.is_fatal());
-        assert_eq!(input().expect_err("latched input must not be sent"), error);
+        // #411 A54 (ISO-1, #419): the open failure latched nothing, so the receipt does not say
+        // the host halted and the session is not latched by it.
+        assert!(!error.is_fatal());
+        assert!(host.fatal_error().expect("runtime health").is_none());
         assert_eq!(state.opens.load(Ordering::Acquire), 1);
         assert_eq!(state.inputs.load(Ordering::Acquire), 0);
         drop(session);
