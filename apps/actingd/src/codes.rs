@@ -115,6 +115,9 @@ actingcommand_contract::outcome_codes! {
         PathEncodingInvalid => "path_encoding_invalid": error / none,
         CheckConfigUsageInvalid => "check_config_usage_invalid": error / none,
         CheckConfigOptionInvalid => "check_config_option_invalid": error / none,
+        // Workflow #421 INST-0 (contracts/actingd-check-config.md, "Invocation"): the root
+        // `--install-root` names is no install root.
+        CheckConfigInstallRootInvalid => "check_config_install_root_invalid": error / none,
         CheckConfigConfigMissing => "check_config_config_missing": error / none,
         CheckConfigReportEncodeFailed => "check_config_report_encode_failed": error / none,
         MaintenanceUsageInvalid => "maintenance_usage_invalid": error / none,

@@ -2070,6 +2070,34 @@
     "amount_after": {
       "type": "integer",
       "description": "The amount, in the pool's real units, that the pool would hold after a run of the task: its projected amount less the task's declared consumption and less any consumption that goes first; negative when the consumption exceeds the amount (Workflow #411 B16)."
+    },
+    "install_operation_id": {
+      "type": "id",
+      "description": "An installer operation's id, op-<unix_ms> (contracts/install-cli.md)."
+    },
+    "plan_id": {
+      "type": "id",
+      "description": "An installer plan's id, plan-<16 hex> (contracts/install-cli.md)."
+    },
+    "install_refusal": {
+      "type": "vocab:install_refusal",
+      "description": "Why an installer update or rollback refused before any change."
+    },
+    "release_checks": {
+      "type": "list<vocab:release_check>",
+      "description": "The failed checks of a release folder."
+    },
+    "rollback_gate_parts": {
+      "type": "list<vocab:rollback_gate_part>",
+      "description": "The failed parts of the rollback gate."
+    },
+    "ledger_sequence": {
+      "type": "integer",
+      "description": "A ledger event sequence."
+    },
+    "install_guards": {
+      "type": "list<vocab:install_guard>",
+      "description": "Installer guards."
     }
   },
   "vocabularies": {
@@ -6312,6 +6340,155 @@
       "tokens": {
         "array_of_arrays": {
           "description": "An array whose every element is an array: a page rule's any_of, a list of groups of target ids (contracts/resource-declarations.md)."
+        }
+      }
+    },
+    "install_refusal": {
+      "description": "Why an installer update or rollback refused before any change (contracts/install-cli.md).",
+      "tokens": {
+        "not_single_location": {
+          "description": "The root is no single-location root: runtime\\BUILD-MANIFEST.json is not a file."
+        },
+        "not_adopted": {
+          "description": "install\\state.json is missing: run actingctl install adopt first."
+        },
+        "state_invalid": {
+          "description": "install\\state.json or an operation journal is not what this build writes."
+        },
+        "live_build_invalid": {
+          "description": "The live runtime\\ and tools\\ manifests are unreadable or name different commits."
+        },
+        "build_not_kept": {
+          "description": "The named build is not kept under install\\builds."
+        },
+        "build_invalid": {
+          "description": "The kept build does not verify against its own manifests."
+        },
+        "runtime_running": {
+          "description": "An actingcommand-actingd.exe runs under the root."
+        },
+        "owner_lock_held": {
+          "description": "The state root's owner lock is held (a Runtime, ledger-maintenance or unlock-owner)."
+        },
+        "processes_unreadable": {
+          "description": "The processes under the root could not be read."
+        },
+        "interface_edge": {
+          "description": "An interface edge failed; the result's edges list it."
+        },
+        "config_refused_by_target": {
+          "description": "The target build's check-config refused the live configuration."
+        },
+        "check_config_unanswered": {
+          "description": "check-config of a build could not be run or answered no report."
+        },
+        "ledger_verify_failed": {
+          "description": "The target build's ledger-maintenance verify did not pass."
+        },
+        "ledger_head_unreadable": {
+          "description": "The ledger head (S0) could not be read with the live build's actingledger."
+        },
+        "writer_lock_failed": {
+          "description": "install\\writer.lock could not be taken within install.lock_wait_ms."
+        }
+      }
+    },
+    "release_check": {
+      "description": "A check of a release folder (contracts/install-cli.md, release verify).",
+      "tokens": {
+        "zip_set": {
+          "description": "Not exactly one Runtime zip and one Tools zip of the same commit."
+        },
+        "sums_missing": {
+          "description": "SHA256SUMS is missing, unreadable, or does not list a zip."
+        },
+        "sums_mismatch": {
+          "description": "A zip's SHA-256 differs from SHA256SUMS."
+        },
+        "facts_missing": {
+          "description": "release stage was given neither --facts nor --local-build."
+        },
+        "facts_invalid": {
+          "description": "The release-facts file is unreadable or not actingcommand.release-facts.v1."
+        },
+        "digest_mismatch": {
+          "description": "A zip's or SHA256SUMS' SHA-256 differs from its asset digest in the facts."
+        },
+        "facts_commit_mismatch": {
+          "description": "The facts' commit is not the zips' commit."
+        },
+        "tag_mismatch": {
+          "description": "--expect-tag differs from the facts' tag."
+        },
+        "commit_prefix_mismatch": {
+          "description": "--expect-commit is not a prefix of the zips' commit."
+        },
+        "zip_unreadable": {
+          "description": "A zip cannot be read or extracted."
+        },
+        "manifest_invalid": {
+          "description": "A zip holds no readable BUILD-MANIFEST.json at its root."
+        },
+        "manifest_layout": {
+          "description": "A manifest's payload layout is not distribution-v1 (Runtime) or platform-tools-v3 (Tools)."
+        },
+        "manifest_repository": {
+          "description": "A manifest's repository is not the facts' repository."
+        },
+        "manifest_commit": {
+          "description": "A manifest's commit_sha is not the zips' commit."
+        },
+        "file_set": {
+          "description": "The extracted files are not exactly the manifest's files and BUILD-MANIFEST.json."
+        },
+        "file_mismatch": {
+          "description": "An extracted file's size or SHA-256 differs from its manifest entry."
+        },
+        "interfaces_invalid": {
+          "description": "A manifest's interfaces declaration breaks the parse rules of component-interfaces.md."
+        },
+        "interfaces_differ": {
+          "description": "The Runtime and Tools manifests declare different interfaces."
+        }
+      }
+    },
+    "rollback_gate_part": {
+      "description": "A part of the rollback gate (contracts/install-cli.md, the rollback gate).",
+      "tokens": {
+        "interface_edges": {
+          "description": "The interface edges of the rollback (the live build's ledger maximum in the target's range)."
+        },
+        "ledger_readability": {
+          "description": "The target build's own reader reads every ledger page after S0."
+        },
+        "open_time": {
+          "description": "The estimated ledger open of the target lies within its deadline minus the margin."
+        },
+        "config": {
+          "description": "The live configuration passes the target build's check-config."
+        }
+      }
+    },
+    "install_guard": {
+      "description": "An installer guard (contracts/install-cli.md, guards).",
+      "tokens": {
+        "memory": {
+          "description": "Available physical memory at least install.guard.min_available_memory_mb."
+        },
+        "schedule_near": {
+          "description": "No affected instance due within install.guard.before_next_start_ms."
+        },
+        "blocked_window": {
+          "description": "Now lies in no configured blocked window."
+        },
+        "foreign_pauses": {
+          "description": "No global pause and no unnamed pause of another party."
+        },
+        "ladder_holding": {
+          "description": "No affected instance in a ladder busy hold."
+        },
+        "adb": {
+          "description": "Each configured instance with a known port answers through the root's running adb server."
         }
       }
     }

@@ -562,4 +562,13 @@ outcome_keys! {
     reserve_at_least: integer,
     amount_after: integer,
     // ---- Workflow #411 B16 part 2: end ----
+    // ---- Workflow #421 INST-0 (`actingctl install`, contracts/install-cli.md): begin ----
+    install_operation_id: id,
+    plan_id: id,
+    install_refusal: vocab(install_refusal),
+    release_checks: list(vocab(release_check)),
+    rollback_gate_parts: list(vocab(rollback_gate_part)),
+    ledger_sequence: integer,
+    install_guards: list(vocab(install_guard)),
+    // ---- Workflow #421 INST-0: end ----
 }
