@@ -408,6 +408,8 @@ outcome_keys! {
     page_id: id,
     blackout_id: id,
     blackout_start_unix_ms: unix_ms,
+    // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): which of the three sources a blackout comes from.
+    blackout_source: vocab(blackout_source),
     pacing_stage: vocab(pacing_stage),
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
@@ -573,4 +575,15 @@ outcome_keys! {
     // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §6.1): begin ----
     table_column: token,
     // ---- Workflow #357 DB-1: end ----
+    // ---- Workflow #421 INST-0 (`actingctl install`, contracts/install-cli.md): begin ----
+    install_operation_id: id,
+    plan_id: id,
+    install_refusal: vocab(install_refusal),
+    release_checks: list(vocab(release_check)),
+    rollback_gate_parts: list(vocab(rollback_gate_part)),
+    ledger_sequence: integer,
+    install_guards: list(vocab(install_guard)),
+    // Ruling 54 (#420 S4): the kind of `install_caveat_noted`, the one warning of the family.
+    install_caveat: vocab(install_caveat),
+    // ---- Workflow #421 INST-0: end ----
 }

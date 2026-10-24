@@ -673,6 +673,9 @@ CREATE TABLE ledger_index (
     `tag.workbench_patterns` pattern (`*` = any text); `input_boundary/<instance>/committed` and
     `/failed`; `decision_memory/<instance>/<task>`; `activity_memory/<instance>/<profile>`;
     `wake/<wake id>`.
+  - Workflow #422 LN-3 adds `monitor/<alias>` (register §1.182 LN3-4): the monitor registry's
+    latest applied change of the alias (`runtime_state` `monitor_changed`), or the import for each
+    alias it brings (`monitor_imported`). A change that was not applied is not tagged.
   - `open`: the intents `policy.dispatch_intent`, `lease.transition_intent`,
     `task.terminal_intent`, `input.intent` and `application.intent`. A result (dispatch admitted
     or rejected, lease granted, transferred, renewed, released, expired or failed, task
@@ -729,6 +732,23 @@ CREATE TABLE ledger_index (
   `PolicyControlState`, so a restart after AO-6 keeps runtime budgets and activity intervals
   (register L7, L14).
 - Wake obligations get `agent.wake_obligation_recorded` (one `AgentWakeRecord` as of AO-4).
+- **As built by LN-3** (Workflow #422, register §1.182; AO-4's gates are not needed): the records
+  go through the existing append path, under the guard the change was made under.
+  - The policy host writes one `policy.control_state_recorded` per changed dispatch pair and one
+    `policy.activity_state_recorded` per changed (instance, activity profile) after an
+    admission's outcome, after a settlement's completion, and after the start's and the online
+    settlement reconciliations. A change is a difference between the key's complete state and its
+    latest record; an exact replay writes nothing.
+  - `daily_counts` holds the newest 32 days. `active_window` is the window of the pair's latest
+    admission. `dispatch_clock` is the admission time of the pair's latest admitted dispatch
+    until its completion. `condition_reruns` stays absent until SR-2b keeps a rerun state.
+  - At the open the replayed state counts as recorded; seeding one record per key once is LN-4's
+    (§11.6), and so is the load (§11.5). The records carry no settlement order: the Workflow #372
+    K5 order a continued id's failure state follows is not rebuilt from them.
+  - Each `agent.wake_requested` is followed by the obligation's `agent.wake_obligation_recorded`
+    with the same wake.
+  - The monitor registry's records already carry an alias's complete state; the index tags them
+    `monitor/<alias>` (§11.1).
 - Derived on load for the instance store: `latest_observed` = the latest record's observation
   time; tombstones = keys whose latest record is an invalidation (≤ key limit; after a tombstone
   rolls out, a resend of the same identity is still refused by `latest_observed` as

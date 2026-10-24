@@ -17,6 +17,13 @@ anything reads them; they take effect only from SR-4a. Until SR-4a lands, timeli
 rely on blackouts before check-config reports the `scheduling_blackout` subsystem that only
 SR-4a adds ("Configuration").
 
+**SR-4a in three parts** (SCH-M frozen model v1.0 §3.2 and §6, Workflow #386, 10-24). SR-4a1
+(built) adds the per-instance list, the `once` entries, the pure judgements of "Pure judgement"
+and "Day-boundary fit", and their configuration keys; nothing reads them yet, so behaviour is
+unchanged. SR-4a2 closes the policy (positions 4 and 7, the day boundary, the admission
+re-check, the random-delay cut and the `scheduling_blackout` subsystem); SR-4a3 brings complete
+silence to the ladder, the startup package, the emulator autostart and the monitor probe.
+
 ## Blackouts
 
 ### Catalog blackouts
@@ -44,19 +51,39 @@ A neutral example, one hour every day from 03:30 UTC for one instance:
 
 `reset` events (zero duration, invalidation only) stay as they are; they are not blackouts.
 
-### Host blackouts
+### Configuration blackouts
 
-A host blackout is an entry of the actingd configuration list `scheduling.blackout.host`; it
-covers every instance of the host. One entry is
-`{id, weekdays, utc_offset_minutes, start_minute_of_day, end_minute_of_day}`, the time fields
-having the shape and bounds of an activity window (`scheduling/v2/activity.schema.json`,
-`window`): `weekdays` 1–7 (unique, at least one), `utc_offset_minutes` within ±840,
-both minutes within 0–1439, an `end` at or before `start` crossing midnight. `id` is unique
-in the list. An entry that breaks a rule fails check-config and startup with
-`blackout_config_invalid` (`field` points at the member, `blackout_id` names the entry; SR-1
-checks the entries from v0.12.0 on). The default list is empty; an
-installation adds entries for its own needs, for example its planned machine restarts, or a
-night period. Entries have no `applies_to`: every blackout is complete silence.
+Two lists of the actingd configuration hold blackout entries:
+
+- **Host blackouts.** `scheduling.blackout.host` covers every instance of the host: planned
+  machine restarts, deploys, a person's quiet period. Default empty.
+- **Instance blackouts** (Workflow #386 SR-4a1). Each `instances[]` entry's
+  `scheduling.blackout` (key `instance.<instance id>.scheduling.blackout`) covers that instance
+  only. Any instance may have one, for any application: it is configuration data, never a rule
+  in code (Alice 10-24: 「任何应用都可以通过修改文件来达到黑名单效果」). An instance whose entry names
+  no list has no entries of its own; nothing in the Runtime, the defaults file or the contracts
+  names a game.
+
+Both lists are settable while the Runtime runs (`ConfigureSettings`; an instance's list once its
+entry names one, even `[]`) and accept two kinds of entry:
+
+- `weekly` (an entry without `kind` is one):
+  `{kind?: "weekly", id, weekdays, utc_offset_minutes, start_minute_of_day, end_minute_of_day}`,
+  the time fields having the shape and bounds of an activity window
+  (`scheduling/v2/activity.schema.json`, `window`): `weekdays` 1–7 (unique, at least one) are the
+  days it starts on, `utc_offset_minutes` within ±840, both minutes within 0–1439, an `end` at or
+  before `start` crossing midnight (an `end` equal to `start` lasts one day).
+- `once`: `{kind: "once", id, from_unix_ms, until_unix_ms}`, the interval
+  `[from_unix_ms, until_unix_ms)`, non-empty (`until_unix_ms` after `from_unix_ms`).
+
+A list holds at most 64 entries (a range, not a threshold), and `id` is unique within its list.
+An entry that breaks a rule fails check-config and startup with `blackout_config_invalid`:
+`field` points at the member (a JSON pointer into the configuration file:
+`/scheduling/blackout/host/<n>/…` or `/instances/<i>/scheduling/blackout/<n>/…`),
+`blackout_id` names the entry when it has a usable id, and `blackout_source` (`host` |
+`instance`) names the list. Through an instruction the same entries are `config_value_invalid`
+(`section_check`) and the configuration in effect stays. Entries have no `applies_to`: every
+blackout is complete silence.
 
 ### Activity profiles become bookkeeping days
 
@@ -69,11 +96,39 @@ data-side (slice SR-8), not Runtime code.
 
 ## Pure judgement
 
-The policy crate holds two pure functions next to `activity_window_at`:
-`blackout_at(blackouts, instance, t)` returns the blackout covering the instance at `t`
-(`{id, start, end}`) or none, and `next_blackout_start(blackouts, instance, t, bound)` returns
-the next start within the bound or none. Both read only the active catalog's maintenance
-events and the configured host entries.
+The policy crate holds two pure functions next to `activity_window_at` (Workflow #386 SR-4a1,
+`crates/policy/src/evaluator/blackout.rs`). They read exactly three sources, vocabulary
+`blackout_source`:
+
+| Source | What | Covers |
+|---|---|---|
+| `host` | `scheduling.blackout.host` | every instance |
+| `instance` | the instance's own `scheduling.blackout` | that instance |
+| `catalog` | the active catalog's timeline `maintenance` events (explicit V2 validity; a zero duration covers nothing) | the instances their scope matches |
+
+- `blackout_at(sources, instance, t)` returns the blackout covering the instance at `t`
+  (`{id, source, start, end}`) or none. It is the maximal union of the overlapping or adjacent
+  intervals of the three sources that contains `t`. Its `end` is the union's end, so a wake at
+  that end never lands inside the next interval; `start` is the union's start. `id` and
+  `source` belong to the entry that covers `t` and ends last (of equal ends: `host`, then
+  `instance`, then `catalog`, then the least id).
+- `next_blackout_start(sources, instance, t, bound)` returns the next blackout that begins after
+  `t` and at or before `bound`, or none: its start, the union's end, and the entry that covers
+  its start and ends last. When a blackout covers `t`, the next one begins after its end.
+- A union is followed through at most 1 024 intervals each way (a computation bound): only a
+  table that covers whole weeks without a gap builds a longer one, and the evaluation at the end
+  reached finds the rest.
+
+### Day-boundary fit
+
+`day_boundary_fit(profile, now, required_ms)` (SCH-M D-6, pure, same file) admits a
+Runtime-started policy run only if `now + required_ms` is at or before the end of the activity
+window it is admitted in. Otherwise it returns `{window_end_unix_ms, required_ms,
+next_eligible_unix_ms}`, the wake being the start of the profile's next window; outside every
+window it returns nothing (the activity window's own gate decides). `required_ms` is the run's
+expected duration E (SCH-M §3.4). SR-4a2 wires it as `policy_day_boundary_approaching` at
+position 7, after `blackout_approaching`, on instances whose `scheduling.day_boundary.quiet` is
+true in effect.
 
 ## Complete silence
 
@@ -115,7 +170,10 @@ suppression reason `blackout` and releases the key. It is not continued after th
    checked in the evaluation and again at admission. `horizon` is the run's response deadline,
    the wall-clock hard limit that also sets its lease time. It is not multiplied by the
    performance pacing factor, because pacing never lengthens the wall-clock limit (Workflow
-   #385). The next start is searched only up to `now + horizon + quiet_margin_ms`.
+   #385). The next start is searched only up to `now + horizon + quiet_margin_ms`. The key
+   `scheduling.blackout.quiet_horizon` (Workflow #386 SR-4a1) chooses the horizon: `deadline`
+   (the default, the response deadline) or `expected` (the run's expected duration E); slice
+   SR-4b changes its default to `expected` with the safety net.
 2. A candidate that fails it is deferred with `blackout_approaching` and wakes at the end of
    that blackout. Shorter candidates still run, so the closer the start, the shorter the work
    that is admitted: there is no fixed quiet start.
@@ -216,10 +274,13 @@ window (`policy-suspension.md`). Blackouts around a reset keep any run from cros
 
 | Key | Default | Meaning |
 |---|---|---|
-| `scheduling.blackout.host` | `[]` | Host blackout entries ("Host blackouts") |
+| `scheduling.blackout.host` | `[]` | Host blackout entries ("Configuration blackouts") |
+| `instance.<instance id>.scheduling.blackout` (SR-4a1) | none (no entries of its own) | The instance's own entries ("Configuration blackouts") |
 | `scheduling.blackout.quiet_margin_ms` | 60,000 | Margin of rule 1 and of each rung and startup package |
 | `scheduling.blackout.hard_quiet_ms` | 0 | Rule 4 |
 | `scheduling.blackout.stop_in_flight_at_start` | true | The safety net |
+| `scheduling.blackout.quiet_horizon` (SR-4a1) | `deadline` | Rule 1's horizon: `deadline` or `expected` |
+| `scheduling.day_boundary.quiet` (SR-4a1) | true | The day-boundary fit ("Day-boundary fit"); also per instance, `instance.<instance id>.scheduling.day_boundary.quiet`, default the section's |
 
 The defaults live in the defaults file `distribution/windows/actingd.defaults.json` of the
 configuration mechanism (Workflow #387) and arrive with the code that parses the keys (slice
@@ -248,10 +309,13 @@ keeps its failure terminal with `blackout_run_stopped`.
 
 | Code | Category | Values | Slice |
 |---|---|---|---|
-| `blackout_active` | info | `instance_id`, `blackout_id`, `next_eligible_unix_ms` | SR-4a |
-| `blackout_approaching` | info | `instance_id`, `blackout_id`, `blackout_start_unix_ms`, `required_ms` | SR-4a |
+| `blackout_active` | info | `instance_id`, `blackout_id`, `blackout_source`, `next_eligible_unix_ms` | SR-4a2 |
+| `blackout_approaching` | info | `instance_id`, `blackout_id`, `blackout_source`, `blackout_start_unix_ms`, `required_ms` | SR-4a2 |
 | `blackout_run_stopped` | error | `blackout_id`, `blackout_start_unix_ms` | SR-4b |
-| `blackout_config_invalid` | error | `field`; `blackout_id` when known | SR-4a |
+| `blackout_config_invalid` | error | `field`, `blackout_source`; `blackout_id` when known | SR-1, SR-4a1 |
+
+`blackout_source` (vocabulary `blackout_source`: `host`, `instance`, `catalog`; SR-4a1) names
+the list a refused entry is in, or the source of the entry a judgement reports.
 
 None of them triggers the recovery ladder; the default ladder configuration contains none of
 them (Workflow #387).

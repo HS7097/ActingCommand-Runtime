@@ -24,6 +24,13 @@
 //! `remedy.choices`, the switch, the request bound and the host-wide choice rows of declared
 //! remedies (each instance's own list is in the per-instance section and replaces this one as a
 //! whole), parsed and checked here; R4 reads them in the evaluation.
+//! Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6): a blackout list holds
+//! `weekly` entries (the host shape; an entry without `kind` is one) and `once` entries
+//! `{kind: "once", id, from_unix_ms, until_unix_ms}`, at most 64 per list; each instance has its
+//! own list (`instances[].scheduling.blackout`, key `instance.<instance id>.scheduling.blackout`,
+//! no default: an instance whose entry names none has no entries of its own);
+//! `blackout.quiet_horizon` (`deadline` | `expected`) and `day_boundary.quiet` (also per
+//! instance) are parsed and checked here; SR-4a2 reads them.
 //! SCH-M slice ED-1 (frozen model v1.0 §3.4 D-12; Alice 10-22 「近5次该任务包的平均时间加5分钟」):
 //! `expected_runtime.enabled`, `expected_runtime.runs` (`1..=16`) and `expected_runtime.margin_ms`
 //! (`0..=3600000`), each also per instance (`instance.<instance id>.scheduling.expected_runtime.*`,
@@ -31,8 +38,8 @@
 //! declared duration D of a fact refresh read; parsed and checked here, read by slice ED-2.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
-//! host blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, and
-//! `blackout_id` when the entry has a usable id); every other broken rule is
+//! blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, `blackout_source`
+//! naming its list, and `blackout_id` when the entry has a usable id); every other broken rule is
 //! `config_value_invalid`. Through an instruction both are `config_value_invalid` and the
 //! Runtime keeps its configuration. Every default lives in the defaults file.
 
@@ -43,6 +50,7 @@ use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType, instance_key,
 };
 use actingcommand_contract::FactScalar;
+use actingcommand_contract::outcome::BlackoutSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -79,6 +87,17 @@ pub const BLACKOUT_QUIET_MARGIN_MS: &str = "scheduling.blackout.quiet_margin_ms"
 pub const BLACKOUT_HARD_QUIET_MS: &str = "scheduling.blackout.hard_quiet_ms";
 /// Whether the safety net stops runs at a blackout start (§5.3 item 5).
 pub const BLACKOUT_STOP_IN_FLIGHT_AT_START: &str = "scheduling.blackout.stop_in_flight_at_start";
+/// Workflow #386 SR-4a1 (SCH-M §3.2 D-4): the horizon of gradual quiet, the run's hard deadline
+/// (`deadline`) or its expected duration (`expected`).
+pub const BLACKOUT_QUIET_HORIZON: &str = "scheduling.blackout.quiet_horizon";
+/// Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the member of an instance's own blackout list, a list
+/// of blackout entries (`instance.<instance id>.scheduling.blackout`; in the file the
+/// `scheduling.blackout` member of its `instances[]` entry).
+pub const INSTANCE_BLACKOUT: &str = "scheduling.blackout";
+/// Workflow #386 SR-4a1 (SCH-M §3.2 D-6): whether a Runtime-started policy run must fit its
+/// activity window by its expected duration. Also the member of an instance's own value
+/// (`instance.<instance id>.scheduling.day_boundary.quiet`).
+pub const DAY_BOUNDARY_QUIET: &str = "scheduling.day_boundary.quiet";
 /// How long a recorded locked feature stays valid (§7.2).
 pub const FEATURE_LOCK_LOCKED_VALID_FOR_MS: &str = "scheduling.feature_lock.locked_valid_for_ms";
 /// The codes a run ends with on a locked feature (§7.2; a list).
@@ -162,6 +181,16 @@ const MAX_COUNT: i64 = u32::MAX as i64;
 pub const PACING_STAGE_TOKENS: &[&str] = &["s0", "s1", "s2", "s3", "s4"];
 /// The words of `rerun.expires`.
 const EXPIRES_TOKENS: &[&str] = &["window_end"];
+/// Workflow #386 SR-4a1: the words of `blackout.quiet_horizon`.
+pub const QUIET_HORIZON_TOKENS: &[&str] = &["deadline", "expected"];
+/// Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the most entries one blackout list holds. A range, not a
+/// threshold.
+const MAX_BLACKOUT_ENTRIES: usize = 64;
+/// Workflow #386 SR-4a1: the member of a blackout entry that names its kind, and the kinds; an
+/// entry without it is `weekly`.
+const BLACKOUT_KIND: &str = "kind";
+const BLACKOUT_WEEKLY: &str = "weekly";
+const BLACKOUT_ONCE: &str = "once";
 /// A host blackout entry's bounds: the shape of an activity window
 /// (`contracts/scheduling/v2/activity.schema.json`, `window`). Schema.
 const MAX_UTC_OFFSET_MINUTES: i64 = 840;
@@ -233,6 +262,11 @@ pub struct SchedulingFile {
     // before v0.12.3 refuses a file that names it, because the section denies unknown fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remedy: Option<RemedyFile>,
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md; Workflow
+    // #386 SR-4a1): a Runtime before SR-4a1 refuses a file that names it, because the section
+    // denies unknown fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    day_boundary: Option<DayBoundaryFile>,
     // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md; SCH-M
     // ED-1): a Runtime before ED-1 refuses a file that names it, because the section denies
     // unknown fields; a file that does not name it keeps its revision.
@@ -252,6 +286,13 @@ pub struct InstanceSchedulingFile {
     // before v0.12.3 refuses a file that names it, because the entry denies unknown fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remedy: Option<InstanceRemedyFile>,
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md; Workflow
+    // #386 SR-4a1): the instance's own blackout list and day-boundary switch. A Runtime before
+    // SR-4a1 refuses a file that names either, because the entry denies unknown fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blackout: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    day_boundary: Option<DayBoundaryFile>,
     // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md; SCH-M
     // ED-1): the instance's own expected-duration keys. A Runtime before ED-1 refuses a file that
     // names them, because the entry denies unknown fields.
@@ -281,6 +322,8 @@ file_struct!(BlackoutFile {
     quiet_margin_ms,
     hard_quiet_ms,
     stop_in_flight_at_start,
+    // Interface anchor `actingd-config` revision 11 (Workflow #386 SR-4a1).
+    quiet_horizon,
 });
 file_struct!(FeatureLockFile {
     locked_valid_for_ms,
@@ -334,6 +377,11 @@ file_struct!(
 file_struct!(
     /// Workflow #411 B15 R3: an instance's own remedy choice rows.
     InstanceRemedyFile { choices }
+);
+file_struct!(
+    /// Workflow #386 SR-4a1 (SCH-M §3.2 D-6): the day-boundary switch, section-level or one
+    /// instance's.
+    DayBoundaryFile { quiet }
 );
 file_struct!(
     /// SCH-M ED-1 (§3.4 D-12): the expected-duration keys, section-level or one instance's.
@@ -402,6 +450,15 @@ const fn remedy_row(name: &'static str, value_type: ValueType, range: KeyRange) 
     KeyRow {
         since: "0.12.3",
         ..row(name, value_type, range, "B15-R4")
+    }
+}
+
+/// Workflow #386 SR-4a1: a key of SCH-M §3.2, parsed and checked from the release that joins
+/// `actingd-config` revision 11, read by SR-4a2.
+const fn sr4a1_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        since: "0.12.12",
+        ..row(name, value_type, range, "SR-4a2")
     }
 }
 
@@ -476,6 +533,12 @@ pub(crate) static ROWS: &[KeyRow] = &[
         KeyRange::Any,
         "SR-4b",
     ),
+    sr4a1_row(
+        BLACKOUT_QUIET_HORIZON,
+        ValueType::String,
+        KeyRange::Tokens(QUIET_HORIZON_TOKENS),
+    ),
+    sr4a1_row(DAY_BOUNDARY_QUIET, ValueType::Boolean, KeyRange::Any),
     row(
         FEATURE_LOCK_LOCKED_VALID_FOR_MS,
         ValueType::DurationMs,
@@ -628,25 +691,50 @@ pub struct CostCommitConfig {
     pub margin_ms: u64,
 }
 
-/// One host blackout entry (§5.1 b; `contracts/scheduling-blackout.md`, "Host blackouts"): the
-/// weekdays it starts on (1–7), the offset of its clock from UTC and its start and end minutes
-/// of day; an end at or before the start crosses midnight.
+/// When one blackout entry covers (`contracts/scheduling-blackout.md`, "Configuration
+/// blackouts"; Workflow #386 SR-4a1 adds `once`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostBlackout {
+pub enum BlackoutWindow {
+    /// §5.1 b: the weekdays it starts on (1–7), the offset of its clock from UTC and its start
+    /// and end minutes of day; an end at or before the start crosses midnight.
+    Weekly {
+        weekdays: Vec<u8>,
+        utc_offset_minutes: i16,
+        start_minute_of_day: u16,
+        end_minute_of_day: u16,
+    },
+    /// `[from_unix_ms, until_unix_ms)`, non-empty.
+    Once {
+        from_unix_ms: u64,
+        until_unix_ms: u64,
+    },
+}
+
+/// One entry of a blackout list: the host list or an instance's own (SCH-M §3.2 D-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlackoutEntry {
     pub id: String,
-    pub weekdays: Vec<u8>,
-    pub utc_offset_minutes: i16,
-    pub start_minute_of_day: u16,
-    pub end_minute_of_day: u16,
+    pub window: BlackoutWindow,
+}
+
+/// Workflow #386 SR-4a1 (SCH-M §3.2 D-4): the horizon of gradual quiet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuietHorizon {
+    /// The run's hard response deadline.
+    Deadline,
+    /// The run's expected duration E.
+    Expected,
 }
 
 /// The `blackout` keys (§5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlackoutConfig {
-    pub host: Vec<HostBlackout>,
+    pub host: Vec<BlackoutEntry>,
     pub quiet_margin_ms: u64,
     pub hard_quiet_ms: u64,
     pub stop_in_flight_at_start: bool,
+    /// Workflow #386 SR-4a1.
+    pub quiet_horizon: QuietHorizon,
 }
 
 /// The `feature_lock` keys (§7.2).
@@ -743,6 +831,8 @@ pub struct SchedulingConfig {
     pub pack_admission: PackAdmissionConfig,
     /// Workflow #411 B15 R3: the remedy keys, with the section's choice rows.
     pub remedy: RemedyConfig,
+    /// Workflow #386 SR-4a1 (SCH-M §3.2 D-6): the section's day-boundary switch.
+    pub day_boundary_quiet: bool,
     /// SCH-M ED-1: the section's expected-duration keys.
     pub expected_runtime: ExpectedRuntimeConfig,
 }
@@ -880,10 +970,13 @@ pub(crate) fn instance_random_delay(
     )
 }
 
-/// One host blackout entry as written: every member required, none unknown.
+/// One `weekly` blackout entry as written: every member required (but `kind`, absent or
+/// `weekly`), none unknown.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HostBlackoutFile {
+struct WeeklyBlackoutFile {
+    #[serde(default, rename = "kind")]
+    _kind: Option<Value>,
     id: Value,
     weekdays: Value,
     utc_offset_minutes: Value,
@@ -891,12 +984,33 @@ struct HostBlackoutFile {
     end_minute_of_day: Value,
 }
 
-/// The JSON pointer of a member of host blackout entry `index`, or of the entry itself.
-fn entry_pointer(index: usize, member: Option<&str>) -> String {
-    let entry = format!("/scheduling/blackout/host/{index}");
-    match member {
-        Some(member) => format!("{entry}/{member}"),
-        None => entry,
+/// One `once` blackout entry as written: every member required, none unknown.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OnceBlackoutFile {
+    #[serde(rename = "kind")]
+    _kind: Value,
+    id: Value,
+    from_unix_ms: Value,
+    until_unix_ms: Value,
+}
+
+/// Workflow #386 SR-4a1: where a blackout list lives: the key that holds it, the list it is
+/// (vocabulary `blackout_source`) and the JSON pointer of the list in the configuration file.
+pub(crate) struct BlackoutList<'a> {
+    pub(crate) config_key: &'a str,
+    pub(crate) source: BlackoutSource,
+    pub(crate) pointer: String,
+}
+
+impl BlackoutList<'_> {
+    /// The JSON pointer of a member of entry `index`, or of the entry itself.
+    fn entry_pointer(&self, index: usize, member: Option<&str>) -> String {
+        let entry = format!("{}/{index}", self.pointer);
+        match member {
+            Some(member) => format!("{entry}/{member}"),
+            None => entry,
+        }
     }
 }
 
@@ -905,64 +1019,187 @@ fn bounded(value: &Value, min: i64, max: i64) -> Option<i64> {
     value.as_i64().filter(|number| (min..=max).contains(number))
 }
 
-/// A usable host blackout id: one to 256 bytes, no control character.
+/// A usable blackout id: one to 256 bytes, no control character.
 fn blackout_id(value: &Value) -> Option<&str> {
     value.as_str().filter(|id| {
         (1..=MAX_BLACKOUT_ID_BYTES).contains(&id.len()) && !id.chars().any(char::is_control)
     })
 }
 
-/// The host blackout entries (`contracts/scheduling-blackout.md`, "Host blackouts"): each an
-/// object of `id`, `weekdays`, `utc_offset_minutes`, `start_minute_of_day` and
-/// `end_minute_of_day`, ids unique. A broken rule is `blackout_config_invalid` with the member
-/// it concerns.
-fn host_blackouts(items: Vec<Value>) -> Result<Vec<HostBlackout>, ConfigFailure> {
+/// The entries of one blackout list (`contracts/scheduling-blackout.md`, "Configuration
+/// blackouts"): at most 64; each a `weekly` entry (an object of `id`, `weekdays`,
+/// `utc_offset_minutes`, `start_minute_of_day` and `end_minute_of_day`, with `kind` absent or
+/// `weekly`) or a `once` entry (`kind` `once`, `id`, `from_unix_ms` and a later
+/// `until_unix_ms`); ids unique in the list. A broken rule is `blackout_config_invalid` with the
+/// member it concerns and the list it is in.
+pub(crate) fn blackout_entries(
+    list: &BlackoutList<'_>,
+    items: Vec<Value>,
+) -> Result<Vec<BlackoutEntry>, ConfigFailure> {
     let mut ids = BTreeSet::new();
-    let mut entries = Vec::with_capacity(items.len());
+    let mut entries = Vec::with_capacity(items.len().min(MAX_BLACKOUT_ENTRIES));
     for (index, item) in items.into_iter().enumerate() {
         let id = item.get("id").and_then(blackout_id).map(str::to_owned);
         let refused = |member: Option<&str>| {
-            ConfigFailure::blackout(BLACKOUT_HOST, entry_pointer(index, member), id.clone())
+            ConfigFailure::blackout(
+                list.config_key,
+                list.entry_pointer(index, member),
+                id.clone(),
+                list.source,
+            )
         };
-        let entry = serde_json::from_value::<HostBlackoutFile>(item).map_err(|_| refused(None))?;
-        let entry_id = match blackout_id(&entry.id) {
-            Some(entry_id) if ids.insert(entry_id.to_owned()) => entry_id.to_owned(),
-            _ => return Err(refused(Some("id"))),
+        if index >= MAX_BLACKOUT_ENTRIES {
+            return Err(refused(None));
+        }
+        let unique_id = |value: &Value| match blackout_id(value) {
+            Some(entry_id) if !ids.contains(entry_id) => Ok(entry_id.to_owned()),
+            _ => Err(refused(Some("id"))),
         };
-        let weekdays = entry
-            .weekdays
-            .as_array()
-            .filter(|days| (1..=MAX_WEEKDAY as usize).contains(&days.len()))
-            .and_then(|days| {
-                days.iter()
-                    .map(|day| bounded(day, 1, MAX_WEEKDAY).and_then(|day| u8::try_from(day).ok()))
-                    .collect::<Option<Vec<_>>>()
-            })
-            .filter(|days| days.iter().collect::<BTreeSet<_>>().len() == days.len())
-            .ok_or_else(|| refused(Some("weekdays")))?;
-        let utc_offset_minutes = bounded(
-            &entry.utc_offset_minutes,
-            -MAX_UTC_OFFSET_MINUTES,
-            MAX_UTC_OFFSET_MINUTES,
-        )
-        .and_then(|offset| i16::try_from(offset).ok())
-        .ok_or_else(|| refused(Some("utc_offset_minutes")))?;
-        let minute = |value: &Value, member: &str| {
-            bounded(value, 0, MAX_MINUTE_OF_DAY)
-                .and_then(|minute| u16::try_from(minute).ok())
-                .ok_or_else(|| refused(Some(member)))
+        let (entry_id, window) = match item.get(BLACKOUT_KIND) {
+            None => weekly_entry(&item, &unique_id, &refused)?,
+            Some(Value::String(kind)) if kind == BLACKOUT_WEEKLY => {
+                weekly_entry(&item, &unique_id, &refused)?
+            }
+            Some(Value::String(kind)) if kind == BLACKOUT_ONCE => {
+                once_entry(&item, &unique_id, &refused)?
+            }
+            Some(_) => return Err(refused(Some(BLACKOUT_KIND))),
         };
-        let start_minute_of_day = minute(&entry.start_minute_of_day, "start_minute_of_day")?;
-        let end_minute_of_day = minute(&entry.end_minute_of_day, "end_minute_of_day")?;
-        entries.push(HostBlackout {
+        ids.insert(entry_id.clone());
+        entries.push(BlackoutEntry {
             id: entry_id,
+            window,
+        });
+    }
+    Ok(entries)
+}
+
+/// One `weekly` entry: the shape and bounds of an activity window
+/// (`contracts/scheduling/v2/activity.schema.json`, `window`).
+fn weekly_entry(
+    item: &Value,
+    unique_id: &dyn Fn(&Value) -> Result<String, ConfigFailure>,
+    refused: &dyn Fn(Option<&str>) -> ConfigFailure,
+) -> Result<(String, BlackoutWindow), ConfigFailure> {
+    let entry =
+        serde_json::from_value::<WeeklyBlackoutFile>(item.clone()).map_err(|_| refused(None))?;
+    let entry_id = unique_id(&entry.id)?;
+    let weekdays = entry
+        .weekdays
+        .as_array()
+        .filter(|days| (1..=MAX_WEEKDAY as usize).contains(&days.len()))
+        .and_then(|days| {
+            days.iter()
+                .map(|day| bounded(day, 1, MAX_WEEKDAY).and_then(|day| u8::try_from(day).ok()))
+                .collect::<Option<Vec<_>>>()
+        })
+        .filter(|days| days.iter().collect::<BTreeSet<_>>().len() == days.len())
+        .ok_or_else(|| refused(Some("weekdays")))?;
+    let utc_offset_minutes = bounded(
+        &entry.utc_offset_minutes,
+        -MAX_UTC_OFFSET_MINUTES,
+        MAX_UTC_OFFSET_MINUTES,
+    )
+    .and_then(|offset| i16::try_from(offset).ok())
+    .ok_or_else(|| refused(Some("utc_offset_minutes")))?;
+    let minute = |value: &Value, member: &str| {
+        bounded(value, 0, MAX_MINUTE_OF_DAY)
+            .and_then(|minute| u16::try_from(minute).ok())
+            .ok_or_else(|| refused(Some(member)))
+    };
+    let start_minute_of_day = minute(&entry.start_minute_of_day, "start_minute_of_day")?;
+    let end_minute_of_day = minute(&entry.end_minute_of_day, "end_minute_of_day")?;
+    Ok((
+        entry_id,
+        BlackoutWindow::Weekly {
             weekdays,
             utc_offset_minutes,
             start_minute_of_day,
             end_minute_of_day,
-        });
+        },
+    ))
+}
+
+/// One `once` entry: `[from_unix_ms, until_unix_ms)`, half-open and non-empty.
+fn once_entry(
+    item: &Value,
+    unique_id: &dyn Fn(&Value) -> Result<String, ConfigFailure>,
+    refused: &dyn Fn(Option<&str>) -> ConfigFailure,
+) -> Result<(String, BlackoutWindow), ConfigFailure> {
+    let entry =
+        serde_json::from_value::<OnceBlackoutFile>(item.clone()).map_err(|_| refused(None))?;
+    let entry_id = unique_id(&entry.id)?;
+    let from_unix_ms = entry
+        .from_unix_ms
+        .as_u64()
+        .ok_or_else(|| refused(Some("from_unix_ms")))?;
+    let until_unix_ms = entry
+        .until_unix_ms
+        .as_u64()
+        .filter(|until| *until > from_unix_ms)
+        .ok_or_else(|| refused(Some("until_unix_ms")))?;
+    Ok((
+        entry_id,
+        BlackoutWindow::Once {
+            from_unix_ms,
+            until_unix_ms,
+        },
+    ))
+}
+
+/// Workflow #386 SR-4a1: `blackout.quiet_horizon` from `reader`.
+fn quiet_horizon(reader: &Reader<'_>) -> Result<QuietHorizon, ConfigFailure> {
+    match reader.scalar(BLACKOUT_QUIET_HORIZON)? {
+        FactScalar::String(token) if token == QUIET_HORIZON_TOKENS[0] => Ok(QuietHorizon::Deadline),
+        FactScalar::String(token) if token == QUIET_HORIZON_TOKENS[1] => Ok(QuietHorizon::Expected),
+        FactScalar::String(_) => Err(invalid(
+            BLACKOUT_QUIET_HORIZON,
+            ConfigValueProblem::OutOfRange,
+        )),
+        _ => Err(invalid(
+            BLACKOUT_QUIET_HORIZON,
+            ConfigValueProblem::WrongType,
+        )),
     }
-    Ok(entries)
+}
+
+/// Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the entries of the own blackout list of the instance
+/// whose registry id is `instance_id`, the `index`-th entry of the file's `instances`; none when
+/// the configuration carries no list for it.
+pub(crate) fn instance_blackouts(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+    index: usize,
+) -> Result<Vec<BlackoutEntry>, ConfigFailure> {
+    let key = instance_key(instance_id, INSTANCE_BLACKOUT);
+    if value(&key).is_none() {
+        return Ok(Vec::new());
+    }
+    let items = Reader { value }.list(&key)?;
+    blackout_entries(
+        &BlackoutList {
+            config_key: &key,
+            source: BlackoutSource::Instance,
+            pointer: format!("/instances/{index}/scheduling/blackout"),
+        },
+        items,
+    )
+}
+
+/// Workflow #386 SR-4a1 (SCH-M §3.2 D-6): the day-boundary switch in effect for the instance
+/// whose registry id is `instance_id`: its own key when the configuration carries it, otherwise
+/// the section's.
+pub(crate) fn day_boundary_quiet(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<bool, ConfigFailure> {
+    let own = instance_key(instance_id, DAY_BOUNDARY_QUIET);
+    let reader = Reader { value };
+    if value(&own).is_some() {
+        reader.boolean(&own)
+    } else {
+        reader.boolean(DAY_BOUNDARY_QUIET)
+    }
 }
 
 impl SchedulingConfig {
@@ -994,10 +1231,18 @@ impl SchedulingConfig {
                 margin_ms: reader.duration(COST_COMMIT_MARGIN_MS)?,
             },
             blackout: BlackoutConfig {
-                host: host_blackouts(reader.list(BLACKOUT_HOST)?)?,
+                host: blackout_entries(
+                    &BlackoutList {
+                        config_key: BLACKOUT_HOST,
+                        source: BlackoutSource::Host,
+                        pointer: "/scheduling/blackout/host".to_owned(),
+                    },
+                    reader.list(BLACKOUT_HOST)?,
+                )?,
                 quiet_margin_ms: reader.duration(BLACKOUT_QUIET_MARGIN_MS)?,
                 hard_quiet_ms: reader.duration(BLACKOUT_HARD_QUIET_MS)?,
                 stop_in_flight_at_start: reader.boolean(BLACKOUT_STOP_IN_FLIGHT_AT_START)?,
+                quiet_horizon: quiet_horizon(&reader)?,
             },
             feature_lock: FeatureLockConfig {
                 locked_valid_for_ms: reader.duration(FEATURE_LOCK_LOCKED_VALID_FOR_MS)?,
@@ -1015,6 +1260,7 @@ impl SchedulingConfig {
             fact_refresh: fact_refresh_from(&reader)?,
             pack_admission: pack_admission_from(&reader)?,
             remedy: remedy_from(&reader)?,
+            day_boundary_quiet: reader.boolean(DAY_BOUNDARY_QUIET)?,
             expected_runtime: expected_runtime_from(
                 &reader,
                 [

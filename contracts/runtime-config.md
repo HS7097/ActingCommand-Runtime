@@ -352,6 +352,8 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.blackout.host` | list of host blackout entries | `[]` |
 | `scheduling.blackout.quiet_margin_ms`, `.hard_quiet_ms` | milliseconds | `60000`, `0` |
 | `scheduling.blackout.stop_in_flight_at_start` | boolean | `true` |
+| `scheduling.blackout.quiet_horizon` (Workflow #386 SR-4a1) | `deadline` \| `expected` | `deadline` |
+| `scheduling.day_boundary.quiet` (Workflow #386 SR-4a1) | boolean | `true` |
 | `scheduling.feature_lock.locked_valid_for_ms` | milliseconds | `86400000` |
 | `scheduling.feature_lock.codes` | list of codes, as `rerun.condition_codes` | `["contained_task_feature_locked"]` |
 | `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
@@ -375,10 +377,12 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
-one `code_retired`; a host blackout entry that breaks a rule of
-[scheduling-blackout.md](scheduling-blackout.md) refuses a start and `check-config` with
-`blackout_config_invalid` (`field`, and `blackout_id` when the entry has a usable id: one to 256
-bytes, no control character) and an instruction with `config_value_invalid` (`section_check`);
+one `code_retired`; a blackout entry (of the host list or, Workflow #386 SR-4a1, of an
+instance's own list) that breaks a rule of [scheduling-blackout.md](scheduling-blackout.md)
+("Configuration blackouts": `weekly` and `once` entries, at most 64 per list) refuses a start and
+`check-config` with `blackout_config_invalid` (`field`, `blackout_source` naming the list, and
+`blackout_id` when the entry has a usable id: one to 256 bytes, no control character) and an
+instruction with `config_value_invalid` (`section_check`);
 `random_delay.min_ms` above `random_delay.max_ms` is `config_value_invalid` (`section_check`) for
 `min_ms`.
 
@@ -394,6 +398,16 @@ dispatches to it ([scheduling-blackout.md](scheduling-blackout.md), "Order of th
 position 9). Every member is settable while the Runtime runs; a change applies to the draws made
 after it (a draw already made keeps its delay), and `enabled = false` releases the instance's
 waiting tasks at the next evaluation.
+
+**Blackouts and the day boundary per instance (Workflow #386 SR-4a1, SCH-M §3.2 D-1, D-6;
+`actingd-config` revision 11).** `instance.<instance id>.scheduling.blackout`, in the file the
+entry's `scheduling.blackout` member, is the instance's own blackout list: no default (an instance
+whose entry names none has no entries of its own and reports no row), settable once the entry
+names one, its entries checked as the host list's are.
+`instance.<instance id>.scheduling.day_boundary.quiet`, in the file the entry's
+`scheduling.day_boundary.quiet`, settable, default `section:scheduling.day_boundary.quiet`. Accessors `EffectiveConfig::instance_blackouts` and
+`EffectiveConfig::day_boundary_quiet`; SR-4a2 reads them, and `scheduling.blackout.quiet_horizon`,
+at every policy cycle.
 
 **Expected duration (SCH-M slice ED-1, frozen model v1.0 §3.4; `actingd-config` revision
 11).** `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms` set the expected duration E
@@ -621,11 +635,22 @@ a file that does not name it keeps its revision.
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
 | `emulator_control.restart_exit_wait_ms` | milliseconds `1000..=300000`, the longest wait for the old VM to exit, on the Runtime clock | `60000` | yes |
+| `emulator_control.watch_enabled` | boolean: whether the emulator watch polls the emulator status of the discovery-bound instances (emu-watch R2) | `true` | yes |
+| `emulator_control.watch_interval_ms` | milliseconds `5000..=3600000`, the time between two polls, on the Runtime clock | `60000` | yes |
+| `emulator_control.restart_attempts` | integer `1..=100`, the most starts of one configured instance's stopped emulator by the watch within `restart_window_ms` (emu-watch R3) | `3` | yes |
+| `emulator_control.restart_window_ms` | milliseconds `60000..=86400000`, the window `restart_attempts` counts in | `1800000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
-`wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
-a restart adds the range's maximum (745 s).
+`wrong_type` (`watch_enabled`: no boolean). The rows are those of
+`config.parameters.emulator_control`. The client's receipt wait of a restart adds the range's
+maximum of `restart_exit_wait_ms` (745 s).
+
+emu-watch (Alice's ruling 35; [emulator-control.md](emulator-control.md), "Emulator watch"): the
+watch reads its four keys at every tick, so an instruction changes them while the Runtime runs;
+`watch_enabled` false stops the polls (and so the watch's restarts) until it is true again.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
+keys; a file that names none of them keeps its revision.
 
 ## The `watchdog` section (#411 A66)
 
@@ -684,6 +709,51 @@ A value outside its range is `config_value_invalid` (`out_of_range`, with `range
 intervals stay where they were recorded (`EffectiveTaskTiming.capture_interval`, each operation's
 `interval`); a pause the back-off lengthened is the span of its wait boundary
 (`page_recognition_wait`, `postcondition_wait`).
+
+## The `install` section (Workflow #421 INST-1)
+
+Workflow #421 ([install-cli.md](install-cli.md)): the tunables of `actingctl install`, the
+installer of a single-location root (Alice 10-09: 「绝不硬编码」). actingd parses and checks the
+section with the rest of the file (its rows are those of `config.parameters.install`) but never
+uses it. `actingctl install` reads it from the root's configuration file at every command,
+through this crate (`install::settings`), never from the configuration in effect, so no key is
+settable. `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds
+the section; a file that does not name it keeps its revision. The section and each of its
+objects deny unknown members.
+
+| Key | Type | Default (`actingd.defaults.json`) | Read by |
+|---|---|---|---|
+| `install.lock_wait_ms` | milliseconds `1000..=600000` | `60000` | the wait for `install\writer.lock` |
+| `install.stop.drain_timeout_ms` | milliseconds `1000..=3600000` | `300000` | the hold's drain (INST-2) |
+| `install.stop.shutdown_wait_ms` | milliseconds `10000..=600000` | `60000` | the close (INST-2) |
+| `install.start.ready_timeout_ms` | milliseconds `60000..=3600000` | `900000` | the installer start's readiness (INST-2) |
+| `install.start.attempts` | integer `1..=5` | `2` | start attempts after an error terminal outcome (INST-2) |
+| `install.hold_after_start` | boolean | `true` | a composite update ends held (INST-2) |
+| `install.hot.idle_wait_ms` | milliseconds `0..=3600000` | `600000` | hot placement's idle wait (INST-4) |
+| `install.rollback.open_margin_ms` | milliseconds `0..=600000` | `20000` | the rollback gate's open-time part |
+| `install.guard.min_available_memory_mb` | integer `0..=1048576` | `10000` | guard `memory` (INST-2) |
+| `install.guard.before_next_start_ms` | milliseconds `0..=86400000` | `900000` | guard `schedule_near` (INST-2) |
+| `install.guard.blocked_windows` | list of windows (below) | `[]` | guard `blocked_window` (INST-2) |
+| `install.guard.adb_timeout_ms` | milliseconds `1000..=60000` | `15000` | guard `adb` (INST-2) |
+
+A window of `install.guard.blocked_windows` is one object, in host local time, `[from, to)`,
+wrapping past the end of its day or hour when `to` is less than `from`:
+
+- `{"kind": "daily", "from": "HH:MM", "to": "HH:MM"}`;
+- `{"kind": "weekly", "weekdays": [1..7], "from": "HH:MM", "to": "HH:MM"}`: the days the window
+  starts on, 1 Monday to 7 Sunday, at least one, each once;
+- `{"kind": "hourly", "from": <minute>, "to": <minute>}`: minutes `0..=59` of every hour.
+
+`HH:MM` is `00:00` to `23:59`; `from` equals `to` in no window. No slot and no game is built
+in: the default is empty, and a restart window or an hourly quiet time is data the person writes
+into a root's configuration (#386, Alice 10-24).
+
+A value outside its type or range is `config_value_invalid` (`out_of_range` with `range_min` and
+`range_max`, or `wrong_type`) at actingd's start, in `check-config` and for every `actingctl
+install` command that reads the section; a window that breaks the rules above, and an unknown
+member of the section or of one of its objects for `actingctl install`, is `config_value_invalid`
+(`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
+unknown member of the file (`config_decode_failed`).
 
 ## Facts
 

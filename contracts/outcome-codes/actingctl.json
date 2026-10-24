@@ -2951,6 +2951,389 @@
       "description": "actingctl capability-gap or ac_capability_gap could not append the gap to the user's local log (path); the failure is linked. Without path, neither LOCALAPPDATA nor APPDATA names a folder for the log (Workflow #410 item 6).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "install_command_done": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "installation_changed": "optional",
+        "install_operation_id": "optional",
+        "commit_sha": "optional",
+        "tag": "optional",
+        "plan_id": "optional",
+        "count": "optional",
+        "game": "optional",
+        "alias": "optional",
+        "path": "optional",
+        "pid": "optional",
+        "owner_epoch": "optional",
+        "log": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "An actingctl install command did what was asked (contracts/install-cli.md); operation names the command. A mutating command sets installation_changed: false when there was nothing to do (a build already kept and verified, a root already adopted, a live build already equal to the target; the result's unchanged is true), true when it changed the root, with install_operation_id naming its journal. By command: commit_sha (and tag) of the build verified, staged, adopted, planned or applied; plan_id of a plan; count of the instances a release-hold resumed or of the kept leftovers; game of a pack command; alias of an instance command; path of the configuration candidate; pid, owner_epoch and log of a start. resume answers it with the resumed operation's own result as its related link. A caveat of the work is an install_caveat_noted note link. Read-only commands (release verify, every plan, status, guards, config show and diff, leftovers) write nothing. Exit 0.",
+      "common_causes": "The command succeeded.",
+      "handling": "None. A plan's plan_id is what its apply takes; an operation's install_operation_id is what install status --operation, resume and undo take."
+    },
+    "install_caveat_noted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "install_caveat": "required",
+        "commit_sha": "optional",
+        "count": "optional",
+        "game": "optional",
+        "package_id": "optional",
+        "config_key": "optional",
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "An actingctl install command did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. As a note link under install_command_done it qualifies a success: mcp_clients_on_previous_build (count) after an update or rollback, pack_declaration_unknown (game) in a plan, restart_required after a configuration commit while the Runtime runs, post_check_mismatch (count) after a start, config_overridden_by_instruction (config_key), pack_restart_needed (package_id), pack_full_check_skipped (path). As the top it is the command's own result and carries install_command_done's values: release verify without a release-facts file (release_unconfirmed, commit_sha). Exit 0.",
+      "common_causes": "MCP servers running during an update; an adopted root whose packs declare no interfaces; a release folder checked without its facts; a configuration committed while the Runtime runs; a post-check after a start that did not match.",
+      "handling": "Act on install_caveat when it matters: reconnect the MCP clients, check the release against its published facts, restart the Runtime when the person chooses, or read the post-check. The command itself needs nothing more."
+    },
+    "watchdog_installer_unfinished": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "install_operation_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "Watchdog decision (row 7a''): a start would be considered, but install\\current.json names the unfinished installer operation install_operation_id. The watchdog starts nothing; actingctl start and restart refuse the same way. A current.json that cannot be read or names no operation is this decision too, without install_operation_id: the watchdog never starts a root whose installer state it cannot read.",
+      "common_causes": "An installer died or failed in the middle of an operation; its writer lock was released by the OS.",
+      "handling": "Run actingctl install resume or install undo with the operation id."
+    },
+    "install_command_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "install_refusal": "required",
+        "release_checks": "optional",
+        "rollback_gate_parts": "optional",
+        "install_guards": "optional",
+        "ledger_sequence": "optional",
+        "plan_id": "optional",
+        "install_operation_id": "optional",
+        "commit_sha": "optional",
+        "path": "optional",
+        "pid": "optional",
+        "count": "optional",
+        "files": "optional",
+        "game": "optional",
+        "package_id": "optional",
+        "aliases": "optional",
+        "alias": "optional",
+        "config_key": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "An actingctl install command refused, or failed without leaving an unfinished operation; operation names the command and install_refusal says why, with that reason's values: release_checks (release_check_failed: every failed check; the result's failures name each with its file and digests), rollback_gate_parts and ledger_sequence (rollback_gate_failed: the failed parts, and the first sequence of a page the target's reader refused), install_guards (guard_failed), plan_id (plan_changed), install_operation_id (operation_unfinished), count and files (live_build_modified), path and pid (running_image_blocks; path also for foreign_part, layout_ab_unsupported and the file a reason concerns), commit_sha (a build), game, package_id, alias, aliases and config_key (the configuration, pack and instance reasons). The cause is the caused_by link: check-config's outcome, the start path's code, a child process's failure, an OS error. Nothing was changed but what the reason says: instances_not_idle keeps the instances paused, and runtime_start_failed after a timeout leaves the process running. A journalled operation whose own checks refuse (a staged release's extracted files, an adopt's copy) is finished with this refusal and keeps its part folder as .abandoned-<ms>. Exit 1.",
+      "common_causes": "A release folder that does not verify; a root that is not adopted, not single-location or an A/B installation; another installer operation unfinished; a running Runtime or image; a changed live file; a configuration the target build refuses; a failed rollback gate or guard; a plan that changed since it was made.",
+      "handling": "Read install_refusal and its values, fix the cause and run the command again. For operation_unfinished run install resume or install undo first; after rollback_gate_failed only a forward fix remains."
+    },
+    "install_operation_interrupted": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "install_operation_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A step of the installer operation install_operation_id failed after it had changed the disk; operation names the journalled command (release stage, adopt, update, rollback and the like). The journal names the step; until install resume or install undo runs, the root cannot run normally (a half-swapped program tree), and the watchdog stands aside (watchdog_installer_unfinished). The step's own failure is the caused_by link. Exit 2.",
+      "common_causes": "A file system error, a full disk, a process holding a file, or the installer killed in the middle of an operation.",
+      "handling": "Fix the cause, then run actingctl install resume --operation <id> to finish the operation or install undo --operation <id> to reverse it."
+    }
+  },
+  "locations": {
+    "install_release_verify": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install release verify (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_release_stage": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install release stage (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_adopt": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install adopt (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_update_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install update plan (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_update_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install update apply (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_rollback_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install rollback plan (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_rollback_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install rollback apply (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_undo": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install undo (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_resume": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install resume (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_status": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install status (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_leftovers": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install leftovers (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_stop": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install stop (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_start": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install start (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_release_hold": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install release-hold (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_guards_report": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install guards (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_config_show": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config show (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_diff": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config diff (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_set": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config set (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_bind": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config bind (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_policy": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config policy (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_lab_options": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config lab-options (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_commit_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config commit plan (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_commit_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config commit apply (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_discard": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config discard (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_restore": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config restore (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_instance_add": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install instance add (Workflow #421 INST-5; contracts/install-cli.md)."
+    },
+    "install_instance_remove": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install instance remove (Workflow #421 INST-5; contracts/install-cli.md)."
+    },
+    "install_pack_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack plan (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_place": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack place (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_remove_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack remove plan (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_remove_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack remove apply (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_restore": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack restore (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_new": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install new (Workflow #421 INST-6; contracts/install-cli.md)."
     }
   }
 }
