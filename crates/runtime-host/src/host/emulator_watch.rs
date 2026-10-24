@@ -17,17 +17,21 @@
 //!   The reading replaces the instance's `emulator_state` (`on` when the emulator runs with
 //!   Android and an ADB port, as a discovery reads it). When it differs from the reading the
 //!   Runtime held, one `device_state_observed` record `emulator_watch_state_changed` (info) under
-//!   the instance. A failed read is `emulator_watch_read_failed` (warning), once per failing
+//!   the instance. A failed read is `emulator_state_read_failed` (warning), once per failing
 //!   streak; the reading stays.
 //! - **Restarts (R3).** A configured instance (`start_emulator`) whose read shows no emulator
 //!   process, whose key no claim holds and on which no autostart or emulator control claim waits
-//!   (never two starts at once), is started again, paused or not: `emulator_watch_restart_requested`
-//!   (info), then one autostart claim marked `watch` (`emulator_autostart`), whose Start and
-//!   result are recorded and reported as every configured start's. At most
+//!   (never two starts at once), is started again, paused or not: `emulator_autostart_queued`
+//!   (info, `count` 1), then one autostart claim marked `watch` (`emulator_autostart`), whose
+//!   Start and result are recorded and reported as every configured start's. At most
 //!   `emulator_control.restart_attempts` restarts of one instance within
 //!   `emulator_control.restart_window_ms`; once they are used up, `emulator_watch_restart_exhausted`
 //!   (warning) once, and no restart until the oldest leaves the window or a person's emulator
-//!   control of the instance clears the count.
+//!   control of the instance clears the count. The stuck-recovery ladder adds none: direction ①
+//!   does not count an autostart claim's records (`recovery_ladder`).
+//! - **Codes (#420 S4).** The watch's own codes are the state change and the used-up bound; the
+//!   read failure, the restart's enqueue and a failed thread spawn are existing codes
+//!   (`emulator_state_read_failed`, `emulator_autostart_queued`, `runtime_monitor_spawn_failed`).
 //! - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
 //!   started. Nothing here stops or restarts a running emulator, and nothing names a device: an
 //!   instance is its alias.
@@ -35,7 +39,7 @@
 //! Each record is also a report line, which actingd writes as a daemon line.
 
 use super::*;
-use crate::codes::{EmulatorWatchCode, EmulatorWatchLocation};
+use crate::codes::{EmulatorWatchCode, EmulatorWatchLocation, HostCode};
 use actingcommand_contract::EmulatorRunningState;
 use actingcommand_runtime_config::EmulatorWatchConfig;
 
@@ -110,10 +114,7 @@ pub(super) fn start(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
     let first_poll_ms = shared
         .monotonic_ms()?
         .saturating_add(shared.emulator_watch_settings()?.interval_ms);
-    let mut watch = lock(
-        &shared.emulator_watch,
-        EmulatorWatchLocation::StartEmulatorWatch,
-    )?;
+    let mut watch = lock(&shared.emulator_watch, EmulatorWatchLocation::Watch)?;
     if watch.thread.is_some() {
         return Ok(());
     }
@@ -123,8 +124,8 @@ pub(super) fn start(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
         .spawn(move || watch_loop(&watch_shared, first_poll_ms))
         .map_err(|_| {
             RuntimeHostError::fatal(
-                EmulatorWatchCode::SpawnFailed,
-                EmulatorWatchLocation::StartEmulatorWatch,
+                HostCode::RuntimeMonitorSpawnFailed,
+                EmulatorWatchLocation::Watch,
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
@@ -134,10 +135,10 @@ pub(super) fn start(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
 
 /// Joins the watch, which ends with the shutdown request.
 pub(super) fn stop(shared: &HostShared) -> RuntimeHostResult<()> {
-    let thread = lock(&shared.emulator_watch, EmulatorWatchLocation::PollEmulators)?
+    let thread = lock(&shared.emulator_watch, EmulatorWatchLocation::Watch)?
         .thread
         .take();
-    join_runtime_thread(thread, EmulatorWatchLocation::PollEmulators)
+    join_runtime_thread(thread, EmulatorWatchLocation::Watch)
 }
 
 /// The watch: the due polls until the Runtime stops. Only a failure the Runtime does not survive
@@ -184,20 +185,17 @@ impl HostShared {
     /// returned.
     fn poll_emulators(&self, settings: &EmulatorWatchConfig, now_ms: u64) -> RuntimeHostResult<()> {
         let configured = self.emulator_autostart()?.to_vec();
-        let watched = lock(
-            &self.registered_instances,
-            EmulatorWatchLocation::PollEmulators,
-        )?
-        .values()
-        .filter(|instance| {
-            instance
-                .adb_endpoint
-                .as_ref()
-                .and_then(ResolvedInstanceEndpoint::discovered_binding)
-                .is_some()
-        })
-        .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
-        .collect::<Vec<_>>();
+        let watched = lock(&self.registered_instances, EmulatorWatchLocation::Watch)?
+            .values()
+            .filter(|instance| {
+                instance
+                    .adb_endpoint
+                    .as_ref()
+                    .and_then(ResolvedInstanceEndpoint::discovered_binding)
+                    .is_some()
+            })
+            .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+            .collect::<Vec<_>>();
         for (instance_id, alias) in watched {
             if self.fatal.is_shutdown_requested() {
                 break;
@@ -218,7 +216,7 @@ impl HostShared {
         }
         #[cfg(test)]
         {
-            lock(&self.emulator_watch, EmulatorWatchLocation::PollEmulators)?.polls += 1;
+            lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?.polls += 1;
             self.emulator_watch_polled.notify_all();
         }
         Ok(())
@@ -262,13 +260,13 @@ impl HostShared {
             Ok(guard) => guard,
             Err(TryLockError::WouldBlock) => return Ok(None),
             Err(TryLockError::Poisoned(_)) => {
-                return Err(lock_poison_error(EmulatorWatchLocation::PollEmulators));
+                return Err(lock_poison_error(EmulatorWatchLocation::Watch));
             }
         };
         let state = match self.execution()?.read_emulator_instance_state(alias) {
             Ok(state) => state,
             Err(error) => {
-                let first = lock(&self.emulator_watch, EmulatorWatchLocation::PollEmulators)?
+                let first = lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?
                     .unreadable
                     .insert(instance_id);
                 if first {
@@ -276,7 +274,7 @@ impl HostShared {
                         instance_id,
                         self.emulator_watch_read_failure(
                             alias,
-                            EmulatorWatchLocation::PollEmulators,
+                            EmulatorWatchLocation::Watch,
                             error.to_string(),
                         ),
                     )?;
@@ -284,16 +282,13 @@ impl HostShared {
                 return Ok(None);
             }
         };
-        lock(&self.emulator_watch, EmulatorWatchLocation::PollEmulators)?
+        lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?
             .unreadable
             .remove(&instance_id);
         let running = state.running();
         let observed_at_unix_ms = self.clock.sample()?.unix_ms;
         let changed = {
-            let mut registry = lock(
-                &self.registered_instances,
-                EmulatorWatchLocation::PollEmulators,
-            )?;
+            let mut registry = lock(&self.registered_instances, EmulatorWatchLocation::Watch)?;
             let Some(record) = registry.get_mut(&instance_id) else {
                 return Ok(None);
             };
@@ -326,7 +321,7 @@ impl HostShared {
         now_ms: u64,
     ) -> RuntimeHostResult<()> {
         let busy = {
-            let scheduler = lock(&self.scheduler, EmulatorWatchLocation::PollEmulators)?;
+            let scheduler = lock(&self.scheduler, EmulatorWatchLocation::Watch)?;
             scheduler.active_lease(instance_id).is_some()
                 || !scheduler
                     .queued_of_kind(instance_id, ClaimKind::Autostart)
@@ -338,8 +333,11 @@ impl HostShared {
         if busy {
             return Ok(());
         }
-        let budget = lock(&self.emulator_watch, EmulatorWatchLocation::PollEmulators)?
-            .restart_budget(instance_id, now_ms, settings);
+        let budget = lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?.restart_budget(
+            instance_id,
+            now_ms,
+            settings,
+        );
         match budget {
             RestartBudget::UsedUp {
                 attempts,
@@ -361,7 +359,8 @@ impl HostShared {
             RestartBudget::Allowed { attempts } => {
                 self.record_emulator_watch(
                     instance_id,
-                    Outcome::new(EmulatorWatchCode::RestartRequested)
+                    Outcome::new(HostCode::EmulatorAutostartQueued)
+                        .count(1_usize)
                         .alias(alias)
                         .attempts(attempts)
                         .limit_count(settings.restart_attempts),
@@ -373,13 +372,13 @@ impl HostShared {
 
     /// R3: a person's emulator control of `instance_id` clears the restarts the watch made there.
     pub(super) fn forget_watch_restarts(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
-        let mut watch = lock(&self.emulator_watch, EmulatorWatchLocation::PollEmulators)?;
+        let mut watch = lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?;
         watch.restarts.remove(&instance_id);
         watch.exhausted.remove(&instance_id);
         Ok(())
     }
 
-    /// `emulator_watch_read_failed` (warning) of a status read of `alias` at `operation`, its
+    /// `emulator_state_read_failed` (warning) of a status read of `alias` at `operation`, its
     /// failure text (`detail`) the foreign cause.
     pub(super) fn emulator_watch_read_failure(
         &self,
@@ -388,7 +387,7 @@ impl HostShared {
         detail: String,
     ) -> Outcome {
         RuntimeHostError::request(
-            EmulatorWatchCode::ReadFailed,
+            HostCode::EmulatorStateReadFailed,
             operation,
             RuntimeErrorCode::BackendOperationFailed,
         )

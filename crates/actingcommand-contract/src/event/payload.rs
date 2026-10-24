@@ -1947,8 +1947,8 @@ pub enum RuntimeLifecyclePhase {
     /// answered an unknown shape, once per failing streak of the sampling). No value names a
     /// device serial: a handset is its label `handset:<alias>`. emu-watch: the emulator watch's
     /// observations of an emulator instance too, linked to its instance: `outcome` is
-    /// `emulator_watch_state_changed` (info), `emulator_watch_read_failed` (warning, once per
-    /// failing streak), `emulator_watch_restart_requested` (info) or
+    /// `emulator_watch_state_changed` (info), `emulator_state_read_failed` (warning, once per
+    /// failing streak), `emulator_autostart_queued` (info; the watch enqueued a restart) or
     /// `emulator_watch_restart_exhausted` (warning); an emulator instance is its `alias`.
     DeviceStateObserved {
         outcome: Outcome,

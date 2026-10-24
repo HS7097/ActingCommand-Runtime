@@ -591,10 +591,13 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   instance a ladder climbs on (its own work); while `rules.direct_runs` is `exempt`, every record
   committed while manual work holds the instance's key, the set a resource fence treats as manual
   (a direct task run, a client lease, an application or input command, a Lab operation), under
-  `trigger` they count; and codes the catalog does not list. An emulator control command is not
-  manual work, so its records count, and the connection preparation after an emulator `start` or
-  `restart` still starts its ladder as above (coordinator ruling P1). The count takes no lock but
-  its own: it reads the holder kind the scheduler last reported for the instance's key (the
+  `trigger` they count; every record committed while an autostart claim holds the instance's
+  key (a configured start, the daemon start's or the emulator watch's: emu-watch, Alice's ruling
+  35, whose own bound limits those starts, R3); and codes the catalog does not list. An emulator
+  control command is not manual work, so its records count, and the connection preparation
+  after an emulator `start` or `restart` still starts its ladder as above (coordinator ruling
+  P1). The count takes no lock but its own: it reads the holder kind the scheduler last
+  reported for the instance's key (the
   scheduler reports it under its own lock at every grant, transfer, release, expiry and
   rollback), and it records nothing and admits nothing on the write path. The lease sweep admits
   each burst's ladder (trigger `stage: stability_warnings`, the burst's last code, no run, task
@@ -1139,17 +1142,17 @@ the configured starts; the watch ends with the host.
   discovery reads it, `off` otherwise). When it differs from the reading the Runtime held, a
   `runtime.lifecycle_observed` record (phase `device_state_observed`) under the instance carries
   `emulator_watch_state_changed` (info; `alias`, `process_started`, `android_started`,
-  `adb_port_present`). A read that fails is `emulator_watch_read_failed` (warning, the read's
-  failure text its foreign cause), once per failing streak; the reading stays.
+  `adb_port_present`). A read that fails is `emulator_state_read_failed` (warning; `alias`, the
+  read's failure text its foreign cause), once per failing streak; the reading stays.
 - **Restarts (R3).** An instance configured with `start_emulator` whose read shows no emulator
   process, whose key no claim holds and on which no autostart or emulator control claim waits
   (never two starts for one instance at once), is started again, paused or not:
-  `emulator_watch_restart_requested` (info; `alias`, `attempts`, `limit_count`), then one
+  `emulator_autostart_queued` (info; `count` 1, `alias`, `attempts`, `limit_count`), then one
   autostart claim marked `watch`, held as a daemon start's claim ("Configured start at daemon
   start"), except that it does not ask whether the binding is pending (an emulator that stopped
   behind the Runtime's back is still bound): with the turn, just before the Start, it reads the
   emulator status once more and ends as `emulator_autostart_skipped` when the emulator process
-  runs, or as `emulator_autostart_failed` (caused by `emulator_watch_read_failed`) when the read
+  runs, or as `emulator_autostart_failed` (caused by `emulator_state_read_failed`) when the read
   fails. Its Start and the result are recorded as every configured start's (`command.received`,
   `command.validated` or `command.rejected` + `runtime.failed`, the report lines). Within
   `emulator_control.restart_window_ms` (default 30 min) the watch starts one instance at most
@@ -1157,13 +1160,20 @@ the configured starts; the watch ends with the host.
   once they are used up, `emulator_watch_restart_exhausted` (warning; `alias`, `attempts`,
   `limit_count`, `retry_after_ms`) is recorded once, and the instance is not started again until
   the oldest of those restarts leaves the window or a person's emulator control of the instance
-  (`actingctl emulator`, `ac_emulator`) clears the count.
+  (`actingctl emulator`, `ac_emulator`) clears the count. Nothing else starts it meanwhile: the
+  stuck-recovery ladder's direction ① counts no record committed while an autostart claim holds
+  the instance's key ("Stuck-recovery ladder", "Triggers"), so the watch's failed Starts never
+  admit a ladder whose emulator-restart rung would start the emulator beyond the bound.
 - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
   started. The watch never stops or restarts a running emulator, and no record names a device:
   an emulator instance is its `alias`.
 
 Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
-keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)).
+keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes
+(#420 S4): two of its own, `emulator_watch_state_changed` and `emulator_watch_restart_exhausted`;
+the rest are existing codes (`emulator_state_read_failed`, `emulator_autostart_queued`, and
+`runtime_monitor_spawn_failed` when its thread cannot be spawned), and its operation is the
+location `emulator_watch`.
 
 ## Client and CLI
 

@@ -2306,12 +2306,12 @@ impl RuntimeHost {
     /// `emulator_control.restart_attempts` per `emulator_control.restart_window_ms`, paused or
     /// not. actingd calls it once, right after `enqueue_emulator_autostart`; a second call does
     /// nothing. It does not block; the watch ends with the host. Only a failure the Runtime does
-    /// not survive is the error (`emulator_watch_spawn_failed`).
+    /// not survive is the error (`runtime_monitor_spawn_failed`).
     pub fn start_emulator_watch(&self) -> RuntimeHostResult<()> {
         let shared = self.shared.as_ref().ok_or_else(|| {
             RuntimeHostError::fatal(
                 HostCode::RuntimeHostClosed,
-                crate::codes::EmulatorWatchLocation::StartEmulatorWatch,
+                crate::codes::EmulatorWatchLocation::Watch,
                 RuntimeErrorCode::RuntimeUnavailable,
             )
         })?;

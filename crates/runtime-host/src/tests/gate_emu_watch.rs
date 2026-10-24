@@ -221,7 +221,8 @@ fn emu_w_a_a_paused_instance_is_started_and_its_startup_package_waits_for_the_re
 
 // (b) R2, R3: a poll finds the configured instance's emulator stopped while the Runtime still held
 // it bound (it stopped behind the Runtime's back): the change is recorded and the emulator is
-// started once on one autostart claim. A second poll during that Start starts nothing.
+// started once on one autostart claim, its enqueue recorded as `emulator_autostart_queued`. A
+// second poll during that Start starts nothing.
 #[test]
 fn emu_w_b_a_polled_stopped_instance_is_started_once_and_recorded() {
     let root = TempDir::new().expect("tempdir");
@@ -254,7 +255,7 @@ fn emu_w_b_a_polled_stopped_instance_is_started_once_and_recorded() {
     let lines = await_reports(&host, |lines| {
         reported(lines, "emulator_autostart_started") == 1
     });
-    assert_eq!(reported(&lines, "emulator_watch_restart_requested"), 1);
+    assert_eq!(reported(&lines, "emulator_autostart_queued"), 1);
     assert_eq!(control_starts(&state), 1, "one Start");
     let changed = watch_records(&host, instance, "emulator_watch_state_changed");
     assert_eq!(changed.len(), 1, "{changed:?}");
@@ -263,8 +264,9 @@ fn emu_w_b_a_polled_stopped_instance_is_started_once_and_recorded() {
         changed[0].value("process_started"),
         Some(&serde_json::json!(false))
     );
-    let requested = watch_records(&host, instance, "emulator_watch_restart_requested");
+    let requested = watch_records(&host, instance, "emulator_autostart_queued");
     assert_eq!(requested.len(), 1, "{requested:?}");
+    assert_eq!(requested[0].value("count"), Some(&serde_json::json!(1)));
     assert_eq!(requested[0].value("alias"), Some(&serde_json::json!(FIRST)));
     assert_eq!(requested[0].value("attempts"), Some(&serde_json::json!(1)));
     assert_eq!(
@@ -295,7 +297,9 @@ fn emu_w_b_a_polled_stopped_instance_is_started_once_and_recorded() {
 }
 
 // (c) R3: three restarts whose Starts fail within 30 min use the bound up: the next poll records
-// the warning once and starts nothing, until the first restart leaves the window.
+// the warning once and starts nothing, until the first restart leaves the window. Nothing else
+// starts the emulator meanwhile: the three failed Starts admit no stuck-recovery ladder (its
+// emulator-restart rung would be a fourth Start in the window).
 #[test]
 fn emu_w_c_three_failed_starts_in_the_window_warn_and_hold_until_it_passes() {
     let root = TempDir::new().expect("tempdir");
@@ -354,7 +358,7 @@ fn emu_w_c_three_failed_starts_in_the_window_warn_and_hold_until_it_passes() {
         1
     );
     assert_eq!(
-        watch_records(&host, instance, "emulator_watch_restart_requested").len(),
+        watch_records(&host, instance, "emulator_autostart_queued").len(),
         3
     );
     assert_eq!(
@@ -371,7 +375,7 @@ fn emu_w_c_three_failed_starts_in_the_window_warn_and_hold_until_it_passes() {
         reported(lines, "emulator_autostart_failed") == 4
     });
     assert_eq!(control_starts(&state), 4);
-    let requested = watch_records(&host, instance, "emulator_watch_restart_requested");
+    let requested = watch_records(&host, instance, "emulator_autostart_queued");
     assert_eq!(requested.len(), 4, "{requested:?}");
     assert_eq!(requested[3].value("attempts"), Some(&serde_json::json!(3)));
     assert!(host.fatal_error().expect("runtime health").is_none());
@@ -414,7 +418,7 @@ fn emu_w_d_an_instance_without_start_emulator_is_observed_and_never_started() {
         EmulatorRunningState::Off { .. }
     ));
     assert!(
-        watch_records(&host, instance, "emulator_watch_restart_requested").is_empty(),
+        watch_records(&host, instance, "emulator_autostart_queued").is_empty(),
         "no restart"
     );
     assert_eq!(
