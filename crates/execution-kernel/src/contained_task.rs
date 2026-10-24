@@ -242,6 +242,10 @@ mod gate_406_t3;
 // #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
 #[cfg(test)]
 mod gate_411_lab_rp;
+// PERF-B1 (Workflow #407 B1; exec keys 181 to 184): a wait's own capture interval, the configured
+// ceiling of a declared interval, and the back-off on unchanged frames.
+#[cfg(test)]
+mod gate_407_b1;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
 pub use readings::{
