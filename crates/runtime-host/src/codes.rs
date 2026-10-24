@@ -1405,6 +1405,12 @@ actingcommand_contract::outcome_codes! {
         /// `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
         // ---- Workflow #373 NAV-6: end
+        // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §2.2, register §1.65 TB3): begin
+        /// Warning. A column of a standard-pack table declares `valid_until_unix_s` and that
+        /// second has passed: every cell of the column reads `null` (keys `game`, `path`,
+        /// `table_column`). A note of check-config.
+        StandardPackTableColumnExpired => "standard_pack_table_column_expired": warning / none,
+        // ---- Workflow #357 DB-1: end
         // ---- Workflow #373 NAV-5 (full-match entry routing, M-373 §5, §9.1): begin
         /// Info. A locate of the entry gate matched exactly one page of `pages.json` (keys
         /// `page_id`, `count`: the locate's number).

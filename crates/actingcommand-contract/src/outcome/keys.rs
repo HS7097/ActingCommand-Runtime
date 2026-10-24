@@ -566,4 +566,7 @@ outcome_keys! {
     predecessor_task_id: name,
     served_by_dispatch_unix_ms: unix_ms,
     // ---- SCH-M CF-1: end ----
+    // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §6.1): begin ----
+    table_column: token,
+    // ---- Workflow #357 DB-1: end ----
 }
