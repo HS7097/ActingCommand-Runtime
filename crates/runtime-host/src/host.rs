@@ -2293,6 +2293,23 @@ impl RuntimeHost {
         self.emulator_autostart_reports.clone()
     }
 
+    /// emu-watch: the emulator watch (not implemented yet; the tests of the slice come first).
+    pub fn start_emulator_watch(&self) -> RuntimeHostResult<()> {
+        Ok(())
+    }
+
+    /// emu-watch, test only: the number of finished polls once it reaches `polls`, waiting at
+    /// most `wait` (not implemented yet: `None`).
+    #[cfg(test)]
+    pub(crate) fn await_emulator_watch_polls_for_test(
+        &self,
+        polls: u64,
+        wait: Duration,
+    ) -> Option<u64> {
+        let _ = (polls, wait);
+        None
+    }
+
     /// The daemon checks fatal_error first, then returns through its owned close path.
     pub fn is_shutdown_requested(&self) -> RuntimeHostResult<bool> {
         Ok(self

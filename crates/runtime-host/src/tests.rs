@@ -153,7 +153,10 @@ mod gate_369_s6c;
 // Workflow #369 S6c review low (b): a failed resume or self-check preparation with no ladder
 // releases the queued startup claim.
 mod gate_369_s6clow;
+// emu-watch (Alice's ruling 35): a pause never holds the emulator start; the Runtime polls its
+// emulators and starts a configured one it finds stopped, within a bound.
 mod gate_372k2;
+mod gate_emu_watch;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
