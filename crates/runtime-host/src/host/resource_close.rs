@@ -256,13 +256,22 @@ impl HostShared {
         }
     }
 
+    /// The close of the instance's resources at a lease end of `token` (`end_lease_device_use`).
     pub(super) fn close_instance_resources(
         &self,
         token: &LeaseToken,
         connection_id: ConnectionId,
         links: EventLinksDraft,
     ) -> Result<(), RequestFailure> {
-        match self.close_instance_resources_result(token, connection_id, links)? {
+        let closed = match self.close_instance_resources_result(token, connection_id, links.clone())
+        {
+            // #411 A64: the lease lapsed before its close could begin.
+            Err(failure) if close_lease_lapsed(&failure.error) => {
+                return self.fence_lapsed_lease_close(token, failure, links);
+            }
+            closed => closed?,
+        };
+        match closed {
             Ok(()) => Ok(()),
             // Workflow #403: the unconfirmed close fenced the instance; the lease ends and the
             // fence keeps the instance out of use.
@@ -275,6 +284,47 @@ impl HostShared {
             Err(error) => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::execution(HostLocation::CloseExecutionSession, &error),
             )),
+        }
+    }
+
+    /// #411 A64 (the 10-24 incident): the close at a lease end met its lease already lapsed, so
+    /// `begin_resource_close` refused its write authority (`lease_expired`): nothing was closed
+    /// and the instance's resources stay as they are. Outside shutdown they count as an
+    /// unconfirmed close of the lease's instance only (Workflow #403): the refusal is recorded
+    /// (it names the lease; its stage is the session close), the instance is fenced by it, and
+    /// the lease end goes on. The preparation that proves the fence's close closes them first,
+    /// under its own lease. During shutdown, or where no fence may take them, the lease end
+    /// fails as before.
+    fn fence_lapsed_lease_close(
+        &self,
+        token: &LeaseToken,
+        failure: RequestFailure,
+        links: EventLinksDraft,
+    ) -> Result<(), RequestFailure> {
+        if self.fatal.is_shutdown_requested() {
+            return Err(failure);
+        }
+        let instance_id = token.instance_id();
+        let mut error = *failure.error;
+        error.lifecycle.instance_id = Some(instance_id);
+        error.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
+        let links =
+            links.with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+        self.append_lifecycle_failure(
+            RuntimeLifecycleFailureStage::SessionClose,
+            RuntimeLifecycleFailure::Host(&error),
+            links.clone(),
+            None,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
+        match self
+            .settle_unconfirmed_resources(&error, Some(instance_id), links)
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
+            UnconfirmedResources::Fenced(_) => Ok(()),
+            UnconfirmedResources::Confirmed | UnconfirmedResources::Retained => {
+                Err(RequestFailure::poison_without_terminal(error))
+            }
         }
     }
 
@@ -1274,6 +1324,14 @@ fn close_lease_refused_by_queue(error: &RuntimeHostError) -> bool {
     !error.is_fatal()
         && error.code() == SchedulerCode::LeaseTransferNotSafe.as_str()
         && error.operation() == HostLocation::PrepareResourceCloseLease.as_str()
+}
+
+/// #411 A64: whether `error` is the refusal of a resource close's write authority because its
+/// lease has lapsed (`retire_instance_resources`: `begin_resource_close` answered
+/// `lease_expired`), met before any close was attempted.
+fn close_lease_lapsed(error: &RuntimeHostError) -> bool {
+    error.code() == RuntimeErrorCode::LeaseExpired.as_str()
+        && error.operation() == HostLocation::BeginDestructiveResourceClose.as_str()
 }
 
 /// One connection preparation attempt (`prepare_instance_connection_with_cooldown`).
