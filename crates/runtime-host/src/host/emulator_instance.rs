@@ -66,7 +66,10 @@
 //!
 //! Workflow #369 S6c (H-5): an autostart claim drives the same start path on its own key
 //! (`drive_configured_start`), and a start it refuses before driving anything records the same
-//! failure pair (`refuse_configured_start`).
+//! failure pair (`refuse_configured_start`). emu-watch (Alice's ruling 35): a scheduling pause does
+//! not withhold the startup package of that configured start: its claim waits queued behind the
+//! pause as a gated entry and runs after the resume. And an operator emulator control of an
+//! instance is a person acting on it: the emulator watch forgets the restarts it made there.
 //!
 //! #411 A50 (the production host on 10-21, after an emulator restart): an operator `start` or
 //! `restart` (and the autostart's start, which drives the same path) of an instance that has a
@@ -283,21 +286,33 @@ enum ControlMode<'key> {
     /// The ladder's emulator-restart rung on its key, which the ladder renews itself (but for
     /// the restart's wait for the old VM, #411 A50): the action records its own failure.
     Ladder(&'key mut HostKey),
+    /// emu-watch: an autostart claim's configured start on its key, as an operator `start`,
+    /// except that a scheduling pause does not withhold the startup package (Alice's ruling 35:
+    /// the pause holds it queued as a gated entry until the resume).
+    Configured(&'key mut HostKey),
 }
 
 impl ControlMode<'_> {
     fn token(&self) -> &LeaseToken {
         match self {
-            Self::Operator(key) | Self::RestartPhase(key) | Self::Ladder(key) => &key.token,
+            Self::Operator(key)
+            | Self::RestartPhase(key)
+            | Self::Ladder(key)
+            | Self::Configured(key) => &key.token,
         }
     }
 
     /// The operator's claim key; `None` on the ladder's rung.
     fn operator_key(&self) -> Option<&HostKey> {
         match self {
-            Self::Operator(key) | Self::RestartPhase(key) => Some(&**key),
+            Self::Operator(key) | Self::RestartPhase(key) | Self::Configured(key) => Some(&**key),
             Self::Ladder(_) => None,
         }
+    }
+
+    /// emu-watch: an autostart claim's configured start.
+    fn configured(&self) -> bool {
+        matches!(self, Self::Configured(_))
     }
 
     fn restart_phase(&self) -> bool {
@@ -317,7 +332,10 @@ impl ControlMode<'_> {
         bound_ms: u64,
     ) -> Result<(), RequestFailure> {
         match self {
-            Self::Operator(key) | Self::RestartPhase(key) | Self::Ladder(key) => {
+            Self::Operator(key)
+            | Self::RestartPhase(key)
+            | Self::Ladder(key)
+            | Self::Configured(key) => {
                 host.renew_host_key(key, bound_ms.saturating_add(OPERATOR_HOLD_MARGIN_MS))
             }
         }
@@ -327,7 +345,7 @@ impl ControlMode<'_> {
     /// may exceed what is left of its key; the ladder renews its own key.
     fn renew(&mut self, host: &HostShared, bound_ms: u64) -> Result<(), RequestFailure> {
         match self {
-            Self::Operator(key) | Self::RestartPhase(key) => {
+            Self::Operator(key) | Self::RestartPhase(key) | Self::Configured(key) => {
                 host.renew_host_key(key, bound_ms.saturating_add(OPERATOR_HOLD_MARGIN_MS))
             }
             Self::Ladder(_) => Ok(()),
@@ -509,13 +527,17 @@ impl HostShared {
             action.event_action(),
             None,
         )?;
+        // emu-watch (R3): a person's emulator control of the instance clears the restarts the
+        // emulator watch made there, so a used-up bound holds the instance no longer.
+        self.forget_watch_restarts(resolved.instance_id())
+            .map_err(RequestFailure::poison_without_terminal)?;
         let mut key = self.await_emulator_control_claim(original, instance_alias, connection_id)?;
         // The binding is read again on the key: another control may have changed it meanwhile.
         let driven = match self.resolve_instance(instance_alias) {
             Ok(resolved) if action == EmulatorInstanceAction::Restart => {
                 self.drive_emulator_restart(&resolved, links, &mut key)
             }
-            Ok(resolved) => self.drive_emulator_control(&resolved, links, action, &mut key),
+            Ok(resolved) => self.drive_emulator_control(&resolved, links, action, &mut key, false),
             Err(failure) => Err(failure.into()),
         };
         let mut driven = match driven {
@@ -716,7 +738,8 @@ impl HostShared {
             links.clone(),
             CommandPayloadDraft::received(action.event_action(), AuditInput::new()),
         )?;
-        let mut driven = match self.drive_emulator_control(resolved, links, action, &mut key) {
+        let mut driven = match self.drive_emulator_control(resolved, links, action, &mut key, true)
+        {
             Ok(driven) => driven,
             Err(failed) => return Err(self.end_failed_emulator_control(request, key, failed)),
         };
@@ -777,17 +800,25 @@ impl HostShared {
         links: EventLinksDraft,
         action: EmulatorInstanceAction,
         key: &mut HostKey,
+        configured: bool,
     ) -> Result<EmulatorControlDriven, FailedControl> {
         let control_request_id = key.request.request_id();
         let instance_guard = self.instance_guard(resolved.instance_id())?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
+        // emu-watch: an autostart claim's configured start is no operator's: a pause does not
+        // withhold its startup package.
+        let mut mode = if configured {
+            ControlMode::Configured(key)
+        } else {
+            ControlMode::Operator(key)
+        };
         match self.drive_control_phase(
             resolved,
             links.clone(),
             action,
             control_request_id,
             &admission,
-            &mut ControlMode::Operator(key),
+            &mut mode,
         ) {
             Ok(driven) => Ok(driven),
             Err(ControlFailure::Request(failure)) => Err(failure.into()),
@@ -1330,8 +1361,10 @@ impl HostShared {
         };
         // #411 A50: the startup package is queued whether or not the preparation passed (the
         // game it starts is what a capture by package needs), unless a scheduling pause holds
-        // the instance; then none is queued and the answer says why.
-        let startup_withheld = if action == EmulatorInstanceAction::Stop {
+        // the instance; then none is queued and the answer says why. emu-watch (Alice's ruling
+        // 35): a configured start's package is queued under the pause too, as a gated entry
+        // that runs after the resume.
+        let startup_withheld = if action == EmulatorInstanceAction::Stop || mode.configured() {
             None
         } else {
             self.startup_package_withheld(&rebound)?

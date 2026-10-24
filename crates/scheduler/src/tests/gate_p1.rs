@@ -302,7 +302,9 @@ fn policy_read_state(state: PolicyReadState) -> (Scenario, InstanceId, ClaimGate
             ClaimGate::Open
         }
         PolicyReadState::RoutineEntryGateOpen | PolicyReadState::RoutineEntryGateHeld => {
-            let routine = scenario.claim(a, ClaimKind::Autostart, LeasePriority::Normal);
+            // emu-watch (Alice's ruling 35): a pause no longer holds the autostart claim; a
+            // ladder claim is the routine entry.
+            let routine = scenario.claim(a, ClaimKind::Ladder, LeasePriority::Normal);
             scenario.enqueue(routine).expect("a routine entry waits");
             scenario.release_before_pump(&run_hold);
             if let PolicyReadState::RoutineEntryGateOpen = state {

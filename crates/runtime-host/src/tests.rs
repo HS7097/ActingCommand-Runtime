@@ -153,7 +153,10 @@ mod gate_369_s6c;
 // Workflow #369 S6c review low (b): a failed resume or self-check preparation with no ladder
 // releases the queued startup claim.
 mod gate_369_s6clow;
+// emu-watch (Alice's ruling 35): a pause never holds the emulator start; the Runtime polls its
+// emulators and starts a configured one it finds stopped, within a bound.
 mod gate_372k2;
+mod gate_emu_watch;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
@@ -364,6 +367,9 @@ mod gate_406_t3;
 // #412 Lab B-3 S2 (host keys 152 to 155), register §1.162: the host runs one declared operation
 // over the Lab lease and writes its LR-10 records.
 mod gate_412_b3_s2;
+// LN-3 (Workflow #422, LEAN-L model §3.6): each change of the decision memory and each wake
+// obligation writes one value record with the complete state, and its `state` row names it.
+mod gate_422_ln3;
 
 mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged

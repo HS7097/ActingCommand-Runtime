@@ -15,7 +15,7 @@ use crate::PersistedEvent;
 use actingcommand_contract::outcome::Category;
 use actingcommand_contract::{
     AgentPayload, EventPayload, EventType, FactPayload, FactScope, PolicyPayload, RuntimeFactScope,
-    RuntimeLifecyclePhase, RuntimePayload,
+    RuntimeLifecyclePhase, RuntimePayload, RuntimeStateFact,
 };
 use serde::Serialize;
 
@@ -140,7 +140,7 @@ pub(super) fn is_tagged(event: &PersistedEvent, policy: &IndexPolicy) -> bool {
 
 /// The tagged keys of one record (§11.1, §11.2): every key of the instance store, the instance's
 /// input boundaries, the workbench keys the patterns name, the decision memory, the activity
-/// state and the wake obligations.
+/// state, the wake obligations and (Workflow #422 LN-3) the monitor registry's aliases.
 fn tagged_keys(event: &PersistedEvent, policy: &IndexPolicy) -> Vec<String> {
     match event.payload() {
         EventPayload::Fact(FactPayload::Published(published)) => published
@@ -193,7 +193,27 @@ fn tagged_keys(event: &PersistedEvent, policy: &IndexPolicy) -> Vec<String> {
                 .into_iter()
                 .collect()
         }
-        _ => input_boundary_key(event).into_iter().collect(),
+        _ => input_boundary_key(event)
+            .into_iter()
+            .chain(monitor_keys(event))
+            .collect(),
+    }
+}
+
+/// Workflow #422 LN-3: `monitor/<alias>`, the monitor registry's complete state of one alias. A
+/// record that changes the registry carries that state: the import, for every alias it brings,
+/// and an applied change, for its alias. A change that was not applied changes no state.
+fn monitor_keys(event: &PersistedEvent) -> Vec<String> {
+    match event.payload().runtime_state() {
+        Some(RuntimeStateFact::MonitorImported { import, .. }) => import
+            .instances
+            .iter()
+            .map(|status| format!("monitor/{}", status.instance_alias()))
+            .collect(),
+        Some(RuntimeStateFact::MonitorChanged { change, .. }) if change.applied => {
+            vec![format!("monitor/{}", change.status.instance_alias())]
+        }
+        _ => Vec::new(),
     }
 }
 

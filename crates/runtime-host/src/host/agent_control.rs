@@ -349,6 +349,19 @@ pub(super) fn append_agent_wake(
         .append(events.sanitize(draft)?)
         .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
     state.apply_event(&persisted, None)?;
+    // Workflow #422 LN-3 (register L8, `contracts/ledger-observer.md` §11.3): the obligation's
+    // value record, the one the index's `wake/<wake id>` row names.
+    let obligation = events.draft(
+        EventSeverity::Info,
+        EventSource::Scheduler,
+        OriginModule::AgentDispatcher,
+        EventActor::Runtime,
+        events.system_links()?,
+        AgentPayloadDraft::wake_obligation_recorded(issued.data().clone(), AuditInput::new()),
+    )?;
+    ledger
+        .append(events.sanitize(obligation)?)
+        .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
     Ok(persisted)
 }
 

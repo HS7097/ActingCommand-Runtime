@@ -61,15 +61,17 @@ on an instance that failed its preparation. A gated claim does not refuse the pa
 (Workflow #411 A3: `request-shutdown`, `restart`, an install CommitShutdown and a drain's
 completion count no routine entry that a pause of its instance or the global pause holds, while
 a routine entry that only a resource fence holds still counts; an accepted shutdown disconnects
-the gated entry with `lease.queue_disconnected`, the pause is kept and restored, and the next
-daemon start queues an autostart claim again, gated). Since Workflow #369 S6c a routine
-claim that waits in the queue (a startup package, a ladder, an autostart claim) is never granted
-at once while the gate is closed, even on a free instance: it waits queued as a gated entry from
-the first moment, and the resume (or the sweep that follows it) grants it. The configured
-emulator start's autostart claim (`contracts/emulator-control.md`, "Configured start at daemon
-start") is such a claim: under a pause, a restored one included, nothing is started until the
-resume, and a pause that arrives while the claim waits makes it queue again and release its
-key, so the pause completes. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
+the gated entry with `lease.queue_disconnected`, and the pause is kept and restored). Since
+Workflow #369 S6c a routine claim that waits in the queue (a startup package, a ladder) is never
+granted at once while the gate is closed, even on a free instance: it waits queued as a gated
+entry from the first moment, and the resume (or the sweep that follows it) grants it. emu-watch
+(Alice's ruling 35: a pause holds only dispatches; #414 option 3): the autostart claim of a
+configured emulator start, at daemon start or by the emulator watch (`contracts/emulator-control.md`,
+"Configured start at daemon start", "Emulator watch"), is no routine claim: a pause, a restored one
+included, never holds or queues it and never makes it yield, so the emulator is started under the
+pause; the pause holds that start's startup package, whose claim waits queued as a gated entry and
+runs after the resume. An instance pause whose hand-back (step (c)) meets such a start holding the
+instance's key waits for it as it waits for an operator's emulator control. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
 that arrives while a ladder holds the instance ends the ladder at its next step
 (`recovery_admission_denied`), and its one release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
 

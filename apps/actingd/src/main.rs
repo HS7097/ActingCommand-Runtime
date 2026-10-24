@@ -665,10 +665,13 @@ fn serve(host: RuntimeHost, policy: Option<PolicyBootstrap>) -> Result<(), Actin
     };
     // Workflow #369 S6c (model-369-queue H-5): the configured emulator starts are enqueued once,
     // after policy initialization and before `runtime_ready`; nothing waits for them here.
+    // emu-watch (Alice's ruling 35): then the emulator watch starts; its lines are report lines
+    // too.
     if let Err(error) = host
         .enqueue_emulator_autostart()
         .map_err(ActingdError::runtime)
         .and_then(|_| write_autostart_reports(&host.emulator_autostart_reports()))
+        .and_then(|()| host.start_emulator_watch().map_err(ActingdError::runtime))
     {
         let recorded =
             error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
