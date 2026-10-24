@@ -133,7 +133,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **离线读取**由 `actingledger` 提供，它只开只读证据快照，从不写入。子命令为：`open`、`events`、`chain --req <request-id>`、`tail`、`repairs`、`export`（可加 `--performance` / `--stability` / `--task-evidence`）、`views`（账本终态视图的一页，与运行时提供的页相同）、`material --request <json>`（一件已提交工件的一段已校验字节）、`signatures`、`frames`（已存截图的只读列表）、`facts --at <sequence>`（按账本位置重放程序事实库）、`replay`、`codes`（本构建内嵌码目录里的结果码）。除裸 `export` 输出人类可读的多行文本报告外，其余报告都是单行 JSON；证据存在缺口时先打印报告再以 `signature_replay_incomplete`、`stability_export_incomplete`、`task_evidence_export_incomplete`、`ledger_view_source_incomplete` 非零退出；`facts` 不可用时以 `runtime_facts_not_available` 或失败码非零退出。
 
-**结果码。** 已登记的结果码放在 `contracts/outcome-codes/` 下的分片里，每个所属包或程序一片（共 26 片，从 `contract`、`ledger`、`runtime-host` 到 `actingctl`、`actingd`、`actinglab`、`actingledger`），共用的键与词表在 `catalog.json`；`outcome-guard merge` 把它们合并成码目录 `contracts/outcome-codes.json`。回执、账本记录、`actingctl`、`actingd`、看门狗与 MCP 工具错误都以 outcome 的形式携带这些码；`actingctl codes`、`actingledger codes` 与 MCP `ac_outcome_code` 可以查码。每个版本都带一份快照 `contracts/outcome-codes/released/<版本>.json`（v0.12.10：3,766 个码，其中 172 个已定稿；1,647 个位置），缺了快照的发布构建会停下。守卫仍豁免 Lab 的 `apps/actinglab` 与 `crates/lab`。
+**结果码。** 已登记的结果码放在 `contracts/outcome-codes/` 下的分片里，每个所属包或程序一片（共 26 片，从 `contract`、`ledger`、`runtime-host` 到 `actingctl`、`actingd`、`actinglab`、`actingledger`），共用的键与词表在 `catalog.json`；构建时把它们合并成码目录并嵌入程序（`outcome-guard merge` 输出的是同一份内容；合并后的文件不提交进仓库）。回执、账本记录、`actingctl`、`actingd`、看门狗与 MCP 工具错误都以 outcome 的形式携带这些码；`actingctl codes`、`actingledger codes` 与 MCP `ac_outcome_code` 可以查码。每个版本都带一份快照 `contracts/outcome-codes/released/<版本>.json`（v0.12.10：3,766 个码，其中 172 个已定稿；1,647 个位置），缺了快照的发布构建会停下。守卫仍豁免 Lab 的 `apps/actinglab` 与 `crates/lab`。
 
 ## 不变式与守卫
 
@@ -198,7 +198,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
 | tools/actinglab-architecture | actingcommand-actinglab-architecture | lib | 从源码推导的架构守卫；仅限开发，不链接进运行时二进制 |
-| tools/outcome-guard | actingcommand-outcome-guard | lib + bin `outcome-guard` | `outcome-guard merge` 把 `contracts/outcome-codes/` 下的结果码分片合并成 `contracts/outcome-codes.json`；仅限开发，由 CI 运行 |
+| tools/outcome-guard | actingcommand-outcome-guard | lib + bin `outcome-guard` | `outcome-guard merge` 输出 `contracts/outcome-codes/` 下结果码分片合并后的码表（构建时嵌入的就是同一份内容，不提交进仓库）；`outcome-guard release` 是发版闸门 G10；仅限开发 |
 
 ## 设备与识别
 

@@ -4,8 +4,9 @@
 //!
 //! Every result that leaves a Runtime process carries one registered code with one category,
 //! typed values under the keys of the one key table, and optionally a nested chain of links.
-//! Meanings live in the catalog `contracts/outcome-codes.json`; the Runtime stores no
-//! explanation next to a code. English exists only in `Display` and developer log lines.
+//! Meanings live in the catalog (the fragments under `contracts/outcome-codes/`, merged at build
+//! time); the Runtime stores no explanation next to a code. English exists only in `Display`
+//! and developer log lines.
 //!
 //! - [`Code`] and [`Location`] are what a crate emits. They can be built only through a
 //!   registry ([`outcome_codes!`](crate::outcome_codes), [`outcome_locations!`](crate::outcome_locations)).
@@ -510,13 +511,11 @@ pub use vocabulary::{
     RemedySource,
 };
 
-/// The merged outcome catalog `contracts/outcome-codes.json`, embedded at build time. It is
-/// generated from the fragments by `outcome-guard merge` (in CI) and never edited by hand.
+/// The merged outcome catalog, embedded at build time. The crate's `build.rs` generates it from
+/// the header and the owner fragments under `contracts/outcome-codes/` (Workflow #420 S2); it is
+/// never committed, and `outcome-guard merge` prints the same text.
 pub fn catalog() -> &'static str {
-    include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../contracts/outcome-codes.json"
-    ))
+    include_str!(concat!(env!("OUT_DIR"), "/outcome-codes.json"))
 }
 
 /// The embedded catalog, parsed once on first use and shared by every reader (the debug

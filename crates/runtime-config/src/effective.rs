@@ -9,6 +9,7 @@ use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
+use crate::execution::CaptureCadenceConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
@@ -20,7 +21,7 @@ use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, f
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, emulator_control, host_claims, instance, ledger_observer,
+    device_link, device_state, emulator_control, execution, host_claims, instance, ledger_observer,
     performance, recovery_ladder, scheduling, startup_discovery, touch,
 };
 use actingcommand_contract::outcome::{BlackoutSource, Outcome};
@@ -426,6 +427,11 @@ impl EffectiveConfig {
         host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, in milliseconds.
+    pub fn run_end_grace_ms(&self) -> Result<u64, ConfigFailure> {
+        host_claims::run_end_grace_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// #411 A50: `emulator_control.restart_exit_wait_ms` in effect, in milliseconds: how long a
     /// restart waits for its old VM to exit before it launches.
     pub fn restart_exit_wait_ms(&self) -> Result<u64, ConfigFailure> {
@@ -484,6 +490,12 @@ impl EffectiveConfig {
     /// run (the kernel's `touch_sampling()`) and at each choice of a press's landing point.
     pub fn touch(&self) -> Result<TouchConfig, ConfigFailure> {
         TouchConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, the kernel's capture
+    /// cadence, which the host hands the kernel with each step's pacing.
+    pub fn capture_cadence(&self) -> Result<CaptureCadenceConfig, ConfigFailure> {
+        CaptureCadenceConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
@@ -691,6 +703,7 @@ impl EffectiveConfig {
         }
         if sections.contains(host_claims::SECTION) {
             self.renewal_slack_ms()?;
+            self.run_end_grace_ms()?;
         }
         if sections.contains(performance::SECTION) {
             self.check_performance()?;
@@ -715,6 +728,9 @@ impl EffectiveConfig {
         }
         if sections.contains(emulator_control::SECTION) {
             self.restart_exit_wait_ms()?;
+        }
+        if sections.contains(execution::SECTION) {
+            self.capture_cadence()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

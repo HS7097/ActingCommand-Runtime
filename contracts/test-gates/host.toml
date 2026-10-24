@@ -1,8 +1,9 @@
 # Gate map, host fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
-# Keys are the ids of rd-1009/tests/inventory-host.md. One `[[gate]]` row per key with exactly
-# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
-# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
-# appended to; a row leaves only when its feature retires.
+# Each `[[gate]]` row has `coverage` ("Y", or "P" = tested only on the cfg(test) Segment
+# backend), `tests` (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when
+# none). A new row carries no `key`: its tests name it (Workflow #420 S6). Rows from before #420
+# keep their `key`, an id of rd-1009/tests/inventory-host.md, as history. Rows are only appended
+# to; a row leaves only when its feature retires.
 
 # One owner per state root; a clean restart gets a new epoch
 [[gate]]
@@ -825,7 +826,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t3_a_main_package_changed_in_place_lifts_after_the_interval_without_a_restart",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t4_only_a_package_the_pause_names_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t5_actingd_suspended_reports_the_paused_and_current_hash_prefixes",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t9_a_restart_rebuilds_the_recorded_hashes_from_the_failure_identity",
 ]
@@ -1792,6 +1792,33 @@ tests = [
 ]
 incident = ["#411 A44"]
 
+# #411 A64 (0.12.12; ruling C-43 of 10-24; no persisted ledger shape; configuration key host_claims.run_end_grace_ms, actingd-config revision 11; host keys 175 to 177, the next free above 174, for the coordinator to confirm): a scheduled run that reaches its deadline renews its lease once by the end grace before its terminal; when its end overruns the grace, its close at the lease end meets the lapsed lease (begin_resource_close: lease_expired) and fences only its instance (Workflow #403, cause lease_expired, the refusal recorded once naming the lease and stage runtime_lifecycle_session_close); the Runtime runs, the run keeps its terminal contained_task_deadline_exceeded, and another instance's direct run completes
+[[gate]]
+key = "175"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a64::a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance",
+]
+incident = ["#411 A64"]
+
+# #411 A64 (ruling C-43 test (c)): a run whose end work takes longer than the old heartbeat reserve (5 s) and less than the end grace ends normally under its renewed lease: its terminal contained_task_deadline_exceeded with no lapse, its lease renewed once before the terminal, never expired and released once, its session closed, no instance fenced
+[[gate]]
+key = "176"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a64::a64_c_end_work_longer_than_the_reserve_and_inside_the_grace_ends_normally",
+]
+incident = ["#411 A64"]
+
+# #411 A64 (ruling C-43 test (d), the 10-24 order): a lease sweep tick after the deadline plus the old reserve, while the run is still at its end work, leaves the lease alone inside the end grace; a tick after the grace expires it (its expiry end fences the instance); the run's later terminal is still recorded, contained_task_deadline_exceeded carrying lease_expired; the instance is fenced with cause lease_expired, the Runtime runs and another instance's direct run completes
+[[gate]]
+key = "177"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a64::a64_d_the_sweep_leaves_the_end_alone_inside_the_grace_and_the_late_terminal_is_kept",
+]
+incident = ["#411 A64"]
+
 # #412 Lab B-3 S2 (0.12.x; register §1.162 B3S2-1, B3S2-2; ledger revision 4, the writer of §1.153 LR-10; design rd-1021/train-0129/lab-b3-design.md §2.3, §3, §5 S2 T2-1; host keys 152 to 155 from the wave-3 frame): a Lab operation that runs a declared operation of two attempts (a failed confirmation, the retry, a second input that arrives) on a fake device ends confirmed; its prepared record was persisted and verified before attempt 1's InputIntent, and its record passes its own validation and the shared evidence verifier. T2-8 (coordinator rulings 1 and 2 of 10-22, LR-10 amended before its first writer): a keyed guard refusal before any input (#411 B22) ends run_completed with its key, no attempt, no before frame or action and the guard not_evaluated; its frames are listed and the records pass the shared verifier
 [[gate]]
 key = "152"
@@ -1829,18 +1856,24 @@ tests = [
 ]
 incident = ["#412 B-3"]
 
-# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.177 SR4A1-3 to SR4A1-5): the shipped defaults name no blackout entry (host list empty, no instance list in effect); scheduling.blackout.quiet_horizon is deadline and scheduling.day_boundary.quiet true, per instance defaulting to the section's, all settable
+# PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177 B1-2, B1-3; test row (d); requirements R2, R3): execution.capture.max_interval_ms (60 000, 5 000..=1 800 000), execution.capture.backoff_enabled (true) and execution.capture.idle_ceiling_ms (5 000, 50..=60 000) default from the defaults file and are settable; a value outside its bounds is config_value_invalid (out_of_range) when the file is rendered, in the whole-section check and in an instruction, and a switch that is no boolean is wrong_type
 [[gate]]
-key = "178"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_407_b1::b1_d_the_capture_keys_default_from_the_file_and_their_bounds_are_checked",
+]
+incident = ["#407 B1"]
+
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): the shipped defaults name no blackout entry (host list empty, no instance list in effect); scheduling.blackout.quiet_horizon is deadline and scheduling.day_boundary.quiet true, per instance defaulting to the section's, all settable
+[[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c1_no_blackout_entry_by_default_and_the_new_keys_have_their_model_defaults",
 ]
 incident = ["#386 SR-4a1"]
 
-# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.177 SR4A1-3 to SR4A1-5): weekly and once entries of the host list and of an instance's own list are read as written; a broken entry refuses a start and check-config with blackout_config_invalid naming field, blackout_id and blackout_source (host or instance); through an instruction config_value_invalid (section_check)
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): weekly and once entries of the host list and of an instance's own list are read as written; a broken entry refuses a start and check-config with blackout_config_invalid naming field, blackout_id and blackout_source (host or instance); through an instruction config_value_invalid (section_check)
 [[gate]]
-key = "179"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c2_bad_blackout_entries_are_refused_with_their_source",

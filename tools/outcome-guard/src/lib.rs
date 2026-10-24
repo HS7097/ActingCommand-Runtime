@@ -13,11 +13,12 @@
 //!   (`persisted.rs`), outside the G6 bridges of [`ALLOW_LIST`];
 //! - G10 review (A8b): a settled entry has its text, in every check of the workspace; at a
 //!   release, `outcome-guard release <version>` (the release build runs it) also needs the
-//!   release's snapshot `released/<version>.json` and, from v0.13.0 on, no pending entry (a
+//!   release's file `released/<version>.json` and, from v0.13.0 on, no pending entry (a
 //!   final of the 0.12 series may carry pending entries; coordinator decision of 2026-10-19);
 //! - G7 key table and vocabularies = catalog (A1);
 //! - G8 naming and prefixes (A1);
-//! - G9 the merged file and the released contract (A1), the ladder class included (#387 D1a).
+//! - G9 the fragments merge, and the released contract holds (A1), the ladder class included
+//!   (#387 D1a); no merged file is committed or compared (Workflow #420 S2).
 //!
 //! Loading the catalog also checks each code's `ladder_class` (#387 D1a): required, a token of
 //! the vocabulary `ladder_class`, and category warning or error for a `stability_warning` code.
@@ -1504,7 +1505,8 @@ pub fn load_workspace(root: &Path) -> Workspace {
     }
 }
 
-/// The merged catalog text, as `outcome-guard merge` writes it.
+/// The merged catalog text, as `outcome-guard merge` prints it and the contract crate's build
+/// embeds it.
 pub fn merge(root: &Path) -> Result<String, Vec<String>> {
     let members = workspace_members(root).map_err(|error| vec![error])?;
     let catalog = catalog::load(root, &members)?;
@@ -1726,7 +1728,7 @@ pub fn check_naming(workspace: &Workspace) -> Vec<String> {
     }
 }
 
-/// G9: the committed merged file is the merge, and released settled entries hold.
+/// G9: the fragments merge, and released settled entries hold.
 pub fn check_contract(workspace: &Workspace) -> Vec<String> {
     match &workspace.catalog {
         Ok(catalog) => catalog::check_contract(&workspace.root, catalog),

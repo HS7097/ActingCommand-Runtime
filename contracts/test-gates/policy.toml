@@ -1,8 +1,9 @@
 # Gate map, policy fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
-# Keys are the ids of rd-1009/tests/inventory-policy.md. One `[[gate]]` row per key with exactly
-# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
-# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
-# appended to; a row leaves only when its feature retires.
+# Each `[[gate]]` row has `coverage` ("Y", or "P" = tested only on the cfg(test) Segment
+# backend), `tests` (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when
+# none). A new row carries no `key`: its tests name it (Workflow #420 S6). Rows from before #420
+# keep their `key`, an id of rd-1009/tests/inventory-policy.md, as history. Rows are only appended
+# to; a row leaves only when its feature retires.
 
 # Scheduler configuration
 [[gate]]
@@ -728,36 +729,32 @@ tests = [
 ]
 incident = ["#411 B16"]
 
-# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.177; no persisted ledger shape): a weekly host entry (crossing midnight, on its weekdays only), a once entry of the instance and a catalog maintenance event of the instance's game each cover on their own, half-open, and the next start finds each within its bound
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.179; no persisted ledger shape): a weekly host entry (crossing midnight, on its weekdays only), a once entry of the instance and a catalog maintenance event of the instance's game each cover on their own, half-open, and the next start finds each within its bound
 [[gate]]
-key = "67"
 coverage = "Y"
 tests = [
     "actingcommand-policy::lib::tests::gate_sr4a1::sr4a1_t1_weekly_once_and_catalog_intervals_each_cover",
 ]
 incident = ["#386 SR-4a1"]
 
-# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.177; no persisted ledger shape): overlapping and adjacent intervals of the three sources are one blackout whose start and end are the union's; the reported id and source belong to the entry that covers the time and ends last
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.179; no persisted ledger shape): overlapping and adjacent intervals of the three sources are one blackout whose start and end are the union's; the reported id and source belong to the entry that covers the time and ends last
 [[gate]]
-key = "68"
 coverage = "Y"
 tests = [
     "actingcommand-policy::lib::tests::gate_sr4a1::sr4a1_t2_overlapping_and_adjacent_intervals_wake_at_the_union_end",
 ]
 incident = ["#386 SR-4a1"]
 
-# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.177; no persisted ledger shape): a host entry, the instance's own entry and a catalog maintenance event each cover one instance with their own source, and the next blackout steps through them in order
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.179; no persisted ledger shape): a host entry, the instance's own entry and a catalog maintenance event each cover one instance with their own source, and the next blackout steps through them in order
 [[gate]]
-key = "69"
 coverage = "Y"
 tests = [
     "actingcommand-policy::lib::tests::gate_sr4a1::sr4a1_t3_host_instance_and_catalog_entries_cover_one_instance",
 ]
 incident = ["#386 SR-4a1"]
 
-# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.177; no persisted ledger shape): an instance's own entry and a catalog event scoped to another game do not cover another instance; a host entry does
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.179; no persisted ledger shape): an instance's own entry and a catalog event scoped to another game do not cover another instance; a host entry does
 [[gate]]
-key = "70"
 coverage = "Y"
 tests = [
     "actingcommand-policy::lib::tests::gate_sr4a1::sr4a1_t4_an_instance_entry_covers_only_its_instance",

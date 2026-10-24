@@ -414,7 +414,8 @@
             "scope": { "$ref": "#/$defs/scope" },
             "fact_key": { "$ref": "#/$defs/identifier" },
             "offset_ms": { "type": "integer", "minimum": -86400000, "maximum": 86400000 },
-            "max_age_ms": { "type": ["integer", "null"], "minimum": 1, "maximum": 31536000000 }
+            "max_age_ms": { "type": ["integer", "null"], "minimum": 1, "maximum": 31536000000 },
+            "once_per_reading": { "type": "boolean" }
           },
           "additionalProperties": false
         },
@@ -430,7 +431,8 @@
               "maxItems": 3,
               "uniqueItems": true,
               "items": { "enum": ["succeeded", "failed", "cancelled"] }
-            }
+            },
+            "since_own_run": { "type": "boolean" }
           },
           "additionalProperties": false
         },

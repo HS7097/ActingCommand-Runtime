@@ -15,9 +15,10 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_config::touch::{CANDIDATE_COUNT, SIGMA_RATIO_MILLI};
 use actingcommand_runtime_config::{
-    DefaultsFile, annotate_settable, mechanism_rows, render_parameters,
+    DefaultSource, DefaultsFile, KeyName, annotate_settable, mechanism_rows, render_parameters,
 };
 use serde_json::json;
+use std::collections::BTreeSet;
 
 const ALIAS: &str = "neutral.instance";
 
@@ -94,7 +95,7 @@ fn least_recent(
     }
 }
 
-/// The five `touch` rows as actingd assembles them from the shipped defaults file.
+/// The `touch` rows as actingd assembles them from the shipped defaults file.
 fn touch_manifest() -> RuntimeConfigManifest {
     let (_, defaults) = DefaultsFile::shipped().expect("the shipped defaults file parses");
     let mut parameters =
@@ -103,7 +104,29 @@ fn touch_manifest() -> RuntimeConfigManifest {
             .into_iter()
             .filter(|parameter| parameter.key.starts_with("touch."))
             .collect::<Vec<_>>();
-    assert_eq!(parameters.len(), 5, "{parameters:?}");
+    // Every `touch` key of the table with a default, read from the table rather than counted by
+    // hand (Workflow #420 S6).
+    let expected = mechanism_rows()
+        .into_iter()
+        .filter_map(|row| match row.name {
+            KeyName::Exact(name)
+                if name.starts_with("touch.") && !matches!(row.default, DefaultSource::None) =>
+            {
+                Some(name.to_owned())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(!expected.is_empty(), "the table has touch keys");
+    assert_eq!(parameters.len(), expected.len(), "{parameters:?}");
+    assert_eq!(
+        parameters
+            .iter()
+            .map(|parameter| parameter.key.clone())
+            .collect::<BTreeSet<_>>(),
+        expected,
+        "{parameters:?}"
+    );
     annotate_settable(&mut parameters).expect("every key is in the key table");
     RuntimeConfigManifest {
         subsystems: Vec::new(),

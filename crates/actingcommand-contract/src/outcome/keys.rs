@@ -564,4 +564,8 @@ outcome_keys! {
     reserve_at_least: integer,
     amount_after: integer,
     // ---- Workflow #411 B16 part 2: end ----
+    // ---- SCH-M CF-1 (condition edges, contracts/scheduling/README.md): begin ----
+    predecessor_task_id: name,
+    served_by_dispatch_unix_ms: unix_ms,
+    // ---- SCH-M CF-1: end ----
 }
