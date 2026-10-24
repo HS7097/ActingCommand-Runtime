@@ -417,6 +417,11 @@ impl EffectiveConfig {
         host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, in milliseconds.
+    pub fn run_end_grace_ms(&self) -> Result<u64, ConfigFailure> {
+        host_claims::run_end_grace_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// #411 A50: `emulator_control.restart_exit_wait_ms` in effect, in milliseconds: how long a
     /// restart waits for its old VM to exit before it launches.
     pub fn restart_exit_wait_ms(&self) -> Result<u64, ConfigFailure> {
@@ -651,6 +656,7 @@ impl EffectiveConfig {
         }
         if sections.contains(host_claims::SECTION) {
             self.renewal_slack_ms()?;
+            self.run_end_grace_ms()?;
         }
         if sections.contains(performance::SECTION) {
             self.check_performance()?;

@@ -4421,8 +4421,13 @@ fn evaluate_predicate(
             fact_key,
             offset_ms,
             max_age_ms,
+            once_per_reading,
         } => {
-            let (at, fresh_until) = match fact_time(facts, scope, fact_key, *max_age_ms, time)? {
+            let FactTimeReading {
+                at,
+                fresh_until,
+                observed_at,
+            } = match fact_time(facts, scope, fact_key, *max_age_ms, time)? {
                 Ok(reading) => reading,
                 Err(problem) => {
                     reasons.push(reason_with(
@@ -4439,6 +4444,22 @@ fn evaluate_predicate(
             };
             // Signed, without overflow; a target before the epoch counts as 0.
             let target = at.saturating_add_signed(*offset_ms);
+            // SCH-M CF-1: a time this task's latest successful run already served is false
+            // until a newer reading, with no wake: the next reading wakes the scheduler.
+            if *once_per_reading == Some(true)
+                && let Some(served_by) = reading_served_by(task_state, target, observed_at)
+            {
+                reasons.push(reason_with(
+                    Outcome::new(PolicyCode::FactTimeServed)
+                        .fact_key(fact_key.as_str())
+                        .served_by_dispatch_unix_ms(served_by),
+                    format!(
+                        "fact '{}:{fact_key}' holds {at}, observed at {observed_at}; the run dispatched at {served_by} served it",
+                        scope_key(scope)
+                    ),
+                ));
+                return Ok(PredicateEvaluation::known(false, None));
+            }
             let freshness_wake = fresh_until
                 .and_then(|expiration| expiration.checked_add(1))
                 .filter(|expiration| *expiration > time.unix_ms);
@@ -4464,6 +4485,7 @@ fn evaluate_predicate(
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
+            since_own_run,
         } => {
             let state = facts.tasks.iter().find(|state| {
                 state.task_id == *task_id
@@ -4477,10 +4499,29 @@ fn evaluate_predicate(
                     reason: "dependency_state_missing".to_owned(),
                 }));
             };
-            Ok(PredicateEvaluation::known(
-                terminal_states.contains(&terminal_state),
-                None,
-            ))
+            if !terminal_states.contains(&terminal_state) {
+                return Ok(PredicateEvaluation::known(false, None));
+            }
+            // SCH-M CF-1: an edge is served once this task ran successfully since the
+            // predecessor's latest dispatch; a failed own run leaves it due.
+            if *since_own_run == Some(true)
+                && let (Some(own), Some(predecessor)) = (task_state, state)
+                && dependency_served(own, predecessor)
+            {
+                reasons.push(reason_with(
+                    Outcome::new(PolicyCode::DependencyAlreadyServed)
+                        .task_id(own.task_id.as_str())
+                        .predecessor_task_id(task_id.as_str()),
+                    format!(
+                        "task '{}' ran successfully at {:?}, since the latest dispatch of '{task_id}' at {:?}",
+                        own.task_id,
+                        own.last_dispatched_unix_ms,
+                        predecessor.last_dispatched_unix_ms
+                    ),
+                ));
+                return Ok(PredicateEvaluation::known(false, None));
+            }
+            Ok(PredicateEvaluation::known(true, None))
         }
         PredicateSpec::Outcome {
             task_id,
@@ -4764,6 +4805,42 @@ fn compare_ordered(
     }
 }
 
+/// Workflow #405 W1: a fact's usable time: the time it holds (`at`), the end of its freshness
+/// and (SCH-M CF-1) when the reading was observed.
+struct FactTimeReading {
+    at: u64,
+    fresh_until: Option<u64>,
+    observed_at: u64,
+}
+
+/// SCH-M CF-1 (`once_per_reading`): the dispatch of this task's latest run when that run
+/// succeeded and was dispatched at or after max(`target`, `observed_at`), so it served the
+/// reading's time.
+fn reading_served_by(
+    task_state: Option<&TaskRuntimeSnapshot>,
+    target: u64,
+    observed_at: u64,
+) -> Option<u64> {
+    task_state
+        .filter(|state| state.terminal_state == Some(TaskTerminalState::Succeeded))
+        .and_then(|state| state.last_dispatched_unix_ms)
+        .filter(|dispatched| *dispatched >= target.max(observed_at))
+}
+
+/// SCH-M CF-1 (`since_own_run`): whether this task's latest run served the predecessor's
+/// latest terminal. It did when it was dispatched, not before the predecessor's latest
+/// dispatch, and succeeded; a task with no admitted dispatch, one dispatched before the
+/// predecessor's latest dispatch, or one whose latest run did not succeed has not.
+fn dependency_served(own: &TaskRuntimeSnapshot, predecessor: &TaskRuntimeSnapshot) -> bool {
+    let Some(own_dispatched) = own.last_dispatched_unix_ms else {
+        return false;
+    };
+    let dispatched_before = predecessor
+        .last_dispatched_unix_ms
+        .is_some_and(|predecessor_dispatched| own_dispatched < predecessor_dispatched);
+    !dispatched_before && own.terminal_state == Some(TaskTerminalState::Succeeded)
+}
+
 /// Workflow #405 W1: the time the fact at (`scope`, `fact_key`) holds and the end of its
 /// freshness, read with `fact`'s rules (missing, confidence 0, `max_age_ms`, its own expiry), or
 /// why it gives no time.
@@ -4773,7 +4850,7 @@ fn fact_time(
     fact_key: &str,
     max_age_ms: Option<u64>,
     time: EvaluationTime,
-) -> PolicyEvaluationResult<Result<(u64, Option<u64>), FactTimeProblem>> {
+) -> PolicyEvaluationResult<Result<FactTimeReading, FactTimeProblem>> {
     let Some(observation) = facts
         .facts
         .iter()
@@ -4814,7 +4891,11 @@ fn fact_time(
     let FactValue::TimestampMs(at) = &observation.value else {
         return Ok(Err(FactTimeProblem::NotATime));
     };
-    Ok(Ok((*at, fresh_until)))
+    Ok(Ok(FactTimeReading {
+        at: *at,
+        fresh_until,
+        observed_at: observation.observed_at_unix_ms,
+    }))
 }
 
 fn fact_kind(value: &FactValue) -> &'static str {
@@ -8076,6 +8157,7 @@ pub(crate) mod tests {
         let dependency = PredicateSpec::DependencyCompleted {
             task_id: "fixture.head".to_owned(),
             terminal_states: vec![TaskTerminalState::Succeeded],
+            since_own_run: None,
         };
         let two_slots = daily(&[360, 1140]);
         let one_slot = daily(&[390]);

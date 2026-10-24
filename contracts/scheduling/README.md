@@ -795,7 +795,7 @@ by it.
 
 Workflow #386 (scheduling model v1.4.2 §8; slice SR-6a). Every decision that is not selected
 carries at least one reason, and its last reason is a registered outcome code
-(`contracts/outcome-codes.json`, the policy fragment for the evaluator's own codes): that is the
+(the outcome catalog `contracts/outcome-codes/`, the policy fragment for the evaluator's own codes): that is the
 code `why` names in a dispatch decision record, and it is never `none`. An evaluator path that
 would end a decision without a reason is a programming error: the candidate is still deferred,
 with the reason `decision_reason_missing` (error; `task_id`, `instance_id`), and the round goes
@@ -873,6 +873,11 @@ A `fact_time_reached` predicate that is false adds its own reason before `trigge
 decides the trigger (Workflow #405, "Fact-time wake" below): `fact_time_pending` (info;
 `fact_key`, `next_eligible_unix_ms`) while the time its fact holds plus its offset has not come,
 and `fact_time_unavailable` (info; `fact_key`, `fact_time_problem`) when its fact gives no time.
+
+An edge member that makes its predicate false adds its own reason the same way (SCH-M CF-1,
+"Condition edges" below): `dependency_already_served` (info; `task_id`, `predecessor_task_id`)
+for `dependency_completed` with `since_own_run`, and `fact_time_served` (info; `fact_key`,
+`served_by_dispatch_unix_ms`) for `fact_time_reached` with `once_per_reading`.
 
 ## Settlement Feedback And Eligibility Age
 
@@ -1116,9 +1121,24 @@ A task that is due when earlier work ends, at an instant a package read and publ
 - **True** when the fact at (`scope`, `fact_key`) exists, its confidence is above 0, it is fresh exactly as for `fact` (observed no longer ago than `max_age_ms` when M is not null, and not past its own `expires_at_unix_ms`), its value is a `timestamp_ms` T, and the evaluation is at or after `T + N`. The sum is signed and never overflows; a sum below 0 counts as 0. While the predicate is true, its freshness is the fact's and it wakes the evaluation one millisecond after that freshness ends, as `fact` does.
 - **False, not reached**, before `T + N`: the predicate adds the info reason `fact_time_pending` {`fact_key`, `next_eligible_unix_ms` = `T + N`} and wakes the evaluation at `T + N`, or one millisecond after the fact's freshness ends when that comes first. A newer reading of the fact wakes the scheduler as every fact publication does, and the next evaluation reads the new time.
 - **False, no time**: the fact is missing, its confidence is 0, it is older than M, it is past its own expiry, or its value is not a `timestamp_ms`. The predicate adds the info reason `fact_time_unavailable` {`fact_key`, `fact_time_problem`: `missing`, `low_confidence`, `stale`, `expired` or `not_a_time`} and no wake. Unlike `fact` it is false, not Unknown: the time is the output of the package that ran the work, which the instance's recognition maintenance package cannot read, so the predicate never asks for a fact refresh ("Fact Refresh") and gives no detection suggestion.
-- **Minimum interval.** Once T + N has passed, the predicate stays true until a newer reading moves the time. The least time between two dispatches of the task is its `cooldown_ms` ("Task Execution Fields"); the predicate has no interval of its own.
+- **Minimum interval.** Once T + N has passed, the predicate stays true until a newer reading moves the time, unless it carries `once_per_reading` ("Condition edges" below). The least time between two dispatches of the task is its `cooldown_ms` ("Task Execution Fields"); the predicate has no interval of its own.
 - **Fallback.** A catalog may write the predicate and a clock in one `any`: whichever is true first makes the task due, so the clock still runs it while the fact gives no time. Under `all` and `not` the predicate combines as any other, and every other predicate evaluates as before. When the predicate decides the trigger, the decision ends with `trigger_false` after its reason.
 - It is no counted clock for the clock-slot records (above) and references no outcome key.
+
+## Condition edges (SCH-M CF-1)
+
+A chain step runs once per new result of its predecessor, and a completion time is served once, without the pass, round and slot reset events that cleared `task.` and `outcome.` facts so that a level could fire again. Two optional boolean members ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only) make a predicate an edge. Both are absent by default: a catalog without them evaluates, serializes and hashes exactly as before. Their inputs are the `TaskRuntimeSnapshot` fields of this task and of the predecessor on the decision's instance ("Settlement Feedback And Eligibility Age"); nothing else is read.
+
+- **`dependency_completed` with `since_own_run: true`.** True when the predecessor's latest terminal state is one of `terminal_states`, and this task has not served it yet: it has no admitted dispatch on the instance, or its latest dispatch is before the predecessor's latest dispatch, or its latest run did not succeed. Otherwise false, with the info reason `dependency_already_served` {`task_id` this task, `predecessor_task_id`} and no wake; the predecessor's next accepted terminal makes it true again.
+  - A failed successor stays due. Its cooldown, its retry and backoff (the Runtime's `on_failure` handling) and its daily limits bound how often it runs again.
+  - A predecessor with no settled run is Unknown (`dependency_state_missing`) as before, and a terminal state the predicate does not accept is false as before.
+  - With `false` or without the member the predicate is the level it always was: true whenever the predecessor's latest terminal state is accepted.
+  - Chain handover ("Chain Handover") names the predecessor the same way, with or without the member.
+- **`fact_time_reached` with `once_per_reading: true`.** A time T the fact holds counts as **served** when this task's latest run on the instance succeeded and was dispatched at or after max(`T + N`, the fact's `observed_at_unix_ms`). A served time makes the predicate false, with the info reason `fact_time_served` {`fact_key`, `served_by_dispatch_unix_ms` that dispatch} and no wake. It stays false until a newer reading, observed after that dispatch, gives a time; the publication of that reading wakes the scheduler, as every fact publication does. A run that failed, or one dispatched before the time or before the reading was observed, served nothing. Every other case is "Fact-time wake" above.
+  - This closes the loop of an emptied slot: a slot left empty shows no countdown, so its last (past) time would otherwise stay true forever. A catalog names a free-slot count fact in an `any` beside it.
+- When a member decides the trigger, the decision ends with `trigger_false` after its reason.
+- **Version.** A V1 document that writes `since_own_run`, with either value, is refused as `unknown_field` at the member; `fact_time_reached` is V2 only as a whole.
+- **Capability.** A Runtime that reads both members reports the always-on subsystem `condition_edges` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). The catalog generator emits neither member for a Runtime whose check-config does not name it; an older Runtime refuses a catalog that writes them (`unknown_field`).
 
 ## Runtime Boundary
 

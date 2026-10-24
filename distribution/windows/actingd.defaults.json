@@ -114,7 +114,8 @@
     }
   },
   "host_claims": {
-    "renewal_slack_ms": 1000
+    "renewal_slack_ms": 1000,
+    "run_end_grace_ms": 120000
   },
   "performance": {
     "monitor": {
