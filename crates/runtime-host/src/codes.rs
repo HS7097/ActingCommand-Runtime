@@ -718,6 +718,10 @@ actingcommand_contract::outcome_codes! {
         InstallTicketMismatch => "install_ticket_mismatch": error / none,
         InstallTransitionConflict => "install_transition_conflict": error / none,
         InstallTransitionUnknown => "install_transition_unknown": error / none,
+        /// Error (ISO-M #419, R8). A lock of one instance alone that guards no data (its admission
+        /// guard, its queue-order lock) was left poisoned by a panic: its poison is cleared, the
+        /// work that met it fails and the instance is fenced; every other instance goes on.
+        InstanceLockPoisoned => "instance_lock_poisoned": error / none,
         InstanceNotRunning => "instance_not_running": error / none,
         InstanceWorkerSpawnFailed => "instance_worker_spawn_failed": error / none,
         InstanceWorkerUnavailable => "instance_worker_unavailable": error / none,
@@ -2458,6 +2462,8 @@ pub(crate) mod test_spellings {
             // #411 A36c: the hook between a PP-OCR diagnostic stream's writes and its seal.
             ConsumePpocrSealTestHook => "consume_ppocr_seal_test_hook",
             ConsumeScheduledPolicyCheckpointTestHook => "consume_scheduled_policy_checkpoint_test_hook",
+            // ISO-M (#419): `contain_failure` at a boundary, and a fence that fails.
+            ContainFailureForTest => "contain_failure_for_test",
             ExpireAllQueuedForTest => "expire_all_queued_for_test",
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
@@ -2466,6 +2472,7 @@ pub(crate) mod test_spellings {
             InjectTestContainedTaskOcrFailurePersistence => "inject_test_contained_task_ocr_failure_persistence",
             InjectTestContainedTaskStabilityEventAppendFailure => "inject_test_contained_task_stability_event_append_failure",
             InjectTestContainedTaskStabilityPersistenceFailure => "inject_test_contained_task_stability_persistence_failure",
+            InjectTestFenceFailure => "inject_test_fence_failure",
             InjectTestPolicyOutcomeProjectionFailure => "inject_test_policy_outcome_projection_failure",
             InjectTestPolicyOutcomeProjectionPosition => "inject_test_policy_outcome_projection_position",
             InjectTestSchedulingTerminalAppendFailure => "inject_test_scheduling_terminal_append_failure",

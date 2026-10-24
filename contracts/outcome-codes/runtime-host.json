@@ -8149,6 +8149,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "instance_lock_poisoned": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A lock of one instance alone that guards no data (its admission guard or its queue-order lock) was left poisoned by a panic (ISO-M #419, R8). Its poison is cleared, the work that met it fails, and the boundary of that work fences the instance; every other instance keeps dispatching and executing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "instance_not_running": {
       "category": "error",
       "ladder_class": "none",
