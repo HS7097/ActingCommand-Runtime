@@ -37,6 +37,9 @@ pub(crate) enum Half {
 }
 
 impl Half {
+    /// Tools first, then the Runtime: the order an update swaps them in.
+    pub(crate) const TOOLS_FIRST: [Self; 2] = [Self::Tools, Self::Runtime];
+
     /// The folder: `runtime` or `tools`.
     pub(crate) const fn dir(self) -> &'static str {
         match self {
@@ -238,6 +241,19 @@ impl Build {
         match half {
             Half::Runtime => &self.runtime,
             Half::Tools => &self.tools,
+        }
+    }
+
+    /// The Runtime manifest's declaration; `None` when it breaks the parse rules.
+    pub(crate) fn speaks(&self) -> Option<Speaks> {
+        self.runtime.speaks()
+    }
+
+    /// Whether both halves declare the same, valid interfaces.
+    pub(crate) fn speaks_agree(&self) -> bool {
+        match (self.runtime.speaks(), self.tools.speaks()) {
+            (Some(runtime), Some(tools)) => runtime == tools,
+            _ => false,
         }
     }
 }

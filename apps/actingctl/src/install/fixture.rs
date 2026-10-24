@@ -3,7 +3,8 @@
 // Test-only: the neutral builds, release folders and roots of the INST-1 gates, and the fake host
 // they run `actingctl install` on. Every name is neutral; no file is a real program.
 
-use super::host::{Host, Installer};
+use super::host::{Host, Installer, Ran, RunningImage};
+use super::manifest::{Speaks, parse_declaration};
 use super::{Answer, execute};
 use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
@@ -283,12 +284,32 @@ pub(super) fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 /// A host on a fixed clock that moves 1 ms per call, its work folder in the test's temporary
-/// folder; it stops an operation after the step `crash_after` names, once.
+/// folder; it stops an operation after the step `crash_after` names, once, and calls `on_step`
+/// after each step first. Its processes are `processes`; its programs answer as `programs` says;
+/// its start logs lie in the root itself.
 pub(super) struct FakeHost {
     clock: Cell<u64>,
     work: PathBuf,
     pub(super) crash_after: Cell<Option<usize>>,
     pub(super) stopped: RefCell<Vec<(String, usize)>>,
+    pub(super) processes: RefCell<Vec<RunningImage>>,
+    pub(super) programs: Programs,
+    #[allow(clippy::type_complexity)]
+    pub(super) on_step: RefCell<Option<Box<dyn Fn(usize)>>>,
+    /// Every program run and every step, in order.
+    pub(super) log: RefCell<Vec<String>>,
+}
+
+/// How the fake programs answer.
+pub(super) struct Programs {
+    /// The builds (`live`, or a commit) whose check-config refuses the configuration.
+    pub(super) refuse_check_config: RefCell<Vec<String>>,
+    /// The ledger head `open` and `events` read.
+    pub(super) ledger_head: Cell<u64>,
+    /// A build whose reader refuses the page holding this sequence.
+    pub(super) unreadable: RefCell<Option<(String, u64)>>,
+    /// The exit code of `ledger-maintenance verify`.
+    pub(super) verify_exit: Cell<i32>,
 }
 
 impl FakeHost {
@@ -299,7 +320,41 @@ impl FakeHost {
             work: work.to_path_buf(),
             crash_after: Cell::new(None),
             stopped: RefCell::new(Vec::new()),
+            processes: RefCell::new(Vec::new()),
+            programs: Programs {
+                refuse_check_config: RefCell::new(Vec::new()),
+                ledger_head: Cell::new(100),
+                unreadable: RefCell::new(None),
+                verify_exit: Cell::new(0),
+            },
+            on_step: RefCell::new(None),
+            log: RefCell::new(Vec::new()),
         }
+    }
+}
+
+/// The build a program belongs to: the commit after `builds`, else `live`.
+fn build_of(program: &Path) -> String {
+    let parts = program
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    parts
+        .iter()
+        .position(|part| part == "builds")
+        .and_then(|index| parts.get(index + 1).cloned())
+        .unwrap_or_else(|| "live".to_owned())
+}
+
+fn ran(exit_code: i32, stdout: Value) -> Ran {
+    Ran {
+        exit_code: Some(exit_code),
+        stdout: serde_json::to_vec(&stdout).expect("JSON"),
+        stderr: if exit_code == 0 {
+            Vec::new()
+        } else {
+            b"refused by the neutral program".to_vec()
+        },
     }
 }
 
@@ -317,11 +372,106 @@ impl Host for FakeHost {
         }
     }
 
+    fn installer_speaks(&self) -> Option<Speaks> {
+        parse_declaration(&json!({
+            "schema_version": "actingcommand.component-interfaces.v1",
+            "speaks": speaks(),
+        }))
+    }
+
     fn work_dir(&self) -> PathBuf {
         self.work.clone()
     }
 
+    fn processes_under(&self, _root: &Path) -> Result<Vec<RunningImage>, Outcome> {
+        Ok(self.processes.borrow().clone())
+    }
+
+    fn run_program(&self, program: &Path, arguments: &[OsString]) -> Result<Ran, Outcome> {
+        let build = build_of(program);
+        let name = program
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let words = arguments
+            .iter()
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        self.log
+            .borrow_mut()
+            .push(format!("{build} {name} {}", words.join(" ")));
+        let head = self.programs.ledger_head.get();
+        Ok(match (name.as_str(), words.first().map(String::as_str)) {
+            ("actingcommand-actingd.exe", Some("check-config")) => {
+                if self.programs.refuse_check_config.borrow().contains(&build) {
+                    ran(
+                        1,
+                        json!({
+                            "schema_version": "actingcommand.actingd.check-config.v2",
+                            "outcome": {"schema_version": "actingcommand.outcome.v1",
+                                "code": "config_decode_failed", "category": "error", "values": {}},
+                        }),
+                    )
+                } else {
+                    ran(
+                        0,
+                        json!({
+                            "schema_version": "actingcommand.actingd.check-config.v2",
+                            "outcome": {"schema_version": "actingcommand.outcome.v1",
+                                "code": "check_config_passed", "category": "success", "values": {}},
+                            "report": {"policy_plan": {"plan": null, "approvals": null},
+                                "standard_packs": {"games": []}},
+                        }),
+                    )
+                }
+            }
+            ("actingcommand-actingd.exe", Some("ledger-maintenance")) => {
+                ran(self.programs.verify_exit.get(), json!({}))
+            }
+            ("actingledger.exe", _) if words.get(2).map(String::as_str) == Some("open") => ran(
+                0,
+                json!({"command": "open", "data": {"latest_sequence": head}}),
+            ),
+            ("actingledger.exe", _) => {
+                let after = words
+                    .iter()
+                    .position(|word| word == "--after")
+                    .and_then(|index| words.get(index + 1))
+                    .and_then(|after| after.parse::<u64>().ok())
+                    .expect("an --after page");
+                let through = head.min(after + 1024);
+                let refused =
+                    self.programs
+                        .unreadable
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|(reader, sequence)| {
+                            *reader == build && after < *sequence && *sequence <= through
+                        });
+                if refused {
+                    ran(1, json!({}))
+                } else {
+                    let next = (through < head).then_some(through);
+                    ran(
+                        0,
+                        json!({"command": "events", "data": {"after_sequence": after,
+                            "through_sequence": through, "limit": 1024, "events": [],
+                            "artifact_evictions": [], "next_after_sequence": next}}),
+                    )
+                }
+            }
+            _ => panic!("an unexpected program: {} {words:?}", program.display()),
+        })
+    }
+
+    fn log_dirs(&self, root: &Path) -> Vec<PathBuf> {
+        vec![root.to_path_buf()]
+    }
+
     fn after_step(&self, operation_id: &str, step: usize) -> Result<(), Outcome> {
+        self.log.borrow_mut().push(format!("step {step}"));
+        if let Some(on_step) = self.on_step.borrow().as_ref() {
+            on_step(step);
+        }
         if self.crash_after.get() == Some(step) {
             self.crash_after.set(None);
             self.stopped

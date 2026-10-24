@@ -8,12 +8,13 @@
 //! Workflow #385 P-c adds `performance`; Workflow #386 SR-1 adds `scheduling`; Workflow #383
 //! AO-1 adds `ledger_observer`; Workflow #398 RD-2 adds `device_link`; Workflow #398 RD-5b adds
 //! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
-//! `touch`; #411 A50 adds `emulator_control`).
+//! `touch`; #411 A50 adds `emulator_control`; Workflow #421 INST-1 adds `install`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
 use crate::emulator_control::EmulatorControlFile;
 use crate::host_claims::HostClaimsFile;
+use crate::install::InstallFile;
 use crate::ledger_observer::LedgerObserverFile;
 use crate::performance::PerformanceFile;
 use crate::recovery_ladder::RecoveryLadderFile;
@@ -65,6 +66,9 @@ pub struct DefaultsFile {
     /// #411 A50.
     #[serde(default)]
     pub emulator_control: Option<EmulatorControlFile>,
+    /// Workflow #421 INST-1.
+    #[serde(default)]
+    pub install: Option<InstallFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

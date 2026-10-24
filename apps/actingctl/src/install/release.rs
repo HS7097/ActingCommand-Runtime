@@ -666,6 +666,7 @@ pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
         } else {
             Vec::new()
         },
+        s0: None,
         previous: Previous {
             live: previous.live.as_ref().map(|live| live.commit.clone()),
             state: Some(previous),

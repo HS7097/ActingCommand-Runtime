@@ -193,6 +193,7 @@ pub(crate) fn adopt(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
         plan_id: None,
         plan: None,
         acknowledged: Vec::new(),
+        s0: None,
         previous: Previous {
             live: previous.live.as_ref().map(|live| live.commit.clone()),
             state: Some(previous),

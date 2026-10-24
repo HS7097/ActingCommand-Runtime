@@ -3,7 +3,9 @@
 //! `actingctl install` (Workflow #421; `contracts/install-cli.md`): the command-line installer of
 //! a single-location root. INST-1 carries `release verify` and `release stage` (a verified build
 //! kept under `install\builds\<commit>`), `adopt` (a root that scripts installed taken over with
-//! its live build kept) and `resume` of their journalled operations. Like `watchdog` and `start`
+//! its live build kept), `update plan|apply` and `rollback plan|apply` (the program files
+//! replaced in place by those of a kept build under the writer lock, a rollback behind its
+//! gate), `undo`, `resume`, `status` and `leftovers`. Like `watchdog` and `start`
 //! the family takes `--root`, not `--state-root`, and exists in the CLI only: configuration file
 //! edits and daemon restarts belong to the person, so no MCP tool drives it.
 //!
@@ -15,9 +17,15 @@ mod adopt;
 pub(crate) mod files;
 mod host;
 mod journal;
+mod lock;
 mod manifest;
+mod plan;
+mod programs;
 mod release;
 mod state;
+mod status;
+mod undo;
+mod update;
 
 // Test-only: Workflow #421 INST-1, test rows IT-1 to IT-4 (frozen model INST-M §12), and the
 // neutral release fixture they share.
@@ -25,13 +33,19 @@ mod state;
 mod fixture;
 #[cfg(test)]
 mod gate_inst1_release;
+// Test-only: Workflow #421 INST-1, test rows IT-5 to IT-12.
+#[cfg(test)]
+mod gate_inst1_update;
 
 pub(crate) use host::{Host, SystemHost};
+// Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
+pub(crate) use state::unfinished_operation;
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::outcome::{Category, Outcome};
 use journal::Operation;
+use plan::PlanKind;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use state::{CurrentState, OperationKind, Paths};
@@ -40,7 +54,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actingctl install release stage --root <root> --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actingctl install adopt --root <root>\nusage: actingctl install resume --root <root> --operation <id>";
+const USAGE: &str = "usage: actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actingctl install release stage --root <root> --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actingctl install adopt --root <root>\nusage: actingctl install update plan --root <root> --build <commit> [--preview] [--accept-ledger-one-way]\nusage: actingctl install update apply --root <root> --build <commit> --plan <id> [--accept-ledger-one-way]\nusage: actingctl install rollback plan|apply --root <root> --to <commit> [--plan <id>] [--accept-ledger-one-way]\nusage: actingctl install undo|resume --root <root> --operation <id>\nusage: actingctl install status --root <root> [--operation <id>] [--check-rollback]\nusage: actingctl install leftovers --root <root>";
 
 /// Runs `install` when the first argument names it; `None` leaves every other command to the
 /// CLI, unchanged.
@@ -105,7 +119,14 @@ pub(crate) fn execute(arguments: &[OsString], host: &dyn Host) -> Answer {
         ["release", "verify", rest @ ..] => release::verify(rest, host),
         ["release", "stage", rest @ ..] => release::stage(rest, host),
         ["adopt", rest @ ..] => adopt::adopt(rest, host),
+        ["update", "plan", rest @ ..] => update::plan_command(rest, host, PlanKind::Update),
+        ["update", "apply", rest @ ..] => update::apply_command(rest, host, PlanKind::Update),
+        ["rollback", "plan", rest @ ..] => update::plan_command(rest, host, PlanKind::Rollback),
+        ["rollback", "apply", rest @ ..] => update::apply_command(rest, host, PlanKind::Rollback),
+        ["undo", rest @ ..] => undo::undo(rest, host),
         ["resume", rest @ ..] => resume(rest, host),
+        ["status", rest @ ..] => status::status(rest, host),
+        ["leftovers", rest @ ..] => status::leftovers(rest, host),
         [word, ..] => Err(cli_line::usage_invalid(
             Some(*word),
             ArgumentProblem::Unknown,
@@ -233,6 +254,7 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     let answer = match operation.journal().kind {
         OperationKind::ReleaseStage => release::resume(operation)?,
         OperationKind::Adopt => adopt::resume(operation)?,
+        OperationKind::Update | OperationKind::Rollback => update::resume(operation)?,
     };
     Ok(resumed(operation_id, answer))
 }

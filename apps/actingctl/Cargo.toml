@@ -25,6 +25,9 @@ mcp = []
 [dependencies]
 actingcommand-contract = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
+# Workflow #421 INST-1: `actingctl install` reads the `install` section and the key table from
+# actingd's configuration file.
+actingcommand-runtime-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -36,8 +39,6 @@ actingcommand-ledger = { workspace = true }
 actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
-# Workflow #387 D1b (D1-M8): the configuration in effect both counters change.
-actingcommand-runtime-config = { workspace = true }
 # Workflow #381 A: the held-start preparation checkpoints and the writer stall gate.
 actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }
 actingcommand-scheduler = { workspace = true }

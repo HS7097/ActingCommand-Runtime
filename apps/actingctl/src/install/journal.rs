@@ -29,6 +29,9 @@ pub(crate) enum StepKind {
     VerifyTree,
     PlaceBuild,
     RecordState,
+    LedgerVerify,
+    StageFile,
+    SwapFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +116,7 @@ pub(crate) struct Opening {
     pub(crate) plan_id: Option<String>,
     pub(crate) plan: Option<Value>,
     pub(crate) acknowledged: Vec<String>,
+    pub(crate) s0: Option<S0>,
     pub(crate) previous: Previous,
 }
 
@@ -214,7 +218,7 @@ impl<'h> Operation<'h> {
             plan: opening.plan,
             guards: Vec::new(),
             acknowledged: opening.acknowledged,
-            s0: None,
+            s0: opening.s0,
             previous: opening.previous,
             steps,
             undo: None,
@@ -288,6 +292,10 @@ impl<'h> Operation<'h> {
         &self.paths
     }
 
+    pub(crate) fn host(&self) -> &'h dyn Host {
+        self.host
+    }
+
     /// Step `n`'s intent as its type.
     pub(crate) fn intent<T: DeserializeOwned>(&self, n: usize) -> Result<T, Outcome> {
         let step = &self.journal.steps[n - 1];
@@ -323,6 +331,51 @@ impl<'h> Operation<'h> {
         self.write()
     }
 
+    /// Starts an undo: `current.json` names the operation again when it had ended (refused
+    /// while another operation is unfinished), and the journal records the undo's start. The
+    /// undo's own milliseconds name what it moves aside.
+    pub(crate) fn begin_undo(&mut self) -> Result<u64, Outcome> {
+        if let Some(undo) = &self.journal.undo {
+            return Ok(undo.started_at_unix_ms);
+        }
+        if self.journal.finished() {
+            refuse_unfinished(&self.paths)?;
+            let current = Current {
+                operation_id: self.journal.operation_id.clone(),
+                kind: self.journal.kind,
+                started_at_unix_ms: self.ms,
+            };
+            let bytes =
+                serde_json::to_vec_pretty(&current).map_err(|error| files::json_failure(&error))?;
+            if !files::create_new(&self.paths.current(), &bytes)? {
+                refuse_unfinished(&self.paths)?;
+                return Err(state_invalid(self.paths.current(), None));
+            }
+        }
+        let now = self.host.now_unix_ms();
+        self.journal.undo = Some(UndoRecord {
+            started_at_unix_ms: now,
+            finished_at_unix_ms: None,
+        });
+        self.write()?;
+        Ok(now)
+    }
+
+    /// Ends an undo: the journal records it (and `result` when the operation had none), and
+    /// `current.json` is renamed `current.json.finished-<ms>`.
+    pub(crate) fn finish_undo(mut self, result: &Outcome) -> Result<(), Outcome> {
+        let now = self.host.now_unix_ms();
+        if let Some(undo) = self.journal.undo.as_mut() {
+            undo.finished_at_unix_ms = Some(now);
+        }
+        if self.journal.result.is_none() {
+            self.journal.result = Some(envelope(result)?);
+        }
+        self.journal.finished_at_unix_ms.get_or_insert(now);
+        self.write()?;
+        retire_current(&self.paths, now)
+    }
+
     /// Records the operation's result and ends it: `current.json` renamed
     /// `current.json.finished-<ms>`.
     pub(crate) fn finish(mut self, result: &Outcome) -> Result<(), Outcome> {
@@ -352,6 +405,9 @@ impl<'h> Operation<'h> {
 /// `current.json` renamed `current.json.finished-<ms>`, `<ms>` the first free one from `now`.
 fn retire_current(paths: &Paths, now: u64) -> Result<(), Outcome> {
     let current = paths.current();
+    if !current.exists() {
+        return Ok(());
+    }
     let mut ms = now;
     loop {
         let finished = files::with_suffix(&current, &format!(".finished-{ms}"));
@@ -360,4 +416,38 @@ fn retire_current(paths: &Paths, now: u64) -> Result<(), Outcome> {
         }
         ms += 1;
     }
+}
+
+/// The ids of every journalled operation of the root, oldest first.
+pub(crate) fn operation_ids(paths: &Paths) -> Result<Vec<String>, Outcome> {
+    let directory = paths.operations();
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(files::os_failure(
+                &directory,
+                &error,
+                actingcommand_contract::outcome::IoOp::ReadDir,
+            ));
+        }
+    };
+    let mut operations = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            files::os_failure(
+                &directory,
+                &error,
+                actingcommand_contract::outcome::IoOp::ReadDir,
+            )
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(operation_id) = name.strip_suffix(".json")
+            && let Some(ms) = operation_ms(operation_id)
+        {
+            operations.push((ms, operation_id.to_owned()));
+        }
+    }
+    operations.sort();
+    Ok(operations.into_iter().map(|(_, id)| id).collect())
 }
