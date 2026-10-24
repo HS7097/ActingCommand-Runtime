@@ -454,7 +454,11 @@
     }
   },
   "emulator_control": {
-    "restart_exit_wait_ms": 60000
+    "restart_exit_wait_ms": 60000,
+    "watch_enabled": true,
+    "watch_interval_ms": 60000,
+    "restart_attempts": 3,
+    "restart_window_ms": 1800000
   },
   "watchdog": {
     "start_window_ms": 900000
