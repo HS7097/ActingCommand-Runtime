@@ -6,12 +6,15 @@
 //! `key=value` detail of `contained_task_select_invalid`.
 
 use super::{AxisRect, DeclaredAdvance, DeclaredRect, DeclaredReposition, Moves, ScanDeclaration};
-use crate::contained_task::MAX_CAPTURE_INTERVAL_MS;
 use actingcommand_contract::{CandidateLayoutKind, CandidateRect, ScanAxis};
 use actingcommand_recognition_pack::{
     CandidateLayout, RecognitionEvaluator, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{SelectionPolicy, SortDirection, TieBreakKey};
+
+/// The longest `settle.interval_ms` (`contracts/selection-graph.md`: 1..=5000). It shared the
+/// capture interval's bound until PERF-B1 moved that one to the configuration; it is unchanged.
+const MAX_SETTLE_INTERVAL_MS: u64 = 5_000;
 
 /// The writer's provisional ceiling of both viewport bounds (S0 §2.1, §8).
 const MAX_SCAN_VIEWPORTS: u32 = 128;
@@ -110,7 +113,7 @@ impl ScanDeclaration {
         }
         let settle = self.settle;
         let bounds = self.bounds;
-        if !(1..=MAX_CAPTURE_INTERVAL_MS).contains(&settle.interval_ms)
+        if !(1..=MAX_SETTLE_INTERVAL_MS).contains(&settle.interval_ms)
             || settle.timeout_ms < settle.interval_ms
             || settle.timeout_ms > bounds.max_ms
         {

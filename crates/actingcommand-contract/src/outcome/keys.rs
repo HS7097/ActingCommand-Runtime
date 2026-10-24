@@ -562,6 +562,10 @@ outcome_keys! {
     reserve_at_least: integer,
     amount_after: integer,
     // ---- Workflow #411 B16 part 2: end ----
+    // ---- SCH-M CF-1 (condition edges, contracts/scheduling/README.md): begin ----
+    predecessor_task_id: name,
+    served_by_dispatch_unix_ms: unix_ms,
+    // ---- SCH-M CF-1: end ----
     // ---- Workflow #421 INST-0 (`actingctl install`, contracts/install-cli.md): begin ----
     install_operation_id: id,
     plan_id: id,
@@ -570,5 +574,7 @@ outcome_keys! {
     rollback_gate_parts: list(vocab(rollback_gate_part)),
     ledger_sequence: integer,
     install_guards: list(vocab(install_guard)),
+    // Ruling 54 (#420 S4): the kind of `install_caveat_noted`, the one warning of the family.
+    install_caveat: vocab(install_caveat),
     // ---- Workflow #421 INST-0: end ----
 }

@@ -5,9 +5,8 @@
 //! only under a fatal top. Received outcomes are relayed unchanged and not checked as emissions;
 //! a code the catalog does not list (a test registry) skips the key checks.
 //!
-//! The checks read the committed merged file `contracts/outcome-codes.json` that the build
-//! embeds, not the fragments: a fragment change is seen once its CI-regenerated merged file
-//! is committed.
+//! The checks read the merged catalog that the build generates from the fragments and embeds
+//! (`build.rs`, Workflow #420 S2): a fragment change is seen by the next build.
 
 use super::{Category, Code, CodeStr, KeyKind, Outcome, key_kind};
 use serde::Deserialize;
