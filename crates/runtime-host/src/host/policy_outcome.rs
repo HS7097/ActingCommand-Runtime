@@ -188,14 +188,19 @@ impl HostShared {
             let Some(lease_id) = grant.links().lease_id() else {
                 continue;
             };
-            let lease_events = self
-                .ledger
-                .query(EventQuery {
+            // LN-5 (#422, LEAN-L §3.3): the lease's records, and below the run's, are read from
+            // the store page by page through `through`.
+            let lease_events = crate::recovery_read::read_pages(
+                &self.ledger,
+                &EventQuery {
                     to_sequence: Some(through),
                     lease_id: Some(*lease_id),
                     ..EventQuery::default()
-                })
-                .map_err(|_| ledger_error(OPERATION))?;
+                },
+                through,
+                self.ledger.history_page_events(),
+            )
+            .map_err(|_| ledger_error(OPERATION))?;
             // Only a run-linked release is the run's (#670 final review).
             if lease_events.iter().any(|event| {
                 run_lease_release_matches(
@@ -236,21 +241,24 @@ impl HostShared {
             // review); a client run's dispatch keeps waiting for its late outcome.
             let scheduled =
                 scheduled_procedures.contains(&policy.dispatch_procedure_ref(&decision_id)?);
-            let run_started = self
-                .ledger
-                .query(EventQuery {
+            let run_started = crate::recovery_read::read_pages(
+                &self.ledger,
+                &EventQuery {
                     to_sequence: Some(through),
                     run_id: Some(*run_id),
                     ..EventQuery::default()
-                })
-                .map_err(|_| ledger_error(OPERATION))?
-                .iter()
-                .any(|event| {
-                    matches!(
-                        event.payload(),
-                        EventPayload::Task(TaskPayload::Semantic(_))
-                    )
-                });
+                },
+                through,
+                self.ledger.history_page_events(),
+            )
+            .map_err(|_| ledger_error(OPERATION))?
+            .iter()
+            .any(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Task(TaskPayload::Semantic(_))
+                )
+            });
             if !(run_started || scheduled) {
                 continue;
             }
@@ -1188,16 +1196,19 @@ impl HostShared {
         context: &PolicyRunContext,
         failure: &RequestFailure,
     ) -> RuntimeHostResult<PolicyExecutionInput> {
-        let task_terminals = self
-            .ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the run's chain is read from the store page by page at the
+        // head.
+        let task_terminals = crate::recovery_read::read_through_head(
+            &self.ledger,
+            &EventQuery {
                 correlation_id: Some(context.correlation_id()),
                 task_id: Some(context.task_id()),
                 run_id: Some(context.run_id()),
                 lease_id: Some(context.lease_token().lease_id()),
                 ..EventQuery::default()
-            })
-            .map_err(|_| ledger_error(HostLocation::ValidatePolicyRunFailure))?;
+            },
+        )
+        .map_err(|_| ledger_error(HostLocation::ValidatePolicyRunFailure))?;
         let task_terminals = task_terminals
             .iter()
             .filter(|event| {

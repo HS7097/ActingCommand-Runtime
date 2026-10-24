@@ -3,7 +3,7 @@
 //! Ledger-rebuilt fact projection shared by policy and execution boundaries.
 
 use crate::codes::{HostCode, HostLocation};
-use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages, read_through_head};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
@@ -605,17 +605,21 @@ impl InstanceFactStore {
                 HostLocation::SynchronizeFactStore,
             )
         })?;
-        let events = ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the records since the last synchronization are read from the
+        // store page by page at the head, never as one command over all of them.
+        let events = read_through_head(
+            ledger,
+            &EventQuery {
                 from_sequence: Some(from_sequence),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                fact_fatal(
-                    HostCode::FactStoreSyncFailed,
-                    HostLocation::SynchronizeFactStore,
-                )
-            })?;
+            },
+        )
+        .map_err(|_| {
+            fact_fatal(
+                HostCode::FactStoreSyncFailed,
+                HostLocation::SynchronizeFactStore,
+            )
+        })?;
         for event in events {
             self.replay_event(&event, ledger)?;
         }

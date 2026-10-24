@@ -4038,12 +4038,17 @@ impl RuntimeHost {
         &self,
         query: EventQuery,
     ) -> RuntimeHostResult<Vec<PersistedEvent>> {
-        self.shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
-            .ledger
-            .query(query)
-            .map_err(|_| {
-                ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
-            })
+        // LN-5 (#422, LEAN-L §3.3): the selection is read from the store page by page at the
+        // head, as every other whole-history read of the host; one command per page.
+        crate::recovery_read::read_through_head(
+            &self
+                .shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
+                .ledger,
+            &query,
+        )
+        .map_err(|_| {
+            ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
+        })
     }
 
     /// Workflow #411 B15 R4, test only: the remedy table in effect.

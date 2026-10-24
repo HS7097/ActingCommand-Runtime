@@ -325,9 +325,10 @@ impl HostShared {
         let Some(main) = resolution.main else {
             return Ok(failed(None));
         };
+        // LN-5 (#422, LEAN-L §3.3): each of the run's selections is read from the store page by
+        // page at the head.
         let query = |query: EventQuery| {
-            self.ledger
-                .query(query)
+            crate::recovery_read::read_through_head(&self.ledger, &query)
                 .map_err(|_| ledger_error(HostLocation::ReadFailureIdentityRows))
         };
         let (rows, scope, operation) = if main.resolved {
@@ -467,9 +468,9 @@ impl HostShared {
         .run_id()
         .copied();
         let previous = match previous_run {
+            // LN-5 (#422, LEAN-L §3.3): the run's captures are read page by page at the head.
             Some(run_id) => locate_error_frame(run_id, |query: EventQuery| {
-                self.ledger
-                    .query(query)
+                crate::recovery_read::read_through_head(&self.ledger, &query)
                     .map_err(|_| ledger_error(HostLocation::CompareFailureFrames))
             })?,
             None => None,
