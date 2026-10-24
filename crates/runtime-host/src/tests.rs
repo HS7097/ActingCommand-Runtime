@@ -169,6 +169,9 @@ mod gate_373_nav5;
 mod gate_411_b37_entry;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
+// Workflow #357 DB-1: the shared tables of a standard-pack game root at startup and in
+// check-config's report.
+mod gate_357_db1;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
