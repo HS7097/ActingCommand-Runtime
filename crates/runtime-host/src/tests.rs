@@ -303,6 +303,9 @@ mod gate_411_a45;
 mod gate_411_a46;
 // #411 A47: a ladder whose application stop fails keeps its key and climbs to its next rung.
 mod gate_411_a47;
+// #411 A64: a run's resource close that meets its lapsed lease fences only its instance; the
+// Runtime, the run's own terminal and the other instances go on.
+mod gate_411_a64;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;

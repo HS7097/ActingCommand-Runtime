@@ -311,6 +311,11 @@ The members of `report`:
       `config_subsystem_discovery_unbound`).
     - `runtime_fact_snapshot`: always on (`config_subsystem_always_on`); it
       rides the performance monitor thread.
+    - `condition_edges` (SCH-M CF-1): always on (`config_subsystem_always_on`).
+      The Runtime reads the catalog edge members `since_own_run` and
+      `once_per_reading` ([scheduling/README.md](scheduling/README.md),
+      "Condition edges"); the catalog generator writes them only for a Runtime
+      that names this row.
     - `resource_reading_time` (SCH-M CF-2): always on
       (`config_subsystem_always_on`). The Runtime admits completion-time
       reading marks (`timestamp_ms`) and publishes their times
