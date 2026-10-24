@@ -1828,3 +1828,22 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_412_b3_s2::b3_s2_t2_4_two_operation_requests_on_one_box_land_on_different_candidates",
 ]
 incident = ["#412 B-3"]
+
+# Workflow #383 AO-3 (contracts/ledger-observer.md §3, §4 G2 and G16, §6, §13, Appendix A; LEDG §14.2 AO3-a to AO3-k; host key 411 provisional, the coordinator assigns the key): a fact publication is one store revision applied first and one capture without a synchronous ledger call, and succeeds while the flush is held; an input between evaluation and admission makes the intent stale; the event a fact waits on invalidates it at once and is captured before the invalidation, for each gate's event; the snapshot id follows the two stores' revision pairs and records, not the ledger head; the acceptance rules stay and a refused change moves no revision and records nothing; one pass of a gate is one capture; the ledger observer's architecture guard keeps every ledger write, barrier, read, capture and tier call on the whitelist that started as Appendix A, and the exception table matches its W rows
+[[gate]]
+key = "411"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_a_a_publication_is_one_store_revision_and_one_capture_without_a_synchronous_call",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_b_a_publication_while_the_flush_is_held_succeeds_and_wakes_the_driver",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_c_an_input_between_evaluation_and_admission_makes_the_intent_stale",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_d_the_event_a_fact_waits_on_invalidates_it_at_once_and_comes_first",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_e_the_snapshot_id_follows_the_store_revisions_and_records_not_the_ledger_head",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_f_the_acceptance_rules_stay",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_g_a_refused_change_moves_no_revision_and_records_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_h_each_gate_s_event_invalidates_the_fact_waiting_on_it_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao3::ao3_i_one_pass_is_one_capture_and_the_store_gate_does_not_wait",
+    "actingcommand-actinglab-architecture::ledger_observer_guard::ao3_j_ledger_calls_stay_on_the_whitelist_of_the_observer_guard",
+    "actingcommand-actinglab-architecture::ledger_observer_guard::ao3_k_the_exception_table_and_the_whitelist_s_w_rows_correspond_row_for_row",
+]
+incident = ["#383"]
