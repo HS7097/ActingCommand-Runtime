@@ -3546,6 +3546,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_settlement_anchor_invalid": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The start's settlement of the direct contained runs of earlier epochs (#411 A65) read the runtime fact host.contained_settlement, which names the start event of the last start that completed this settlement, and found no integer the Runtime recorded, or a start event at or after this start's own. The start fails; the fact comes back at every start.",
+      "common_causes": "A ledger whose runtime facts were changed outside the Runtime, or a ledger written by another program.",
+      "handling": "TBD"
+    },
     "contained_task_active_identity_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -20599,6 +20619,25 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A standard-pack game directory or root file, or the root directory itself (then without game), could not be read (an I/O failure other than a root file's absence; the OS error is the cause). Recorded at startup; a run that needs the root is refused in preparation (Workflow #373 NAV-6). A broken root never stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "standard_pack_table_column_expired": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "table_column": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A column of a standard-pack table declares valid_until_unix_s and that second has passed, so every cell of the column reads null (Workflow #357 DB-1, M-357a v1.1). A note of check-config, one per expired column.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

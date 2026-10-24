@@ -646,6 +646,8 @@ fn refresh_state(
         }),
         last_duration_ms: None,
         failure_streak: Some(failure_streak),
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
     }
 }
 

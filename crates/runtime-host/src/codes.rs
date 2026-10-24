@@ -448,6 +448,11 @@ actingcommand_contract::outcome_codes! {
         ClientFactReplayOriginConflict => "client_fact_replay_origin_conflict": error / none,
         ClientFactRequestIdConflict => "client_fact_request_id_conflict": error / none,
         ConnectionPreparationCooldownOverflow => "connection_preparation_cooldown_overflow": error / none,
+        /// Fatal (#411 A65). The runtime fact `host.contained_settlement`, which names the start
+        /// event of the start that last completed the previous-epoch settlement of direct runs,
+        /// is not the Runtime's integer or names no start event before this start's. The start
+        /// fails; the fact comes back at every start.
+        ContainedSettlementAnchorInvalid => "contained_settlement_anchor_invalid": fatal / none,
         ContainedTaskActiveIdentityMismatch => "contained_task_active_identity_mismatch": error / none,
         ContainedTaskAlreadyRunning => "contained_task_already_running": error / none,
         ContainedTaskCancellationIdentityMissing => "contained_task_cancellation_identity_missing": error / none,
@@ -1409,6 +1414,12 @@ actingcommand_contract::outcome_codes! {
         /// `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
         // ---- Workflow #373 NAV-6: end
+        // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §2.2, register §1.65 TB3): begin
+        /// Warning. A column of a standard-pack table declares `valid_until_unix_s` and that
+        /// second has passed: every cell of the column reads `null` (keys `game`, `path`,
+        /// `table_column`). A note of check-config.
+        StandardPackTableColumnExpired => "standard_pack_table_column_expired": warning / none,
+        // ---- Workflow #357 DB-1: end
         // ---- Workflow #373 NAV-5 (full-match entry routing, M-373 §5, §9.1): begin
         /// Info. A locate of the entry gate matched exactly one page of `pages.json` (keys
         /// `page_id`, `count`: the locate's number).
@@ -2427,6 +2438,8 @@ pub(crate) mod test_spellings {
             ScheduledPolicyCheckpointMarkerWriteFailed => "scheduled_policy_checkpoint_marker_write_failed": error / none,
             ScheduledPolicyCheckpointTestHookAlreadyInstalled => "scheduled_policy_checkpoint_test_hook_already_installed": error / none,
             SchedulingTerminalAppendInjectedFailure => "scheduling_terminal_append_injected_failure": error / none,
+            // #411 A65: a start made to fail right after it appended its start event.
+            StartFailedAfterStartEventForTest => "start_failed_after_start_event_for_test": error / none,
             TestClaimNotGranted => "test_claim_not_granted": error / none,
             TestInstanceMissing => "test_instance_missing": error / none,
             TestLeaseExpiryCheckpointDuplicate => "test_lease_expiry_checkpoint_duplicate": error / none,
@@ -2468,6 +2481,7 @@ pub(crate) mod test_spellings {
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
             FailScheduledHostClaimForTest => "fail_scheduled_host_claim_for_test",
+            FailStartAfterStartEventForTest => "fail_start_after_start_event_for_test",
             InjectInstanceWorkerPanicForTest => "inject_instance_worker_panic_for_test",
             InjectTestContainedTaskOcrFailurePersistence => "inject_test_contained_task_ocr_failure_persistence",
             InjectTestContainedTaskStabilityEventAppendFailure => "inject_test_contained_task_stability_event_append_failure",

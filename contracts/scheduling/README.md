@@ -891,6 +891,19 @@ projects carries what earlier runs of that task on that instance settled:
   precedes its admission). The score stage uses it as the utility cost:
   `cost_ms = last_duration_ms` when above zero, else the declared
   `expected_duration_ms`, and the `score_computed` detail prints that `cost_ms`.
+  When the snapshot carries the expected duration E (below), the cost is E.
+- `expected_runtime_ms` and `expected_runtime_runs` (SCH-M slice ED-1, frozen model v1.0 §3.4
+  D-12, D-15) carry the expected duration E of the pair and how many samples it is the mean of:
+  E = min(⌈mean of the latest `runs` successful scheduled runs of the task's package on the
+  instance⌉ + `margin_ms`, the task's `loop_budget.max_runtime_ms`), with the instance's
+  `scheduling.expected_runtime.*` in effect (`actingcommand_policy::expected_runtime`). With no
+  sample, or with `enabled` false, E is the declared value and both members are absent, so the
+  evaluation input and every evaluation are byte for byte those without samples. When present, E
+  (at most `max_runtime_ms`) replaces the declared `expected_duration_ms` as the candidate's cost,
+  as the dispatch intent's `expected_duration_ms` (hence the budget reservations, forward
+  planning and the random-delay cut) and in the strategy's production estimate. Hard deadlines,
+  lease TTLs and `loop_budget.max_runtime_ms` never use E. The host fills the members from the
+  instance's `health.run_duration` record from slice ED-2 on; until then they are absent.
 - `failure_streak` is the number of consecutive failed runs ending at that
   latest completed run, 0 after a success. The evaluator validates and carries
   it; the score stage does not consume it yet.
@@ -1055,7 +1068,7 @@ Recoverable failures receive a positive, bounded backoff. Only repeated failures
 
 Before an intent becomes trusted, a Runtime-owned manifest content-addressably binds `procedure_ref`, the package SHA-256 digest, `operation_id`, and the ordered `yield_points`. The binding digest participates in decision identity and is persisted with dispatch events. Admission resolves the alias again and requires the exact package and binding digests before requesting a lease.
 
-`expected_duration_ms` is the declared reservation and planning duration. `cooldown_ms` is the minimum interval after the last dispatch before the task can become eligible again. `next_run_clamp_ms` caps recoverable retry delay. `yield_points` names the only package-declared safe cooperation points that may be exposed to a mechanism adapter; it never grants a new operation. `sensitive` disables automatic restart after failure and does not weaken fatal-error propagation.
+`expected_duration_ms` is the declared reservation and planning duration D; a pair whose snapshot carries the expected duration E (SCH-M ED-1, "Settlement Feedback And Eligibility Age") uses E instead. `cooldown_ms` is the minimum interval after the last dispatch before the task can become eligible again. `next_run_clamp_ms` caps recoverable retry delay. `yield_points` names the only package-declared safe cooperation points that may be exposed to a mechanism adapter; it never grants a new operation. `sensitive` disables automatic restart after failure and does not weaken fatal-error propagation.
 
 ## Clock Sources
 

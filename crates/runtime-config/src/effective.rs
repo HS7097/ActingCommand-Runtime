@@ -13,7 +13,8 @@ use crate::execution::CaptureCadenceConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
-    FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
+    ExpectedRuntimeConfig, FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig,
+    SchedulingConfig,
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
@@ -526,6 +527,17 @@ impl EffectiveConfig {
     /// a whole).
     pub fn remedy(&self, instance_id: &str) -> Result<RemedyConfig, ConfigFailure> {
         scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// SCH-M ED-1 (§3.4 "Configuration"): the expected-duration keys in effect for the instance
+    /// whose registry id is `instance_id`: each of `enabled`, `runs` and `margin_ms` the instance's
+    /// own `instance.<instance_id>.scheduling.expected_runtime.<member>` when the configuration
+    /// carries it, otherwise the section's `scheduling.expected_runtime.<member>`.
+    pub fn expected_runtime(
+        &self,
+        instance_id: &str,
+    ) -> Result<ExpectedRuntimeConfig, ConfigFailure> {
+        scheduling::instance_expected_runtime(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
     /// Workflow #405 D1: the random delay in effect for the instance whose registry id is

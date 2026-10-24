@@ -70,6 +70,8 @@ pub(crate) struct Installation {
     pub(crate) layout: Layout,
     pub(crate) config_plain: PathBuf,
     pub(crate) state_root: PathBuf,
+    /// #411 A66: the start window of the configuration (`watchdog.start_window_ms`).
+    pub(crate) start_window_ms: u64,
 }
 
 impl Installation {
@@ -99,8 +101,10 @@ impl Installation {
     }
 
     fn ab(root: PathBuf, selected: InstalledProcess) -> Result<Self, Outcome> {
+        let (state_root, start_window_ms) = selected_configuration(&selected)?;
         Ok(Self {
-            state_root: selected_state_root(&selected)?,
+            state_root,
+            start_window_ms,
             root_plain: plain_path(&root),
             config_plain: plain_path(&selected.config_path()),
             layout: Layout::Ab {
@@ -117,8 +121,10 @@ impl Installation {
     fn single(root: PathBuf) -> Result<Self, Outcome> {
         let config_plain = plain_path(&root.join(ROOT_CONFIG_FILE));
         let bytes = root_config_bytes(&root.join(ROOT_CONFIG_FILE), &config_plain)?;
+        let (state_root, start_window_ms) = configured(&bytes, &config_plain)?;
         Ok(Self {
-            state_root: configured_state_root(&bytes, &config_plain)?,
+            state_root,
+            start_window_ms,
             root_plain: plain_path(&root),
             config_plain,
             layout: Layout::Single,
@@ -226,17 +232,20 @@ fn root_config_bytes(path: &Path, config_plain: &Path) -> Result<Vec<u8>, Outcom
     Ok(bytes)
 }
 
-fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Outcome> {
+fn selected_configuration(selected: &InstalledProcess) -> Result<(PathBuf, u64), Outcome> {
     let config = plain_path(&selected.config_path());
     let bytes = selected
         .config_bytes()
         .map_err(|error| Outcome::new(error.code()))?;
-    configured_state_root(&bytes, &config)
+    configured(&bytes, &config)
 }
 
-/// A configuration's `state_root`: a document that is not JSON is `watchdog_config_unreadable`,
-/// one without an absolute `state_root` `watchdog_state_root_invalid`, each with its `path`.
-fn configured_state_root(bytes: &[u8], config: &Path) -> Result<PathBuf, Outcome> {
+/// A configuration's `state_root` and its start window in milliseconds: a document that is not
+/// JSON is `watchdog_config_unreadable`, one without an absolute `state_root`
+/// `watchdog_state_root_invalid`, each with its `path`. #411 A66: the start window is its
+/// `watchdog.start_window_ms`, else the defaults file's; a value outside its type or range is
+/// the configuration's own refusal, `config_value_invalid` with the key.
+pub(crate) fn configured(bytes: &[u8], config: &Path) -> Result<(PathBuf, u64), Outcome> {
     let document: Value = serde_json::from_slice(bytes).map_err(|error| {
         Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
             .path(config)
@@ -249,7 +258,9 @@ fn configured_state_root(bytes: &[u8], config: &Path) -> Result<PathBuf, Outcome
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .ok_or_else(|| Outcome::new(ActingctlCode::WatchdogStateRootInvalid).path(config))?;
-    Ok(state_root)
+    let start_window_ms = actingcommand_runtime_config::watchdog::start_window_ms(&document)
+        .map_err(|failure| failure.outcome())?;
+    Ok((state_root, start_window_ms))
 }
 
 /// The canonical installation root carries the Windows verbatim prefix; cmd, WMI, the task
@@ -465,10 +476,13 @@ fn epoch_text(value: &Value) -> Option<String> {
 /// among the logs in `log_directories` (Workflow #381 A: a state root a test wrote is read the
 /// same way, I7). `root` is the supervised installation: a terminal outcome that names another
 /// installation's `install_root` is not this root's (Workflow #378 A6a, model section 8.2 N4).
+/// `start_window_ms` is the installation's start window (#411 A66), which bounds the open start
+/// an answering owner may belong to.
 pub(crate) fn observe_owner(
     state_root: &Path,
     log_directories: &[PathBuf],
     root: Option<&Path>,
+    start_window_ms: u64,
 ) -> Result<Observed, Outcome> {
     let (lock, journal, bytes) = read_owner_journal(state_root)?;
     let terminal = match (&lock, &journal) {
@@ -511,6 +525,7 @@ pub(crate) fn observe_owner(
         journal,
         terminal,
         earlier_terminal,
+        start_window_ms,
     })
 }
 

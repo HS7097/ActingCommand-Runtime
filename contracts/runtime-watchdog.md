@@ -12,8 +12,9 @@ Scheduler runs one tick a minute through `<root>\tools\actingwatch.exe`.
 The watchdog reads the ledger never and writes it never. It adds no event type, no
 fact and no persisted Runtime structure. It is a read-only consumer of `owner.lock`
 (it never locks it), `runtime-info.json`, `install\active.json` (through the contract
-reader) and the configuration's `state_root` (the selected one, or a single-location
-root's `actingd.config.json`). Its own memory is the
+reader) and the configuration's `state_root` and, from #411 A66, its
+`watchdog.start_window_ms` (the selected one, or a single-location root's
+`actingd.config.json`; see "Start window"). Its own memory is the
 operational file `<root>\watchdog\state.json`, outside the ledger (below).
 
 ## Commands
@@ -176,7 +177,8 @@ watchdog brings back:
 
 **Formal starts.** A live owner is the watchdog's own when a start record names its
 epoch, or when a start whose result is still open (`watchdog_start_pending`,
-`start_timeout`) spawned it: its recorded start lies in `[at − 2 s, at + 180 s]`.
+`start_timeout`) spawned it: its recorded start lies in `[at − 2 s, at + start window]`
+(#411 A66; it was 180 s).
 Every other live owner is a formal start (acsetup, a logon script, an operator's
 restart script, the console). This is decided again on every tick, from an answering
 owner only. A formal start clears sticky exhaustion; starts before it no longer count.
@@ -225,7 +227,8 @@ to children are plain (no `\\?\`).
   reaches the Runtime, so a manual run never holds its caller's terminal.
 - There is no third method: the Runtime is never started inside a job.
 
-**Readiness**, polled every 500 ms for 180 s: L locked and an answering owner whose
+**Readiness**, polled every 500 ms for the start window (below; it was 180 s): L locked
+and an answering owner whose
 recorded start is not older than the spawn minus 2 s. An exit of the started process
 first is `exited_during_startup` (`log`, and the child's `exit_code` or the `cmd`'s
 `pid`). No answer in time is `start_timeout` (`log`, `timeout_ms`); the process is
@@ -238,6 +241,22 @@ line on success:
 
 A single-location root has no generation: its lines and its start records carry no
 `generation`.
+
+**Start window** (#411 A66, Runtime v0.12.12; coordinator ruling 10-24). How long a start may
+take is `watchdog.start_window_ms` of the configuration the tick already reads for the state
+root: the file's value, else the defaults file's, 900 000 ms (15 minutes; a start's ledger
+open alone may take up to `ledger_observer.open_timeout_ms`, 600 s, and a whole start took 4
+to 6 minutes on the 10-24 ledger). It lies in `60000..=3600000`; a value outside it or no
+integer is `config_value_invalid` (`config_key`, `config_value_problem`, `range_min`,
+`range_max`), and the tick is `watchdog_misconfigured` with it as the cause (row 1). Every
+wait for a start uses the same window: the readiness above (`start_timeout` carries it as
+`timeout_ms`), the formal-start test (`[at − 2 s, at + start window]`), `actingctl start` and
+`restart` (their default readiness, which an explicit `--ready-timeout-s` overrides, and
+their wait for `run.lock`, the window plus 20 s) and `uninstall`'s wait for `run.lock` (the
+window plus 20 s; the defaults file's window when the root no longer resolves). The key is
+read from the file at every tick and command, never from the Runtime's configuration in
+effect, so an instruction cannot change it ([runtime-config.md](runtime-config.md), "The
+`watchdog` section").
 
 On failure, `ERROR watchdog_start_failed` with `generation`, `method`, the failure as
 `failure_code` and a `cause` field, `previous_epoch`, `previous_pid` and `last_line`:
@@ -318,8 +337,9 @@ differs); a query that failed is `watchdog_misconfigured` in `attention`, and th
 section carries it as `error`.
 
 `uninstall` ends a tick in flight (`schtasks /End`; a start it already issued keeps
-running), deletes the task (`schtasks /Delete /F`), then waits up to 200 s for
-`run.lock` and reports `tick_in_progress` if a tick still holds it. When the name is
+running), deletes the task (`schtasks /Delete /F`), then waits up to the start window plus
+20 s (#411 A66; it was 200 s) for `run.lock` and reports `tick_in_progress` if a tick still
+holds it. When the name is
 not registered it lists `other_watchdog_tasks` in `\`, so a root spelled differently
 than at install can be found. `install` holds `run.lock` (for up to 30 s, else
 `watchdog_install_refused` caused by `watchdog_run_in_progress`) while it rewrites
@@ -400,7 +420,7 @@ the Runtime must write stdout and stderr to such a log (X3):
 | the console | `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log` |
 | a logon script | `<root>\actingd-autostart-<stamp>.out.log` and `.err.log` |
 | an operator's WMI restart script | `<root>\actingd-wmi-<stamp>.log` |
-| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`; while acsetup holds `install\writer.lock` both refuse as row 7a does, with `start_runtime_refused` caused by `watchdog_installer_busy`, `restart` before it stops anything; `restart --wait-idle` reads Status every 10 s while it waits for idle, since each Status records a ledger observation) | `<root>\actingd-<ms>.log` |
+| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`, waiting for readiness up to the start window unless `--ready-timeout-s` is given (#411 A66); while acsetup holds `install\writer.lock` both refuse as row 7a does, with `start_runtime_refused` caused by `watchdog_installer_busy`, `restart` before it stops anything; `restart --wait-idle` reads Status every 10 s while it waits for idle, since each Status records a ledger observation) | `<root>\actingd-<ms>.log` |
 | the watchdog | `<root>\watchdog\actingd-<ms>.log` |
 | acsetup's Startup-folder launcher | the UI's side: the UI major's launcher has acforward write its own and actingd's output to `<root>\actingd-autostart-<stamp>.log` (Workflow #378, model §16 A-3). A launcher start that writes no log is, for the Runtime, a hand start (next row). |
 | a hand start in a terminal | actingd's fallback log, for a start refusal only: when its stderr is a console or absent, actingd also appends the refusal's daemon lines to `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log`, with `install_root` once it resolved its installation (Workflow #378 A6a). A stop after the start has no log: it shows only as `watchdog_formal_close_unlogged` in `status`. |
