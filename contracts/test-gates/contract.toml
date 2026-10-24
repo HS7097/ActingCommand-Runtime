@@ -322,11 +322,13 @@ incident = ["#378 A2a"]
 key = "O2"
 coverage = "Y"
 tests = [
-    "actingcommand-outcome-guard::guard::g9_merged_catalog_is_current_and_keeps_released_entries",
-    "actingcommand-outcome-guard::guard::g9_reports_a_stale_merged_file_and_a_changed_settled_entry",
+    "actingcommand-outcome-guard::guard::g9_fragments_merge_and_keep_released_entries",
+    "actingcommand-outcome-guard::guard::g9_reports_a_changed_settled_entry",
     "actingcommand-outcome-guard::guard::gate_c5_g1b_every_code_has_a_ladder_class_and_a_settled_class_stays",
+    "actingcommand-outcome-guard::guard::gate_420_s2_a_fragment_change_needs_no_committed_merged_file",
+    "actingcommand-outcome-guard::guard::gate_420_s3_a_released_code_retyped_is_refused_from_the_compact_release_file",
 ]
-incident = ["#387 D1a"]
+incident = ["#387 D1a", "#420 S2", "#420 S3"]
 
 # Outcome guard G2-G5, G7, G8
 [[gate]]
