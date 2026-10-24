@@ -278,6 +278,22 @@
       "type": "integer",
       "description": "Free space on a volume, in bytes."
     },
+    "memory_total_bytes": {
+      "type": "integer",
+      "description": "Physical memory in total, in bytes, as a memory sample read it."
+    },
+    "memory_available_bytes": {
+      "type": "integer",
+      "description": "Physical memory available, in bytes, as a memory sample read it."
+    },
+    "memory_reserve_bytes": {
+      "type": "integer",
+      "description": "The memory, in bytes, a budget leaves to the operating system (the frame store OS reserve)."
+    },
+    "memory_floor_bytes": {
+      "type": "integer",
+      "description": "The budget, in bytes, a memory budget falls back to when its sample leaves less after the reserve (frame_store.floor_mem_bytes)."
+    },
     "carried_bytes": {
       "type": "integer",
       "description": "The size of the release an offline installer carries, in bytes."
@@ -1621,6 +1637,10 @@
       "type": "unix_ms",
       "description": "When a blackout starts, in Unix milliseconds."
     },
+    "blackout_source": {
+      "type": "vocab:blackout_source",
+      "description": "Which of the three sources a blackout comes from: the host list, the instance's own list or a catalog maintenance event (Workflow #386 SR-4a1)."
+    },
     "pacing_stage": {
       "type": "vocab:pacing_stage",
       "description": "The performance pacing stage of an instance."
@@ -1675,7 +1695,7 @@
     },
     "standard_pack_problem": {
       "type": "vocab:standard_pack_problem",
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6)."
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6) or table file (Workflow #357 DB-1)."
     },
     "json_pointer": {
       "type": "pointer",
@@ -2078,6 +2098,10 @@
     "served_by_dispatch_unix_ms": {
       "type": "unix_ms",
       "description": "When the task's latest successful run that served a fact_time_reached time was dispatched, in Unix milliseconds (SCH-M CF-1)."
+    },
+    "table_column": {
+      "type": "token",
+      "description": "The name of a column of a standard-pack table (Workflow #357 DB-1, M-357a v1.1 section 6.1)."
     },
     "install_operation_id": {
       "type": "id",
@@ -5278,6 +5302,25 @@
         }
       }
     },
+    "blackout_source": {
+      "description": "Where a blackout comes from (Workflow #386 SR-4a1, SCH-M section 3.2 D-1): the configuration list a refused entry is in, or the source of the entry a blackout judgement reports.",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/outcome/vocabulary.rs",
+        "enum": "BlackoutSource"
+      },
+      "tokens": {
+        "host": {
+          "description": "The machine-wide list scheduling.blackout.host; it covers every instance."
+        },
+        "instance": {
+          "description": "The instance's own list instance.<instance id>.scheduling.blackout; it covers that instance only."
+        },
+        "catalog": {
+          "description": "A maintenance event of the active catalog's timeline whose scope matches the instance."
+        }
+      }
+    },
     "ladder_class": {
       "description": "How the recovery ladder's trigger matching reads a code (Workflow #387). Every code entry names exactly one class: the first of these tokens, in this order, whose rule the code meets.",
       "tokens": {
@@ -5470,10 +5513,10 @@
       }
     },
     "standard_pack_problem": {
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6).",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6) or table file (Workflow #357 DB-1).",
       "tokens": {
         "malformed": {
-          "description": "The file is not JSON of the file's shape and version."
+          "description": "The file is not JSON of the file's shape and version; for a table, not canonical JSON either (a floating point number, an unsafe integer or a duplicate key)."
         },
         "game_mismatch": {
           "description": "The file's game is not the game directory it sits in."
@@ -5482,7 +5525,7 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json, navigation.json or pages.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json, pages.json or (Workflow #357 DB-1) a tables directory but no bundle.json."
         },
         "pages_missing": {
           "description": "The game root holds interrupts.json or navigation.json but no pages.json."
@@ -5540,6 +5583,27 @@
         },
         "recovery_chain_duplicate": {
           "description": "recovery_chain names a package twice (Workflow #373 NAV-5)."
+        },
+        "table_id_mismatch": {
+          "description": "A table's table_id is not its file name without .json, or the file name is no table id (Workflow #357 DB-1)."
+        },
+        "table_column_invalid": {
+          "description": "A table's columns break a rule: their count (2 to 32), a name, a repeated name, a type's declaration (min and max, allowed), a second key column, or valid_until_unix_s on a column that is not nullable (Workflow #357 DB-1)."
+        },
+        "table_row_key_invalid": {
+          "description": "A table's row_key is empty or longer than 8, repeats a column, does not start with the key column, or names an undeclared or nullable column (Workflow #357 DB-1)."
+        },
+        "table_row_invalid": {
+          "description": "A table has no row, a row is not as long as columns, or a cell is not of its column's type (Workflow #357 DB-1)."
+        },
+        "table_value_out_of_range": {
+          "description": "A table cell is outside its column's min and max or allowed values, or is null in a column that is not nullable (Workflow #357 DB-1)."
+        },
+        "table_row_duplicate": {
+          "description": "Two rows of a table have the same row key (Workflow #357 DB-1)."
+        },
+        "table_too_large": {
+          "description": "A table holds more than 8192 rows or 2 MiB, or is a game root's 65th table or later by file name (Workflow #357 DB-1)."
         }
       }
     },

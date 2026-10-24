@@ -116,7 +116,9 @@ pub enum ClaimKind {
     LadderContinuation,
     /// An instance's startup package after an emulator start.
     StartupPackage,
-    /// A configured emulator start at daemon start.
+    /// A configured emulator start: at daemon start, and (emu-watch) the emulator watch's start
+    /// of a configured emulator it found stopped. A scheduling pause never holds it (Alice's
+    /// ruling 35).
     Autostart,
     /// A direct task run (CLI, console, MCP).
     DirectTaskRun,
@@ -148,7 +150,8 @@ pub enum ClaimClass {
     HolderOwned,
     /// Passes a closed gate.
     Operator,
-    /// The Runtime's own dedicated leases.
+    /// The Runtime's own dedicated leases, and (emu-watch R1) its configured emulator start,
+    /// which a scheduling pause never holds.
     HostInternal,
 }
 
@@ -175,9 +178,7 @@ impl ClaimKind {
 
     pub const fn class(self) -> ClaimClass {
         match self {
-            Self::PolicyDispatch | Self::Ladder | Self::StartupPackage | Self::Autostart => {
-                ClaimClass::Routine
-            }
+            Self::PolicyDispatch | Self::Ladder | Self::StartupPackage => ClaimClass::Routine,
             Self::LadderContinuation => ClaimClass::HolderOwned,
             Self::DirectTaskRun
             | Self::EmulatorControl
@@ -186,12 +187,16 @@ impl ClaimKind {
             | Self::SelfCheck
             | Self::LabOperation
             | Self::ClientLease => ClaimClass::Operator,
-            Self::DaemonStartPreparation | Self::ResourceClose => ClaimClass::HostInternal,
+            Self::Autostart | Self::DaemonStartPreparation | Self::ResourceClose => {
+                ClaimClass::HostInternal
+            }
         }
     }
 
     /// Q-3 (4): a routine entry is skipped while a pause holds. Since #369 S6b that includes the
-    /// startup claim (H-4, M6; `scheduling-pause.md`).
+    /// startup claim (H-4, M6; `scheduling-pause.md`); since emu-watch (Alice's ruling 35) the
+    /// autostart claim is no routine entry: a pause holds only dispatches, never the emulator
+    /// start.
     pub const fn gated_by_pause(self) -> bool {
         matches!(self.class(), ClaimClass::Routine)
     }
@@ -1066,8 +1071,9 @@ impl SeedScheduler {
                 return Err(queue_ahead(state, ahead));
             }
             // Workflow #369 Q-3 (4) (S6c): while a pause holds the gate, a routine claim that
-            // waits in the queue (a ladder, a startup package, an autostart) waits as a gated
-            // entry from the first moment, even on a free instance. A policy dispatch is never
+            // waits in the queue (a ladder, a startup package) waits as a gated entry from the
+            // first moment, even on a free instance (since emu-watch the autostart claim is no
+            // routine claim and a pause never holds it). A policy dispatch is never
             // queued: its pause deferral is the admission's own, before the scheduler is asked.
             if policy.gate == ClaimGate::RoutineHeld
                 && policy.kind.gated_by_pause()

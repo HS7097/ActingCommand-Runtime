@@ -24,7 +24,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-pub(super) const DESCRIPTION: &str = "The packages the selected configuration generation binds, as actingctl packs answers them: read from that actingd.config.json on disk (source.kind selected_config: the generation install\\active.json selects, which a running actingd may not have loaded yet); no Runtime request and no ledger record. instances: one row per configured instance {alias, instance_id, packs}, with role startup (startup_package; package_id from the package folder's control.json) and resource_package (path only). installation: role procedure (policy.procedure_manifest: package_id from procedure_ref package.<id>, procedure_ref, operation_id, scheduled when it has scheduled_execution, path its package_path); prerequisite and return-home packages are the installed standard packs' own, no configuration binding. Rows carry no package digest. Paths are absolute: a relative one resolves against the configuration's folder. readable (present with path) says whether the path can be opened; each unreadable one adds the warning package_binding_unreadable. instance (alias, instance_id or ADB port, as the configuration names them) narrows instances only; role narrows both lists. An answer larger than the output budget is written whole, its warnings included, to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {source, export {path, sha256, size}} with the warning answer_exported, whose count is the number of warnings the file holds; narrow it with role or instance. A configuration that cannot be read answers config_read_failed, one that does not decode config_decode_failed.";
+pub(super) const DESCRIPTION: &str = "The packages the selected configuration generation binds, as actingctl packs answers them: read from that actingd.config.json on disk (source.kind selected_config: the generation install\\active.json selects, which a running actingd may not have loaded yet); no Runtime request and no ledger record. instances: one row per configured instance {alias, instance_id, packs}, with role startup (startup_package; package_id from the package folder's control.json) and resource_package (path only). installation: role procedure (policy.procedure_manifest: package_id from procedure_ref package.<id>, procedure_ref, operation_id, scheduled when it has scheduled_execution, path its package_path); prerequisite and return-home packages are the installed standard packs' own, no configuration binding. Rows carry no package digest. Paths are absolute: a relative one resolves against the configuration's folder. readable (present with path) says whether the path can be opened; each unreadable one adds the warning package_binding_unreadable. instance (alias, instance_id or ADB port, as the configuration names them) narrows instances only; role narrows both lists. standard_packs (present when the configuration sets standard_packs.root): {root, games}, one entry {game, tables} per sound game root below it, its tables/ files in file name order as actingd check-config lists them: {table_id, path, row_count (when read), problem (standard_pack_table_invalid or standard_pack_table_unreadable, when refused), expired_columns (the columns whose valid_until_unix_s has passed)}; a broken game root is not listed (check-config and the Runtime's start report it), and neither instance nor role narrows standard_packs. An answer larger than the output budget is written whole, its warnings included, to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {source, export {path, sha256, size}} with the warning answer_exported, whose count is the number of warnings the file holds; narrow it with role or instance. A configuration that cannot be read answers config_read_failed, one that does not decode config_decode_failed.";
 
 pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "role"])?;
@@ -39,7 +39,8 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
     let (installation, config) =
         reader::selected_config(context.runtime.requested_root()).map_err(refused)?;
     let answer =
-        reader::read(installation.as_ref(), &config, &Query { instance, role }).map_err(refused)?;
+        reader::read_with_tables(installation.as_ref(), &config, &Query { instance, role })
+            .map_err(refused)?;
     within_budget(&answer)
 }
 
@@ -125,6 +126,18 @@ pub(super) fn result_schema() -> Value {
         },
         "required": ["role", "path", "readable"],
     });
+    // Workflow #357 DB-1 (register §1.65 TB4): one table of a game root, as check-config lists it.
+    let table = json!({
+        "type": "object",
+        "properties": {
+            "table_id": text,
+            "path": text,
+            "row_count": {"type": "integer"},
+            "problem": {"type": "object"},
+            "expired_columns": {"type": "array", "items": text},
+        },
+        "required": ["table_id", "path"],
+    });
     json!({
         "type": "object",
         "properties": {
@@ -160,6 +173,24 @@ pub(super) fn result_schema() -> Value {
                     },
                     "required": ["role", "scheduled"],
                 },
+            },
+            "standard_packs": {
+                "type": "object",
+                "properties": {
+                    "root": text,
+                    "games": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "game": text,
+                                "tables": {"type": "array", "items": table},
+                            },
+                            "required": ["game", "tables"],
+                        },
+                    },
+                },
+                "required": ["root", "games"],
             },
             "export": {
                 "type": "object",

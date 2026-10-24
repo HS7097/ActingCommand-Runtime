@@ -75,6 +75,10 @@ outcome_keys! {
     actual_bytes: integer,
     limit_bytes: integer,
     free_bytes: integer,
+    memory_total_bytes: integer,
+    memory_available_bytes: integer,
+    memory_reserve_bytes: integer,
+    memory_floor_bytes: integer,
     carried_bytes: integer,
     count_known: boolean,
     event_count: integer,
@@ -404,6 +408,8 @@ outcome_keys! {
     page_id: id,
     blackout_id: id,
     blackout_start_unix_ms: unix_ms,
+    // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): which of the three sources a blackout comes from.
+    blackout_source: vocab(blackout_source),
     pacing_stage: vocab(pacing_stage),
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
@@ -566,6 +572,9 @@ outcome_keys! {
     predecessor_task_id: name,
     served_by_dispatch_unix_ms: unix_ms,
     // ---- SCH-M CF-1: end ----
+    // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §6.1): begin ----
+    table_column: token,
+    // ---- Workflow #357 DB-1: end ----
     // ---- Workflow #421 INST-0 (`actingctl install`, contracts/install-cli.md): begin ----
     install_operation_id: id,
     plan_id: id,

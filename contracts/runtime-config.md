@@ -352,6 +352,8 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.blackout.host` | list of host blackout entries | `[]` |
 | `scheduling.blackout.quiet_margin_ms`, `.hard_quiet_ms` | milliseconds | `60000`, `0` |
 | `scheduling.blackout.stop_in_flight_at_start` | boolean | `true` |
+| `scheduling.blackout.quiet_horizon` (Workflow #386 SR-4a1) | `deadline` \| `expected` | `deadline` |
+| `scheduling.day_boundary.quiet` (Workflow #386 SR-4a1) | boolean | `true` |
 | `scheduling.feature_lock.locked_valid_for_ms` | milliseconds | `86400000` |
 | `scheduling.feature_lock.codes` | list of codes, as `rerun.condition_codes` | `["contained_task_feature_locked"]` |
 | `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
@@ -375,10 +377,12 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
-one `code_retired`; a host blackout entry that breaks a rule of
-[scheduling-blackout.md](scheduling-blackout.md) refuses a start and `check-config` with
-`blackout_config_invalid` (`field`, and `blackout_id` when the entry has a usable id: one to 256
-bytes, no control character) and an instruction with `config_value_invalid` (`section_check`);
+one `code_retired`; a blackout entry (of the host list or, Workflow #386 SR-4a1, of an
+instance's own list) that breaks a rule of [scheduling-blackout.md](scheduling-blackout.md)
+("Configuration blackouts": `weekly` and `once` entries, at most 64 per list) refuses a start and
+`check-config` with `blackout_config_invalid` (`field`, `blackout_source` naming the list, and
+`blackout_id` when the entry has a usable id: one to 256 bytes, no control character) and an
+instruction with `config_value_invalid` (`section_check`);
 `random_delay.min_ms` above `random_delay.max_ms` is `config_value_invalid` (`section_check`) for
 `min_ms`.
 
@@ -394,6 +398,16 @@ dispatches to it ([scheduling-blackout.md](scheduling-blackout.md), "Order of th
 position 9). Every member is settable while the Runtime runs; a change applies to the draws made
 after it (a draw already made keeps its delay), and `enabled = false` releases the instance's
 waiting tasks at the next evaluation.
+
+**Blackouts and the day boundary per instance (Workflow #386 SR-4a1, SCH-M §3.2 D-1, D-6;
+`actingd-config` revision 11).** `instance.<instance id>.scheduling.blackout`, in the file the
+entry's `scheduling.blackout` member, is the instance's own blackout list: no default (an instance
+whose entry names none has no entries of its own and reports no row), settable once the entry
+names one, its entries checked as the host list's are.
+`instance.<instance id>.scheduling.day_boundary.quiet`, in the file the entry's
+`scheduling.day_boundary.quiet`, settable, default `section:scheduling.day_boundary.quiet`. Accessors `EffectiveConfig::instance_blackouts` and
+`EffectiveConfig::day_boundary_quiet`; SR-4a2 reads them, and `scheduling.blackout.quiet_horizon`,
+at every policy cycle.
 
 **Expected duration (SCH-M slice ED-1, frozen model v1.0 §3.4; `actingd-config` revision
 11).** `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms` set the expected duration E
@@ -621,11 +635,43 @@ a file that does not name it keeps its revision.
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
 | `emulator_control.restart_exit_wait_ms` | milliseconds `1000..=300000`, the longest wait for the old VM to exit, on the Runtime clock | `60000` | yes |
+| `emulator_control.watch_enabled` | boolean: whether the emulator watch polls the emulator status of the discovery-bound instances (emu-watch R2) | `true` | yes |
+| `emulator_control.watch_interval_ms` | milliseconds `5000..=3600000`, the time between two polls, on the Runtime clock | `60000` | yes |
+| `emulator_control.restart_attempts` | integer `1..=100`, the most starts of one configured instance's stopped emulator by the watch within `restart_window_ms` (emu-watch R3) | `3` | yes |
+| `emulator_control.restart_window_ms` | milliseconds `60000..=86400000`, the window `restart_attempts` counts in | `1800000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
-`wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
-a restart adds the range's maximum (745 s).
+`wrong_type` (`watch_enabled`: no boolean). The rows are those of
+`config.parameters.emulator_control`. The client's receipt wait of a restart adds the range's
+maximum of `restart_exit_wait_ms` (745 s).
+
+emu-watch (Alice's ruling 35; [emulator-control.md](emulator-control.md), "Emulator watch"): the
+watch reads its four keys at every tick, so an instruction changes them while the Runtime runs;
+`watch_enabled` false stops the polls (and so the watch's restarts) until it is true again.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
+keys; a file that names none of them keeps its revision.
+
+## The `watchdog` section (#411 A66)
+
+#411 A66 ([runtime-watchdog.md](runtime-watchdog.md), "Start window"; coordinator ruling 10-24):
+how long a start may take before the watchdog, or `actingctl start` and `restart` without
+`--ready-timeout-s`, calls it `start_timeout`. The same window bounds which open watchdog start an
+answering owner belongs to, and a waiter for the watchdog's `run.lock` waits it plus 20 s. actingd
+parses and checks the section with the rest of the file (its row is that of
+`config.parameters.watchdog`) but never uses it. The watchdog and `actingctl` read it from the
+configuration file they already read for the state root, at every tick or command, through this
+crate (`watchdog::start_window_ms`), never from the configuration in effect, so it is not settable.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the section;
+a file that does not name it keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `watchdog.start_window_ms` | milliseconds `60000..=3600000`, the longest a start may take | `900000` | no (read from the file by the watchdog and `actingctl`) |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at actingd's start, in `check-config`, and on every watchdog tick or `actingctl start`
+or `restart` (the tick's `watchdog_misconfigured`); a value that is no integer is `wrong_type`.
 
 ## The `execution` section (PERF-B1, Workflow #407 B1)
 

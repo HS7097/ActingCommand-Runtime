@@ -6,9 +6,12 @@
 // owner's health probe and the clock. Every expected value comes from the requirement:
 // - contracts/runtime-watchdog.md, "Observation" item 5 (W tried shared; a free lock stays held
 //   shared until the tick ends), "Decision" rows 7a and 7f, and "Start" (readiness polled every
-//   500 ms for 180 s; an exit of the started process first is `exited_during_startup`; no answer
-//   in time is `start_timeout` and the process is left running; the start record is saved before
-//   the spawn);
+//   500 ms for the start window; an exit of the started process first is `exited_during_startup`;
+//   no answer in time is `start_timeout` and the process is left running; the start record is
+//   saved before the spawn);
+// - #411 A66 (coordinator ruling 10-24): the start window is `watchdog.start_window_ms` of the
+//   installation's configuration, 900 000 ms by default (the fixture's configuration does not
+//   name it), so a start that answers after 200 s is started, not `start_timeout`;
 // - rd-1007/v0113/model-374.md §2.3 steps 1 and 6 (:198, :217-220) and row 7a;
 // - req-basis-ha.md A-4 G12 (the start record, `outcome=pending`, is on disk before the spawn;
 //   the result and `last_tick` are saved at the tick's end);
@@ -17,7 +20,7 @@
 // The seams offer no way to end a started process, so a start that times out leaves it running
 // by construction.
 
-use super::decide::{LiveOwner, READY_TIMEOUT_MS};
+use super::decide::LiveOwner;
 use super::observe::HostProbe;
 use super::start::{Attempt, StartedProcess, StartedState, Target, TickSeams};
 use super::{Report, run_once_with};
@@ -34,6 +37,8 @@ use tempfile::TempDir;
 const T0: u64 = 1_800_000_000_000;
 const HOUR_MS: u64 = 3_600_000;
 const DAY_MS: u64 = 24 * HOUR_MS;
+// #411 A66: the start window by default (`watchdog.start_window_ms`, coordinator ruling 10-24).
+const START_WINDOW_MS: u64 = 900_000;
 // The owner the started Runtime answers as.
 const STARTED_PID: u32 = 4242;
 const STARTED_EPOCH: &str = "epoch_started";
@@ -99,11 +104,11 @@ fn gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_duri
     assert_start_bookkeeping(&machine, &state, "exited_during_startup");
 }
 
-// Row 7f, a start that never answers: after the 180 s readiness window (polled every 500 ms), the
-// tick ends `watchdog_start_failed` caused by `start_timeout` with that window, kept as the
-// start's result; no owner is recorded for it.
+// Row 7f, a start that never answers: after the start window, 900 s by default (polled every
+// 500 ms), the tick ends `watchdog_start_failed` caused by `start_timeout` with that window, kept
+// as the start's result; no owner is recorded for it.
 #[test]
-fn gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s() {
+fn gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window() {
     let base = TempDir::new().expect("tempdir");
     let root = install_root(base.path());
     let machine = FakeMachine::new(Behaviour::Silent);
@@ -124,8 +129,8 @@ fn gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s() {
     );
     let failure = cause(&report);
     assert_eq!(failure.code().as_str(), "start_timeout");
-    assert_eq!(failure.value("timeout_ms"), Some(&json!(READY_TIMEOUT_MS)));
-    let window = Duration::from_millis(READY_TIMEOUT_MS);
+    assert_eq!(failure.value("timeout_ms"), Some(&json!(START_WINDOW_MS)));
+    let window = Duration::from_millis(START_WINDOW_MS);
     assert!(
         machine.elapsed.get() >= window
             && machine.elapsed.get() < window + Duration::from_millis(500),
@@ -134,6 +139,29 @@ fn gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s() {
     );
     assert_start_bookkeeping(&machine, &state, "start_timeout");
     assert!(state["starts"][0].get("actingd_pid").is_none(), "{state}");
+}
+
+// #411 A66 (production 10-24: two watchdog starts were `start_timeout` at 180 s while they were
+// still recovering; a start took 4 to 6 minutes): a start whose owner answers after 200 s, inside
+// the 900 s default window, is `watchdog_started_runtime` with that owner, not `start_timeout`.
+// Readiness is polled every 500 ms from the spawn, so the 401st poll comes at 200 s.
+#[test]
+fn gate_411_a66_a_start_that_answers_after_200_s_inside_its_window_is_started() {
+    let base = TempDir::new().expect("tempdir");
+    let root = install_root(base.path());
+    let machine = FakeMachine::new(Behaviour::AnswersAt { poll: 401 });
+
+    let (report, state) = tick(&root, &machine);
+
+    assert_eq!(
+        report.outcome.code().as_str(),
+        "watchdog_started_runtime",
+        "{}",
+        describe(&report)
+    );
+    assert_eq!(machine.elapsed.get(), Duration::from_secs(200));
+    assert_eq!(report.outcome.value("pid"), Some(&json!(STARTED_PID)));
+    assert_start_bookkeeping(&machine, &state, "watchdog_started_runtime");
 }
 
 // Row 7a: while acsetup holds its writer lock exclusively, the tick is `watchdog_installer_busy`:

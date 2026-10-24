@@ -12,6 +12,8 @@ pub mod agent;
 pub mod backend_open;
 pub mod candidate_projection;
 pub mod capture_geometry;
+// Workflow #357 DB-1: canonical JSON, moved here from selection-policy (M-357a v1.1 §2.2).
+pub mod canonical;
 pub mod codes;
 pub mod device_binding;
 pub mod emulator;
@@ -38,6 +40,8 @@ pub mod runtime;
 pub mod runtime_fact;
 pub mod runtime_observation;
 pub mod standard_pack;
+// Workflow #357 DB-1: the shared tables of a standard-pack game root (M-357a v1.1 §2).
+pub mod standard_pack_table;
 pub mod state;
 pub mod taskflow;
 pub mod types;
@@ -67,6 +71,7 @@ pub use runtime::*;
 pub use runtime_fact::*;
 pub use runtime_observation::*;
 pub use standard_pack::*;
+pub use standard_pack_table::*;
 pub use state::*;
 pub use taskflow::*;
 pub use types::{

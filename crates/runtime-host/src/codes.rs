@@ -143,7 +143,10 @@ actingcommand_contract::outcome_codes! {
         /// start; the start fails (Workflow #369 S6c; keys `alias`).
         EmulatorAutostartRequiresPhysicalInstance => "emulator_autostart_requires_physical_instance": error / none,
         /// Info. The daemon enqueued the autostart claims of the configured instances whose
-        /// emulator is stopped (Workflow #369 S6c; keys `count`). A report line.
+        /// emulator is stopped (Workflow #369 S6c; keys `count`). A report line. emu-watch: the
+        /// emulator watch enqueued one for a configured instance it found stopped (`count` 1,
+        /// `alias`, `attempts` this restart's place in the window, `limit_count`), also a
+        /// `device_state_observed` record under the instance.
         EmulatorAutostartQueued => "emulator_autostart_queued": info / none,
         /// Info. An autostart claim read internet access from the operating system's
         /// connectivity status (Workflow #369 S6c, P3; keys `alias`, `elapsed_ms`, the wait). A
@@ -172,12 +175,10 @@ actingcommand_contract::outcome_codes! {
         /// its key before its Start, with no failure pair (Workflow #369 S6c; keys `alias`). A
         /// report line.
         EmulatorAutostartSuperseded => "emulator_autostart_superseded": info / none,
-        /// Info. A scheduling pause holds the instance or the global gate: the autostart claim
-        /// queues again as a gated entry and releases its key (Workflow #369 S6c; keys `alias`).
-        /// A report line.
-        EmulatorAutostartYielded => "emulator_autostart_yielded": info / none,
         /// Info. The instance already runs when its autostart claim holds the key: the claim
-        /// ends without action (Workflow #369 S6c; keys `alias`). A report line.
+        /// ends without action (Workflow #369 S6c; keys `alias`). emu-watch: for the watch's
+        /// claim, the status read just before its Start found the emulator process running. A
+        /// report line.
         EmulatorAutostartSkipped => "emulator_autostart_skipped": info / none,
         /// Info. A drain or a shutdown ended the autostart claim before its Start; it releases
         /// its key (Workflow #369 S6c; keys `alias`). A report line.
@@ -448,6 +449,11 @@ actingcommand_contract::outcome_codes! {
         ClientFactReplayOriginConflict => "client_fact_replay_origin_conflict": error / none,
         ClientFactRequestIdConflict => "client_fact_request_id_conflict": error / none,
         ConnectionPreparationCooldownOverflow => "connection_preparation_cooldown_overflow": error / none,
+        /// Fatal (#411 A65). The runtime fact `host.contained_settlement`, which names the start
+        /// event of the start that last completed the previous-epoch settlement of direct runs,
+        /// is not the Runtime's integer or names no start event before this start's. The start
+        /// fails; the fact comes back at every start.
+        ContainedSettlementAnchorInvalid => "contained_settlement_anchor_invalid": fatal / none,
         ContainedTaskActiveIdentityMismatch => "contained_task_active_identity_mismatch": error / none,
         ContainedTaskAlreadyRunning => "contained_task_already_running": error / none,
         ContainedTaskCancellationIdentityMissing => "contained_task_cancellation_identity_missing": error / none,
@@ -1222,6 +1228,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeInstanceRegistryIncomplete => "runtime_instance_registry_incomplete": error / none,
         RuntimeListenerAddressFailed => "runtime_listener_address_failed": error / none,
         RuntimeListenerConfigFailed => "runtime_listener_config_failed": error / none,
+        /// Error. A Runtime monitor thread could not be spawned: the monitor probe at the host's
+        /// start, or the emulator watch (emu-watch). The Runtime halts.
         RuntimeMonitorSpawnFailed => "runtime_monitor_spawn_failed": error / none,
         /// Error. The thread of the task package admission after start could not be started;
         /// the start fails (Workflow #386 SR-3).
@@ -1405,6 +1413,12 @@ actingcommand_contract::outcome_codes! {
         /// `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
         // ---- Workflow #373 NAV-6: end
+        // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §2.2, register §1.65 TB3): begin
+        /// Warning. A column of a standard-pack table declares `valid_until_unix_s` and that
+        /// second has passed: every cell of the column reads `null` (keys `game`, `path`,
+        /// `table_column`). A note of check-config.
+        StandardPackTableColumnExpired => "standard_pack_table_column_expired": warning / none,
+        // ---- Workflow #357 DB-1: end
         // ---- Workflow #373 NAV-5 (full-match entry routing, M-373 §5, §9.1): begin
         /// Info. A locate of the entry gate matched exactly one page of `pages.json` (keys
         /// `page_id`, `count`: the locate's number).
@@ -1495,7 +1509,9 @@ actingcommand_contract::outcome_codes! {
         /// `adb_port_present`, `adb_port`, `elapsed_ms`).
         EmulatorDeviceUnrecognized => "emulator_device_unrecognized": error / environment_fault,
         /// Warning. A self-check's emulator status read failed; the check went on from the
-        /// Runtime's own state of the instance. The read's failure text is the cause.
+        /// Runtime's own state of the instance. The read's failure text is the cause. emu-watch:
+        /// also a failed status read of the emulator watch, or of its autostart claim just before
+        /// the Start (keys `alias`); the instance's reading stays.
         EmulatorStateReadFailed => "emulator_state_read_failed": warning / none,
         // ---- #411 A48: end
         // ---- #411 A50: a restart launches only after the old VM has exited: begin
@@ -2423,6 +2439,8 @@ pub(crate) mod test_spellings {
             ScheduledPolicyCheckpointMarkerWriteFailed => "scheduled_policy_checkpoint_marker_write_failed": error / none,
             ScheduledPolicyCheckpointTestHookAlreadyInstalled => "scheduled_policy_checkpoint_test_hook_already_installed": error / none,
             SchedulingTerminalAppendInjectedFailure => "scheduling_terminal_append_injected_failure": error / none,
+            // #411 A65: a start made to fail right after it appended its start event.
+            StartFailedAfterStartEventForTest => "start_failed_after_start_event_for_test": error / none,
             TestClaimNotGranted => "test_claim_not_granted": error / none,
             TestInstanceMissing => "test_instance_missing": error / none,
             TestLeaseExpiryCheckpointDuplicate => "test_lease_expiry_checkpoint_duplicate": error / none,
@@ -2462,6 +2480,7 @@ pub(crate) mod test_spellings {
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
             FailScheduledHostClaimForTest => "fail_scheduled_host_claim_for_test",
+            FailStartAfterStartEventForTest => "fail_start_after_start_event_for_test",
             InjectInstanceWorkerPanicForTest => "inject_instance_worker_panic_for_test",
             InjectTestContainedTaskOcrFailurePersistence => "inject_test_contained_task_ocr_failure_persistence",
             InjectTestContainedTaskStabilityEventAppendFailure => "inject_test_contained_task_stability_event_append_failure",
@@ -2820,3 +2839,35 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #411 B15 R0: end ----
+
+// ---- emu-watch (Alice's ruling 35; review item 5): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's own codes of the emulator watch (emu-watch): it polls the emulator status of
+    /// every discovery-bound instance and starts a configured one it finds stopped, within a
+    /// bound. Each is a `device_state_observed` record under the instance and the same report
+    /// line, which actingd writes as a daemon line. #420 S4: everything else the watch says is an
+    /// existing code (`emulator_state_read_failed`, `emulator_autostart_queued`,
+    /// `runtime_monitor_spawn_failed`).
+    pub(crate) enum EmulatorWatchCode {
+        /// Info. A poll read the instance's emulator in another running state than the Runtime
+        /// held: `emulator_state` takes the reading (keys `alias`, `process_started`,
+        /// `android_started`, `adb_port_present`).
+        StateChanged => "emulator_watch_state_changed": info / none,
+        /// Warning. A poll found the configured instance's emulator stopped, but the watch already
+        /// started it `emulator_control.restart_attempts` times within
+        /// `emulator_control.restart_window_ms`: no start until the oldest leaves the window
+        /// (`retry_after_ms`) or a person's emulator control of the instance. Once per streak
+        /// (keys `alias`, `attempts`, `limit_count`, `retry_after_ms`).
+        RestartExhausted => "emulator_watch_restart_exhausted": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operation of the emulator watch (emu-watch).
+    pub(crate) enum EmulatorWatchLocation {
+        /// The watch: its start (`RuntimeHost::start_emulator_watch`), its polls of the emulator
+        /// status and the restarts they request, and its end with the host.
+        Watch => "emulator_watch",
+    }
+}
+// ---- emu-watch: end ----
