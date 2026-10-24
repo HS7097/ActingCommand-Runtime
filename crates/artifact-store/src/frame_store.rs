@@ -2,7 +2,7 @@
 
 use crate::codes::{StoreCode, StoreLocation};
 use crate::{ArtifactStore, ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{ArtifactReference, CapturePressureState, PinnedFrameReason};
 use actingcommand_device::{Frame, FrameMemoryBudget, FrameMemoryCharge, PixelFormat};
 use serde::{Deserialize, Serialize};
@@ -595,6 +595,11 @@ impl FrameStore {
 
     pub fn memory_budget(&self) -> FrameMemoryBudget {
         self.memory.clone()
+    }
+
+    /// #411 A67 (R5): the warning the store records while its budget stands on the floor.
+    pub fn budget_floor_warning(&self) -> Option<Outcome> {
+        None
     }
 
     /// Configure before accepting frames; the window keeps each original materializable.
@@ -1812,6 +1817,40 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
+
+    /// #411 A67 (R5; production 10-24: a start whose memory sample left no budget after the
+    /// 2 GiB OS reserve failed with `frame_store_usage`): a memory sample below the OS reserve
+    /// opens the store on the floor budget, 256 MiB by default, with the registered warning that
+    /// carries the sampled total and available memory, the reserve and the floor.
+    #[test]
+    fn a_memory_sample_below_the_os_reserve_opens_the_store_on_its_floor_with_a_warning() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        const FLOOR: u64 = 256 * 1024 * 1024;
+        let config = FrameStoreConfig {
+            os_reserve_bytes: 2 * GIB,
+            ..Default::default()
+        }
+        .with_memory_sample(MemorySample {
+            total_bytes: 64 * GIB,
+            available_bytes: GIB,
+        });
+        let root = TempDir::new().expect("tempdir");
+
+        let store = FrameStore::new(root.path().to_path_buf(), config)
+            .expect("the store opens on its floor");
+
+        assert_eq!(store.budget.budget_bytes, FLOOR);
+        let warning = store.budget_floor_warning().expect("the floor warning");
+        assert_eq!(warning.code().as_str(), "frame_store_budget_floor_applied");
+        assert_eq!(
+            warning.category(),
+            actingcommand_contract::outcome::Category::Warning
+        );
+        assert_eq!(warning.value("memory_total_bytes"), Some(&json!(64 * GIB)));
+        assert_eq!(warning.value("memory_available_bytes"), Some(&json!(GIB)));
+        assert_eq!(warning.value("memory_reserve_bytes"), Some(&json!(2 * GIB)));
+        assert_eq!(warning.value("memory_floor_bytes"), Some(&json!(FLOOR)));
+    }
 
     #[test]
     fn memory_budget_uses_available_total_and_os_reserve() {
