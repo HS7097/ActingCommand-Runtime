@@ -2618,7 +2618,9 @@ mod tests {
                     RuntimeErrorCode::BackendOpenFailed
                 }
             );
-            assert!(error.is_fatal());
+            // #411 A54 (ISO-1, #419): the Runtime did not latch, so the receipt does not say
+            // the host halted.
+            assert!(!error.is_fatal());
             let receipt_text = format!("{error:?} {error}");
             assert!(!receipt_text.contains(endpoint));
             assert!(!receipt_text.contains("failed to spawn adb"));

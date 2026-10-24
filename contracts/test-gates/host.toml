@@ -1864,6 +1864,33 @@ tests = [
 ]
 incident = ["#407 B1"]
 
+# ISO-1 (Workflow #419, ISO-M R0.1-R0.4, R8): the scope classification table. Every code of the closed Global list is Global, built fatal and untagged or tagged as one instance's, and resolves to its family; every listed family names a code; a catalog code of category fatal is Global; a device, lease or run failure tagged as one instance's is Instance of that instance whatever the boundary's, severe for its work and halting nothing, and the wrappers keep its scope; a tagged failure without an instance takes the boundary's, else is Global; an unclassified fatal failure stays Global (fail-safe); a request failure is Operation; a join with a Global failure is Global; a poisoned lock of one instance alone is cleared and fails as instance_lock_poisoned of that instance
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_a_the_scope_classification_table",
+]
+incident = ["#419"]
+
+# ISO-1 (Workflow #419, ISO-M R0.2, R0.5-R0.7), each on its own host with instances X and Y and a manual clock: contain_failure fences an Instance failure of X (one instance_resources_fenced record caused by the failure, X's fence in the status, no latch, no shutdown) and Y's direct run completes after it; an Operation failure fails only its operation; a Global failure (ledger_failure) latches the Runtime and fences nothing; a fence that fails latches its own failure
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_b_contain_failure_fences_an_instance_failure_and_the_other_instance_runs",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_c_contain_failure_fails_only_the_operation_of_an_operation_failure",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_d_contain_failure_latches_a_global_failure",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_e_a_fence_that_fails_latches_the_runtime",
+]
+incident = ["#419"]
+
+# ISO-1 (Workflow #419, ISO-M §5.4; #411 A54): a failed receipt's host_halted says whether the Runtime latched: a read-only observe whose capture fails with a fatal device error (capture_failed) and an IPC input whose backend fails (backend_operation_failed) latch nothing, and both receipts say host_halted false
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_f_a_receipt_says_host_halted_only_when_the_runtime_latched",
+]
+incident = ["#419", "#411 A54"]
+
 # Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): the shipped defaults name no blackout entry (host list empty, no instance list in effect); scheduling.blackout.quiet_horizon is deadline and scheduling.day_boundary.quiet true, per instance defaulting to the section's, all settable
 [[gate]]
 coverage = "Y"

@@ -61,6 +61,18 @@ pub(crate) fn read_event_types(
     Ok(events)
 }
 
+/// LN-5 (#422, LEAN-L §3.3): the events `query` selects through the ledger's head when the
+/// read begins, in ledger order: what one `query` at that head returns. The history is read from
+/// the store page by page (`history_page_events` events per writer command), so no single
+/// command reads and authenticates the whole selection within its read budget.
+pub(crate) fn read_through_head(
+    ledger: &GlobalLedger,
+    query: &EventQuery,
+) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+    let head = ledger.latest_sequence()?;
+    read_pages(ledger, query, head, ledger.history_page_events())
+}
+
 /// #411 A65 (R1): the events `query` selects with a sequence after `after` through `through`, in
 /// ledger order, one page of at most `page_events` events at a time. A page that the writer's
 /// read budget stopped (`ledger_read_budget_exceeded`) is read again with half as many events,

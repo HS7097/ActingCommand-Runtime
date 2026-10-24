@@ -33,6 +33,21 @@ pub(super) fn key(value: impl Serialize) -> GlobalLedgerResult<String> {
     }
 }
 
+/// LN-5 (#422): the stored severities within `minimum` and `maximum`, for a binding.
+pub(super) fn severities(
+    minimum: Option<EventSeverity>,
+    maximum: Option<EventSeverity>,
+) -> GlobalLedgerResult<Vec<SqlValue>> {
+    SEVERITIES
+        .into_iter()
+        .filter(|severity| {
+            minimum.is_none_or(|minimum| *severity >= minimum)
+                && maximum.is_none_or(|maximum| *severity <= maximum)
+        })
+        .map(|severity| key(severity).map(SqlValue::Text))
+        .collect()
+}
+
 // Only closed, product-owned enum values enter DDL. Query values use bindings below.
 fn literal(value: impl Serialize) -> GlobalLedgerResult<String> {
     Ok(format!("'{}'", key(value)?.replace('\'', "''")))

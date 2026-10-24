@@ -8,8 +8,8 @@
 //! never consults the unlinked-warning latch, the Warning ring or the K/T policy.
 
 use super::super::GlobalLedgerResult;
-use super::super::projection::EventIndexes;
-use super::{RetentionIndex, material_references, referenced_frames, source};
+use super::super::projection::LabKeys;
+use super::{RetentionIndex, material_references, referenced_frames};
 use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::outcome::CodeStr;
@@ -580,11 +580,11 @@ impl Classified {
 
 impl RetentionIndex {
     /// Workflow #375 R5c/R5d: the frame view at this index's head and at `now`, named in the
-    /// machine's local time. The classes are cached by head and setting.
-    pub(in crate::global) fn frame_view<E: LedgerEventRead>(
+    /// machine's local time. The classes are cached by head and setting. LN-5: `related` answers
+    /// whether a Lab anchor at this head relates to a frame's verified record (by its Lab keys).
+    pub(in crate::global) fn frame_view(
         &self,
-        events: &[E],
-        indexes: &EventIndexes,
+        related: &mut dyn FnMut(&LabKeys) -> GlobalLedgerResult<bool>,
         now: u64,
         switches: FrameRetentionSwitches,
         work: &crate::global::read_work::ReadWork,
@@ -599,7 +599,7 @@ impl RetentionIndex {
         }) {
             return Ok(cached.classified.at(self.through_sequence, now));
         }
-        let frames = self.view_frames(events, indexes, work)?;
+        let frames = self.view_frames(related, work)?;
         let classified = classify(
             &self.frame_facts,
             &self.frames,
@@ -623,10 +623,9 @@ impl RetentionIndex {
         Ok(view)
     }
 
-    fn view_frames<E: LedgerEventRead>(
+    fn view_frames(
         &self,
-        events: &[E],
-        indexes: &EventIndexes,
+        related: &mut dyn FnMut(&LabKeys) -> GlobalLedgerResult<bool>,
         work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<Vec<ViewFrame>> {
         let mut frames = Vec::new();
@@ -648,9 +647,7 @@ impl RetentionIndex {
                 .values()
                 .any(|(_, reason)| *reason == ArtifactPinReason::Lab)
                 || match &object.verified {
-                    Some(verified) => {
-                        self.lab_protected(object, source(events, verified)?, indexes)
-                    }
+                    Some(_) => self.lab_protected(object, || related(&object.verified_lab))?,
                     None => false,
                 };
             frames.push(ViewFrame {
@@ -1105,8 +1102,23 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         switches: FrameRetentionSwitches,
         work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<FrameRetentionView> {
-        self.retention
-            .frame_view(&self.events, &self.indexes, now_unix_ms, switches, work)
+        // LN-5 (#422, LEAN-L §3.3): the Lab relations at the writer's head are read from the
+        // store once per rebuild of the view, when a frame first asks.
+        let through = self.retention.through_sequence;
+        let mut relations: Option<crate::global::history::LabRelations> = None;
+        self.retention.frame_view(
+            &mut |keys| {
+                if relations.is_none() {
+                    relations = Some(self.backend.lab_relations(through, &Default::default())?);
+                }
+                Ok(relations
+                    .as_ref()
+                    .is_some_and(|relations| relations.related(keys)))
+            },
+            now_unix_ms,
+            switches,
+            work,
+        )
     }
 }
 
@@ -1159,9 +1171,9 @@ impl super::super::GlobalLedgerEvidence {
                 self.frame_index.get_or_init(|| built)
             }
         };
+        let through = retention.through_sequence;
         retention.frame_view(
-            events,
-            indexes,
+            &mut |keys| Ok(indexes.lab_related(keys, through)),
             now_unix_ms,
             switches,
             &crate::global::read_work::ReadWork::unbounded(),

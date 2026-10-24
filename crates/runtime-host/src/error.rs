@@ -53,7 +53,35 @@ pub struct RuntimeHostError {
     code: HostErrorCode,
     operation: HostErrorOperation,
     projection: Box<RuntimeErrorProjection>,
+    /// ISO-M (#419): what the error's constructor said about its scope ([`Self::scope_at`]).
+    scope: ScopeTag,
     pub(crate) lifecycle: Box<RuntimeHostFailureContext>,
+}
+
+/// ISO-M (#419, R0.1): what one failure concerns, and so how much work it may stop. One
+/// emulator's fault must not stop the whole Runtime: only a `Global` failure latches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureScope {
+    /// The Runtime as a whole cannot run normally: the failure latches the Runtime.
+    Global,
+    /// The failure originates in, or concerns only, this instance: it holds the instance (a
+    /// resource fence), and every other instance goes on dispatching and executing.
+    Instance(InstanceId),
+    /// The failure concerns one request or operation, and its instance is sound: only the
+    /// operation fails, with its own code.
+    Operation,
+}
+
+/// ISO-M (#419, §6): the scope a failure's constructor gave it. `into_fatal`, the poisons,
+/// `with_caused_by` and the other wrappers keep it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScopeTag {
+    /// No constructor said: the failure takes its scope from its projection, `Global` when it
+    /// is fatal (fail-safe) and `Operation` otherwise.
+    Untagged,
+    /// The failure concerns one instance only: the instance it names, else the instance of the
+    /// boundary that contains it ([`RuntimeHostError::instance_scoped`]).
+    Instance,
 }
 
 /// The code a [`RuntimeHostError`] carries: a registered code, or the spelling of a code that
@@ -149,6 +177,7 @@ impl PartialEq for RuntimeHostError {
         self.code() == other.code()
             && self.operation() == other.operation()
             && self.projection == other.projection
+            && self.scope == other.scope
             && self.lifecycle.complete_failure == other.lifecycle.complete_failure
             && self.lifecycle.failure_stage == other.lifecycle.failure_stage
             && self.lifecycle.installation_effect == other.lifecycle.installation_effect
@@ -450,6 +479,85 @@ impl RuntimeHostError {
         &self.projection
     }
 
+    /// ISO-M (#419, R0.1-R0.4): the scope of this failure.
+    /// - A failure joined with a `Global` one (B7) is `Global`.
+    /// - An untagged failure is `Global` when it is fatal (fail-safe: the Global list names
+    ///   it, or no slice has classified its path yet) and `Operation` otherwise.
+    /// - An instance-scoped failure ([`Self::instance_scoped`]) is `Instance` of the instance it
+    ///   names, else of `boundary_instance`; it stays `Global` when its code is on the closed
+    ///   Global list, and when neither names an instance.
+    pub(crate) fn scope_at(&self, boundary_instance: Option<InstanceId>) -> FailureScope {
+        let joined_global = self
+            .lifecycle
+            .complete_failure
+            .as_ref()
+            .is_some_and(|complete| {
+                complete
+                    .secondary
+                    .iter()
+                    .any(|(_, error)| error.scope_at(None) == FailureScope::Global)
+            });
+        if joined_global {
+            return FailureScope::Global;
+        }
+        match self.scope {
+            ScopeTag::Untagged if self.projection.fatal => FailureScope::Global,
+            ScopeTag::Untagged => FailureScope::Operation,
+            ScopeTag::Instance if crate::host::failure_scope::is_global_code(self.code()) => {
+                FailureScope::Global
+            }
+            ScopeTag::Instance => self
+                .lifecycle
+                .instance_id
+                .or(boundary_instance)
+                .map_or(FailureScope::Global, FailureScope::Instance),
+        }
+    }
+
+    /// ISO-M (#419): the scope of this failure without a boundary's instance
+    /// ([`Self::scope_at`]).
+    pub fn scope(&self) -> FailureScope {
+        self.scope_at(None)
+    }
+
+    /// ISO-M (#419, R0.2, §6): whether this failure may stop the Runtime: latch it, end
+    /// actingd's driver or monitor, end a shared thread, fail a start or block the watchdog.
+    /// Only a `Global` failure may; `is_fatal` says only how severe the failure is for the work
+    /// that met it.
+    pub fn halts_runtime(&self) -> bool {
+        self.scope() == FailureScope::Global
+    }
+
+    /// ISO-M (#419, §6): this failure concerns only one instance: the instance it names, else
+    /// the instance of the boundary that contains it ([`Self::scope_at`]). Its boundary fences
+    /// that instance instead of latching the Runtime (`contain_failure`); a code of the Global
+    /// list stays `Global`.
+    pub(crate) fn instance_scoped(mut self) -> Self {
+        self.scope = ScopeTag::Instance;
+        self
+    }
+
+    /// ISO-M (#419, §6, R0.6): a failure that originates in `instance` and leaves that
+    /// instance's state unknown (its device, session, backend, lease or key, worker, a lock of
+    /// its own, an invariant about its data). It is severe for the work that met it (a fatal
+    /// projection with `runtime_code`), and its boundary fences `instance` instead of latching
+    /// the Runtime.
+    pub(crate) fn instance_fault(
+        code: impl Into<Code>,
+        operation: impl Into<Location>,
+        runtime_code: RuntimeErrorCode,
+        instance: InstanceId,
+    ) -> Self {
+        let mut error = Self::with_projection(
+            code,
+            operation,
+            RuntimeErrorProjection::new(runtime_code, true),
+        )
+        .instance_scoped();
+        error.lifecycle.instance_id = Some(instance);
+        error
+    }
+
     /// This error as the outcome of a denied or failed receipt (Workflow #378 A4, model section
     /// 7.2): the outcome its ledger record carries ([`Self::outcome`]: its code on top with the
     /// values its producer attached, its operation, and the failure behind it as the `caused_by`
@@ -459,6 +567,16 @@ impl RuntimeHostError {
     /// `outcome_relay_unregistered` with its `raw_code`.
     pub(crate) fn receipt_outcome(&self) -> Outcome {
         self.projection.with_receipt_values(self.outcome())
+    }
+
+    /// ISO-M (#419; #411 A54): [`Self::receipt_outcome`] whose `host_halted` is `true` only when
+    /// the Runtime latched (`runtime_latched`, its fatal state when the receipt is written). How
+    /// severe the failure was for its own work does not make the receipt say the host halted;
+    /// on a host that latched, the receipt is [`Self::receipt_outcome`] unchanged.
+    pub(crate) fn receipt_outcome_latched(&self, runtime_latched: bool) -> Outcome {
+        let mut projection = self.projection.as_ref().clone();
+        projection.fatal &= runtime_latched;
+        projection.with_receipt_values(self.outcome())
     }
 
     /// Workflow #378 A6a (model section 2.3, M1a): how a latched host answers a later request.
@@ -667,6 +785,7 @@ impl RuntimeHostError {
             code,
             operation,
             projection: Box::new(projection),
+            scope: ScopeTag::Untagged,
             lifecycle: Box::default(),
         }
     }
@@ -730,6 +849,7 @@ impl RuntimeHostError {
             code: HostErrorCode::Registered(error.code()),
             operation: HostErrorOperation::Registered(operation.into()),
             projection: Box::new(RuntimeErrorProjection::new(runtime_code, error.is_fatal())),
+            scope: ScopeTag::Untagged,
             lifecycle: Box::new(RuntimeHostFailureContext {
                 diagnostics: error.failure_context().clone(),
                 instance_id: error.instance_id(),

@@ -607,3 +607,15 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_411_bt_lr::bt_lr_t2_the_writer_refuses_a_fact_out_of_its_runs_order",
 ]
 incident = ["#411 BT-LR"]
+
+# LN-5 (#422, LEAN-L §3.3, §3.4, §5 LN-5): the history is on disk; the writer keeps no list or index of its records. On a SQLite store with two-row history pages, each `EventQuery` condition selects exactly what `contracts/global-ledger-query.md` names (query, query pages, a subscription's replay, again after the writer is opened anew); a history read its budget stops is refused with `ledger_read_budget_exceeded`, not fatally, and the same history read page by page is whole; a duplicate event id is refused against the store and against the batch staged with it; run rules see the records staged in the same batch; the scheduled-settlement continuation reads its chain from the store after the writer is opened anew, settles once, and refuses a chain without its lease grant without stopping the writer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t1_each_query_condition_selects_what_the_contract_names",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t2_a_history_read_over_its_budget_is_refused_and_its_pages_read_it_whole",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t3_a_duplicate_event_id_is_refused_against_the_store_and_the_batch",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t4_run_rules_see_the_records_staged_in_the_same_batch",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t5_the_settlement_continuation_reads_its_chain_from_the_store",
+]
+incident = ["#422 LN-5"]

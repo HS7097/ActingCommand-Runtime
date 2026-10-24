@@ -28,6 +28,8 @@ mod write_failure;
 // (`contracts/ledger-observer.md` §2.1, §7, §8, §11).
 mod capture;
 mod flush;
+// LN-5 (#422, LEAN-L): the history is read from the store on demand.
+mod history;
 mod index;
 // #411 A51 (R2): the work budget of one read on the writer thread.
 mod read_work;
@@ -881,6 +883,9 @@ pub struct GlobalLedgerConfig {
     /// are measured on (the failure plan's clock, the process's monotonic clock unless a test
     /// drives its own).
     clock: LedgerMonotonicClock,
+    /// LN-5 (#422, LEAN-L §3.3, §3.7): the rows of one page of a history read
+    /// (`ledger_observer.history_page_rows`).
+    history_page_rows: usize,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -902,6 +907,7 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("capture_policy", &self.capture_policy)
             .field("read_budget", &self.read_budget)
             .field("close_timeout", &self.close_timeout)
+            .field("history_page_rows", &self.history_page_rows)
             .finish()
     }
 }
@@ -921,6 +927,7 @@ impl GlobalLedgerConfig {
             read_budget: None,
             close_timeout: None,
             clock: write_failure::process_clock(),
+            history_page_rows: history::DEFAULT_HISTORY_PAGE_ROWS,
         }
     }
 
@@ -936,6 +943,7 @@ impl GlobalLedgerConfig {
         self.capture_policy = plan.capture_policy().clone();
         self.read_budget = plan.read_budget().or(self.read_budget);
         self.close_timeout = plan.close_timeout().or(self.close_timeout);
+        self.history_page_rows = plan.history_page_rows().unwrap_or(self.history_page_rows);
         self.clock = plan.clock();
         if let Some(timeout) = plan.reply_timeout() {
             self.reply_timeout = timeout;
@@ -961,6 +969,13 @@ impl GlobalLedgerConfig {
     /// #411 A51: the writer's clock in milliseconds (a test drives its own).
     pub fn with_clock(mut self, clock: LedgerMonotonicClock) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read, `1..=4096`
+    /// (`ledger_observer.history_page_rows`; 256 unless set).
+    pub fn with_history_page_rows(mut self, rows: usize) -> Self {
+        self.history_page_rows = rows;
         self
     }
 
@@ -1024,6 +1039,13 @@ impl GlobalLedgerConfig {
             return Err(GlobalLedgerError::fatal(
                 LedgerCode::InvalidLedgerConfig.code(),
                 LedgerLocation::ValidateSubscriptionCapacity.location(),
+            ));
+        }
+        // LN-5: a history page holds at least one row and at most the key's bound.
+        if !(1..=history::MAX_HISTORY_PAGE_ROWS).contains(&self.history_page_rows) {
+            return Err(GlobalLedgerError::fatal(
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ConfigureLedgerWritePolicy.location(),
             ));
         }
         // #411 A51: a read stops before a caller stops waiting for it, and the close waits
@@ -1315,6 +1337,8 @@ impl DeferredSummary {
 }
 
 pub struct GlobalLedger {
+    /// LN-5 (#422): the rows of one page of a history read (`history_page_rows`).
+    history_page_rows: usize,
     sender: Option<SyncSender<WriterCommand>>,
     writer: Option<JoinHandle<GlobalLedgerResult<()>>>,
     commit_statistics: Arc<CommitStatistics>,
@@ -1872,6 +1896,13 @@ impl GlobalLedger {
         self.commit_statistics.take_writer_peak()
     }
 
+    /// LN-5 (#422, LEAN-L §3.3): the events of one page of a paged history read: the configured
+    /// `ledger_observer.history_page_rows`, at most a query page's limit (1024). Does not
+    /// enqueue a writer command.
+    pub fn history_page_events(&self) -> usize {
+        self.history_page_rows.min(MAX_QUERY_PAGE_EVENTS)
+    }
+
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
         match self.writer.as_ref() {
             Some(writer) if !writer.is_finished() => Ok(()),
@@ -1957,6 +1988,7 @@ impl GlobalLedger {
         let capacity = config.ingress_capacity;
         let subscription_capacity = config.subscription_capacity;
         let reply_timeout = config.reply_timeout;
+        let history_page_rows = config.history_page_rows;
         let failure = config.write_failure.clone();
         // #411 A51: the read budget and the close bound, on the writer's clock.
         let close_timeout = config.close_timeout;
@@ -2058,6 +2090,7 @@ impl GlobalLedger {
                     }
                 };
                 Ok(Self {
+                    history_page_rows,
                     sender: Some(sender),
                     writer: Some(writer),
                     commit_statistics,
@@ -3218,12 +3251,9 @@ fn writer_commands<S: LedgerStore>(
                 command_succeeded = true;
             }
             WriterCommand::CommittedSequence { event_id, response } => {
-                command_succeeded = true;
-                command_observation.replied(
-                    response
-                        .send(Ok(store.committed_sequence(&event_id)))
-                        .is_ok(),
-                );
+                let result = store.committed_sequence(&event_id);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
             }
             WriterCommand::ReconcileScheduledPolicySettlement {
                 execution,
@@ -3248,14 +3278,28 @@ fn writer_commands<S: LedgerStore>(
                 if let Err(error) = result {
                     // A settlement refusal is not terminal (#670 safety net); an execution
                     // appended before its completion was refused stays, and reaches the
-                    // subscribers.
-                    for event in store.query(&EventQuery {
-                        from_sequence: Some(before.saturating_add(1)),
-                        ..EventQuery::default()
-                    }) {
-                        deliver_live_event(&mut subscribers, &event);
+                    // subscribers. LN-5: read back from the store; a failed read ends the writer.
+                    let appended = store.query_within(
+                        &EventQuery {
+                            from_sequence: Some(before.saturating_add(1)),
+                            ..EventQuery::default()
+                        },
+                        &read_work::ReadWork::unbounded(),
+                        LedgerLocation::ReconcileScheduledPolicySettlement.location(),
+                    );
+                    match appended {
+                        Ok(appended) => {
+                            for event in &appended {
+                                deliver_live_event(&mut subscribers, event);
+                            }
+                            command_observation.replied(response.send(Err(error)).is_ok());
+                        }
+                        Err(read_error) => {
+                            notify_terminal_failure(&mut subscribers, read_error.clone());
+                            let _ = response.send(Err(read_error.clone()));
+                            return Err(read_error);
+                        }
                     }
-                    command_observation.replied(response.send(Err(error)).is_ok());
                 }
             }
             WriterCommand::Query { query, response } => {
