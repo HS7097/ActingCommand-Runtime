@@ -429,6 +429,12 @@ impl EffectiveConfig {
         emulator_control::restart_exit_wait_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// emu-watch: the emulator watch's keys of the `emulator_control` section in effect
+    /// (`watch_enabled`, `watch_interval_ms`, `restart_attempts`, `restart_window_ms`).
+    pub fn emulator_watch(&self) -> Result<emulator_control::EmulatorWatchConfig, ConfigFailure> {
+        emulator_control::EmulatorWatchConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #385 P-c: the `performance` section in effect, checked whole (PERF §4.1,
     /// §10.4).
     pub fn check_performance(&self) -> Result<(), ConfigFailure> {
@@ -688,6 +694,7 @@ impl EffectiveConfig {
         }
         if sections.contains(emulator_control::SECTION) {
             self.restart_exit_wait_ms()?;
+            self.emulator_watch()?;
         }
         if sections.contains(execution::SECTION) {
             self.capture_cadence()?;

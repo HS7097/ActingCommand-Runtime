@@ -1369,12 +1369,14 @@ fn closed_gate_skips_routine_entries_and_the_startup_claim_and_passes_operator_a
     let mut scheduler =
         SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
     let (instance_id, token) = held_instance(&issuer, &mut scheduler);
-    let autostart = claim(
+    // emu-watch (Alice's ruling 35): the autostart claim is no routine entry any more; a ladder
+    // claim is the routine entry here.
+    let routine = claim(
         &issuer,
         instance_id,
         holder(&issuer).1,
         connection(2),
-        ClaimKind::Autostart,
+        ClaimKind::Ladder,
         LeasePriority::High,
     );
     let direct = claim(
@@ -1385,7 +1387,7 @@ fn closed_gate_skips_routine_entries_and_the_startup_claim_and_passes_operator_a
         ClaimKind::DirectTaskRun,
         LeasePriority::Normal,
     );
-    scheduler.enqueue_claim(autostart, 2).expect("autostart");
+    scheduler.enqueue_claim(routine, 2).expect("routine");
     scheduler.enqueue_claim(direct, 2).expect("direct run");
     assert_eq!(scheduler.eligible_count(instance_id, ClaimGate::Open, 3), 2);
     assert_eq!(
@@ -1420,7 +1422,7 @@ fn closed_gate_skips_routine_entries_and_the_startup_claim_and_passes_operator_a
     else {
         panic!("an open gate serves the head");
     };
-    assert_eq!(open.queued_request_id(), autostart.request_id);
+    assert_eq!(open.queued_request_id(), routine.request_id);
     let next = scheduler
         .commit_transfer(gated, 4)
         .expect("commit past the routine head");
@@ -1565,15 +1567,17 @@ fn an_immediate_try_never_jumps_an_eligible_entry() {
     let mut scheduler =
         SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
     let (instance_id, token) = held_instance(&issuer, &mut scheduler);
-    let autostart = claim(
+    // emu-watch (Alice's ruling 35): a ladder claim is the routine entry, since a pause no longer
+    // holds the autostart claim.
+    let routine = claim(
         &issuer,
         instance_id,
         holder(&issuer).1,
         connection(2),
-        ClaimKind::Autostart,
+        ClaimKind::Ladder,
         LeasePriority::Normal,
     );
-    scheduler.enqueue_claim(autostart, 2).expect("autostart");
+    scheduler.enqueue_claim(routine, 2).expect("routine");
     scheduler
         .release_owned(&token, connection(1), LeaseReleaseReason::InstancePaused)
         .expect("free instance, entry left standing");
@@ -1590,7 +1594,7 @@ fn an_immediate_try_never_jumps_an_eligible_entry() {
     assert_eq!(
         refused,
         SchedulerError::QueueAhead {
-            kind: ClaimKind::Autostart,
+            kind: ClaimKind::Ladder,
             position: 1,
         }
     );
@@ -1611,7 +1615,7 @@ fn an_immediate_try_never_jumps_an_eligible_entry() {
             .prepare_claim_acquire(operator, ClaimGate::Open, 3)
             .expect_err("an open gate makes the routine entry eligible"),
         SchedulerError::QueueAhead {
-            kind: ClaimKind::Autostart,
+            kind: ClaimKind::Ladder,
             position: 1,
         }
     );
@@ -1656,21 +1660,18 @@ fn an_immediate_try_never_jumps_an_eligible_entry() {
 
 // Workflow #369 Q-3 (4), S6c (wave 13 coordinator ruling 6; merge ledger :303): while a
 // scheduling pause holds the gate, the immediate try of a routine claim that waits in the queue (a
-// ladder, a startup package, an autostart) is never granted on a free instance: it is refused
-// `lease_busy` and the instance stays free, so the claim waits queued as a gated entry. An
-// operator claim passes the closed gate, a policy dispatch keeps its own admission (it is never
-// queued), and with the gate open the routine claim is granted at once.
+// ladder, a startup package) is never granted on a free instance: it is refused `lease_busy` and
+// the instance stays free, so the claim waits queued as a gated entry. An operator claim passes
+// the closed gate, a policy dispatch keeps its own admission (it is never queued), and with the
+// gate open the routine claim is granted at once. Since emu-watch (Alice's ruling 35) the
+// autostart claim is no routine claim.
 #[test]
 fn s6c_a_routine_claim_under_a_held_gate_is_never_granted_at_once() {
     let issuer = ids();
     let mut scheduler =
         SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
     let instance_id = instance(&issuer);
-    for kind in [
-        ClaimKind::Ladder,
-        ClaimKind::StartupPackage,
-        ClaimKind::Autostart,
-    ] {
+    for kind in [ClaimKind::Ladder, ClaimKind::StartupPackage] {
         let routine = claim(
             &issuer,
             instance_id,
@@ -1732,26 +1733,26 @@ fn s6c_a_routine_claim_under_a_held_gate_is_never_granted_at_once() {
         "a policy dispatch is not queued, so the gate is its admission's own check"
     );
 
-    let autostart = claim(
+    let routine = claim(
         &issuer,
         instance_id,
         holder(&issuer).1,
         connection(5),
-        ClaimKind::Autostart,
+        ClaimKind::Ladder,
         LeasePriority::Normal,
     );
     let preparation = scheduler
-        .prepare_claim_acquire(autostart, ClaimGate::Open, 4)
+        .prepare_claim_acquire(routine, ClaimGate::Open, 4)
         .expect("an open gate grants the routine claim at once");
     scheduler
         .commit_acquire(preparation, 4)
-        .expect("autostart grant");
+        .expect("routine grant");
     assert_eq!(
         scheduler
             .active_lease(instance_id)
-            .expect("autostart holds")
+            .expect("the routine claim holds")
             .kind(),
-        ClaimKind::Autostart
+        ClaimKind::Ladder
     );
 }
 
@@ -2065,7 +2066,8 @@ fn claim_kind_tokens_are_unique_and_the_stopped_instance_kinds_skip_admission_ch
 // whose routine gate a scheduling pause holds, as the caller reads it. A routine entry on an
 // instance that only a #403 resource fence holds (the caller reports no pause there), an operator
 // entry, a holder-owned continuation and a client entry all count; with no pause every entry
-// counts. Each row is checked as it is queued.
+// counts. Since emu-watch (Alice's ruling 35) a pause never holds the autostart claim, so it counts
+// on a paused instance too. Each row is checked as it is queued.
 #[test]
 fn a3_waiting_total_skips_only_pause_gated_routine_entries() {
     let issuer = ids();
@@ -2076,7 +2078,7 @@ fn a3_waiting_total_skips_only_pause_gated_routine_entries() {
     let held_by_pause = |instance_id: InstanceId| instance_id == paused;
     // (instance, kind, whether the entry counts)
     let rows = [
-        (paused, ClaimKind::Autostart, false),
+        (paused, ClaimKind::Autostart, true),
         (paused, ClaimKind::StartupPackage, false),
         (paused, ClaimKind::Ladder, false),
         (fenced, ClaimKind::Autostart, true),

@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #411 A3 (R-1; host gate 102): a routine entry that a scheduling pause holds back in the
-// queue, such as an autostart claim under a restored pause, does no work until a resume, so it no
-// longer refuses a shutdown. An accepted shutdown disconnects it (`lease.queue_disconnected`) and
-// the next start queues it again under the restored pause. A holder, an eligible entry and a
-// routine entry that only a #403 resource fence holds still refuse the shutdown. On the scripted
-// emulator (HOST-I1) and a scripted connectivity status, with the S6c helpers; every wait returns
-// as soon as what it waits for is read or recorded, `GATE_WAIT` only bounds a broken run.
+// queue does no work until a resume, so it no longer refuses a shutdown. An accepted shutdown
+// disconnects it (`lease.queue_disconnected`). A holder, an eligible entry and a routine entry that
+// only a #403 resource fence holds still refuse the shutdown. emu-watch (Alice's ruling 35): a
+// pause no longer holds the autostart claim, A3's first example, so the routine entry here is a
+// Runtime-internal ladder claim, which, as the autostart claim did, takes no admission check on
+// the stopped instance. On the scripted emulator (HOST-I1) and a scripted connectivity status, with
+// the S6c helpers; every wait returns as soon as what it waits for is read or recorded,
+// `GATE_WAIT` only bounds a broken run.
 
 use super::gate_369_s6c::{
-    FIRST, GATE_WAIT, START, autostart_host, claims_after, codes, connectivity, control, head,
-    instance_scope, instance_status, of_request, pause, resume, send, starts, stop,
+    FIRST, GATE_WAIT, START, autostart_host, connectivity, control, instance_scope,
+    instance_status, of_request, pause, resume, send, starts, stop,
 };
 use super::*;
 use crate::codes::HostCode;
-use crate::host::NetworkConnectivityForTest;
+use crate::host::{HostClaimForTest, NetworkConnectivityForTest};
 use actingcommand_contract::{
-    DiagnosticCode, RequestId, SchedulerPayload, SchedulingPauseScope, StartupPackageDisposition,
+    DiagnosticCode, SchedulerPayload, SchedulingPauseScope, StartupPackageDisposition,
 };
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_host_metrics::NetworkConnectivity;
@@ -47,18 +49,21 @@ fn paused_restart(
     })
 }
 
-// actingd's enqueue at the start: one autostart claim, waiting gated from the first moment.
-fn enqueue_gated(host: &RuntimeHost, instance: InstanceId) -> RequestId {
-    let before = head(host);
-    assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
+// A routine claim on the paused instance: a Runtime-internal ladder claim, waiting gated from the
+// first moment.
+fn queue_gated(host: &RuntimeHost) -> HostClaimForTest {
+    let claim = host
+        .request_host_claim_for_test(FIRST, ClaimKind::Ladder)
+        .expect("routine claim");
+    assert!(
+        claim.granted.is_none() && claim.queued.is_some(),
+        "{claim:?}"
+    );
     assert_eq!(
         host.instance_claims_for_test(FIRST).expect("claims"),
-        (None, vec![ClaimKind::Autostart]),
+        (None, vec![ClaimKind::Ladder]),
         "the claim waits gated"
     );
-    let [claim] = claims_after(host, instance, before)[..] else {
-        panic!("one autostart claim");
-    };
     claim
 }
 
@@ -97,20 +102,18 @@ fn assert_refused(receipt: &RuntimeReceipt, code: RuntimeErrorCode) {
     );
 }
 
-// Requirement 1 and 3: under its instance's restored pause the autostart claim waits gated and
-// does no work, so the shutdown is accepted at once; the Runtime then answers no resume, nothing
-// is started, the dropped claim's request ends with `scheduler.denied lease.queue_disconnected`
-// and no report line, and the next start restores the pause and queues the claim again, gated.
+// Requirement 1 and 3: under its instance's restored pause a routine claim waits gated and does
+// no work, so the shutdown is accepted at once; the Runtime then answers no resume, nothing is
+// started, and the dropped claim's request ends with `scheduler.denied lease.queue_disconnected`.
 #[test]
-fn a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_claim() {
+fn a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_routine_claim() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let instance = instance_id();
     let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
     let host = paused_restart(&root, &state, instance, &read, instance_scope(FIRST));
     let calls = state.emulator.listen();
-    let reports = host.emulator_autostart_reports();
-    let claim = enqueue_gated(&host, instance);
+    let claim = queue_gated(&host);
     assert_eq!(instance_status(&host, FIRST).queued_request_count(), 1);
 
     assert_accepted(&request_shutdown(&host, 203));
@@ -120,11 +123,6 @@ fn a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_cla
     );
     host.close().expect("close the stopping host");
     assert_eq!(starts(&calls), 0, "no Start");
-    assert_eq!(
-        codes(&reports.take().expect("report lines")),
-        ["emulator_autostart_queued"],
-        "the disconnected claim reports nothing"
-    );
 
     let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| config);
     let (_, instance_pauses) = host.scheduling_pauses_for_test().expect("pauses");
@@ -132,7 +130,7 @@ fn a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_cla
         instance_pauses.contains_key(FIRST),
         "the instance's pause is restored"
     );
-    let dropped = of_request(&host, claim);
+    let dropped = of_request(&host, claim.request.request_id());
     let disconnected = dropped
         .iter()
         .filter(|event| {
@@ -145,9 +143,6 @@ fn a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_cla
         .count();
     assert_eq!(disconnected, 1, "{dropped:#?}");
     assert_eq!(count_granted(&dropped), 0, "{dropped:#?}");
-    let again = enqueue_gated(&host, instance);
-    assert_ne!(again, claim, "a new claim of the new start");
-    assert_eq!(starts(&calls), 0, "no Start under the restored pause");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }
@@ -161,15 +156,15 @@ fn count_granted(events: &[PersistedEvent]) -> usize {
 
 // Requirement 4: a resume done before the shutdown decision wins. While another admission on the
 // instance keeps the pump from granting it, the resumed claim waits eligible and refuses the
-// shutdown; once granted it holds its key (no internet access yet) and still refuses it.
+// shutdown; once granted it holds its key and still refuses it.
 #[test]
 fn a3_a_resume_before_the_shutdown_grants_the_claim_and_the_shutdown_stays_busy() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let instance = instance_id();
-    let (read, reads) = connectivity(Vec::new(), NetworkConnectivity::NoInternet);
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
     let host = paused_restart(&root, &state, instance, &read, SchedulingPauseScope::Global);
-    enqueue_gated(&host, instance);
+    let claim = queue_gated(&host);
 
     let admission = host
         .instance_admission_for_test(FIRST)
@@ -188,22 +183,20 @@ fn a3_a_resume_before_the_shutdown_grants_the_claim_and_the_shutdown_stays_busy(
     );
     assert_eq!(
         host.instance_claims_for_test(FIRST).expect("claims"),
-        (None, vec![ClaimKind::Autostart]),
+        (None, vec![ClaimKind::Ladder]),
         "the resumed claim waits eligible"
     );
     assert_refused(&request_shutdown(&host, 206), RuntimeErrorCode::RuntimeBusy);
 
     release_tx.send(()).expect("release the guard");
     holder.join().expect("the guard's holder");
-    assert_eq!(
-        reads
-            .recv_timeout(GATE_WAIT)
-            .expect("the granted claim reads"),
-        NetworkConnectivity::NoInternet
-    );
+    claim
+        .wait_for_grant(GATE_WAIT)
+        .expect("the claim's grant")
+        .expect("the claim is granted");
     assert_eq!(
         host.instance_claims_for_test(FIRST).expect("claims"),
-        (Some(ClaimKind::Autostart), vec![]),
+        (Some(ClaimKind::Ladder), vec![]),
         "the claim holds its key"
     );
     assert_refused(&request_shutdown(&host, 207), RuntimeErrorCode::RuntimeBusy);
@@ -221,7 +214,7 @@ fn a3_an_operator_start_passes_the_gated_claim_and_the_shutdown_is_accepted() {
     let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
     let host = paused_restart(&root, &state, instance, &read, SchedulingPauseScope::Global);
     let calls = state.emulator.listen();
-    enqueue_gated(&host, instance);
+    let _claim = queue_gated(&host);
 
     let started = control(&host, FIRST, START, 208);
     assert_eq!(
@@ -232,7 +225,7 @@ fn a3_an_operator_start_passes_the_gated_claim_and_the_shutdown_is_accepted() {
     assert_eq!(starts(&calls), 1, "the operator's Start");
     assert_eq!(
         host.instance_claims_for_test(FIRST).expect("claims"),
-        (None, vec![ClaimKind::Autostart]),
+        (None, vec![ClaimKind::Ladder]),
         "the gated claim waits for a resume"
     );
     assert_accepted(&request_shutdown(&host, 209));
