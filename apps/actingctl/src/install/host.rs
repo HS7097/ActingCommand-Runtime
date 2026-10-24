@@ -47,9 +47,15 @@ impl Host for SystemHost {
     }
 
     fn installer(&self) -> Installer {
+        let executable = std::env::current_exe().ok();
+        let commit = executable
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .and_then(|directory| super::manifest::read_manifest(directory).ok())
+            .map(|manifest| manifest.commit_sha);
         Installer {
-            commit: None,
-            path: String::new(),
+            commit,
+            path: executable.map_or_else(String::new, |path| path.display().to_string()),
         }
     }
 
