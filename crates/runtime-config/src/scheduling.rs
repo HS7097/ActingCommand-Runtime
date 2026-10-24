@@ -105,6 +105,11 @@ pub const FACT_REFRESH_FAILURE_BACKOFF_MS: &str = "scheduling.fact_refresh.failu
 /// the activity day.
 pub const FACT_REFRESH_MAX_CONSECUTIVE_FAILURES: &str =
     "scheduling.fact_refresh.max_consecutive_failures";
+/// ED-1 red stub: the key names only, not in the key table.
+pub const FACT_REFRESH_EXPECTED_DURATION_MS: &str = "scheduling.fact_refresh.expected_duration_ms";
+pub const EXPECTED_RUNTIME_ENABLED: &str = "scheduling.expected_runtime.enabled";
+pub const EXPECTED_RUNTIME_RUNS: &str = "scheduling.expected_runtime.runs";
+pub const EXPECTED_RUNTIME_MARGIN_MS: &str = "scheduling.expected_runtime.margin_ms";
 /// Workflow #384 D2-S5 (D2 model §3.4, §3.9 item 6): how long one instance's candidates may wait
 /// for one key before the transition recorder reports `fact_reader_overdue`. No default: unset,
 /// nothing is reported.
@@ -601,6 +606,16 @@ pub struct FactRefreshConfig {
     pub max_consecutive_failures: u32,
     /// Workflow #384 D2-S5: when one key's wait is reported overdue; `None` when unset.
     pub overdue_ms: Option<u64>,
+    /// ED-1 red stub: not read from the configuration.
+    pub expected_duration_ms: u64,
+}
+
+/// ED-1 red stub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedRuntimeConfig {
+    pub enabled: bool,
+    pub runs: u8,
+    pub margin_ms: u64,
 }
 
 /// Workflow #386 SR-3 (§2.4): the task package admission check of `check-config` and of the
@@ -655,6 +670,8 @@ pub struct SchedulingConfig {
     pub pack_admission: PackAdmissionConfig,
     /// Workflow #411 B15 R3: the remedy keys, with the section's choice rows.
     pub remedy: RemedyConfig,
+    /// ED-1 red stub: not read from the configuration.
+    pub expected_runtime: ExpectedRuntimeConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -925,6 +942,11 @@ impl SchedulingConfig {
             fact_refresh: fact_refresh_from(&reader)?,
             pack_admission: pack_admission_from(&reader)?,
             remedy: remedy_from(&reader)?,
+            expected_runtime: ExpectedRuntimeConfig {
+                enabled: false,
+                runs: 1,
+                margin_ms: 0,
+            },
         })
     }
 }
@@ -1126,6 +1148,7 @@ fn fact_refresh_from(reader: &Reader<'_>) -> Result<FactRefreshConfig, ConfigFai
         failure_backoff_ms: reader.duration(FACT_REFRESH_FAILURE_BACKOFF_MS)?,
         max_consecutive_failures: reader.count(FACT_REFRESH_MAX_CONSECUTIVE_FAILURES)?,
         overdue_ms: reader.optional_duration(FACT_REFRESH_OVERDUE_MS)?,
+        expected_duration_ms: 0,
     })
 }
 

@@ -12,7 +12,8 @@ use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
-    FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
+    ExpectedRuntimeConfig, FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig,
+    SchedulingConfig,
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
@@ -514,6 +515,18 @@ impl EffectiveConfig {
     /// a whole).
     pub fn remedy(&self, instance_id: &str) -> Result<RemedyConfig, ConfigFailure> {
         scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// ED-1 red stub: no key is read.
+    pub fn expected_runtime(
+        &self,
+        _instance_id: &str,
+    ) -> Result<ExpectedRuntimeConfig, ConfigFailure> {
+        Ok(ExpectedRuntimeConfig {
+            enabled: false,
+            runs: 1,
+            margin_ms: 0,
+        })
     }
 
     /// Workflow #405 D1: the random delay in effect for the instance whose registry id is

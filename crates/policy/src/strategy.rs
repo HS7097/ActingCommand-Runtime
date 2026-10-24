@@ -4,10 +4,11 @@
 
 use crate::canonical::canonical_serialized;
 use crate::codes::PolicyCode;
-use crate::evaluator::scope_matches_instance;
+use crate::evaluator::{scope_matches_instance, snapshot_expected_runtime};
 use crate::{
     ActivityProfile, CompiledCatalog, EvaluationFacts, EvaluationResources, FactValue, GoalTarget,
-    InstanceSnapshot, LoadProfile, MetricRef, PredicateSpec, ScopeSelector, TaskSpec,
+    InstanceSnapshot, LoadProfile, MetricRef, PredicateSpec, ScopeSelector, TaskRuntimeSnapshot,
+    TaskSpec,
 };
 use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 use actingcommand_contract::outcome::{Code, CodeStr};
@@ -554,7 +555,8 @@ pub fn project_strategic_report(
             resources,
             report.as_of_unix_ms(),
         )?;
-        let production_rate = catalog_production_rate(catalog, &goal.metric, instance)?;
+        let production_rate =
+            catalog_production_rate(catalog, &goal.metric, instance, &facts.tasks)?;
         require_optional_check("current projection", assessment.current_projection, current)?;
         require_optional_check(
             "production rate",
@@ -845,10 +847,14 @@ fn resolve_metric_current(
     }
 }
 
+/// The guaranteed production rate of the catalog's tasks on `instance` into the metric's pool.
+/// SCH-M ED-1 (§3.4 D-15): a task's duration is the expected duration E its snapshot in `tasks`
+/// carries, else its declared `expected_duration_ms`.
 fn catalog_production_rate(
     catalog: &CompiledCatalog,
     metric: &MetricRef,
     instance: &InstanceSnapshot,
+    tasks: &[TaskRuntimeSnapshot],
 ) -> StrategyResult<Option<u64>> {
     let MetricRef::Pool { pool_id } = metric else {
         return Ok(None);
@@ -884,12 +890,16 @@ fn catalog_production_rate(
             // This planner derives guaranteed integer inventory, not probabilistic yield.
             return Ok(None);
         }
-        let duration_with_cooldown = task
-            .expected_duration_ms
+        let state = tasks
+            .iter()
+            .find(|state| state.task_id == task.id && state.instance_id == instance.instance_id);
+        let expected_duration_ms =
+            snapshot_expected_runtime(task, state).unwrap_or(task.expected_duration_ms);
+        let duration_with_cooldown = expected_duration_ms
             .checked_add(task.cooldown_ms)
             .ok_or_else(|| StrategyError::overflow("task cycle addition overflow"))?;
         let task_cycle = task.next_run_clamp_ms.max(duration_with_cooldown);
-        if task.expected_duration_ms == 0 || task_cycle == 0 {
+        if expected_duration_ms == 0 || task_cycle == 0 {
             return Err(StrategyError::invalid(
                 "catalog production task has a zero duration",
             ));
@@ -897,7 +907,7 @@ fn catalog_production_rate(
         let executions = [
             u64::from(task.loop_budget.daily_limit),
             u64::from(task.loop_budget.window_iteration_limit),
-            task.loop_budget.max_runtime_ms / task.expected_duration_ms,
+            task.loop_budget.max_runtime_ms / expected_duration_ms,
             RATE_PERIOD_MS / task_cycle,
         ]
         .into_iter()
@@ -2143,11 +2153,11 @@ mod tests {
             pool_id: "fixture-pool".to_owned(),
         };
         assert_eq!(
-            catalog_production_rate(&catalog, &metric, instance).expect("first rate"),
+            catalog_production_rate(&catalog, &metric, instance, &[]).expect("first rate"),
             Some(3_321)
         );
         assert_eq!(
-            catalog_production_rate(&catalog, &metric, instance).expect("second rate"),
+            catalog_production_rate(&catalog, &metric, instance, &[]).expect("second rate"),
             Some(3_321)
         );
         assert_eq!(
@@ -2157,6 +2167,7 @@ mod tests {
                     fact_key: "resource.current".to_owned()
                 },
                 instance,
+                &[],
             )
             .expect("fact rate"),
             None
@@ -2169,6 +2180,7 @@ mod tests {
                     outcome_key: "completed".to_owned()
                 },
                 instance,
+                &[],
             )
             .expect("outcome rate"),
             None
@@ -2178,7 +2190,8 @@ mod tests {
         no_producer["produces"] = serde_json::json!([]);
         let no_producer = catalog_with_tasks(vec![no_producer]);
         assert_eq!(
-            catalog_production_rate(&no_producer, &metric, instance).expect("no-producer rate"),
+            catalog_production_rate(&no_producer, &metric, instance, &[])
+                .expect("no-producer rate"),
             Some(0)
         );
 
@@ -2212,7 +2225,7 @@ mod tests {
         }
         let expected = compile_catalog(&expected_sources).unwrap();
         assert_eq!(
-            catalog_production_rate(&expected, &metric, instance).unwrap(),
+            catalog_production_rate(&expected, &metric, instance, &[]).unwrap(),
             None
         );
 
@@ -2241,7 +2254,7 @@ mod tests {
         sources.pools.bytes = serde_json::to_vec(&pools_document).expect("overflow pool bytes");
         let overflow_catalog = compile_catalog(&sources).expect("overflow catalog");
         assert_eq!(
-            catalog_production_rate(&overflow_catalog, &metric, instance)
+            catalog_production_rate(&overflow_catalog, &metric, instance, &[])
                 .expect_err("production sum must be checked")
                 .code()
                 .as_str(),

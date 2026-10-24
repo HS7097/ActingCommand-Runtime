@@ -398,6 +398,8 @@ fn served_at(at: u64) -> TaskRuntimeSnapshot {
         completed_window: None,
         last_duration_ms: None,
         failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
     }
 }
 
