@@ -2195,6 +2195,9 @@ impl HostShared {
                     | CriticalExecutionError::OutcomeUndurable { .. },
                 ) => policy.refresh_dispatches(&self.ledger),
             };
+            // Workflow #422 LN-3: the admission's changes of the decision memory, as value
+            // records, still under the policy guard.
+            let applied = applied.and_then(|()| self.record_policy_values(&mut policy));
             let applied = match applied {
                 Ok(()) => Ok(()),
                 Err(error) => {

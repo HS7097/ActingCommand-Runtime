@@ -1871,3 +1871,14 @@ tests = [
     "actingcommand-runtime-config::lib::ed1_tests::ed1_c1_per_instance_keys_override_the_section",
 ]
 incident = ["#405 ED-1"]
+
+# LN-3 (Workflow #422, LEAN-L model v1.0 §3.6, §5.1 row LN-3; contracts/ledger-observer.md §11.1, §11.3; register L7, L8, L14): each change of a dispatch pair's control state, an activity state and the monitor registry's alias state, and each wake obligation, writes exactly one value record with the key's complete state, and its `state` row names it (`decision_memory/`, `activity_memory/`, `wake/`, `monitor/`); a change that changes nothing writes none; a restart from the records alone keeps the runtime budgets and the activity interval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln3::ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln3::ln3_a_each_wake_obligation_writes_one_value_record_its_state_row_names",
+    "actingcommand-runtime-host::lib::monitor::tests::ln3_a_the_monitor_row_names_the_latest_change_of_each_alias",
+    "actingcommand-runtime-host::lib::policy_control::tests::ln3_b_a_restart_from_the_value_records_alone_keeps_runtime_budgets_and_activity_intervals",
+]
+incident = ["#422 LN-3"]
