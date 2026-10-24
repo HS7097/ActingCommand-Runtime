@@ -74,6 +74,10 @@ pub const BLACKOUT_QUIET_MARGIN_MS: &str = "scheduling.blackout.quiet_margin_ms"
 pub const BLACKOUT_HARD_QUIET_MS: &str = "scheduling.blackout.hard_quiet_ms";
 /// Whether the safety net stops runs at a blackout start (§5.3 item 5).
 pub const BLACKOUT_STOP_IN_FLIGHT_AT_START: &str = "scheduling.blackout.stop_in_flight_at_start";
+/// SR-4a1 red stub: the key names only, not in the key table.
+pub const BLACKOUT_QUIET_HORIZON: &str = "scheduling.blackout.quiet_horizon";
+pub const INSTANCE_BLACKOUT: &str = "scheduling.blackout";
+pub const DAY_BOUNDARY_QUIET: &str = "scheduling.day_boundary.quiet";
 /// How long a recorded locked feature stays valid (§7.2).
 pub const FEATURE_LOCK_LOCKED_VALID_FOR_MS: &str = "scheduling.feature_lock.locked_valid_for_ms";
 /// The codes a run ends with on a locked feature (§7.2; a list).
@@ -554,25 +558,44 @@ pub struct CostCommitConfig {
     pub margin_ms: u64,
 }
 
-/// One host blackout entry (§5.1 b; `contracts/scheduling-blackout.md`, "Host blackouts"): the
-/// weekdays it starts on (1–7), the offset of its clock from UTC and its start and end minutes
-/// of day; an end at or before the start crosses midnight.
+/// SR-4a1 red stub: the entry types, without the `once` kind's parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostBlackout {
+pub enum BlackoutWindow {
+    Weekly {
+        weekdays: Vec<u8>,
+        utc_offset_minutes: i16,
+        start_minute_of_day: u16,
+        end_minute_of_day: u16,
+    },
+    Once {
+        from_unix_ms: u64,
+        until_unix_ms: u64,
+    },
+}
+
+/// SR-4a1 red stub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlackoutEntry {
     pub id: String,
-    pub weekdays: Vec<u8>,
-    pub utc_offset_minutes: i16,
-    pub start_minute_of_day: u16,
-    pub end_minute_of_day: u16,
+    pub window: BlackoutWindow,
+}
+
+/// SR-4a1 red stub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuietHorizon {
+    Deadline,
+    Expected,
 }
 
 /// The `blackout` keys (§5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlackoutConfig {
-    pub host: Vec<HostBlackout>,
+    pub host: Vec<BlackoutEntry>,
     pub quiet_margin_ms: u64,
     pub hard_quiet_ms: u64,
     pub stop_in_flight_at_start: bool,
+    /// SR-4a1 red stub: not read from the configuration.
+    pub quiet_horizon: QuietHorizon,
 }
 
 /// The `feature_lock` keys (§7.2).
@@ -655,6 +678,8 @@ pub struct SchedulingConfig {
     pub pack_admission: PackAdmissionConfig,
     /// Workflow #411 B15 R3: the remedy keys, with the section's choice rows.
     pub remedy: RemedyConfig,
+    /// SR-4a1 red stub: not read from the configuration.
+    pub day_boundary_quiet: bool,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -826,7 +851,7 @@ fn blackout_id(value: &Value) -> Option<&str> {
 /// object of `id`, `weekdays`, `utc_offset_minutes`, `start_minute_of_day` and
 /// `end_minute_of_day`, ids unique. A broken rule is `blackout_config_invalid` with the member
 /// it concerns.
-fn host_blackouts(items: Vec<Value>) -> Result<Vec<HostBlackout>, ConfigFailure> {
+fn host_blackouts(items: Vec<Value>) -> Result<Vec<BlackoutEntry>, ConfigFailure> {
     let mut ids = BTreeSet::new();
     let mut entries = Vec::with_capacity(items.len());
     for (index, item) in items.into_iter().enumerate() {
@@ -864,12 +889,14 @@ fn host_blackouts(items: Vec<Value>) -> Result<Vec<HostBlackout>, ConfigFailure>
         };
         let start_minute_of_day = minute(&entry.start_minute_of_day, "start_minute_of_day")?;
         let end_minute_of_day = minute(&entry.end_minute_of_day, "end_minute_of_day")?;
-        entries.push(HostBlackout {
+        entries.push(BlackoutEntry {
             id: entry_id,
-            weekdays,
-            utc_offset_minutes,
-            start_minute_of_day,
-            end_minute_of_day,
+            window: BlackoutWindow::Weekly {
+                weekdays,
+                utc_offset_minutes,
+                start_minute_of_day,
+                end_minute_of_day,
+            },
         });
     }
     Ok(entries)
@@ -908,6 +935,7 @@ impl SchedulingConfig {
                 quiet_margin_ms: reader.duration(BLACKOUT_QUIET_MARGIN_MS)?,
                 hard_quiet_ms: reader.duration(BLACKOUT_HARD_QUIET_MS)?,
                 stop_in_flight_at_start: reader.boolean(BLACKOUT_STOP_IN_FLIGHT_AT_START)?,
+                quiet_horizon: QuietHorizon::Deadline,
             },
             feature_lock: FeatureLockConfig {
                 locked_valid_for_ms: reader.duration(FEATURE_LOCK_LOCKED_VALID_FOR_MS)?,
@@ -925,6 +953,7 @@ impl SchedulingConfig {
             fact_refresh: fact_refresh_from(&reader)?,
             pack_admission: pack_admission_from(&reader)?,
             remedy: remedy_from(&reader)?,
+            day_boundary_quiet: false,
         })
     }
 }

@@ -404,6 +404,8 @@ outcome_keys! {
     page_id: id,
     blackout_id: id,
     blackout_start_unix_ms: unix_ms,
+    // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): which of the three sources a blackout comes from.
+    blackout_source: vocab(blackout_source),
     pacing_stage: vocab(pacing_stage),
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.

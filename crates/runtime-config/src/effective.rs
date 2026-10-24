@@ -12,7 +12,8 @@ use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
-    FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
+    BlackoutEntry, FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig,
+    SchedulingConfig,
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
@@ -22,7 +23,7 @@ use crate::{
     device_link, device_state, emulator_control, host_claims, instance, ledger_observer,
     performance, recovery_ladder, scheduling, startup_discovery, touch,
 };
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
     ConfiguredSetting, FactScalar, RuntimeConfigManifest, config_parameter_section,
@@ -201,6 +202,11 @@ impl ConfigFailure {
     /// Workflow #386 SR-1: the id of a host blackout entry that breaks a rule, when it has one.
     pub fn blackout_id(&self) -> Option<&str> {
         self.blackout.as_deref().and_then(|(_, id)| id.as_deref())
+    }
+
+    /// SR-4a1 red stub: no list is named.
+    pub fn blackout_source(&self) -> Option<BlackoutSource> {
+        None
     }
 
     /// `outcome` with this failure's values: `config_key`, `config_value_problem` when the value
@@ -514,6 +520,19 @@ impl EffectiveConfig {
     /// a whole).
     pub fn remedy(&self, instance_id: &str) -> Result<RemedyConfig, ConfigFailure> {
         scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// SR-4a1 red stub: no instance list is read.
+    pub fn instance_blackouts(
+        &self,
+        _instance_id: &str,
+    ) -> Result<Vec<BlackoutEntry>, ConfigFailure> {
+        Ok(Vec::new())
+    }
+
+    /// SR-4a1 red stub: no key is read.
+    pub fn day_boundary_quiet(&self, _instance_id: &str) -> Result<bool, ConfigFailure> {
+        Ok(false)
     }
 
     /// Workflow #405 D1: the random delay in effect for the instance whose registry id is

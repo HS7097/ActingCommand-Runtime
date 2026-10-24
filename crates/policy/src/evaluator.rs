@@ -28,9 +28,15 @@ use crate::{
     TimelineEvent,
 };
 
+// Workflow #386 SR-4a1 (SCH-M §3.2 D-1, D-6): the pure blackout and day-boundary judgements.
+mod blackout;
 mod chain_handover;
 mod fact_refresh;
 
+pub use blackout::{
+    Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
+    day_boundary_fit, next_blackout_start,
+};
 pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
 use fact_refresh::{AffectedCandidate, RefreshGate, RefreshKey};
 pub use fact_refresh::{

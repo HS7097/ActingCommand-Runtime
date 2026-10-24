@@ -506,7 +506,8 @@ mod keys;
 mod vocabulary;
 
 pub use vocabulary::{
-    CauseRelation, FileState, IoKind, IoOp, LadderClass, RawSource, RemedyProblem, RemedySource,
+    BlackoutSource, CauseRelation, FileState, IoKind, IoOp, LadderClass, RawSource, RemedyProblem,
+    RemedySource,
 };
 
 /// The merged outcome catalog `contracts/outcome-codes.json`, embedded at build time. It is
