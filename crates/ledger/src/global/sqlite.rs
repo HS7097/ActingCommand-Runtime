@@ -3843,8 +3843,8 @@ fn read_lab_relations(
         "SELECT r.run_id FROM ledger_links r WHERE r.request_id IN (SELECT value FROM json_each(?2)) AND r.run_id IS NOT NULL AND r.sequence<=?1 UNION SELECT r.run_id FROM ledger_links r WHERE r.correlation_id IN (SELECT value FROM json_each(?3)) AND r.run_id IS NOT NULL AND r.sequence<=?1",
         &[
             SqlValue::Integer(encode(through)),
-            SqlValue::Text(encoded(&requests)?),
-            SqlValue::Text(encoded(&correlations)?),
+            SqlValue::Text(encoded(requests.as_slice())?),
+            SqlValue::Text(encoded(correlations.as_slice())?),
         ],
         None,
         &mut 0,
