@@ -384,6 +384,24 @@ impl HostShared {
             })
     }
 
+    /// emu-watch: the emulator watch's keys of the `emulator_control` section in effect
+    /// (`watch_enabled`, `watch_interval_ms`, `restart_attempts`, `restart_window_ms`), read at
+    /// every tick of the watch.
+    pub(super) fn emulator_watch_settings(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::EmulatorWatchConfig> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .emulator_watch()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, read
     /// when a run joins the readings it handed to recognition.
     pub(super) fn recognition_join_timeout(&self) -> RuntimeHostResult<Duration> {

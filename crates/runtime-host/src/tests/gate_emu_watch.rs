@@ -184,7 +184,7 @@ fn emu_w_a_a_paused_instance_is_started_and_its_startup_package_waits_for_the_re
     let lines = await_reports(&host, |lines| {
         reported(lines, "emulator_autostart_started") == 1
     });
-    assert_eq!(reported(&lines, "emulator_autostart_yielded"), 0);
+    assert_eq!(reported(&lines, "emulator_autostart_failed"), 0);
     assert_eq!(starts(&calls), 1, "the Start under the pause");
     let claim = of_request(&host, claims_after(&host, instance, before)[0]);
     assert_eq!(
@@ -374,6 +374,55 @@ fn emu_w_c_three_failed_starts_in_the_window_warn_and_hold_until_it_passes() {
     let requested = watch_records(&host, instance, "emulator_watch_restart_requested");
     assert_eq!(requested.len(), 4, "{requested:?}");
     assert_eq!(requested[3].value("attempts"), Some(&serde_json::json!(3)));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// (d) R4: an instance without `start_emulator` is polled and its stopped emulator recorded, but
+// never started.
+#[test]
+fn emu_w_d_an_instance_without_start_emulator_is_observed_and_never_started() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(FIRST, instance, Arc::clone(&state))),
+    )
+    .expect("runtime host without start_emulator");
+    bind_fake_emulator(&host, FIRST, instance, &state);
+    for _ in 0..2 {
+        state.emulator.script_read(stopped_state());
+    }
+
+    host.start_emulator_watch().expect("the watch starts");
+    for poll in 1..=2 {
+        clock.advance(WATCH_INTERVAL_MS);
+        host.await_emulator_watch_polls_for_test(poll, GATE_WAIT)
+            .expect("the poll");
+    }
+    let changed = watch_records(&host, instance, "emulator_watch_state_changed");
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    assert_eq!(changed[0].value("alias"), Some(&serde_json::json!(FIRST)));
+    assert_eq!(
+        changed[0].value("process_started"),
+        Some(&serde_json::json!(false))
+    );
+    assert!(matches!(
+        instance_status(&host, FIRST).emulator_state(),
+        EmulatorRunningState::Off { .. }
+    ));
+    assert!(
+        watch_records(&host, instance, "emulator_watch_restart_requested").is_empty(),
+        "no restart"
+    );
+    assert_eq!(
+        host.instance_claims_for_test(FIRST).expect("claims"),
+        (None, vec![]),
+        "no claim"
+    );
+    assert_eq!(control_starts(&state), 0, "no Start");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }

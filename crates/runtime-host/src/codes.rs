@@ -172,12 +172,10 @@ actingcommand_contract::outcome_codes! {
         /// its key before its Start, with no failure pair (Workflow #369 S6c; keys `alias`). A
         /// report line.
         EmulatorAutostartSuperseded => "emulator_autostart_superseded": info / none,
-        /// Info. A scheduling pause holds the instance or the global gate: the autostart claim
-        /// queues again as a gated entry and releases its key (Workflow #369 S6c; keys `alias`).
-        /// A report line.
-        EmulatorAutostartYielded => "emulator_autostart_yielded": info / none,
         /// Info. The instance already runs when its autostart claim holds the key: the claim
-        /// ends without action (Workflow #369 S6c; keys `alias`). A report line.
+        /// ends without action (Workflow #369 S6c; keys `alias`). emu-watch: for the watch's
+        /// claim, the status read just before its Start found the emulator process running. A
+        /// report line.
         EmulatorAutostartSkipped => "emulator_autostart_skipped": info / none,
         /// Info. A drain or a shutdown ended the autostart claim before its Start; it releases
         /// its key (Workflow #369 S6c; keys `alias`). A report line.
@@ -2820,3 +2818,43 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #411 B15 R0: end ----
+
+// ---- emu-watch (Alice's ruling 35; review item 5): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the emulator watch (emu-watch): it polls the emulator status of every
+    /// discovery-bound instance and starts a configured one it finds stopped, within a bound.
+    /// Each is a `device_state_observed` record under the instance and the same report line,
+    /// which actingd writes as a daemon line.
+    pub(crate) enum EmulatorWatchCode {
+        /// Info. A poll read the instance's emulator in another running state than the Runtime
+        /// held: `emulator_state` takes the reading (keys `alias`, `process_started`,
+        /// `android_started`, `adb_port_present`).
+        StateChanged => "emulator_watch_state_changed": info / none,
+        /// Warning. A poll's emulator status read failed; the instance's reading stays as it was.
+        /// Once per failing streak; the read's failure text is the cause (keys `alias`).
+        ReadFailed => "emulator_watch_read_failed": warning / none,
+        /// Info. A poll found the configured instance's emulator stopped, its key free and no
+        /// start waiting: the watch requests one autostart claim, the restart `attempts` of
+        /// `limit_count` in the window (keys `alias`, `attempts`, `limit_count`).
+        RestartRequested => "emulator_watch_restart_requested": info / none,
+        /// Warning. A poll found the configured instance's emulator stopped, but the watch already
+        /// started it `emulator_control.restart_attempts` times within
+        /// `emulator_control.restart_window_ms`: no start until the oldest leaves the window
+        /// (`retry_after_ms`) or a person's emulator control of the instance. Once per streak
+        /// (keys `alias`, `attempts`, `limit_count`, `retry_after_ms`).
+        RestartExhausted => "emulator_watch_restart_exhausted": warning / none,
+        /// Error. The emulator watch could not start: its thread could not be spawned.
+        SpawnFailed => "emulator_watch_spawn_failed": error / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the emulator watch (emu-watch).
+    pub(crate) enum EmulatorWatchLocation {
+        /// The watch's start (`RuntimeHost::start_emulator_watch`).
+        StartEmulatorWatch => "start_emulator_watch",
+        /// One poll of the emulator status and the restarts it requests.
+        PollEmulators => "poll_emulators",
+    }
+}
+// ---- emu-watch: end ----

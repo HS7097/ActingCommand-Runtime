@@ -5372,6 +5372,8 @@ const HOST_SPLIT: &[HostModule] = &[
     // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
     host_module("emulator_autostart", &["HostShared"]),
     host_module("emulator_instance", &["HostShared"]),
+    // emu-watch (Alice's ruling 35): the emulator watch, its polls and its bounded restarts.
+    host_module("emulator_watch", &["HostShared"]),
     host_module("evidence_export", &["HostShared"]),
     host_module("facts", &["HostShared"]),
     host_module("failure_settlement", &["HostShared"]),
