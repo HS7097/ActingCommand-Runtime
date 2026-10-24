@@ -60,10 +60,6 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-#[cfg(test)]
-#[path = "tests/synthetic_ledger.rs"]
-mod tests;
-
 /// The issuer namespace every synthetic identifier carries: `SYNTHETI` in hex.
 const FIXED_NAMESPACE: &str = "53594e5448455449";
 /// The salt of the generator's secret fingerprints (its records carry no secret field).
@@ -1112,3 +1108,7 @@ pub fn process_age_ms() -> std::io::Result<u64> {
         "the process creation time is read on Windows only",
     ))
 }
+
+#[cfg(test)]
+#[path = "tests/synthetic_ledger.rs"]
+mod tests;

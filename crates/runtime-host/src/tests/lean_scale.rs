@@ -225,7 +225,7 @@ fn lean_scale_start_child() {
         "memory_settled": memory_json(settled),
     });
     fs::write(
-        &report_path,
+        report_path,
         serde_json::to_vec_pretty(&report).expect("the child report's bytes"),
     )
     .expect("write the child report");
@@ -265,9 +265,9 @@ fn start_child(root: &Path, report_dir: &Path, records: u64, start: &str) -> Val
         tail(&stderr_path)
     );
     let mut report: Value =
-        serde_json::from_slice(&fs::read(&report_path).expect("the child's report"))
+        serde_json::from_slice(&fs::read(report_path).expect("the child's report"))
             .expect("the child's report is JSON");
-    let printed = fs::read_to_string(&stdout_path)
+    let printed = fs::read_to_string(stdout_path)
         .expect("the child's stdout")
         .lines()
         .find(|line| line.contains("actingd startup_recovery "))
@@ -334,9 +334,10 @@ fn measure(records: u64, report_dir: &Path) -> Value {
         );
         starts.insert(start.to_owned(), report);
     }
+    let generation = serde_json::to_value(generated).expect("the generation report");
     json!({
         "records": records,
-        "generation": serde_json::to_value(&generated).expect("the generation report"),
+        "generation": generation,
         "database_bytes": bytes,
         "starts": starts,
     })
