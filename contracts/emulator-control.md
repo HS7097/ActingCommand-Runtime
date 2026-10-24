@@ -424,7 +424,9 @@ that belongs to emulator control:
   A50: whether or not the preparation passed, since the game the package starts is what a capture
   by package needs; before A50 only a passing one); a scheduling pause that holds the instance
   (its own or the global one) schedules none, the answer saying why
-  (`startup_package_withheld`), and cancels the instance's queued startup claims:
+  (`startup_package_withheld`), and cancels the instance's queued startup claims (emu-watch:
+  except after a configured start, whose package's claim waits queued behind the pause as a
+  gated entry and runs after the resume, "Configured start at daemon start"):
   one `runtime.lifecycle_observed` (phase `startup_package_scheduled { instance_id }`, the
   package locator in the audit machine path, links of the control request plus a freshly
   minted causation id) is appended, the control's key goes to the package's claim, and the
@@ -589,10 +591,13 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   instance a ladder climbs on (its own work); while `rules.direct_runs` is `exempt`, every record
   committed while manual work holds the instance's key, the set a resource fence treats as manual
   (a direct task run, a client lease, an application or input command, a Lab operation), under
-  `trigger` they count; and codes the catalog does not list. An emulator control command is not
-  manual work, so its records count, and the connection preparation after an emulator `start` or
-  `restart` still starts its ladder as above (coordinator ruling P1). The count takes no lock but
-  its own: it reads the holder kind the scheduler last reported for the instance's key (the
+  `trigger` they count; every record committed while an autostart claim holds the instance's
+  key (a configured start, the daemon start's or the emulator watch's: emu-watch, Alice's ruling
+  35, whose own bound limits those starts, R3); and codes the catalog does not list. An emulator
+  control command is not manual work, so its records count, and the connection preparation
+  after an emulator `start` or `restart` still starts its ladder as above (coordinator ruling
+  P1). The count takes no lock but its own: it reads the holder kind the scheduler last
+  reported for the instance's key (the
   scheduler reports it under its own lock at every grant, transfer, release, expiry and
   rollback), and it records nothing and admits nothing on the write path. The lease sweep admits
   each burst's ladder (trigger `stage: stability_warnings`, the burst's last code, no run, task
@@ -1047,6 +1052,9 @@ S6a: off unless the instance names it; discovery-bound instances only,
 `instance.<instance_id>.start_emulator`) whose emulator is stopped when the daemon starts (its
 ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
 (`ClaimKind::Autostart`). An instance already running gets the usual start preparation only.
+emu-watch (Alice's ruling 35: starting the emulators belongs to the Runtime; a pause holds only
+dispatches; #414 option 3): a scheduling pause, the instance's own or the global one (a restored
+one included), never holds or queues the claim and never makes it yield.
 
 - **When.** `actingd` enqueues the claims once, after policy initialization succeeded (without
   a `policy` section, right after the host started) and before `runtime_ready`; the enqueue
@@ -1055,21 +1063,17 @@ ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
   startup refuses an alias that is not registered (`emulator_autostart_instance_unknown`) or a
   fixture instance (`emulator_autostart_requires_physical_instance`), both fatal, with the
   alias; `RuntimeHost::enqueue_emulator_autostart` enqueues the claims.
-- **The claim.** A Runtime-internal routine claim: no deadline (`scheduler.queued` carries
-  `u64::MAX`), normal priority, never preempting, under its own `AcquireLease` request (origin
-  `(Agent, Adapter)`, the host's synthesized connection), with a 120 s key. Like an operator
-  control it takes neither the bound-endpoint check nor the performance-control lease gate and
-  is granted with drain capacity, so a stopped (pending) instance is granted it. Every claim is
-  visible: a holder from the enqueue (`lease.requested`, `scheduler.admitted`, `lease.granted`
-  under the claim's request; status `lease_active`), or, while a scheduling pause holds the
-  instance or the global gate (a restored pause included), a gated entry from the first moment
-  (`lease.requested` + `scheduler.queued`; status `queued_request_count` 1); the resume grants
-  it. A claim the pause gate holds is not waiting work (Workflow #411 A3): it does not refuse
-  `request-shutdown` or `restart`; an accepted shutdown disconnects it (`scheduler.denied` with
-  `lease.queue_disconnected`, under the claim's request) without a report line, and the next
-  start enqueues it again under the restored pause. A takeover cooldown is waited out in the
-  queue. A pending instance stays withheld from
-  policy until its start and preparation pass.
+- **The claim.** A Runtime-internal claim that no scheduling pause holds (emu-watch; it was a
+  routine claim before): no deadline (`scheduler.queued` carries `u64::MAX`), normal priority,
+  never preempting, under its own `AcquireLease` request (origin `(Agent, Adapter)`, the host's
+  synthesized connection), with a 120 s key. Like an operator control it takes neither the
+  bound-endpoint check nor the performance-control lease gate and is granted with drain
+  capacity, so a stopped (pending) instance is granted it. Every claim is visible: a holder from
+  the enqueue (`lease.requested`, `scheduler.admitted`, `lease.granted` under the claim's
+  request; status `lease_active`), paused or not, or a queued entry behind another holder
+  (`lease.requested` + `scheduler.queued`), which counts as waiting work. A takeover cooldown is
+  waited out in the queue. A pending instance stays withheld from policy until its start and
+  preparation pass.
 - **Network first.** Once granted, the claim waits on its instance's worker
   (`actingd-instance-<alias>`) while it holds the key, never on a shared thread. It reads the
   operating system's connectivity status at once and every 5 s, for at most 600 s (on Windows
@@ -1089,8 +1093,6 @@ ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
     key with no `command.*` record, so the operator's control is granted within its 5 s; once
     the Start is being driven the claim does not yield, and an operator control that arrives
     then waits its 5 s and may be refused `lease_queue_expired` naming holder `autostart`;
-  - when a scheduling pause holds the instance or the global gate: it queues again as a gated
-    entry, then releases its key, so the pause completes; the resume grants it again;
   - when the instance already runs (an operator started it): it releases its key and does
     nothing.
 - **Order.** The claims holding their keys take a start turn one at a time, the first in
@@ -1106,7 +1108,9 @@ ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
   connection preparation on the key. A passing preparation hands the key to the startup
   package through the gate ("Startup package hook"); a failing one hands it to the ladder it
   admits ("Stuck-recovery ladder"); a failed start ends the key as a failed operator control
-  does.
+  does. emu-watch: unlike an operator's start, a scheduling pause does not withhold the startup
+  package (no `startup_package_withheld`): its claim waits queued behind the pause as a gated
+  entry, so the package runs only after the resume (an instance resume's reconnect first).
 - **Report.** Each outcome is one report line, which `actingd` writes as a daemon line
   (`OUTCOME actingd:` with the developer line, Workflow #378 A6a): `emulator_autostart_queued`
   (`count`) when the claims are enqueued, nothing when no instance names `start_emulator`;
@@ -1115,10 +1119,61 @@ ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
   one of `emulator_autostart_started`, `emulator_autostart_preparation_failed` (the backend
   self-check after the start did not pass), `emulator_autostart_failed` (`caused_by` the
   failure), `emulator_autostart_network_unready`, `emulator_autostart_superseded`,
-  `emulator_autostart_yielded`, `emulator_autostart_skipped` (already running) and
-  `emulator_autostart_interrupted` (a drain or a shutdown), each with the `alias`. A report
-  line that cannot be written never stops the daemon. Only a failure the Runtime does not
-  survive (a ledger append) stops the host.
+  `emulator_autostart_skipped` (already running) and `emulator_autostart_interrupted` (a drain
+  or a shutdown), each with the `alias` (emu-watch retires `emulator_autostart_yielded`: no
+  pause makes the claim yield). A report line that cannot be written never stops the daemon.
+  Only a failure the Runtime does not survive (a ledger append) stops the host.
+
+## Emulator watch (emu-watch)
+
+<!-- Slice EMU-W (Alice's ruling 35; #414 option 3; review item 5 of 10-24, in 0.12). -->
+The Runtime watches the emulators of its instances and starts a configured one it finds
+stopped. `actingd` starts the watch (`RuntimeHost::start_emulator_watch`) right after it enqueued
+the configured starts; the watch ends with the host.
+
+- **Polls (R2).** While `emulator_control.watch_enabled` (default `true`), a poll is due every
+  `emulator_control.watch_interval_ms` (default 60 000 ms; the first one interval after the
+  watch started); the watch reads both keys at every 250 ms tick, so an instruction changes
+  them while the Runtime runs. A poll reads the emulator status of every discovery-bound
+  instance through the existing read (`MuMuManager info`, bounded; it never starts anything; no
+  `api`), under the instance's admission guard when that guard is free; an instance that a
+  control, a preparation or a run holds is read at a later poll. The reading replaces the
+  instance's `emulator_state` (`on` when the emulator runs with Android and an ADB port, as a
+  discovery reads it, `off` otherwise). When it differs from the reading the Runtime held, a
+  `runtime.lifecycle_observed` record (phase `device_state_observed`) under the instance carries
+  `emulator_watch_state_changed` (info; `alias`, `process_started`, `android_started`,
+  `adb_port_present`). A read that fails is `emulator_state_read_failed` (warning; `alias`, the
+  read's failure text its foreign cause), once per failing streak; the reading stays.
+- **Restarts (R3).** An instance configured with `start_emulator` whose read shows no emulator
+  process, whose key no claim holds and on which no autostart or emulator control claim waits
+  (never two starts for one instance at once), is started again, paused or not:
+  `emulator_autostart_queued` (info; `count` 1, `alias`, `attempts`, `limit_count`), then one
+  autostart claim marked `watch`, held as a daemon start's claim ("Configured start at daemon
+  start"), except that it does not ask whether the binding is pending (an emulator that stopped
+  behind the Runtime's back is still bound): with the turn, just before the Start, it reads the
+  emulator status once more and ends as `emulator_autostart_skipped` when the emulator process
+  runs, or as `emulator_autostart_failed` (caused by `emulator_state_read_failed`) when the read
+  fails. Its Start and the result are recorded as every configured start's (`command.received`,
+  `command.validated` or `command.rejected` + `runtime.failed`, the report lines). Within
+  `emulator_control.restart_window_ms` (default 30 min) the watch starts one instance at most
+  `emulator_control.restart_attempts` times (default 3), whether the Start passed or failed;
+  once they are used up, `emulator_watch_restart_exhausted` (warning; `alias`, `attempts`,
+  `limit_count`, `retry_after_ms`) is recorded once, and the instance is not started again until
+  the oldest of those restarts leaves the window or a person's emulator control of the instance
+  (`actingctl emulator`, `ac_emulator`) clears the count. Nothing else starts it meanwhile: the
+  stuck-recovery ladder's direction ① counts no record committed while an autostart claim holds
+  the instance's key ("Stuck-recovery ladder", "Triggers"), so the watch's failed Starts never
+  admit a ladder whose emulator-restart rung would start the emulator beyond the bound.
+- **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
+  started. The watch never stops or restarts a running emulator, and no record names a device:
+  an emulator instance is its `alias`.
+
+Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
+keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes
+(#420 S4): two of its own, `emulator_watch_state_changed` and `emulator_watch_restart_exhausted`;
+the rest are existing codes (`emulator_state_read_failed`, `emulator_autostart_queued`, and
+`runtime_monitor_spawn_failed` when its thread cannot be spawned), and its operation is the
+location `emulator_watch`.
 
 ## Client and CLI
 

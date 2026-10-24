@@ -227,6 +227,16 @@ actingcommand_contract::outcome_codes! {
         WatchdogLauncherWriterLockFailed => "watchdog_launcher_writer_lock_failed": error / none,
         WatchdogLauncherSpawnFailed => "watchdog_launcher_spawn_failed": error / none,
         // ---- Workflow #378 A5 (end)
+        // ---- Workflow #421 INST-0 (begin): `actingctl install`, the command-line installer
+        // (contracts/install-cli.md, "Outcome codes"). Folded by ruling 54 (#420 S4): one domain
+        // code per kind of outcome, the value `operation` naming the command (`InstallLocation`).
+        // Kept apart: the watchdog decision row 7a″ and the fatal interrupted operation.
+        InstallCommandDone => "install_command_done": success / none,
+        InstallCaveatNoted => "install_caveat_noted": warning / none,
+        WatchdogInstallerUnfinished => "watchdog_installer_unfinished": warning / none,
+        InstallCommandRefused => "install_command_refused": error / none,
+        InstallOperationInterrupted => "install_operation_interrupted": fatal / none,
+        // ---- Workflow #421 INST-0 (end)
     }
 }
 
@@ -404,3 +414,161 @@ impl MaterialLimit {
 }
 
 // ---- Workflow #378 A5 (end) ----
+
+// ---- Workflow #421 INST-0 (begin): the locations and vocabularies of `actingctl install`. ----
+
+actingcommand_contract::outcome_locations! {
+    /// The commands of `actingctl install` (contracts/install-cli.md), the value `operation` of
+    /// `install_command_done`, `install_command_refused`, `install_caveat_noted` and
+    /// `install_operation_interrupted` (Workflow #421 INST-0, ruling 54). INST-1 runs the release,
+    /// adopt, update, rollback, undo, resume, status and leftovers commands; the later slices
+    /// run the rest.
+    pub enum InstallLocation {
+        ReleaseVerify => "install_release_verify",
+        ReleaseStage => "install_release_stage",
+        Adopt => "install_adopt",
+        UpdatePlan => "install_update_plan",
+        UpdateApply => "install_update_apply",
+        RollbackPlan => "install_rollback_plan",
+        RollbackApply => "install_rollback_apply",
+        Undo => "install_undo",
+        Resume => "install_resume",
+        Status => "install_status",
+        Leftovers => "install_leftovers",
+        Stop => "install_stop",
+        Start => "install_start",
+        ReleaseHold => "install_release_hold",
+        GuardsReport => "install_guards_report",
+        ConfigShow => "install_config_show",
+        ConfigDiff => "install_config_diff",
+        ConfigSet => "install_config_set",
+        ConfigBind => "install_config_bind",
+        ConfigPolicy => "install_config_policy",
+        ConfigLabOptions => "install_config_lab_options",
+        ConfigCommitPlan => "install_config_commit_plan",
+        ConfigCommitApply => "install_config_commit_apply",
+        ConfigDiscard => "install_config_discard",
+        ConfigRestore => "install_config_restore",
+        InstanceAdd => "install_instance_add",
+        InstanceRemove => "install_instance_remove",
+        PackPlan => "install_pack_plan",
+        PackPlace => "install_pack_place",
+        PackRemovePlan => "install_pack_remove_plan",
+        PackRemoveApply => "install_pack_remove_apply",
+        PackRestore => "install_pack_restore",
+        New => "install_new",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why an installer command refused or failed without leaving an unfinished operation
+    /// (vocabulary `install_refusal`, the value `install_refusal` of `install_command_refused`;
+    /// Workflow #421 INST-0, folded by ruling 54).
+    pub enum InstallRefusal: "install_refusal" {
+        NotSingleLocation => "not_single_location",
+        LayoutAbUnsupported => "layout_ab_unsupported",
+        NotAdopted => "not_adopted",
+        StateInvalid => "state_invalid",
+        OperationUnfinished => "operation_unfinished",
+        ForeignPart => "foreign_part",
+        WriterLockFailed => "writer_lock_failed",
+        ReleaseCheckFailed => "release_check_failed",
+        LiveBuildInvalid => "live_build_invalid",
+        LiveBuildModified => "live_build_modified",
+        BuildNotKept => "build_not_kept",
+        BuildInvalid => "build_invalid",
+        ConfigUnreadable => "config_unreadable",
+        InstallSectionInvalid => "install_section_invalid",
+        ConfigRefusedByTarget => "config_refused_by_target",
+        CheckConfigUnanswered => "check_config_unanswered",
+        ConfigBaseChanged => "config_base_changed",
+        LabOptionsLocked => "lab_options_locked",
+        CatalogPlanUnexpected => "catalog_plan_unexpected",
+        RuntimeRunning => "runtime_running",
+        OwnerLockHeld => "owner_lock_held",
+        ProcessesUnreadable => "processes_unreadable",
+        RunningImageBlocks => "running_image_blocks",
+        InterfaceEdge => "interface_edge",
+        LedgerVerifyFailed => "ledger_verify_failed",
+        LedgerHeadUnreadable => "ledger_head_unreadable",
+        PlanChanged => "plan_changed",
+        RollbackGateFailed => "rollback_gate_failed",
+        GuardFailed => "guard_failed",
+        RuntimeStartFailed => "runtime_start_failed",
+        PackInvalid => "pack_invalid",
+        PackBindingBroken => "pack_binding_broken",
+        PackMaintenanceDrift => "pack_maintenance_drift",
+        InstancesNotIdle => "instances_not_idle",
+        InstanceInvalid => "instance_invalid",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// What an installer command noted while its work went on (vocabulary `install_caveat`, the
+    /// value `install_caveat` of `install_caveat_noted`; Workflow #421 INST-0, folded by
+    /// ruling 54).
+    pub enum InstallCaveat: "install_caveat" {
+        ReleaseUnconfirmed => "release_unconfirmed",
+        McpClientsOnPreviousBuild => "mcp_clients_on_previous_build",
+        PackDeclarationUnknown => "pack_declaration_unknown",
+        PostCheckMismatch => "post_check_mismatch",
+        RestartRequired => "restart_required",
+        ConfigOverriddenByInstruction => "config_overridden_by_instruction",
+        PackRestartNeeded => "pack_restart_needed",
+        PackFullCheckSkipped => "pack_full_check_skipped",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// A check of a release folder (vocabulary `release_check`, the items of `release_checks` of
+    /// `install_command_refused` with `install_refusal` `release_check_failed`; Workflow #421
+    /// INST-0).
+    pub enum ReleaseCheck: "release_check" {
+        ZipSet => "zip_set",
+        SumsMissing => "sums_missing",
+        SumsMismatch => "sums_mismatch",
+        FactsMissing => "facts_missing",
+        FactsInvalid => "facts_invalid",
+        DigestMismatch => "digest_mismatch",
+        FactsCommitMismatch => "facts_commit_mismatch",
+        TagMismatch => "tag_mismatch",
+        CommitPrefixMismatch => "commit_prefix_mismatch",
+        ZipUnreadable => "zip_unreadable",
+        ManifestInvalid => "manifest_invalid",
+        ManifestLayout => "manifest_layout",
+        ManifestRepository => "manifest_repository",
+        ManifestCommit => "manifest_commit",
+        FileSet => "file_set",
+        FileMismatch => "file_mismatch",
+        InterfacesInvalid => "interfaces_invalid",
+        InterfacesDiffer => "interfaces_differ",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// A part of the rollback gate (vocabulary `rollback_gate_part`, the items of
+    /// `rollback_gate_parts` of `install_command_refused` with `install_refusal`
+    /// `rollback_gate_failed`; Workflow #421 INST-0).
+    pub enum RollbackGatePart: "rollback_gate_part" {
+        InterfaceEdges => "interface_edges",
+        LedgerReadability => "ledger_readability",
+        OpenTime => "open_time",
+        Config => "config",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// An installer guard (vocabulary `install_guard`, the items of `install_guards` of
+    /// `install_command_refused` with `install_refusal` `guard_failed`; Workflow #421 INST-0;
+    /// INST-2 evaluates them).
+    pub enum InstallGuard: "install_guard" {
+        Memory => "memory",
+        ScheduleNear => "schedule_near",
+        BlockedWindow => "blocked_window",
+        ForeignPauses => "foreign_pauses",
+        LadderHolding => "ladder_holding",
+        Adb => "adb",
+    }
+}
+
+// ---- Workflow #421 INST-0 (end) ----

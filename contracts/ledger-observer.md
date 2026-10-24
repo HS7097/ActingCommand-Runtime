@@ -673,6 +673,9 @@ CREATE TABLE ledger_index (
     `tag.workbench_patterns` pattern (`*` = any text); `input_boundary/<instance>/committed` and
     `/failed`; `decision_memory/<instance>/<task>`; `activity_memory/<instance>/<profile>`;
     `wake/<wake id>`.
+  - Workflow #422 LN-3 adds `monitor/<alias>` (register §1.182 LN3-4): the monitor registry's
+    latest applied change of the alias (`runtime_state` `monitor_changed`), or the import for each
+    alias it brings (`monitor_imported`). A change that was not applied is not tagged.
   - `open`: the intents `policy.dispatch_intent`, `lease.transition_intent`,
     `task.terminal_intent`, `input.intent` and `application.intent`. A result (dispatch admitted
     or rejected, lease granted, transferred, renewed, released, expired or failed, task
@@ -729,6 +732,23 @@ CREATE TABLE ledger_index (
   `PolicyControlState`, so a restart after AO-6 keeps runtime budgets and activity intervals
   (register L7, L14).
 - Wake obligations get `agent.wake_obligation_recorded` (one `AgentWakeRecord` as of AO-4).
+- **As built by LN-3** (Workflow #422, register §1.182; AO-4's gates are not needed): the records
+  go through the existing append path, under the guard the change was made under.
+  - The policy host writes one `policy.control_state_recorded` per changed dispatch pair and one
+    `policy.activity_state_recorded` per changed (instance, activity profile) after an
+    admission's outcome, after a settlement's completion, and after the start's and the online
+    settlement reconciliations. A change is a difference between the key's complete state and its
+    latest record; an exact replay writes nothing.
+  - `daily_counts` holds the newest 32 days. `active_window` is the window of the pair's latest
+    admission. `dispatch_clock` is the admission time of the pair's latest admitted dispatch
+    until its completion. `condition_reruns` stays absent until SR-2b keeps a rerun state.
+  - At the open the replayed state counts as recorded; seeding one record per key once is LN-4's
+    (§11.6), and so is the load (§11.5). The records carry no settlement order: the Workflow #372
+    K5 order a continued id's failure state follows is not rebuilt from them.
+  - Each `agent.wake_requested` is followed by the obligation's `agent.wake_obligation_recorded`
+    with the same wake.
+  - The monitor registry's records already carry an alias's complete state; the index tags them
+    `monitor/<alias>` (§11.1).
 - Derived on load for the instance store: `latest_observed` = the latest record's observation
   time; tombstones = keys whose latest record is an invalidation (≤ key limit; after a tombstone
   rolls out, a resend of the same identity is still refused by `latest_observed` as
@@ -959,7 +979,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `open_timeout_ms` | 600 000 | ms | the deadline of the start's ledger open (was a fixed 120 s); `10000..=600000` (P0-LO) | P0-LO, 0.12.11 |
 | `open_warn_ratio_milli` | 500 | integer | an open whose measured time exceeds `open_timeout_ms` × it / 1000 writes `ledger_open_slow`; `100..=1000` (P0-LO) | P0-LO, 0.12.11 |
 | `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.12 |
-| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
+| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
 - `settable` as fixed by AO-1: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys` and
@@ -1011,6 +1031,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   The open still reads every record (until LN-8) and keeps only the retention state.
   `history_page_rows` is read when the ledger opens (`false`).
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
+  `host.contained_settlement` joins it in #411 A65 (0.12.12; see
+  [runtime-fact-store.md](runtime-fact-store.md));
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
   (#387) and `config.catalog` (MCP-9a) fall under the existing `config.` prefix.
 - These defaults are a starting point; AO-2's first round fills them from a real-machine copy.

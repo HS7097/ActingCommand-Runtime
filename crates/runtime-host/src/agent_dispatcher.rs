@@ -204,8 +204,10 @@ impl AgentDispatcherState {
             })
             .collect::<BTreeMap<_, _>>();
         let mut state = Self::default();
+        // Workflow #422 LN-3: the fold takes the replayed types only, so the whole-ledger
+        // reference skips the wake obligations' value records as the paged read does.
         for event in agent_events {
-            if matches!(event.payload(), EventPayload::Agent(_)) {
+            if AGENT_EVENT_TYPES.contains(&event.event_type()) {
                 state.apply_event(event, Some(&source_events))?;
             }
         }

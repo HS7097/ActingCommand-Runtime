@@ -213,6 +213,14 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     emulator_control: Option<actingcommand_runtime_config::EmulatorControlFile>,
+    /// #411 A66: how long a start may take before the watchdog and `actingctl start` call it
+    /// `start_timeout` (`watchdog.start_window_ms`), optional; the defaults file holds the
+    /// default. actingd checks it and never uses it.
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+    // before #411 A66 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    watchdog: Option<actingcommand_runtime_config::watchdog::WatchdogFile>,
     /// PERF-B1 (Workflow #407 B1): the kernel's keys (`execution.*`), so far its capture cadence:
     /// the largest capture interval a package may declare and the back-off of a step's wait over
     /// unchanged frames (`execution.capture.*`), each member optional; the defaults file holds
@@ -1430,6 +1438,8 @@ impl ActingdConfigFile {
             "touch": serde_json::to_value(&self.touch)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "emulator_control": serde_json::to_value(&self.emulator_control)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "watchdog": serde_json::to_value(&self.watchdog)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "execution": serde_json::to_value(&self.execution)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,

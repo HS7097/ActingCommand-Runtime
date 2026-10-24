@@ -906,7 +906,7 @@ tests = [
 ]
 incident = ["#398"]
 
-# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it waits queued as a gated entry from the first moment (never granted at once on the free instance, merge ledger :303) until the resume; a pause during the wait makes it queue again and release, so the pause completes; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
+# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it is granted at once and starts (merge ledger :303; emu-watch, Alice's ruling 35: a pause never holds the emulator start), and a pause during the wait does not make it yield; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
 [[gate]]
 key = "86"
 coverage = "Y"
@@ -915,8 +915,8 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_2_no_internet_then_internet_after_two_reads_starts_the_emulator",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_3_an_unknown_status_starts_at_once_with_one_line",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_4_no_internet_for_600_s_refuses_the_start_with_the_failure_pair",
-    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_waits_queued_until_the_resume",
-    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_yields_and_the_pause_completes",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_is_granted_at_once_and_starts",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_does_not_hold_the_start",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_7_a_cli_start_during_the_wait_supersedes_the_claim",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_8_a_failed_preparation_hands_the_key_to_the_ladder",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_9_two_instances_start_in_configuration_order_and_the_waiting_claim_renews",
@@ -1207,12 +1207,12 @@ tests = [
 ]
 incident = ["#390"]
 
-# Workflow #411 A3 (R-1, v0.12.1; register E6C-2 note): the shutdown idle test does not count a routine entry on an instance whose routine gate a scheduling pause holds (the global pause or the instance's own): a paused instance's gated autostart claim no longer refuses request-shutdown, an accepted shutdown disconnects it with scheduler.denied lease.queue_disconnected and no report line, and the next start restores the pause and queues it again, gated; an operator start under the pause passes the gated claim and the shutdown is accepted; a resume done before the decision wins (the eligible or granted claim refuses it, runtime_busy); a routine entry that only a #403 resource fence holds, an operator, client or holder-owned entry still counts
+# Workflow #411 A3 (R-1, v0.12.1; register E6C-2 note): the shutdown idle test does not count a routine entry on an instance whose routine gate a scheduling pause holds (the global pause or the instance's own): a paused instance's gated routine claim (a Runtime-internal ladder claim since emu-watch, as a pause no longer holds the autostart claim) no longer refuses request-shutdown, and an accepted shutdown disconnects it with scheduler.denied lease.queue_disconnected while the pause is restored; an operator start under the pause passes the gated claim and the shutdown is accepted; a resume done before the decision wins (the eligible or granted claim refuses it, runtime_busy); a routine entry that only a #403 resource fence holds, an operator, client or holder-owned entry still counts
 [[gate]]
 key = "102"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_claim",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_routine_claim",
     "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_resume_before_the_shutdown_grants_the_claim_and_the_shutdown_stays_busy",
     "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_an_operator_start_passes_the_gated_claim_and_the_shutdown_is_accepted",
     "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_fence_gated_routine_entry_still_refuses_a_shutdown",
@@ -1864,6 +1864,22 @@ tests = [
 ]
 incident = ["#407 B1"]
 
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): the shipped defaults name no blackout entry (host list empty, no instance list in effect); scheduling.blackout.quiet_horizon is deadline and scheduling.day_boundary.quiet true, per instance defaulting to the section's, all settable
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c1_no_blackout_entry_by_default_and_the_new_keys_have_their_model_defaults",
+]
+incident = ["#386 SR-4a1"]
+
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): weekly and once entries of the host list and of an instance's own list are read as written; a broken entry refuses a start and check-config with blackout_config_invalid naming field, blackout_id and blackout_source (host or instance); through an instruction config_value_invalid (section_check)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c2_bad_blackout_entries_are_refused_with_their_source",
+]
+incident = ["#386 SR-4a1"]
+
 # SCH-M ED-1 (frozen model v1.0 §3.4 "Configuration", §6 row ED-1; contracts/runtime-config.md, "Expected duration"; register §1.178 ED1-3): scheduling.expected_runtime.enabled, runs and margin_ms default to true, 5 and 300000 and scheduling.fact_refresh.expected_duration_ms to 60000, all settable; each instance's expected_runtime keys default to the section's, an instance's own key overrides the section for that instance only (from the file and through an instruction), and a change of the section's key reaches every instance that names none
 [[gate]]
 coverage = "Y"
@@ -1871,3 +1887,14 @@ tests = [
     "actingcommand-runtime-config::lib::ed1_tests::ed1_c1_per_instance_keys_override_the_section",
 ]
 incident = ["#405 ED-1"]
+
+# LN-3 (Workflow #422, LEAN-L model v1.0 §3.6, §5.1 row LN-3; contracts/ledger-observer.md §11.1, §11.3; register L7, L8, L14): each change of a dispatch pair's control state, an activity state and the monitor registry's alias state, and each wake obligation, writes exactly one value record with the key's complete state, and its `state` row names it (`decision_memory/`, `activity_memory/`, `wake/`, `monitor/`); a change that changes nothing writes none; a restart from the records alone keeps the runtime budgets and the activity interval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln3::ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln3::ln3_a_each_wake_obligation_writes_one_value_record_its_state_row_names",
+    "actingcommand-runtime-host::lib::monitor::tests::ln3_a_the_monitor_row_names_the_latest_change_of_each_alias",
+    "actingcommand-runtime-host::lib::policy_control::tests::ln3_b_a_restart_from_the_value_records_alone_keeps_runtime_budgets_and_activity_intervals",
+]
+incident = ["#422 LN-3"]
