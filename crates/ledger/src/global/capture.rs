@@ -804,6 +804,24 @@ impl CaptureQueue {
         )
     }
 
+    /// Workflow #383 AO-3 (§8.1, §8.3): a sanitized draft of a registered revisioned source with
+    /// its caller's reply; its capture time is its own time and it carries its source.
+    pub(super) fn capture_draft_from_source(
+        &self,
+        draft: SanitizedEventDraft,
+        source: SourceRevision,
+        reply: Reply,
+    ) -> u64 {
+        let captured_at = draft.timestamp_unix_ms();
+        self.push(
+            Body::Draft(Arc::new(draft)),
+            Some(captured_at),
+            Some(source),
+            None,
+            Some(reply),
+        )
+    }
+
     /// A finding of the flush thread (§8.3), written in capture order.
     pub(super) fn capture_finding(&self, outcome: Outcome) {
         let mut state = self.lock();

@@ -172,19 +172,22 @@ impl HostShared {
             .events
             .sanitize(draft)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #383 AO-3 (§3, G15 until AO-4): the joint record passes the host's capture
+        // point, which also raises its wake (AO-7: a committed approval decision wakes the
+        // policy driver).
         let persisted = self
-            .ledger
-            .append_transaction(draft, work)
+            .capture_committed_under_gate(draft, |ledger, draft| {
+                ledger
+                    .append_transaction(draft, work)
+                    .map_err(crate::approval::approval_transaction_error)
+            })
             .map_err(|error| {
-                let error = crate::approval::approval_transaction_error(error);
                 if error.is_fatal() {
                     RequestFailure::poison_without_terminal(error)
                 } else {
                     RequestFailure::request(error, RuntimeReceiptState::Denied, None)
                 }
             })?;
-        // Workflow #383 AO-7: a committed approval decision wakes the policy driver.
-        self.policy_wakes.raise(persisted.event_type());
         let observed = self
             .observe_device_diagnostics_under_fact_gate(&persisted)
             .and_then(|()| self.synchronize_fact_store_under_gate());

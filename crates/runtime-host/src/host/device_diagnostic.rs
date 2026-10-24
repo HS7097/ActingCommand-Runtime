@@ -107,15 +107,18 @@ impl HostShared {
         // This is an additional ledger fact; it never re-enters the observation hook.
         // Its append is deferred; this boundary confirms it with the same wait a
         // synchronous append had, so a failure keeps the same code and error path.
-        let result =
-            append_device_diagnostic_record(&self.ledger, &self.events, self.owner_epoch, record)
-                .and_then(|()| {
-                    confirm_deferred_appends(
-                        &self.ledger,
-                        GlobalLedger::REPLY_TIMEOUT,
-                        HostLocation::AppendDeviceDiagnosticBudget,
-                    )
-                });
+        // Workflow #383 AO-3, G16: it passes the host's capture point.
+        let result = device_diagnostic_draft(&self.events, self.owner_epoch, record)
+            .and_then(|draft| {
+                self.capture_deferred_under_gate(draft, HostLocation::AppendDeviceDiagnosticBudget)
+            })
+            .and_then(|()| {
+                confirm_deferred_appends(
+                    &self.ledger,
+                    GlobalLedger::REPLY_TIMEOUT,
+                    HostLocation::AppendDeviceDiagnosticBudget,
+                )
+            });
         if let Err(error) = &result {
             self.fatal.mark(error.clone())?;
         }
@@ -181,15 +184,12 @@ pub(super) fn summary_incomplete(
     failure
 }
 
-/// Hands the close summary to the ledger without awaiting its commit. Acceptance is not
-/// persistence: the calling boundary confirms it through `confirm_deferred_appends`, and
-/// nothing reads the summary's event id before that.
-pub(super) fn append_device_diagnostic_record(
-    ledger: &GlobalLedger,
+/// The close summary's sanitized record.
+fn device_diagnostic_draft(
     events: &RuntimeEvents,
     owner_epoch: actingcommand_contract::OwnerEpoch,
     record: DeviceDiagnosticBudgetRecord,
-) -> RuntimeHostResult<()> {
+) -> RuntimeHostResult<actingcommand_contract::SanitizedEventDraft> {
     events
         .draft(
             EventSeverity::Info,
@@ -200,12 +200,24 @@ pub(super) fn append_device_diagnostic_record(
             RuntimePayloadDraft::device_diagnostics(owner_epoch, record),
         )
         .and_then(|draft| events.sanitize(draft))
-        .and_then(|draft| {
-            ledger
-                .append_deferred(draft)
-                .map(|_| ())
-                .map_err(|_| ledger_error(HostLocation::AppendDeviceDiagnosticBudget))
-        })
+}
+
+/// Hands the close summary of a start that ended before the host was shared to the ledger
+/// without awaiting its commit (no capture point exists yet; the instance fact store is still
+/// replaying). Acceptance is not persistence: the calling boundary confirms it through
+/// `confirm_deferred_appends`, and nothing reads the summary's event id before that.
+pub(super) fn append_device_diagnostic_record(
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    owner_epoch: actingcommand_contract::OwnerEpoch,
+    record: DeviceDiagnosticBudgetRecord,
+) -> RuntimeHostResult<()> {
+    device_diagnostic_draft(events, owner_epoch, record).and_then(|draft| {
+        ledger
+            .append_deferred(draft)
+            .map(|_| ())
+            .map_err(|_| ledger_error(HostLocation::AppendDeviceDiagnosticBudget))
+    })
 }
 
 /// One confirmation boundary: a failed deferred reply fails the boundary through the same

@@ -1245,13 +1245,13 @@ pub(super) struct RuntimeContainedTask<'a> {
     taken_resource_readings: Vec<JoinedReadingFrame>,
     /// Workflow #384 D2-S3: the admitted package's entry task id.
     entry_task_label: String,
-    /// Workflow #384 D2-S3: the operation and the ledger sequence of the `task.step_finished` of
-    /// the step finished last.
-    last_step_finished: Option<(String, u64)>,
+    /// Workflow #384 D2-S3: the operation and the `task.step_finished` of the step finished last
+    /// (Workflow #383 AO-3: with its place in the instance fact store's history, no ledger
+    /// position).
+    last_step_finished: Option<(String, crate::fact_store::FactTrigger)>,
     /// Workflow #384 D2-S3: the confirmations of operations that declare adjustments, in order:
-    /// the frame's device capture time and id and the sequence of the step's
-    /// `task.step_finished`.
-    adjustment_confirmations: Vec<(SystemTime, IssuedFrameId, u64)>,
+    /// the frame's device capture time and id and the step's `task.step_finished`.
+    adjustment_confirmations: Vec<(SystemTime, IssuedFrameId, crate::fact_store::FactTrigger)>,
     /// How many of `adjustment_confirmations` the run has joined, in order.
     joined_adjustment_confirmations: usize,
     /// The adjustments of the joined confirmations, in confirmation order.
@@ -2380,7 +2380,7 @@ impl RuntimeContainedTask<'_> {
             .collect::<BTreeSet<_>>();
         let mut pre_run = BTreeMap::new();
         for key in keys {
-            if let Some((record, sequence, event_id)) = self
+            if let Some((record, order, event_id)) = self
                 .host
                 .active_fact_revision(&scope, &key)
                 .map_err(RequestFailure::poison_without_terminal)?
@@ -2389,7 +2389,7 @@ impl RuntimeContainedTask<'_> {
                     key,
                     PreRunRecord {
                         record,
-                        sequence,
+                        order,
                         event_id,
                     },
                 );
@@ -2417,11 +2417,11 @@ impl RuntimeContainedTask<'_> {
                 .adjustment_confirmations
                 .iter()
                 .zip(&self.taken_adjustments)
-                .map(|((captured_at, _, step_sequence), adjustments)| {
+                .map(|((captured_at, _, step), adjustments)| {
                     Ok(ConfirmationInput {
                         captured_at: *captured_at,
                         observed_at_unix_ms: reading_unix_ms(*captured_at)?,
-                        step_sequence: *step_sequence,
+                        step: *step,
                         adjustments,
                     })
                 })
@@ -5002,7 +5002,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     ),
                 )?;
                 // Workflow #384 D2-S3: the step a confirmation of adjustments follows.
-                self.last_step_finished = Some((finished_operation, finished.sequence()));
+                self.last_step_finished = Some((
+                    finished_operation,
+                    crate::fact_store::FactTrigger::committed(&finished),
+                ));
                 self.end_diagnostic_step(diagnostic_ended, true)?;
                 self.diagnostic_physical = None;
                 Ok(())
@@ -5127,20 +5130,18 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         HostCode::ContainedTaskResourceReadingFrameMissing,
                     ));
                 };
-                let step_sequence = self
+                let step = self
                     .last_step_finished
                     .as_ref()
                     .filter(|(operation, _)| *operation == operation_label)
-                    .map(|(_, sequence)| *sequence);
-                let Some(step_sequence) =
-                    step_sequence.filter(|_| frame_captured_at == captured_at)
-                else {
+                    .map(|(_, step)| *step);
+                let Some(step) = step.filter(|_| frame_captured_at == captured_at) else {
                     return Err(resource_reading_poison(
                         HostCode::ContainedTaskResourceReadingFrameMismatch,
                     ));
                 };
                 self.adjustment_confirmations
-                    .push((captured_at, frame_id, step_sequence));
+                    .push((captured_at, frame_id, step));
                 Ok(())
             }
             // Workflow #384 D2-S3: the adjustments of the next confirmation, joined before
@@ -9692,8 +9693,8 @@ impl HostShared {
             match self.invalidate_adjusted_fact(
                 &fact_scope,
                 &invalidation.fact_key,
-                invalidation.base_sequence,
-                invalidation.step_sequence,
+                invalidation.base_event,
+                invalidation.step,
             ) {
                 Ok(()) => {}
                 Err(error) if error.is_fatal() => {
@@ -9711,7 +9712,7 @@ impl HostShared {
         // Workflow #384 D2-S2 (model §3.5): each reading is observed when its frame was captured;
         // D2-S3: an adjustment write when its operation was confirmed, adjusting the record it
         // names, which must still be the key's record.
-        let mut published: Vec<Option<(u64, EventId)>> = Vec::with_capacity(publications.len());
+        let mut published: Vec<Option<EventId>> = Vec::with_capacity(publications.len());
         for (publication, reading_record) in publications.iter().zip(reading_records) {
             let (id, record, purpose) = match (publication, reading_record) {
                 (_, Some((id, record))) => (id, Some(record), FactPublicationPurpose::Ordinary),
@@ -9723,10 +9724,10 @@ impl HostShared {
                         ));
                     };
                     let base = match adjustment.base {
-                        PlannedBase::PreRun { sequence, event_id } => Some((sequence, event_id)),
+                        PlannedBase::PreRun { event_id, .. } => Some(event_id),
                         PlannedBase::Run(position) => published.get(position).copied().flatten(),
                     };
-                    let Some((base_sequence, base_event)) = base else {
+                    let Some(base_event) = base else {
                         return Ok(Some(refuse_resource_reading(
                             draft,
                             &adjustment.adjustment_id,
@@ -9744,7 +9745,7 @@ impl HostShared {
                             &frame_text,
                             &base_text,
                         ),
-                        FactPublicationPurpose::ResourceAdjustment { base_sequence },
+                        FactPublicationPurpose::ResourceAdjustment { base_event },
                     )
                 }
                 (PlannedPublication::Reading { .. }, None) => {
@@ -9767,7 +9768,7 @@ impl HostShared {
                 None,
                 purpose,
             ) {
-                Ok(fact) => published.push(Some((fact.sequence, fact.event_id))),
+                Ok(fact) => published.push(Some(fact.event_id)),
                 Err(error) if error.is_fatal() => {
                     return Err(RequestFailure::poison_without_terminal(error));
                 }

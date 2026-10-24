@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Ledger-rebuilt fact projection shared by policy and execution boundaries.
+//! The instance fact store (Workflow #383 AO-3, `contracts/ledger-observer.md` §1, §3): the
+//! live memory of the observations and instructions, applied first by its one entry and copied to
+//! the ledger by the gates. The start still rebuilds it from the ledger (AO-6 retires that), and
+//! until business opens it follows the ledger tail as before; from then on it reads no ledger:
+//! every change is applied here, counted in its lineage's revision, and every recorded event
+//! reaches [`InstanceFactStore::observe_trigger`] at capture.
 
 use crate::codes::{HostCode, HostLocation};
 use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages};
@@ -11,20 +16,17 @@ use actingcommand_contract::{
     EventActor, EventId, EventPayload, EventQuery, EventType, FactContent,
     FactInvalidationEventData, FactPayload, FactRecord, FactScalar as ContractFactScalar,
     FactScope, FactValue as ContractFactValue, InstanceFactContext, InstanceFactSnapshot,
-    RESOURCE_TARGETS_FACT_KEY, RuntimeErrorCode, priority_offset_task_id,
+    OwnerEpoch, RESOURCE_TARGETS_FACT_KEY, RuntimeErrorCode, RuntimeStateStoreRevision,
+    priority_offset_task_id,
 };
-use actingcommand_ledger::{
-    GlobalLedger, LedgerTransactionWork, PersistedEvent, TransactionStateObservation,
-    TransactionWorkError,
-};
+use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, FactScalar as PolicyFactScalar,
     FactValue as PolicyFactValue, InstanceSnapshot, MAX_ID_BYTES, MAX_PRIORITY_OFFSET_MILLI,
     ObservedFact, PriorityOffsetOrigin, ScopeSelector,
 };
 use actingcommand_runtime_state::{
-    FACT_TOMBSTONE_NAMESPACE, FactStateObservation, PreparedFactProjection, RuntimeStateStore,
-    fact_tombstone_key,
+    FACT_TOMBSTONE_NAMESPACE, RuntimeStateStore, fact_tombstone_key,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,6 +36,72 @@ type FactIdentity = (FactScope, String);
 type InvalidationIdentity = (FactScope, String, String, EventId);
 type HistoricalInvalidationIdentity = (FactIdentity, String);
 
+/// Workflow #383 AO-3 (`contracts/ledger-observer.md` §3, §8.1): where a record or an event
+/// stands in the store's history. What the start replayed from the ledger (everything committed
+/// before business opened) stands at its ledger sequence; everything of the live lineage stands
+/// at its capture number in this epoch, after everything replayed. Capture order is ledger order
+/// within an epoch (§8.1), so the two compare as the ledger orders them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum FactOrder {
+    Replayed(u64),
+    Captured(u64),
+}
+
+impl FactOrder {
+    /// A live event's place: its capture number in this epoch.
+    pub(crate) fn of_live_event(event: &PersistedEvent) -> Option<Self> {
+        event
+            .capture()
+            .map(|capture| Self::Captured(capture.capture_seq))
+    }
+}
+
+/// Workflow #383 AO-3 (§3): one recorded event as [`InstanceFactStore::observe_trigger`] sees it:
+/// its type, id, instance link and time, and, for a record observed after its commit, its place
+/// in the store's history (a record observed at its own capture comes after everything the store
+/// holds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FactTrigger {
+    pub(crate) event_type: EventType,
+    pub(crate) event_id: EventId,
+    pub(crate) instance_id: Option<actingcommand_contract::InstanceId>,
+    pub(crate) at_unix_ms: u64,
+    pub(crate) order: Option<FactOrder>,
+}
+
+impl FactTrigger {
+    /// A record observed right after its commit, at its capture number; a record the ledger
+    /// drafted itself has none and comes after everything the store holds.
+    pub(crate) fn committed(event: &PersistedEvent) -> Self {
+        Self {
+            event_type: event.event_type(),
+            event_id: *event.event_id(),
+            instance_id: event.links().instance_id().copied(),
+            at_unix_ms: event.timestamp_unix_ms(),
+            order: FactOrder::of_live_event(event),
+        }
+    }
+
+    /// A record observed at its own capture, from its sanitized draft.
+    pub(crate) fn at_capture(draft: &actingcommand_contract::SanitizedEventDraft) -> Self {
+        Self {
+            event_type: draft.event_type(),
+            event_id: *draft.event_id(),
+            instance_id: draft.links().instance_id().copied(),
+            at_unix_ms: draft.timestamp_unix_ms(),
+            order: None,
+        }
+    }
+}
+
+/// Workflow #383 AO-3 (§3): an invalidation the store applied for a trigger, with the revision
+/// it took; the gate copies it after its trigger.
+#[derive(Debug, Clone)]
+pub(crate) struct AppliedInvalidation {
+    pub(crate) data: FactInvalidationEventData,
+    pub(crate) revision: u64,
+}
+
 /// Replay metadata, retained even when no fact is active for an instance.
 #[derive(Clone, Default)]
 struct InputInvalidationBoundaries {
@@ -42,12 +110,25 @@ struct InputInvalidationBoundaries {
 
 impl InputInvalidationBoundaries {
     fn observe(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
-        let index = match event.event_type() {
+        self.observe_type(
+            event.event_type(),
+            event.links().instance_id(),
+            event.timestamp_unix_ms(),
+        )
+    }
+
+    fn observe_type(
+        &mut self,
+        event_type: EventType,
+        instance: Option<&actingcommand_contract::InstanceId>,
+        at_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let index = match event_type {
             EventType::InputCommitted => 0,
             EventType::InputFailed => 1,
             _ => return Ok(()),
         };
-        let instance = event.links().instance_id().ok_or_else(|| {
+        let instance = instance.ok_or_else(|| {
             fact_fatal(
                 HostCode::FactInputScopeMissing,
                 HostLocation::ReplayFactInputBoundary,
@@ -62,7 +143,7 @@ impl InputInvalidationBoundaries {
             ));
         }
         let boundary = self.by_instance.entry(*instance).or_default();
-        boundary[index] = boundary[index].max(event.timestamp_unix_ms());
+        boundary[index] = boundary[index].max(at_unix_ms);
         Ok(())
     }
 
@@ -96,17 +177,25 @@ fn invalidation_scope_matches(
     event: &PersistedEvent,
     instances: &[actingcommand_contract::InstanceId],
 ) -> bool {
-    match event.links().instance_id() {
+    trigger_scope_matches(event.event_type(), event.links().instance_id(), instances)
+}
+
+fn trigger_scope_matches(
+    event_type: EventType,
+    instance: Option<&actingcommand_contract::InstanceId>,
+    instances: &[actingcommand_contract::InstanceId],
+) -> bool {
+    match instance {
         Some(instance) => {
             instances.contains(instance)
                 || (instances.is_empty()
                     && !matches!(
-                        event.event_type(),
+                        event_type,
                         EventType::InputCommitted | EventType::InputFailed
                     ))
         }
         None => !matches!(
-            event.event_type(),
+            event_type,
             EventType::InputCommitted | EventType::InputFailed
         ),
     }
@@ -210,7 +299,11 @@ enum PolicyFactConflictDisposition {
 #[derive(Clone)]
 struct StoredFact {
     record: FactRecord,
-    sequence: u64,
+    /// Workflow #383 AO-3: where its `fact.published` stands in the store's history.
+    order: FactOrder,
+    /// The ledger sequence of its `fact.published` when the store knows it: a record the start
+    /// replayed, or a publication whose capture waited for its commit.
+    sequence: Option<u64>,
     event_id: EventId,
     scope_instances: Vec<actingcommand_contract::InstanceId>,
     /// The actor of the `fact.published` event that carried the record.
@@ -220,54 +313,41 @@ struct StoredFact {
 #[derive(Clone)]
 struct InvalidationTombstone {
     data: FactInvalidationEventData,
-    sequence: u64,
+    /// Where its `fact.invalidated` stands; a live invalidation stands at its trigger until its
+    /// own record is captured.
+    order: FactOrder,
 }
 
+/// An invalidation the start replay derived and the start has not written yet (until business
+/// opens, the store follows the ledger tail; §3 applies from then on).
 #[derive(Clone)]
 pub(crate) struct PendingFactInvalidation {
     pub(crate) data: FactInvalidationEventData,
-    published_sequence: u64,
-    trigger_sequence: u64,
+    /// The start wrote it; its record settles it once the store follows the ledger past it.
+    written: bool,
 }
 
-pub(crate) struct FactTransaction {
-    state: PreparedFactProjection,
+/// The active record of a key as [`InstanceFactStore::active_revision`] reads it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ActiveFact<'a> {
+    pub(crate) record: &'a FactRecord,
+    pub(crate) order: FactOrder,
+    pub(crate) sequence: Option<u64>,
+    pub(crate) event_id: EventId,
 }
 
-impl LedgerTransactionWork for FactTransaction {
-    fn apply(
-        &self,
-        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
-        event: &PersistedEvent,
-    ) -> Result<(), TransactionWorkError> {
-        self.state
-            .apply(transaction, event)
-            .map_err(fact_work_error)
-    }
-
-    fn observe(
-        &self,
-        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
-    ) -> Result<TransactionStateObservation, TransactionWorkError> {
-        self.state
-            .observe(transaction)
-            .map(|value| match value {
-                FactStateObservation::Applied => TransactionStateObservation::Applied,
-                FactStateObservation::Unchanged => TransactionStateObservation::Unchanged,
-                FactStateObservation::Unknown => TransactionStateObservation::Unknown,
-            })
-            .map_err(fact_work_error)
-    }
+/// Workflow #383 AO-3 (§3): until business opens the store follows the ledger tail as before;
+/// from then on it is live: it reads no ledger, counts every accepted change in its lineage and
+/// observes every recorded event at capture.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StoreMode {
+    Replaying,
+    Live,
 }
 
-fn fact_work_error(error: actingcommand_runtime_state::RuntimeStateError) -> TransactionWorkError {
-    TransactionWorkError {
-        code: error.code(),
-        operation: error.operation(),
-        fatal: error.is_fatal(),
-        detail: error.to_string(),
-    }
-}
+/// A capture number not issued yet: the order of a record between its application and its
+/// capture, both under `fact_write_gate`.
+const UNSETTLED_ORDER: FactOrder = FactOrder::Captured(u64::MAX);
 
 fn fact_state_error(error: actingcommand_runtime_state::RuntimeStateError) -> RuntimeHostError {
     RuntimeHostError::state(&error).with_native_detail(error.to_string())
@@ -498,21 +578,31 @@ pub(crate) struct InstanceFactStore {
     input_boundaries: InputInvalidationBoundaries,
     invalidated: BTreeMap<(FactIdentity, String), InvalidationTombstone>,
     pending: BTreeMap<InvalidationIdentity, PendingFactInvalidation>,
+    /// The ledger position the store has followed through while replaying.
     last_sequence: u64,
+    mode: StoreMode,
+    /// Workflow #383 AO-3 (§8.3): the store's lineage (the owner epoch) and its revision, +1 per
+    /// accepted change once it is live; 0 is the state it went live with.
+    lineage: OwnerEpoch,
+    revision: u64,
     state: Arc<RuntimeStateStore>,
 }
 
 impl InstanceFactStore {
     /// The live store's active records, only when it has replayed exactly through
     /// `ledger_position` (Workflow #317 item E); `None` sends the caller to
-    /// `active_records_at`, which replays the ledger for any other position.
+    /// `active_records_at`, which replays the ledger for any other position. A live store
+    /// follows no ledger position (Workflow #383 AO-3).
     pub(crate) fn active_records_if_at(&self, ledger_position: u64) -> Option<Vec<FactRecord>> {
-        (ledger_position != 0 && ledger_position == self.last_sequence).then(|| {
-            self.active
-                .values()
-                .map(|stored| stored.record.clone())
-                .collect()
-        })
+        (self.mode == StoreMode::Replaying
+            && ledger_position != 0
+            && ledger_position == self.last_sequence)
+            .then(|| {
+                self.active
+                    .values()
+                    .map(|stored| stored.record.clone())
+                    .collect()
+            })
     }
 
     pub(crate) fn active_records_at(
@@ -549,9 +639,12 @@ impl InstanceFactStore {
         Ok(projection.records())
     }
 
+    /// Rebuilds the store from the whole ledger (the start's replay, until AO-6). The store
+    /// replays until [`Self::go_live`]; `lineage` is this start's owner epoch.
     pub(crate) fn recover(
         ledger: &GlobalLedger,
         state: Arc<RuntimeStateStore>,
+        lineage: OwnerEpoch,
     ) -> RuntimeHostResult<Self> {
         let mut store = Self {
             active: BTreeMap::new(),
@@ -560,6 +653,9 @@ impl InstanceFactStore {
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
+            mode: StoreMode::Replaying,
+            lineage,
+            revision: 0,
             state,
         };
         // Workflow #381 R4a: the whole Ledger through one position, in bounded pages.
@@ -593,7 +689,13 @@ impl InstanceFactStore {
         Ok(store)
     }
 
+    /// Follows the ledger tail while the store replays (the start, until business opens). A live
+    /// store has observed every recorded event at its capture and reads no ledger (Workflow #383
+    /// AO-3, §3); for it there is nothing to follow.
     pub(crate) fn synchronize(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
+        if self.mode == StoreMode::Live {
+            return Ok(());
+        }
         let from_sequence = self.last_sequence.checked_add(1).ok_or_else(|| {
             fact_fatal(
                 HostCode::FactSequenceOverflow,
@@ -617,54 +719,205 @@ impl InstanceFactStore {
         Ok(())
     }
 
+    /// The invalidations the replay derived and the start has not written yet.
     pub(crate) fn pending_invalidations(&self) -> Vec<PendingFactInvalidation> {
-        self.pending.values().cloned().collect()
+        self.pending
+            .values()
+            .filter(|pending| !pending.written)
+            .cloned()
+            .collect()
     }
 
-    pub(crate) fn prepare_invalidation(
-        &self,
-        ledger: &GlobalLedger,
-        pending: &PendingFactInvalidation,
-    ) -> RuntimeHostResult<FactTransaction> {
-        let published = original_at(ledger, pending.published_sequence)?;
-        let trigger = original_at(ledger, pending.trigger_sequence)?;
-        let state = self
-            .state
-            .prepare_fact_projection(&pending.data, published, trigger)
-            .map_err(fact_state_error)?;
-        Ok(FactTransaction { state })
+    /// Whether an invalidation the replay derived is still unwritten or unsettled.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
     }
 
-    /// Workflow #384 D2-S3 (D2 model §3.6): the `fact.invalidated` that drops `key`'s active
-    /// record in `scope`, published at ledger sequence `base_sequence`, because the operation
-    /// of the step whose `task.step_finished` is the event at `trigger_sequence` changed the
-    /// fact and no reading of it followed. `None` when the key has no active record or another
-    /// record than that one; the record must have been published before the trigger.
-    pub(crate) fn prepare_adjustment_invalidation(
-        &self,
-        ledger: &GlobalLedger,
+    /// Workflow #383 AO-3: whether the store is live (§3 applies).
+    pub(crate) fn is_live(&self) -> bool {
+        self.mode == StoreMode::Live
+    }
+
+    /// Workflow #383 AO-3 (§3, §8.3): the store stops following the ledger and goes live with the
+    /// state it holds, at revision 0 of its lineage. Every replayed invalidation must be written
+    /// by then.
+    pub(crate) fn go_live(&mut self) -> RuntimeHostResult<()> {
+        if self.mode == StoreMode::Live || !self.pending.is_empty() {
+            return Err(fact_fatal(
+                HostCode::FactStoreNotLive,
+                HostLocation::SynchronizeFactStore,
+            ));
+        }
+        self.mode = StoreMode::Live;
+        self.revision = 0;
+        Ok(())
+    }
+
+    /// Workflow #383 AO-3 (§13, register W1): the store's lineage and its revision.
+    pub(crate) fn revision(&self) -> RuntimeStateStoreRevision {
+        RuntimeStateStoreRevision {
+            lineage: self.lineage,
+            revision: self.revision,
+        }
+    }
+
+    fn require_live(&self, operation: impl Into<Location>) -> RuntimeHostResult<()> {
+        if self.mode != StoreMode::Live {
+            return Err(fact_fatal(HostCode::FactStoreNotLive, operation));
+        }
+        Ok(())
+    }
+
+    fn next_revision(&mut self, operation: impl Into<Location>) -> RuntimeHostResult<u64> {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| fact_fatal(HostCode::FactSequenceOverflow, operation))?;
+        Ok(self.revision)
+    }
+
+    /// Workflow #383 AO-3, the store's one entry for a publication (G2): applies the records of
+    /// one `fact.published` (`event_id`), checked first by [`Self::preview_observation`], and
+    /// returns the revision the change took. The records stand unsettled until the gate has
+    /// captured them ([`Self::settle_publication`]).
+    pub(crate) fn apply_publication(
+        &mut self,
+        records: &[FactRecord],
+        scope_instances: &[actingcommand_contract::InstanceId],
+        publisher: EventActor,
+        event_id: EventId,
+    ) -> RuntimeHostResult<u64> {
+        self.require_live(HostLocation::CommitFact)?;
+        let mut applied = self.clone();
+        for record in records {
+            applied.commit_publish(record.clone(), UNSETTLED_ORDER, None, event_id)?;
+            let stored = applied
+                .active
+                .get_mut(&(record.scope.clone(), record.key.clone()))
+                .ok_or_else(|| fact_fatal(HostCode::FactCommitMissing, HostLocation::CommitFact))?;
+            stored.scope_instances = scope_instances.to_vec();
+            stored.publisher = publisher;
+        }
+        let revision = applied.next_revision(HostLocation::CommitFact)?;
+        *self = applied;
+        Ok(revision)
+    }
+
+    /// Workflow #383 AO-3: the place of a publication's records once the gate captured their
+    /// `fact.published`, and its ledger sequence when the capture waited for the commit.
+    pub(crate) fn settle_publication(
+        &mut self,
+        event_id: EventId,
+        order: FactOrder,
+        sequence: Option<u64>,
+    ) {
+        for stored in self
+            .active
+            .values_mut()
+            .filter(|stored| stored.event_id == event_id)
+        {
+            stored.order = order;
+            stored.sequence = sequence;
+        }
+    }
+
+    /// Workflow #383 AO-3, `contracts/ledger-observer.md` §3: one recorded event, at its capture
+    /// (or, for a record the ledger drafted itself, right after it): records the input boundary,
+    /// plans the `invalidate_on` invalidations and applies them at once, each one change of the
+    /// store. Returns them in application order, for the gate to capture after the event. A
+    /// record observed after its commit invalidates only records that stand before it.
+    /// `fact.published` and `fact.invalidated` never trigger (§3).
+    pub(crate) fn observe_trigger(
+        &mut self,
+        trigger: &FactTrigger,
+    ) -> RuntimeHostResult<Vec<AppliedInvalidation>> {
+        self.require_live(HostLocation::DeriveFactInvalidation)?;
+        if matches!(
+            trigger.event_type,
+            EventType::FactPublished | EventType::FactInvalidated
+        ) {
+            return Ok(Vec::new());
+        }
+        self.input_boundaries.observe_type(
+            trigger.event_type,
+            trigger.instance_id.as_ref(),
+            trigger.at_unix_ms,
+        )?;
+        let planned = self
+            .active
+            .values()
+            .filter(|stored| {
+                trigger.order.is_none_or(|order| stored.order < order)
+                    && stored.record.invalidate_on.contains(&trigger.event_type)
+                    && trigger_scope_matches(
+                        trigger.event_type,
+                        trigger.instance_id.as_ref(),
+                        &stored.scope_instances,
+                    )
+            })
+            .map(|stored| FactInvalidationEventData {
+                scope: stored.record.scope.clone(),
+                key: stored.record.key.clone(),
+                source_snapshot_id: stored.record.source_snapshot_id.clone(),
+                invalidated_at_unix_ms: trigger.at_unix_ms,
+                invalidated_by_event_id: trigger.event_id,
+                invalidated_by_event_type: trigger.event_type,
+            })
+            .collect::<Vec<_>>();
+        let mut applied = Vec::with_capacity(planned.len());
+        for data in planned {
+            self.apply_invalidation(data.clone(), UNSETTLED_ORDER, true)?;
+            let revision = self.next_revision(HostLocation::DeriveFactInvalidation)?;
+            applied.push(AppliedInvalidation { data, revision });
+        }
+        Ok(applied)
+    }
+
+    /// Workflow #383 AO-3: the place of an applied invalidation once the gate captured its
+    /// `fact.invalidated`.
+    pub(crate) fn settle_invalidation(
+        &mut self,
+        data: &FactInvalidationEventData,
+        order: FactOrder,
+    ) {
+        if let Some(tombstone) = self.invalidated.get_mut(&(
+            (data.scope.clone(), data.key.clone()),
+            data.source_snapshot_id.clone(),
+        )) && tombstone.data == *data
+        {
+            tombstone.order = order;
+        }
+    }
+
+    /// Workflow #384 D2-S3 (D2 model §3.6), through the store's one entry (Workflow #383 AO-3):
+    /// drops `key`'s active record in `scope`, the one `fact.published` `base_event` carried,
+    /// because the operation of the step whose `task.step_finished` is `trigger` changed the fact
+    /// and no reading of it followed; one change of the store. `None` when the key has no active
+    /// record or another record than that one; the record must stand before the trigger.
+    pub(crate) fn apply_adjustment_invalidation(
+        &mut self,
         scope: &FactScope,
         key: &str,
-        base_sequence: u64,
-        trigger_sequence: u64,
-    ) -> RuntimeHostResult<Option<(FactInvalidationEventData, FactTransaction)>> {
+        base_event: EventId,
+        trigger: &FactTrigger,
+    ) -> RuntimeHostResult<Option<AppliedInvalidation>> {
+        self.require_live(HostLocation::CommitFactInvalidation)?;
         let Some(stored) = self
             .active
             .get(&(scope.clone(), key.to_owned()))
-            .filter(|stored| stored.sequence == base_sequence)
+            .filter(|stored| stored.event_id == base_event)
         else {
             return Ok(None);
         };
-        let trigger = original_at(ledger, trigger_sequence)?;
         let data = FactInvalidationEventData {
             scope: scope.clone(),
             key: key.to_owned(),
             source_snapshot_id: stored.record.source_snapshot_id.clone(),
-            invalidated_at_unix_ms: trigger.timestamp_unix_ms(),
-            invalidated_by_event_id: *trigger.event_id(),
-            invalidated_by_event_type: trigger.event_type(),
+            invalidated_at_unix_ms: trigger.at_unix_ms,
+            invalidated_by_event_id: trigger.event_id,
+            invalidated_by_event_type: trigger.event_type,
         };
-        if stored.sequence >= trigger_sequence
+        if trigger.order.is_none_or(|order| stored.order >= order)
             || !actingcommand_contract::is_adjustment_invalidation(&data)
         {
             return Err(fact_fatal(
@@ -672,12 +925,9 @@ impl InstanceFactStore {
                 HostLocation::CommitFactInvalidation,
             ));
         }
-        let published = original_at(ledger, stored.sequence)?;
-        let state = self
-            .state
-            .prepare_fact_projection(&data, published, trigger)
-            .map_err(fact_state_error)?;
-        Ok(Some((data, FactTransaction { state })))
+        self.apply_invalidation(data.clone(), UNSETTLED_ORDER, true)?;
+        let revision = self.next_revision(HostLocation::CommitFactInvalidation)?;
+        Ok(Some(AppliedInvalidation { data, revision }))
     }
 
     pub(crate) fn at_position(
@@ -727,7 +977,8 @@ impl InstanceFactStore {
                     identity,
                     StoredFact {
                         record,
-                        sequence,
+                        order: FactOrder::Replayed(sequence),
+                        sequence: Some(sequence),
                         event_id,
                         scope_instances,
                         publisher,
@@ -742,6 +993,9 @@ impl InstanceFactStore {
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: position,
+            mode: StoreMode::Replaying,
+            lineage: self.lineage,
+            revision: self.revision,
             state: Arc::clone(&self.state),
         })
     }
@@ -797,6 +1051,7 @@ impl InstanceFactStore {
         event: &PersistedEvent,
         ledger: &GlobalLedger,
     ) -> RuntimeHostResult<()> {
+        let order = FactOrder::Replayed(event.sequence());
         match event.payload() {
             EventPayload::Fact(FactPayload::Published(payload)) => {
                 self.input_boundaries
@@ -816,14 +1071,19 @@ impl InstanceFactStore {
                             &record.key,
                             &record.source_snapshot_id,
                         )?
-                        .is_some_and(|tombstone| tombstone.sequence <= event.sequence())
+                        .is_some_and(|tombstone| tombstone.order <= order)
                     {
                         return Err(fact_fatal(
                             HostCode::FactSourceSnapshotRepublished,
                             HostLocation::ReplayFactEvent,
                         ));
                     }
-                    complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
+                    complete.commit_publish(
+                        record.clone(),
+                        order,
+                        Some(event.sequence()),
+                        *event.event_id(),
+                    )?;
                     let stored = complete
                         .active
                         .get_mut(&(record.scope.clone(), record.key.clone()))
@@ -833,11 +1093,28 @@ impl InstanceFactStore {
                     stored.scope_instances = payload.scope_instances().to_vec();
                     stored.publisher = event.origin().actor();
                 }
+                complete.advance(event.sequence(), HostLocation::ReplayFactEvent)?;
                 *self = complete;
                 Ok(())
             }
             EventPayload::Fact(FactPayload::Invalidated(payload)) => {
                 let data = payload.invalidation();
+                let identity = (
+                    (data.scope.clone(), data.key.clone()),
+                    data.source_snapshot_id.clone(),
+                );
+                // Workflow #383 AO-3: an invalidation this start derived is applied already and
+                // was written without a tombstone projection (the store keeps its tombstones;
+                // the next start rebuilds the projection from the ledger); its record settles it.
+                if self.pending.contains_key(&invalidation_identity(data))
+                    && self
+                        .invalidated
+                        .get(&identity)
+                        .is_some_and(|tombstone| tombstone.data == *data)
+                {
+                    self.apply_invalidation(data.clone(), order, true)?;
+                    return self.advance(event.sequence(), HostLocation::ReplayFactEvent);
+                }
                 let entry = self
                     .persisted_tombstone(ledger, &data.scope, &data.key, &data.source_snapshot_id)?
                     .ok_or_else(|| {
@@ -846,16 +1123,12 @@ impl InstanceFactStore {
                             HostLocation::ReplayFactEvent,
                         )
                     })?;
-                if entry.data != *data || entry.sequence < event.sequence() {
+                if entry.data != *data || entry.order < order {
                     return Err(fact_fatal(
                         SharedCode::FactTombstoneProjectionSourceMismatch,
                         HostLocation::ReplayFactEvent,
                     ));
                 }
-                let identity = (
-                    (data.scope.clone(), data.key.clone()),
-                    data.source_snapshot_id.clone(),
-                );
                 if !self.invalidated.contains_key(&identity)
                     && self.active.get(&identity.0).is_none_or(|active| {
                         active.record.source_snapshot_id != data.source_snapshot_id
@@ -865,28 +1138,33 @@ impl InstanceFactStore {
                         identity,
                         InvalidationTombstone {
                             data: data.clone(),
-                            sequence: event.sequence(),
+                            order,
                         },
                     );
                     self.trim_recent_tombstones()?;
                     return self.advance(event.sequence(), HostLocation::ReplayFactEvent);
                 }
-                self.commit_invalidation(payload.invalidation().clone(), event.sequence())
+                self.apply_invalidation(payload.invalidation().clone(), order, true)?;
+                self.advance(event.sequence(), HostLocation::ReplayFactEvent)
             }
             _ => {
                 self.input_boundaries.observe(event)?;
                 for invalidation in self.plan_invalidations(event) {
-                    self.derive_invalidation(invalidation, event.sequence())?;
+                    self.derive_invalidation(invalidation, order)?;
                 }
                 self.advance(event.sequence(), HostLocation::ReplayFactEvent)
             }
         }
     }
 
+    /// Workflow #383 AO-3: whether `record` may be published, from the store's memory only: an
+    /// identity whose tombstone the store keeps is refused (`fact_source_snapshot_invalidated`);
+    /// one whose tombstone rolled out is refused by the latest observation it saw
+    /// (`fact_observation_not_newer`, `contracts/ledger-observer.md` §11.3). `Some` is the
+    /// active publication the record repeats.
     pub(crate) fn preview_publish(
         &self,
         record: &FactRecord,
-        ledger: &GlobalLedger,
     ) -> RuntimeHostResult<Option<EventId>> {
         record.validate().map_err(|_| {
             fact_request(HostCode::FactRecordInvalid, ContractLocation::PublishFact)
@@ -895,14 +1173,6 @@ impl InstanceFactStore {
         if self
             .invalidated
             .contains_key(&(identity.clone(), record.source_snapshot_id.clone()))
-            || self
-                .persisted_tombstone(
-                    ledger,
-                    &record.scope,
-                    &record.key,
-                    &record.source_snapshot_id,
-                )?
-                .is_some()
         {
             return Err(fact_request(
                 HostCode::FactSourceSnapshotInvalidated,
@@ -949,13 +1219,14 @@ impl InstanceFactStore {
     pub(crate) fn commit_publish(
         &mut self,
         record: FactRecord,
-        sequence: u64,
+        order: FactOrder,
+        sequence: Option<u64>,
         event_id: EventId,
     ) -> RuntimeHostResult<()> {
         record
             .validate()
             .map_err(|_| fact_fatal(HostCode::FactRecordInvalid, HostLocation::CommitFact))?;
-        if sequence == 0 {
+        if sequence == Some(0) {
             return Err(fact_fatal(
                 HostCode::FactSequenceInvalid,
                 HostLocation::CommitFact,
@@ -986,16 +1257,17 @@ impl InstanceFactStore {
                     HostLocation::CommitFact,
                 ));
             }
-            return self.advance(sequence, HostLocation::CommitFact);
+            return Ok(());
         }
         self.active.insert(
             identity.clone(),
             StoredFact {
                 record,
+                order,
                 sequence,
                 event_id,
                 scope_instances: Vec::new(),
-                // Replay binds the publishing event's actor right after the commit.
+                // The caller binds the publishing event's actor right after the commit.
                 publisher: EventActor::Runtime,
             },
         );
@@ -1004,14 +1276,13 @@ impl InstanceFactStore {
             .entry(identity)
             .and_modify(|latest| *latest = (*latest).max(observed))
             .or_insert(observed);
-        self.advance(sequence, HostLocation::CommitFact)
+        Ok(())
     }
 
     pub(crate) fn preview_observation(
         &self,
         observation: &actingcommand_contract::FactObservation,
         now: u64,
-        ledger: &GlobalLedger,
     ) -> RuntimeHostResult<Option<EventId>> {
         observation.validate().map_err(|_| {
             fact_request(
@@ -1030,7 +1301,7 @@ impl InstanceFactStore {
         let mut new_count = 0;
         let mut new_identities = 0;
         for record in &observation.records {
-            match self.preview_publish(record, ledger)? {
+            match self.preview_publish(record)? {
                 Some(event) => {
                     reused.insert(event);
                 }
@@ -1090,6 +1361,8 @@ impl InstanceFactStore {
         Ok(reused.into_iter().next())
     }
 
+    /// The `invalidate_on` invalidations a replayed event derives: the active records that stand
+    /// before it and name its type, in its scope.
     pub(crate) fn plan_invalidations(
         &self,
         event: &PersistedEvent,
@@ -1100,10 +1373,11 @@ impl InstanceFactStore {
         ) {
             return Vec::new();
         }
+        let order = FactOrder::Replayed(event.sequence());
         self.active
             .values()
             .filter(|stored| {
-                stored.sequence <= event.sequence()
+                stored.order <= order
                     && stored.record.invalidate_on.contains(&event.event_type())
                     && invalidation_scope_matches(event, &stored.scope_instances)
             })
@@ -1118,18 +1392,12 @@ impl InstanceFactStore {
             .collect()
     }
 
-    pub(crate) fn commit_invalidation(
-        &mut self,
-        data: FactInvalidationEventData,
-        sequence: u64,
-    ) -> RuntimeHostResult<()> {
-        self.apply_invalidation(data, sequence, true)
-    }
-
+    /// A replayed invalidation the start wrote: the store had applied it when it derived it; it
+    /// is no longer to be written, and its record, once the store follows the ledger past it,
+    /// settles it.
     pub(crate) fn acknowledge_generated_invalidation(
         &mut self,
         data: &FactInvalidationEventData,
-        sequence: u64,
     ) -> RuntimeHostResult<()> {
         let tombstone_key = (
             (data.scope.clone(), data.key.clone()),
@@ -1148,50 +1416,44 @@ impl InstanceFactStore {
                 HostLocation::AcknowledgeFactInvalidation,
             ));
         }
-        let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
-            fact_fatal(
-                HostCode::FactGeneratedInvalidationMissing,
-                HostLocation::AcknowledgeFactInvalidation,
-            )
-        })?;
-        tombstone.sequence = sequence;
-        self.pending.remove(&identity);
-        self.trim_recent_tombstones()?;
+        if let Some(pending) = self.pending.get_mut(&identity) {
+            pending.written = true;
+        }
         Ok(())
     }
 
     fn derive_invalidation(
         &mut self,
         data: FactInvalidationEventData,
-        sequence: u64,
+        order: FactOrder,
     ) -> RuntimeHostResult<()> {
-        let published_sequence = self
+        if !self
             .active
-            .get(&(data.scope.clone(), data.key.clone()))
-            .ok_or_else(|| {
-                fact_fatal(
-                    HostCode::FactInvalidationTargetMissing,
-                    HostLocation::DeriveFactInvalidation,
-                )
-            })?
-            .sequence;
-        self.apply_invalidation(data.clone(), sequence, false)?;
+            .contains_key(&(data.scope.clone(), data.key.clone()))
+        {
+            return Err(fact_fatal(
+                HostCode::FactInvalidationTargetMissing,
+                HostLocation::DeriveFactInvalidation,
+            ));
+        }
+        self.apply_invalidation(data.clone(), order, false)?;
         self.pending.insert(
             invalidation_identity(&data),
             PendingFactInvalidation {
                 data,
-                published_sequence,
-                trigger_sequence: sequence,
+                written: false,
             },
         );
         Ok(())
     }
 
+    /// Applies one invalidation to memory. `settled` is false only for one the replay derived
+    /// and the start has not written yet (it stays pending and is never compacted).
     fn apply_invalidation(
         &mut self,
         data: FactInvalidationEventData,
-        sequence: u64,
-        persisted: bool,
+        order: FactOrder,
+        settled: bool,
     ) -> RuntimeHostResult<()> {
         let identity = (data.scope.clone(), data.key.clone());
         let tombstone_key = (identity.clone(), data.source_snapshot_id.clone());
@@ -1202,7 +1464,7 @@ impl InstanceFactStore {
                     HostLocation::CommitFactInvalidation,
                 ));
             }
-            if persisted {
+            if settled {
                 self.pending.remove(&invalidation_identity(&data));
                 let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
                     fact_fatal(
@@ -1210,10 +1472,10 @@ impl InstanceFactStore {
                         HostLocation::CommitFactInvalidation,
                     )
                 })?;
-                tombstone.sequence = sequence;
+                tombstone.order = order;
                 self.trim_recent_tombstones()?;
             }
-            return self.advance(sequence, HostLocation::CommitFactInvalidation);
+            return Ok(());
         }
         let active = self.active.get(&identity).ok_or_else(|| {
             fact_fatal(
@@ -1238,19 +1500,21 @@ impl InstanceFactStore {
             tombstone_key,
             InvalidationTombstone {
                 data: data.clone(),
-                sequence,
+                order,
             },
         );
         self.latest_observed
             .entry(identity.clone())
             .and_modify(|at| *at = (*at).max(data.invalidated_at_unix_ms))
             .or_insert(data.invalidated_at_unix_ms);
-        if persisted {
+        if settled {
             self.trim_recent_tombstones()?;
         }
-        self.advance(sequence, HostLocation::CommitFactInvalidation)
+        Ok(())
     }
 
+    /// The tombstone projection of the state document (written by the starts before AO-3 and
+    /// rebuilt from the ledger by every start): read by the start's replay only.
     fn persisted_tombstone(
         &self,
         ledger: &GlobalLedger,
@@ -1287,7 +1551,7 @@ impl InstanceFactStore {
         }
         Ok(Some(InvalidationTombstone {
             data,
-            sequence: entry.ledger_sequence(),
+            order: FactOrder::Replayed(entry.ledger_sequence()),
         }))
     }
 
@@ -1301,7 +1565,7 @@ impl InstanceFactStore {
                         .pending
                         .contains_key(&invalidation_identity(&tombstone.data))
                 })
-                .min_by_key(|(identity, tombstone)| (tombstone.sequence, *identity))
+                .min_by_key(|(identity, tombstone)| (tombstone.order, *identity))
                 .map(|(identity, _)| identity.clone())
                 .ok_or_else(|| {
                     fact_fatal(
@@ -1311,6 +1575,15 @@ impl InstanceFactStore {
                 })?;
             self.invalidated.remove(&candidate);
         }
+        Ok(())
+    }
+
+    fn advance(&mut self, sequence: u64, operation: impl Into<Location>) -> RuntimeHostResult<()> {
+        let operation: Location = operation.into();
+        if sequence == 0 || sequence < self.last_sequence {
+            return Err(fact_fatal(HostCode::FactSequenceInvalid, operation));
+        }
+        self.last_sequence = sequence;
         Ok(())
     }
 
@@ -1330,18 +1603,9 @@ impl InstanceFactStore {
             })
             .collect::<Vec<_>>();
         for data in invalidations {
-            self.derive_invalidation(data, self.last_sequence + 1)
+            self.derive_invalidation(data, FactOrder::Replayed(self.last_sequence + 1))
                 .expect("test trigger invalidation");
         }
-    }
-
-    fn advance(&mut self, sequence: u64, operation: impl Into<Location>) -> RuntimeHostResult<()> {
-        let operation: Location = operation.into();
-        if sequence == 0 || sequence < self.last_sequence {
-            return Err(fact_fatal(HostCode::FactSequenceInvalid, operation));
-        }
-        self.last_sequence = sequence;
-        Ok(())
     }
 
     /// The active record stored under exactly this scope and key, if any.
@@ -1351,16 +1615,18 @@ impl InstanceFactStore {
             .map(|stored| &stored.record)
     }
 
-    /// The active record under exactly this scope and key with the sequence and id of the
-    /// `fact.published` event that carried it (Workflow #308 RT-S1a).
-    pub(crate) fn active_revision(
-        &self,
-        scope: &FactScope,
-        key: &str,
-    ) -> Option<(&FactRecord, u64, EventId)> {
+    /// The active record under exactly this scope and key with the place, the ledger sequence
+    /// when known and the id of the `fact.published` event that carried it (Workflow #308
+    /// RT-S1a; Workflow #383 AO-3).
+    pub(crate) fn active_revision(&self, scope: &FactScope, key: &str) -> Option<ActiveFact<'_>> {
         self.active
             .get(&(scope.clone(), key.to_owned()))
-            .map(|stored| (&stored.record, stored.sequence, stored.event_id))
+            .map(|stored| ActiveFact {
+                record: &stored.record,
+                order: stored.order,
+                sequence: stored.sequence,
+                event_id: stored.event_id,
+            })
     }
 
     /// The active record for `key` that applies to `context`, the most specific scope first
@@ -1406,10 +1672,14 @@ impl InstanceFactStore {
         records
     }
 
+    /// The records that apply to `context`, identified by the two stores' (lineage, revision)
+    /// and the records (Workflow #383 AO-3, `contracts/ledger-observer.md` §13): the snapshot id
+    /// no longer depends on the ledger position, which the snapshot still names.
     pub(crate) fn snapshot(
         &self,
         context: InstanceFactContext,
         ledger_position: u64,
+        workbench: RuntimeStateStoreRevision,
     ) -> RuntimeHostResult<InstanceFactSnapshot> {
         context.validate().map_err(|_| {
             fact_request(HostCode::FactContextInvalid, HostLocation::ReadFactSnapshot)
@@ -1431,7 +1701,7 @@ impl InstanceFactStore {
                 .cmp(&right.key)
                 .then_with(|| left.scope.cmp(&right.scope))
         });
-        let snapshot_id = snapshot_id(&context, ledger_position, &records)?;
+        let snapshot_id = snapshot_id(&context, self.revision(), workbench, &records)?;
         let snapshot = InstanceFactSnapshot {
             snapshot_id,
             ledger_position,
@@ -1447,16 +1717,20 @@ impl InstanceFactStore {
         Ok(snapshot)
     }
 
+    /// The evaluation inputs with the store's records overlaid. Their snapshot id is computed
+    /// from the inputs, the records and the two stores' (lineage, revision), never from a ledger
+    /// position (Workflow #383 AO-3, §13).
     pub(crate) fn overlay_policy_facts(
         &self,
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
         ledger_position: u64,
+        workbench: RuntimeStateStoreRevision,
     ) -> RuntimeHostResult<EvaluationFacts> {
         self.overlay_policy_facts_with_disposition(
             facts,
             resources,
-            ledger_position,
+            (ledger_position, workbench),
             PolicyFactConflictDisposition::FatalInvariant,
             HostLocation::ProjectPolicyFacts,
         )
@@ -1467,11 +1741,12 @@ impl InstanceFactStore {
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
         ledger_position: u64,
+        workbench: RuntimeStateStoreRevision,
     ) -> RuntimeHostResult<EvaluationFacts> {
         self.overlay_policy_facts_with_disposition(
             facts,
             resources,
-            ledger_position,
+            (ledger_position, workbench),
             PolicyFactConflictDisposition::RejectCaller,
             ContractLocation::ProjectPolicyForward,
         )
@@ -1481,7 +1756,7 @@ impl InstanceFactStore {
         &self,
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
-        ledger_position: u64,
+        (ledger_position, workbench): (u64, RuntimeStateStoreRevision),
         conflict_disposition: PolicyFactConflictDisposition,
         operation: impl Into<Location>,
     ) -> RuntimeHostResult<EvaluationFacts> {
@@ -1578,6 +1853,8 @@ impl InstanceFactStore {
         projected
             .instances
             .sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+        // Workflow #383 AO-3: a record is identified by its publication, not by its ledger
+        // position.
         let authority_revisions = selected
             .iter()
             .map(|((scope, key), stored)| {
@@ -1585,7 +1862,6 @@ impl InstanceFactStore {
                     scope,
                     key,
                     &stored.record.source_snapshot_id,
-                    stored.sequence,
                     stored.event_id,
                 )
             })
@@ -1613,6 +1889,7 @@ impl InstanceFactStore {
             resources,
             &authority_revisions,
             &offset_identity,
+            (self.revision(), workbench),
         )?;
         Ok(projected)
     }
@@ -1800,12 +2077,21 @@ fn policy_scope_key(scope: &ScopeSelector) -> String {
     }
 }
 
+/// Workflow #383 AO-3 (`contracts/ledger-observer.md` §13): `hash(context, instance store
+/// (lineage, revision), workbench (lineage, revision), records)`.
 fn snapshot_id(
     context: &InstanceFactContext,
-    ledger_position: u64,
+    instance_facts: RuntimeStateStoreRevision,
+    runtime_facts: RuntimeStateStoreRevision,
     records: &[FactRecord],
 ) -> RuntimeHostResult<String> {
-    let bytes = serde_json::to_vec(&(context, ledger_position, records)).map_err(|_| {
+    let bytes = serde_json::to_vec(&(
+        context,
+        (instance_facts.lineage, instance_facts.revision),
+        (runtime_facts.lineage, runtime_facts.revision),
+        records,
+    ))
+    .map_err(|_| {
         fact_fatal(
             HostCode::FactSnapshotEncodeFailed,
             HostLocation::HashFactSnapshot,
@@ -1817,11 +2103,14 @@ fn snapshot_id(
 /// The consumed priority offsets' identity: (scope, task, offset in milli, observed at).
 type PriorityOffsetIdentity = (FactScope, String, i32, u64);
 
+/// The policy inputs' snapshot id: the inputs, the records they took from the store, the
+/// consumed priority offsets and the two stores' (lineage, revision) (Workflow #383 AO-3, §13).
 fn combined_policy_snapshot_id<T: serde::Serialize>(
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
     authority_revisions: &[T],
     offset_identity: &[PriorityOffsetIdentity],
+    (instance_facts, runtime_facts): (RuntimeStateStoreRevision, RuntimeStateStoreRevision),
 ) -> RuntimeHostResult<String> {
     let mut resources = resources.clone();
     resources
@@ -1830,8 +2119,11 @@ fn combined_policy_snapshot_id<T: serde::Serialize>(
     resources
         .hosts
         .sort_by(|left, right| left.host_id.cmp(&right.host_id));
-    // Without offsets the hashed tuple is exactly the one before offsets existed, so an
-    // unchanged configuration keeps its snapshot identity.
+    let revisions = (
+        (instance_facts.lineage, instance_facts.revision),
+        (runtime_facts.lineage, runtime_facts.revision),
+    );
+    // Without offsets the hashed tuple leaves them out, as before offsets existed.
     let bytes = if offset_identity.is_empty() {
         serde_json::to_vec(&(
             &facts.facts,
@@ -1840,6 +2132,7 @@ fn combined_policy_snapshot_id<T: serde::Serialize>(
             &facts.instances,
             &resources,
             authority_revisions,
+            revisions,
         ))
     } else {
         serde_json::to_vec(&(
@@ -1850,6 +2143,7 @@ fn combined_policy_snapshot_id<T: serde::Serialize>(
             &resources,
             authority_revisions,
             offset_identity,
+            revisions,
         ))
     }
     .map_err(|_| {
@@ -1879,6 +2173,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn store_with_state(state: Arc<RuntimeStateStore>) -> InstanceFactStore {
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
         InstanceFactStore {
             active: BTreeMap::new(),
             latest_observed: BTreeMap::new(),
@@ -1886,6 +2181,9 @@ mod tests {
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
+            mode: StoreMode::Replaying,
+            lineage: *issuer.mint_owner_epoch().expect("lineage").transport(),
+            revision: 0,
             state,
         }
     }
@@ -1955,7 +2253,8 @@ mod tests {
                     "snapshot:server",
                     Vec::new(),
                 ),
-                1,
+                FactOrder::Replayed(1),
+                Some(1),
                 *issuer.mint_event_id().expect("event").transport(),
             )
             .expect("server fact");
@@ -1968,10 +2267,12 @@ mod tests {
                     "snapshot:instance",
                     Vec::new(),
                 ),
-                2,
+                FactOrder::Replayed(2),
+                Some(2),
                 *issuer.mint_event_id().expect("event").transport(),
             )
             .expect("instance fact");
+        let workbench = store.revision();
         let a = store
             .snapshot(
                 InstanceFactContext {
@@ -1980,6 +2281,7 @@ mod tests {
                     game_id: "game-a".to_owned(),
                 },
                 2,
+                workbench,
             )
             .expect("snapshot a");
         let b = store
@@ -1990,6 +2292,7 @@ mod tests {
                     game_id: "game-a".to_owned(),
                 },
                 2,
+                workbench,
             )
             .expect("snapshot b");
         assert_eq!(a.records.len(), 2);
@@ -1998,18 +2301,7 @@ mod tests {
 
     #[test]
     fn event_invalidation_removes_only_the_matching_snapshot() {
-        let root = TempDir::new().expect("tempdir");
-        let database = Arc::new(
-            RuntimeStateStore::open_database(root.path(), b"0123456789abcdef").expect("database"),
-        );
-        let state =
-            Arc::new(RuntimeStateStore::from_database(Arc::clone(&database)).expect("state store"));
-        let mut store = store_with_state(state);
-        let ledger = GlobalLedger::open_sqlite_candidate(
-            actingcommand_ledger::GlobalLedgerConfig::new(root.path(), "fact-preview"),
-            database,
-        )
-        .expect("ledger");
+        let (_root, mut store) = empty_store();
         let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
         let published = *issuer.mint_event_id().expect("event").transport();
         let trigger = *issuer.mint_event_id().expect("event").transport();
@@ -2022,7 +2314,8 @@ mod tests {
                     "snapshot:instance",
                     vec![EventType::RuntimeTakeover],
                 ),
-                1,
+                FactOrder::Replayed(1),
+                Some(1),
                 published,
             )
             .expect("publish");
@@ -2044,7 +2337,6 @@ mod tests {
                         records: vec![old.clone()]
                     },
                     3_000,
-                    &ledger,
                 )
                 .unwrap_err()
                 .code(),
@@ -2059,7 +2351,6 @@ mod tests {
                         records: vec![fresh.clone()]
                     },
                     3_000,
-                    &ledger,
                 )
                 .is_ok()
         );
@@ -2070,7 +2361,6 @@ mod tests {
                         records: vec![fresh]
                     },
                     2_000,
-                    &ledger,
                 )
                 .unwrap_err()
                 .code(),
@@ -2081,6 +2371,7 @@ mod tests {
     #[test]
     fn policy_snapshot_identity_covers_every_evaluator_fact_dimension() {
         let (_root, store) = empty_store();
+        let workbench = store.revision();
         let base = EvaluationFacts {
             ledger_position: 1,
             fact_snapshot_id: "caller-snapshot-a".to_owned(),
@@ -2126,14 +2417,14 @@ mod tests {
         };
         let resources = resources();
         let canonical = store
-            .overlay_policy_facts(&base, &resources, 7)
+            .overlay_policy_facts(&base, &resources, 7, workbench)
             .expect("canonical facts");
 
         let mut caller_identity_changed = base.clone();
         caller_identity_changed.fact_snapshot_id = "caller-snapshot-b".to_owned();
         assert_eq!(
             store
-                .overlay_policy_facts(&caller_identity_changed, &resources, 99)
+                .overlay_policy_facts(&caller_identity_changed, &resources, 99, workbench)
                 .expect("canonical caller-independent facts")
                 .fact_snapshot_id,
             canonical.fact_snapshot_id
@@ -2159,7 +2450,7 @@ mod tests {
         for changed in variants {
             assert_ne!(
                 store
-                    .overlay_policy_facts(&changed, &resources, 7)
+                    .overlay_policy_facts(&changed, &resources, 7, workbench)
                     .expect("changed facts")
                     .fact_snapshot_id,
                 canonical.fact_snapshot_id
@@ -2170,13 +2461,17 @@ mod tests {
         changed_resources.pools[0].value += 1;
         assert_ne!(
             store
-                .overlay_policy_facts(&base, &changed_resources, 7)
+                .overlay_policy_facts(&base, &changed_resources, 7, workbench)
                 .expect("changed resources")
                 .fact_snapshot_id,
             canonical.fact_snapshot_id
         );
     }
 
+    /// Workflow #383 AO-3 (`contracts/ledger-observer.md` §3.6, §11.3): the store keeps at most
+    /// 256 tombstones in memory; an identity whose tombstone rolled out is still refused, by the
+    /// latest observation of its key (`fact_observation_not_newer`), live and after the start's
+    /// replay rebuilt the store from the ledger.
     #[test]
     fn fact_tombstones_compact_in_memory_without_losing_durable_rejection() {
         use actingcommand_contract::{
@@ -2196,6 +2491,8 @@ mod tests {
         )
         .expect("ledger");
         let mut store = store_with_state(Arc::clone(&state));
+        store.go_live().expect("live store");
+        let lineage = store.revision().lineage;
         let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
         let fingerprinter =
             Sha256SecretFingerprinter::new(b"fact-compaction-specification").expect("salt");
@@ -2203,13 +2500,26 @@ mod tests {
             instance_id: "instance-a".to_owned(),
         };
         let mut first = None;
+        let mut capture = 0;
 
         for index in 0..(MAX_RECENT_FACT_TOMBSTONES + 32) {
             let snapshot = format!("snapshot:compaction-{index}");
             let fact = record(scope.clone(), &snapshot, vec![EventType::RuntimeTakeover]);
             first.get_or_insert_with(|| fact.clone());
+            let published_id = issuer.mint_event_id().expect("publish event");
+            let published_event = *published_id.transport();
+            store
+                .apply_publication(
+                    std::slice::from_ref(&fact),
+                    &[],
+                    EventActor::Runtime,
+                    published_event,
+                )
+                .expect("live publication");
+            capture += 1;
+            store.settle_publication(published_event, FactOrder::Captured(capture), None);
             let published = EventDraft::new(
-                issuer.mint_event_id().expect("publish event"),
+                published_id,
                 1_000,
                 EventSeverity::Info,
                 EventOrigin::new(
@@ -2223,8 +2533,10 @@ mod tests {
             .sanitize(&fingerprinter)
             .expect("publish draft");
             ledger.append(published).expect("publish original fact");
+            let trigger_id = issuer.mint_event_id().expect("trigger event");
+            let trigger_event = *trigger_id.transport();
             let trigger = EventDraft::new(
-                issuer.mint_event_id().expect("trigger event"),
+                trigger_id,
                 2_000 + index as u64,
                 EventSeverity::Info,
                 EventOrigin::new(
@@ -2238,33 +2550,29 @@ mod tests {
             )
             .sanitize(&fingerprinter)
             .expect("trigger draft");
+            let applied = store
+                .observe_trigger(&FactTrigger::at_capture(&trigger))
+                .expect("observe the trigger");
+            assert_eq!(applied.len(), 1, "the trigger invalidates its record");
+            assert_eq!(trigger_event, applied[0].data.invalidated_by_event_id);
             ledger.append(trigger).expect("original trigger");
-            store.synchronize(&ledger).expect("derive invalidation");
-            for pending in store.pending_invalidations() {
-                let work = store
-                    .prepare_invalidation(&ledger, &pending)
-                    .expect("prepare tombstone");
-                let draft = EventDraft::new(
-                    issuer.mint_event_id().expect("invalidation event"),
-                    2_000 + index as u64,
-                    EventSeverity::Info,
-                    EventOrigin::new(
-                        EventSource::Runtime,
-                        OriginModule::FactStore,
-                        EventActor::Runtime,
-                    ),
-                    EventLinksDraft::default(),
-                    FactPayloadDraft::invalidated(pending.data.clone(), AuditInput::new()).into(),
-                )
-                .sanitize(&fingerprinter)
-                .expect("invalidation draft");
-                let event = ledger
-                    .append_transaction(draft, Box::new(work))
-                    .expect("joint invalidation");
-                store
-                    .acknowledge_generated_invalidation(&pending.data, event.sequence())
-                    .expect("acknowledge committed tombstone");
-            }
+            capture += 2;
+            store.settle_invalidation(&applied[0].data, FactOrder::Captured(capture));
+            let draft = EventDraft::new(
+                issuer.mint_event_id().expect("invalidation event"),
+                2_000 + index as u64,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::FactStore,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                FactPayloadDraft::invalidated(applied[0].data.clone(), AuditInput::new()).into(),
+            )
+            .sanitize(&fingerprinter)
+            .expect("invalidation draft");
+            ledger.append(draft).expect("invalidation");
         }
 
         assert_eq!(store.invalidated.len(), MAX_RECENT_FACT_TOMBSTONES);
@@ -2272,20 +2580,21 @@ mod tests {
         let first = first.expect("first fact");
         assert_eq!(
             store
-                .preview_publish(&first, &ledger)
-                .expect_err("compacted tombstone must still reject republish")
+                .preview_publish(&first)
+                .expect_err("a rolled-out tombstone's identity is still refused")
                 .code(),
-            "fact_source_snapshot_invalidated"
+            "fact_observation_not_newer"
         );
 
         drop(store);
-        let recovered = InstanceFactStore::recover(&ledger, state).expect("replay original facts");
+        let recovered =
+            InstanceFactStore::recover(&ledger, state, lineage).expect("replay original facts");
         assert_eq!(
             recovered
-                .preview_publish(&first, &ledger)
-                .expect_err("durable tombstone must survive projection reconstruction")
+                .preview_publish(&first)
+                .expect_err("the replayed store still refuses the identity")
                 .code(),
-            "fact_source_snapshot_invalidated"
+            "fact_observation_not_newer"
         );
     }
 }

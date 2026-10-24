@@ -14,15 +14,13 @@
 //! transfer or expiry, and a performance or resource-authoring record, raise
 //! `ResourcesChanged`; a catalog transition record raises `CatalogChanged`; an instance fact
 //! publication or invalidation and an approval decision raise `FactsChanged`. Nothing else
-//! wakes the driver. The append points that raise are the ones that can commit a record of a
-//! waking type: every `append_event*` path (`facts.rs`), the fact invalidations of the store's
-//! synchronization, approval decisions (`governance.rs`), catalog transitions
-//! (`policy_catalog.rs`), the lease critical executions that end a lease (`lease.rs`, through
-//! [`PolicyWakingLedger`]) and the capacity monitor's records (`performance/capacity.rs`).
+//! wakes the driver. Workflow #383 AO-3: the raise is part of the host's capture point
+//! (`facts.rs`): every record the fan-out point or the instance fact store's entry captures, and
+//! every record committed outside them (critical executions, joint transactions, the capacity
+//! monitor's records) when it is handed to the capture's observation step.
 
 use super::*;
-use actingcommand_contract::{EventFamily, SanitizedEventDraft};
-use actingcommand_ledger::GlobalLedgerResult;
+use actingcommand_contract::EventFamily;
 use std::sync::PoisonError;
 
 /// The policy driver's wakes the host has raised and its policy monitor has not taken yet,
@@ -80,21 +78,6 @@ impl PolicyWakes {
     }
 }
 
-/// Workflow #383 AO-7: the ledger as a critical execution's appender that raises the policy
-/// driver's wake for each record it commits. The lease critical executions that end a lease
-/// (an explicit release, a cleanup and an expiry) append through it.
-pub(super) struct PolicyWakingLedger<'a> {
-    shared: &'a HostShared,
-}
-
-impl EventAppender for PolicyWakingLedger<'_> {
-    fn append_durable(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
-        let event = self.shared.ledger.append_durable(draft)?;
-        self.shared.policy_wakes.raise(event.event_type());
-        Ok(event)
-    }
-}
-
 impl HostShared {
     /// The daemon policy monitor's starting point ([`RuntimeHost::open_policy_wakes`]): the
     /// wakes raised before are dropped, as the monitor's ledger subscription used to start at
@@ -105,10 +88,6 @@ impl HostShared {
         PolicyWakes {
             signal: Arc::clone(&self.policy_wakes),
         }
-    }
-
-    pub(super) fn policy_waking_ledger(&self) -> PolicyWakingLedger<'_> {
-        PolicyWakingLedger { shared: self }
     }
 }
 

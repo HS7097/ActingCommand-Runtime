@@ -230,8 +230,11 @@ impl HostShared {
                 }
             };
         let execution = self.execution()?;
+        // Workflow #383 AO-3 (§3, G6 until AO-4): the intent and the outcome pass the host's
+        // capture point's observation step.
+        let appender = self.capturing_appender();
         let result = execute_critical(
-            &self.ledger,
+            &appender,
             self.events.fingerprinter(),
             plan,
             || {
@@ -412,7 +415,16 @@ impl HostShared {
             return Err(RequestFailure::poison_without_terminal(error));
         }
         if matches!(&result, Ok(_) | Err(CriticalExecutionError::Action { .. })) {
+            // The intent, the outcome and its fact invalidations, under the outcome's gate, in
+            // ledger order before anything committed after them.
+            appender
+                .observe_under_gate()
+                .map_err(RequestFailure::poison_without_terminal)?;
             self.synchronize_fact_store_under_gate()
+                .map_err(RequestFailure::poison_without_terminal)?;
+        } else {
+            appender
+                .defer()
                 .map_err(RequestFailure::poison_without_terminal)?;
         }
         // Cleanup and pipeline observation may append events and must run outside this gate.
@@ -567,8 +579,11 @@ impl HostShared {
         let failure_links = links;
         let mut destructive_step = None;
         let execution = self.execution()?;
+        // Workflow #383 AO-3 (§3, G6 until AO-4): the intent and the result pass the host's
+        // capture point's observation step.
+        let appender = self.capturing_appender();
         let result = execute_critical(
-            &self.ledger,
+            &appender,
             self.events.fingerprinter(),
             plan,
             || {
@@ -693,6 +708,9 @@ impl HostShared {
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
         );
+        appender
+            .defer()
+            .map_err(RequestFailure::poison_without_terminal)?;
         match result {
             Ok(receipt) => {
                 self.finish_destructive_input(destructive_step.take(), connection_id)?;

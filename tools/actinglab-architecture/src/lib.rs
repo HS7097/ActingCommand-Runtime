@@ -656,6 +656,31 @@ pub fn inspect_ledger_append_ingress(owners: &[LedgerOwnerModule]) -> Result<Vec
                         continue;
                     }
                 }
+                // Workflow #383 AO-3 (`contracts/ledger-observer.md` §8.3): a revisioned
+                // source's committed append takes the same sanitized draft and its
+                // (source, lineage, revision).
+                if method.sig.ident == "append_with_source" && is_public(&method.vis) {
+                    let typed = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .filter_map(|input| match input {
+                            FnArg::Receiver(_) => None,
+                            FnArg::Typed(argument) => Some(argument),
+                        })
+                        .collect::<Vec<_>>();
+                    if typed.len() == 2
+                        && method.sig.generics.params.is_empty()
+                        && pattern_ident(&typed[0].pat).is_some_and(|ident| ident == "draft")
+                        && type_last_ident(&typed[0].ty)
+                            .is_some_and(|ident| ident == "SanitizedEventDraft")
+                        && pattern_ident(&typed[1].pat).is_some_and(|ident| ident == "source")
+                        && type_last_ident(&typed[1].ty)
+                            .is_some_and(|ident| ident == "SourceRevision")
+                    {
+                        continue;
+                    }
+                }
                 if is_public(&method.vis)
                     && (method.sig.ident.to_string().starts_with("append")
                         || method_accepts_event_ingress(method)

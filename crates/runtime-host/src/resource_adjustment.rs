@@ -22,6 +22,7 @@
 //!   is dropped, and only when that record is older than the confirmation that dropped it.
 
 use crate::codes::{AdjustmentReason, HostCode};
+use crate::fact_store::{FactOrder, FactTrigger};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     EventId, FactContent, FactRecord, FactValue, ResourceAdjustmentDirection,
@@ -41,17 +42,18 @@ pub(crate) struct ReadingFrameInput<'a> {
 pub(crate) struct ConfirmationInput<'a> {
     pub(crate) captured_at: SystemTime,
     pub(crate) observed_at_unix_ms: u64,
-    /// The ledger sequence of the confirmed step's `task.step_finished`.
-    pub(crate) step_sequence: u64,
+    /// The confirmed step's `task.step_finished`, with its place in the instance fact store's
+    /// history (Workflow #383 AO-3: no ledger position).
+    pub(crate) step: FactTrigger,
     pub(crate) adjustments: &'a [ResourceAdjustmentResult],
 }
 
-/// A key's active record before the run, with the sequence and the id of its
-/// `fact.published`.
+/// A key's active record before the run, with its place in the instance fact store's history
+/// and the id of its `fact.published`.
 #[derive(Debug, Clone)]
 pub(crate) struct PreRunRecord {
     pub(crate) record: FactRecord,
-    pub(crate) sequence: u64,
+    pub(crate) order: FactOrder,
     pub(crate) event_id: EventId,
 }
 
@@ -59,7 +61,7 @@ pub(crate) struct PreRunRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlannedBase {
     /// The key's record before the run.
-    PreRun { sequence: u64, event_id: EventId },
+    PreRun { order: FactOrder, event_id: EventId },
     /// An earlier publication of the plan.
     Run(usize),
 }
@@ -92,13 +94,13 @@ pub(crate) enum PlannedPublication {
 }
 
 /// A key's record from before the run, dropped because a confirmed change of the key was not
-/// read: the `fact.published` at `base_sequence`, dropped by the step at `step_sequence`.
+/// read: the `fact.published` `base_event`, dropped by the step `step`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlannedInvalidation {
     pub(crate) adjustment_id: String,
     pub(crate) fact_key: String,
-    pub(crate) base_sequence: u64,
-    pub(crate) step_sequence: u64,
+    pub(crate) base_event: EventId,
+    pub(crate) step: FactTrigger,
 }
 
 /// One adjustment's outcome: a row of the run's task diagnostic on its confirmation frame.
@@ -128,8 +130,14 @@ enum RunRecord {
 
 #[derive(Debug, Clone, Copy)]
 enum BaseSource {
-    PreRun { sequence: u64, event_id: EventId },
+    PreRun { order: FactOrder, event_id: EventId },
     Run(RunRecord),
+}
+
+/// Whether a record at `order` stands before the confirmed step `step` (a step without a place
+/// comes after every record).
+fn stands_before(order: FactOrder, step: &FactTrigger) -> bool {
+    step.order.is_none_or(|step| order < step)
 }
 
 /// The key's current record at a confirmation.
@@ -177,7 +185,7 @@ pub(crate) fn plan_resource_adjustments(
     let mut outcomes = Vec::new();
     let mut writes: Vec<Write> = Vec::new();
     // The first confirmation that dropped each key: its adjustment, its step and its time.
-    let mut dropped: BTreeMap<String, (String, u64, u64)> = BTreeMap::new();
+    let mut dropped: BTreeMap<String, (String, FactTrigger, u64)> = BTreeMap::new();
     for (index, confirmation) in confirmations.iter().enumerate() {
         for adjustment in confirmation.adjustments {
             let declaration = &adjustment.declaration;
@@ -211,8 +219,8 @@ pub(crate) fn plan_resource_adjustments(
                         Some(base)
                             if matches!(
                                 base.source,
-                                BaseSource::PreRun { sequence, .. }
-                                    if sequence >= confirmation.step_sequence
+                                BaseSource::PreRun { order, .. }
+                                    if !stands_before(order, &confirmation.step)
                             ) || base.observed_at_unix_ms > confirmation.observed_at_unix_ms =>
                         {
                             (
@@ -287,7 +295,7 @@ pub(crate) fn plan_resource_adjustments(
             if drops_key {
                 dropped.entry(key.to_owned()).or_insert((
                     declaration.id.clone(),
-                    confirmation.step_sequence,
+                    confirmation.step,
                     confirmation.observed_at_unix_ms,
                 ));
             }
@@ -295,19 +303,17 @@ pub(crate) fn plan_resource_adjustments(
     }
     let invalidations = dropped
         .iter()
-        .filter_map(
-            |(key, (adjustment_id, step_sequence, observed_at_unix_ms))| {
-                let before = pre_run.get(key)?;
-                (before.sequence < *step_sequence
-                    && before.record.observed_at_unix_ms <= *observed_at_unix_ms)
-                    .then(|| PlannedInvalidation {
-                        adjustment_id: adjustment_id.clone(),
-                        fact_key: key.clone(),
-                        base_sequence: before.sequence,
-                        step_sequence: *step_sequence,
-                    })
-            },
-        )
+        .filter_map(|(key, (adjustment_id, step, observed_at_unix_ms))| {
+            let before = pre_run.get(key)?;
+            (stands_before(before.order, step)
+                && before.record.observed_at_unix_ms <= *observed_at_unix_ms)
+                .then(|| PlannedInvalidation {
+                    adjustment_id: adjustment_id.clone(),
+                    fact_key: key.clone(),
+                    base_event: before.event_id,
+                    step: *step,
+                })
+        })
         .collect();
     AdjustmentPlan {
         outcomes,
@@ -331,7 +337,7 @@ fn current_base(
         expires_at_unix_ms: before.record.expires_at_unix_ms,
         confidence_milli: before.record.confidence_milli,
         source: BaseSource::PreRun {
-            sequence: before.sequence,
+            order: before.order,
             event_id: before.event_id,
         },
     });
@@ -419,8 +425,8 @@ fn publication_order(
                      base,
                  }| {
                     adjustment.base = match base {
-                        BaseSource::PreRun { sequence, event_id } => {
-                            PlannedBase::PreRun { sequence, event_id }
+                        BaseSource::PreRun { order, event_id } => {
+                            PlannedBase::PreRun { order, event_id }
                         }
                         // The record a write adjusts is a record of its own key, which is in
                         // the order whenever the write is, and earlier. A position past the

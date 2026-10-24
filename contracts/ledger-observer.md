@@ -84,6 +84,26 @@ Inside a running actingd, `runtime-host` calls the ledger in exactly four ways (
   - The exception table *is* the write part of the whitelist, row for row. Adding a row is the
     coordinator's decision and is reported to Alice; a write call that is not in the table fails
     the guard.
+- **As built (AO-3)**: the guard is `tools/actinglab-architecture/tests/ledger_observer_guard.rs`
+  (AO3-j, AO3-k). It parses the production files of both crates (test files, `tests` trees,
+  modules declared only for tests, `#[cfg(test)]` items and `*_for_test` functions left out, as
+  A.1) and lists every call by `file::Owner::function -> call` with its count. A call counts when
+  its receiver is a `GlobalLedger`, a `LedgerMaintenance` or the capture interface: a parameter
+  or local of that type (declared, or made by `GlobalLedger::open*` / `LedgerMaintenance::acquire`
+  / `open_writer*`), or a binding named `ledger`, `maintenance` or `ledger_capture`; every struct
+  field of those types must carry that name, which the guard checks. Its tables: 48 write rows
+  (the direct calls of Appendix A as the code stands after AO-3, A.9), the flush barrier and the
+  tier read empty (no site yet: step 10 of §12 is AO-6, the install receipts AO-4, the tier read
+  PERF P-s), 87 read rows (today's readers, named per function; AO-4 and AO-6 narrow them), and
+  three capture rows (the start hands the host its capture interface; `capture_store_change_under_gate`
+  is the one holder). Each write row names its gate and the slice that moves it. The ledger's
+  ingress guard (`ledger_ingress_accepts_only_sanitized_event_v2`) accepts the one new ledger
+  method, `append_with_source` (§8.3 note).
+  - AO3-k checks the half of the correspondence that holds while the whitelist is still Appendix A:
+    every row of the table above is one whitelisted write at its file with its call (`W1`, `W2`),
+    every `W` row of the whitelist is a table row, and the offline subcommands' files write nowhere
+    else. "Every write call of the whitelist is in the exception table" holds once AO-4 has moved
+    the other write rows; until then AO3-j fails any write added outside the whitelist.
 - **B-class payload mapping** (kernel trace to `task.*`, capture to `capture.*`, …) stays in an
   adapter beside each choke point. The adapter converts types only and calls no ledger API; the
   ledger crate never depends on `execution-kernel` (LEDG §4.8, Q1a).
@@ -198,6 +218,43 @@ ledger without the host.
 - The validator change lands with SH-1 (the v0.12.0 shape slice); the rejection is the existing
   request error `invalid_fact_record`.
 
+**As built (AO-3).** Where the code departs from the text above, the open question is in the PR
+of AO-3 and the coordinator decides.
+
+- **Fan-out point.** `HostShared::append_event_under_fact_gate_with_observation` (`f`) holds
+  `fact_write_gate` and hands its record to `capture_committed_under_gate`, which hands it to the
+  ledger and then runs the observation step on the committed record: the instance store's
+  `observe_trigger`, the invalidations it derived captured after it, the driver's wake (AO-7) and
+  the ladder's direction-1 counter (D1c). The record of G1 itself still waits for its commit:
+  its callers put the ledger sequence into receipts and projections until AO-4 (runtime-client
+  revision 3); the store no longer reads the ledger back.
+- **The store's single entry.** `InstanceFactStore` applies first and counts: `apply_publication`
+  (a publication, revision +1), `observe_trigger` (a trigger: the input boundary, then every
+  `invalidate_on` invalidation it plans, each revision +1), `apply_adjustment_invalidation`
+  (D2-S3). The acceptance rules stay; a refused change moves no revision and records nothing.
+  Each change is copied by `capture_store_change_under_gate`, the one holder of the capture
+  interface, with `source {instance_facts, lineage, revision}`, the lineage being the owner
+  epoch. A resource-target publication, whose receipt names its ledger sequence until AO-4, is
+  handed over with `GlobalLedger::append_with_source` (same source, waits for its commit).
+- **Start segment.** Until business opens the store follows the ledger as before (the start's
+  replay, its derived invalidations written through the capture point). `open_live_fact_stores`,
+  just before business opens, settles the replay and opens the store's lineage at revision 0 (its
+  first captured change is revision 1) and the workbench's revision count. From then the store
+  reads nothing from the ledger. A fact waits on a trigger when its own place (its replayed
+  sequence, or its capture number) is before the trigger's.
+- **Records written outside the fan-out point** (the critical executions of leases, inputs and
+  applications, policy admission, catalog and release transitions, agent wakes, the settlement
+  continuation's records) are queued after their commit and observed in ledger order by the next
+  holder of `fact_write_gate` before its own record; the input path observes its records under
+  the gate at once. This replaces the "event types some fact waits on" check, which would take the
+  gate inside writers that hold it or locks after it. Not observed yet (AO-4 moves them to choke
+  points): the two artifact sinks and the frame pin (G9), the capacity records (G11) and the Lab
+  pin release, which the ledger drafts.
+- **Refused triggers.** `FactRecord::validate` still refuses only `fact.published` and
+  `fact.invalidated`; the table above is assigned to SH-1 and was not changed by AO-3.
+- **D1c.** The direction-1 counter counts every record the capture point hands the ledger and
+  every queued record, in the observation step, no longer inside the `f` layer only.
+
 ## 4 Silent gates (G1–G16)
 
 Each gate is one `capture` call at a choke point (LEDG §4.1). *Decision* records are today's
@@ -241,6 +298,12 @@ durable class (FULL sync, may be tagged); *observation* records are today's obse
 Intent and result stay two records (rule 8: an intent is not a fact) but the effect no longer
 waits for the intent to commit (rule 9). Outside readers show an intent without a result as
 "in progress or unknown", never "done" (MCP `ac_get_run`, the UI run view; AO-9).
+
+**As built (AO-3).** G1 and G2 as in §3's note. G16: `runtime.started` / `runtime.takeover` and
+`runtime.instance_bound` are handed off through the capture point at start, each waiting for its
+commit (the single barrier of §12 step 10 is AO-6's); `runtime.failed` and the lifecycle phases go
+through the fan-out point; the close-time device diagnostic summary is captured by
+`capture_deferred_under_gate` (the deferred append it had, observed at capture).
 
 ## 5 Call-site classes (AO-0 inventory; AO-3 to AO-4 move them)
 
@@ -865,6 +928,14 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   receipts stay as today.
 - History by ledger position (`fact_store.rs:474-498`) remains for actingledger forensics only.
 
+**As built (AO-3).** The fact snapshot id (`InstanceFactStore::snapshot`) and the policy's
+combined snapshot id hash both stores' (lineage, revision) instead of the ledger position. The
+workbench's revision is counted in memory (+1 per accepted change, lineage the owner epoch, 0
+when business opens); its records carry it from AO-4. The status source names both pairs from
+business open. `input_fact_revisions` is not written yet: §18 places "payload fields by revision
+pair" in AO-4, and `task.selection_evaluated` is written by the execution kernel (question in the
+PR of AO-3).
+
 **Wake source (AO-7)**: actingd stops subscribing to the whole ledger. The host sends business
 notifications: store revisions changed → `FactsChanged`; lease release, transfer, expiry →
 `ResourcesChanged`; catalog change → `CatalogChanged`; performance and resource changes →
@@ -1041,6 +1112,9 @@ unchanged). Nothing emits them before the slice named.
   `segment_edge` (vocabulary `segment_edge`), `buffer_bytes`, `source_counts`
   (records of `ledger_source`, `count`). The two vocabularies have no `source` enum yet; the slice
   that builds them from an enum adds `source`.
+- AO-3 adds `fact_store_not_live` to the Runtime host's registry (`runtime-host.json`, error,
+  `ladder_class` none, fatal): the instance store's mode broke (a live change before business
+  opened, or a second opening).
 - One code, one category: `ledger_dump_invalid` is only "middle hash mismatch, prefix imported,
   file kept" (error); a newer dump version is `ledger_dump_unsupported` (fatal).
 - Reused codes, registered by #378 A2: `writer_unavailable`, `writer_response_timeout` (error, no
@@ -1722,4 +1796,23 @@ The survey above records today's code and proposals. AO-0 decides as follows; th
 | M11 | A record is copied by the gate of the choke point where it is written; its category follows its type. |
 | M12 | Every row that puts the returned sequence into a receipt, a store or a reply (68 rows) is a §13 change point for AO-3 / AO-4. |
 | M13 | The 14 writes §4.1a missed join the gates listed in A.4. |
+
+### A.9 Inventory changes by AO-3 (against `706ead94`)
+
+The whitelist of the guard (`tools/actinglab-architecture/tests/ledger_observer_guard.rs`) is the
+inventory's direct calls as the code stands after AO-3; its rows name functions, not lines. Against
+the 48 DIRECT call sites of A.3:
+
+| A.2 row | at `706ead94` | after AO-3 | change |
+|---|---|---|---|
+| 117 | `f:666` `synchronize_fact_store_under_gate` → `append_transaction` (G2; tombstone projection work) | `synchronize_fact_store_under_gate` → `append` | the start's derived invalidations, handed off through the capture point; the runtime tombstone projection is no longer written (§11.3: a late duplicate is refused as `fact_observation_not_newer`) |
+| 126 | `governance.rs:97` `record_approval_decision` → `append_transaction` | `append_approval_decision` → `append_transaction` | same call, named by its own function; handed off through the capture point |
+| 169, 171, 173, 180, 202, 131, 137 | `execute_critical(&self.ledger, …)` | `execute_critical(&appender, …)` | the critical executions write through `CapturingAppender::append_durable` (new row in `f`), which keeps their records for the observation step |
+| 220, 222 | free functions `append_runtime_start_event`, `append_instance_binding_events` (`lifecycle.rs`) | `HostShared::append_runtime_start_event`, `HostShared::append_instance_binding_events` | G16 through the capture point |
+| 90 | `device_diagnostic.rs:205` `append_device_diagnostic_record` → `append_deferred` | unchanged for the summary of a start that ended before the host was shared; the close-time summary moved to `capture_deferred_under_gate` (new row) | G16 |
+| — | — | `capture_store_change_under_gate` → `append_with_source` (new) | G2: a resource-target publication's committed hand-off until AO-4 |
+| — | `policy_wake.rs` `PolicyWakingLedger` (an `EventAppender` around the ledger that raised the driver's wake) | removed | the wake is raised in the observation step |
+
+Every other DIRECT row is on the whitelist unchanged, at the same function. The `f` facade, the
+14 under-gate calls and the wrapper rows of A.2 are unchanged.
 

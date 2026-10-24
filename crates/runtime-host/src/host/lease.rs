@@ -1379,8 +1379,12 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint().to_string();
         let outcome_links = links.clone();
         let failure_links = links;
+        // Workflow #383 AO-3 (§3, G4 until AO-4): the lease records pass the host's capture
+        // point's observation step once the critical execution returns; AO-7's wake of a
+        // lease end is raised there.
+        let appender = self.capturing_appender();
         let result = execute_critical(
-            &self.ledger,
+            &appender,
             self.events.fingerprinter(),
             plan,
             || match self.commit_acquire(preparation) {
@@ -1427,6 +1431,9 @@ impl HostShared {
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
         );
+        appender
+            .defer()
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.map_critical_lease_result(result, RuntimeReceiptState::Admitted, |token| {
             RuntimeResult::LeaseGranted { token }
         })
@@ -1576,8 +1583,12 @@ impl HostShared {
         let outcome_links = links.clone();
         let failure_links = links;
         let endpoint = resolved.audit_endpoint;
+        // Workflow #383 AO-3 (§3, G4 until AO-4): the lease records pass the host's capture
+        // point's observation step once the critical execution returns; AO-7's wake of a
+        // lease end is raised there.
+        let appender = self.capturing_appender();
         let result = execute_critical(
-            &self.ledger,
+            &appender,
             self.events.fingerprinter(),
             plan,
             || {
@@ -1623,6 +1634,9 @@ impl HostShared {
                 )
             },
         );
+        appender
+            .defer()
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.map_critical_lease_result(result, RuntimeReceiptState::Completed, |token| {
             RuntimeResult::LeaseRenewed { token }
         })
@@ -1745,9 +1759,12 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint.clone();
         let outcome_links = links.clone();
         let failure_links = links;
-        // Workflow #383 AO-7: the committed `lease.released` wakes the policy driver.
+        // Workflow #383 AO-3 (§3, G4 until AO-4): the lease records pass the host's capture
+        // point's observation step once the critical execution returns; AO-7's wake of a
+        // lease end is raised there.
+        let appender = self.capturing_appender();
         let result = execute_critical(
-            &self.policy_waking_ledger(),
+            &appender,
             self.events.fingerprinter(),
             plan,
             || match self.complete_explicit_release(request_id, token, connection_id) {
@@ -1781,6 +1798,9 @@ impl HostShared {
                 )
             },
         );
+        appender
+            .defer()
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.map_critical_lease_result(result, RuntimeReceiptState::Completed, |token| {
             RuntimeResult::LeaseReleased {
                 instance_id: token.instance_id(),
@@ -2518,10 +2538,12 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint.clone();
         let outcome_links = links.clone();
         let failure_links = links;
-        // Workflow #383 AO-7: the committed `lease.released` or `lease.expired` wakes the
-        // policy driver.
+        // Workflow #383 AO-3 (§3, G4 until AO-4): the lease records pass the host's capture
+        // point's observation step once the critical execution returns; AO-7's wake of a
+        // lease end is raised there.
+        let appender = self.capturing_appender();
         let result = execute_critical(
-            &self.policy_waking_ledger(),
+            &appender,
             self.events.fingerprinter(),
             plan,
             || {
@@ -2627,6 +2649,7 @@ impl HostShared {
                 self.lease_failure_draft(failure_links, action, error.diagnostic, effect, &endpoint)
             },
         );
+        appender.defer()?;
         match result {
             Ok(_) => Ok(()),
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
@@ -4046,8 +4069,12 @@ impl HostShared {
         let outcome_links = links.clone();
         let failure_links = links;
         let endpoint = resolved.audit_endpoint;
+        // Workflow #383 AO-3 (§3, G4 until AO-4): the lease records pass the host's capture
+        // point's observation step once the critical execution returns; AO-7's wake of a
+        // lease end is raised there.
+        let appender = self.capturing_appender();
         let result = execute_critical(
-            &self.ledger,
+            &appender,
             self.events.fingerprinter(),
             plan,
             || {
@@ -4098,6 +4125,9 @@ impl HostShared {
                 )
             },
         );
+        appender
+            .defer()
+            .map_err(RequestFailure::poison_without_terminal)?;
         match result {
             Ok(receipt) => Ok(receipt.into_value()),
             Err(CriticalExecutionError::Action { error, outcome, .. }) => Err(RequestFailure {

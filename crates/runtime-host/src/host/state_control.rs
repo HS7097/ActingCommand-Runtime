@@ -41,10 +41,13 @@ impl HostShared {
                 )?;
                 let draft = self.events.sanitize(draft)?;
                 let fact_gate = lock(&self.fact_write_gate, HostLocation::StageReleaseSet)?;
-                let outcome = self
-                    .ledger
-                    .append_transaction(draft, Box::new(ReleaseTransaction { state: Ok(work) }))
-                    .map_err(release_transaction_error)?;
+                // Workflow #383 AO-3 (§3, G15 until AO-4): the joint record passes the host's
+                // capture point.
+                let outcome = self.capture_committed_under_gate(draft, |ledger, draft| {
+                    ledger
+                        .append_transaction(draft, Box::new(ReleaseTransaction { state: Ok(work) }))
+                        .map_err(release_transaction_error)
+                })?;
                 self.observe_device_diagnostics_under_fact_gate(&outcome)?;
                 self.synchronize_fact_store_under_gate()?;
                 drop(fact_gate);
@@ -118,6 +121,9 @@ impl HostShared {
                 .ledger
                 .append(plan.intent().clone())
                 .map_err(release_ledger_error)?;
+            // Workflow #383 AO-3 (§3, G15 until AO-4): each transition record passes the host's
+            // capture point's observation step.
+            self.defer_observation(&intent)?;
             let state = self
                 .state
                 .prepare_release_transition(&preview, &intent)
@@ -171,13 +177,16 @@ impl HostShared {
                             format!("{error}; detail={:?}", error.detail()),
                         )
                     })?;
+                    self.defer_observation(&failed)
+                        .map_err(|error| release_failure_error(&original, error))?;
                     self.synchronize_fact_store()
                         .and_then(|()| self.observe_pipeline_event(&failed))
                         .map_err(|error| release_failure_error(&original, error))?;
                     return Err(original);
                 }
             };
-            self.synchronize_fact_store()
+            self.defer_observation(&outcome)
+                .and_then(|()| self.synchronize_fact_store())
                 .and_then(|()| self.observe_pipeline_event(&outcome))
                 .map_err(RuntimeHostError::into_fatal)?;
             Ok(manifest)

@@ -7149,6 +7149,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "fact_store_not_live": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "Workflow #383 AO-3: an invariant of the instance fact store's mode broke. Until business opens the store follows the ledger; from then on it is live (contracts/ledger-observer.md section 3). A live change reached the store before it went live, or the store went live twice or with a replayed invalidation not yet written. The Runtime stops (fatal).",
+      "common_causes": "A defect in the Runtime: a write path that bypasses the host's capture point, or a start order that opens business before the store went live.",
+      "handling": "Report it with the daemon log; restart actingd."
+    },
     "fact_store_query_failed": {
       "category": "error",
       "ladder_class": "none",

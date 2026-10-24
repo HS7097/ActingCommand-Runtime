@@ -136,6 +136,7 @@ impl HostShared {
             sequence,
             previous_version,
             replayed,
+            ..
         } = self.publish_facts(
             FactObservation {
                 records: vec![record],
@@ -143,6 +144,15 @@ impl HostShared {
             Some(validated),
             FactPublicationPurpose::ResourceTargets,
         )?;
+        // Workflow #383 AO-3: a resource target policy's capture waited for its commit, so its
+        // receipt still carries the ledger sequence (until AO-4).
+        let sequence = sequence.ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::FactPublicationSequenceMissing,
+                RESOURCE_TARGETS_OPERATION,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(TerminalEvent { sequence, event_id }),
@@ -240,12 +250,13 @@ impl HostShared {
                     instance_id: instance.instance_id.clone(),
                 };
                 let store = lock(&self.facts, HostLocation::ResourceTargetViewActivePolicy)?;
-                let (_, version, event_id) = store
+                let (version, event_id) = store
                     .active_revision(&scope, RESOURCE_TARGETS_FACT_KEY)
-                    .filter(|(record, _, _)| {
+                    .filter(|active| {
                         stored.policy_sha256.strip_prefix("sha256:")
-                            == Some(record.resource_bundle_hash.as_str())
+                            == Some(active.record.resource_bundle_hash.as_str())
                     })
+                    .and_then(|active| active.sequence.map(|version| (version, active.event_id)))
                     .ok_or_else(|| {
                         RuntimeHostError::request(
                             HostCode::ResourceTargetViewPolicyInconsistent,

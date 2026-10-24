@@ -4163,7 +4163,10 @@ fn b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_con
 
 /// Production sites in crates/runtime-host/src that write instance fact store state (the
 /// store's mutating methods and constructor, and every fact payload construction), with
-/// whether a `fact_write_gate` guard is held in scope: (row, reason).
+/// whether a `fact_write_gate` guard is held in scope: (row, reason). Workflow #383 AO-3
+/// (`contracts/ledger-observer.md` §3): the store applies first through its single entry and
+/// the change is captured after; the `*_under_gate` functions run inside a caller's hold of the
+/// gate.
 const INSTANCE_FACT_WRITE_SITES: &[(&str, &str)] = &[
     (
         "crates/runtime-host/src/host.rs::RuntimeHost::start_with_provider -> InstanceFactStore::recover [no fact_write_gate]",
@@ -4174,12 +4177,44 @@ const INSTANCE_FACT_WRITE_SITES: &[(&str, &str)] = &[
         "the single fact publication entry, for PublishFact and PublishFacts alike",
     ),
     (
-        "crates/runtime-host/src/host/facts.rs::HostShared::synchronize_fact_store_under_gate -> FactPayloadDraft::invalidated [no fact_write_gate]",
-        "event-driven invalidation during ledger replay; its callers hold the gate",
+        "crates/runtime-host/src/host/facts.rs::HostShared::publish_facts -> apply_publication [fact_write_gate held]",
+        "Workflow #383 AO-3: the publication's store revision, applied before its capture",
     ),
     (
-        "crates/runtime-host/src/host/facts.rs::HostShared::invalidate_adjusted_fact -> FactPayloadDraft::invalidated [fact_write_gate held]",
+        "crates/runtime-host/src/host/facts.rs::HostShared::publish_facts -> settle_publication [fact_write_gate held]",
+        "Workflow #383 AO-3: the publication's record takes its capture place",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::invalidate_adjusted_fact -> apply_adjustment_invalidation [fact_write_gate held]",
         "Workflow #384 D2-S3: a run's confirmed adjustment that read no new value drops the key's record (D2 model §3.6)",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::observe_store_under_gate -> observe_trigger [no fact_write_gate]",
+        "Workflow #383 AO-3 (§3 step 2): a committed record reaches the store at the fan-out point; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::drain_deferred_observations_under_gate -> observe_trigger [no fact_write_gate]",
+        "Workflow #383 AO-3: records written outside the fan-out point reach the store in ledger order; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::capture_deferred_under_gate -> observe_trigger [no fact_write_gate]",
+        "Workflow #383 AO-3 (G16): the close summary reaches the store at its capture; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::capture_invalidations_under_gate -> FactPayloadDraft::invalidated [no fact_write_gate]",
+        "Workflow #383 AO-3 (§3 step 3): the store's invalidations are captured after their trigger; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::capture_invalidations_under_gate -> settle_invalidation [no fact_write_gate]",
+        "Workflow #383 AO-3: an invalidation's record takes its capture place; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::open_live_fact_stores -> go_live [fact_write_gate held]",
+        "Workflow #383 AO-3: the store's lineage opens when business opens",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::synchronize_fact_store_under_gate -> FactPayloadDraft::invalidated [no fact_write_gate]",
+        "event-driven invalidation during ledger replay; its callers hold the gate",
     ),
     (
         "crates/runtime-host/src/host/facts.rs::HostShared::synchronize_fact_store_under_gate -> acknowledge_generated_invalidation [no fact_write_gate]",

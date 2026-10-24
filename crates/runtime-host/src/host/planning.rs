@@ -82,17 +82,20 @@ impl HostShared {
             )?;
             let draft = self.events.sanitize(draft)?;
             let attempt_event_id = *draft.event_id();
-            let persisted = self
-                .ledger
-                .append_transaction(draft, Box::new(work))
-                .map_err(|error| {
-                    let error = crate::policy_host::planning_transaction_error(error);
-                    let context = error.clone().with_native_detail(format!(
-                        "event_id={attempt_event_id:?}; attempted_sequence={:?}",
-                        staged_quota.attempted_sequence()
-                    ));
-                    error.with_related_failure("planning_attempt", &context)
-                })?;
+            // Workflow #383 AO-3 (§3, G15 until AO-4): the joint record passes the host's capture
+            // point.
+            let persisted = self.capture_committed_under_gate(draft, |ledger, draft| {
+                ledger
+                    .append_transaction(draft, Box::new(work))
+                    .map_err(|error| {
+                        let error = crate::policy_host::planning_transaction_error(error);
+                        let context = error.clone().with_native_detail(format!(
+                            "event_id={attempt_event_id:?}; attempted_sequence={:?}",
+                            staged_quota.attempted_sequence()
+                        ));
+                        error.with_related_failure("planning_attempt", &context)
+                    })
+            })?;
             committed_signal = Some((*persisted.event_id(), persisted.sequence()));
             policy.publish_planning_signal(staged_quota);
             // Workflow #411 B15 R4 (model-b15 §7.8): a remedy stop, lift or expiry is part of
@@ -138,7 +141,7 @@ impl HostShared {
             let _gate = lock(&self.agent_write_gate, HostLocation::RecordAgentWake)?;
             let mut agent = lock(&self.agent_dispatcher, HostLocation::RecordAgentWake)?;
             if !agent.has_wake_for_trigger(persisted.event_id()) {
-                append_agent_wake(
+                let wake = append_agent_wake(
                     &mut agent,
                     &self.ledger,
                     &self.events,
@@ -147,6 +150,9 @@ impl HostShared {
                     instance_id,
                     kind,
                 )?;
+                // Workflow #383 AO-3 (§3, G12 until AO-4): the wake record passes the capture's
+                // observation step.
+                self.defer_observation(&wake)?;
             }
             Ok(())
         })()

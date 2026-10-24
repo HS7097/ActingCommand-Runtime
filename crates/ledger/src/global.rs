@@ -2132,6 +2132,34 @@ impl GlobalLedger {
         self.append_request(draft, false).0
     }
 
+    /// Workflow #383 AO-3 (`contracts/ledger-observer.md` §8.1, §8.3): a direct append of a
+    /// registered revisioned source's record, which carries its (source, lineage, revision) as
+    /// every captured record of that source does; its caller waits for the commit as with
+    /// [`Self::append`]. The host's capture point uses it for a store change whose receipt still
+    /// names the ledger sequence until AO-4.
+    pub fn append_with_source(
+        &self,
+        draft: SanitizedEventDraft,
+        source: actingcommand_contract::SourceRevision,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        self.writer_ready(LedgerLocation::AppendEvent.location())?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.queue.capture_draft_from_source(
+            draft,
+            source,
+            capture::Reply::Append {
+                response,
+                observation: None,
+            },
+        );
+        receive_response(
+            receiver,
+            LedgerLocation::AppendEvent.location(),
+            self.reply_timeout,
+        )?
+        .0
+    }
+
     /// Observes the same append and returns its original result unchanged.
     /// Queue rejection or a missing reply leaves inner spans unobserved/incomplete.
     /// Response transport, caller wakeup and later subscription delivery are outside

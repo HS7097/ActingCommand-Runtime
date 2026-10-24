@@ -539,31 +539,73 @@ impl HostShared {
     }
 }
 
-pub(super) fn append_runtime_start_event(
-    ledger: &GlobalLedger,
-    events: &RuntimeEvents,
-    state_root: &Path,
-    takeover: bool,
-    device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
-) -> RuntimeHostResult<()> {
-    let payload = RuntimePayloadDraft::start_with_device_diagnostics(
-        takeover,
-        device_diagnostic_mode,
-        audit_path(state_root),
-    );
-    let draft = events.draft(
-        EventSeverity::Info,
-        EventSource::Runtime,
-        OriginModule::Runtime,
-        EventActor::Runtime,
-        EventLinksDraft::default(),
-        payload,
-    )?;
-    let draft = events.sanitize(draft)?;
-    ledger
-        .append(draft)
+impl HostShared {
+    /// Workflow #383 AO-3, G16 (`contracts/ledger-observer.md` §4, §12): `runtime.started` or
+    /// `runtime.takeover`, through the host's capture point under `fact_write_gate`, so a fact
+    /// whose `invalidate_on` names it is invalidated by it. Its capture waits for the commit:
+    /// business opens only after the start records are committed.
+    pub(super) fn append_runtime_start_event(
+        &self,
+        state_root: &Path,
+        takeover: bool,
+        device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
+    ) -> RuntimeHostResult<()> {
+        let payload = RuntimePayloadDraft::start_with_device_diagnostics(
+            takeover,
+            device_diagnostic_mode,
+            audit_path(state_root),
+        );
+        let draft = self.events.draft(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            EventLinksDraft::default(),
+            payload,
+        )?;
+        let draft = self.events.sanitize(draft)?;
+        let _gate = lock(&self.fact_write_gate, HostLocation::AppendRuntimeStart)?;
+        self.capture_committed_under_gate(draft, |ledger, draft| {
+            ledger
+                .append(draft)
+                .map_err(|_| ledger_error(HostLocation::AppendRuntimeStart))
+        })
         .map(|_| ())
-        .map_err(|_| ledger_error(HostLocation::AppendRuntimeStart))
+    }
+
+    /// Workflow #383 AO-3, G16: one `runtime.instance_bound` per registered instance, in
+    /// instance_id order, each through the host's capture point.
+    pub(super) fn append_instance_binding_events(
+        &self,
+        instances: &BTreeMap<InstanceId, RegisteredInstance>,
+    ) -> RuntimeHostResult<()> {
+        let _gate = lock(
+            &self.fact_write_gate,
+            HostLocation::AppendRuntimeInstanceBound,
+        )?;
+        for instance in instances.values() {
+            let links = self.events.system_links()?.with_instance_id(
+                self.events
+                    .issuer()
+                    .issue_registered_instance(instance.instance_id),
+            );
+            let draft = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                instance_bound_payload(instance),
+            )?;
+            let draft = self.events.sanitize(draft)?;
+            self.capture_committed_under_gate(draft, |ledger, draft| {
+                ledger
+                    .append(draft)
+                    .map_err(|_| ledger_error(HostLocation::AppendRuntimeInstanceBound))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 /// The `runtime.instance_bound` payload of one registered instance: a pending discovery
@@ -605,34 +647,6 @@ pub(super) fn instance_bound_payload(instance: &RegisteredInstance) -> RuntimePa
         device,
         AuditInput::new(),
     )
-}
-
-/// Records one `runtime.instance_bound` fact per registered instance, in instance_id order.
-pub(super) fn append_instance_binding_events(
-    ledger: &GlobalLedger,
-    events: &RuntimeEvents,
-    instances: &BTreeMap<InstanceId, RegisteredInstance>,
-) -> RuntimeHostResult<()> {
-    for instance in instances.values() {
-        let links = events.system_links()?.with_instance_id(
-            events
-                .issuer()
-                .issue_registered_instance(instance.instance_id),
-        );
-        let draft = events.draft(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links,
-            instance_bound_payload(instance),
-        )?;
-        let draft = events.sanitize(draft)?;
-        ledger
-            .append(draft)
-            .map_err(|_| ledger_error(HostLocation::AppendRuntimeInstanceBound))?;
-    }
-    Ok(())
 }
 
 pub(super) fn record_failure(slot: &mut Option<RuntimeHostError>, result: RuntimeHostResult<()>) {

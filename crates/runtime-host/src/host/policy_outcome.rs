@@ -36,7 +36,7 @@ impl HostShared {
             if eligible.is_empty() {
                 return Ok(());
             }
-            reconcile_scheduled_policy_outcomes_for(
+            let continued = reconcile_scheduled_policy_outcomes_for(
                 &mut policy,
                 &self.ledger,
                 eligible
@@ -46,6 +46,12 @@ impl HostShared {
                     .collect(),
                 None,
             )?;
+            // Workflow #383 AO-3 (`contracts/ledger-observer.md` §3): the records the ledger's
+            // settlement continuation returned pass the host's capture point's observation step
+            // until AO-4 retires the continuation.
+            for completion in &continued {
+                self.defer_observation(completion)?;
+            }
             let pending_completions = policy
                 .pending_dispatch_completions()
                 .into_iter()
@@ -60,6 +66,9 @@ impl HostShared {
                         .ledger
                         .reconcile_scheduled_policy_settlement(execution)
                         .map_err(|_| ledger_error(HostLocation::ReconcilePolicySettlements))?;
+                    // Workflow #383 AO-3 (§3): the continuation's record passes the observation
+                    // step.
+                    self.defer_observation(&completion)?;
                     policy
                         .complete_dispatch(&decision_id, &completion)
                         .map_err(RuntimeHostError::into_fatal)?;
@@ -1903,18 +1912,22 @@ fn reconcile_scheduled_policy_outcomes(
     start: &mut StartSettlement,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
-    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, Some(start))
+    // The start's replaying instance fact store takes the continuation's records from the
+    // ledger itself (Workflow #383 AO-3).
+    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, Some(start)).map(|_| ())
 }
 
-/// `start`: the start's settlement context (`None` online).
+/// `start`: the start's settlement context (`None` online). Returns the records the ledger's
+/// settlement continuation committed, for the host's capture point (Workflow #383 AO-3, §3).
 fn reconcile_scheduled_policy_outcomes_for(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     pending: Vec<String>,
     mut start: Option<&mut StartSettlement>,
-) -> RuntimeHostResult<()> {
+) -> RuntimeHostResult<Vec<PersistedEvent>> {
+    let mut continued = Vec::new();
     if pending.is_empty() {
-        return Ok(());
+        return Ok(continued);
     }
     // Every read below is pinned to one position and goes through an index (Workflow #317
     // rf2), never the whole ledger; the original predicates still select the events.
@@ -2189,6 +2202,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             policy
                 .complete_dispatch(&decision_id, &completion)
                 .map_err(RuntimeHostError::into_fatal)?;
+            continued.push(completion);
             Ok(())
         })();
         // Workflow #369 E3 (coordinator ruling on #670, safety net): at start, a run whose
@@ -2209,7 +2223,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             }
         }
     }
-    Ok(())
+    Ok(continued)
 }
 
 fn scheduled_admission_release_matches(

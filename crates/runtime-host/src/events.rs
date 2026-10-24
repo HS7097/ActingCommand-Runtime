@@ -5,8 +5,8 @@ use crate::{RuntimeClock, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ActionId, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
-    EventSeverity, EventSource, IdentifierIssuer, InstanceId, LeaseId, LeaseToken, OriginModule,
-    RuntimeErrorCode, RuntimeOperation, RuntimeRequest, SanitizedEventDraft,
+    EventSeverity, EventSource, IdentifierIssuer, InstanceId, IssuedEventId, LeaseId, LeaseToken,
+    OriginModule, RuntimeErrorCode, RuntimeOperation, RuntimeRequest, SanitizedEventDraft,
     ValidatedRuntimeRequest,
 };
 use actingcommand_ledger::Sha256SecretFingerprinter;
@@ -51,6 +51,12 @@ impl RuntimeEvents {
 
     pub(crate) const fn fingerprinter(&self) -> &Sha256SecretFingerprinter {
         &self.fingerprinter
+    }
+
+    /// Workflow #383 AO-3: an event id issued for a record the host hands to the capture
+    /// interface, which may be linked at once (`contracts/ledger-observer.md` §2.1, §13).
+    pub(crate) fn issue_event_id(&self) -> RuntimeHostResult<IssuedEventId> {
+        self.issuer.mint_event_id().map_err(|_| id_error())
     }
 
     pub(crate) fn action_id(&self) -> RuntimeHostResult<ActionId> {

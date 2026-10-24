@@ -242,7 +242,9 @@ impl HostShared {
                 .append(plan.intent().clone())
                 .map_err(|error| crate::policy_host::catalog_ledger_error(&error))?;
             // Workflow #383 AO-7: each committed catalog transition record wakes the driver.
-            self.policy_wakes.raise(intent.event_type());
+            // Workflow #383 AO-3 (§3, G15 until AO-4): each passes the host's capture point's
+            // observation step, which raises the wake.
+            self.defer_observation(&intent)?;
             let work = policy.prepare_active_transaction(&catalog, expected_active_hash.as_deref());
             let success = self.events.draft(
                 EventSeverity::Info,
@@ -339,7 +341,7 @@ impl HostShared {
                     drop(policy);
                     match failed {
                         Ok(event) => {
-                            self.policy_wakes.raise(event.event_type());
+                            self.defer_observation(&event)?;
                             if original.is_fatal() {
                                 self.fatal.mark(original.clone())?;
                             }
@@ -362,7 +364,7 @@ impl HostShared {
             };
             policy.publish_active(catalog);
             drop(policy);
-            self.policy_wakes.raise(outcome.event_type());
+            self.defer_observation(&outcome)?;
             let post = self
                 .synchronize_fact_store()
                 .and_then(|()| self.observe_pipeline_event(&outcome));
