@@ -1688,6 +1688,30 @@ pub enum ResourceReadingType {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dictionary: Option<IntegerDictionary>,
     },
+    /// SCH-M CF-2: a completion time read as a countdown. `format` is required and must be
+    /// `clock_hms` (`H:MM:SS`, the time left in seconds); the time is that countdown added to
+    /// `base`, the device capture time of the frame the reading was taken on.
+    TimestampMs {
+        format: OcrUnsignedIntegerFormat,
+        base: ResourceReadingTimeBase,
+    },
+}
+
+/// SCH-M CF-2: what a `timestamp_ms` reading's countdown is added to. The closed set has one
+/// member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceReadingTimeBase {
+    /// The device capture time of the frame the reading was taken on.
+    Observation,
+}
+
+impl ResourceReadingType {
+    /// SCH-M CF-2: whether the reading is a completion time (`timestamp_ms`), whose parsed value
+    /// is a countdown in seconds that the frame's capture time is added to.
+    pub fn is_timestamp(&self) -> bool {
+        matches!(self, Self::TimestampMs { .. })
+    }
 }
 
 impl ResourceReadingDeclaration {
@@ -1712,10 +1736,14 @@ impl ResourceReadingDeclaration {
         // Workflow #390 READ-1: only a `current_capacity` mark has a capacity to write, under a
         // key of the mark key rule.
         if let Some(capacity_fact_key) = &self.capacity_fact_key {
-            let ResourceReadingType::UnsignedInteger { format, .. } = &self.value;
-            if *format != OcrUnsignedIntegerFormat::CurrentCapacity
-                || !resource_fact_key(capacity_fact_key)
-            {
+            let fraction = matches!(
+                &self.value,
+                ResourceReadingType::UnsignedInteger {
+                    format: OcrUnsignedIntegerFormat::CurrentCapacity,
+                    ..
+                }
+            );
+            if !fraction || !resource_fact_key(capacity_fact_key) {
                 return Err(TaskflowCode::ResourceReadingCapacityFactKeyInvalid.code());
             }
         }
@@ -1725,18 +1753,30 @@ impl ResourceReadingDeclaration {
         if !identifier(&self.target_id) {
             return Err(TaskflowCode::ResourceReadingTargetIdInvalid.code());
         }
-        let ResourceReadingType::UnsignedInteger {
-            min,
-            max,
-            dictionary,
-            ..
-        } = &self.value;
-        if *max > MAX_RESOURCE_READING_VALUE {
-            return Err(TaskflowCode::ResourceReadingValueMaxInvalid.code());
-        }
-        if min > max {
-            return Err(TaskflowCode::ResourceReadingValueMinInvalid.code());
-        }
+        let dictionary = match &self.value {
+            ResourceReadingType::UnsignedInteger {
+                min,
+                max,
+                dictionary,
+                ..
+            } => {
+                if *max > MAX_RESOURCE_READING_VALUE {
+                    return Err(TaskflowCode::ResourceReadingValueMaxInvalid.code());
+                }
+                if min > max {
+                    return Err(TaskflowCode::ResourceReadingValueMinInvalid.code());
+                }
+                dictionary.as_ref()
+            }
+            // SCH-M CF-2: a completion time is read as a countdown `H:MM:SS` only. No code of
+            // its own: the declaration gate names the refused member.
+            ResourceReadingType::TimestampMs { format, .. } => {
+                if *format != OcrUnsignedIntegerFormat::ClockHms {
+                    return Err(SharedCode::ResourceDeclarationInvalid.code());
+                }
+                None
+            }
+        };
         if !(1..=1_000).contains(&self.minimum_confidence_milli) {
             return Err(TaskflowCode::ResourceReadingMinimumConfidenceInvalid.code());
         }
@@ -1746,9 +1786,7 @@ impl ResourceReadingDeclaration {
         // Workflow #411 B1: a dictionary and an agreement follow their declaration rules; a mark
         // writes a fact, so every frame of its agreement must read the value. No code of their
         // own (register §1.163): the declaration gate names the refused member.
-        if dictionary
-            .as_ref()
-            .is_some_and(|dictionary| dictionary.refused_member().is_some())
+        if dictionary.is_some_and(|dictionary| dictionary.refused_member().is_some())
             || self
                 .agreement
                 .is_some_and(|agreement| agreement.refused_member(true).is_some())
@@ -1767,23 +1805,31 @@ impl ResourceReadingDeclaration {
     /// Workflow #390 READ-1: parses one observed text as [`Self::parse`] does and, for a mark
     /// that declares `capacity_fact_key`, also returns the capacity, which must fit an exact
     /// JSON integer (`0..=2^53-1`, else `OutOfRange`); without that key, `capacity` is `None`.
+    /// SCH-M CF-2: a `timestamp_ms` mark's value is its countdown in seconds, read by its
+    /// format (`clock_hms`); the frame's capture time is added to it where the reading is
+    /// published.
     pub fn parse_parts(&self, text: &str) -> Result<OcrUnsignedIntegerParts, OcrFieldReason> {
         let text = match self.trim {
             OcrFieldTrim::WhitespaceV1 => text.trim(),
         };
-        let ResourceReadingType::UnsignedInteger {
-            min,
-            max,
-            format,
-            dictionary,
-        } = &self.value;
+        let (min, max, format, dictionary) = match &self.value {
+            ResourceReadingType::UnsignedInteger {
+                min,
+                max,
+                format,
+                dictionary,
+            } => (*min, *max, *format, dictionary.as_ref()),
+            ResourceReadingType::TimestampMs { format, .. } => {
+                (0, MAX_RESOURCE_READING_VALUE, *format, None)
+            }
+        };
         // Workflow #411 B1: the mark's dictionary, after the trim and before the parser.
         let text = match dictionary {
             Some(dictionary) => dictionary.apply(text)?,
             None => std::borrow::Cow::Borrowed(text),
         };
         let parts = format.parse_parts(&text)?;
-        if parts.value < *min || parts.value > *max {
+        if parts.value < min || parts.value > max {
             return Err(OcrFieldReason::OutOfRange);
         }
         let capacity = match (&self.capacity_fact_key, parts.capacity) {

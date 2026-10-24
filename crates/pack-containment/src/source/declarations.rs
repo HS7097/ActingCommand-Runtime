@@ -3499,26 +3499,49 @@ impl Declaration<'_> {
                 ));
             }
             let value_pointer = child(&pointer, "value");
+            // SCH-M CF-2: `base` is a member of a completion time (`timestamp_ms`) only.
             let value_type = self.object(
                 &object["value"],
                 &value_pointer,
-                &["type", "min", "max", "format", "dictionary"],
+                &["type", "min", "max", "format", "dictionary", "base"],
             )?;
             let kind = self.required(value_type, &value_pointer, "type")?;
             self.string(kind, &child(&value_pointer, "type"))?;
-            if kind.as_str() != Some("unsigned_integer") {
+            let timestamp = match kind.as_str() {
+                Some("unsigned_integer") => false,
+                Some("timestamp_ms") => true,
+                _ => {
+                    return Err(self.error(
+                        &child(&value_pointer, "type"),
+                        ResourceDeclarationReason::InvalidValue,
+                    ));
+                }
+            };
+            let foreign: &[&str] = if timestamp {
+                &["min", "max", "dictionary"]
+            } else {
+                &["base"]
+            };
+            if let Some(member) = foreign
+                .iter()
+                .find(|member| value_type.contains_key(**member))
+            {
                 return Err(self.error(
-                    &child(&value_pointer, "type"),
-                    ResourceDeclarationReason::InvalidValue,
+                    &child(&value_pointer, member),
+                    ResourceDeclarationReason::UnknownField,
                 ));
             }
-            for field in ["min", "max"] {
-                self.unsigned(
-                    self.required(value_type, &value_pointer, field)?,
-                    &child(&value_pointer, field),
-                )?;
+            if timestamp {
+                self.timestamp_reading_value(value_type, &value_pointer)?;
+            } else {
+                for field in ["min", "max"] {
+                    self.unsigned(
+                        self.required(value_type, &value_pointer, field)?,
+                        &child(&value_pointer, field),
+                    )?;
+                }
             }
-            if let Some(format) = value_type.get("format") {
+            if let Some(format) = value_type.get("format").filter(|_| !timestamp) {
                 let format_pointer = child(&value_pointer, "format");
                 self.string(format, &format_pointer)?;
                 if serde_json::from_value::<actingcommand_contract::OcrUnsignedIntegerFormat>(
@@ -3613,6 +3636,36 @@ impl Declaration<'_> {
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// SCH-M CF-2: the `value` of a completion-time mark (`timestamp_ms`): `format` is required
+    /// and must be `clock_hms`, and `base` is required and must be `observation`; each is
+    /// refused at its member.
+    fn timestamp_reading_value(
+        &self,
+        value_type: &Map<String, Value>,
+        value_pointer: &str,
+    ) -> CliOutcome<()> {
+        let format_pointer = child(value_pointer, "format");
+        let format = self.required(value_type, value_pointer, "format")?;
+        self.string(format, &format_pointer)?;
+        if serde_json::from_value::<actingcommand_contract::OcrUnsignedIntegerFormat>(
+            format.clone(),
+        )
+        .ok()
+            != Some(actingcommand_contract::OcrUnsignedIntegerFormat::ClockHms)
+        {
+            return Err(self.error(&format_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        let base_pointer = child(value_pointer, "base");
+        let base = self.required(value_type, value_pointer, "base")?;
+        self.string(base, &base_pointer)?;
+        if serde_json::from_value::<actingcommand_contract::ResourceReadingTimeBase>(base.clone())
+            .is_err()
+        {
+            return Err(self.error(&base_pointer, ResourceDeclarationReason::InvalidValue));
         }
         Ok(())
     }

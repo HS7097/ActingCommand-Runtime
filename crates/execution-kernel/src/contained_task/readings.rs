@@ -18,6 +18,7 @@ use actingcommand_recognition_pack::{
     OcrObservationEvaluation, RecognitionPackResult, RememberedOcrObservations, k_of_n_value,
 };
 use std::sync::mpsc;
+use std::time::UNIX_EPOCH;
 
 /// The recognition results of one handed-off frame, one per mark in mark order.
 type MarkResults = Vec<RecognitionPackResult<OcrObservationEvaluation>>;
@@ -192,17 +193,26 @@ pub fn judge_resource_reading(
     Ok(readings)
 }
 
+/// One frame's judgement of a mark with an agreement: the frame's device capture time and what
+/// the mark read on it.
+type AgreementJudgement = (
+    SystemTime,
+    Result<Vec<ResourceReadingValue>, ResourceReadingProblem>,
+);
+
 /// Workflow #411 B1 (B-train plan §2.1 items 2 and 3, register §1.163): a mark with an
 /// agreement, from its judgements on its frames, the handed-off frame first: it holds only when
 /// every frame read the same readings (its `k` is `frames`), and its readings are the handed-off
 /// frame's at the lowest confidence of its frames. A frame whose recognition failed or did not
 /// return gives that problem; any other difference is `no_agreement`. There is no default and
-/// no last value.
+/// no last value. SCH-M CF-2: a completion-time mark's frames agree on the instants they convert
+/// to ([`instants_agree`]), not on the countdowns they show.
 fn agreed_readings(
+    declaration: &ResourceReadingDeclaration,
     agreement: IntegerAgreement,
-    frames: Vec<Result<Vec<ResourceReadingValue>, ResourceReadingProblem>>,
+    frames: Vec<AgreementJudgement>,
 ) -> Result<Vec<ResourceReadingValue>, ResourceReadingProblem> {
-    if let Some(problem) = frames.iter().find_map(|frame| match frame {
+    if let Some(problem) = frames.iter().find_map(|(_, frame)| match frame {
         Err(
             problem
             @ (ResourceReadingProblem::ProviderFailed | ResourceReadingProblem::JoinTimeout),
@@ -211,29 +221,32 @@ fn agreed_readings(
     }) {
         return Err(problem);
     }
-    let values = frames.iter().map(|frame| {
-        frame.as_ref().ok().map(|readings| {
-            readings
-                .iter()
-                .map(|reading| reading.value)
-                .collect::<Vec<_>>()
-        })
-    });
-    if frames.len() != agreement.frame_count()
-        || k_of_n_value(values, agreement.required()).is_none()
-    {
+    let agreed = if declaration.value.is_timestamp() {
+        instants_agree(agreement, &frames)
+    } else {
+        let values = frames.iter().map(|(_, frame)| {
+            frame.as_ref().ok().map(|readings| {
+                readings
+                    .iter()
+                    .map(|reading| reading.value)
+                    .collect::<Vec<_>>()
+            })
+        });
+        k_of_n_value(values, agreement.required()).is_some()
+    };
+    if frames.len() != agreement.frame_count() || !agreed {
         return Err(ResourceReadingProblem::NoAgreement);
     }
     let confidence_milli = frames
         .iter()
-        .flatten()
+        .filter_map(|(_, frame)| frame.as_ref().ok())
         .flatten()
         .map(|reading| reading.confidence_milli)
         .min();
     let mut readings = frames
         .into_iter()
         .next()
-        .and_then(Result::ok)
+        .and_then(|(_, frame)| frame.ok())
         .ok_or(ResourceReadingProblem::NoAgreement)?;
     if let Some(confidence_milli) = confidence_milli {
         for reading in &mut readings {
@@ -241,6 +254,32 @@ fn agreed_readings(
         }
     }
     Ok(readings)
+}
+
+/// SCH-M CF-2 (frozen model D-9): the frames of a completion-time mark agree when each gave its
+/// reading and the instants they convert to, each frame's capture time plus the countdown it
+/// showed, lie within (frames - 1) × `interval_ms` + 1000 ms of one another (the latest minus
+/// the earliest), so a running countdown agrees with itself.
+fn instants_agree(agreement: IntegerAgreement, frames: &[AgreementJudgement]) -> bool {
+    let instants = frames
+        .iter()
+        .map(|(captured_at, frame)| {
+            let [reading] = frame.as_ref().ok()?.as_slice() else {
+                return None;
+            };
+            let captured_at_ms = captured_at.duration_since(UNIX_EPOCH).ok()?.as_millis();
+            Some(captured_at_ms + u128::from(reading.value) * 1_000)
+        })
+        .collect::<Option<Vec<u128>>>();
+    let Some(instants) = instants else {
+        return false;
+    };
+    let (Some(earliest), Some(latest)) = (instants.iter().min(), instants.iter().max()) else {
+        return false;
+    };
+    let tolerance =
+        u128::from(agreement.frames.saturating_sub(1)) * u128::from(agreement.interval_ms) + 1_000;
+    latest - earliest <= tolerance
 }
 
 /// Workflow #411 B1: the judgement of the mark at position `mark` of its handed-off frame on one
@@ -701,22 +740,27 @@ impl PreparedContainedTask {
                             )
                             .map_err(ContainedTaskRunError::Boundary)?;
                         let judged = judge_resource_reading(declaration, result);
-                        // Workflow #411 B1: a mark with an agreement holds on all its frames.
+                        // Workflow #411 B1: a mark with an agreement holds on all its frames;
+                        // SCH-M CF-2: each with its capture time.
                         let judged = match declaration.agreement {
                             None => judged,
                             Some(agreement) => agreed_readings(
+                                declaration,
                                 agreement,
-                                std::iter::once(judged)
+                                std::iter::once((frame.captured_at, judged))
                                     .chain(
                                         later
                                             .iter()
                                             .take(agreement.frame_count().saturating_sub(1))
                                             .map(|(agreement_frame, answer)| {
-                                                agreement_frame_judgement(
-                                                    declaration,
-                                                    mark,
-                                                    agreement_frame,
-                                                    answer,
+                                                (
+                                                    agreement_frame.captured_at,
+                                                    agreement_frame_judgement(
+                                                        declaration,
+                                                        mark,
+                                                        agreement_frame,
+                                                        answer,
+                                                    ),
                                                 )
                                             }),
                                     )

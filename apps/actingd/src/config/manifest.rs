@@ -144,6 +144,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCH-M CF-2: this build admits completion-time reading marks (`timestamp_ms`) and
+        // publishes their times; packs that declare one are placed only on a Runtime that names
+        // it.
+        subsystem(
+            "resource_reading_time",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
     let explicit_or_default = |present: bool| {
