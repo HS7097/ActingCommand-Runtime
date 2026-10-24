@@ -530,3 +530,28 @@ fn cf2_an_agreement_compares_the_frames_instants_within_its_tolerance() {
         &vec![(READY_AT.to_owned(), ResourceReadingProblem::NoAgreement)]
     );
 }
+
+// Coordinator ruling of 2026-10-24 on CF-2 (answer to the slice's question 2): a completion time
+// is no amount, so a `resource_adjustments` entry that names the key of a `timestamp_ms` mark is
+// refused at declaration, at that entry's path, with the existing declaration-error code
+// (`resource_declaration_invalid`, `InvalidValue`): an entry read after its operation (no
+// `amount`) and one that reads the change the screen shows (`amount`) alike.
+#[test]
+fn cf2_an_adjustment_of_a_completion_time_key_is_refused_at_its_entry() {
+    for adjustment in [
+        json!({"id": "spent", "fact_key": READY_AT, "operation_id": "open"}),
+        json!({"id": "spent", "fact_key": READY_AT, "operation_id": "open",
+               "amount": {"target_id": "count/countdown", "direction": "consume"}}),
+    ] {
+        let mut task = open_task(vec![countdown_mark(timestamp_value("clock_hms"), None)]);
+        task["resource_adjustments"] = json!([adjustment.clone()]);
+        assert_eq!(
+            refused_at(admit(task)),
+            (
+                "/resource_adjustments/0".to_owned(),
+                format!("{:?}", ResourceDeclarationReason::InvalidValue)
+            ),
+            "{adjustment}"
+        );
+    }
+}
