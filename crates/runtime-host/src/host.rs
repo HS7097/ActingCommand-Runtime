@@ -176,6 +176,8 @@ mod emulator_instance;
 mod emulator_watch;
 mod evidence_export;
 mod facts;
+// ISO-M (#419): the failure scope core, the closed Global list and `contain_failure`.
+pub(crate) mod failure_scope;
 mod failure_settlement;
 mod foreground_gate;
 mod frame_retention;
@@ -1768,6 +1770,8 @@ impl RuntimeHost {
             frame_extent_fault_for_test: AtomicBool::new(false),
             #[cfg(test)]
             ppocr_seal_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            fence_failure_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
@@ -4797,6 +4801,10 @@ struct HostShared {
     // and its seal.
     #[cfg(test)]
     ppocr_seal_hook_for_test: Mutex<Option<PpocrSealTestHook>>,
+    // ISO-M (#419) R0.7, test only: the next fence of a contained failure fails as its ledger
+    // record would.
+    #[cfg(test)]
+    fence_failure_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
