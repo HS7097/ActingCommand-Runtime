@@ -895,3 +895,8 @@ impl PreparedContainedTask {
         Ok(())
     }
 }
+
+// SCH-M CF-2: a countdown mark (`timestamp_ms`) and its agreement over the frames' instants.
+#[cfg(test)]
+#[path = "gate_405_cf2.rs"]
+mod gate_405_cf2;
