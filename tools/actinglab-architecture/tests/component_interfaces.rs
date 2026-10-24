@@ -29,9 +29,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   still read, so [5, 9]. P0-LO (v0.12.11): revision 10 adds
 ///   `ledger_observer.open_timeout_ms` and `ledger_observer.open_warn_ratio_milli`; revisions 5
 ///   to 9 are still read, so [5, 10]. #411 A64 (v0.12.12, ruling C-43): revision 11 adds
-///   `host_claims.run_end_grace_ms`, and PERF-B1 (Workflow #407 B1, register §1.177, same
-///   release) adds to it the optional `execution` section; revisions 5 to 10 are still read, so
-///   [5, 11].
+///   `host_claims.run_end_grace_ms`, PERF-B1 (Workflow #407 B1, register §1.177, same
+///   release) adds to it the optional `execution` section, and SCH-M ED-1 (register §1.178,
+///   same release) the expected-duration keys; revisions 5 to 10 are still read, so [5, 11].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
