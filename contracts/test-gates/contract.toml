@@ -381,18 +381,9 @@ incident = []
 key = "A3"
 coverage = "Y"
 tests = [
-    "actingcommand-actinglab-architecture::workspace_guards::b2_new_artifact_bytes_pass_the_single_capacity_predicate",
-    "actingcommand-actinglab-architecture::workspace_guards::b2_an_absent_admission_handle_refuses_with_a_distinct_code",
-    "actingcommand-actinglab-architecture::workspace_guards::b2_business_capacity_admission_has_a_named_caller_set",
     "actingcommand-actinglab-architecture::workspace_guards::b3_every_runtime_operation_has_an_explicit_origin_category",
     "actingcommand-actinglab-architecture::workspace_guards::b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection",
-    "actingcommand-actinglab-architecture::workspace_guards::b3_fact_publication_reaches_the_store_through_one_gated_entry",
-    "actingcommand-actinglab-architecture::workspace_guards::b4_planning_envelopes_are_validated_by_their_single_decoding_entry",
-    "actingcommand-actinglab-architecture::workspace_guards::b4_planning_envelope_sites_match_the_responsibility_table",
-    "actingcommand-actinglab-architecture::workspace_guards::b5_runtime_database_file_and_key_have_a_named_constructor_table",
     "actingcommand-actinglab-architecture::workspace_guards::b5_forensic_read_chain_reaches_no_write_entry",
-    "actingcommand-actinglab-architecture::workspace_guards::b5_vendor_stdio_diagnostics_are_constructed_in_the_device_domain_only",
-    "actingcommand-actinglab-architecture::workspace_guards::b6_host_split_modules_match_their_typed_owner_and_delegation_table",
 ]
 incident = []
 
@@ -403,7 +394,7 @@ coverage = "Y"
 tests = [
     "actingcommand-actinglab-architecture::workspace_guards::c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral",
     "actingcommand-actinglab-architecture::workspace_guards::r2f_product_and_authoring_paths_have_no_builtin_game_identity",
-    "actingcommand-actinglab-architecture::workspace_guards::r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture",
+    "actingcommand-actinglab-architecture::workspace_guards::r35_the_contained_task_request_carries_no_application_identity",
 ]
 incident = []
 

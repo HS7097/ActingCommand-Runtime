@@ -13,10 +13,13 @@ attribute (every module job, on the Windows runner)
 check (the `gate` job, check name `rust`, on ubuntu)
     Holds the gate map contracts/test-gates/<module>.toml against the attributed results of every
     module job: each map name runs exactly once per configuration its job runs it in, and passes.
-    A name of ci/flaky-tests.toml is reported as "flaky, skipped". On pull requests the row count
-    of each fragment must not fall below the base branch's, and no row may carry a `key` the base
-    fragment does not hold: a row's key is optional history, a new row carries none (Workflow #420
-    S6). Exits 1 on any violation.
+    A name of ci/flaky-tests.toml is reported as "flaky, skipped". On pull requests the head is
+    held against its merge base with the base branch (a base that moves while the run is under
+    way adds no row the head could lack): a test name or a row `key` the merge base holds and the
+    head does not leaves only when ci/retired-gates.toml lists it (Alice 10-09: a retirement
+    needs its mapping table), and no row may carry a `key` the merge base's fragment does not
+    hold: a row's key is optional history, a new row carries none (Workflow #420 S6). Exits 1 on
+    any violation.
 
 known-unbootable <path> (the `Boot smoke` step of the exact-SHA build, on the Windows runner)
     Validates ci/known-unbootable.toml, the machine-readable copy of Workflow #390 REG-0, and
@@ -35,6 +38,11 @@ from pathlib import Path
 RESULTS_FORMAT = "actingcommand-gate-results/1"
 CI_WORKFLOW = Path(".github/workflows/ci.yml")
 FLAKY_MIRROR = Path("ci/flaky-tests.toml")
+RETIRED_LIST = Path("ci/retired-gates.toml")
+# The members of one retirement entry: the fragment it left, the name or the key that left, and
+# its record (Alice 10-09: a retirement needs its mapping table).
+RETIRED_RECORD = ("covered_by", "reason", "ruling")
+RETIRED_KINDS = ("test", "key")
 GATE_MAP = Path("contracts/test-gates")
 GATE_FRAGMENTS = ("contract", "ledger", "host", "policy", "exec", "apps")
 
@@ -414,6 +422,90 @@ def row_label(module, row):
     return f"{module} row {first}"
 
 
+def row_names(row):
+    names = row.get("tests")
+    return [name for name in names if isinstance(name, str)] if isinstance(names, list) else []
+
+
+def load_retired(tomllib, text, label, violations):
+    """The retirement list as {(fragment, kind, name)}, kind `test` or `key`.
+
+    Each `[[retired]]` entry holds `fragment`, exactly one of `test` (a gate map name) and `key`
+    (a row's old key), and its record `ruling`, `reason` and `covered_by`, each a non-empty
+    string. An entry stays after its pull request merges: the file is the table of what left.
+    """
+    try:
+        document = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        violations.append(f"{label} does not parse: {error}")
+        return set()
+    for key in sorted(set(document) - {"retired"}):
+        violations.append(f"{label}: `{key}`: the file holds only `[[retired]]` entries")
+    entries = document.get("retired", [])
+    if not isinstance(entries, list):
+        violations.append(f"{label}: `retired` is not an array of tables")
+        return set()
+    listed = set()
+    for index, entry in enumerate(entries, 1):
+        at = f"{label} entry {index}"
+        if not isinstance(entry, dict):
+            violations.append(f"{at}: not a table")
+            continue
+        kinds = [kind for kind in RETIRED_KINDS if kind in entry]
+        wanted = sorted(("fragment", *kinds, *RETIRED_RECORD))
+        if len(kinds) != 1 or sorted(entry) != wanted:
+            violations.append(
+                f"{at}: keys {sorted(entry)}; an entry holds `fragment`, exactly one of `test` "
+                "and `key`, and `ruling`, `reason` and `covered_by`"
+            )
+            continue
+        empty = [
+            field for field in wanted if not isinstance(entry[field], str) or not entry[field].strip()
+        ]
+        if empty:
+            violations.append(f"{at}: {', '.join(empty)} is not a non-empty string")
+            continue
+        if entry["fragment"] not in GATE_FRAGMENTS:
+            violations.append(f"{at}: `fragment` {entry['fragment']!r} is not one of {GATE_FRAGMENTS}")
+            continue
+        item = (entry["fragment"], kinds[0], entry[kinds[0]])
+        if item in listed:
+            violations.append(f"{at}: {item[0]} {item[1]} {item[2]} is listed twice")
+        listed.add(item)
+    return listed
+
+
+def left_the_map(base, head):
+    """What the base holds and the head does not, as (fragment, kind, name): a `key` no head row
+    of its fragment holds, and a `test` name no head row of any fragment holds (a name that moved
+    to another row or fragment did not leave). `base` and `head` map a fragment to its rows."""
+    kept_names = {name for rows in head.values() for row in rows for name in row_names(row)}
+    left = {}
+    for module in GATE_FRAGMENTS:
+        if module not in base:
+            continue
+        kept_keys = {row.get("key") for row in head.get(module, [])}
+        for row in base[module]:
+            key = row.get("key")
+            if isinstance(key, str) and key not in kept_keys:
+                left[(module, "key", key)] = None
+            for name in row_names(row):
+                if name not in kept_names:
+                    left[(module, "test", name)] = None
+    return list(left)
+
+
+def retirement_violations(base, head, listed, base_label):
+    """A test name or a row key leaves the gate map only when the retirement list holds it."""
+    return [
+        f"{module}.toml: {kind} {name} is at {base_label} and not at the head; it leaves only when "
+        f"{RETIRED_LIST.as_posix()} lists it with its ruling, its reason and what covers its risk "
+        "(Alice 10-09: a retirement needs its mapping table)"
+        for module, kind, name in left_the_map(base, head)
+        if (module, kind, name) not in listed
+    ]
+
+
 def load_results(results_dir, modules, violations):
     """Job → {(package, target, path, configuration): [result, …]} from the downloaded artifacts."""
     index = {}
@@ -453,12 +545,15 @@ def cmd_check(args):
 
     # 1. Every fragment parses.
     fragments = {}
+    unreadable = set()
     for path in sorted(GATE_MAP.glob("*.toml")):
         if path.stem not in GATE_FRAGMENTS:
             violations.append(f"{path.as_posix()} is not one of the fragments {GATE_FRAGMENTS}")
             continue
         rows = load_fragment(tomllib, path.read_text(encoding="utf-8"), path.as_posix(), violations)
-        if rows is not None:
+        if rows is None:
+            unreadable.add(path.stem)
+        else:
             fragments[path.stem] = rows
     if not fragments:
         violations.append(f"{GATE_MAP.as_posix()} holds no fragment")
@@ -512,8 +607,12 @@ def cmd_check(args):
                             f"{label}: {shown} in job {job} is {', '.join(results)}"
                         )
 
-    # 6. On pull requests the row count of every fragment does not fall below the base's, and no
-    # row carries a key the base fragment does not hold (#420 S6: a new row has no key).
+    # 6. On pull requests, against the merge base of the head and the base branch: the checkout is
+    # the pull request's merge commit, made when the run started, while the base branch can gain
+    # rows before this job fetches it (run 40077624452). A test name or a row key the merge base
+    # holds leaves only when the retirement list holds it (Alice 10-09: a retirement needs its
+    # mapping table), and no row carries a key the merge base's fragment does not hold (#420 S6:
+    # a new row has no key).
     counts = []
     if args.base:
         verified = subprocess.run(
@@ -522,24 +621,37 @@ def cmd_check(args):
         )
         if verified.returncode != 0:
             fail(f"base {args.base} is not a commit in this checkout (fetch-depth: 0?)")
+        merged = subprocess.run(
+            ["git", "merge-base", "HEAD", args.base], capture_output=True, text=True, check=False
+        )
+        if merged.returncode != 0 or not merged.stdout.strip():
+            fail(f"git merge-base HEAD {args.base} failed: {merged.stderr.strip()}")
+        merge_base = merged.stdout.strip()
+        base_label = f"{args.base} merge base {merge_base[:12]}"
+        print(f"base: {base_label}")
+        base = {}
         for module in GATE_FRAGMENTS:
             rows = fragments.get(module, [])
-            old = base_rows(tomllib, args.base, module, violations)
-            head, base = len(rows), len(old)
-            counts.append(f"{module}: head {head} rows, {args.base} {base} rows")
-            if head < base:
-                violations.append(
-                    f"{module}.toml: {head} rows at the head, {base} at {args.base}; a row "
-                    "leaves only when its feature retires (test plan §2.1)"
-                )
+            old = base_rows(tomllib, merge_base, module, violations)
+            counts.append(f"{module}: head {len(rows)} rows, {base_label} {len(old)} rows")
+            if module not in unreadable:
+                base[module] = old
             kept = {row.get("key") for row in old}
             for row in rows:
                 key = row.get("key")
                 if isinstance(key, str) and key not in kept:
                     violations.append(
-                        f"{module}.toml: key {key} is not at {args.base}; a new row carries no "
+                        f"{module}.toml: key {key} is not at {base_label}; a new row carries no "
                         "key, its tests name it (Workflow #420 S6)"
                     )
+        if RETIRED_LIST.is_file():
+            listed = load_retired(
+                tomllib, RETIRED_LIST.read_text(encoding="utf-8"), RETIRED_LIST.as_posix(), violations
+            )
+        else:
+            violations.append(f"{RETIRED_LIST.as_posix()} is missing")
+            listed = set()
+        violations.extend(retirement_violations(base, fragments, listed, base_label))
 
     for job, names in checked.items():
         print(f"::group::{job}: {len(names)} map names checked")

@@ -826,7 +826,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t3_a_main_package_changed_in_place_lifts_after_the_interval_without_a_restart",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t4_only_a_package_the_pause_names_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t5_actingd_suspended_reports_the_paused_and_current_hash_prefixes",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t9_a_restart_rebuilds_the_recorded_hashes_from_the_failure_identity",
 ]
