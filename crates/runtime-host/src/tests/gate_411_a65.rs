@@ -48,17 +48,14 @@ const FILLER_RECORDS: usize = 2 * crate::recovery_read::RECOVERY_PAGE_EVENTS;
 /// Test (a): the restart's read budget, the smallest `ledger_observer.read_budget_ms` takes.
 const READ_BUDGET: Duration = Duration::from_millis(1);
 
-/// Test (a): the restart's ledger writer clock, the process's monotonic milliseconds plus one
-/// for every reading before. Two readings lie at least 1 ms apart, so a read under
-/// `READ_BUDGET` stops at its first look at the clock however fast its rows are read; the close
-/// bound and the stall watch, on the same clock, run no slower than the process's clock.
+/// Test (a): the restart's ledger writer clock, a fake that reads no wall clock (test plan v2.2
+/// §2.1 guard 3): it starts at 0 ms and moves 1 ms each time it is read. Two readings lie 1 ms
+/// apart, so a read under `READ_BUDGET` stops at its first look at the clock however fast its
+/// rows are read. The close bound and the stall watch, on the same clock, measure only its
+/// readings; this start and close are expected to end well before either bound.
 fn one_ms_per_reading_clock() -> LedgerMonotonicClock {
-    let origin = Instant::now();
-    let readings = Arc::new(AtomicU64::new(0));
-    Arc::new(move || {
-        let elapsed_ms = u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX);
-        elapsed_ms.saturating_add(readings.fetch_add(1, Ordering::SeqCst))
-    })
+    let now_ms = Arc::new(AtomicU64::new(0));
+    Arc::new(move || now_ms.fetch_add(1, Ordering::SeqCst))
 }
 
 /// The settlement the requirement asks for: one terminal of `run`, cancelled with
