@@ -220,9 +220,11 @@ fn predecessors_of<'a>(predicate: &'a PredicateSpec, found: &mut Vec<&'a str>) {
                 predecessors_of(predicate, found);
             }
         }
+        // SCH-M CF-1: with or without `since_own_run`.
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
+            ..
         } if terminal_states.contains(&TaskTerminalState::Succeeded) => {
             found.push(task_id.as_str());
         }

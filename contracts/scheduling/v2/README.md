@@ -108,3 +108,20 @@ has come, false with its reason before that or when the fact gives no time
 the member. A V1 document that names the kind is refused as an unknown field at
 the predicate's `kind`. A catalog without it serializes, and hashes, exactly as
 before.
+
+Two edge members (SCH-M CF-1), V2 only, each an optional boolean
+(`../README.md`, "Condition edges"):
+- `dependency_completed` may carry `since_own_run`. With `true` the predicate
+  is an edge: true once per new accepted terminal of the predecessor, until
+  this task has run successfully since the predecessor's latest dispatch
+  (`dependency_already_served` while it has). With `false`, or without the
+  member, it reads the predecessor's latest terminal state as before.
+- `fact_time_reached` may carry `once_per_reading`. With `true` a reached time
+  is served once: after this task's latest run succeeded and was dispatched at
+  or after `T + N` and the reading's observation, the predicate is false
+  (`fact_time_served`) until a newer reading. With `false`, or without the
+  member, it is true from `T + N` on as before.
+
+A V1 document that writes `since_own_run`, with either value, is refused as an
+unknown field at the member; `fact_time_reached` is V2 only as a whole. A
+catalog without either member serializes, and hashes, exactly as before.

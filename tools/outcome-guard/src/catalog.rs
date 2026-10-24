@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The catalog header and the owner fragments: validation, the merge into
-//! `contracts/outcome-codes.json`, naming (G8) and the released contract (G9).
+//! The catalog header and the owner fragments: validation, the merged catalog, naming (G8) and
+//! the released contract (G9).
+//!
+//! The merged catalog is never committed (Workflow #420 S2): the contract crate's `build.rs`
+//! includes this file and embeds [`merged_text`] of the fragments, and `outcome-guard merge`
+//! prints the same text.
 
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,11 +13,11 @@ use std::fs;
 use std::path::Path;
 
 pub const CATALOG_SCHEMA_VERSION: &str = "actingcommand.outcome-codes.v1";
-pub const RELEASE_SCHEMA_VERSION: &str = "actingcommand.outcome-codes.release.v1";
+/// The compact release file (Workflow #420 S3): only the entries a release binds.
+pub const RELEASE_SCHEMA_VERSION: &str = "actingcommand.outcome-codes.release.v2";
 pub const HEADER_FILE: &str = "contracts/outcome-codes/catalog.json";
 pub const FRAGMENT_DIR: &str = "contracts/outcome-codes";
 pub const RELEASED_DIR: &str = "contracts/outcome-codes/released";
-pub const MERGED_FILE: &str = "contracts/outcome-codes.json";
 /// The owner the reserved UI prefixes map to; it owns no Runtime fragment.
 pub const UI_OWNER: &str = "ui";
 /// The prefixes reserved for the UI (spec amendment A-1..A-4): no Runtime code, location or key
@@ -321,24 +325,13 @@ pub fn check_naming(catalog: &Catalog) -> Vec<String> {
     violations
 }
 
-/// G9: the committed merged file equals the merge; released settled entries are kept, and a
-/// released retired entry stays retired.
+/// G9 (Workflow #420 S2): the fragments, already loaded without conflict, merge into one
+/// catalog; released settled entries are kept, and a released retired entry stays retired. No
+/// merged file is read: none is committed.
 pub fn check_contract(root: &Path, catalog: &Catalog) -> Vec<String> {
     let mut violations = Vec::new();
-    match merged_text(catalog) {
-        Err(error) => violations.push(format!("G9 {error}")),
-        Ok(merged) => match fs::read_to_string(root.join(MERGED_FILE)) {
-            Err(error) => violations.push(format!("G9 {MERGED_FILE}: cannot read: {error}")),
-            Ok(committed) => {
-                if committed.replace("\r\n", "\n") != merged {
-                    violations.push(format!(
-                        "G9 {MERGED_FILE} is not the merge of the fragments: commit the \
-                         outcome-codes-<sha> artifact that CI uploaded for this exact head, \
-                         unchanged"
-                    ));
-                }
-            }
-        },
+    if let Err(error) = merged_text(catalog) {
+        violations.push(format!("G9 {error}"));
     }
     let Ok(entries) = fs::read_dir(root.join(RELEASED_DIR)) else {
         return violations;
@@ -365,7 +358,10 @@ pub fn check_contract(root: &Path, catalog: &Catalog) -> Vec<String> {
     violations
 }
 
-/// G9 for one release snapshot against the current catalog.
+/// G9 for one release file against the current catalog. A release file (Workflow #420 S3)
+/// holds only what binds later catalogs: the settled and the retired entries of its release
+/// whose signature no earlier release file holds. Checking every release file is checking every
+/// release's full snapshot, since an entry's check depends only on its own signature.
 pub fn check_snapshot(
     relative: &str,
     snapshot: &Map<String, Value>,
@@ -503,8 +499,8 @@ pub fn parse_release(release: &str) -> Option<((u64, u64, u64), bool)> {
     }
 }
 
-/// The release snapshots a commit holds: the names of the `released/<version>.json` files,
-/// without `.json`. A missing directory holds none.
+/// The releases a commit holds a release file for: the names of the `released/<version>.json`
+/// files, without `.json`. A missing directory holds none.
 pub fn released_versions(root: &Path) -> Result<BTreeSet<String>, String> {
     let entries = match fs::read_dir(root.join(RELEASED_DIR)) {
         Ok(entries) => entries,
@@ -530,9 +526,9 @@ pub fn released_versions(root: &Path) -> Result<BTreeSet<String>, String> {
 
 /// G10, the release half: what releasing `release` asks of the catalog at the release's commit
 /// (model-378 §9 G10, review L14). The catalog half holds for every release. A release `X.Y.Z`
-/// needs its snapshot `released/X.Y.Z.json` among `released` (written by the release PR), and
-/// from v0.13.0 on ([`SETTLED_FROM`]) no code or location may still be pending. A release
-/// candidate is not the release: it needs neither.
+/// needs its release file `released/X.Y.Z.json` among `released` (written by the release PR
+/// with `ci/outcome_release.py`), and from v0.13.0 on ([`SETTLED_FROM`]) no code or location
+/// may still be pending. A release candidate is not the release: it needs neither.
 pub fn check_release(catalog: &Catalog, release: &str, released: &BTreeSet<String>) -> Vec<String> {
     let mut violations = check_review(catalog);
     let Some((version, candidate)) = parse_release(release) else {
@@ -547,7 +543,7 @@ pub fn check_release(catalog: &Catalog, release: &str, released: &BTreeSet<Strin
     if !released.contains(release) {
         violations.push(format!(
             "G10 release {release}: {RELEASED_DIR}/{release}.json is missing; the release PR \
-             writes the snapshot of the catalog it releases"
+             writes it with ci/outcome_release.py"
         ));
     }
     if version >= SETTLED_FROM {
