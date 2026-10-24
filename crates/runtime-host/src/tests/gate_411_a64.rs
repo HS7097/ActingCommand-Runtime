@@ -21,8 +21,9 @@
 //! The fixture is the incident's shape on fakes, on the shipped scheduler (a heartbeat reserve of
 //! 5 s). Both registered instances capture through the Nemu IPC, so every lease end closes the
 //! instance's session (the multi-Nemu gate, `keeps_device_session`), as on the production host.
-//! The policy instance's scheduled run taps and then waits for a page that never comes; the
-//! Runtime clock moves only when the kernel waits, and the first wait after the tap reaches the
+//! The policy instance's scheduled run taps and then waits for a page that never comes
+//! (`deadline_package`: its step timeout, task timeout and step budget all outlast the deadline);
+//! the Runtime clock moves only when the kernel waits, and the first wait after the tap reaches the
 //! run's deadline, so the run ends `contained_task_deadline_exceeded`. A checkpoint hook then
 //! moves the clock on inside the run's end: at its lease end (`FailedRunLeaseEnd`, after its
 //! terminal and before its close) or at the start of its end work (`EndWork`, before the diagnostic
@@ -131,6 +132,105 @@ impl RuntimeClock for DeadlineClock {
     }
 }
 
+/// The scheduled run's package: one tap from `home` that waits for `terminal`, which never comes
+/// on a device that stays on `home`. The tap's confirmation captures a frame every 5 s; its step
+/// timeout (60 s) and its task timeout (120 s) both run past the run's deadline (50 s), and its
+/// step budget (2) is never reached, so the first wait after the tap (which `DeadlineClock` moves
+/// to the deadline) is followed by a capture that ends the run `contained_task_deadline_exceeded`.
+/// The frame is the fenced instance's physical 16x9 extent (`physical_task_geometry`).
+fn deadline_package() -> Vec<u8> {
+    let target = |id: &str, expected: [u8; 3]| {
+        serde_json::json!({
+            "type": "color",
+            "id": id,
+            "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+            "expected": expected
+        })
+    };
+    let page = |id: &str, required: &str| {
+        serde_json::json!({
+            "id": id,
+            "required": [required],
+            "optional": [],
+            "forbidden": []
+        })
+    };
+    let files = [
+        (
+            "control.json",
+            serde_json::json!({
+                "schema_version": "Lab-1y.control.v1",
+                "package_id": "neutral.a64.deadline-task",
+                "execution_mode": "navigable_route",
+                "game": "neutral",
+                "server": "test",
+                "resolution": {"width": 16, "height": 9},
+                "entry_task_id": "task",
+                "capture_interval_ms": 5_000,
+                "step_timeout_ms": 60_000,
+                "timeout_ms": 120_000,
+                "max_steps": 2
+            }),
+        ),
+        (
+            "resources/manifest.json",
+            serde_json::json!({"schema_version": "0.3", "entry_task_id": "task"}),
+        ),
+        (
+            "resources/operations/task/task.json",
+            serde_json::json!({
+                "schema_version": "0.6",
+                "task_id": "task",
+                "game": "neutral",
+                "server_scope": ["test"],
+                "coordinate_space": {"width": 16, "height": 9},
+                "entry_page": "home",
+                "target_page": "terminal",
+                "operations": [{
+                    "id": "open_terminal",
+                    "from": "home",
+                    "to": "terminal",
+                    "click": {"kind": "point", "x": 1, "y": 0},
+                    "unguarded_trusted_coordinate": true,
+                    "retryable": false
+                }]
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pack.json",
+            serde_json::json!({
+                "schema_version": "0.3",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 16, "height": 9},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": [
+                    target("page/home", [255, 0, 0]),
+                    target("page/terminal", [0, 0, 255])
+                ]
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            serde_json::json!({
+                "schema_version": "0.3",
+                "pages": [
+                    page("neutral/home", "page/home"),
+                    page("neutral/terminal", "page/terminal")
+                ]
+            }),
+        ),
+    ];
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (path, value) in files {
+        zip.start_file(path, options).expect("zip entry");
+        zip.write_all(&serde_json::to_vec(&value).expect("package JSON"))
+            .expect("zip content");
+    }
+    zip.finish().expect("finish zip").into_inner()
+}
+
 /// A device configuration whose capture is the Nemu IPC (neutral test values).
 fn nemu_capture(serial: &str) -> EffectiveDeviceConfiguration {
     EffectiveDeviceConfiguration {
@@ -170,7 +270,7 @@ struct Fixture {
 fn fixture() -> Fixture {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("a64-deadline-task.zip");
-    fs::write(&package, neutral_contained_task_package(true)).expect("write package");
+    fs::write(&package, deadline_package()).expect("write package");
     // The fenced instance shows `home` before and after its tap: the run's page never comes.
     let fenced_state = Arc::new(FakeState::default());
     fenced_state
