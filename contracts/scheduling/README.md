@@ -795,7 +795,7 @@ by it.
 
 Workflow #386 (scheduling model v1.4.2 §8; slice SR-6a). Every decision that is not selected
 carries at least one reason, and its last reason is a registered outcome code
-(`contracts/outcome-codes.json`, the policy fragment for the evaluator's own codes): that is the
+(the outcome catalog `contracts/outcome-codes/`, the policy fragment for the evaluator's own codes): that is the
 code `why` names in a dispatch decision record, and it is never `none`. An evaluator path that
 would end a decision without a reason is a programming error: the candidate is still deferred,
 with the reason `decision_reason_missing` (error; `task_id`, `instance_id`), and the round goes
