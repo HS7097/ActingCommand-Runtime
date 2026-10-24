@@ -481,6 +481,7 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.close_timeout_ms` (#411 A51) | milliseconds, above `read_budget_ms` | `60000` | no |
 | `ledger_observer.open_timeout_ms` (P0-LO) | milliseconds `10000..=600000` | `600000` | no |
 | `ledger_observer.open_warn_ratio_milli` (P0-LO) | integer `100..=1000` (thousandths) | `500` | no |
+| `ledger_observer.history_page_rows` (#422 LN-5) | integer `1..=4096` | `256` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -505,6 +506,13 @@ time (the sum of the phases `ledger_opened` reports) exceeds `open_timeout_ms` �
 `timeout_ms`, `event_count`) right after `ledger_opened`
 ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). Both keys
 are read when the ledger opens (not settable); a value outside its range is `config_value_invalid`
+(`out_of_range`).
+
+#422 LN-5 (`actingd-config` revision 11): `history_page_rows` is the rows of one page of a
+history read; the ledger reads its history from SQLite a page at a time, and the Runtime's paged
+history reads take as many events per page, at most a query page's 1 024
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). It is read
+when the ledger opens (not settable); a value outside `1..=4096` is `config_value_invalid`
 (`out_of_range`).
 
 ## The `device_link` section (Workflow #398 RD-2)

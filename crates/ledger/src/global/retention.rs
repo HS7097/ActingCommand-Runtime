@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{GlobalLedgerError, GlobalLedgerResult, projection::EventIndexes};
+use super::history::{PriorRecords, RetentionHistory};
+use super::projection::{EventIndexes, LabKeys};
+use super::{GlobalLedgerError, GlobalLedgerResult};
 use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::{FactValidationError, LedgerEventRead, StoredEventRecord};
 use crate::{ArtifactAvailability, PersistedEvent};
@@ -73,6 +75,8 @@ struct RetainedObject {
     reference: ProjectedArtifactReference,
     last_reference_sequence: u64,
     verified: Option<TerminalEvent>,
+    /// LN-5 (#422): the Lab keys of the `verified` record, which a Lab protection relates.
+    verified_lab: LabKeys,
     summary: Option<TerminalEvent>,
     identity: Option<ArtifactRetentionIdentity>,
     pins: BTreeMap<EventId, (TerminalEvent, ArtifactPinReason)>,
@@ -261,12 +265,12 @@ impl RetentionIndex {
         }
     }
 
-    /// Source selection uses indexes updated by the same committed writer.
-    pub(super) fn intent<E: LedgerEventRead>(
+    /// Source selection uses indexes updated by the same committed writer. LN-5: the sources are
+    /// read from `history`.
+    pub(super) fn intent<H: RetentionHistory>(
         &self,
         reference: &ProjectedArtifactReference,
-        events: &[E],
-        indexes: &EventIndexes,
+        history: &H,
     ) -> GlobalLedgerResult<Option<ArtifactEvictionIntentRecord>> {
         let Some(object) = self.objects.get(&reference.artifact_id) else {
             return Ok(None);
@@ -287,7 +291,10 @@ impl RetentionIndex {
         if !self.run_is_unambiguous(identity) {
             return Ok(None);
         }
-        if self.lab_protected(object, source(events, verified)?, indexes) {
+        let verified_event = source(history, verified)?;
+        if self.lab_protected(object, || {
+            history.lab_related(&LabKeys::of(verified_event.links()), self.through_sequence)
+        })? {
             return Ok(None);
         }
         let Some(closure) = self.closures.get(&ClosureScope::from_identity(identity)) else {
@@ -314,7 +321,7 @@ impl RetentionIndex {
         // A settlement that does not match the terminal branch (e.g. a success that overran its
         // runtime budget) keeps the object; it never reaches the fatal admission check.
         if let Some(settlement) = &closure.settlement
-            && !settlement_matches(source(events, settlement)?, TaskOutcome::Success)
+            && !settlement_matches(&source(history, settlement)?, TaskOutcome::Success)
         {
             return Ok(None);
         }
@@ -327,7 +334,7 @@ impl RetentionIndex {
             settlement: closure.settlement,
             through_sequence: self.through_sequence,
         };
-        self.validate_intent(object, &intent, events, indexes, true)?;
+        self.validate_intent(object, &intent, history, true)?;
         Ok(Some(intent))
     }
 
@@ -445,7 +452,15 @@ impl RetentionIndex {
         prior: &[E],
         event: &E,
     ) -> GlobalLedgerResult<()> {
-        self.validate(event, prior, indexes, true, false)?;
+        self.validate(
+            event,
+            &PriorRecords {
+                events: prior,
+                indexes: &*indexes,
+            },
+            true,
+            false,
+        )?;
         self.apply(event);
         indexes.insert(event, prior.len());
         Ok(())
@@ -469,19 +484,20 @@ impl RetentionIndex {
     }
 
     /// `admission` is true only on the sole writer's append path; replay (every open, every read
-    /// face, the writer's own startup) checks integrity only.
-    pub(super) fn validate<E: LedgerEventRead>(
+    /// face, the writer's own startup) checks integrity only. LN-5 (#422, LEAN-L §3.4): the
+    /// earlier records it reads come from `history` (a full build's own records, or the writer's
+    /// store and staged batch).
+    pub(super) fn validate<E: LedgerEventRead, H: RetentionHistory<Event = E>>(
         &self,
         event: &E,
-        events: &[E],
-        indexes: &EventIndexes,
+        history: &H,
         guarded_intent: bool,
         admission: bool,
     ) -> GlobalLedgerResult<()> {
         if event.sequence() != self.through_sequence.saturating_add(1) {
             return Err(invalid(LedgerCode::ArtifactRetentionSnapshotGap.code()));
         }
-        self.validate_prior_epoch(event, events, guarded_intent)?;
+        self.validate_prior_epoch(event, history, guarded_intent)?;
         // An outcome records the result of an already sealed identity, never a new use.
         let retention = event.payload().artifact_retention();
         for reference in material_references(event) {
@@ -520,11 +536,8 @@ impl RetentionIndex {
                     return Err(sealed());
                 }
             }
-            let lab = event.origin().source() == EventSource::Lab
-                || event.event_type() == EventType::LabRequest
-                || indexes.lab_related(event, self.through_sequence);
-            if lab
-                && event.payload().lab_pin_release_request().is_none()
+            // LN-5: the Lab relation, a lookup, is asked only of a record in a sealed scope.
+            if event.payload().lab_pin_release_request().is_none()
                 && scopes(event).any(|scope| {
                     self.sealed_scopes.contains(&scope)
                         || self.linked_runs.get(&scope).is_some_and(|runs| {
@@ -532,6 +545,9 @@ impl RetentionIndex {
                                 .any(|run| self.sealed_scopes.contains(&RetentionScope::Run(*run)))
                         })
                 })
+                && (event.origin().source() == EventSource::Lab
+                    || event.event_type() == EventType::LabRequest
+                    || history.lab_related(&LabKeys::of(event.links()), self.through_sequence)?)
             {
                 return Err(sealed());
             }
@@ -568,10 +584,10 @@ impl RetentionIndex {
                 if object.proof.is_some() {
                     return Err(sealed());
                 }
-                let trigger = source(events, &pin.trigger)?;
-                if !same_scope(trigger, identity)
+                let trigger = source(history, &pin.trigger)?;
+                if !same_scope(&trigger, identity)
                     || self.owner_at(trigger.sequence()) != Some(identity.owner_epoch)
-                    || !material_references(trigger)
+                    || !material_references(&trigger)
                         .iter()
                         .any(|value| value == &object.reference)
                         && trigger.links().frame_id() != object.reference.frame_id.as_ref()
@@ -583,7 +599,8 @@ impl RetentionIndex {
                 if pin.reason == ArtifactPinReason::WarningOrHigher
                     && trigger.severity() < EventSeverity::Warning
                     || pin.reason == ArtifactPinReason::Lab
-                        && !indexes.lab_related(trigger, self.through_sequence)
+                        && !history
+                            .lab_related(&LabKeys::of(trigger.links()), self.through_sequence)?
                 {
                     return Err(invalid(LedgerCode::ArtifactPinReasonConflict.code()));
                 }
@@ -598,13 +615,13 @@ impl RetentionIndex {
                 if *pin != release.pin {
                     return Err(invalid(LedgerCode::ArtifactPinNotReleasable.code()));
                 }
-                let release_source = source(events, &release.release)?;
+                let release_source = source(history, &release.release)?;
                 match reason {
                     ArtifactPinReason::Explicit => {
                         if admission
-                            && (!same_close_scope(release_source, identity)
-                                || !successful_close(release_source, identity)
-                                || !self.close_owner_matches(release_source, identity))
+                            && (!same_close_scope(&release_source, identity)
+                                || !successful_close(&release_source, identity)
+                                || !self.close_owner_matches(&release_source, identity))
                         {
                             return Err(invalid(LedgerCode::ArtifactPinReleaseNotClosed.code()));
                         }
@@ -614,7 +631,7 @@ impl RetentionIndex {
                             artifact_id: identity.artifact.artifact_id,
                             pin: release.pin,
                         };
-                        if !lab_release_request_matches(release_source, &target) {
+                        if !lab_release_request_matches(&release_source, &target) {
                             return Err(invalid(
                                 LedgerCode::ArtifactLabPinReleaseRequestConflict.code(),
                             ));
@@ -627,7 +644,7 @@ impl RetentionIndex {
                 if !guarded_intent {
                     return Err(invalid(LedgerCode::ArtifactEvictionGuardRequired.code()));
                 }
-                self.validate_intent(object, intent, events, indexes, admission)?;
+                self.validate_intent(object, intent, history, admission)?;
             }
             ArtifactRetentionFact::EvictionOutcome(outcome) => {
                 if !guarded_intent {
@@ -652,12 +669,11 @@ impl RetentionIndex {
     /// decided once, by the admitting writer; a reader never re-judges it. Workflow #382 L-5b:
     /// an intent names its original success; the failed-run (K/T) evidence is retired, so a
     /// stored intent that still carries it does not decode and never reaches this check.
-    fn validate_intent<E: LedgerEventRead>(
+    fn validate_intent<H: RetentionHistory>(
         &self,
         object: &RetainedObject,
         intent: &ArtifactEvictionIntentRecord,
-        events: &[E],
-        indexes: &EventIndexes,
+        history: &H,
         admission: bool,
     ) -> GlobalLedgerResult<()> {
         if intent.through_sequence != self.through_sequence
@@ -671,34 +687,36 @@ impl RetentionIndex {
         {
             return Err(invalid(LedgerCode::ArtifactEvictionNotEligible.code()));
         }
-        let verified = source(events, &intent.verified)?;
+        let verified = source(history, &intent.verified)?;
         let Some(success) = &intent.success else {
             return Err(invalid(LedgerCode::ArtifactEvictionTerminalMissing.code()));
         };
-        let success = source(events, success)?;
-        let close = source(events, &intent.close)?;
+        let success = source(history, success)?;
+        let close = source(history, &intent.close)?;
         let summary = intent
             .capture_summary
             .as_ref()
-            .map(|value| source(events, value))
+            .map(|value| source(history, value))
             .transpose()?;
         let settlement = intent
             .settlement
             .as_ref()
-            .map(|value| source(events, value))
+            .map(|value| source(history, value))
             .transpose()?;
         if !admission {
             return Ok(());
         }
-        if !same_scope(verified, &intent.identity)
-            || !same_scope(success, &intent.identity)
-            || !same_close_scope(close, &intent.identity)
-            || self.lab_protected(object, verified, indexes)
-            || [verified, success]
+        if !same_scope(&verified, &intent.identity)
+            || !same_scope(&success, &intent.identity)
+            || !same_close_scope(&close, &intent.identity)
+            || self.lab_protected(object, || {
+                history.lab_related(&LabKeys::of(verified.links()), self.through_sequence)
+            })?
+            || [&verified, &success]
                 .iter()
                 .any(|event| self.owner_at(event.sequence()) != Some(intent.identity.owner_epoch))
-            || !successful_close(close, &intent.identity)
-            || !self.close_owner_matches(close, &intent.identity)
+            || !successful_close(&close, &intent.identity)
+            || !self.close_owner_matches(&close, &intent.identity)
         {
             return Err(invalid(LedgerCode::ArtifactEvictionCloseConflict.code()));
         }
@@ -713,7 +731,7 @@ impl RetentionIndex {
                 }
                 let summary = summary
                     .ok_or_else(|| invalid(LedgerCode::ArtifactEvictionSummaryMissing.code()))?;
-                if !same_scope(summary, &intent.identity)
+                if !same_scope(&summary, &intent.identity)
                     || summary.sequence() >= close.sequence()
                     || !matches!(summary.payload(), EventPayload::Capture(CapturePayload::SummaryCommitted(payload))
                         if payload.summary().frames().iter().any(|frame| frame.artifact() == &object.reference))
@@ -734,10 +752,10 @@ impl RetentionIndex {
             .is_some_and(|run| self.scheduled_runs.contains(&run));
         match (settlement, scheduled) {
             (Some(settlement), true) => {
-                if !same_scope(settlement, &intent.identity)
+                if !same_scope(&settlement, &intent.identity)
                     || settlement.sequence() <= success.sequence()
                     || self.owner_at(settlement.sequence()) != Some(intent.identity.owner_epoch)
-                    || !settlement_matches(settlement, TaskOutcome::Success)
+                    || !settlement_matches(&settlement, TaskOutcome::Success)
                 {
                     return Err(invalid(
                         LedgerCode::ArtifactEvictionSettlementConflict.code(),
@@ -934,6 +952,7 @@ impl RetentionIndex {
                     reference,
                     last_reference_sequence: event.sequence(),
                     verified: None,
+                    verified_lab: LabKeys::default(),
                     summary: None,
                     identity: None,
                     pins: BTreeMap::new(),
@@ -947,8 +966,9 @@ impl RetentionIndex {
                 object.last_reference_sequence = event.sequence();
             }
             object.reference_scopes.extend(scopes(event));
-            if event.event_type() == EventType::ArtifactVerified {
-                object.verified.get_or_insert_with(|| terminal(event));
+            if event.event_type() == EventType::ArtifactVerified && object.verified.is_none() {
+                object.verified = Some(terminal(event));
+                object.verified_lab = LabKeys::of(event.links());
             }
             if event.event_type() == EventType::CaptureSummaryCommitted {
                 object.summary = Some(terminal(event));
@@ -1063,26 +1083,27 @@ impl RetentionIndex {
         }
     }
 
-    fn lab_protected<E: LedgerEventRead>(
+    /// LN-5: `related` answers whether a Lab anchor relates to the object's verified record; it
+    /// is asked only when no reference scope of the object has a Lab use.
+    fn lab_protected(
         &self,
         object: &RetainedObject,
-        verified: &E,
-        indexes: &EventIndexes,
-    ) -> bool {
+        related: impl FnOnce() -> GlobalLedgerResult<bool>,
+    ) -> GlobalLedgerResult<bool> {
         let latest = object
             .reference_scopes
             .iter()
             .filter_map(|scope| self.latest_lab_use(scope))
             .max();
-        if !indexes.lab_related(verified, self.through_sequence) && latest.is_none() {
-            return false;
+        if latest.is_none() && !related()? {
+            return Ok(false);
         }
         let covered = object
             .released_lab_pins
             .values()
             .map(|release| release.release_request.sequence)
             .max();
-        match (latest, covered) {
+        Ok(match (latest, covered) {
             (Some(latest), Some(covered)) => {
                 latest > covered
                     || object
@@ -1091,7 +1112,7 @@ impl RetentionIndex {
                         .any(|(_, reason)| *reason == ArtifactPinReason::Lab)
             }
             _ => true,
-        }
+        })
     }
 
     /// The per-scope ring counts exact first-observed frames and never scans history.
@@ -1198,16 +1219,13 @@ fn direct_evidence<E: LedgerEventRead>(event: &E) -> BTreeSet<ArtifactId> {
     ids
 }
 
-fn source<'a, E: LedgerEventRead>(
-    events: &'a [E],
+/// LN-5: the record `reference` names, read from `history`.
+fn source<H: RetentionHistory + ?Sized>(
+    history: &H,
     reference: &TerminalEvent,
-) -> GlobalLedgerResult<&'a E> {
-    let position = events.partition_point(|event| event.sequence() < reference.sequence);
-    events
-        .get(position)
-        .filter(|event| {
-            event.sequence() == reference.sequence && event.event_id() == &reference.event_id
-        })
+) -> GlobalLedgerResult<H::Event> {
+    history
+        .record(reference)?
         .ok_or_else(|| invalid(LedgerCode::ArtifactRetentionProofSourceMissing.code()))
 }
 
@@ -1378,9 +1396,12 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
     )> {
         let denied =
             |code| GlobalLedgerError::request(code, ContractLocation::ReleaseLabPin.location());
-        let request_event = source(&self.events, &request)
-            .map_err(|_| denied(LedgerCode::LabPinReleaseRequestMissing.code()))?;
-        if !lab_release_request_matches(request_event, &target) {
+        // LN-5: a read that fails is that failure; a request the store does not hold is denied.
+        let request_event = self
+            .history()
+            .record_at(&request)?
+            .ok_or_else(|| denied(LedgerCode::LabPinReleaseRequestMissing.code()))?;
+        if !lab_release_request_matches(&request_event, &target) {
             return Err(denied(LedgerCode::LabPinReleaseRequestConflict.code()));
         }
         let object = self
@@ -1456,7 +1477,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             }
             // Recovery re-checks the material under this exclusive, hash-verified guard: absent
             // material records RecoveryAbsent; present material completes the sealed unlink once.
-            let original = source(&self.events, &proof.intent)?;
+            let original = source(&self.history(), &proof.intent)?;
             let Some(ArtifactRetentionFact::EvictionIntent(intent)) =
                 original.payload().artifact_retention()
             else {
@@ -1510,10 +1531,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                 false,
             )?);
         }
-        let Some(intent) = self
-            .retention
-            .intent(&reference, &self.events, &self.indexes)?
-        else {
+        let Some(intent) = self.retention.intent(&reference, &self.history())? else {
             return Ok((ArtifactEvictionAdmission::Deferred, appended));
         };
         if !guard.material_present() {
@@ -1577,7 +1595,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             ArtifactPayloadDraft, AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin,
             IdentifierIssuer, OriginModule,
         };
-        let links = source(&self.events, source_ref)?
+        let links = source(&self.history(), source_ref)?
             .links()
             .artifact_retention_source();
         // The stored severity is the record's category: a failed eviction's I/O outcome, else
@@ -1857,7 +1875,7 @@ impl RetentionIndex {
     /// The availability an authenticated eviction proof gives a reference, or `None` when it
     /// has none. Workflow #375 R5a: a `Failed` outcome restores as `FailedEviction`; it no
     /// longer stops an opening. An identity conflict stays fatal.
-    fn proven_availability(
+    pub(super) fn proven_availability(
         &self,
         reference: &ProjectedArtifactReference,
     ) -> Result<Option<ArtifactAvailability>, FactValidationError> {

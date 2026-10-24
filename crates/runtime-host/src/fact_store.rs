@@ -3,7 +3,7 @@
 //! Ledger-rebuilt fact projection shared by policy and execution boundaries.
 
 use crate::codes::{HostCode, HostLocation};
-use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages, read_through_head};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
@@ -531,17 +531,22 @@ impl InstanceFactStore {
                 HostLocation::ProjectFactHistory,
             ));
         }
-        let events = ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the history is read from the store page by page.
+        let events = read_pages(
+            ledger,
+            &EventQuery {
                 to_sequence: Some(ledger_position),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                fact_fatal(
-                    HostCode::FactStoreQueryFailed,
-                    HostLocation::ProjectFactHistory,
-                )
-            })?;
+            },
+            ledger_position,
+            ledger.history_page_events(),
+        )
+        .map_err(|_| {
+            fact_fatal(
+                HostCode::FactStoreQueryFailed,
+                HostLocation::ProjectFactHistory,
+            )
+        })?;
         let mut projection = HistoricalFactProjection::default();
         for event in events {
             projection.replay(&event)?;
@@ -600,17 +605,21 @@ impl InstanceFactStore {
                 HostLocation::SynchronizeFactStore,
             )
         })?;
-        let events = ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the records since the last synchronization are read from the
+        // store page by page at the head, never as one command over all of them.
+        let events = read_through_head(
+            ledger,
+            &EventQuery {
                 from_sequence: Some(from_sequence),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                fact_fatal(
-                    HostCode::FactStoreSyncFailed,
-                    HostLocation::SynchronizeFactStore,
-                )
-            })?;
+            },
+        )
+        .map_err(|_| {
+            fact_fatal(
+                HostCode::FactStoreSyncFailed,
+                HostLocation::SynchronizeFactStore,
+            )
+        })?;
         for event in events {
             self.replay_event(&event, ledger)?;
         }
@@ -692,18 +701,22 @@ impl InstanceFactStore {
             ));
         }
         let mut history = HistoricalFactProjection::default();
-        for event in ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the history is read from the store page by page.
+        for event in read_pages(
+            ledger,
+            &EventQuery {
                 to_sequence: Some(position),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                fact_fatal(
-                    HostCode::FactHistoryReadFailed,
-                    HostLocation::ProjectFactHistory,
-                )
-            })?
-        {
+            },
+            position,
+            ledger.history_page_events(),
+        )
+        .map_err(|_| {
+            fact_fatal(
+                HostCode::FactHistoryReadFailed,
+                HostLocation::ProjectFactHistory,
+            )
+        })? {
             history.replay(&event)?;
         }
         let active = history
