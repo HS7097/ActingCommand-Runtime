@@ -142,6 +142,20 @@ warning `frame_store_budget_floor_applied` (`memory_total_bytes`,
 budget stands on the floor. A sample that leaves at least the floor is used as
 before.
 
+#411 A67-R (0.12.12): the Runtime records that warning when the budget of its
+capture frame stores enters the floor, at the start (the daemon-start preparation's
+open) or at a refresh (a later open, a frame's budget refresh or an admission's
+limit): its daemon lines in actingd's log (the developer line
+`WARN actingd: frame_store_budget_floor_applied` with the four values, then its
+`OUTCOME actingd:` envelope), then one Warning `runtime.failed` with system links
+whose outcome is the warning (detail `frame_store` /
+`frame_store` / `artifact_store` / `frame_store`). All capture frame stores share
+one floor watch (`BudgetFloorWatch`): a budget that stays on the floor records
+nothing more; one that leaves it and comes back is recorded again. The start
+records an entry before it goes on; later entries are recorded by the lease
+sweep's next tick. A failed record is fatal to the Runtime, as the sweep's other
+ledger records are.
+
 The original memory budget admits the live frame/copy, PNG workspace and material
 verification buffer before allocation or publication. Host copies run inside one
 synchronous pipeline operation: a fresh budget is sampled before the copy, and

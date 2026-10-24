@@ -992,6 +992,11 @@ pub trait RuntimeDaemonReporter: Send + Sync {
     /// A background step that a ledger read did not answer in time, or that its read stopped at
     /// its work budget, skipped (R3); the step runs again at its next tick.
     fn step_skipped(&self, outcome: &Outcome);
+
+    /// #411 A67-R: a warning the host records in the ledger while it runs, at the moment it
+    /// records it: `frame_store_budget_floor_applied` when the capture frame stores' budget
+    /// enters the floor, at the start or at a refresh.
+    fn warning_recorded(&self, outcome: &Outcome);
 }
 
 /// #411 A50: a capture open failure's cause as a token of the catalog vocabulary
@@ -1083,6 +1088,13 @@ impl FatalState {
     pub(crate) fn report_skipped(&self, outcome: &Outcome) {
         if let Some(reporter) = self.reporter.as_ref() {
             reporter.step_skipped(outcome);
+        }
+    }
+
+    /// #411 A67-R: hands a warning the host records to the daemon's log.
+    pub(crate) fn report_warning(&self, outcome: &Outcome) {
+        if let Some(reporter) = self.reporter.as_ref() {
+            reporter.warning_recorded(outcome);
         }
     }
 

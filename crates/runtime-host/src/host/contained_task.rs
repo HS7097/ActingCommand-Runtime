@@ -3898,7 +3898,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             self.run_id.transport(),
                         )
                         .map_err(online_observation::observation_artifact_failure)?,
-                        frame_retention::capture_frame_store_config(),
+                        self.host.capture_frame_store_config(),
                     )
                     .map_err(online_observation::observation_artifact_failure)?,
                 );
@@ -3982,8 +3982,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                             .take()
                                             .expect("capture memory owner prepared"),
                                         CapturePipelineConfig {
-                                            frame_store:
-                                                frame_retention::capture_frame_store_config(),
+                                            frame_store: self.host.capture_frame_store_config(),
                                             retention_class: RetentionClass::DebugFull,
                                             redaction_state: ArtifactRedactionState::NotRequired,
                                             ..CapturePipelineConfig::default()

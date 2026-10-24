@@ -585,6 +585,10 @@ pub struct RuntimeHostConfig {
     /// so its ledger is an old one without the anchor.
     #[cfg(test)]
     contained_settlement_unrecorded_for_test: bool,
+    /// #411 A67-R, test only: the memory sample every capture frame store reads in place of the
+    /// host's physical memory.
+    #[cfg(test)]
+    capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -645,7 +649,20 @@ impl RuntimeHostConfig {
             fail_after_start_event_for_test: false,
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: false,
+            #[cfg(test)]
+            capture_memory_sample_for_test: None,
         }
+    }
+
+    /// #411 A67-R, test only: every capture frame store reads `sample` in place of the host's
+    /// physical memory.
+    #[cfg(test)]
+    pub(crate) fn with_capture_memory_sample_for_test(
+        mut self,
+        sample: actingcommand_artifact_store::MemorySample,
+    ) -> Self {
+        self.capture_memory_sample_for_test = Some(sample);
+        self
     }
 
     /// #411 A65, test only: every read on the ledger writer gets `budget` in place of
@@ -1680,6 +1697,9 @@ impl RuntimeHost {
                     },
                 )
             })),
+            frame_store_floor: Arc::default(),
+            #[cfg(test)]
+            capture_memory_sample_for_test: config.capture_memory_sample_for_test,
             governance_write_gate: Mutex::new(()),
             governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),
@@ -2125,6 +2145,9 @@ impl RuntimeHost {
             // so a failed preparation's ladder already has one.
             host_claims::spawn_instance_workers(&shared)?;
             shared.prepare_physical_instances_on_start()?;
+            // #411 A67-R: a preparation whose frame store opened on the floor is in the daemon's
+            // log and the ledger before the start goes on.
+            shared.record_frame_store_floor_entries()?;
             shared.check_install_preparation()?;
             // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
             // after their daemon-start preparation; none without a bound handset.
@@ -4618,6 +4641,13 @@ struct HostShared {
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
     frame_retention: Mutex<Option<frame_retention::FrameRetention>>,
+    /// #411 A67-R: the floor watch of every capture frame store's budget; the start's
+    /// preparation and the sweep record the warnings of the budgets that entered the floor
+    /// (`record_frame_store_floor_entries`).
+    frame_store_floor: Arc<actingcommand_artifact_store::BudgetFloorWatch>,
+    /// #411 A67-R, test only: see [`RuntimeHostConfig::with_capture_memory_sample_for_test`].
+    #[cfg(test)]
+    capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
     governance_policy: GovernancePolicy,
@@ -5381,6 +5411,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         }
         if let Err(error) = shared.expire_agent_sessions() {
             shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
+        // #411 A67-R: a capture frame store's budget that entered the floor since the last tick
+        // (at an open or a frame's refresh) is recorded once.
+        if let Err(error) = shared.record_frame_store_floor_entries() {
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and

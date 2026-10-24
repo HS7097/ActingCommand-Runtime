@@ -47,6 +47,8 @@ impl RuntimeDaemonReporter for DaemonLog {
     }
 
     fn step_skipped(&self, _outcome: &Outcome) {}
+
+    fn warning_recorded(&self, _outcome: &Outcome) {}
 }
 
 /// A start as actingd makes one, with its configuration manifest: its `config.*` runtime facts
