@@ -5460,6 +5460,24 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     )
 }
 
+/// #411 A65 (R2): [`ledger_error`] of `operation` with the ledger's own failure as its outcome's
+/// `caused_by` link: the ledger's code with the values the ledger attached and its operation
+/// (`ledger_read_budget_exceeded` of `query_event_page`, for example).
+fn ledger_error_caused_by(
+    operation: impl Into<Location>,
+    error: &actingcommand_ledger::GlobalLedgerError,
+) -> RuntimeHostError {
+    let cause = error
+        .outcome_values()
+        .cloned()
+        .unwrap_or_else(|| Outcome::relayed(error.code()));
+    let cause = match Location::relayed(error.operation()) {
+        Some(location) if cause.value("operation").is_none() => cause.operation(location),
+        _ => cause,
+    };
+    ledger_error(operation).with_caused_by(cause)
+}
+
 /// #411 A51 (R3): the ledger codes of a read the writer did not answer in time
 /// (`writer_response_timeout`) or stopped at its work budget (`ledger_read_budget_exceeded`).
 /// Neither is a ledger failure: the Runtime goes on, and the read's caller reads again at its

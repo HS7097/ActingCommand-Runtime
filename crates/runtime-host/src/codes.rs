@@ -448,6 +448,11 @@ actingcommand_contract::outcome_codes! {
         ClientFactReplayOriginConflict => "client_fact_replay_origin_conflict": error / none,
         ClientFactRequestIdConflict => "client_fact_request_id_conflict": error / none,
         ConnectionPreparationCooldownOverflow => "connection_preparation_cooldown_overflow": error / none,
+        /// Fatal (#411 A65). The runtime fact `host.contained_settlement`, which names the start
+        /// event of the start that last completed the previous-epoch settlement of direct runs,
+        /// is not the Runtime's integer or names no start event before this start's. The start
+        /// fails; the fact comes back at every start.
+        ContainedSettlementAnchorInvalid => "contained_settlement_anchor_invalid": fatal / none,
         ContainedTaskActiveIdentityMismatch => "contained_task_active_identity_mismatch": error / none,
         ContainedTaskAlreadyRunning => "contained_task_already_running": error / none,
         ContainedTaskCancellationIdentityMissing => "contained_task_cancellation_identity_missing": error / none,

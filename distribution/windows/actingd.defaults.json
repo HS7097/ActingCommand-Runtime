@@ -386,7 +386,8 @@
         "host.install_transition.pauses",
         "host.perf_baseline.*",
         "host.perf_calibration.*",
-        "host.config_overrides"
+        "host.config_overrides",
+        "host.contained_settlement"
       ],
       "reobserve_prefixes": [
         "device.",

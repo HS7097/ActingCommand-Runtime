@@ -3546,6 +3546,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_settlement_anchor_invalid": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The start's settlement of the direct contained runs of earlier epochs (#411 A65) read the runtime fact host.contained_settlement, which names the start event of the last start that completed this settlement, and found no integer the Runtime recorded, or a start event at or after this start's own. The start fails; the fact comes back at every start.",
+      "common_causes": "A ledger whose runtime facts were changed outside the Runtime, or a ledger written by another program.",
+      "handling": "TBD"
+    },
     "contained_task_active_identity_mismatch": {
       "category": "error",
       "ladder_class": "none",
