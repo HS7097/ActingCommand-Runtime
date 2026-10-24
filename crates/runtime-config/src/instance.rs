@@ -19,13 +19,19 @@
 //! settable, checked with the `recovery_ladder` section. Workflow #411 B15 R3 (model-b15 §5.2)
 //! adds `scheduling.remedy.choices`, the instance's own remedy choice rows in its entry's
 //! `scheduling` member: default the `scheduling` section's list; when set, it replaces that list
-//! as a whole; settable; its rows checked as the section's are.
+//! as a whole; settable; its rows checked as the section's are. Workflow #386 SR-4a1 (SCH-M §3.2
+//! D-1, D-6) adds `scheduling.blackout`, the instance's own blackout list in its entry's
+//! `scheduling` member (default none: an instance whose entry names none has no entries of its
+//! own; settable; its entries checked as the host list's are, refused as `blackout_config_invalid`
+//! with `blackout_source` `instance`), and `scheduling.day_boundary.quiet`, default the section's
+//! `scheduling.day_boundary.quiet`, settable.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder;
 use crate::scheduling::{
-    self, DELAY, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
+    self, DAY_BOUNDARY_QUIET, DELAY, INSTANCE_BLACKOUT, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS,
+    RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
 };
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
@@ -134,6 +140,31 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "B15-R4",
         since: "0.12.3",
     },
+    // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the instance's own blackout list; reported only for
+    // an instance whose entry names one (none: no entries of its own); settable while the
+    // Runtime runs.
+    KeyRow {
+        name: KeyName::PerInstance(INSTANCE_BLACKOUT),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::List,
+        range: KeyRange::Any,
+        default: DefaultSource::None,
+        settable: Settable::Yes,
+        reader: "SR-4a2",
+        since: "0.12.12",
+    },
+    // Workflow #386 SR-4a1 (SCH-M §3.2 D-6): the instance's own day-boundary switch; the
+    // section's value in effect is its default.
+    KeyRow {
+        name: KeyName::PerInstance(DAY_BOUNDARY_QUIET),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::Boolean,
+        range: KeyRange::Any,
+        default: DefaultSource::Section(DAY_BOUNDARY_QUIET),
+        settable: Settable::Yes,
+        reader: "SR-4a2",
+        since: "0.12.12",
+    },
 ];
 
 /// Workflow #405: one instance's random delay member, named as the section-level key whose value
@@ -153,14 +184,17 @@ const fn random_delay_row(member: &'static str, value_type: ValueType, range: Ke
 
 /// The whole-section check of one instance (§5.3): its two stuck-recovery members together form
 /// valid stuck-recovery settings, (Workflow #405) its random delay's `min_ms` is at most its
-/// `max_ms` as both are in effect, each its own or the section's, and (Workflow #411 B15 R3) its
-/// remedy choice rows in effect keep the rows' rules. A member the section does not carry is not
-/// checked.
+/// `max_ms` as both are in effect, each its own or the section's, (Workflow #411 B15 R3) its
+/// remedy choice rows in effect keep the rows' rules, and (Workflow #386 SR-4a1) its own
+/// blackout entries keep the entries' rules (`index` is the instance's position in the file's
+/// `instances`, for the entries' pointers). A member the section does not carry is not checked.
 pub(crate) fn check_instance(
     instance: &str,
+    index: usize,
     value: impl Fn(&str) -> Option<FactScalar>,
 ) -> Result<(), ConfigFailure> {
     let read = |key: &str| value(key);
+    scheduling::instance_blackouts(&read, instance, index)?;
     let reader = scheduling::Reader { value: &read };
     let delay_keys = [
         RANDOM_DELAY_ENABLED,

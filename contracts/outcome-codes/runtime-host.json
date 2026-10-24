@@ -20410,6 +20410,7 @@
       "values": {
         "instance_id": "required",
         "blackout_id": "required",
+        "blackout_source": "required",
         "next_eligible_unix_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
@@ -20420,7 +20421,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate on the instance is deferred because a blackout (blackout_id: a catalog maintenance event or a host blackout entry) is active; it wakes at the blackout's end (next_eligible_unix_ms). Admission refuses an intent that crossed into the blackout with the same code.",
+      "description": "A candidate on the instance is deferred because a blackout (blackout_id: a catalog maintenance event, a host blackout entry or an entry of the instance's own list; blackout_source: which of the three) is active; it wakes at the blackout's end (next_eligible_unix_ms), the end of the union of the overlapping or adjacent intervals. Admission refuses an intent that crossed into the blackout with the same code.",
       "common_causes": "A configured maintenance or reset period, or a host blackout such as a planned machine restart.",
       "handling": "Nothing to repair."
     },
@@ -20433,6 +20434,7 @@
       "values": {
         "instance_id": "required",
         "blackout_id": "required",
+        "blackout_source": "required",
         "blackout_start_unix_ms": "required",
         "required_ms": "required",
         "operation": "optional",
@@ -20444,7 +20446,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate is deferred because its response deadline (required_ms) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms); it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually.",
+      "description": "A candidate is deferred because its response deadline (required_ms) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms; blackout_id and blackout_source name the entry that covers the start); it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually.",
       "common_causes": "A blackout starts soon.",
       "handling": "Nothing to repair."
     },

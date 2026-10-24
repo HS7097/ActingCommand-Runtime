@@ -90,12 +90,12 @@ pub struct ConfigFailure {
     config_key: String,
     problem: Option<ConfigValueProblem>,
     range: Option<(i64, i64)>,
-    /// Workflow #386 SR-1: the member of a host blackout entry that breaks a rule (a JSON
-    /// pointer into the configuration file) and the entry's id when it has a usable one, the
-    /// values of `blackout_config_invalid`. This member and `pointer` are rarely set, so both are
-    /// boxed: that keeps the failure well under clippy's `result_large_err` size (80 of 128
-    /// bytes on 64-bit).
-    blackout: Option<Box<(String, Option<String>)>>,
+    /// Workflow #386 SR-1: the member of a blackout entry that breaks a rule (a JSON pointer into
+    /// the configuration file), the entry's id when it has a usable one and (Workflow #386
+    /// SR-4a1) the list it is in, the values of `blackout_config_invalid`. This member and
+    /// `pointer` are rarely set, so both are boxed: that keeps the failure well under clippy's
+    /// `result_large_err` size (80 of 128 bytes on 64-bit).
+    blackout: Option<Box<(String, Option<String>, BlackoutSource)>>,
     /// Workflow #411 B15 R3: the JSON pointer, into the refused key's value, of the remedy choice
     /// row (and member) that breaks a rule. Not an outcome value: `config_value_invalid` declares
     /// no pointer key.
@@ -127,16 +127,18 @@ impl ConfigFailure {
         self.pointer.as_deref()
     }
 
-    /// Workflow #386 SR-1: `blackout_config_invalid` for the host blackout entry member at
-    /// `field` of the key `config_key` (`scheduling.blackout.host`), with the entry's id when it
-    /// has a usable one.
+    /// Workflow #386 SR-1: `blackout_config_invalid` for the blackout entry member at `field` of
+    /// the key `config_key` (`scheduling.blackout.host`, or Workflow #386 SR-4a1 an instance's
+    /// `instance.<instance id>.scheduling.blackout`), with the entry's id when it has a usable
+    /// one and the list it is in.
     pub fn blackout(
         config_key: impl Into<String>,
         field: impl Into<String>,
         blackout_id: Option<String>,
+        source: BlackoutSource,
     ) -> Self {
         Self {
-            blackout: Some(Box::new((field.into(), blackout_id))),
+            blackout: Some(Box::new((field.into(), blackout_id, source))),
             ..Self::new(ConfigCode::BlackoutConfigInvalid, config_key)
         }
     }
@@ -194,28 +196,30 @@ impl ConfigFailure {
         self.problem
     }
 
-    /// Workflow #386 SR-1: the member pointer of a host blackout entry that breaks a rule.
+    /// Workflow #386 SR-1: the member pointer of a blackout entry that breaks a rule.
     pub fn field(&self) -> Option<&str> {
-        self.blackout.as_deref().map(|(field, _)| field.as_str())
+        self.blackout.as_deref().map(|(field, _, _)| field.as_str())
     }
 
-    /// Workflow #386 SR-1: the id of a host blackout entry that breaks a rule, when it has one.
+    /// Workflow #386 SR-1: the id of a blackout entry that breaks a rule, when it has one.
     pub fn blackout_id(&self) -> Option<&str> {
-        self.blackout.as_deref().and_then(|(_, id)| id.as_deref())
+        self.blackout
+            .as_deref()
+            .and_then(|(_, id, _)| id.as_deref())
     }
 
-    /// SR-4a1 red stub: no list is named.
+    /// Workflow #386 SR-4a1: the list of a blackout entry that breaks a rule.
     pub fn blackout_source(&self) -> Option<BlackoutSource> {
-        None
+        self.blackout.as_deref().map(|(_, _, source)| *source)
     }
 
     /// `outcome` with this failure's values: `config_key`, `config_value_problem` when the value
     /// is refused and, for a bounded key, `range_min` and `range_max`; for
-    /// `blackout_config_invalid` (Workflow #386 SR-1) `field` and `blackout_id` instead, the keys
-    /// that code declares.
+    /// `blackout_config_invalid` (Workflow #386 SR-1) `field`, `blackout_id` and (SR-4a1)
+    /// `blackout_source` instead, the keys that code declares.
     pub fn with_values(&self, outcome: Outcome) -> Outcome {
-        if let Some((field, blackout_id)) = self.blackout.as_deref() {
-            let outcome = outcome.field(field.clone());
+        if let Some((field, blackout_id, source)) = self.blackout.as_deref() {
+            let outcome = outcome.field(field.clone()).blackout_source(*source);
             return match blackout_id {
                 Some(blackout_id) => outcome.blackout_id(blackout_id.clone()),
                 None => outcome,
@@ -522,17 +526,46 @@ impl EffectiveConfig {
         scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
-    /// SR-4a1 red stub: no instance list is read.
+    /// Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the own blackout entries of the instance whose
+    /// registry id is `instance_id`, from `instance.<instance_id>.scheduling.blackout` in effect;
+    /// none when the configuration carries no list for it.
     pub fn instance_blackouts(
         &self,
-        _instance_id: &str,
+        instance_id: &str,
     ) -> Result<Vec<BlackoutEntry>, ConfigFailure> {
-        Ok(Vec::new())
+        scheduling::instance_blackouts(
+            &|key: &str| self.value(key).cloned(),
+            instance_id,
+            self.instance_index(instance_id),
+        )
     }
 
-    /// SR-4a1 red stub: no key is read.
-    pub fn day_boundary_quiet(&self, _instance_id: &str) -> Result<bool, ConfigFailure> {
-        Ok(false)
+    /// Workflow #386 SR-4a1 (SCH-M §3.2 D-6): the day-boundary switch in effect for the instance
+    /// whose registry id is `instance_id`: `instance.<instance_id>.scheduling.day_boundary.quiet`
+    /// when the configuration carries it, otherwise `scheduling.day_boundary.quiet`.
+    pub fn day_boundary_quiet(&self, instance_id: &str) -> Result<bool, ConfigFailure> {
+        scheduling::day_boundary_quiet(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// Workflow #386 SR-4a1: the position of the instance whose registry id is `instance_id`
+    /// among the instances the configuration names, in the order of their first key: the order of
+    /// the file's `instances` (the file layer renders each instance's keys together, in that
+    /// order). An instance the configuration does not name takes the next position.
+    fn instance_index(&self, instance_id: &str) -> usize {
+        let mut seen: Vec<&str> = Vec::new();
+        for instance in self
+            .settings
+            .iter()
+            .filter_map(|setting| setting.instance.as_deref())
+        {
+            if instance == instance_id {
+                return seen.len();
+            }
+            if !seen.contains(&instance) {
+                seen.push(instance);
+            }
+        }
+        seen.len()
     }
 
     /// Workflow #405 D1: the random delay in effect for the instance whose registry id is
@@ -692,7 +725,9 @@ impl EffectiveConfig {
             .filter_map(|setting| setting.instance.as_deref())
             .collect::<BTreeSet<_>>();
         for instance in instances {
-            instance::check_instance(instance, |key| self.value(key).cloned())?;
+            instance::check_instance(instance, self.instance_index(instance), |key| {
+                self.value(key).cloned()
+            })?;
         }
         Ok(())
     }
