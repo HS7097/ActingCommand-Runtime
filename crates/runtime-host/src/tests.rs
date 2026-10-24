@@ -283,6 +283,9 @@ mod gate_411_a35_s5;
 // Workflow #405 D1 (host key 122), register §1.135: once an instance has its random delay
 // enabled, every task the scheduler dispatches there first waits a random time.
 mod gate_405_d1;
+// SCH-M CF-2: a countdown mark publishes its frame time plus the countdown as a timestamp_ms
+// fact, and fact_time_reached turns true at that instant.
+mod gate_405_cf2;
 // #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
 // prerequisite layer is judged on its own recognition.
 mod gate_411_a23;
@@ -373,6 +376,9 @@ mod home_entry;
 mod input;
 mod input_failure;
 mod instance_workers;
+// LN-1 (Workflow #422, LEAN-L model §7.2): the scale harness on the synthetic ledger; it reports,
+// LN-8 makes it a gate.
+mod lean_scale;
 mod lease_fencing;
 mod lease_queue;
 mod lifecycle;

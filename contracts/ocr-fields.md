@@ -225,7 +225,9 @@ prefix are invalid.
 `clock_hms` (Workflow #396 REC-6) accepts `H:MM:SS`: 1 to 3 ASCII digits of hours, then two
 ASCII digits each of minutes and seconds in `00..=59`, separated by `:`. The value is the number
 of seconds: `1:05:00` resolves to `3900`; `1:5:00`, `1:05:60` and `1234:00:00` are invalid. Fields
-and readings accept it like the other formats. Internal whitespace, signs, decimal points and
+and readings accept it like the other formats. It is the only format of a completion-time
+reading (`timestamp_ms`, SCH-M CF-2), whose seconds are added to the frame's capture time
+([resource-readings.md](resource-readings.md), "Completion times"). Internal whitespace, signs, decimal points and
 non-ASCII digits are invalid in every format. Group separators are exclusive to `comma_grouped`; unknown
 formats fail declaration admission. A pack that declares `times_prefixed` needs Runtime
 v0.11.3 or later; an older Runtime refuses its program at admission.

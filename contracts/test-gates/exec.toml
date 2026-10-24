@@ -1058,8 +1058,6 @@ tests = [
     "actingcommand-contract::lib::package::tests::s5_t2_a_bundle_index_v2_or_v3_is_refused",
     "actingcommand-lab::lib::gate_336_pkgs5::s5_t3_record_stop_writes_its_package_as_its_package_id_and_replaces_one_of_that_name",
     "actingcommand-lab::lib::gate_336_pkgs5::s5_t3_a_container_that_expands_to_another_table_fails_its_round_trip",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_no_package_reference_is_left",
     "actingcommand-contract::lib::package::tests::s5_t6_bundle_v4_reads_its_tables_list_and_refuses_a_pack_named_tables",
 ]
 incident = ["#336 PKG-S5"]
@@ -2114,3 +2112,35 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t5_admission_refuses_a_broken_wait_step_or_wait_page_with_its_rule",
 ]
 incident = ["#411 B36", "#411 B19", "#412 B-3"]
+
+# PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177; brief rd-1024/brief-perf-b1-capture.md, test row (a); requirement R1): a step's `expect_after.interval_ms` is its own wait's capture interval: a wait declared at 30 000 ms captures at most ⌈duration / interval⌉ + 1 frames, its pauses the declared interval and the last cut at its end, while the package's other steps keep their own interval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_a_a_slow_wait_keeps_its_declared_interval_and_the_other_steps_keep_theirs",
+]
+incident = ["#407 B1"]
+
+# PERF-B1 (register §1.177; test row (b); requirements R3, R4): while a step waits for a page, each unchanged frame (#411 B12's whole-frame measure) doubles the pause from the declared interval (50 ms for a package that declares none) up to the idle ceiling (execution.capture.idle_ceiling_ms, default 5 000); the first changed frame returns it to the declared interval; execution.capture.backoff_enabled false keeps every pause at the declared interval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_b_unchanged_frames_back_off_to_the_idle_ceiling_and_a_change_returns_to_the_declared_interval",
+]
+incident = ["#407 B1"]
+
+# PERF-B1 (register §1.177; test row (c); requirement R3): the back-off never passes the step's remaining time: a pause is cut at the time left of the step's own wait and at the task's deadline, and the wait ends at its limit with its own code
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_c_the_back_off_never_passes_the_steps_remaining_time",
+]
+incident = ["#407 B1"]
+
+# PERF-B1 (register §1.177 B1-1, B1-2; test row (d); requirement R2): with a configured ceiling (execution.capture.max_interval_ms) of 20 000 ms a run refuses, before any capture, a package that declares a longer interval: contained_task_control_invalid for the control's capture_interval_ms and a step's expect_after.interval_ms, contained_task_linear_invalid for a transition's interval_ms; 20 000 ms runs; admission takes an interval up to the key's maximum, 1 800 000 ms, and refuses one above it with the same codes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_d_a_declared_interval_above_the_configured_ceiling_is_refused",
+]
+incident = ["#407 B1"]

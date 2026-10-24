@@ -316,6 +316,12 @@ The members of `report`:
       `once_per_reading` ([scheduling/README.md](scheduling/README.md),
       "Condition edges"); the catalog generator writes them only for a Runtime
       that names this row.
+    - `resource_reading_time` (SCH-M CF-2): always on
+      (`config_subsystem_always_on`). The Runtime admits completion-time
+      reading marks (`timestamp_ms`) and publishes their times
+      ([resource-readings.md](resource-readings.md), "Completion times");
+      a pack that declares one is placed only on a Runtime that names this
+      row.
     - `env_overrides`: on only when `allow_env_overrides` is `true`
       (`config_subsystem_configured`, `config_subsystem_configured_off` or
       `config_subsystem_flag_absent`). When the flag is off, the outcome

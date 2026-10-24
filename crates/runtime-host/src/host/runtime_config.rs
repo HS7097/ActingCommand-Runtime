@@ -630,6 +630,28 @@ impl HostShared {
             })
     }
 
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, read at each step of a
+    /// contained run and handed to the kernel with the step's pacing.
+    pub(super) fn capture_cadence(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_execution_kernel::CaptureCadence> {
+        let cadence = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .capture_cadence()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        Ok(actingcommand_execution_kernel::CaptureCadence::new(
+            cadence.max_interval_ms,
+            cadence.backoff_enabled,
+            cadence.idle_ceiling_ms,
+        ))
+    }
+
     /// Records one configuration fact, observed now and strictly after the stored record of its
     /// key, ledger-first through [`Self::record_runtime_fact`].
     /// Workflow #389 MCP-9a (register A5): records `config.catalog`, the active policy catalog

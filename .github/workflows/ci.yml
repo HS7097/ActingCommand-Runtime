@@ -43,8 +43,8 @@ name: CI
 #   writes no file. `gate` runs the logic tests of ci/gate_check.py (ci/test_gate_check.py).
 # - `gate` downloads every `test-results-*` and runs `ci/gate_check.py check`: each name of
 #   contracts/test-gates/*.toml runs exactly once per configuration of its job and passes; a name
-#   of ci/flaky-tests.toml is reported as skipped; on pull requests no fragment has fewer keys
-#   than at the base.
+#   of ci/flaky-tests.toml is reported as skipped; on pull requests a name or key that leaves the
+#   map since the merge base must be listed in ci/retired-gates.toml, and no key may be new.
 
 on:
   push:
