@@ -13,8 +13,10 @@ attribute (every module job, on the Windows runner)
 check (the `gate` job, check name `rust`, on ubuntu)
     Holds the gate map contracts/test-gates/<module>.toml against the attributed results of every
     module job: each map name runs exactly once per configuration its job runs it in, and passes.
-    A name of ci/flaky-tests.toml is reported as "flaky, skipped". On pull requests the key count
-    of each fragment must not fall below the base branch's. Exits 1 on any violation.
+    A name of ci/flaky-tests.toml is reported as "flaky, skipped". On pull requests the row count
+    of each fragment must not fall below the base branch's, and no row may carry a `key` the base
+    fragment does not hold: a row's key is optional history, a new row carries none (Workflow #420
+    S6). Exits 1 on any violation.
 
 known-unbootable <path> (the `Boot smoke` step of the exact-SHA build, on the Windows runner)
     Validates ci/known-unbootable.toml, the machine-readable copy of Workflow #390 REG-0, and
@@ -389,16 +391,27 @@ def load_fragment(tomllib, text, label, violations):
 
 
 def base_rows(tomllib, base, module, violations):
+    """The base branch's rows of one fragment (none when it has no such fragment)."""
     path = f"{GATE_MAP.as_posix()}/{module}.toml"
     shown = subprocess.run(
         ["git", "show", f"{base}:{path}"], capture_output=True, text=True, check=False
     )
     if shown.returncode != 0:
         if "does not exist in" in shown.stderr or "exists on disk, but not in" in shown.stderr:
-            return 0
+            return []
         fail(f"git show {base}:{path} failed: {shown.stderr.strip()}")
     rows = load_fragment(tomllib, shown.stdout, f"{base}:{path}", violations)
-    return 0 if rows is None else len(rows)
+    return [] if rows is None else rows
+
+
+def row_label(module, row):
+    """How a message names a row: its old key, else its first test (#420 S6)."""
+    key = row.get("key")
+    if isinstance(key, str):
+        return f"{module} key {key}"
+    tests = row.get("tests")
+    first = tests[0] if isinstance(tests, list) and tests else "?"
+    return f"{module} row {first}"
 
 
 def load_results(results_dir, modules, violations):
@@ -464,24 +477,25 @@ def cmd_check(args):
         for row in rows:
             key = row.get("key")
             names = row.get("tests")
-            if not isinstance(key, str) or not isinstance(names, list):
-                violations.append(f"{module}.toml: a row has no string `key` or no `tests` list")
+            if (key is not None and not isinstance(key, str)) or not isinstance(names, list):
+                violations.append(f"{module}.toml: a row has a `key` that is no string or no `tests` list")
                 continue
+            label = row_label(module, row)
             for name in names:
                 parts = split_name(name) if isinstance(name, str) else None
                 if parts is None:
-                    violations.append(f"{module} key {key}: {name!r} is not <package>::<target>::<path>")
+                    violations.append(f"{label}: {name!r} is not <package>::<target>::<path>")
                     continue
                 package, target, path = parts
                 job = owner.get(package)
                 if job is None:
                     violations.append(
-                        f"{module} key {key}: {name} belongs to no module job (`{package}` is in "
+                        f"{label}: {name} belongs to no module job (`{package}` is in "
                         "no CI_PACKAGES line)"
                     )
                     continue
                 if name in mirror:
-                    flaky.append(f"{name} ({module} key {key}: effective coverage P this run)")
+                    flaky.append(f"{name} ({label}: effective coverage P this run)")
                     continue
                 for configuration in expected_configurations(modules[job], target, path):
                     results = index[job].get((package, target, path, configuration), [])
@@ -490,15 +504,16 @@ def cmd_check(args):
                         checked[job].append(f"{shown} ok")
                     elif not results:
                         violations.append(
-                            f"{module} key {key}: {shown} is absent from job {job} (cfg'd out, not "
+                            f"{label}: {shown} is absent from job {job} (cfg'd out, not "
                             "compiled or not selected)"
                         )
                     else:
                         violations.append(
-                            f"{module} key {key}: {shown} in job {job} is {', '.join(results)}"
+                            f"{label}: {shown} in job {job} is {', '.join(results)}"
                         )
 
-    # 6. On pull requests the key count of every fragment does not fall below the base's.
+    # 6. On pull requests the row count of every fragment does not fall below the base's, and no
+    # row carries a key the base fragment does not hold (#420 S6: a new row has no key).
     counts = []
     if args.base:
         verified = subprocess.run(
@@ -508,14 +523,23 @@ def cmd_check(args):
         if verified.returncode != 0:
             fail(f"base {args.base} is not a commit in this checkout (fetch-depth: 0?)")
         for module in GATE_FRAGMENTS:
-            head = len(fragments.get(module, []))
-            base = base_rows(tomllib, args.base, module, violations)
-            counts.append(f"{module}: head {head} keys, {args.base} {base} keys")
+            rows = fragments.get(module, [])
+            old = base_rows(tomllib, args.base, module, violations)
+            head, base = len(rows), len(old)
+            counts.append(f"{module}: head {head} rows, {args.base} {base} rows")
             if head < base:
                 violations.append(
-                    f"{module}.toml: {head} keys at the head, {base} at {args.base}; a key row "
+                    f"{module}.toml: {head} rows at the head, {base} at {args.base}; a row "
                     "leaves only when its feature retires (test plan §2.1)"
                 )
+            kept = {row.get("key") for row in old}
+            for row in rows:
+                key = row.get("key")
+                if isinstance(key, str) and key not in kept:
+                    violations.append(
+                        f"{module}.toml: key {key} is not at {args.base}; a new row carries no "
+                        "key, its tests name it (Workflow #420 S6)"
+                    )
 
     for job, names in checked.items():
         print(f"::group::{job}: {len(names)} map names checked")
@@ -526,7 +550,7 @@ def cmd_check(args):
     for name in flaky:
         print(f"  {name}")
     if counts:
-        print("key counts, head vs base:")
+        print("row counts, head vs base:")
         for line in counts:
             print(f"  {line}")
     if violations:

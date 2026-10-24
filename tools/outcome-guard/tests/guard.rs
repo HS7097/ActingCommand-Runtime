@@ -99,7 +99,7 @@ fn g8_names_and_prefixes_follow_the_rules() {
 }
 
 #[test]
-fn g9_merged_catalog_is_current_and_keeps_released_entries() {
+fn g9_fragments_merge_and_keep_released_entries() {
     assert_none("G9", check_contract(workspace()));
 }
 
@@ -301,21 +301,7 @@ fn gate_g7_reports_ui_prefixed_keys_on_either_side() {
 }
 
 #[test]
-fn g9_reports_a_stale_merged_file_and_a_changed_settled_entry() {
-    let mut changed = changed_workspace();
-    let catalog = changed.catalog.as_mut().expect("the catalog loads");
-    if let Some(entry) = catalog.codes.get_mut("foreign_os_error") {
-        entry.insert(
-            "description".to_owned(),
-            serde_json::Value::from("Another description."),
-        );
-    }
-    assert_reported(
-        "G9",
-        &check_contract(&changed),
-        "is not the merge of the fragments",
-    );
-
+fn g9_reports_a_changed_settled_entry() {
     let snapshot = serde_json::json!({
         "schema_version": RELEASE_SCHEMA_VERSION,
         "release": "0.12.0",
@@ -336,6 +322,100 @@ fn g9_reports_a_stale_merged_file_and_a_changed_settled_entry() {
         "settled foreign_os_error changed its category",
     );
     assert_reported("G9", &violations, "gained the required key raw_source");
+}
+
+/// Workflow #420 S2: the merged catalog is generated from the fragments at build time and never
+/// committed. A fragment change, here a new pending code and new text on a settled code, keeps
+/// G9 green while the workspace holds no merged file: a pull request that changes codes is green
+/// on its first push, and two pull requests that change different fragments share no file.
+#[test]
+fn gate_420_s2_a_fragment_change_needs_no_committed_merged_file() {
+    const MERGED_FILE: &str = "contracts/outcome-codes.json";
+    let root = workspace_root(Path::new(env!("CARGO_MANIFEST_DIR")));
+    assert!(
+        !root.join(MERGED_FILE).exists(),
+        "{MERGED_FILE} is committed; the build generates the merged catalog (#420 S2)"
+    );
+    let mut changed = changed_workspace();
+    let catalog = changed.catalog.as_mut().expect("the catalog loads");
+    let mut entry = catalog
+        .codes
+        .get("foreign_os_error")
+        .cloned()
+        .expect("the contract fragment lists foreign_os_error");
+    entry.insert("review".to_owned(), "pending".into());
+    entry.insert("description".to_owned(), "A new pending code.".into());
+    catalog
+        .codes
+        .insert("foreign_new_source_failed".to_owned(), entry);
+    if let Some(entry) = catalog.codes.get_mut("foreign_os_error") {
+        entry.insert("description".to_owned(), "Another description.".into());
+    }
+    assert_none("G9", check_contract(&changed));
+}
+
+/// Workflow #420 S3: the compact release files still hold a released settled code to its
+/// signature. A settled code of the committed release file `released/0.12.0.json` whose category
+/// or whose key's type changes in the catalog turns G9 red, naming that release file.
+#[test]
+fn gate_420_s3_a_released_code_retyped_is_refused_from_the_compact_release_file() {
+    let root = workspace_root(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let relative = format!("{RELEASED_DIR}/0.12.0.json");
+    let text = fs::read_to_string(root.join(&relative))
+        .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+    let release: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {relative}: {error}"));
+    assert_eq!(release["schema_version"], RELEASE_SCHEMA_VERSION);
+    let (name, key) = release["codes"]
+        .as_object()
+        .expect("codes is an object")
+        .iter()
+        .filter(|(_, entry)| entry["review"] == "settled")
+        .find_map(|(name, entry)| {
+            let key = entry["values"].as_object()?.keys().next()?.clone();
+            Some((name.clone(), key))
+        })
+        .expect("the 0.12.0 release file holds a settled code with a value key");
+
+    let mut recategorised = changed_workspace();
+    let catalog = recategorised.catalog.as_mut().expect("the catalog loads");
+    let entry = catalog
+        .codes
+        .get_mut(&name)
+        .expect("the released code is in the catalog");
+    let current = entry
+        .get("category")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let other = ["success", "info", "warning", "error", "fatal"]
+        .into_iter()
+        .find(|category| current.as_deref() != Some(*category))
+        .expect("another category");
+    entry.insert("category".to_owned(), other.into());
+    assert_reported(
+        "G9",
+        &check_contract(&recategorised),
+        &format!("G9 {relative}: settled {name} changed its category"),
+    );
+
+    let mut retyped = changed_workspace();
+    let catalog = retyped.catalog.as_mut().expect("the catalog loads");
+    let entry = catalog
+        .keys
+        .get_mut(&key)
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("the value key is in the key table");
+    let kind = if entry.get("type").and_then(serde_json::Value::as_str) == Some("token") {
+        "name"
+    } else {
+        "token"
+    };
+    entry.insert("type".to_owned(), kind.into());
+    assert_reported(
+        "G9",
+        &check_contract(&retyped),
+        &format!("G9 {relative}: settled {name} changed the type or presence of key {key}"),
+    );
 }
 
 /// #378 A2a T6 (a, b) (brief-a2a.md; model-378 §16 A-9 :631; A1 acceptance carry-over 3): a
@@ -540,11 +620,12 @@ fn gate_c5_g1b_every_code_has_a_ladder_class_and_a_settled_class_stays() {
     }
 }
 
-/// #378 A8b (model-378 §9 G10, §5.2, §5.3; runtime-outcomes.md, "Release snapshot"): every
-/// settled entry of the catalog has its text, and the v0.12.0 release has its snapshot: the
-/// `actingcommand.outcome-codes.release.v1` document of release 0.12.0, whose every code holds
-/// exactly `category`, `ladder_class`, `review`, `status` and `values` (each key's `type` and
-/// `required`) and every location exactly `review` and `status`. G10 holds for releasing
+/// #378 A8b (model-378 §9 G10, §5.2, §5.3; runtime-outcomes.md, "Release files"), in the compact
+/// form of Workflow #420 S3: every settled entry of the catalog has its text, and the v0.12.0
+/// release has its release file: the `actingcommand.outcome-codes.release.v2` document of
+/// release 0.12.0, which holds only settled or retired entries, every code with exactly
+/// `category`, `ladder_class`, `review`, `status` and `values` (each key's `type` and
+/// `required`) and every location with exactly `review` and `status`. G10 holds for releasing
 /// v0.12.0.
 #[test]
 fn gate_g10_settled_entries_have_text_and_v0120_has_its_snapshot() {
@@ -560,7 +641,7 @@ fn gate_g10_settled_entries_have_text_and_v0120_has_its_snapshot() {
     assert_eq!(
         members(&snapshot),
         BTreeSet::from(["codes", "locations", "release", "schema_version"]),
-        "the members of the snapshot"
+        "the members of the release file"
     );
     assert_eq!(snapshot["schema_version"], RELEASE_SCHEMA_VERSION);
     assert_eq!(snapshot["release"], "0.12.0");
@@ -568,15 +649,21 @@ fn gate_g10_settled_entries_have_text_and_v0120_has_its_snapshot() {
     let locations = snapshot["locations"]
         .as_object()
         .expect("locations is an object");
-    assert!(!codes.is_empty(), "the v0.12.0 snapshot lists codes");
+    assert!(
+        !codes.is_empty(),
+        "the v0.12.0 release file lists settled codes"
+    );
     assert!(
         !locations.is_empty(),
-        "the v0.12.0 snapshot lists locations"
+        "the v0.12.0 release file lists settled locations"
     );
     let categories = ["success", "info", "warning", "error", "fatal"];
     let reviews = ["pending", "settled"];
     let statuses = ["active", "retired"];
     let token = |value: &serde_json::Value| value.as_str().unwrap_or_default().to_owned();
+    let binds = |entry: &serde_json::Value| {
+        token(&entry["review"]) == "settled" || token(&entry["status"]) == "retired"
+    };
     for (name, entry) in codes {
         assert_eq!(
             members(entry),
@@ -599,6 +686,7 @@ fn gate_g10_settled_entries_have_text_and_v0120_has_its_snapshot() {
             statuses.contains(&token(&entry["status"]).as_str()),
             "code {name}: status"
         );
+        assert!(binds(entry), "code {name}: neither settled nor retired");
         let values = entry["values"].as_object().expect("values is an object");
         for (key, value) in values {
             assert_eq!(
@@ -627,6 +715,7 @@ fn gate_g10_settled_entries_have_text_and_v0120_has_its_snapshot() {
             statuses.contains(&token(&entry["status"]).as_str()),
             "location {name}: status"
         );
+        assert!(binds(entry), "location {name}: neither settled nor retired");
     }
 }
 
