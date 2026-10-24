@@ -2089,7 +2089,7 @@
     },
     "install_refusal": {
       "type": "vocab:install_refusal",
-      "description": "Why an installer update or rollback refused before any change."
+      "description": "Why an installer command refused, or failed without leaving an unfinished operation."
     },
     "release_checks": {
       "type": "list<vocab:release_check>",
@@ -2105,7 +2105,11 @@
     },
     "install_guards": {
       "type": "list<vocab:install_guard>",
-      "description": "Installer guards."
+      "description": "The installer guards that failed or could not be evaluated."
+    },
+    "install_caveat": {
+      "type": "vocab:install_caveat",
+      "description": "What an installer command noted while its work went on: something left unchecked, pending or on the previous build."
     }
   },
   "vocabularies": {
@@ -6352,31 +6356,64 @@
       }
     },
     "install_refusal": {
-      "description": "Why an installer command (adopt, stage, update, rollback, undo) refused before any change (contracts/install-cli.md).",
+      "description": "Why an installer command refused, or failed without leaving an unfinished operation (contracts/install-cli.md, \"Outcome codes\").",
       "tokens": {
         "not_single_location": {
           "description": "The root is no single-location root: runtime\\BUILD-MANIFEST.json is not a file."
+        },
+        "layout_ab_unsupported": {
+          "description": "The root holds install\\active.json (path): an A/B installation, which acsetup installs, not actingctl install."
         },
         "not_adopted": {
           "description": "install\\state.json is missing: run actingctl install adopt first."
         },
         "state_invalid": {
-          "description": "install\\state.json or an operation journal is not what this build writes."
+          "description": "install\\state.json, install\\current.json or an operation journal is not what this build writes (path)."
+        },
+        "operation_unfinished": {
+          "description": "Another installer operation is unfinished (install\\current.json, install_operation_id): every other mutating command refuses until install resume or install undo ends it."
+        },
+        "foreign_part": {
+          "description": "A staging part (.part) of another operation lies in the root (path); Tools never removes it."
+        },
+        "writer_lock_failed": {
+          "description": "install\\writer.lock could not be taken within install.lock_wait_ms."
+        },
+        "release_check_failed": {
+          "description": "A release folder failed its checks; release_checks lists every failed check."
         },
         "live_build_invalid": {
           "description": "The live runtime\\ and tools\\ manifests are unreadable or name different commits."
         },
-        "config_unreadable": {
-          "description": "The root's actingd.config.json cannot be read or is not JSON."
-        },
-        "install_section_invalid": {
-          "description": "The configuration's install section breaks its rules (config_value_invalid is the link)."
+        "live_build_modified": {
+          "description": "A file that a live manifest lists differs from it or is missing (count, files)."
         },
         "build_not_kept": {
           "description": "The named build is not kept under install\\builds."
         },
         "build_invalid": {
-          "description": "The kept build does not verify against its own manifests."
+          "description": "The kept build does not verify against its own manifests (commit_sha, path)."
+        },
+        "config_unreadable": {
+          "description": "The root's actingd.config.json, or the standard-pack root it names, cannot be read or is not JSON."
+        },
+        "install_section_invalid": {
+          "description": "The configuration's install section breaks its rules (config_value_invalid is the link)."
+        },
+        "config_refused_by_target": {
+          "description": "check-config of the build that will run refused the configuration: the live one for an update or rollback, the candidate for a configuration commit (INST-3); its outcome is the link."
+        },
+        "check_config_unanswered": {
+          "description": "check-config of a build could not be run or answered no report."
+        },
+        "config_base_changed": {
+          "description": "The configuration candidate was built on a live file that has changed since (INST-3)."
+        },
+        "lab_options_locked": {
+          "description": "config set may not write a Lab option (config_key); only config lab-options writes them (INST-3)."
+        },
+        "catalog_plan_unexpected": {
+          "description": "The candidate changes the catalog plan without a policy write (INST-3)."
         },
         "runtime_running": {
           "description": "An actingcommand-actingd.exe runs under the root."
@@ -6387,14 +6424,11 @@
         "processes_unreadable": {
           "description": "The processes under the root could not be read."
         },
+        "running_image_blocks": {
+          "description": "A running process's image under the root would change and may not be renamed aside (path, pid): any image but actingctl.exe, and adb.exe always."
+        },
         "interface_edge": {
           "description": "An interface edge failed; the result's edges list it."
-        },
-        "config_refused_by_target": {
-          "description": "The target build's check-config refused the live configuration."
-        },
-        "check_config_unanswered": {
-          "description": "check-config of a build could not be run or answered no report."
         },
         "ledger_verify_failed": {
           "description": "The target build's ledger-maintenance verify did not pass."
@@ -6402,8 +6436,61 @@
         "ledger_head_unreadable": {
           "description": "The ledger head (S0) could not be read with the live build's actingledger."
         },
-        "writer_lock_failed": {
-          "description": "install\\writer.lock could not be taken within install.lock_wait_ms."
+        "plan_changed": {
+          "description": "The plan recomputed under the writer lock differs from the plan_id the apply was given: something changed since the plan."
+        },
+        "rollback_gate_failed": {
+          "description": "The rollback gate failed (rollback_gate_parts); ledger_sequence is the first sequence of a page the target's own reader refused. Only a forward fix remains."
+        },
+        "guard_failed": {
+          "description": "A guard failed or could not be evaluated and was not acknowledged with --ack-guard (install_guards; INST-2)."
+        },
+        "runtime_start_failed": {
+          "description": "The installer's start ended without a ready Runtime (INST-2): the start path's own code is the link (exited_during_startup, or start_timeout with its timeout_ms, after which the process is left running)."
+        },
+        "pack_invalid": {
+          "description": "A bundle zip failed the placement checks (game; INST-4)."
+        },
+        "pack_binding_broken": {
+          "description": "A package the configuration binds is not in the new bundle (package_id; INST-4)."
+        },
+        "pack_maintenance_drift": {
+          "description": "A server's maintenance role moves to another package while an instance binds the old one (package_id; INST-4)."
+        },
+        "instances_not_idle": {
+          "description": "A hot placement found the affected instances not idle in time (aliases); they stay paused (INST-4)."
+        },
+        "instance_invalid": {
+          "description": "An instance add or remove was refused (alias; INST-5)."
+        }
+      }
+    },
+    "install_caveat": {
+      "description": "What an installer command noted while its work went on (contracts/install-cli.md, \"Outcome codes\").",
+      "tokens": {
+        "release_unconfirmed": {
+          "description": "A release folder was checked without a release-facts file: the files match SHA256SUMS and their manifests, but the tag and the published asset digests were not checked."
+        },
+        "mcp_clients_on_previous_build": {
+          "description": "An update or rollback renamed running actingctl images aside (MCP servers, reads) that keep running on the previous build (count); their clients reconnect to use the new build."
+        },
+        "pack_declaration_unknown": {
+          "description": "A placed game root's package interface is not known (adopted roots keep no interfaces.json), so the package edge could not be checked for it (game)."
+        },
+        "post_check_mismatch": {
+          "description": "A post-check after an installer start did not match (count); the Runtime stays up and the hold stays (INST-2)."
+        },
+        "restart_required": {
+          "description": "A configuration was committed while the Runtime runs: it takes effect at the next start, a watchdog restart after a crash included (INST-3)."
+        },
+        "config_overridden_by_instruction": {
+          "description": "A configuration key written to the candidate is overridden by a run-time instruction (config_key; INST-3)."
+        },
+        "pack_restart_needed": {
+          "description": "A placement changes the reading keys of a bound recognition package, which the Runtime reads only at start (package_id; INST-4)."
+        },
+        "pack_full_check_skipped": {
+          "description": "No actinglab.exe under the root's tools\\, so a placed game root got the Runtime reader's check only (path; INST-4)."
         }
       }
     },

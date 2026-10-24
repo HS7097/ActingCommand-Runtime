@@ -2952,196 +2952,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "install_release_verified": {
+    "install_command_done": {
       "category": "success",
       "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
       "values": {
-        "commit_sha": "required",
-        "tag": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install release verify (or the check inside release stage) found a Runtime zip and a Tools zip of one commit, listed in SHA256SUMS, each manifest's layout, repository and commit right, every file of each manifest present with its size and SHA-256, and both manifests declaring the same interfaces; with a release-facts file also the asset digests, the commit and the tag. commit_sha is the build's commit, tag the facts' tag. The result line carries commit, tree, tag, prerelease, interfaces and files.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_build_staged": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "commit_sha": "required",
-        "install_operation_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install release stage kept a verified build under install\\builds\\<commit> with its release.json and recorded it in install\\state.json. install_operation_id names the journalled operation; it is absent when the build was already kept and verified (the result's unchanged is true).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_root_adopted": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "commit_sha": "required",
-        "install_operation_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install adopt verified the live runtime\\ and tools\\ against their manifests, kept a copy of the listed files as install\\builds\\<commit>, and wrote install\\state.json with the live build, the pack register and the configuration's SHA-256. install_operation_id is absent when the same live build was already adopted (unchanged).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_update_planned": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "plan_id": "required",
-        "commit_sha": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install update plan computed the plan of an in-place update to the kept build commit_sha; plan_id names the canonical plan document that update apply must be given. The result line carries the builds, the interface edges, the file plan, the defaults diff, both check-config summaries, the running state and the notice block. Read-only.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_update_applied": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "required",
-        "commit_sha": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install update apply replaced the program files of runtime\\ and tools\\ by those of the kept build commit_sha under the writer lock, kept every replaced file as <file>.old-<ms>, verified every manifest file in place and recorded the new live build. install_operation_id names the journal, which is the rollback record.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_update_unchanged": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "commit_sha": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install update apply found the live build already equal to the kept build commit_sha: nothing to replace, nothing changed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_rollback_planned": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "plan_id": "required",
-        "commit_sha": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install rollback plan computed the plan of a rollback to the kept build commit_sha and found the rollback gate passing; plan_id names the plan document. Read-only.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_rollback_applied": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "required",
-        "commit_sha": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install rollback apply evaluated the rollback gate again under the writer lock and replaced the program files by those of the kept build commit_sha, as an update does.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_operation_resumed": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install resume finished the unfinished operation install_operation_id from its journal: each step's postcondition was checked on disk and the missing steps were done.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_operation_undone": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install undo reversed the operation install_operation_id: parts abandoned, swapped files put back from their .old-<ms> copies, the state rewritten. Every displaced file is kept.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_runtime_stopped": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install stop held dispatch and closed the Runtime formally (INST-2).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_runtime_started": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
+        "operation": "required",
+        "installation_changed": "optional",
+        "install_operation_id": "optional",
+        "commit_sha": "optional",
+        "tag": "optional",
+        "plan_id": "optional",
+        "count": "optional",
+        "game": "optional",
+        "alias": "optional",
+        "path": "optional",
         "pid": "optional",
         "owner_epoch": "optional",
         "log": "optional"
@@ -3149,360 +2976,32 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "actingctl install start started the Runtime as the installer and it became ready (INST-2).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An actingctl install command did what was asked (contracts/install-cli.md); operation names the command. A mutating command sets installation_changed: false when there was nothing to do (a build already kept and verified, a root already adopted, a live build already equal to the target; the result's unchanged is true), true when it changed the root, with install_operation_id naming its journal. By command: commit_sha (and tag) of the build verified, staged, adopted, planned or applied; plan_id of a plan; count of the instances a release-hold resumed or of the kept leftovers; game of a pack command; alias of an instance command; path of the configuration candidate; pid, owner_epoch and log of a start. resume answers it with the resumed operation's own result as its related link. A caveat of the work is an install_caveat_noted note link. Read-only commands (release verify, every plan, status, guards, config show and diff, leftovers) write nothing. Exit 0.",
+      "common_causes": "The command succeeded.",
+      "handling": "None. A plan's plan_id is what its apply takes; an operation's install_operation_id is what install status --operation, resume and undo take."
     },
-    "install_hold_released": {
-      "category": "success",
+    "install_caveat_noted": {
+      "category": "warning",
       "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
       "values": {
-        "count": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install release-hold resumed the instances paused with exactly the given hold reason (INST-2); count is how many.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_guards_reported": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install guards reported the guards of a command (INST-2). Read-only.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_staged": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "path": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "An actingctl install config or instance command wrote the configuration candidate under install\\candidate (INST-3); the live file is unchanged.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_planned": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "plan_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install config commit plan computed the commit plan of the configuration candidate (INST-3). Read-only.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_committed": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install config commit apply replaced the live configuration by the candidate, keeping the previous file as actingd.config.json.prev-<ms> (INST-3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_restored": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install config restore committed a kept actingd.config.json.prev-<ms> (INST-3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_planned": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "plan_id": "optional",
-        "game": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install pack plan computed the placement plan of a bundle zip (INST-4). Read-only.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_placed": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "optional",
-        "game": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install pack place placed a bundle's game root and recorded it in the pack register (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_removed": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "optional",
-        "game": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install pack remove renamed a game root aside as packages\\<game>.old-<ms> (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_restored": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "optional",
-        "game": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install pack restore put the kept items of one finished pack operation back (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_instance_staged": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "alias": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install instance add or remove wrote the configuration candidate (INST-5).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_root_created": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
+        "operation": "required",
+        "install_caveat": "required",
         "commit_sha": "optional",
-        "install_operation_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install new created a fresh single-location root (INST-6).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_status_reported": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install status reported the root's install state: the live and kept builds, the pack register, the configuration, the unfinished operation and the rollback window. Read-only.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_leftovers_reported": {
-      "category": "success",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "count": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install leftovers listed every file and folder the installer kept (.old-, .rolledback-, .prev-, .part, .abandoned- and finished markers); count is how many. Nothing is deleted.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_restart_required": {
-      "category": "info",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A configuration was committed while the Runtime runs (INST-3): it takes effect at the next start, a watchdog restart after a crash included.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_full_check_unavailable": {
-      "category": "info",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
+        "count": "optional",
+        "game": "optional",
+        "package_id": "optional",
+        "config_key": "optional",
         "path": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "No actinglab.exe under the root's tools\\, so a placed game root got the Runtime reader's check only (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_release_verified_local": {
-      "category": "warning",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "commit_sha": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install release verify checked the zips without a release-facts file: the files match SHA256SUMS and their manifests, but the tag and the published asset digests were not checked.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_mcp_clients_on_previous_build": {
-      "category": "warning",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "count": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "An update renamed running actingctl images aside (MCP servers, reads) that keep running on the previous build; count is how many. Their MCP clients reconnect to use the new build.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_post_check_failed": {
-      "category": "warning",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "count": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A post-check after an installer start did not match (INST-2); the Runtime stays up and the hold stays.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_declaration_unknown": {
-      "category": "warning",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "game": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A placed game root's package interface is not known (adopted roots keep no interfaces.json), so the package edge of an update or rollback could not be checked for it.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_restart_needed": {
-      "category": "warning",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "package_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A placement changes the reading keys of a bound recognition package; the Runtime reads them only at start (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_overridden_by_instruction": {
-      "category": "warning",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "config_key": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A configuration key written to the candidate is overridden by a run-time instruction (INST-3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An actingctl install command did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. As a note link under install_command_done it qualifies a success: mcp_clients_on_previous_build (count) after an update or rollback, pack_declaration_unknown (game) in a plan, restart_required after a configuration commit while the Runtime runs, post_check_mismatch (count) after a start, config_overridden_by_instruction (config_key), pack_restart_needed (package_id), pack_full_check_skipped (path). As the top it is the command's own result and carries install_command_done's values: release verify without a release-facts file (release_unconfirmed, commit_sha). Exit 0.",
+      "common_causes": "MCP servers running during an update; an adopted root whose packs declare no interfaces; a release folder checked without its facts; a configuration committed while the Runtime runs; a post-check after a start that did not match.",
+      "handling": "Act on install_caveat when it matters: reconnect the MCP clients, check the release against its published facts, restart the Runtime when the person chooses, or read the post-check. The command itself needs nothing more."
     },
     "watchdog_installer_unfinished": {
       "category": "warning",
@@ -3520,356 +3019,38 @@
       "common_causes": "An installer died or failed in the middle of an operation; its writer lock was released by the OS.",
       "handling": "Run actingctl install resume or install undo with the operation id."
     },
-    "install_release_refused": {
+    "install_command_refused": {
       "category": "error",
       "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
       "values": {
-        "release_checks": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "actingctl install release verify or stage refused a release folder; release_checks lists every failed check, and the result line's failures name each one with its file and digests. Nothing was written.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_update_refused": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
+        "operation": "required",
         "install_refusal": "required",
+        "release_checks": "optional",
+        "rollback_gate_parts": "optional",
+        "install_guards": "optional",
+        "ledger_sequence": "optional",
+        "plan_id": "optional",
+        "install_operation_id": "optional",
         "commit_sha": "optional",
         "path": "optional",
-        "count": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "An installer command (adopt, release stage, update, rollback, undo) refused before any change; install_refusal says why (the root's layout or install state, the live build, the configuration or its install section, a kept build that is missing or does not verify, a running Runtime, a held owner lock, a failed interface edge listed in the result's edges, the target's check-config refusing the configuration, a failed ledger verification, the ledger head, the writer lock). A check's own outcome is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_rollback_refused": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "rollback_gate_parts": "required",
-        "commit_sha": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The rollback gate failed (rollback plan or apply, undo of a finished update, status --check-rollback): rollback_gate_parts lists the failed parts. Only a forward fix remains.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_rollback_ledger_unreadable": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "ledger_sequence": "required",
-        "commit_sha": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The rollback build's own actingledger refused a ledger page after S0; ledger_sequence is the first sequence of the refused page. The rollback window is closed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_plan_changed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "plan_id": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "An apply was given plan_id, but the plan recomputed under the writer lock differs: something changed since the plan. Nothing was changed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_guard_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_guards": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A guard of the command failed or could not be evaluated and was not acknowledged with --ack-guard (INST-2).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_operation_unfinished": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "install_operation_id": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "Another installer operation, install_operation_id, is unfinished (install\\current.json): every other mutating command refuses until resume or undo ends it.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_foreign_part": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "path": "required"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A staging part (.part) of another operation lies in the root at path. Tools never removes it.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_running_image_blocks": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "path": "required",
-        "pid": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A running process's image under the root would change and may not be renamed aside: any image but actingctl.exe, and adb.exe always.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_live_build_modified": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "count": "required",
-        "files": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A file that a live manifest lists differs from it or is missing; files names them. adopt and update refuse.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_layout_ab_unsupported": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "path": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The root holds install\\active.json: an A/B installation, which acsetup installs, not actingctl install.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_refused": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The configuration candidate was refused by check-config (INST-3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_base_changed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The configuration candidate was built on a live file that has changed since (INST-3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_config_lab_options_locked": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
+        "pid": "optional",
+        "count": "optional",
+        "files": "optional",
+        "game": "optional",
+        "package_id": "optional",
+        "aliases": "optional",
+        "alias": "optional",
         "config_key": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "config set may not write a Lab option; only config lab-options writes them (INST-3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_catalog_plan_unexpected": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The candidate changes the catalog plan without a policy write (INST-3).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_refused": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "game": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A bundle zip was refused by the placement checks (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_binding_broken": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "package_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A package the configuration binds is not in the new bundle (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_maintenance_drift": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "package_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A server's maintenance role moves to another package while an instance binds the old one (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_pack_not_idle": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "aliases": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "A hot placement found the affected instances not idle in time; they stay paused (INST-4).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_instance_refused": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "alias": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "An instance add or remove was refused (INST-5).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_runtime_start_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The installer's start failed (INST-2).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "install_runtime_start_timeout": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "timeout_ms": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.12",
-      "description": "The installer's start did not become ready in time; the process is left running (INST-2).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An actingctl install command refused, or failed without leaving an unfinished operation; operation names the command and install_refusal says why, with that reason's values: release_checks (release_check_failed: every failed check; the result's failures name each with its file and digests), rollback_gate_parts and ledger_sequence (rollback_gate_failed: the failed parts, and the first sequence of a page the target's reader refused), install_guards (guard_failed), plan_id (plan_changed), install_operation_id (operation_unfinished), count and files (live_build_modified), path and pid (running_image_blocks; path also for foreign_part, layout_ab_unsupported and the file a reason concerns), commit_sha (a build), game, package_id, alias, aliases and config_key (the configuration, pack and instance reasons). The cause is the caused_by link: check-config's outcome, the start path's code, a child process's failure, an OS error. Nothing was changed but what the reason says: instances_not_idle keeps the instances paused, and runtime_start_failed after a timeout leaves the process running. A journalled operation whose own checks refuse (a staged release's extracted files, an adopt's copy) is finished with this refusal and keeps its part folder as .abandoned-<ms>. Exit 1.",
+      "common_causes": "A release folder that does not verify; a root that is not adopted, not single-location or an A/B installation; another installer operation unfinished; a running Runtime or image; a changed live file; a configuration the target build refuses; a failed rollback gate or guard; a plan that changed since it was made.",
+      "handling": "Read install_refusal and its values, fix the cause and run the command again. For operation_unfinished run install resume or install undo first; after rollback_gate_failed only a forward fix remains."
     },
     "install_operation_interrupted": {
       "category": "fatal",
@@ -3878,14 +3059,281 @@
       "layer": "process",
       "uncertain": false,
       "values": {
+        "operation": "required",
         "install_operation_id": "required"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A step of the installer operation install_operation_id failed after it had changed the disk. The journal names the step; until install resume or install undo runs, the root cannot run normally (a half-swapped program tree). The step's own failure is the caused_by link.",
+      "description": "A step of the installer operation install_operation_id failed after it had changed the disk; operation names the journalled command (release stage, adopt, update, rollback and the like). The journal names the step; until install resume or install undo runs, the root cannot run normally (a half-swapped program tree), and the watchdog stands aside (watchdog_installer_unfinished). The step's own failure is the caused_by link. Exit 2.",
       "common_causes": "A file system error, a full disk, a process holding a file, or the installer killed in the middle of an operation.",
       "handling": "Fix the cause, then run actingctl install resume --operation <id> to finish the operation or install undo --operation <id> to reverse it."
+    }
+  },
+  "locations": {
+    "install_release_verify": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install release verify (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_release_stage": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install release stage (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_adopt": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install adopt (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_update_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install update plan (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_update_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install update apply (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_rollback_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install rollback plan (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_rollback_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install rollback apply (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_undo": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install undo (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_resume": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install resume (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_status": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install status (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_leftovers": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install leftovers (Workflow #421 INST-1; contracts/install-cli.md)."
+    },
+    "install_stop": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install stop (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_start": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install start (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_release_hold": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install release-hold (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_guards_report": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install guards (Workflow #421 INST-2; contracts/install-cli.md)."
+    },
+    "install_config_show": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config show (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_diff": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config diff (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_set": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config set (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_bind": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config bind (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_policy": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config policy (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_lab_options": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config lab-options (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_commit_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config commit plan (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_commit_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config commit apply (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_discard": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config discard (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_config_restore": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install config restore (Workflow #421 INST-3; contracts/install-cli.md)."
+    },
+    "install_instance_add": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install instance add (Workflow #421 INST-5; contracts/install-cli.md)."
+    },
+    "install_instance_remove": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install instance remove (Workflow #421 INST-5; contracts/install-cli.md)."
+    },
+    "install_pack_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack plan (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_place": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack place (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_remove_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack remove plan (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_remove_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack remove apply (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_pack_restore": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install pack restore (Workflow #421 INST-4; contracts/install-cli.md)."
+    },
+    "install_new": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The operation of the command actingctl install new (Workflow #421 INST-6; contracts/install-cli.md)."
     }
   }
 }
