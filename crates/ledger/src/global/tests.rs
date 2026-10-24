@@ -2679,6 +2679,8 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         .expect("capture queue"),
     );
     let ledger = GlobalLedger {
+        // LN-5 (#422): the default rows of one page of a history read.
+        history_page_rows: super::history::DEFAULT_HISTORY_PAGE_ROWS,
         sender: Some(sender),
         writer: Some(writer),
         commit_statistics: Arc::new(CommitStatistics::new(0).expect("statistics")),

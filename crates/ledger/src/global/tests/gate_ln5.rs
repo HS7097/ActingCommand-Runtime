@@ -21,7 +21,7 @@
 //!   chain without its lease grant is refused and the writer goes on.
 //!
 //! Every record time is a fixed offset; T2's budget runs on a clock that moves a fixed step each
-//! time it is read. `BARRIER_WAIT` only bounds a broken run.
+//! time it is read. `BARRIER_WAIT` and `GATE_WAIT` only bound a broken run.
 
 use super::*;
 use crate::WriterReadHoldGate;
@@ -41,6 +41,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
 
+/// Test plan v2.2 §2.1 guard 3: the one bound of a cross-thread wait in this file.
+const GATE_WAIT: Duration = Duration::from_secs(30);
 const AT_MS: u64 = 1_752_147_200_000;
 /// The rows of one history page in these tests.
 const ROWS: usize = 2;
@@ -121,7 +123,7 @@ fn rejected() -> EventPayloadDraft {
     .into()
 }
 
-fn lab_request() -> EventPayloadDraft {
+fn lab_request_payload() -> EventPayloadDraft {
     ClientPayloadDraft::lab_request(EventAction::RuntimeTaskRun, AuditInput::new()).into()
 }
 
@@ -261,7 +263,7 @@ fn corpus(ledger: &GlobalLedger) -> Corpus {
             EventLinksDraft::default()
                 .with_request_id(lab_request)
                 .with_correlation_id(lab_correlation),
-            lab_request(),
+            lab_request_payload(),
         ),
         draft(
             &ids,
@@ -585,7 +587,7 @@ fn ln5_t1_each_query_condition_selects_what_the_contract_names() {
             .iter()
             .map(|_| {
                 subscription
-                    .recv_timeout(BARRIER_WAIT)
+                    .recv_timeout(GATE_WAIT)
                     .expect("a replayed record")
             })
             .collect::<Vec<_>>();
