@@ -1024,6 +1024,7 @@ fn validate_predicate_node(
             fact_key,
             offset_ms,
             max_age_ms,
+            ..
         } => {
             if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
                 diagnostics.push(map.diagnostic(
@@ -1070,7 +1071,20 @@ fn validate_predicate_node(
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
+            since_own_run,
         } => {
+            // SCH-M CF-1: the edge member is V2 only; a V1 document that writes it, with either
+            // value, is refused at the member.
+            if since_own_run.is_some()
+                && map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)
+            {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::UnknownField,
+                    format!("{path}/since_own_run"),
+                    "dependency_completed since_own_run requires actingcommand.scheduling.v2",
+                    descriptor,
+                ));
+            }
             if !task_ids.contains(task_id.as_str()) {
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::DanglingReference,

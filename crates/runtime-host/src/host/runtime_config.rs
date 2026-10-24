@@ -355,6 +355,21 @@ impl HostShared {
         Ok(config)
     }
 
+    /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, read when a run reaches
+    /// its deadline.
+    pub(super) fn run_end_grace_ms(&self) -> RuntimeHostResult<u64> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .run_end_grace_ms()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, read at every renewal.
     pub(super) fn renewal_slack_ms(&self) -> RuntimeHostResult<u64> {
         lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
@@ -613,6 +628,28 @@ impl HostShared {
                 )
                 .with_outcome_values(|outcome| failure.with_values(outcome))
             })
+    }
+
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, read at each step of a
+    /// contained run and handed to the kernel with the step's pacing.
+    pub(super) fn capture_cadence(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_execution_kernel::CaptureCadence> {
+        let cadence = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .capture_cadence()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        Ok(actingcommand_execution_kernel::CaptureCadence::new(
+            cadence.max_interval_ms,
+            cadence.backoff_enabled,
+            cadence.idle_ceiling_ms,
+        ))
     }
 
     /// Records one configuration fact, observed now and strictly after the stored record of its

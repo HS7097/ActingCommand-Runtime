@@ -3202,6 +3202,18 @@ impl RuntimeHost {
             .expire_due_leases()
     }
 
+    /// #411 A64: holds the lease sweep's expiry scan (`expire_due_leases`) until the returned
+    /// guard drops, so that a run's own lease end, not the sweep, meets the run's lapsed lease.
+    #[cfg(test)]
+    pub(crate) fn hold_lease_expiry_scan_for_test(&self) -> RuntimeHostResult<MutexGuard<'_, ()>> {
+        let shared = self
+            .shared_ref(crate::codes::test_spellings::TestLocation::SerializeTestLeaseExpiryScan)?;
+        lock(
+            &shared.lease_expiry_scan_test_gate,
+            crate::codes::test_spellings::TestLocation::SerializeTestLeaseExpiryScan,
+        )
+    }
+
     /// Workflow #398 RD-2: one event of the running device-link watch, handed in as its reader
     /// hands it (the fake provider's watch reports nothing by itself).
     #[cfg(test)]

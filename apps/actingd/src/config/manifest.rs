@@ -144,6 +144,21 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCH-M CF-1: this build reads the catalog edge members `since_own_run` and
+        // `once_per_reading`; the catalog generator emits them only when check-config names it.
+        subsystem(
+            "condition_edges",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        // SCH-M CF-2: this build admits completion-time reading marks (`timestamp_ms`) and
+        // publishes their times; packs that declare one are placed only on a Runtime that names
+        // it.
+        subsystem(
+            "resource_reading_time",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
     let explicit_or_default = |present: bool| {

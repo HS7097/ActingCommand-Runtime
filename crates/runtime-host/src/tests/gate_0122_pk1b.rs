@@ -803,12 +803,14 @@ fn pk2_the_step_pacing_carries_the_stages_extra_rounds_and_pre_input_wait() {
 }
 
 // Test 6 (requirement 4): a direct run of one tap from `home` to `terminal`, its confirmation a
-// frame every 1 s for 3 s (the package's capture interval and step timeout). At a pinned 2 000
-// with one extra round the device shows `terminal` from the sixth frame after the tap on: the
-// first round's frames (0, 1, 2 and 3 s) show `home`, and the second round's second frame
-// confirms the step, so the step's `steps[]` entry has `extra_wait_rounds` 1 beside its factor.
-// At 1 000 with no extra round and `terminal` on the first frame after the tap the run uses none
-// and has no `steps[]` entry.
+// frame every 1 s within 3 s (the package's capture interval and step timeout). The device shows
+// `terminal` a set time after the tap on the Runtime clock, however often the run captures
+// (coordinator ruling C-45). At a pinned 2 000 with one extra round it shows `terminal` 6 s after
+// the first frame after the tap: after the first round's 3 s, which on the still `home` #411 A43b
+// counts unpaced from the second frame on (they end 4 s after that frame), and within the extra
+// round's 3 s (ending 7 s after it). A frame of the second round confirms the step, so the step's
+// `steps[]` entry has `extra_wait_rounds` 1 beside its factor. At 1 000 with no extra round and
+// `terminal` from the first frame after the tap on, the run uses none and has no `steps[]` entry.
 #[test]
 fn pk2_a_steps_used_rounds_are_recorded() {
     let one_tap = package(
@@ -817,33 +819,38 @@ fn pk2_a_steps_used_rounds_are_recorded() {
         3_000,
         60_000,
     );
-    for (factor_milli, extra_wait_rounds, terminal_from, steps) in [
-        (2_000, 1, 6, vec![(0, Some(2_000), Some(1))]),
-        (1_000, 0, 1, Vec::new()),
+    for (factor_milli, extra_wait_rounds, terminal_after_ms, steps) in [
+        (2_000, 1, 6_000, vec![(0, Some(2_000), Some(1))]),
+        (1_000, 0, 0, Vec::new()),
     ] {
         let root = TempDir::new().expect("tempdir");
         let path = root.path().join("one-tap.zip");
         fs::write(&path, &one_tap).expect("write package");
         let state = Arc::new(FakeState::default());
-        // The device shows `home` before the tap, and after it `home` until the
-        // `terminal_from`-th frame, `terminal` from then on.
-        let first_after_tap = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+        let clock = Arc::new(WaitClock::new(1_000));
+        // The device shows `home` before the tap, and after it `home` until `terminal_after_ms`
+        // of the Runtime clock have passed since the first frame after the tap, `terminal` from
+        // then on.
+        let device_clock = Arc::clone(&clock);
+        let first_after_tap_ms = AtomicU64::new(u64::MAX);
         *state.pixel_script.lock().expect("pixel script") = Some(Arc::new(
-            move |capture: usize, inputs: usize| -> Vec<(usize, [u8; 3])> {
+            move |_capture: usize, inputs: usize| -> Vec<(usize, [u8; 3])> {
                 let page = if inputs == 0 {
                     HOME
                 } else {
-                    let first = first_after_tap
-                        .fetch_min(capture, Ordering::SeqCst)
-                        .min(capture);
-                    // This frame is the `nth` after the tap.
-                    let nth = capture - first + 1;
-                    if nth >= terminal_from { TERMINAL } else { HOME }
+                    let now_ms = device_clock.monotonic_ms();
+                    let first_ms = first_after_tap_ms
+                        .fetch_min(now_ms, Ordering::SeqCst)
+                        .min(now_ms);
+                    if now_ms - first_ms >= terminal_after_ms {
+                        TERMINAL
+                    } else {
+                        HOME
+                    }
                 };
                 vec![(0, page)]
             },
         ));
-        let clock = Arc::new(WaitClock::new(1_000));
         let host = direct_host(&root, &clock, &state);
         host.pin_step_pacing_for_test(ALIAS, factor_milli, extra_wait_rounds)
             .expect("pin the step pacing");

@@ -39,6 +39,9 @@ pub use actingcommand_artifact_store::WatermarkRatios;
 pub use migration::*;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use sqlite::after_release_baseline_head_for_test;
+// LN-1 (Workflow #422): the synthetic ledger's batch commit, for `crate::synthetic`.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) use sqlite::synthetic::{AppendedBatch, SyntheticAppender};
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,

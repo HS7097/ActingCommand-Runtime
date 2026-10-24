@@ -498,10 +498,22 @@ pub enum PredicateSpec {
         offset_ms: i64,
         #[serde(deserialize_with = "required_nullable_u64")]
         max_age_ms: Option<u64>,
+        /// SCH-M CF-1 (optional): with `true`, a time the fact holds is served once: after the
+        /// task's latest run succeeded and was dispatched at or after the time plus `offset_ms`
+        /// and the reading's observation, the predicate is false until a newer reading. Absent,
+        /// it serializes as nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        once_per_reading: Option<bool>,
     },
     DependencyCompleted {
         task_id: String,
         terminal_states: Vec<TaskTerminalState>,
+        /// SCH-M CF-1 (`actingcommand.scheduling.v2` only, optional): with `true`, the predicate
+        /// is an edge: true once per new terminal of the predecessor in `terminal_states`, until
+        /// this task has run successfully since it. Absent or `false`, the level semantics; an
+        /// absent member serializes as nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_own_run: Option<bool>,
     },
     Outcome {
         task_id: String,
