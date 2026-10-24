@@ -158,10 +158,11 @@ pub fn assembly_rows() -> &'static [KeyRow] {
 
 /// The rows of the sections this crate resolves and renders (§5.1), one file each: their file
 /// layer, defaults file and section defaults. The section-level keys come before the
-/// per-instance section whose defaults they are.
-fn mechanism_sections() -> [&'static [KeyRow]; 17] {
+/// per-instance section whose defaults they are. A new section is one more line; nothing counts
+/// the sections by hand (Workflow #420 S6).
+fn mechanism_sections() -> Vec<&'static [KeyRow]> {
     let [monitor, responsiveness, pacing, calibration] = performance::sections();
-    [
+    vec![
         recovery_ladder::ROWS,
         host_claims::ROWS,
         standard_packs::ROWS,

@@ -355,6 +355,21 @@ impl HostShared {
         Ok(config)
     }
 
+    /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, read when a run reaches
+    /// its deadline.
+    pub(super) fn run_end_grace_ms(&self) -> RuntimeHostResult<u64> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .run_end_grace_ms()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, read at every renewal.
     pub(super) fn renewal_slack_ms(&self) -> RuntimeHostResult<u64> {
         lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
