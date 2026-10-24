@@ -3180,13 +3180,13 @@ Wave 1 groundwork of v35: behaviour-neutral until ED-2 fills the snapshot member
 [scheduling/README.md](scheduling/README.md) ("Settlement Feedback And Eligibility Age") and
 [runtime-config.md](runtime-config.md) ("Expected duration") are the contract. **No persisted
 ledger shape.** The configuration joins `actingd-config` revision 11. Gates: policy keys 71 to
-76, host key 158.
+76, host key 180.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | ED1-1 | `expected_runtime(samples_newest_first, ExpectedRuntimeSettings {enabled, runs, margin_ms}, declared_ms, max_runtime_ms) -> ExpectedRuntime {expected_ms, source: Declared \| Runs(n)}`; `ExpectedRuntime::snapshot_members` | policy interface (memory only) (policy 71 to 74) | ED-1 | ED-1 | D-12: E = min(⌈mean of the latest min(runs, k)⌉ + margin, M); k = 0 or the switch off: D, no snapshot member |
 | ED1-2 | `TaskRuntimeSnapshot.expected_runtime_ms`, `.expected_runtime_runs` | new optional members of the evaluation input (memory and the input identity; absent: today's bytes) (policy 75, 76) | ED-1 | ED-2 | the evaluator uses E (at most `max_runtime_ms`) for the cost, the intent's `expected_duration_ms`, forward planning and the production estimate; absent, the declared value (and the cost's `last_duration_ms` fallback) as before |
-| ED1-3 | `scheduling.expected_runtime.{enabled, runs, margin_ms}` (`true`, 5 in `1..=16`, 300 000 in `0..=3600000`) and per instance `instance.<id>.scheduling.expected_runtime.*` (default the section's); `scheduling.fact_refresh.expected_duration_ms` (60 000 in `1..=1800000`) | configuration keys (`actingd-config` revision 11) (host 158) | ED-1 | person | all settable; accessor `EffectiveConfig::expected_runtime(instance_id)`; `FactRefreshConfig.expected_duration_ms`; read by ED-2 |
+| ED1-3 | `scheduling.expected_runtime.{enabled, runs, margin_ms}` (`true`, 5 in `1..=16`, 300 000 in `0..=3600000`) and per instance `instance.<id>.scheduling.expected_runtime.*` (default the section's); `scheduling.fact_refresh.expected_duration_ms` (60 000 in `1..=1800000`) | configuration keys (`actingd-config` revision 11) (host 180) | ED-1 | person | all settable; accessor `EffectiveConfig::expected_runtime(instance_id)`; `FactRefreshConfig.expected_duration_ms`; read by ED-2 |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -1831,7 +1831,7 @@ incident = ["#412 B-3"]
 
 # SCH-M ED-1 (frozen model v1.0 §3.4 "Configuration", §6 row ED-1; contracts/runtime-config.md, "Expected duration"; register §1.178 ED1-3): scheduling.expected_runtime.enabled, runs and margin_ms default to true, 5 and 300000 and scheduling.fact_refresh.expected_duration_ms to 60000, all settable; each instance's expected_runtime keys default to the section's, an instance's own key overrides the section for that instance only (from the file and through an instruction), and a change of the section's key reaches every instance that names none
 [[gate]]
-key = "158"
+key = "180"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-config::lib::ed1_tests::ed1_c1_per_instance_keys_override_the_section",
