@@ -142,7 +142,7 @@ journalled. Steps: `extract` into `install\builds\<c>.new-<ms>.part\{runtime,too
 `release.json`: the facts, the verification result and `local_build`), then `record_state` (the
 build added to `state.json`). The checks that need no extraction run before the operation
 opens, so their refusal writes nothing; a check of the extracted files that fails renames the
-part folder `installuilds\<c>.abandoned-<ms>` and finishes the operation with the refusal.
+part folder `install\builds\<c>.abandoned-<ms>` and finishes the operation with the refusal.
 Staging a build that is already kept and verifies answers
 `install_build_staged` with `unchanged: true` and opens no operation. A root that
 `release stage` writes need not be adopted yet: it writes only `install\`.
