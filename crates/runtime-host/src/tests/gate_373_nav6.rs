@@ -793,13 +793,16 @@ fn n6_2_a_broken_game_root_never_stops_the_runtime() {
 /// The budget is spent on the Runtime clock, which the kernel reads (test plan E-3, §3.10): a
 /// manual clock that every capture moves `N6_3_CAPTURE_MS` forward and every wait of the kernel
 /// by its length, so what the step's own frames spend no longer depends on the runner's load.
-/// The step's own wait sees `N6_3_OWN_WAIT_FRAMES` frames that show no page of the run, the
-/// count with which a loaded runner once spent the 600 ms of wall-clock time on them alone (CI
-/// run 38603013861); on the Runtime clock they spend about half of it.
+/// The page stays dark for `N6_3_DARK_MS` of the Runtime clock from the handler's frame on, about
+/// half the step's 600 ms budget (what the ten dark frames of the earlier frame-counted script
+/// spent; a loaded runner once spent the whole 600 ms of wall-clock time on them, CI run
+/// 38603013861). The page arrives after a time however often the run captures (coordinator
+/// ruling C-45): the step's own wait looks at the dark page at its own cadence, which lengthens
+/// while the frames stay unchanged (PERF-B1), and still sees it before `home`.
 #[test]
 fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
     const N6_3_CAPTURE_MS: u64 = 20;
-    const N6_3_OWN_WAIT_FRAMES: usize = 10;
+    const N6_3_DARK_MS: u64 = 300;
     let state = Arc::new(FakeState::default());
     let temp = TempDir::new().expect("tempdir");
     let mut root = GameRoot::new(temp.path());
@@ -825,20 +828,25 @@ fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
             1
         )]));
     // After the run's input the notice covers the page; after the handler's input the page is
-    // dark (the handler's destination) for the handler's own frame and then the step's own wait,
-    // then `home` shows. Captures are counted and each moves the Runtime clock; the process clock
-    // is not read (test plan v2.2 §2.1 guard 3).
+    // dark (the handler's destination) from the handler's own frame on, through frames of the
+    // step's own wait, until `N6_3_DARK_MS` of the Runtime clock have passed; then `home` shows.
+    // Each capture moves the Runtime clock; the process clock is not read (test plan v2.2 §2.1
+    // guard 3).
     let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
     let script_clock = Arc::clone(&clock);
-    let dark_from = std::sync::Mutex::new(None::<usize>);
-    script(&state, move |capture, inputs| {
+    let dark_from_ms = std::sync::Mutex::new(None::<u64>);
+    script(&state, move |_capture, inputs| {
         script_clock.advance(N6_3_CAPTURE_MS);
         match inputs {
             0 => frame(RED, None),
             1 => frame(RED, Some(Overlay::Notice)),
             _ => {
-                let first = *dark_from.lock().expect("dark from").get_or_insert(capture);
-                if capture <= first + N6_3_OWN_WAIT_FRAMES {
+                let now_ms = script_clock.monotonic_ms();
+                let first_ms = *dark_from_ms
+                    .lock()
+                    .expect("dark from")
+                    .get_or_insert(now_ms);
+                if now_ms - first_ms < N6_3_DARK_MS {
                     frame(BLACK, None)
                 } else {
                     frame(BLUE, None)

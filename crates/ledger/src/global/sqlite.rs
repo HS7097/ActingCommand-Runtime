@@ -42,6 +42,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod release_source;
+// LN-1 (Workflow #422): the scale harness's synthetic ledger commits its batches here.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(super) mod synthetic;
 mod views;
 pub use release_source::*;
 

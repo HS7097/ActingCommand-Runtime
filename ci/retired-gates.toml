@@ -1,0 +1,137 @@
+# The retirement table of the gate map contracts/test-gates/ (Alice 10-09: a retirement needs its
+# mapping table).
+#
+# On a pull request `ci/gate_check.py check` (check name `rust`) compares the head with its merge
+# base: a test name no head row holds any more, or a row `key` its fragment no longer holds, is red
+# unless an entry here lists it. A name that moves to another row or fragment does not leave.
+#
+# One `[[retired]]` entry per name or key that leaves:
+# - `fragment`: the fragment it left (`contract`, `ledger`, `host`, `policy`, `exec` or `apps`);
+# - exactly one of `test` (the full `<package>::<target>::<libtest path>`) and `key` (a row's old
+#   key, when the whole row leaves; its tests are listed too);
+# - `ruling`: the ruling that retires it; `reason`: why it goes; `covered_by`: what covers its risk
+#   now, or "none" and why.
+# Entries stay after their pull request merges: this file is the table of what left the gate map.
+
+# Workflow #420 S5 (PR #1322): the source-text architecture guards. Every guard the slice removed
+# is listed with its boundary in the PR body; these are the ones the gate map held.
+
+# contract.toml, row A3.
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b2_new_artifact_bytes_pass_the_single_capacity_predicate"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private call table (ARTIFACT_BYTE_WRITES: function, byte sink, admission) and a count of exactly one admit_bytes call; a rename or a moved function turns it red, no user would notice the fault."
+covered_by = "None as a source guard."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b2_an_absent_admission_handle_refuses_with_a_distinct_code"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private use table (CAPACITY_ADMISSION_HANDLES and _USES: 13 handle uses by file, scope and expression)."
+covered_by = "None as a source guard."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b2_business_capacity_admission_has_a_named_caller_set"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private call table (BUSINESS_CAPACITY_ADMISSION_CALLERS: 15 host callers by file and function)."
+covered_by = "None as a source guard."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b3_fact_publication_reaches_the_store_through_one_gated_entry"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private call table (INSTANCE_FACT_WRITE_SITES: seven host functions by file, and whether each holds the gate) and the dispatch arms of process_validated."
+covered_by = "None as a source guard."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b4_planning_envelopes_are_validated_by_their_single_decoding_entry"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A reference and visibility table (PLANNING_ENVELOPE_ENTRIES: the identifiers each named function body must reference, the envelope's field visibility)."
+covered_by = "The contract's behaviour tests of planning_document_hash_mismatch and planning_document_kind_mismatch."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b4_planning_envelope_sites_match_the_responsibility_table"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private call table (PLANNING_ENVELOPE_SITES: about 30 call sites by file::function and exact call text)."
+covered_by = "None as a source guard."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b5_runtime_database_file_and_key_have_a_named_constructor_table"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private construction table (RUNTIME_DATABASE_CONSTRUCTORS: 14 construction sites by file and function)."
+covered_by = "None as a source guard."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b5_vendor_stdio_diagnostics_are_constructed_in_the_device_domain_only"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private construction table (construction owners by path prefix, three named kernel files among them)."
+covered_by = "None as a source guard."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::b6_host_split_modules_match_their_typed_owner_and_delegation_table"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A private submodule call and visibility table (HOST_SPLIT: every host/*.rs module, its owner types, each definition's visibility, caller files and delegations), the example the ruling names."
+covered_by = "None (host-internal layout)."
+
+# contract.toml, row A4: trimmed to its boundary half and renamed; the new name takes its place in
+# the same row.
+[[retired]]
+fragment = "contract"
+test = "actingcommand-actinglab-architecture::workspace_guards::r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "Its literal cut of the ContainedTaskRequest body, its host and kernel game-name check (the C2 scan covers it) and its pinned process-fixture test names went; the boundary half stays under a new name."
+covered_by = "actingcommand-actinglab-architecture::workspace_guards::r35_the_contained_task_request_carries_no_application_identity (the field check, read with syn), in row A4; the game-name scan of c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral."
+
+# exec.toml, row 66 (#336 PKG-S5).
+[[retired]]
+fragment = "exec"
+test = "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "Caller-file lists, a count of exactly one call in containment, an indentation cut and the absence of names from 12 named files."
+covered_by = "The behaviour rows that stay in exec row 66 (S5-T1, S5-T2, S5-T3, S5-T6)."
+
+[[retired]]
+fragment = "exec"
+test = "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_no_package_reference_is_left"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A retired-name list (PackageRef, ContentDirectory and four more may never be spelled) blocks ordinary names and guards nothing at run time; the deleted types cannot return without a definition the compiler sees."
+covered_by = "None needed. The refusal of bundle v2 and v3 stays tested (s5_t2, exec row 66)."
+
+# host.toml, row 75 (#336 PKG-S3).
+[[retired]]
+fragment = "host"
+test = "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks"
+ruling = "Workflow #420 S5 (Alice 10-24)"
+reason = "A caller-file table and an occurrence count (measure_package_hash spelled exactly twice in suspension_lift.rs), and the absence of names from 6 named files."
+covered_by = "The behaviour rows of host row 75 (S3-T1 to S3-T5, S3-T8, S3-T9)."
+
+# Slice EMU-W (PR #1309): a scheduling pause never holds the emulator start any more, so the
+# three host tests that pinned the old hold were adapted and renamed; each new name takes the old
+# one's place in the same row.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_waits_queued_until_the_resume"
+ruling = "Alice's ruling 35 (emu-watch; #414 option 3)"
+reason = "It pinned the autostart claim waiting queued as a gated entry under a restored pause; ruling 35 makes a pause hold only dispatches, so the claim is granted at once and starts."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_is_granted_at_once_and_starts, in host row 86."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_yields_and_the_pause_completes"
+ruling = "Alice's ruling 35 (emu-watch; #414 option 3)"
+reason = "It pinned the waiting autostart claim yielding to a pause; ruling 35 makes a pause never hold the emulator start, so the claim no longer yields."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_does_not_hold_the_start, in host row 86."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_claim"
+ruling = "Alice's ruling 35 (emu-watch; #414 option 3)"
+reason = "A pause no longer gates an autostart claim, so the gated routine entry the shutdown idle test must not count is now a Runtime-internal ladder claim."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_routine_claim, in host row 102."

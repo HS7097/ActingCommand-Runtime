@@ -31,6 +31,7 @@ use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
 use actingcommand_contract::{
     RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
 };
+use capture_cadence::{CaptureBackoff, MAX_DECLARED_INTERVAL_MS};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
 use still_wait::StillUnrecognised;
@@ -70,6 +71,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 // Workflow #390 EXEC-1: ordered candidate operations on one page.
 mod candidates;
+// PERF-B1 (Workflow #407 B1): a wait's capture cadence.
+mod capture_cadence;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
 // #412 Lab B-3 S1: one declared operation run as the kernel runs it.
@@ -242,6 +245,11 @@ mod gate_406_t3;
 // #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
 #[cfg(test)]
 mod gate_411_lab_rp;
+// PERF-B1 (Workflow #407 B1): a wait's own capture interval, the configured
+// ceiling of a declared interval, and the back-off on unchanged frames.
+#[cfg(test)]
+mod gate_407_b1;
+pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
 pub use readings::{
@@ -269,7 +277,9 @@ const DEFAULT_STEP_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_MAX_STEPS: u32 = 100;
 const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
 const MAX_STEP_TIMEOUT_MS: u64 = 60_000;
-const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
+/// The longest post-input delay an operation may declare. PERF-B1 moved the capture interval's
+/// bound, which this one shared, to the configuration (`execution.capture`); this one is unchanged.
+const MAX_POST_DELAY_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
 const MAX_PREREQUISITE_PACKAGE_ID_BYTES: usize = 256;
 const PREREQUISITE_ENTRY_UNMATCHED: Code =
@@ -2292,10 +2302,14 @@ pub struct StepPacing {
     /// kernel waits exactly this long, on the budget clock like any wait, and recognizes nothing
     /// again after it. Zero (the default) is no pause.
     pub pre_input_wait: Duration,
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect for the step
+    /// ([`Self::with_capture_cadence`]); [`CaptureCadence::UNCONFIGURED`] by default.
+    pub capture_cadence: CaptureCadence,
 }
 
 impl Default for StepPacing {
-    /// No observe-only retry, factor 1000, no extra round and no pre-input wait.
+    /// No observe-only retry, factor 1000, no extra round, no pre-input wait and the unconfigured
+    /// capture cadence.
     fn default() -> Self {
         Self::new(0)
     }
@@ -2303,13 +2317,22 @@ impl Default for StepPacing {
 
 impl StepPacing {
     /// `sample_timeout_retries` observe-only retries at the factor 1000, without an extra round
-    /// or a pre-input wait.
+    /// or a pre-input wait, at the unconfigured capture cadence.
     pub const fn new(sample_timeout_retries: u32) -> Self {
         Self {
             sample_timeout_retries,
             factor_milli: actingcommand_contract::MIN_PACING_FACTOR_MILLI,
             extra_wait_rounds: 0,
             pre_input_wait: Duration::ZERO,
+            capture_cadence: CaptureCadence::UNCONFIGURED,
+        }
+    }
+
+    /// PERF-B1: the same pacing with the capture cadence `capture_cadence`.
+    pub const fn with_capture_cadence(self, capture_cadence: CaptureCadence) -> Self {
+        Self {
+            capture_cadence,
+            ..self
         }
     }
 
@@ -3534,6 +3557,8 @@ impl PreparedContainedTask {
         let pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): no capture of a package that declares an interval above the ceiling.
+        self.check_declared_intervals(pacing)?;
         let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut started = budget_now(runtime, pace);
         let budget = Duration::from_millis(
@@ -3667,6 +3692,8 @@ impl PreparedContainedTask {
         let pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): no capture of a package that declares an interval above the ceiling.
+        self.check_declared_intervals(pacing)?;
         // #385 P-k (performance model v1.4.2 §5.3): the check's window is budget time.
         let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
@@ -3772,6 +3799,8 @@ impl PreparedContainedTask {
         let pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): no capture of a package that declares an interval above the ceiling.
+        self.check_declared_intervals(pacing)?;
         let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
         let mut rounds = ExtraRounds::of(pacing);
@@ -4453,6 +4482,9 @@ impl PreparedContainedTask {
         let mut pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): the run captures nothing of a package that declares a capture interval
+        // above the ceiling in effect at its start.
+        self.check_declared_intervals(pacing)?;
         observation_timing =
             observation_timing.with_pace(paced_step(runtime, observation_timing.pace(), pacing)?);
         if self.control.execution_mode == linear::LINEAR_STEPS {
@@ -6278,6 +6310,8 @@ impl PreparedContainedTask {
         // #385 P-k (§5.4 item 1): a wait that ran out of its window starts the step's extra
         // rounds, one window each, before it fails.
         let mut rounds = ExtraRounds::of(retries.0);
+        // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
+        let mut backoff = CaptureBackoff::new(interval, retries.0);
         let mut retries = SampleRetries::new(retries.0, retries.1);
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
@@ -6326,6 +6360,7 @@ impl PreparedContainedTask {
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
                     still.observation_failed();
+                    backoff.reset();
                     continue;
                 }
             };
@@ -6347,6 +6382,8 @@ impl PreparedContainedTask {
             missed = true;
             // #411 A43b: the frame gave no page of the package.
             still.frame(runtime, &scene)?;
+            // PERF-B1 (R3): compared with the wait's frame before it.
+            backoff.frame(&scene)?;
             // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame is
             // offered to the shared interrupt pages before the wait goes on, its budget paused
             // while one is handled.
@@ -6355,6 +6392,7 @@ impl PreparedContainedTask {
                 started += paused;
                 window_started += paused;
                 still.interrupted();
+                backoff.reset();
                 continue;
             }
             let now = budget_now(runtime, pace);
@@ -6373,9 +6411,12 @@ impl PreparedContainedTask {
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
             let now = pace.budget(wait_started);
+            // PERF-B1 (R3): the back-off's pause, cut at the wait's and the task's time left.
             still.pause(
                 runtime,
-                interval.min(limit.saturating_sub(now.saturating_duration_since(started))),
+                backoff
+                    .interval()
+                    .min(limit.saturating_sub(now.saturating_duration_since(started))),
                 task_deadline.saturating_duration_since(now),
             );
             let wait_ended = runtime.monotonic_now();
@@ -7150,6 +7191,8 @@ impl PreparedContainedTask {
         // #411 A43b: whether the latest two frames are still and neither is a destination, and
         // the part of the window counted unpaced.
         let mut still = StillUnrecognised::new(pace);
+        // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
+        let mut backoff = CaptureBackoff::new(interval, pacing);
         // #411 B36/B19 (A35-S3): the page the wait holds on, when the operation declares one (a
         // wait step's own page, the confirmation's wait page), and the budget instant of the
         // wait's latest frame.
@@ -7196,6 +7239,7 @@ impl PreparedContainedTask {
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
                     still.observation_failed();
+                    backoff.reset();
                     continue;
                 }
             };
@@ -7300,6 +7344,9 @@ impl PreparedContainedTask {
                             )
                         }
                     };
+                    // PERF-B1 (R3): every frame that does not end the wait, the page it holds on
+                    // included, is compared with the wait's frame before it.
+                    backoff.frame(&observation.scene)?;
                     last_frame_page = Some(observation.page_label.clone());
                     last_observation = Some(observation);
                     (paused, unconfirmed)
@@ -7308,6 +7355,8 @@ impl PreparedContainedTask {
                     last_frame_page = None;
                     // #411 A43b: the frame gave no page.
                     still.frame(runtime, &scene)?;
+                    // PERF-B1 (R3).
+                    backoff.frame(&scene)?;
                     (self.offer_shared_interrupt(runtime, &scene)?, true)
                 }
             };
@@ -7319,6 +7368,7 @@ impl PreparedContainedTask {
                 started += paused;
                 window_started += paused;
                 still.interrupted();
+                backoff.reset();
                 // #411 B36/B19 (A35-S3): a handled interrupt pauses a wait step's clock too.
                 if let Some(held) = held.as_mut() {
                     held.interrupted(paused);
@@ -7344,9 +7394,10 @@ impl PreparedContainedTask {
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
             let now = pace.budget(wait_started);
+            // PERF-B1 (R3): the back-off's pause, cut at the wait's and the task's time left.
             still.pause(
                 runtime,
-                interval.min(remaining),
+                backoff.interval().min(remaining),
                 task_deadline.saturating_duration_since(now),
             );
             let wait_ended = runtime.monotonic_now();
@@ -7798,7 +7849,9 @@ impl TaskControl {
             ));
         }
         self.resolution.validate()?;
-        validate_bounded(self.capture_interval_ms, MAX_CAPTURE_INTERVAL_MS)?;
+        // PERF-B1 (R2): admission bounds the interval by the largest ceiling the configuration
+        // may set; the run checks the ceiling in effect (`check_declared_intervals`).
+        validate_bounded(self.capture_interval_ms, MAX_DECLARED_INTERVAL_MS)?;
         validate_bounded(self.timeout_ms, MAX_TASK_TIMEOUT_MS)?;
         validate_bounded(self.step_timeout_ms, MAX_STEP_TIMEOUT_MS)?;
         if self
@@ -9887,7 +9940,8 @@ impl TaskOperationExpectation {
                 ExecutionKernelCode::ContainedTaskControlInvalid.code(),
             ));
         }
-        validate_bounded(self.interval_ms, MAX_CAPTURE_INTERVAL_MS)
+        // PERF-B1 (R1, R2): the step's own wait interval, bounded as the control's is.
+        validate_bounded(self.interval_ms, MAX_DECLARED_INTERVAL_MS)
     }
 }
 
@@ -10094,7 +10148,7 @@ impl TaskOperation {
         )?;
         if self
             .post_delay_ms
-            .is_some_and(|value| value == 0 || value > MAX_CAPTURE_INTERVAL_MS)
+            .is_some_and(|value| value == 0 || value > MAX_POST_DELAY_MS)
         {
             return Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
@@ -15801,7 +15855,7 @@ mod retry_wiring_tests {
             .validate(&task_control, TaskOperationDefaults::default(), "0.6")
             .expect("omitted post delay preserves existing admission");
 
-        for invalid in [0, MAX_CAPTURE_INTERVAL_MS + 1, u64::MAX] {
+        for invalid in [0, MAX_POST_DELAY_MS + 1, u64::MAX] {
             let mut operation = operation(json!({}), None);
             operation.post_delay_ms = Some(invalid);
             assert_eq!(
