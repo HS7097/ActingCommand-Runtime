@@ -14,7 +14,7 @@
 //! budget reservations and forward planning) and the production estimate. A pair whose snapshot
 //! carries no E is evaluated exactly as before.
 
-use super::{PolicyEvaluationResult, TaskRuntimeSnapshot};
+use super::{PolicyEvaluationError, PolicyEvaluationResult, TaskRuntimeSnapshot};
 use crate::TaskSpec;
 
 /// The expected-duration settings of one instance as they are in effect
@@ -57,26 +57,59 @@ impl ExpectedRuntime {
     }
 }
 
-/// ED-1 red stub: always the declared value.
+/// SCH-M §3.4 D-12: E for a pair from its samples, newest first (`d1` first), its declared value
+/// `declared_ms` and its task's `max_runtime_ms`:
+/// - the switch off, or no sample: `declared_ms`;
+/// - otherwise the mean of the newest min(`runs`, k) samples, rounded up, plus `margin_ms`, at
+///   most `max_runtime_ms`.
+///
+/// `runs` outside `1..=16` or an overflowing sum is `policy_evaluation_input_invalid` or
+/// `policy_evaluation_numeric_overflow`: the configuration check keeps both out.
 pub fn expected_runtime(
-    _samples_newest_first: &[u64],
-    _settings: ExpectedRuntimeSettings,
+    samples_newest_first: &[u64],
+    settings: ExpectedRuntimeSettings,
     declared_ms: u64,
-    _max_runtime_ms: u64,
+    max_runtime_ms: u64,
 ) -> PolicyEvaluationResult<ExpectedRuntime> {
+    if !(1..=MAX_EXPECTED_RUNTIME_RUNS).contains(&settings.runs) {
+        return Err(PolicyEvaluationError::invalid(
+            "expected-runtime runs must be within 1..=16",
+        ));
+    }
+    let used = samples_newest_first.len().min(usize::from(settings.runs));
+    if !settings.enabled || used == 0 {
+        return Ok(ExpectedRuntime {
+            expected_ms: declared_ms,
+            source: ExpectedRuntimeSource::Declared,
+        });
+    }
+    let sum = samples_newest_first[..used]
+        .iter()
+        .map(|sample| u128::from(*sample))
+        .sum::<u128>();
+    let count = used as u128;
+    let mean = sum.div_ceil(count);
+    let expected = u64::try_from(mean)
+        .ok()
+        .and_then(|mean| mean.checked_add(settings.margin_ms))
+        .ok_or_else(|| PolicyEvaluationError::overflow("an expected duration overflowed"))?;
     Ok(ExpectedRuntime {
-        expected_ms: declared_ms,
-        source: ExpectedRuntimeSource::Declared,
+        expected_ms: expected.min(max_runtime_ms),
+        // `used` is at most `runs`, which is at most 16.
+        source: ExpectedRuntimeSource::Runs(used as u8),
     })
 }
 
 /// The most samples a pair's mean reads (the range of `scheduling.expected_runtime.runs`).
 pub const MAX_EXPECTED_RUNTIME_RUNS: u8 = 16;
 
-/// ED-1 red stub: the snapshot's E is not read.
+/// SCH-M D-15: the E a pair's snapshot carries, at most the task's `max_runtime_ms` (the
+/// admission's own bound); none when the snapshot carries none, and the declared value applies.
 pub(crate) fn snapshot_expected_runtime(
-    _task: &TaskSpec,
-    _state: Option<&TaskRuntimeSnapshot>,
+    task: &TaskSpec,
+    state: Option<&TaskRuntimeSnapshot>,
 ) -> Option<u64> {
-    None
+    state
+        .and_then(|state| state.expected_runtime_ms)
+        .map(|expected| expected.min(task.loop_budget.max_runtime_ms))
 }

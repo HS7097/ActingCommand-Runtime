@@ -3174,6 +3174,20 @@ code. Gates: exec keys 175 to 179.
 | S3-5 | `TaskPhaseOperation.on_timeout_key`, `wait_timeout_mapping_busy` | Runtime-internal interface (memory only) | A35-S3 | A35-S3 | the walk's view of the new member, shared by source parsing, build and Runtime admission |
 | S3-6 | `lab_operation_problem` token `wait` | new token of an existing vocabulary (Lab B-3 S0, §1.159 B3-6) on the existing `contained_task_declared_operation_unsupported` (exec 179) | A35-S3 | A35-S3 | Lab B-3 S1's admission of a declared operation (`PreparedContainedTask::declared_operation`, §1.161 B3S1-2, B3S1-3) refuses a wait step before any lease, with `pack_operation_id` and `lab_operation_problem` `wait` (Lab decision Q2: page-graph clicks only); checked after the package's execution mode, the application effect and the select step; no new code or key |
 
+### 1.178 Slice ED-1 (0.12.x): the expected duration E, pure, and its configuration keys (#405; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.4 D-12, D-15, §6 row ED-1; Alice 10-22 16:4x, #405 comment 6335497930; ruling 39 R6.2, R6.3)
+
+Wave 1 groundwork of v35: behaviour-neutral until ED-2 fills the snapshot members.
+[scheduling/README.md](scheduling/README.md) ("Settlement Feedback And Eligibility Age") and
+[runtime-config.md](runtime-config.md) ("Expected duration") are the contract. **No persisted
+ledger shape.** The configuration joins `actingd-config` revision 11. Gates: policy keys 71 to
+76, host key 158.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ED1-1 | `expected_runtime(samples_newest_first, ExpectedRuntimeSettings {enabled, runs, margin_ms}, declared_ms, max_runtime_ms) -> ExpectedRuntime {expected_ms, source: Declared \| Runs(n)}`; `ExpectedRuntime::snapshot_members` | policy interface (memory only) (policy 71 to 74) | ED-1 | ED-1 | D-12: E = min(⌈mean of the latest min(runs, k)⌉ + margin, M); k = 0 or the switch off: D, no snapshot member |
+| ED1-2 | `TaskRuntimeSnapshot.expected_runtime_ms`, `.expected_runtime_runs` | new optional members of the evaluation input (memory and the input identity; absent: today's bytes) (policy 75, 76) | ED-1 | ED-2 | the evaluator uses E (at most `max_runtime_ms`) for the cost, the intent's `expected_duration_ms`, forward planning and the production estimate; absent, the declared value (and the cost's `last_duration_ms` fallback) as before |
+| ED1-3 | `scheduling.expected_runtime.{enabled, runs, margin_ms}` (`true`, 5 in `1..=16`, 300 000 in `0..=3600000`) and per instance `instance.<id>.scheduling.expected_runtime.*` (default the section's); `scheduling.fact_refresh.expected_duration_ms` (60 000 in `1..=1800000`) | configuration keys (`actingd-config` revision 11) (host 158) | ED-1 | person | all settable; accessor `EffectiveConfig::expected_runtime(instance_id)`; `FactRefreshConfig.expected_duration_ms`; read by ED-2 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -3269,6 +3283,7 @@ when it takes effect.
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` MCP-19b |
+| `scheduling.expected_runtime.*` and per instance `instance.<id>.scheduling.expected_runtime.*`; `scheduling.fact_refresh.expected_duration_ms` (`actingd-config` revision 11) | `enabled`, `runs`, `margin_ms`; the declared duration of a fact refresh read | `true`, 5 (`1..=16`), 300 000 (`0..=3600000`); 60 000 (`1..=1800000`); an instance's default is the section's (SCH-M §3.4) | ED-1 (built, §1.178) | ED-2 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 D1 (0.12.5, §1.135): the pair in effect per instance, read at every policy cycle |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 (built, §1.69 SR3-4) | SR-3 (v0.12.0) |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default value: unset, no `fact_reader_overdue` is reported; that is its declared default, coordinator ruling 9 of 2026-10-16, so R4 holds) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
