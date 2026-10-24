@@ -84,9 +84,10 @@ pub use recovery_ladder::{
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
-    BlackoutConfig, CostCommitConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
-    HostBlackout, InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay,
-    RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+    BlackoutConfig, BlackoutEntry, BlackoutWindow, CostCommitConfig, ExpectedRuntimeConfig,
+    FactRefreshConfig, FeatureLockConfig, InstanceSchedulingFile, PacingStage, PackAdmissionConfig,
+    QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
+    SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
 pub use startup_discovery::{StartupDiscoveryConfig, StartupDiscoveryFile};
@@ -133,6 +134,9 @@ mod perf_tests;
 mod rd4_tests;
 #[cfg(test)]
 mod scheduling_tests;
+// Workflow #386 SR-4a1.
+#[cfg(test)]
+mod sr4a1_tests;
 #[cfg(test)]
 mod tests;
 // Workflow #406 T12.

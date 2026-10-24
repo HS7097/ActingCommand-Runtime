@@ -1637,6 +1637,10 @@
       "type": "unix_ms",
       "description": "When a blackout starts, in Unix milliseconds."
     },
+    "blackout_source": {
+      "type": "vocab:blackout_source",
+      "description": "Which of the three sources a blackout comes from: the host list, the instance's own list or a catalog maintenance event (Workflow #386 SR-4a1)."
+    },
     "pacing_stage": {
       "type": "vocab:pacing_stage",
       "description": "The performance pacing stage of an instance."
@@ -5263,6 +5267,25 @@
         },
         "s4": {
           "description": "Severe: every dispatch pauses and running policy runs are held."
+        }
+      }
+    },
+    "blackout_source": {
+      "description": "Where a blackout comes from (Workflow #386 SR-4a1, SCH-M section 3.2 D-1): the configuration list a refused entry is in, or the source of the entry a blackout judgement reports.",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/outcome/vocabulary.rs",
+        "enum": "BlackoutSource"
+      },
+      "tokens": {
+        "host": {
+          "description": "The machine-wide list scheduling.blackout.host; it covers every instance."
+        },
+        "instance": {
+          "description": "The instance's own list instance.<instance id>.scheduling.blackout; it covers that instance only."
+        },
+        "catalog": {
+          "description": "A maintenance event of the active catalog's timeline whose scope matches the instance."
         }
       }
     },

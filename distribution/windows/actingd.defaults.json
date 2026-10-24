@@ -314,7 +314,8 @@
       "host": [],
       "quiet_margin_ms": 60000,
       "hard_quiet_ms": 0,
-      "stop_in_flight_at_start": true
+      "stop_in_flight_at_start": true,
+      "quiet_horizon": "deadline"
     },
     "feature_lock": {
       "locked_valid_for_ms": 86400000,
@@ -349,6 +350,9 @@
       "enabled": true,
       "max_per_round": 2,
       "choices": []
+    },
+    "day_boundary": {
+      "quiet": true
     },
     "expected_runtime": {
       "enabled": true,

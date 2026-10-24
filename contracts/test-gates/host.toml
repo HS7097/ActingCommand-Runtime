@@ -1864,6 +1864,22 @@ tests = [
 ]
 incident = ["#407 B1"]
 
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): the shipped defaults name no blackout entry (host list empty, no instance list in effect); scheduling.blackout.quiet_horizon is deadline and scheduling.day_boundary.quiet true, per instance defaulting to the section's, all settable
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c1_no_blackout_entry_by_default_and_the_new_keys_have_their_model_defaults",
+]
+incident = ["#386 SR-4a1"]
+
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): weekly and once entries of the host list and of an instance's own list are read as written; a broken entry refuses a start and check-config with blackout_config_invalid naming field, blackout_id and blackout_source (host or instance); through an instruction config_value_invalid (section_check)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c2_bad_blackout_entries_are_refused_with_their_source",
+]
+incident = ["#386 SR-4a1"]
+
 # SCH-M ED-1 (frozen model v1.0 §3.4 "Configuration", §6 row ED-1; contracts/runtime-config.md, "Expected duration"; register §1.178 ED1-3): scheduling.expected_runtime.enabled, runs and margin_ms default to true, 5 and 300000 and scheduling.fact_refresh.expected_duration_ms to 60000, all settable; each instance's expected_runtime keys default to the section's, an instance's own key overrides the section for that instance only (from the file and through an instruction), and a change of the section's key reaches every instance that names none
 [[gate]]
 coverage = "Y"
