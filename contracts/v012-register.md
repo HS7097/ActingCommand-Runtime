@@ -3174,6 +3174,27 @@ code. Gates: exec keys 175 to 179.
 | S3-5 | `TaskPhaseOperation.on_timeout_key`, `wait_timeout_mapping_busy` | Runtime-internal interface (memory only) | A35-S3 | A35-S3 | the walk's view of the new member, shared by source parsing, build and Runtime admission |
 | S3-6 | `lab_operation_problem` token `wait` | new token of an existing vocabulary (Lab B-3 S0, §1.159 B3-6) on the existing `contained_task_declared_operation_unsupported` (exec 179) | A35-S3 | A35-S3 | Lab B-3 S1's admission of a declared operation (`PreparedContainedTask::declared_operation`, §1.161 B3S1-2, B3S1-3) refuses a wait step before any lease, with `pack_operation_id` and `lab_operation_problem` `wait` (Lab decision Q2: page-graph clicks only); checked after the package's execution mode, the application effect and the select step; no new code or key |
 
+### 1.180 Slice CF-1 (0.12.x): the edge members `since_own_run` and `once_per_reading`: a chain step runs once per new result of its predecessor, a completion time is served once (SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.3 D-8, §6 row CF-1; #405, Alice 10-22, comment 6335384240: condition-first, not a timer)
+
+CF-1: two optional V2 catalog members turn a level into an edge, so condition-first catalogs (v34)
+need no pass, round or slot reset events to make a successor or a completion time fire again.
+[scheduling/README.md](scheduling/README.md) ("Condition edges", "Why A Candidate Does Not Run")
+and [scheduling/v2/README.md](scheduling/v2/README.md) are the contract. **No persisted ledger
+shape**: the members are a catalog format addition (the ledger holds only the catalog's
+`catalog_hash`, unchanged for a catalog without them); the reasons are catalog codes carried by the
+evaluation's decisions and the existing dispatch decision records; the subsystem row is a value of
+the existing `config.subsystems` fact. No wire, configuration key or interface revision changes. A
+Runtime before CF-1 refuses a catalog that writes either member (`unknown_field`), so the generator
+emits them only when check-config names `condition_edges`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF1-1 | `dependency_completed.since_own_run` (optional boolean; `PredicateSpec::DependencyCompleted`, `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | CF-1 | GEN-34 | V2 only (a V1 document writing it, either value: `unknown_field` at the member); `true`: true when the predecessor's latest terminal is accepted and this task has no admitted dispatch on the instance, or its latest dispatch is before the predecessor's latest dispatch, or its latest run did not succeed; otherwise false with `dependency_already_served`, no wake; absent or `false`: the level as before; absent serializes as nothing |
+| CF1-2 | `fact_time_reached.once_per_reading` (optional boolean; `PredicateSpec::FactTimeReached`) | catalog format addition (no ledger shape) | CF-1 | GEN-34 | V2 only with its predicate; `true`: a time T is served when this task's latest run succeeded and was dispatched at or after max(T + `offset_ms`, the fact's `observed_at_unix_ms`), then false with `fact_time_served`, no wake, until a reading observed after that dispatch; absent or `false`: §1.134 W1-2 as before; absent serializes as nothing |
+| CF1-3 | codes `dependency_already_served` (info; `task_id`, `predecessor_task_id`), `fact_time_served` (info; `fact_key`, `served_by_dispatch_unix_ms`) | new catalog entries (no shape) | CF-1 | CF-1 | owner policy (registry `PolicyCode`, block `SCH-M CF-1`), `ladder_class` `none` (row 7: a scheduling decision reason, not how work on an instance ended), layer `policy`, review `pending`; the prefixes `dependency_` and `fact_` already cover policy |
+| CF1-4 | keys `predecessor_task_id` (name), `served_by_dispatch_unix_ms` (unix_ms) | new key-table entries (no shape) | CF-1 | CF-1 | — |
+| CF1-5 | `config.subsystems` row `condition_edges` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-1 | CF-1 | [actingd-check-config.md](actingd-check-config.md); the generator's capability check for both members |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

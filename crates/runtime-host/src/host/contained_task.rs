@@ -14,7 +14,7 @@ use crate::resource_adjustment::{
 use actingcommand_contract::codes::{
     ContractLocation, DeviceSelfCheckFailure, RuntimeErrorCode, SharedCode,
 };
-use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     CaptureBackendName, CaptureExtent, CaptureGeometryObservation, DesignatedEffectTally,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
@@ -145,6 +145,9 @@ pub(crate) enum ContainedTaskCheckpointPoint {
     /// Workflow #369 E3 (#670 final review M-1): a failed scheduled run's lease end, after its
     /// terminal and before the admission guard is taken.
     FailedRunLeaseEnd,
+    /// #411 A64 (ruling C-43): a run's end work, after its execution ended and before the
+    /// diagnostic seal, the capture summary and the terminal.
+    EndWork,
 }
 
 #[cfg(test)]
@@ -505,6 +508,20 @@ pub(super) struct ContainedRunControl {
     paced_reduction: std::sync::OnceLock<Duration>,
     /// #411 B37 (A35-S1): set once when the run's committed terminal selected a `busy` mapping.
     busy_end: std::sync::OnceLock<BusyEnd>,
+    /// #411 A64 (ruling C-43): set once when the run reached its deadline and entered its end
+    /// phase.
+    end_phase: std::sync::OnceLock<RunEndPhase>,
+    /// #411 A64 (ruling C-43): whether a close of the instance's resources at a lease end in the
+    /// run's end phase met the lapsed lease and closed nothing (`LAPSED_CLOSE_*`).
+    lapsed_close: AtomicU8,
+}
+
+/// #411 A64 (ruling C-43): the end phase of a run that reached its deadline while it held its
+/// lease: the lease its end runs under and the Runtime-clock instant its end grace ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RunEndPhase {
+    pub(super) lease_id: LeaseId,
+    pub(super) until_monotonic_ms: u64,
 }
 
 /// #385 P-k (PERF v1.4.2 §5.3, §5.6 item 2): the factor segments of one contained run. Each
@@ -666,6 +683,12 @@ impl ContainedRunControl {
     const CLIENT_REQUESTED: u8 = 1;
     const DEADLINE_EXCEEDED: u8 = 2;
     const PAUSE_REQUESTED: u8 = 3;
+    /// #411 A64: no close in the run's end phase met its lapsed lease.
+    const LAPSED_CLOSE_NONE: u8 = 0;
+    /// #411 A64: a close met the lapsed lease and closed nothing; the session is still to close.
+    const LAPSED_CLOSE_OWED: u8 = 1;
+    /// #411 A64: the owed close was settled (`HostShared::close_lapsed_run_session_guarded`).
+    const LAPSED_CLOSE_SETTLED: u8 = 2;
 
     const fn new(request_id: RequestId, instance_id: InstanceId, client_cancellable: bool) -> Self {
         Self {
@@ -681,7 +704,51 @@ impl ContainedRunControl {
             host_package: std::sync::OnceLock::new(),
             paced_reduction: std::sync::OnceLock::new(),
             busy_end: std::sync::OnceLock::new(),
+            end_phase: std::sync::OnceLock::new(),
+            lapsed_close: AtomicU8::new(Self::LAPSED_CLOSE_NONE),
         }
+    }
+
+    /// #411 A64 (ruling C-43): notes the run's end phase, once; a second note keeps the first.
+    fn enter_end_phase(&self, phase: RunEndPhase) {
+        let _ = self.end_phase.set(phase);
+    }
+
+    /// #411 A64 (ruling C-43): the run's end phase, once it reached its deadline.
+    pub(super) fn end_phase(&self) -> Option<RunEndPhase> {
+        self.end_phase.get().copied()
+    }
+
+    /// #411 A64 (ruling C-43): notes that a close at a lease end in the run's end phase met the
+    /// lapsed lease and closed nothing. `true` only for the first such close of the run, whose
+    /// refusal alone is recorded.
+    pub(super) fn note_lapsed_close(&self) -> bool {
+        self.lapsed_close
+            .compare_exchange(
+                Self::LAPSED_CLOSE_NONE,
+                Self::LAPSED_CLOSE_OWED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// #411 A64 (ruling C-43): whether the session of a close that met the lapsed lease is still
+    /// to close.
+    pub(super) fn lapsed_close_owed(&self) -> bool {
+        self.lapsed_close.load(Ordering::Acquire) == Self::LAPSED_CLOSE_OWED
+    }
+
+    /// #411 A64 (ruling C-43): takes the owed close once; `false` when none is owed.
+    pub(super) fn take_lapsed_close(&self) -> bool {
+        self.lapsed_close
+            .compare_exchange(
+                Self::LAPSED_CLOSE_OWED,
+                Self::LAPSED_CLOSE_SETTLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
 
     /// #411 B37 (A35-S1): notes the run's busy end, once; a second note keeps the first.
@@ -1196,6 +1263,17 @@ impl CaptureEvidenceAccumulator {
             ))
         })
     }
+}
+
+/// #411 A64 (ruling C-43): whether the run's execution ended because the run reached its deadline.
+fn reached_deadline(
+    execution: &Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>>,
+) -> bool {
+    matches!(
+        execution,
+        Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
+            if failure.error.projection().code == RuntimeErrorCode::ContainedTaskDeadlineExceeded
+    )
 }
 
 /// #411 A34: the capture summary of a run that ends failed or cancelled. A capacity refusal that
@@ -7192,6 +7270,23 @@ impl HostShared {
         if let Some(reduction) = runtime.pacing.reduction {
             control.note_paced_reduction(reduction);
         }
+        // #411 A64 (ruling C-43): a run that reached its deadline enters its end phase before any
+        // of its end work; its end runs under the lease its end grace renewed (`end_token`).
+        let end_token = if reached_deadline(&execution) {
+            Some(self.enter_run_end_phase(request, &token, connection_id, &control)?)
+        } else {
+            None
+        };
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::EndWork,
+            ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
@@ -7285,6 +7380,8 @@ impl HostShared {
             .collect::<Vec<_>>();
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
+        // #411 A64 (ruling C-43): the terminal and the lease end use the renewed token.
+        let token = end_token.unwrap_or(token);
         let outcome = match execution {
             Ok(outcome) => outcome,
             Err(
@@ -9022,6 +9119,98 @@ impl HostShared {
         }
     }
 
+    /// #411 A64 (ruling C-43): a run that reached its deadline enters its end phase before any of
+    /// its end work (the diagnostic seal, the capture summary, the terminal, the close), when it
+    /// still holds its lease then (the lease is registered under the run's token). Its control
+    /// notes the phase first, under the scheduler's lock: the lease sweep then leaves the run's
+    /// lease to the run until the end grace (`host_claims.run_end_grace_ms`, the configuration in
+    /// effect) ends. Then the lease is renewed once to the end grace from now, with the renew
+    /// records of a Runtime-held lease, and the run's end uses the renewed token. A refused
+    /// renewal (the lease had lapsed before the end began, and the sweep had not ended it yet) is
+    /// recorded by the renewal and the end goes on under the old token: a lapsed lease then costs
+    /// the instance a fence, never the Runtime.
+    ///
+    /// A lease that had already ended when the run's end began (it lapsed during the run and the
+    /// sweep expired it) is not the end's to hold: the run enters no end phase, attempts no
+    /// renewal and ends as before C-43 (its terminal is refused and its settlement releases the
+    /// lease; #670 final review, test (g)). Any other refusal of the lease's position is left to
+    /// the terminal's own check, which ends the run with it as before. A failure that poisons (a
+    /// ledger failure) ends the run as before.
+    fn enter_run_end_phase(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        control: &ContainedRunControl,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let grace_ms = self
+            .run_end_grace_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let held = {
+            let scheduler = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?;
+            let held = scheduler.connection_for_token(token).is_ok();
+            if held {
+                control.enter_end_phase(RunEndPhase {
+                    lease_id: token.lease_id(),
+                    until_monotonic_ms: now.saturating_add(grace_ms),
+                });
+            }
+            held
+        };
+        if !held {
+            return Ok(token.clone());
+        }
+        match self.renew_held_lease(request, token, connection_id, grace_ms) {
+            Ok(renewed) => Ok(renewed),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => Err(failure),
+            Err(_) => Ok(token.clone()),
+        }
+    }
+
+    /// #411 A64 (ruling C-43): the control of the registered run whose end phase runs under
+    /// `lease_id`.
+    pub(super) fn run_end_control_of_lease(
+        &self,
+        lease_id: LeaseId,
+    ) -> RuntimeHostResult<Option<Arc<ContainedRunControl>>> {
+        Ok(
+            lock(&self.contained_runs, HostLocation::ReadActiveContainedRun)?
+                .values()
+                .find(|control| {
+                    control
+                        .end_phase()
+                        .is_some_and(|phase| phase.lease_id == lease_id)
+                })
+                .cloned(),
+        )
+    }
+
+    /// #411 A64 (ruling C-43): the end phase of the registered run whose end runs under
+    /// `lease_id`, when that run reached its deadline while it held the lease.
+    pub(super) fn run_end_phase_of_lease(
+        &self,
+        lease_id: LeaseId,
+    ) -> RuntimeHostResult<Option<RunEndPhase>> {
+        Ok(self
+            .run_end_control_of_lease(lease_id)?
+            .and_then(|control| control.end_phase()))
+    }
+
+    /// #411 A64 (ruling C-43): whether the lease sweep leaves the lapsed `token` to its run at
+    /// `now`: the run on it is in its end phase and its end grace has not ended.
+    pub(super) fn run_end_keeps_lease(
+        &self,
+        token: &LeaseToken,
+        now: u64,
+    ) -> RuntimeHostResult<bool> {
+        Ok(self
+            .run_end_phase_of_lease(token.lease_id())?
+            .is_some_and(|phase| now < phase.until_monotonic_ms))
+    }
+
     fn begin_contained_run(
         &self,
         request_id: RequestId,
@@ -9195,14 +9384,40 @@ impl HostShared {
                 .with_run_id(draft.run_id);
             // The task's lease is still current when its terminal is written. Workflow #191 H: the
             // device session stays with the instance; the lease end closes one that must close.
-            let _task_connection = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?
-                .connection_for_token(token)
-                .map_err(|error| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                        HostLocation::ReadTaskLeaseConnection,
-                        &error,
-                    ))
-                })?;
+            // #411 A64 (ruling C-43): a run in its end phase whose lease the sweep expired after its
+            // end grace still commits its terminal, which carries `lease_expired` (naming the
+            // lease) beside the run's own failure; its instance is fenced once the terminal is
+            // committed (below), never the Runtime.
+            let end_phase = self
+                .run_end_phase_of_lease(token.lease_id())
+                .map_err(RequestFailure::poison_without_terminal)?;
+            let task_connection = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?
+                .connection_for_token(token);
+            let lapsed = match task_connection {
+                Ok(_) => None,
+                Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch)
+                    if end_phase.is_some() && !self.fatal.is_shutdown_requested() =>
+                {
+                    Some(
+                        RuntimeHostError::scheduler(
+                            HostLocation::ReadTaskLeaseConnection,
+                            &SchedulerError::LeaseExpired,
+                        )
+                        .naming_lease(token.lease_id()),
+                    )
+                }
+                Err(error) => {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::scheduler(HostLocation::ReadTaskLeaseConnection, &error),
+                    ));
+                }
+            };
+            if let Some(lapse) = &lapsed {
+                draft.failure = draft
+                    .failure
+                    .take()
+                    .map(|failure| failure.joined(CauseRelation::Related, lapse.outcome()));
+            }
             #[cfg(test)]
             self.consume_contained_task_checkpoint_for_test(
                 ContainedTaskCheckpointPoint::BeforeTerminalAppend,
@@ -9325,6 +9540,7 @@ impl HostShared {
                     draft.final_page.as_deref(),
                 )
             });
+            let fence_links = lapsed.as_ref().map(|_| links.clone());
             let terminal_event = self
                 .append_event_under_fact_gate(
                     severity,
@@ -9353,6 +9569,21 @@ impl HostShared {
             for event in &appended {
                 self.observe_pipeline_event(event)
                     .map_err(RequestFailure::poison_without_terminal)?;
+            }
+            // #411 A64 (ruling C-43): the lapsed lease of the run's end fences its instance (the
+            // Workflow #403 instance path); one already fenced by the sweep's expiry stays as it is.
+            if let (Some(mut lapse), Some(fence_links)) = (lapsed, fence_links) {
+                lapse.lifecycle.instance_id = Some(token.instance_id());
+                lapse.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
+                match self
+                    .settle_unconfirmed_resources(&lapse, Some(token.instance_id()), fence_links)
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    UnconfirmedResources::Fenced(_) => {}
+                    UnconfirmedResources::Confirmed | UnconfirmedResources::Retained => {
+                        return Err(RequestFailure::poison_without_terminal(lapse));
+                    }
+                }
             }
             if draft.outcome == TaskOutcome::Failure
                 && let Some(failure) = &draft.failure
