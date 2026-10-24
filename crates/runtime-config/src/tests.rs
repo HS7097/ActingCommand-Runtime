@@ -122,10 +122,31 @@ fn d1_m2_a_file_naming_one_key_makes_it_explicit_and_leaves_the_rest_default() {
         .filter(|parameter| {
             find_row(&parameter.key).is_some_and(|(_, instance)| instance.is_some())
         })
-        .count();
-    // Two instances, each with its two stuck-recovery members, (Workflow #405, parsed by #386
-    // SR-1) its three random-delay members and (Workflow #411 B15 R3) its remedy choice list.
-    assert_eq!(per_instance, 12, "{parameters:?}");
+        .map(|parameter| parameter.key.clone())
+        .collect::<Vec<_>>();
+    // Each instance has every per-instance key of the table that has a default (§5.5: a
+    // `default = none` key the file does not name is left out), read from the table rather than
+    // counted by hand (Workflow #420 S6), so a new per-instance key needs no edit here.
+    let expected = instances
+        .iter()
+        .flat_map(|instance| {
+            mechanism_rows()
+                .into_iter()
+                .filter_map(move |row| match row.name {
+                    KeyName::PerInstance(member) if !matches!(row.default, DefaultSource::None) => {
+                        Some(instance_key(instance, member))
+                    }
+                    _ => None,
+                })
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(!expected.is_empty(), "the table has per-instance keys");
+    assert_eq!(per_instance.len(), expected.len(), "{parameters:?}");
+    assert_eq!(
+        per_instance.into_iter().collect::<BTreeSet<_>>(),
+        expected,
+        "{parameters:?}"
+    );
     let named = parameter(&parameters, &instance_key(INSTANCE_A, STUCK_RECOVERY));
     assert_eq!(named.value, FactScalar::Boolean(false));
     assert_eq!(named.source, ConfigParameterSource::Explicit);
