@@ -17237,6 +17237,28 @@
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
+    "standard_pack_package_unclassified": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "package_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A package of a standard-pack game root's bundle is neither maintenance-role by the root files, named by a rule of the root's schedule.json, nor held (ROUT-L RL-1a, contracts/standard-pack-schedule.md). It is not scheduled; the rest of the game is. The policy composer finds it; check-config, the Runtime and actinglab standard-pack check report it once per game, package and schedule.json.",
+      "common_causes": "A package was added to the bundle without a rule or a held entry, or its rule was removed.",
+      "handling": "Add a rule that names the package, or a held entry with its reason, to the game root's schedule.json."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

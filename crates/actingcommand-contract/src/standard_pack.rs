@@ -90,6 +90,16 @@ crate::outcome_vocabulary! {
         PackageNotListed => "package_not_listed",
         /// Two packages of one list belong to the same server.
         ServerDuplicate => "server_duplicate",
+        /// ROUT-L RL-1a: `schedule.json` is not of its shape and version, or breaks one of its
+        /// own rules (a scope, an instance override, an unknown server).
+        ScheduleInvalid => "schedule_invalid",
+        /// ROUT-L RL-1a: `schedule.json` requires a subsystem the Runtime does not name.
+        ScheduleRequiresMissing => "schedule_requires_missing",
+        /// ROUT-L RL-1a: a rule or a `held` entry names a package the registry does not hold.
+        RulePackageUnregistered => "rule_package_unregistered",
+        /// ROUT-L RL-1a: two rules, pools, profiles or events share an id, in one file or across
+        /// the games in use, or two games' rules name one package id.
+        RuleIdConflict => "rule_id_conflict",
         /// `interrupts` holds more than 32 entries.
         InterruptsCount => "interrupts_count",
         /// An interrupt's `page` is not a page of `pages.json`.

@@ -7,6 +7,8 @@
 mod canonical;
 mod codes;
 mod compiler;
+// ROUT-L RL-1a: the composer of the standard packs' schedule rules.
+mod compose;
 mod evaluator;
 mod forward;
 mod remedy;
@@ -18,6 +20,7 @@ mod validation;
 
 pub use codes::{PolicyCode, RefreshLimit};
 pub use compiler::*;
+pub use compose::*;
 pub use evaluator::*;
 pub use forward::*;
 pub use remedy::*;

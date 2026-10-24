@@ -5473,6 +5473,18 @@
         "server_duplicate": {
           "description": "Two packages of one list belong to the same server."
         },
+        "schedule_invalid": {
+          "description": "schedule.json is not of its shape and version, or breaks one of its own rules: a scope, an instance override, an unknown server (ROUT-L RL-1a)."
+        },
+        "schedule_requires_missing": {
+          "description": "schedule.json requires a subsystem the Runtime does not name (ROUT-L RL-1a)."
+        },
+        "rule_package_unregistered": {
+          "description": "A rule or a held entry of schedule.json names a package the game root's bundle does not hold (ROUT-L RL-1a)."
+        },
+        "rule_id_conflict": {
+          "description": "Two rules, pools, profiles or events share an id, in one schedule.json or across the games in use, or two games' rules name one package id (ROUT-L RL-1a)."
+        },
         "interrupts_count": {
           "description": "interrupts holds more than 32 entries."
         },

@@ -38,6 +38,8 @@ pub mod runtime;
 pub mod runtime_fact;
 pub mod runtime_observation;
 pub mod standard_pack;
+// ROUT-L RL-1a: a game root's `schedule.json`, the schedule rules of the standard package.
+pub mod standard_pack_schedule;
 pub mod state;
 pub mod taskflow;
 pub mod types;
@@ -67,6 +69,7 @@ pub use runtime::*;
 pub use runtime_fact::*;
 pub use runtime_observation::*;
 pub use standard_pack::*;
+pub use standard_pack_schedule::*;
 pub use state::*;
 pub use taskflow::*;
 pub use types::{
