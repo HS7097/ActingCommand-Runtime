@@ -28,6 +28,8 @@ actingcommand-runtime-client = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+# Workflow #421 INST-1: `install release verify` and `stage` extract the release zips.
+zip = { workspace = true }
 
 [dev-dependencies]
 actingcommand-ledger = { workspace = true }
@@ -40,4 +42,3 @@ actingcommand-runtime-config = { workspace = true }
 actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }
 actingcommand-scheduler = { workspace = true }
 tempfile = "3"
-zip = { workspace = true }
