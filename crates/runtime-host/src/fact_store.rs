@@ -753,6 +753,12 @@ impl InstanceFactStore {
         Ok(())
     }
 
+    /// Workflow #383 AO-3: the last ledger sequence the store followed before it went live; a
+    /// record at or below it reached the store through the replay.
+    pub(crate) fn replayed_through(&self) -> u64 {
+        self.last_sequence
+    }
+
     /// Workflow #383 AO-3 (§13, register W1): the store's lineage and its revision.
     pub(crate) fn revision(&self) -> RuntimeStateStoreRevision {
         RuntimeStateStoreRevision {

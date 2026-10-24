@@ -1223,9 +1223,16 @@ impl HostShared {
             *deferred = later;
             earlier
         };
-        if !lock(&self.facts, HostLocation::DeriveFactInvalidation)?.is_live() {
-            return Ok(());
-        }
+        let replayed_through = {
+            let facts = lock(&self.facts, HostLocation::DeriveFactInvalidation)?;
+            if !facts.is_live() {
+                return Ok(());
+            }
+            facts.replayed_through()
+        };
+        // A record the start's replay already followed (committed before the store went live,
+        // deferred after) is not observed twice.
+        drained.retain(|event| event.sequence() > replayed_through);
         drained.sort_by_key(PersistedEvent::sequence);
         for event in &drained {
             let applied = lock(&self.facts, HostLocation::DeriveFactInvalidation)?
