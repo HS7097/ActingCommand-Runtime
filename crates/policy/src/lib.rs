@@ -56,4 +56,7 @@ mod tests {
     // Workflow #411 B16 part 2, slice BT-B16b (policy keys 64 to 66): a task's reserves gate it,
     // and of two tasks that fit alone but not together the higher score runs first.
     mod gate_411_bt_b16b;
+
+    // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the pure blackout judgement over its three sources.
+    mod gate_sr4a1;
 }
