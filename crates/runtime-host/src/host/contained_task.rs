@@ -4407,7 +4407,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             // ISO-2 (#419, ISO-M rows A05, E16): a resolve refused by the instance's session
             // fails only this operation.
             .map_err(|error| {
-                RequestFailure::frame_handoff(HostLocation::ResolveCommittedInputFrame, &error)
+                RequestFailure::frame_handoff(
+                    HostLocation::ResolveCommittedInputFrame,
+                    &error,
+                    Some(self.token.instance_id()),
+                )
             })
     }
 
@@ -4676,6 +4680,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             RequestFailure::frame_handoff(
                                 HostLocation::CommitCaptureInputFrame,
                                 &error,
+                                Some(self.token.instance_id()),
                             )
                         })
                 })();

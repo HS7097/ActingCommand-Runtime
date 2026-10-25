@@ -608,12 +608,14 @@ impl HostShared {
         )
         // ISO-2 (#419, ISO-M row E48): the observed instance's failure alone.
         .map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
+            let mut error = RuntimeHostError::fatal(
                 HostCode::ReadonlyObservationInvalid,
                 ContractLocation::ObserveReadonly,
                 RuntimeErrorCode::RuntimeHalted,
-                instance_id,
-            ))
+            )
+            .instance_scoped();
+            error.lifecycle.instance_id = links.instance_id().copied();
+            RequestFailure::poison_without_terminal(error)
         })?;
         self.append_capture_completed(
             links.clone(),
@@ -654,7 +656,11 @@ impl HostShared {
             // ISO-2 (#419, ISO-M rows E14, E15): a commit refused by the instance's session
             // fails only this observe.
             .map_err(|error| {
-                RequestFailure::frame_handoff(HostLocation::CommitCaptureInputFrame, &error)
+                RequestFailure::frame_handoff(
+                    HostLocation::CommitCaptureInputFrame,
+                    &error,
+                    links.instance_id().copied(),
+                )
             })?;
         Ok(CompletedReadonlyObservation {
             observation,

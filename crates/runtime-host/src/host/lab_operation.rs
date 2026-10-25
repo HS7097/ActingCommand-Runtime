@@ -1877,7 +1877,11 @@ impl ContainedTaskRuntime for LabOperationRuntime<'_> {
             // ISO-2 (#419, ISO-M rows A05, E16): a resolve refused by the instance's session
             // fails only this operation.
             .map_err(|error| {
-                RequestFailure::frame_handoff(HostLocation::ResolveCommittedInputFrame, &error)
+                RequestFailure::frame_handoff(
+                    HostLocation::ResolveCommittedInputFrame,
+                    &error,
+                    Some(self.instance_id),
+                )
             })
     }
 

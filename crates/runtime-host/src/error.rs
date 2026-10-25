@@ -920,13 +920,16 @@ impl RuntimeHostError {
     /// ISO-2 (#419 R1; ISO-M rows A05, E14, E15, E16): the kernel refused one operation on its
     /// instance's session: a frame commit or resolve met a session that was closed, is closing
     /// or was retired, or a frame that a later capture replaced. Nothing of the instance is
-    /// left held, so only that operation fails, with the kernel's code, non-fatal. An
-    /// unconfirmed close and a code on the closed Global list keep the kernel's severity.
+    /// left held, so only that operation fails, with the kernel's code, non-fatal. Its scope is
+    /// the session's own instance when the kernel names one, else `instance`'s. An unconfirmed
+    /// close and a code on the closed Global list keep the kernel's severity.
     pub(crate) fn instance_operation(
         operation: impl Into<Location>,
         error: &ExecutionKernelError,
+        instance: Option<InstanceId>,
     ) -> Self {
         let mut result = Self::execution(operation, error);
+        result.lifecycle.instance_id = result.lifecycle.instance_id.or(instance);
         if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
             && !crate::host::failure_scope::is_global_code(result.code())
         {

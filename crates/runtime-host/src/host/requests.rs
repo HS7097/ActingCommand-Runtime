@@ -817,8 +817,12 @@ impl RequestFailure {
     /// resolve on the instance's own session (`RuntimeHostError::instance_operation`). Only the
     /// operation fails, non-fatal, with the kernel's code (a run's as its task failure); a
     /// refusal that keeps its severity poisons as before, and its boundary contains it.
-    pub(super) fn frame_handoff(operation: HostLocation, error: &ExecutionKernelError) -> Self {
-        let error = RuntimeHostError::instance_operation(operation, error);
+    pub(super) fn frame_handoff(
+        operation: HostLocation,
+        error: &ExecutionKernelError,
+        instance: Option<InstanceId>,
+    ) -> Self {
+        let error = RuntimeHostError::instance_operation(operation, error, instance);
         if error.is_fatal() {
             return Self::poison_without_terminal(error);
         }

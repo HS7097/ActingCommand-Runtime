@@ -550,8 +550,11 @@ fn iso2_e_a_refused_frame_commit_or_resolve_fails_only_its_operation() {
 
     let assert_operation_failure = |refusal: &ExecutionKernelError, code: &str| {
         assert_eq!(refusal.code().as_str(), code);
-        let failure =
-            RuntimeHostError::instance_operation(HostLocation::CommitCaptureInputFrame, refusal);
+        let failure = RuntimeHostError::instance_operation(
+            HostLocation::CommitCaptureInputFrame,
+            refusal,
+            Some(x),
+        );
         assert_eq!(failure.code(), code);
         assert!(!failure.is_fatal(), "{code}");
         assert!(!failure.halts_runtime(), "{code}");
@@ -589,8 +592,11 @@ fn iso2_e_a_refused_frame_commit_or_resolve_fails_only_its_operation() {
         )
         .expect_err("a closed kernel opens no session");
     assert_eq!(closed.code().as_str(), "execution_kernel_closed");
-    let global =
-        RuntimeHostError::instance_operation(HostLocation::CommitCaptureInputFrame, &closed);
+    let global = RuntimeHostError::instance_operation(
+        HostLocation::CommitCaptureInputFrame,
+        &closed,
+        Some(x),
+    );
     assert!(global.is_fatal());
     assert_eq!(global.scope_at(Some(x)), FailureScope::Global);
     assert!(global.halts_runtime());
