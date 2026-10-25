@@ -432,6 +432,13 @@ impl Bench {
     fn cycle(&self, unix_ms: u64, monotonic_ms: u64) -> PolicyCycle {
         self.clock.set_unix_ms(unix_ms);
         self.clock.set_monotonic_ms(monotonic_ms);
+        // The host's capacity at the new time, as its capacity monitor samples it while time
+        // passes (`gate_372k2`'s `Slots`).
+        let sample_capacity = self
+            .host
+            .capacity_sampler_for_test()
+            .expect("capacity owner");
+        sample_capacity().expect("capacity sample");
         self.host
             .evaluate_policy_cycle_with_test_inputs(
                 &self.facts,

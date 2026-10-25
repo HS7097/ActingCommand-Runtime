@@ -376,6 +376,15 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         let _gate = lock(&self.proposal_write_gate, ContractLocation::PromoteProposal)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // ROUT-L RL-1b (model §3.5): in composer mode the scheduler workbench is the only writer
+        // of the active generation, so no proposal is promoted.
+        if self.standard_packs.schedule.is_some() {
+            return Err(proposal_request_failure(RuntimeHostError::request(
+                HostCode::ProposalPromotionInvalid,
+                ContractLocation::PromoteProposal,
+                RuntimeErrorCode::InvalidRequest,
+            )));
+        }
         self.verify_proposal_reports(proposal)?;
         let (prepared, current) = {
             let policy = lock(self.policy()?, HostLocation::PrepareProposalPromotion)?;

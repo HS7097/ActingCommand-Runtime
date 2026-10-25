@@ -593,7 +593,7 @@ impl HostShared {
     /// Records `standard_pack_registered` when `registry` differs from the one last read for
     /// `game` (the first read included), its return-home packages included (Workflow #373
     /// NAV-3a), and remembers it (§4.3).
-    pub(super) fn note_standard_pack_registry(
+    fn note_standard_pack_registry(
         &self,
         game: &str,
         registry: &StandardPackRegistry,
