@@ -627,3 +627,11 @@ tests = [
     "actingcommand-ledger::lib::global::sqlite::tests::ln_diag_the_release_baseline_read_reads_only_the_records_it_selects",
 ]
 incident = ["#422 LN-DIAG"]
+
+# LN-TUNE (#422, brief rd-1026 item 2): a paged history read with a limit asks the store for no more rows than it can still return, so the monitor registry's replay (pages of half a history page) reads and authenticates each Runtime record once, and its pages hold what one unpaged read of the same query holds
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln_tune::ln_tune_every_monitor_row_is_authenticated_once_per_read",
+]
+incident = ["#422 LN-TUNE"]

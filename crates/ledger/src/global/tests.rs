@@ -2075,6 +2075,7 @@ mod subscription {
             last_delivered_sequence: 0,
             replay_through_sequence: 0,
             replay_page_events: 1,
+            reply_timeout: GlobalLedger::REPLY_TIMEOUT,
             live,
             terminal,
             terminal_error: None,
@@ -2924,3 +2925,6 @@ mod gate_411_a24;
 // LN-5 (#422, LEAN-L): the writer's reads and its append checks read the history from the store.
 #[path = "tests/gate_ln5.rs"]
 mod gate_ln5;
+// #422 LN-TUNE: a paged history read reads and authenticates each row once.
+#[path = "tests/gate_ln_tune.rs"]
+mod gate_ln_tune;

@@ -112,7 +112,7 @@ impl HostShared {
                 .and_then(|()| {
                     confirm_deferred_appends(
                         &self.ledger,
-                        GlobalLedger::REPLY_TIMEOUT,
+                        self.ledger.reply_timeout(),
                         HostLocation::AppendDeviceDiagnosticBudget,
                     )
                 });

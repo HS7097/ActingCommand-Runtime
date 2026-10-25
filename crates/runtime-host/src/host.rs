@@ -1654,7 +1654,7 @@ impl RuntimeHost {
                     .and_then(|()| {
                         device_diagnostic::confirm_deferred_appends(
                             &ledger,
-                            GlobalLedger::REPLY_TIMEOUT,
+                            ledger.reply_timeout(),
                             HostLocation::AppendDeviceDiagnosticBudget,
                         )
                     }) {
@@ -5331,7 +5331,7 @@ impl HostShared {
         record_failure(
             &mut failure,
             self.confirm_deferred_appends(
-                GlobalLedger::REPLY_TIMEOUT,
+                self.ledger.reply_timeout(),
                 HostLocation::ConfirmDeferredAppends,
             ),
         );
@@ -6041,6 +6041,9 @@ fn ledger_failure_plan(
     if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
         plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
     }
+    // #422 LN-TUNE: how long a caller waits for one writer reply
+    // (`ledger_observer.writer_reply_timeout_ms`); a test may wait less.
+    plan = plan.with_reply_timeout(Duration::from_millis(section.writer_reply_timeout_ms));
     if let Some(timeout) = config.ledger_reply_timeout {
         plan = plan.with_reply_timeout(timeout);
     }
