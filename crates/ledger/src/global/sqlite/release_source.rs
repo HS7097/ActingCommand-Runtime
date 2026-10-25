@@ -190,9 +190,15 @@ pub fn verify_release_source_reference(
     })
 }
 
-/// Checks the fixed Release baseline key through the original authenticated global prefix.
-/// A complete scan prevents changed filter columns from hiding an existing boundary. Pages
-/// bound memory; duplicate boundaries fail with both original locators, never a first-row win.
+/// Checks the fixed Release baseline key as of the authenticated head. Workflow #422 LN-DIAG
+/// (LEAN-L model §3.2 step 5 X4, §6; Alice 10-24, #422 ruling 57): the keyed meta row names the
+/// head, and the newest stored row must be at it and carry its hash; the candidates are the
+/// `state.migrated` records, selected through the event-type index in pages, each authenticated
+/// on its own (record and hash, keyed tag, predecessor link, indexed columns, links and
+/// artifacts). Duplicate boundaries fail with both original locators, never a first-row win.
+/// The read does not grow with the history: a record it does not select is not read here, and its
+/// damage is found by the open's verification, by `ledger-maintenance verify` and, once the open
+/// verifies only its tail, by the scrub.
 pub fn read_release_baseline_source(
     database: &RuntimeDatabase,
     transaction: &RuntimeTransaction<'_, '_>,
@@ -208,35 +214,32 @@ pub fn read_release_baseline_source(
             hook();
         }
     }
+    verify_source_extent(database, connection, &head)?;
+    let migrated = SqlValue::Text(views::key(EventType::StateMigrated)?);
     let mut after = 0;
-    let mut previous = None;
-    let mut artifact_count = 0_u64;
     let mut found: Option<VerifiedReleaseLedgerSource> = None;
     loop {
-        let rows = read_rows(
+        let rows = read_rows_bound(
             connection,
             &format!(
-                "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence>{} ORDER BY sequence LIMIT {BASELINE_PAGE_EVENTS}",
-                encode(after),
+                "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE event_type=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT {BASELINE_PAGE_EVENTS}"
             ),
+            &[
+                migrated.clone(),
+                SqlValue::Integer(encode(after)),
+                SqlValue::Integer(encode(head.sequence)),
+            ],
             None,
             &mut 0,
             true,
         )?;
-        if rows.is_empty() {
-            break;
-        }
+        let full = rows.len() >= BASELINE_PAGE_EVENTS;
         for row in rows {
-            let (event, projected) = verify_source_row(database, &row, previous.as_deref())?;
-            if event.sequence() != increment_sequence(after)? || event.sequence() > head.sequence {
+            let (event, projected) = authenticate_source_row(database, connection, &row)?;
+            if event.sequence() <= after || event.sequence() > head.sequence {
                 return Err(failure(LedgerCode::SequenceDiscontinuity.code(), OPERATION));
             }
-            verify_source_indexes(connection, &projected)?;
-            artifact_count = artifact_count
-                .checked_add(projected.artifacts.len() as u64)
-                .ok_or_else(|| failure(LedgerCode::LedgerSnapshotOverflow.code(), OPERATION))?;
             after = event.sequence();
-            previous = Some(projected.hash.clone());
             if is_release_baseline(event.payload()) {
                 let current = VerifiedReleaseLedgerSource {
                     reference: ReleaseLedgerSourceReference {
@@ -259,24 +262,67 @@ pub fn read_release_baseline_source(
                 found = Some(current);
             }
         }
-    }
-    if after != head.sequence || previous != head.hash {
-        return Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION));
-    }
-    let (events, links, artifacts): (i64, i64, i64) = connection
-        .query_row(
-            "SELECT (SELECT count(*) FROM ledger_events), (SELECT count(*) FROM ledger_links), (SELECT count(*) FROM ledger_artifacts)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .map_err(|error| sql_error(error, OPERATION))?;
-    if u64::try_from(events).ok() != Some(after)
-        || u64::try_from(links).ok() != Some(after)
-        || u64::try_from(artifacts).ok() != Some(artifact_count)
-    {
-        return Err(failure(LedgerCode::LedgerIndexMismatch.code(), OPERATION));
+        if !full {
+            break;
+        }
     }
     Ok(found)
+}
+
+/// LN-DIAG (#422): the stored rows end at the authenticated head. The largest sequence is the
+/// head's (a read of the primary key's end), and the newest row, authenticated on its own, is the
+/// record the head hash names; a ledger without records has neither.
+fn verify_source_extent(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+    head: &SourceHead,
+) -> GlobalLedgerResult<()> {
+    let newest = connection
+        .query_row("SELECT MAX(sequence) FROM ledger_events", [], |row| {
+            row.get::<_, Option<i64>>(0)
+        })
+        .map_err(|error| sql_error(error, OPERATION))?
+        .map(decode);
+    match newest {
+        None if head.sequence == 0 => Ok(()),
+        Some(newest) if newest == head.sequence => {
+            let row = read_source_row(connection, newest)?;
+            let (_, projected) = authenticate_source_row(database, connection, &row)?;
+            if Some(&projected.hash) == head.hash.as_ref() {
+                Ok(())
+            } else {
+                Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION))
+            }
+        }
+        _ => Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION)),
+    }
+}
+
+/// LN-DIAG (#422): one stored row, authenticated on its own, as a locator's row is
+/// ([`verify_release_source_reference`]): chained from its predecessor, which is checked against
+/// its own stored predecessor hash, and both with their links and artifacts.
+fn authenticate_source_row(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+    row: &SqlRow,
+) -> GlobalLedgerResult<(LedgerEventMetadata, ProjectedRecord)> {
+    let Some(SqlValue::Integer(stored)) = row.first() else {
+        return Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION));
+    };
+    let previous = match decode(*stored) {
+        0 => return Err(failure(LedgerCode::SequenceDiscontinuity.code(), OPERATION)),
+        1 => None,
+        sequence => {
+            let predecessor = read_source_row(connection, sequence - 1)?;
+            let (_, projected) =
+                verify_source_row(database, &predecessor, previous_hash(&predecessor)?)?;
+            verify_source_indexes(connection, &projected)?;
+            Some(projected.hash)
+        }
+    };
+    let (event, projected) = verify_source_row(database, row, previous.as_deref())?;
+    verify_source_indexes(connection, &projected)?;
+    Ok((event, projected))
 }
 
 struct SourceHead {

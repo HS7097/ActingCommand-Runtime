@@ -828,3 +828,177 @@ fn sqlite_commit_before_notification_replays_after_process_exit() {
     );
     reopened.close().expect("close recovered");
 }
+
+/// LN-DIAG (#422): a `state.migrated` record of the Release baseline key.
+fn ln_diag_baseline(timestamp: u64) -> SanitizedEventDraft {
+    let migration = StateMigrationData::new(
+        format!("migration:{timestamp:064x}"),
+        RELEASE_BASELINE_STATE_KEY,
+        "release.state.v1",
+        "release.atomic.v1",
+        format!("sha256:{}", "e".repeat(64)),
+        StateValidationResult::Passed,
+        StateRecoveryAction::ImportedLegacy,
+    )
+    .expect("baseline migration");
+    EventDraft::new(
+        IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_event_id()
+            .expect("event id"),
+        timestamp,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default(),
+        StatePayloadDraft::migrated(migration, AuditInput::new()).into(),
+    )
+    .sanitize(&Sha256SecretFingerprinter::new(b"sqlite-ledger-contract").expect("salt"))
+    .expect("baseline draft")
+}
+
+/// LN-DIAG (#422): a closed root of eight records, the Release baselines at the sequences
+/// `boundaries` names and commands elsewhere.
+fn ln_diag_history(boundaries: &[u64]) -> (TempDir, Arc<RuntimeDatabase>, Vec<PersistedEvent>) {
+    let root = TempDir::new().expect("root");
+    let database = database(root.path());
+    let ledger =
+        GlobalLedger::open_sqlite_candidate(config(root.path(), "ln-diag"), Arc::clone(&database))
+            .expect("writer");
+    let events = (1..=8)
+        .map(|timestamp| {
+            let record = if boundaries.contains(&timestamp) {
+                ln_diag_baseline(timestamp)
+            } else {
+                draft(timestamp)
+            };
+            ledger.append(record).expect("record")
+        })
+        .collect::<Vec<_>>();
+    ledger.close().expect("close");
+    (root, database, events)
+}
+
+/// LN-DIAG (#422): the Release baseline read in one read transaction of `database`.
+fn ln_diag_read(
+    database: &RuntimeDatabase,
+) -> GlobalLedgerResult<Option<VerifiedReleaseLedgerSource>> {
+    let mut connection = database
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
+        .expect("connection");
+    let transaction = connection.transaction().expect("read transaction");
+    let source = read_release_baseline_source(database, &database.borrow_transaction(&transaction));
+    transaction.rollback().expect("end the read");
+    source
+}
+
+fn ln_diag_mutate(database: &RuntimeDatabase, sql: &str) {
+    database
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
+        .expect("connection")
+        .execute_batch(sql)
+        .expect("mutate fixture");
+}
+
+/// Workflow #422 LN-DIAG (LEAN-L model §3.2 step 5 X4, §6; Alice 10-24, #422 ruling 57): the
+/// Release baseline read selects the `state.migrated` records through the event-type index and
+/// authenticates each on its own, with the newest row at the authenticated head. It finds the one
+/// boundary with its original locator and absence without one, refuses two boundaries, a damaged
+/// boundary and a history short of its head, and reads no record it does not select, so its work
+/// follows the boundary's candidates and not the history's length. At a million records the
+/// whole-chain read it replaces took about 87 s in the start's `runtime_state` step and again
+/// inside the boundary's joint append on the writer, past the caller's 10 s reply limit.
+#[test]
+fn ln_diag_the_release_baseline_read_reads_only_the_records_it_selects() {
+    // One boundary, at sequence 6: found with its original locator.
+    let (_intact_root, intact, events) = ln_diag_history(&[6]);
+    let boundary = &events[5];
+    let source = ln_diag_read(&intact)
+        .expect("the boundary is read")
+        .expect("one boundary");
+    assert_eq!(source.sequence(), boundary.sequence());
+    assert_eq!(source.event_id(), boundary.event_id());
+    let stored_hash: String = intact
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
+        .expect("connection")
+        .query_row(
+            "SELECT record_sha256 FROM ledger_events WHERE sequence=?1",
+            [encode(boundary.sequence())],
+            |row| row.get(0),
+        )
+        .expect("the boundary's stored hash");
+    assert_eq!(source.reference().record_sha256(), stored_hash);
+
+    // No boundary: absence.
+    let (_absent_root, absent, _) = ln_diag_history(&[]);
+    assert!(ln_diag_read(&absent).expect("absence is read").is_none());
+
+    // A damaged record the read does not select (neither a candidate nor the newest record, nor
+    // the predecessor of either) is not read: the boundary is still found. The record itself is
+    // refused when it is read.
+    let (_old_root, damaged_old, events) = ln_diag_history(&[6]);
+    let old = &events[2];
+    ln_diag_mutate(
+        &damaged_old,
+        &format!(
+            "UPDATE ledger_events SET integrity_tag='ln-diag-invalid-tag' WHERE sequence={}",
+            encode(old.sequence())
+        ),
+    );
+    let source = ln_diag_read(&damaged_old)
+        .expect("a record the read does not select is not read")
+        .expect("one boundary");
+    assert_eq!(source.sequence(), events[5].sequence());
+    {
+        let mut connection = damaged_old
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
+            .expect("connection");
+        let transaction = connection.transaction().expect("read transaction");
+        let error = verify_transaction_event(
+            &damaged_old,
+            &damaged_old.borrow_transaction(&transaction),
+            old,
+        )
+        .expect_err("the damaged record is refused when it is read");
+        assert!(error.is_fatal(), "{error}");
+        transaction.rollback().expect("end the read");
+    }
+
+    // A damaged boundary is refused.
+    let (_boundary_root, damaged_boundary, events) = ln_diag_history(&[6]);
+    ln_diag_mutate(
+        &damaged_boundary,
+        &format!(
+            "UPDATE ledger_events SET severity='warning' WHERE sequence={}",
+            encode(events[5].sequence())
+        ),
+    );
+    let error = ln_diag_read(&damaged_boundary).expect_err("a damaged boundary is refused");
+    assert_eq!(error.code(), LedgerCode::LedgerRecordMismatch.as_str());
+    assert!(error.is_fatal(), "{error}");
+
+    // Two boundaries are refused, never a first-row win.
+    let (_two_root, two, _) = ln_diag_history(&[3, 6]);
+    let error = ln_diag_read(&two).expect_err("two boundaries are refused");
+    assert_eq!(
+        error.code(),
+        LedgerCode::ReleaseBaselineSourceConflict.as_str()
+    );
+    assert!(error.is_fatal(), "{error}");
+
+    // A history whose newest record is missing does not reach its authenticated head.
+    let (_cut_root, cut, events) = ln_diag_history(&[6]);
+    let newest = encode(events[7].sequence());
+    ln_diag_mutate(
+        &cut,
+        &format!(
+            "DELETE FROM ledger_links WHERE sequence={newest}; DELETE FROM ledger_artifacts WHERE sequence={newest}; DELETE FROM ledger_events WHERE sequence={newest}"
+        ),
+    );
+    let error = ln_diag_read(&cut).expect_err("a history short of its head is refused");
+    assert_eq!(error.code(), LedgerCode::LedgerMetaMismatch.as_str());
+    assert!(error.is_fatal(), "{error}");
+}
