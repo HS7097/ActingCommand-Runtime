@@ -2,10 +2,12 @@
 
 //! Candidate durable medium. Typed semantics remain in EventStore/GlobalLedger.
 
+use super::history::{HistorySelection, LabRelations};
 use super::index::{IndexChange, IndexRows};
-use super::projection::EventIndexes;
+use super::projection::{EventIndexes, LAB_ANCHOR_SOURCE, LAB_ANCHOR_TYPE};
 use super::read_only::check_read_budget;
 use super::read_work::ReadWork;
+use super::retention::RetentionIndex;
 use super::retention::{LedgerOpenTiming, elapsed_ms};
 use super::storage::{
     DurableStorage, EventStore, ReadBack, UniqueJsonValue, WriterOwnership, increment_sequence,
@@ -644,6 +646,7 @@ pub(super) fn open_formal(
     let head_hash = prefix.head_hash.clone();
     let head = events.last().map_or(0, PersistedEvent::sequence);
     upgrade_views(&database, head, head_hash.as_deref())?;
+    ensure_history_index(&database)?;
     let meta_has_marker = {
         let connection =
             database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
@@ -660,7 +663,10 @@ pub(super) fn open_formal(
         meta_has_marker,
         prefix: Cell::new(Some(prefix)),
     };
-    let mut store = EventStore::recovered(backend, next, events)?;
+    // LN-5 (#422, LEAN-L §5 LN-5): the open still reads every record (until LN-8), derives the
+    // retention state from them and drops them; the writer reads its history from the store.
+    let mut store = EventStore::recovered(backend, next, &events)?;
+    drop(events);
     // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.4, §12 step 2): a dump an earlier run
     // left is imported after the ledger is verified and before any new record; AO-2 (§10, §12
     // step 5): then the previous epoch's unconfirmed tail.
@@ -887,6 +893,7 @@ impl SqliteLedgerStore {
                 events.last().map_or(0, PersistedEvent::sequence),
                 prefix.head_hash.as_deref(),
             )?;
+            ensure_history_index(&database)?;
             let meta_has_marker = {
                 let connection =
                     database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
@@ -911,7 +918,9 @@ impl SqliteLedgerStore {
             meta_has_marker,
             prefix: Cell::new(Some(prefix)),
         };
-        let mut store = Self::recovered(backend, next, events)?;
+        // LN-5 (#422): the records are dropped once the retention state is derived from them.
+        let mut store = Self::recovered(backend, next, &events)?;
+        drop(events);
         // Workflow #383 AO-1: a candidate opened with a failure plan writes and imports as the
         // running Runtime's writer does (`contracts/ledger-observer.md` §9); AO-2: and records
         // the previous epoch's unconfirmed tail (§10).
@@ -1473,21 +1482,24 @@ impl DurableStorage for SqliteStorage {
         self.database.root()
     }
 
+    fn head(&self) -> u64 {
+        self.head
+    }
+
     fn resolve_artifact(
         &self,
         selection: &super::LedgerArtifactSelection,
         deadline: Instant,
-    ) -> Option<GlobalLedgerResult<super::ResolvedLedgerArtifact>> {
-        Some(
-            SqliteViewSnapshot {
-                database: Arc::clone(&self.database),
-                through_sequence: self.head,
-                head_hash: self.head_hash.clone(),
-                budget: None,
-                source: LedgerReadSource::Runtime,
-            }
-            .resolve_artifact(selection, deadline, &self.prefix),
-        )
+        _retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
+        SqliteViewSnapshot {
+            database: Arc::clone(&self.database),
+            through_sequence: self.head,
+            head_hash: self.head_hash.clone(),
+            budget: None,
+            source: LedgerReadSource::Runtime,
+        }
+        .resolve_artifact(selection, deadline, &self.prefix)
     }
 
     fn project_view_page(
@@ -1497,22 +1509,21 @@ impl DurableStorage for SqliteStorage {
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
         work: &ReadWork,
-    ) -> Option<GlobalLedgerResult<RuntimeEventQueryPage>> {
-        Some(
-            SqliteViewSnapshot {
-                database: Arc::clone(&self.database),
-                through_sequence: self.head,
-                head_hash: self.head_hash.clone(),
-                budget: None,
-                source: LedgerReadSource::Runtime,
-            }
-            .project_view_page_observed(
-                query,
-                profile,
-                request,
-                observation,
-                (Some(&self.prefix), work),
-            ),
+        _retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        SqliteViewSnapshot {
+            database: Arc::clone(&self.database),
+            through_sequence: self.head,
+            head_hash: self.head_hash.clone(),
+            budget: None,
+            source: LedgerReadSource::Runtime,
+        }
+        .project_view_page_observed(
+            query,
+            profile,
+            request,
+            observation,
+            (Some(&self.prefix), work),
         )
     }
 
@@ -1521,6 +1532,122 @@ impl DurableStorage for SqliteStorage {
         prefixes: &[String],
     ) -> Option<GlobalLedgerResult<Vec<super::tagged::StateIndexRow>>> {
         Some(tagged::state_index_rows(&self.database, prefixes))
+    }
+
+    fn history_page(
+        &self,
+        selection: &HistorySelection<'_>,
+        (after, through): (u64, u64),
+        rows: usize,
+        retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let through = through.min(self.head);
+        if after >= through || rows == 0 {
+            return Ok(Vec::new());
+        }
+        let mut connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
+        let metadata = match read_history_rows(
+            &self.database,
+            &transaction,
+            selection,
+            (after, through),
+            rows,
+        ) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return Err(
+                    error.with_close_result(transaction.rollback().map_err(|error| {
+                        sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
+                    })),
+                );
+            }
+        };
+        transaction
+            .commit()
+            .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
+        drop(connection);
+        metadata
+            .into_iter()
+            .map(|event| {
+                event
+                    .into_event_with_artifact_availability(&mut |reference| {
+                        retention.proven_availability(reference)
+                    })
+                    .map_err(|error| {
+                        failure(
+                            error.code(),
+                            LedgerLocation::ValidatePersistedEvent.location(),
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>> {
+        let connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        let rows = read_rows_bound(
+            &connection,
+            "SELECT sequence FROM ledger_events WHERE event_id=?",
+            &[SqlValue::Text(views::key(event_id)?)],
+            None,
+            &mut 0,
+            false,
+        )?;
+        match rows.as_slice() {
+            [] => Ok(None),
+            [row] => match row.as_slice() {
+                [SqlValue::Integer(sequence)] => Ok(Some(decode(*sequence))),
+                _ => Err(failure(
+                    LedgerCode::InvalidEventInteger.code(),
+                    LedgerLocation::RecoverSqliteSequence.location(),
+                )),
+            },
+            _ => Err(failure(
+                LedgerCode::DuplicateEventId.code(),
+                LedgerLocation::RecoverEventIds.location(),
+            )),
+        }
+    }
+
+    fn lab_relations(&self, through: u64, seed: &LabRelations) -> GlobalLedgerResult<LabRelations> {
+        let connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        read_lab_relations(&connection, through, seed)
+    }
+
+    fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>> {
+        let connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        let rows = read_rows(
+            &connection,
+            "SELECT MAX(timestamp_unix_ms) FROM ledger_events",
+            None,
+            &mut 0,
+            false,
+        )?;
+        match rows.as_slice() {
+            [row] => match row.as_slice() {
+                [SqlValue::Null] => Ok(None),
+                [SqlValue::Integer(timestamp)] => Ok(Some(decode(*timestamp))),
+                _ => Err(failure(
+                    LedgerCode::InvalidEventInteger.code(),
+                    LedgerLocation::ReadSqliteRow.location(),
+                )),
+            },
+            _ => Err(failure(
+                LedgerCode::InvalidEventInteger.code(),
+                LedgerLocation::ReadSqliteRow.location(),
+            )),
+        }
     }
 
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
@@ -3452,6 +3579,314 @@ fn read_range_rows(
     Ok(RangeRead {
         events,
         head_sequence: head,
+    })
+}
+
+/// LN-5 (#422, LEAN-L §3.3): the index the history reads of artifact identities require
+/// (`ledger_artifacts` by artifact id); a database without it gets it once, at the first writer
+/// open of a build that requires it.
+const HISTORY_INDEX: &str = "CREATE INDEX IF NOT EXISTS ledger_artifacts_artifact ON ledger_artifacts(artifact_id, sequence)";
+
+fn ensure_history_index(database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
+    let connection = database.connection(LedgerLocation::UpgradeLedgerViews.location())?;
+    connection
+        .execute_batch(HISTORY_INDEX)
+        .map_err(|error| sql_error(error, LedgerLocation::CreateLedgerViews.location()))
+}
+
+/// The JSON path of a policy dispatch or execution record's decision in its stored record.
+const DECISION_PATH: &str = "$.payload.payload.data.decision_id";
+
+/// LN-5 (#422, LEAN-L §3.3): one page of the committed rows `selection` selects with
+/// `after < sequence <= through`, at most `rows`, in ledger order. The statement selects through
+/// the indexes (the sequence key; the event type, origin, time and severity indexes; the link
+/// indexes; a decision through the stored record); each row is then authenticated on its own
+/// (`RowReader::authenticate`), and its link and artifact rows must be the ones it requires.
+fn read_history_rows(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+    selection: &HistorySelection<'_>,
+    range: (u64, u64),
+    rows: usize,
+) -> GlobalLedgerResult<Vec<LedgerEventMetadata>> {
+    let (sql, values) = history_statement(selection, range, rows)?;
+    let mut reader = RowReader::new(database, connection, None);
+    let selected = read_rows_bound(connection, &sql, &values, None, &mut reader.bytes, true)?;
+    let mut sequences = Vec::with_capacity(selected.len());
+    let mut events = Vec::with_capacity(selected.len());
+    let mut expected_links = Vec::with_capacity(selected.len());
+    let mut expected_artifacts = Vec::new();
+    for row in selected {
+        let Some(sequence) = row.first().cloned() else {
+            return Err(failure(
+                LedgerCode::InvalidEventInteger.code(),
+                LedgerLocation::RecoverSqliteSequence.location(),
+            ));
+        };
+        let (event, links, artifacts) = reader.authenticate(row, events.len() + 1)?;
+        sequences.push(sequence);
+        expected_links.push(links);
+        expected_artifacts.extend(artifacts);
+        events.push(event);
+    }
+    if sequences.is_empty() {
+        return Ok(events);
+    }
+    let placeholders = vec!["?"; sequences.len()].join(",");
+    let stored_links = read_rows_bound(
+        connection,
+        &format!(
+            "SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence IN ({placeholders}) ORDER BY sequence"
+        ),
+        &sequences,
+        None,
+        &mut reader.bytes,
+        false,
+    )?;
+    let stored_artifacts = read_rows_bound(
+        connection,
+        &format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence IN ({placeholders}) ORDER BY sequence,ordinal"
+        ),
+        &sequences,
+        None,
+        &mut reader.bytes,
+        false,
+    )?;
+    if stored_links != expected_links || stored_artifacts != expected_artifacts {
+        return Err(failure(
+            LedgerCode::LedgerIndexMismatch.code(),
+            LedgerLocation::VerifySqliteRelations.location(),
+        ));
+    }
+    Ok(events)
+}
+
+/// The statement of one history page and its bound values: the query's conditions that have a
+/// column or an index, every value bound, in placeholder order.
+fn history_statement(
+    selection: &HistorySelection<'_>,
+    (after, through): (u64, u64),
+    rows: usize,
+) -> GlobalLedgerResult<(String, Vec<SqlValue>)> {
+    let query = selection.query;
+    let columns = EVENT_COLUMNS
+        .split(',')
+        .map(|column| format!("e.{column}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut clauses = vec!["e.sequence>?".to_owned(), "e.sequence<=?".to_owned()];
+    let mut values = vec![
+        SqlValue::Integer(encode(after)),
+        SqlValue::Integer(encode(through)),
+    ];
+    for (clause, value) in [
+        ("e.sequence>=?", query.from_sequence),
+        ("e.sequence<=?", query.to_sequence),
+        ("e.timestamp_unix_ms>=?", query.from_timestamp_unix_ms),
+        ("e.timestamp_unix_ms<?", query.to_timestamp_unix_ms),
+    ] {
+        if let Some(value) = value {
+            clauses.push(clause.to_owned());
+            values.push(SqlValue::Integer(encode(value)));
+        }
+    }
+    if let Some(event_type) = query.event_type {
+        clauses.push("e.event_type=?".to_owned());
+        values.push(SqlValue::Text(views::key(event_type)?));
+    }
+    for (event_types, operator) in [
+        (&query.event_types, "IN"),
+        (&query.exclude_event_types, "NOT IN"),
+    ] {
+        if event_types.is_empty() {
+            continue;
+        }
+        clauses.push(format!(
+            "e.event_type {operator} ({})",
+            vec!["?"; event_types.len()].join(",")
+        ));
+        for event_type in event_types {
+            values.push(SqlValue::Text(views::key(event_type)?));
+        }
+    }
+    if let Some(source) = query.source {
+        clauses.push("e.origin_source=?".to_owned());
+        values.push(SqlValue::Text(views::key(source)?));
+    }
+    if let Some(module) = query.origin_module {
+        clauses.push("e.origin_module=?".to_owned());
+        values.push(SqlValue::Text(views::key(module)?));
+    }
+    if query.minimum_severity.is_some() || query.maximum_severity.is_some() {
+        let allowed = views::severities(query.minimum_severity, query.maximum_severity)?;
+        clauses.push(format!(
+            "e.severity IN ({})",
+            vec!["?"; allowed.len()].join(",")
+        ));
+        values.extend(allowed);
+    }
+    let mut links = false;
+    for (column, value) in [
+        ("l.instance_id", query.instance_id.as_ref().map(views::key)),
+        ("l.request_id", query.request_id.as_ref().map(views::key)),
+        (
+            "l.correlation_id",
+            query.correlation_id.as_ref().map(views::key),
+        ),
+        (
+            "l.causation_id",
+            query.causation_id.as_ref().map(views::key),
+        ),
+        ("l.task_id", query.task_id.as_ref().map(views::key)),
+        ("l.run_id", query.run_id.as_ref().map(views::key)),
+        ("l.lease_id", query.lease_id.as_ref().map(views::key)),
+        ("l.frame_id", query.frame_id.as_ref().map(views::key)),
+        ("l.action_id", query.action_id.as_ref().map(views::key)),
+        (
+            "l.recognition_id",
+            query.recognition_id.as_ref().map(views::key),
+        ),
+    ] {
+        if let Some(value) = value.transpose()? {
+            links = true;
+            clauses.push(format!("{column}=?"));
+            values.push(SqlValue::Text(value));
+        }
+    }
+    if !query.instance_ids.is_empty() {
+        links = true;
+        clauses.push(format!(
+            "l.instance_id IN ({})",
+            vec!["?"; query.instance_ids.len()].join(",")
+        ));
+        for instance_id in &query.instance_ids {
+            values.push(SqlValue::Text(views::key(instance_id)?));
+        }
+    }
+    if let Some(decision) = selection.decision_id {
+        clauses.push(format!(
+            "json_extract(CAST(e.canonical_record AS TEXT),'{DECISION_PATH}')=?"
+        ));
+        values.push(SqlValue::Text(decision.to_owned()));
+    }
+    values.push(SqlValue::Integer(i64::try_from(rows).map_err(|_| {
+        failure(
+            LedgerCode::InvalidPageLimit.code(),
+            LedgerLocation::EncodeLedgerQuery.location(),
+        )
+    })?));
+    let join = if links {
+        " JOIN ledger_links l ON l.sequence=e.sequence"
+    } else {
+        ""
+    };
+    Ok((
+        format!(
+            "SELECT {columns} FROM ledger_events e{join} WHERE {} ORDER BY e.sequence LIMIT ?",
+            clauses.join(" AND ")
+        ),
+        values,
+    ))
+}
+
+/// LN-5 (#422, LEAN-L §3.3): the Lab relations of the committed rows through `through`
+/// (`LAB_RELATIONS`), selected through the view and link indexes as the stored Lab view selects
+/// them: the requests and correlations of the Lab anchors, with `seed`'s; then the runs of the
+/// rows that name one of them, with `seed`'s.
+fn read_lab_relations(
+    connection: &Connection,
+    through: u64,
+    seed: &LabRelations,
+) -> GlobalLedgerResult<LabRelations> {
+    let mut relations = seed.clone();
+    let anchors = [
+        SqlValue::Text(views::key(LAB_ANCHOR_SOURCE)?),
+        SqlValue::Text(views::key(LAB_ANCHOR_TYPE)?),
+        SqlValue::Integer(encode(through)),
+    ];
+    let anchored = |column: &str| {
+        format!(
+            "SELECT al.{column} FROM ledger_events a JOIN ledger_links al ON al.sequence=a.sequence WHERE a.origin_source=?1 AND a.sequence<=?3 AND al.{column} IS NOT NULL UNION SELECT al.{column} FROM ledger_events a JOIN ledger_links al ON al.sequence=a.sequence WHERE a.event_type=?2 AND a.sequence<=?3 AND al.{column} IS NOT NULL"
+        )
+    };
+    for text in link_texts(read_rows_bound(
+        connection,
+        &anchored("request_id"),
+        &anchors,
+        None,
+        &mut 0,
+        false,
+    )?)? {
+        relations.requests.insert(id_from_text(&text)?);
+    }
+    for text in link_texts(read_rows_bound(
+        connection,
+        &anchored("correlation_id"),
+        &anchors,
+        None,
+        &mut 0,
+        false,
+    )?)? {
+        relations.correlations.insert(id_from_text(&text)?);
+    }
+    let requests = relations
+        .requests
+        .iter()
+        .map(views::key)
+        .collect::<GlobalLedgerResult<Vec<_>>>()?;
+    let correlations = relations
+        .correlations
+        .iter()
+        .map(views::key)
+        .collect::<GlobalLedgerResult<Vec<_>>>()?;
+    let encoded = |values: &[String]| {
+        serde_json::to_string(values).map_err(|error| {
+            GlobalLedgerError::json(
+                LedgerCode::EventSerializationFailed.code(),
+                LedgerLocation::EncodeLedgerQuery.location(),
+                &error,
+            )
+        })
+    };
+    let runs = read_rows_bound(
+        connection,
+        "SELECT r.run_id FROM ledger_links r WHERE r.request_id IN (SELECT value FROM json_each(?2)) AND r.run_id IS NOT NULL AND r.sequence<=?1 UNION SELECT r.run_id FROM ledger_links r WHERE r.correlation_id IN (SELECT value FROM json_each(?3)) AND r.run_id IS NOT NULL AND r.sequence<=?1",
+        &[
+            SqlValue::Integer(encode(through)),
+            SqlValue::Text(encoded(requests.as_slice())?),
+            SqlValue::Text(encoded(correlations.as_slice())?),
+        ],
+        None,
+        &mut 0,
+        false,
+    )?;
+    for text in link_texts(runs)? {
+        relations.runs.insert(id_from_text(&text)?);
+    }
+    Ok(relations)
+}
+
+/// The text of each one-column row.
+fn link_texts(rows: Vec<SqlRow>) -> GlobalLedgerResult<Vec<String>> {
+    rows.into_iter()
+        .map(|row| match <[SqlValue; 1]>::try_from(row) {
+            Ok([SqlValue::Text(text)]) => Ok(text),
+            _ => Err(failure(
+                LedgerCode::InvalidEventLink.code(),
+                LedgerLocation::ReadLedgerView.location(),
+            )),
+        })
+        .collect()
+}
+
+/// An identifier from its stored text (its serialization).
+fn id_from_text<T: serde::de::DeserializeOwned>(text: &str) -> GlobalLedgerResult<T> {
+    serde_json::from_value(Value::String(text.to_owned())).map_err(|_| {
+        failure(
+            LedgerCode::InvalidEventLink.code(),
+            LedgerLocation::ReadLedgerView.location(),
+        )
     })
 }
 

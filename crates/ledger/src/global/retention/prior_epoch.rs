@@ -47,10 +47,10 @@ impl RetentionIndex {
             .flatten()
     }
 
-    pub(super) fn validate_prior_epoch<E: LedgerEventRead>(
+    pub(super) fn validate_prior_epoch<E: LedgerEventRead, H: RetentionHistory<Event = E>>(
         &self,
         event: &E,
-        events: &[E],
+        history: &H,
         guarded: bool,
     ) -> GlobalLedgerResult<()> {
         let Some(observation) = fact(event) else {
@@ -104,14 +104,14 @@ impl RetentionIndex {
                 {
                     return Err(invalid(LedgerCode::PriorEpochScopePrefixConflict.code()));
                 }
-                let original = source(events, &record.scope_source)?;
+                let original = source(history, &record.scope_source)?;
                 if self.owner_at(original.sequence()) != Some(scope.owner)
-                    || ClosureScope::from_event(original, scope.owner) != Some(scope)
+                    || ClosureScope::from_event(&original, scope.owner) != Some(scope)
                 {
                     return Err(invalid(LedgerCode::PriorEpochScopeSourceConflict.code()));
                 }
-                let imported = source(events, &record.proof)?;
-                if !matches!(fact(imported), Some(PriorEpochCloseFact::OwnerImported(value)) if value == proof)
+                let imported = source(history, &record.proof)?;
+                if !matches!(fact(&imported), Some(PriorEpochCloseFact::OwnerImported(value)) if value == proof)
                 {
                     return Err(invalid(LedgerCode::PriorEpochImportSourceConflict.code()));
                 }

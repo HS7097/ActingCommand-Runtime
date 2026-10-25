@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -163,6 +164,8 @@ pub struct FrameStoreConfig {
     /// #411 A67 (R5): the budget when the memory sample leaves less after the OS reserve.
     pub floor_mem_bytes: u64,
     memory_source: Option<MemorySampleSource>,
+    /// #411 A67-R: the watch told of every budget built from this configuration.
+    floor_watch: Option<Arc<BudgetFloorWatch>>,
 }
 
 impl Default for FrameStoreConfig {
@@ -178,6 +181,7 @@ impl Default for FrameStoreConfig {
             flush_workspace_reserve_bytes: DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES,
             floor_mem_bytes: DEFAULT_FLOOR_MEM_BYTES,
             memory_source: None,
+            floor_watch: None,
         }
     }
 }
@@ -218,6 +222,14 @@ impl FrameStoreConfig {
 
     pub fn with_memory_source(mut self, source: MemorySampleSource) -> Self {
         self.memory_source = Some(source);
+        self
+    }
+
+    /// #411 A67-R: every budget built from this configuration (the store's open, each frame's
+    /// refresh and each admission's limit) is shown to `watch`, which may be shared by many
+    /// configurations.
+    pub fn with_floor_watch(mut self, watch: Arc<BudgetFloorWatch>) -> Self {
+        self.floor_watch = Some(watch);
         self
     }
 
@@ -266,6 +278,41 @@ impl MemorySampleSource {
     }
 }
 
+/// #411 A67-R: whether the budgets built from the configurations that share this watch stand on
+/// the floor, and the warnings of the budgets that entered it. A budget on the floor after one
+/// that was not (or as the first) enters it: its `frame_store_budget_floor_applied` is kept
+/// until [`Self::take_entered`]. A budget off the floor leaves it, so the next one on the floor
+/// enters again; a budget that stays on the floor keeps nothing more.
+#[derive(Debug, Default)]
+pub struct BudgetFloorWatch {
+    on_floor: AtomicBool,
+    entered: Mutex<Vec<Outcome>>,
+}
+
+impl BudgetFloorWatch {
+    fn observe(&self, budget: &MemoryBudget) -> CliOutcome<()> {
+        if !budget.floor_applied {
+            self.on_floor.store(false, Ordering::Release);
+            return Ok(());
+        }
+        if self.on_floor.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.entered
+            .lock()
+            .map_err(|_| CliError::device("frame store floor watch poisoned"))?
+            .push(budget.floor_warning());
+        Ok(())
+    }
+
+    /// The warnings of the budgets that entered the floor since the last call, in order.
+    pub fn take_entered(&self) -> CliOutcome<Vec<Outcome>> {
+        Ok(std::mem::take(&mut *self.entered.lock().map_err(|_| {
+            CliError::device("frame store floor watch poisoned")
+        })?))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct MemoryBudget {
     total_bytes: u64,
@@ -292,6 +339,9 @@ impl MemoryBudget {
             .map_err(|err| CliError::usage(format!("invalid frame store config: {err}")))?;
         let budget = Self::from_config(config, config.memory_sample()?);
         budget.validate()?;
+        if let Some(watch) = &config.floor_watch {
+            watch.observe(&budget)?;
+        }
         Ok(budget)
     }
 

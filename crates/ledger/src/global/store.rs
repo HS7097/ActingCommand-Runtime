@@ -76,7 +76,8 @@ pub(super) trait LedgerStore: Send + 'static {
         identifiers: &IdentifierIssuer,
     ) -> FlushReport;
     /// Workflow #383 AO-2 (§8.4): the ledger sequence of a committed record, for the barrier.
-    fn committed_sequence(&self, event_id: &EventId) -> Option<u64>;
+    /// LN-5: read from the store's unique index; a failed read is that failure.
+    fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>>;
 
     /// Revalidates persisted admission/effect/release facts. Returns the existing
     /// or new completion, plus only newly appended events in sequence order.
@@ -85,9 +86,9 @@ pub(super) trait LedgerStore: Send + 'static {
         execution: PolicyExecutionEventData,
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)>;
 
-    fn query(&self, query: &EventQuery) -> Vec<PersistedEvent>;
     /// #411 A51 (R2): every read below stops where `work`'s budget runs out; a page answers
-    /// incomplete, any other read `ledger_read_budget_exceeded` of `operation`.
+    /// incomplete, any other read `ledger_read_budget_exceeded` of `operation`. LN-5 (#422): each
+    /// reads the store, one page of `history_page_rows` rows at a time.
     fn query_within(
         &self,
         query: &EventQuery,
@@ -203,7 +204,7 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         Self::commit_captured(self, batch, identifiers)
     }
 
-    fn committed_sequence(&self, event_id: &EventId) -> Option<u64> {
+    fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>> {
         Self::committed_sequence(self, event_id)
     }
 
@@ -212,10 +213,6 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         execution: PolicyExecutionEventData,
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)> {
         Self::reconcile_scheduled_policy_settlement(self, execution)
-    }
-
-    fn query(&self, query: &EventQuery) -> Vec<PersistedEvent> {
-        Self::query(self, query)
     }
 
     fn query_within(

@@ -141,12 +141,17 @@ pub(crate) fn collect_maintenance_evidence(
     let window_start = query
         .as_of_unix_ms
         .saturating_sub(query.trend_policy.lookback_ms);
-    let events = ledger
-        .query(EventQuery {
+    // LN-5 (#422, LEAN-L §3.3): the history is read from the store page by page.
+    let events = crate::recovery_read::read_pages(
+        ledger,
+        &EventQuery {
             to_sequence: Some(query.as_of_ledger_position()),
             ..EventQuery::default()
-        })
-        .map_err(|_| fatal(HostCode::MaintenanceLedgerQueryFailed))?;
+        },
+        query.as_of_ledger_position(),
+        ledger.history_page_events(),
+    )
+    .map_err(|_| fatal(HostCode::MaintenanceLedgerQueryFailed))?;
     let mut durations = Vec::new();
     // Each confidence sample keeps the source snapshot it was published under, so that a
     // persisted invalidation of that snapshot removes it (Workflow #317 item G).

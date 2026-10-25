@@ -44,6 +44,9 @@ CREATE TABLE ledger_artifacts (
     retention_class TEXT NOT NULL, redaction_state TEXT NOT NULL,
     PRIMARY KEY (sequence, ordinal)
 ) STRICT;
+-- #422 LN-5 (LEAN-L §3.3): artifact identities by their index; an older database gets it at
+-- its first writer open (`CREATE INDEX IF NOT EXISTS`).
+CREATE INDEX ledger_artifacts_artifact ON ledger_artifacts(artifact_id, sequence);
 CREATE TABLE ledger_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version TEXT NOT NULL,
