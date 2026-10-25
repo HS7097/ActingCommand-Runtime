@@ -8184,7 +8184,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.13",
+      "since": "0.12.12",
       "description": "A lock of one instance alone that guards no data (its admission guard or its queue-order lock) was left poisoned by a panic (ISO-M #419, R8). Its poison is cleared, the work that met it fails, and the boundary of that work fences the instance; every other instance keeps dispatching and executing.",
       "common_causes": "TBD",
       "handling": "TBD"
