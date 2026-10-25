@@ -77,9 +77,10 @@ pub(super) struct PendingIdleAction {
 }
 
 /// The scheduler's plan for `alias` in the latest evaluation: a task is due when the evaluation
-/// selected one or one is due and did not run; its next wake is the instance's earliest. An
-/// instance the evaluation decided nothing for has no due task and no wake; none before the
-/// first evaluated cycle.
+/// selected one, or one is due and did not run with no later wake of its own (held by the
+/// instance's queue, blocked); a due task deferred to a later time (a budget, a random delay)
+/// is due at that wake. The next wake is the instance's earliest. An instance the evaluation
+/// decided nothing for has no due task and no wake; none before the first evaluated cycle.
 fn idle_plan(explanation: &RuntimeScheduleExplanation, alias: &str) -> Option<IdlePlan> {
     let evaluated_at_unix_ms = explanation.evaluated_at_unix_ms?;
     let entry = explanation
@@ -88,8 +89,14 @@ fn idle_plan(explanation: &RuntimeScheduleExplanation, alias: &str) -> Option<Id
         .find(|entry| entry.instance_alias == alias);
     Some(IdlePlan {
         evaluated_at_unix_ms,
-        due_now: entry
-            .is_some_and(|entry| entry.selected.is_some() || entry.not_running.task_id.is_some()),
+        due_now: entry.is_some_and(|entry| {
+            entry.selected.is_some()
+                || (entry.not_running.task_id.is_some()
+                    && entry
+                        .not_running
+                        .next_wake_unix_ms
+                        .is_none_or(|wake| wake <= evaluated_at_unix_ms))
+        }),
         next_wake_unix_ms: entry.and_then(|entry| entry.next_wake_unix_ms),
     })
 }
