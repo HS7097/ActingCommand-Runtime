@@ -38,6 +38,9 @@ const POOL_A: &str = "fixture-pool-a";
 const POOL_B: &str = "fixture-pool-b";
 /// The default `standard_packs.check_interval_ms`.
 const INTERVAL_MS: u64 = 60_000;
+/// The least `standard_packs.check_interval_ms`: within the fixture scheduler's lease TTL
+/// (5 000 ms), so a dispatch admitted before a check still holds its lease after it.
+const SHORT_INTERVAL_MS: u64 = 1_000;
 const HOUR_MS: u64 = 3_600_000;
 
 // ---------------------------------------------------------------------------------------------
@@ -256,6 +259,21 @@ fn no_cache() -> RuntimeConfigManifest {
     )])
 }
 
+/// `standard_packs.cached_generations = 0` and `standard_packs.check_interval_ms` at its least,
+/// `SHORT_INTERVAL_MS`.
+fn no_cache_short_interval() -> RuntimeConfigManifest {
+    manifest(&[
+        (
+            actingcommand_runtime_config::STANDARD_PACKS_CACHED_GENERATIONS,
+            FactScalar::Integer(0),
+        ),
+        (
+            actingcommand_runtime_config::STANDARD_PACKS_CHECK_INTERVAL_MS,
+            FactScalar::DurationMs(SHORT_INTERVAL_MS),
+        ),
+    ])
+}
+
 /// One bound instance: alias, game and server.
 type Bound = (&'static str, &'static str, &'static str);
 
@@ -318,6 +336,18 @@ impl Bench {
         composer: bool,
         manifest: Option<RuntimeConfigManifest>,
     ) -> Self {
+        Self::with_facts(bound, pools, composer, manifest, facts(bound))
+    }
+
+    /// As `new`, with `facts` as the configured instance inputs from the start: the start seeds
+    /// the instance facts from them, so a cycle at the start instant seeds nothing new.
+    fn with_facts(
+        bound: &[Bound],
+        pools: &[&str],
+        composer: bool,
+        manifest: Option<RuntimeConfigManifest>,
+        facts: EvaluationFacts,
+    ) -> Self {
         let state = TempDir::new().expect("state root");
         let packs = TempDir::new().expect("standard-pack root");
         let instances = bound.iter().map(|_| instance_id()).collect::<Vec<_>>();
@@ -325,6 +355,7 @@ impl Bench {
         let host = Self::start_host(
             &state,
             &packs,
+            &facts,
             bound,
             &instances,
             &clock,
@@ -338,15 +369,17 @@ impl Bench {
             packs,
             bound: bound.to_vec(),
             instances,
-            facts: facts(bound),
+            facts,
             resources: resources(pools),
             manifest,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_host(
         state: &TempDir,
         packs: &TempDir,
+        facts: &EvaluationFacts,
         bound: &[Bound],
         instances: &[InstanceId],
         clock: &Arc<ManualRuntimeClock>,
@@ -354,7 +387,7 @@ impl Bench {
         manifest: Option<RuntimeConfigManifest>,
     ) -> RuntimeHost {
         let mut host_config = config(state)
-            .with_policy_inputs(PolicyInputSnapshot::new(facts(bound), policy_resources()))
+            .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources()))
             .with_runtime_clock(clock.clone())
             .with_standard_packs_root(Some(packs.path().to_owned()))
             .with_standard_pack_schedule(composer);
@@ -390,6 +423,7 @@ impl Bench {
         let host = Self::start_host(
             &state,
             &packs,
+            &facts,
             &bound,
             &instances,
             &clock,
@@ -833,9 +867,8 @@ fn rl1b_a6_a_broken_file_keeps_that_games_last_good_rules_and_spares_the_others(
 #[test]
 fn rl1b_a8_a_configured_catalog_evaluates_as_before() {
     let decisions = |with_schedule: bool| {
-        let mut bench = Bench::new(&[BOUND_A], &[POOL_A], false, None);
-        // The configured fixture's own instance inputs.
-        bench.facts = policy_facts();
+        // The configured fixture's own instance inputs, from the start.
+        let bench = Bench::with_facts(&[BOUND_A], &[POOL_A], false, None, policy_facts());
         let schedule = schedule_a(&[(RULE_2, PACKAGE_1, 100)]);
         bench.place(
             GAME_A,
@@ -891,10 +924,11 @@ fn rl1b_a8_a_configured_catalog_evaluates_as_before() {
 }
 
 /// A9 (§7.1): a dispatch admitted under generation N settles after N+1 is active, with
-/// `cached_generations = 0` (N is read back from disk).
+/// `cached_generations = 0` (N is read back from disk). The check interval is the least one, so
+/// N+1 is composed while the dispatch still holds its lease (no agent renews it here).
 #[test]
 fn rl1b_a9_a_dispatch_admitted_under_one_generation_settles_after_the_next() {
-    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, Some(no_cache()));
+    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, Some(no_cache_short_interval()));
     bench.place(
         GAME_A,
         SERVER_A,
@@ -912,7 +946,7 @@ fn rl1b_a9_a_dispatch_admitted_under_one_generation_settles_after_the_next() {
         &[PACKAGE_1],
         Some(&schedule_a(&[(RULE_1, PACKAGE_1, 99)])),
     );
-    bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS);
+    bench.cycle(POLICY_NOW_UNIX_MS, SHORT_INTERVAL_MS);
     assert!(bench.active().catalog_version() > generation_n.catalog_version());
     let (residency, _) = bench
         .host
