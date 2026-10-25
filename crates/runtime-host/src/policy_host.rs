@@ -1141,9 +1141,6 @@ pub(crate) struct PolicyHost {
     /// since), so a re-alignment rebuilds the decision memory from them.
     values_loaded: bool,
     values_through: u64,
-    /// Workflow #422 LN-4: the ledger position through which the dispatch journal holds every
-    /// dispatch event it keeps.
-    journal_through: u64,
     /// Workflow #422 LN-4 (coordinator ruling 2, 10-26): the (task, instance) pairs whose earlier
     /// admitted dispatches the journal no longer holds (pruned, or not loaded), so a projection
     /// at an older position reads the history on demand.
@@ -1566,7 +1563,6 @@ impl PolicyHost {
             recorded_values: BTreeMap::new(),
             values_loaded: false,
             values_through: 0,
-            journal_through: 0,
             pruned_pairs: BTreeSet::new(),
         };
         match tagged {
@@ -1588,7 +1584,6 @@ impl PolicyHost {
                 host.seen_dispatches = journal.seen;
                 host.dispatch_order = journal.order;
                 host.pruned_pairs = journal.pruned;
-                host.journal_through = through;
                 host.control = loaded.control;
                 host.recorded_values = loaded.records;
                 host.values_loaded = true;
@@ -4363,11 +4358,10 @@ impl PolicyHost {
         control: PolicyControlState,
         control_after: u64,
     ) -> RuntimeHostResult<()> {
-        let (events, through) = ledger
+        let events = ledger
             .latest_sequence()
             .and_then(|through| {
                 read_event_types(ledger, &DISPATCH_EVENT_TYPES, through, RECOVERY_PAGE_EVENTS)
-                    .map(|events| (events, through))
             })
             .map_err(|_| {
                 fatal(
@@ -4393,23 +4387,24 @@ impl PolicyHost {
         self.dispatch_order = journal.order;
         self.pruned_pairs = journal.pruned;
         self.control = control;
-        self.journal_through = through;
         Ok(())
     }
 
     /// Workflow #422 LN-4: re-aligns the dispatch journal and the decision memory with the
     /// ledger without reading its whole history. The decision memory is rebuilt from the value
-    /// records the ledger holds as latest; the dispatch events after the older of the journal's
-    /// and the records' positions are read, each applied to the journal unless it already is,
-    /// and each admission and execution after the records' position to the decision memory.
-    /// Before the seeding wrote the records, the journal and the decision memory are rebuilt
-    /// from every dispatch event.
+    /// records the ledger holds as latest; the dispatch events after the records' position are
+    /// read, each applied to the journal unless it already is, and each admission and execution
+    /// among them to the decision memory. Every dispatch change writes its pair's record under
+    /// the guard it was applied under, so a dispatch with an event after the records' position
+    /// is open or its pair's latest completed one, which the journal keeps. Before the seeding
+    /// wrote the records, the journal and the decision memory are rebuilt from every dispatch
+    /// event.
     fn refresh_dispatch_tail(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
         if !self.values_loaded {
             return self.recover_dispatches(ledger, PolicyControlState::default(), 0);
         }
-        let after = self.journal_through.min(self.values_through);
-        let (events, through) = ledger
+        let after = self.values_through;
+        let events = ledger
             .latest_sequence()
             .and_then(|through| {
                 read_event_types_after(
@@ -4419,7 +4414,6 @@ impl PolicyHost {
                     through,
                     RECOVERY_PAGE_EVENTS,
                 )
-                .map(|events| (events, through))
             })
             .map_err(|_| {
                 fatal(
@@ -4452,7 +4446,6 @@ impl PolicyHost {
         self.dispatch_order = journal.order;
         self.pruned_pairs = journal.pruned;
         self.control = control;
-        self.journal_through = through;
         Ok(())
     }
 

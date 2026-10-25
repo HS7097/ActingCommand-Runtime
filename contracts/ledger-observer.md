@@ -860,8 +860,10 @@ time L that D2 needs (D2 A-7) is the end of step 7.
       escalated wakes' records are read.
   - A re-alignment of the dispatch journal after an append error (`refresh_dispatches`) no
     longer reads the whole history. It rebuilds the decision memory from the latest value
-    records, then applies the dispatch records after the older of the journal's and the records'
-    positions.
+    records, then applies the dispatch records after the records' position. Every dispatch
+    change writes its pair's record under the guard it was applied under, so a dispatch with a
+    record after that position is open or its pair's latest completed one, which the journal
+    keeps.
   - The resident dispatch journal is bounded, never by the event count (LEAN-L model §3.1;
     coordinator ruling 10-26). Per (task, instance) it keeps every open dispatch, the latest
     intent (the not-run explanation names its state) and the latest 64 admitted dispatches
