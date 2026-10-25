@@ -35,6 +35,12 @@
 //! `package_bundle_entry_page_unlisted` warning per package whose entry pages, as the Runtime's
 //! entry gate reads them when its game has navigation data, are not all listed in `pages.json`.
 //!
+//! ROUT-L RL-1a (contracts/standard-pack-schedule.md): with `schedule.json` (`package bundle
+//! --schedule`, or a game root that holds it), the file is composed by the Runtime's composer with
+//! one bound instance per server ([`crate::standard_pack_schedule`]); a refusal is
+//! `standard_pack_root_invalid` naming it, and each unclassified package is one
+//! `standard_pack_package_unclassified` warning, after the remedy report.
+//!
 //! Last, with or without `pages.json`, the remedy report (Workflow #411 B15, contracts/remedies.md
 //! section 10): every package of the root is read by the Runtime's metadata reader, and one
 //! `package_bundle_remedy_invalid` warning reports each capability a remedy names that no package
@@ -44,6 +50,7 @@
 
 use crate::codes::ResourceToolingCode;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
+use crate::standard_pack_schedule::check_schedule;
 use crate::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCheckRequest, StandardPackCheckResponse,
     StandardPackRootFiles,
@@ -54,8 +61,8 @@ use actingcommand_contract::{
     BundleIndex, InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem,
     NavigationRole, ProvidedCapability, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
-    read_standard_pack_root,
+    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
+    StandardPackRootIssue, read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
@@ -85,6 +92,8 @@ pub(crate) struct RootFileInputs {
     pages: Option<RootFile>,
     interrupts: Option<RootFile>,
     navigation: Option<RootFile>,
+    /// ROUT-L RL-1a: `schedule.json`, checked by the composer and laid beside `bundle.json`.
+    schedule: Option<RootFile>,
 }
 
 impl RootFileInputs {
@@ -109,11 +118,20 @@ impl RootFileInputs {
             pages: read(files.pages.as_ref())?,
             interrupts: read(files.interrupts.as_ref())?,
             navigation: read(files.navigation.as_ref())?,
+            schedule: read(files.schedule.as_ref())?,
         })
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.pages.is_none() && self.interrupts.is_none() && self.navigation.is_none()
+        self.pages.is_none()
+            && self.interrupts.is_none()
+            && self.navigation.is_none()
+            && self.schedule.is_none()
+    }
+
+    /// ROUT-L RL-1a: the `schedule.json` given, if any.
+    pub(crate) fn schedule(&self) -> Option<&RootFile> {
+        self.schedule.as_ref()
     }
 
     /// Each given file under its root file name, in the order a game root lists them.
@@ -122,6 +140,7 @@ impl RootFileInputs {
             (STANDARD_PACK_PAGES_FILE, &self.pages),
             (STANDARD_PACK_INTERRUPTS_FILE, &self.interrupts),
             (STANDARD_PACK_NAVIGATION_FILE, &self.navigation),
+            (STANDARD_PACK_SCHEDULE_FILE, &self.schedule),
         ]
         .into_iter()
         .filter_map(|(name, file)| file.as_ref().map(|file| (name, file)))
@@ -184,6 +203,8 @@ pub fn check_standard_pack_root(
         STANDARD_PACK_PAGES_FILE,
         STANDARD_PACK_INTERRUPTS_FILE,
         STANDARD_PACK_NAVIGATION_FILE,
+        // ROUT-L RL-1a: read beside the others, and checked by the composer after them.
+        STANDARD_PACK_SCHEDULE_FILE,
     ] {
         if let Some(bytes) = read_bounded(&root.join(name))? {
             present.push(name);
@@ -223,12 +244,26 @@ pub fn check_standard_pack_root(
         };
         root_invalid(&game, &root.join(STANDARD_PACK_BUNDLE_FILE), &issue)
     })?;
-    let warnings = cross_check(
+    let mut warnings = cross_check(
         &game,
         &checked,
         &|directory: &str| root.join(directory),
         BTreeMap::new(),
     )?;
+    // ROUT-L RL-1a: the schedule rules, composed as the Runtime composes them.
+    if let Some(schedule) = bytes(STANDARD_PACK_SCHEDULE_FILE) {
+        let maintenance = bytes(STANDARD_PACK_BUNDLE_FILE)
+            .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
+            .map(|index| index.maintenance().to_vec())
+            .unwrap_or_default();
+        warnings.extend(check_schedule(
+            &game,
+            &checked,
+            &maintenance,
+            schedule,
+            &root.join(STANDARD_PACK_SCHEDULE_FILE),
+        )?);
+    }
     Ok(StandardPackCheckResponse {
         status: "checked".to_owned(),
         root: root.display().to_string(),
@@ -697,7 +732,7 @@ fn lists_no_pack(issue: &StandardPackRootIssue, bundle: Option<&[u8]>) -> bool {
 
 /// `standard_pack_root_invalid`: the root file at `path` breaks its shape, a limit or a
 /// reference.
-fn root_invalid(game: &str, path: &Path, issue: &StandardPackRootIssue) -> LabError {
+pub(crate) fn root_invalid(game: &str, path: &Path, issue: &StandardPackRootIssue) -> LabError {
     let code = SharedCode::StandardPackRootInvalid;
     let outcome = Outcome::new(code)
         .game(game)
@@ -719,7 +754,7 @@ fn unreadable(path: &Path, error: &io::Error) -> LabError {
 
 /// A root file's bytes, `None` when it does not exist. A file that cannot be read, or that
 /// exceeds the package input byte limit, is a usage error naming it.
-fn read_bounded(path: &Path) -> LabResult<Option<Vec<u8>>> {
+pub(crate) fn read_bounded(path: &Path) -> LabResult<Option<Vec<u8>>> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),

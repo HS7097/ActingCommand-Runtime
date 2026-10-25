@@ -241,6 +241,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("lab debug-package", UNSUPPORTED),
     ("lab export-evidence", UNSUPPORTED),
     ("package bundle", UNSUPPORTED),
+    // ROUT-L RL-1a: it writes a new directory; `standard-pack check` reads the same rules.
+    ("standard-pack compose", UNSUPPORTED),
     // Workflow #411 RV-1: it writes its work directory and report; no read-only alternative.
     ("resource verify", UNSUPPORTED),
     ("package run", UNSUPPORTED),

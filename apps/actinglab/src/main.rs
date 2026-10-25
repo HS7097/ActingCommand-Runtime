@@ -416,9 +416,10 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "resource" => {
             run_resource(sub, &invocation.global, &invocation.args)
         }
-        // Workflow #373 NAV-T: `standard-pack check --root <game root>`.
+        // Workflow #373 NAV-T: `standard-pack check --root <game root>`; ROUT-L RL-1a:
+        // `standard-pack compose`.
         [group, sub] if group == "standard-pack" => {
-            standard_pack_cli::run_standard_pack(sub, &invocation.args)
+            standard_pack_cli::run_standard_pack(sub, &invocation.global, &invocation.args)
         }
         [group, sub] if group == "runtime" => {
             runtime_slice_cli::run(sub, &invocation.global, &invocation.args)
