@@ -26,12 +26,21 @@ impl HostShared {
     ) -> RuntimeHostResult<T> {
         let operation: Location = operation.into();
         let mut index = lock(&self.verified_artifacts, operation)?;
+        // LN-5 (#422, LEAN-L §3.3): the type's history is read from the store page by page.
         let events = self
             .ledger
-            .query(EventQuery {
-                event_type: Some(EventType::ArtifactVerified),
-                from_sequence: (index.through != 0).then_some(index.through + 1),
-                ..EventQuery::default()
+            .latest_sequence()
+            .and_then(|through| {
+                crate::recovery_read::read_pages(
+                    &self.ledger,
+                    &EventQuery {
+                        event_type: Some(EventType::ArtifactVerified),
+                        from_sequence: (index.through != 0).then_some(index.through + 1),
+                        ..EventQuery::default()
+                    },
+                    through,
+                    self.ledger.history_page_events(),
+                )
             })
             // #411 A51 (R3): a read the writer did not answer in time fails only the request.
             .map_err(|error| ledger_read_error(&error, operation))?;

@@ -3,11 +3,19 @@
 The private persistence boundary and staged database behavior are specified in
 [GlobalLedger storage contract](ledger-store.md).
 
-`EventQuery` is the shared, storage-independent query declaration. Ledger
-`EventIndexes` selects candidates and applies the same predicates to live
-queries, read-only snapshots and subscription projection. Indexes are rebuilt
+`EventQuery` is the shared, storage-independent query declaration. #422 LN-5: the
+Runtime's live queries (`query`, `query_page`, `project`, `project_page`, a
+subscription's replay) read the SQLite store a page of
+`ledger_observer.history_page_rows` rows at a time: the statement selects through
+the sequence key, the view indexes (type, module, source, time, severity) and the
+link indexes, and every selected row is authenticated on its own and checked
+against the whole query again, conditions without a column (`diagnostic_code`,
+`fact_key`, the Lab view's relation) included. The Lab relation of a live query is
+read from the view and link indexes at the query's position. Read-only snapshots,
+the offline readers and the test-only segment store keep `EventIndexes`, rebuilt
 from the persisted events, including their `origin.module` and optional payload
-diagnostic code. Events without a diagnostic code do not match a code filter.
+diagnostic code; both apply the same predicates. Events without a diagnostic code
+do not match a code filter.
 
 All selected conditions are conjoined. `from_sequence` and `to_sequence` are
 inclusive; `minimum_severity` and `maximum_severity` are inclusive bounds.

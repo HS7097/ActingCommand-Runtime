@@ -81,6 +81,13 @@ further than the authenticated head sequence and within the caller's deadline.
 Exceeding either returns `ledger_read_budget_exceeded`, which RuntimeHost treats
 as fatal. Open time and memory grow linearly with committed history and retained
 artifact bytes; no persisted verification checkpoint, archive or rotation exists.
+#422 LN-5: the open keeps only the retention state it derives from the records and
+drops the records; the writer keeps no list or index of them. Its reads of the
+history read SQLite a page of `ledger_observer.history_page_rows` rows at a time,
+each row authenticated on its own, and the checks an append makes (event id, a task
+fact's run, the scheduled continuation's chain, retention's sources) are indexed
+lookups of the store and of the records the batch has staged. A refused batch drops
+its staged records; the writer ends ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)).
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit
@@ -95,9 +102,10 @@ reopen; an empty ledger reports position 0. `PersistedEvent` remains opaque to
 consumers. The existing scheduled continuation alone may derive recovery facts
 and issue their identities from an already persisted chain.
 
-The Segment implementation serializes the typed stored record, writes a complete
-line and syncs the active file before publishing the event to its in-memory
-indexes and recording successful commit statistics. Only then does append return
+The Segment implementation (test builds only) serializes the typed stored record,
+writes a complete line and syncs the active file before publishing the event to its
+own in-memory records and indexes, which are its read path, and recording
+successful commit statistics. Only then does append return
 success. Sequence overflow, malformed facts and I/O failures retain their current
 errors. An error built from a `std::io::Error` (`ledger_io`, `writer_spawn_failed`)
 also carries `io_kind()`, a closed `LedgerIoKind` (`not_found`,

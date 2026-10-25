@@ -381,6 +381,9 @@ mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;
+// #411 A67-R: a start whose memory sample leaves no frame budget after the OS reserve goes on, and
+// records the floor warning once in the daemon's log and once in the ledger.
+mod gate_411_a67r;
 // #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
 // fatal the Runtime under test latched and its shutdown flag.
 mod gate_411_harness_diag;
