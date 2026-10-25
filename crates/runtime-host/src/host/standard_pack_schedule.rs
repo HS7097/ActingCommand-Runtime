@@ -403,7 +403,7 @@ impl HostShared {
                             state,
                             game,
                             "root:metadata",
-                            failure.outcome(Some(game)),
+                            failure.outcome(Some(game.as_str())),
                         )?;
                         return Ok(());
                     }
@@ -426,7 +426,7 @@ impl HostShared {
                         // A broken game root keeps the active generation as it is until it is
                         // fixed: its registry is what every rule of the game is placed by.
                         let key = format!("root:{:?}", marks.get(game));
-                        self.report_once(state, game, &key, failure.outcome(Some(game)))?;
+                        self.report_once(state, game, &key, failure.outcome(Some(game.as_str())))?;
                         return Ok(());
                     }
                 }
@@ -503,10 +503,19 @@ impl HostShared {
                 }
                 return Ok(());
             }
+            // Each round takes out at least one refused game, so the loop ends; a refusal that
+            // names no game this round composed keeps the active generation.
+            let mut progressed = false;
             for (game, issue) in failed {
                 let Some(bytes) = schedules.remove(&game) else {
+                    if let Some(root) = &root {
+                        let path = root.join(&game).join(STANDARD_PACK_SCHEDULE_FILE);
+                        let refusal = schedule_refusal(&game, &path, issue);
+                        self.report_once(state, &game, "unplaced", refusal)?;
+                    }
                     continue;
                 };
+                progressed = true;
                 let sha = sha256(&bytes);
                 if let Some(root) = &root {
                     let path = root.join(&game).join(STANDARD_PACK_SCHEDULE_FILE);
@@ -528,6 +537,9 @@ impl HostShared {
                 {
                     schedules.insert(game, fragment);
                 }
+            }
+            if !progressed {
+                return Ok(());
             }
         };
 
