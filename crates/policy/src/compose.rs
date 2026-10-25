@@ -354,7 +354,7 @@ pub fn compose_standard_pack_rules(
         };
         match read_game(game_id, *files, input.subsystems) {
             Ok((schedule, classification)) => read.push(ReadGame {
-                game_id: *game_id,
+                game_id,
                 bound: bound.clone(),
                 files: *files,
                 schedule,

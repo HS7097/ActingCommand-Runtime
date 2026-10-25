@@ -26,8 +26,8 @@ use crate::{
     EvaluationFacts, EvaluationResources, EvaluationTime, HostResourceSnapshot, InstanceSnapshot,
     ObservedFact, PoolValueSnapshot, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDecisionState,
     StandardPackBinding, StandardPackComposeFailure, StandardPackComposeInput,
-    StandardPackComposition, StandardPackGameFiles, compile_catalog, compose_standard_pack_rules,
-    evaluate,
+    StandardPackComposition, StandardPackGameFiles, TaskRuntimeSnapshot, TaskTerminalState,
+    compile_catalog, compose_standard_pack_rules, evaluate,
 };
 
 const GAME_A: &str = "game-a";
@@ -129,6 +129,7 @@ const NEUTRAL_WORDS: &[&str] = &[
     "snapshot",
     "stable",
     "standard",
+    "succeeded",
     "task",
     "than",
     "the",
@@ -473,6 +474,27 @@ fn grid_facts(instances: &[&str]) -> EvaluationFacts {
     }
 }
 
+/// T1's facts snapshot: [`grid_facts`] of instance A, whose rule ran once and succeeded at the
+/// grid's start. The grid then holds steps that do not run (the rule's cooldown at the start;
+/// in its first hour, after the reading turns stale, neither its clock nor its fact is due) and
+/// steps that run (its reading still fresh, and every hour's clock after the first).
+fn grid_facts_after_a_run() -> EvaluationFacts {
+    let mut facts = grid_facts(&[INSTANCE_A]);
+    facts.tasks.push(TaskRuntimeSnapshot {
+        task_id: RULE.to_owned(),
+        instance_id: INSTANCE_A.to_owned(),
+        last_dispatched_unix_ms: Some(GRID_START),
+        eligible_since_unix_ms: None,
+        terminal_state: Some(TaskTerminalState::Succeeded),
+        completed_window: None,
+        last_duration_ms: None,
+        failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
+    });
+    facts
+}
+
 fn grid_resources(instances: &[&str]) -> EvaluationResources {
     EvaluationResources {
         pools: vec![PoolValueSnapshot {
@@ -519,6 +541,10 @@ fn fixtures() -> Vec<(&'static str, Value)> {
         (
             "grid facts",
             serde_json::to_value(grid_facts(&[INSTANCE_A, INSTANCE_B])).expect("facts JSON"),
+        ),
+        (
+            "grid facts after a run",
+            serde_json::to_value(grid_facts_after_a_run()).expect("facts JSON"),
         ),
         (
             "grid resources",
@@ -827,7 +853,7 @@ fn rl1a_t1_catalog_a_converted_by_the_as_is_rules_composes_back_and_decides_alik
         }]
     );
 
-    let facts = grid_facts(&[INSTANCE_A]);
+    let facts = grid_facts_after_a_run();
     let resources = grid_resources(&[INSTANCE_A]);
     let (mut runs, mut waits) = (0, 0);
     for step in 0..GRID_DAYS * DAY_MS / GRID_STEP_MS {
@@ -1132,10 +1158,16 @@ fn rl1a_t6_no_rules_compose_a_valid_empty_catalog() {
         }
         assert!(composition.manifest().is_empty(), "{case}");
         assert!(composition.warnings().is_empty(), "{case}");
+        // The empty catalog declares no pool, so its inputs hold no pool reading: a reading of a
+        // pool the catalog does not declare is an invalid input, with rules or without.
+        let resources = EvaluationResources {
+            pools: Vec::new(),
+            ..grid_resources(&[INSTANCE_A])
+        };
         let evaluation = evaluated(
             composition.compiled(),
             &grid_facts(&[INSTANCE_A]),
-            &grid_resources(&[INSTANCE_A]),
+            &resources,
             GRID_START + 12 * 60 * MINUTE_MS,
         )
         .unwrap_or_else(|code| panic!("{case}: the empty catalog evaluates: {code}"));
