@@ -96,6 +96,22 @@ pub struct ProcedureManifest {
 
 impl ProcedureManifest {
     pub fn new(bindings: impl IntoIterator<Item = ProcedureBinding>) -> RuntimeHostResult<Self> {
+        Self::build(bindings, false)
+    }
+
+    /// ROUT-L RL-1b (frozen model v1.0 §3.4, §3.6): the manifest of a composition of the
+    /// standard packs' rules, built by the scheduler workbench. It may bind no procedure, as no
+    /// rules is a valid state; the fact refresh's procedure is bound as in [`Self::new`].
+    pub fn composed(
+        bindings: impl IntoIterator<Item = ProcedureBinding>,
+    ) -> RuntimeHostResult<Self> {
+        Self::build(bindings, true)
+    }
+
+    fn build(
+        bindings: impl IntoIterator<Item = ProcedureBinding>,
+        empty_allowed: bool,
+    ) -> RuntimeHostResult<Self> {
         let mut indexed = BTreeMap::new();
         for binding in bindings {
             let procedure_ref = binding.procedure_ref.clone();
@@ -106,7 +122,7 @@ impl ProcedureManifest {
                 ));
             }
         }
-        if indexed.is_empty() {
+        if indexed.is_empty() && !empty_allowed {
             return Err(manifest_fatal(
                 HostCode::ProcedureManifestEmpty,
                 HostLocation::BuildProcedureManifest,

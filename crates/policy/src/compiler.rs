@@ -133,6 +133,37 @@ impl CompiledCatalog {
             .map(|task| task.id.as_str())
     }
 
+    /// ROUT-L RL-1b (RL-1a review, #386 6399836824): the task of this catalog that continues
+    /// `task_id` on the instance `instance_id`. A composition with two instances of one game and
+    /// server gives each instance its own copy (`<id>@<alias>`), and every copy continues the
+    /// file's `<id>`; the copy scoped to `instance_id` is the one that continues it there. A task
+    /// that is not scoped to one instance continues `task_id` on every instance, as
+    /// [`Self::continued_by`] reads it.
+    pub fn continued_by_on(&self, task_id: &str, instance_id: &str) -> Option<&str> {
+        let continues = |task: &&TaskSpec| {
+            task.continues_from
+                .as_deref()
+                .is_some_and(|continued| continued.iter().any(|id| id == task_id))
+        };
+        let tasks = &self.catalog.tasks.tasks;
+        tasks
+            .iter()
+            .filter(continues)
+            .find(|task| {
+                matches!(
+                    &task.scope,
+                    crate::ScopeSelector::Instance { instance_id: scoped } if scoped == instance_id
+                )
+            })
+            .or_else(|| {
+                tasks
+                    .iter()
+                    .filter(continues)
+                    .find(|task| !matches!(&task.scope, crate::ScopeSelector::Instance { .. }))
+            })
+            .map(|task| task.id.as_str())
+    }
+
     pub fn referenced_outcome_keys(&self, task_id: &str) -> BTreeSet<String> {
         let mut keys = BTreeSet::new();
         for task in &self.catalog.tasks.tasks {

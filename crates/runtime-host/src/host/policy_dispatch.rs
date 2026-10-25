@@ -838,6 +838,10 @@ impl HostShared {
         if trigger == PolicyTrigger::Reconciliation {
             self.reconcile_pending_policy_settlements()?;
         }
+        // ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench's check, at most once
+        // per `standard_packs.check_interval_ms`, before this cycle reads its manifest and
+        // catalog. Nothing in configured mode.
+        self.check_standard_pack_rules(observed_monotonic_ms)?;
         let _detection_gate = lock(
             &self.detection_write_gate,
             HostLocation::PlanPolicyDetection,
@@ -1436,12 +1440,36 @@ impl HostShared {
             }
         }
         let catalog = policy.active_loaded();
+        // ROUT-L RL-1b (RL-1a review, #386 6399836824 item 1; #419; model §3.6): under a composed
+        // generation a configured static pool reading names a pool of a game in use or none; a
+        // reading for a pool no composed game declares is left out (the workbench records it
+        // once per pool), so it never stops the evaluation of every instance. A configured
+        // catalog's readings are passed as they are.
+        let static_resources = match &catalog {
+            Some(catalog)
+                if catalog.generation().catalog_id()
+                    == actingcommand_policy::STANDARD_PACKS_CATALOG_ID =>
+            {
+                let mut resources = inputs.resources().clone();
+                resources.pools.retain(|reading| {
+                    catalog
+                        .compiled()
+                        .catalog()
+                        .pools
+                        .pools
+                        .iter()
+                        .any(|pool| pool.id == reading.pool_id)
+                });
+                resources
+            }
+            _ => inputs.resources().clone(),
+        };
         let mut unknown_offset_tasks = UnknownPriorityOffsetTasks::new();
         if let Some(catalog) = &catalog {
             validate_static_fact_pool_authority(
                 catalog.compiled(),
                 inputs.facts(),
-                inputs.resources(),
+                &static_resources,
                 operation,
             )?;
             // An offset for a task the catalog does not declare is still passed (the
@@ -1461,16 +1489,16 @@ impl HostShared {
         }
         let facts = fact_projection.overlay_policy_facts(
             &base_facts,
-            inputs.resources(),
+            &static_resources,
             ledger_position,
         )?;
         let resources = if let Some(catalog) = catalog {
             fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
                 self.fact_scope_instances(scope)
             })?;
-            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, inputs.resources())
+            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, &static_resources)
         } else {
-            inputs.resources().clone()
+            static_resources
         };
         let facts =
             fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
@@ -1657,14 +1685,19 @@ impl HostShared {
                 &self.governance_write_gate,
                 HostLocation::ProjectPolicyApprovals,
             )?;
-            let approval_fact_ids =
+            // ROUT-L RL-1b (model §3.5): an intent of a composed generation names no approval,
+            // so its approval check passes without a projection.
+            let approval_fact_ids = if intent.approval_refs.is_empty() {
+                BTreeSet::new()
+            } else {
                 match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
                     Ok(projection) => projection.active_for_dispatch(intent),
                     Err(error) => {
                         self.fatal.mark(error.clone())?;
                         return Err(error);
                     }
-                };
+                }
+            };
             let authoritative_context = PolicyAdmissionContext {
                 fact_ledger_position: trusted.intent.input_ledger_position,
                 fact_snapshot_id: trusted.intent.fact_snapshot_id.clone(),

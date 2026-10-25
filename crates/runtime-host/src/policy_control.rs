@@ -1420,7 +1420,7 @@ impl PolicyControlState {
             }
             // Workflow #372 K5: the entry stands for the task whose accounting group holds its
             // id, and only while it is that task's failure state; the round is that group's.
-            let task_id = accounting_owner(catalog, &pair.0);
+            let task_id = accounting_owner(catalog, &pair.0, &pair.1);
             if self.failure_key(catalog, task_id, &pair.1) != *pair {
                 continue;
             }
@@ -1613,7 +1613,7 @@ impl PolicyControlState {
             if pair.1 == instance_id
                 && !self.retry_round_has_budget(
                     catalog,
-                    accounting_owner(catalog, &pair.0),
+                    accounting_owner(catalog, &pair.0, &pair.1),
                     &pair.1,
                     round,
                     include_runtime,
@@ -1629,10 +1629,18 @@ impl PolicyControlState {
     }
 }
 
-/// Workflow #372 K5: the task whose accounting group holds `task_id` under `catalog`: the task
-/// that continues it, else `task_id` itself.
-fn accounting_owner<'a>(catalog: &'a CompiledCatalog, task_id: &'a str) -> &'a str {
-    catalog.continued_by(task_id).unwrap_or(task_id)
+/// Workflow #372 K5: the task whose accounting group holds `task_id` on `instance_id` under
+/// `catalog`: the task that continues it there, else `task_id` itself. ROUT-L RL-1b: read per
+/// instance, as two instances of one game and server each continue the file's id with their own
+/// copy.
+fn accounting_owner<'a>(
+    catalog: &'a CompiledCatalog,
+    task_id: &'a str,
+    instance_id: &str,
+) -> &'a str {
+    catalog
+        .continued_by_on(task_id, instance_id)
+        .unwrap_or(task_id)
 }
 
 /// Workflow #372 K5: the sum of the entries of `ids` on `instance_id` for one day or window
