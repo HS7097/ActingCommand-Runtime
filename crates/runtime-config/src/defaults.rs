@@ -9,13 +9,15 @@
 //! AO-1 adds `ledger_observer`; Workflow #398 RD-2 adds `device_link`; Workflow #398 RD-5b adds
 //! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
 //! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
-//! `execution`; ROUT-L RL-1b adds `standard_packs`, the scheduler workbench's two keys).
+//! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
+//! workbench's two keys).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
 use crate::emulator_control::EmulatorControlFile;
 use crate::execution::ExecutionFile;
 use crate::host_claims::HostClaimsFile;
+use crate::idle::IdleFile;
 use crate::ledger_observer::LedgerObserverFile;
 use crate::performance::PerformanceFile;
 use crate::recovery_ladder::RecoveryLadderFile;
@@ -75,6 +77,9 @@ pub struct DefaultsFile {
     /// PERF-B1 (Workflow #407 B1).
     #[serde(default)]
     pub execution: Option<ExecutionFile>,
+    /// IDLE-1.
+    #[serde(default)]
+    pub idle: Option<IdleFile>,
     /// ROUT-L RL-1b: `check_interval_ms` and `cached_generations` (no root).
     #[serde(default)]
     pub standard_packs: Option<StandardPacksDefaultsFile>,

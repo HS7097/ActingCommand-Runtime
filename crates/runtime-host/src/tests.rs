@@ -157,6 +157,10 @@ mod gate_369_s6clow;
 // emulators and starts a configured one it finds stopped, within a bound.
 mod gate_372k2;
 mod gate_emu_watch;
+// IDLE-1 (Alice's ruling 41): the idle planner on a manual clock.
+mod gate_idle1;
+// IDLE-1 (#419): a failed idle stop is contained to its instance and the Runtime goes on.
+mod gate_idle1_host;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
@@ -381,6 +385,9 @@ mod gate_422_ln2;
 // LN-3 (Workflow #422, LEAN-L model §3.6): each change of the decision memory and each wake
 // obligation writes one value record with the complete state, and its `state` row names it.
 mod gate_422_ln3;
+// LN-4 (Workflow #422, LEAN-L model §3.2, §3.6): the decision memory, the agent dispatcher and the
+// monitor registry load from their tagged records; a start without the marker seeds them once.
+mod gate_422_ln4;
 
 mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged

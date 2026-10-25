@@ -11,7 +11,7 @@
 use super::*;
 use actingcommand_contract::{
     EventId, PolicyActivityStateRecord, PolicyControlStateRecord, PolicyDailyCount,
-    PolicyDispatchClockRecord, PolicyRetryRoundRecord,
+    PolicyDispatchClockRecord, PolicyJournalDispatchRecord, PolicyRetryRoundRecord,
 };
 use actingcommand_runtime_database::{DatabaseLocation, RuntimeDatabase};
 
@@ -60,6 +60,18 @@ fn control_records(host: &RuntimeHost) -> Vec<(PersistedEvent, PolicyControlStat
         (event, state)
     })
     .collect()
+}
+
+// Workflow #422 LN-4: the sequence of the latest record of `event_type`.
+fn last_sequence(host: &RuntimeHost, event_type: EventType) -> u64 {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(event_type),
+        ..EventQuery::default()
+    })
+    .expect("the records")
+    .pop()
+    .expect("a record")
+    .sequence()
 }
 
 fn activity_records(host: &RuntimeHost) -> Vec<(PersistedEvent, PolicyActivityStateRecord)> {
@@ -111,6 +123,14 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
     let admission = context.admission().clone();
     let activity = &admission.activity;
     let window_end = u64::try_from(activity.local_day + 1).expect("a day") * DAY_MS;
+    // Workflow #422 LN-4 (register §1.184 LN4-7): the record names the open dispatch by the
+    // sequences of its intent and its admission.
+    let journal_dispatch = PolicyJournalDispatchRecord {
+        intent_sequence: last_sequence(&host, EventType::PolicyDispatchIntent),
+        admitted_sequence: Some(last_sequence(&host, EventType::PolicyDispatchAdmitted)),
+        completed_sequence: None,
+        failures: None,
+    };
     let admitted = PolicyControlStateRecord {
         instance_id: intent.instance_id.clone(),
         task_id: intent.task_id.clone(),
@@ -122,15 +142,19 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
         window_runtime_ms: intent.expected_duration_ms,
         active_window: Some(activity.window_id.clone()),
         failure_streak: None,
+        // Workflow #422 LN-4 (register §1.184 LN4-2): the first round this host opened.
         retry_round: Some(PolicyRetryRoundRecord {
             admission: admission.clone(),
             until_unix_ms: window_end,
             expected_duration_ms: intent.expected_duration_ms,
+            opened: Some(1),
         }),
         dispatch_clock: Some(PolicyDispatchClockRecord {
             admitted_at_unix_ms: activity.admitted_at_unix_ms,
         }),
         condition_reruns: None,
+        failure_settled: None,
+        dispatches: vec![journal_dispatch],
     };
     let admitted_activity = PolicyActivityStateRecord {
         instance_id: intent.instance_id.clone(),
@@ -169,10 +193,19 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
     let PolicyExecutionOutcome::Succeeded { runtime_ms } = settled.outcome else {
         panic!("expected a success")
     };
+    // Workflow #422 LN-4 (register §1.184 LN4-2): the success is the first settlement that set
+    // or cleared the pair's failure state.
     let settled_pair = PolicyControlStateRecord {
         window_runtime_ms: runtime_ms,
         retry_round: None,
         dispatch_clock: None,
+        failure_settled: Some(1),
+        // Workflow #422 LN-4: the completed dispatch, with no failure through it.
+        dispatches: vec![PolicyJournalDispatchRecord {
+            completed_sequence: Some(last_sequence(&host, EventType::PolicyDispatchCompleted)),
+            failures: Some(0),
+            ..journal_dispatch
+        }],
         ..admitted
     };
     let settled_activity = PolicyActivityStateRecord {

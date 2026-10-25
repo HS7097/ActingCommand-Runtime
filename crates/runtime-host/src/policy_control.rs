@@ -15,7 +15,8 @@ use actingcommand_contract::{
     PolicyBudgetReceipt, PolicyConditionSettlement, PolicyControlStateRecord, PolicyDailyCount,
     PolicyDispatchClockRecord, PolicyExecutionEventData, PolicyExecutionOutcome,
     PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, PolicyFailureStreakRecord,
-    PolicyRetryRoundRecord, RuntimeErrorCode, scheduled_failure_code_str,
+    PolicyJournalDispatchRecord, PolicyRetryRoundRecord, RuntimeErrorCode,
+    scheduled_failure_code_str,
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
@@ -160,10 +161,12 @@ impl PolicyControlState {
     /// Workflow #422 LN-3 (register L7, L14): the value record of every key this state holds,
     /// each with the key's complete state. `dispatch_clocks` are the admission times of the
     /// pairs' admitted dispatches that are not completed yet, per (task, instance); the policy
-    /// host keeps them.
+    /// host keeps them. Workflow #422 LN-4 (register §1.184 LN4-7): `dispatches` are the
+    /// dispatches the policy host's journal keeps per pair, which its record names.
     pub(crate) fn value_records(
         &self,
         dispatch_clocks: &BTreeMap<(String, String), u64>,
+        dispatches: &BTreeMap<(String, String), Vec<PolicyJournalDispatchRecord>>,
     ) -> BTreeMap<String, PolicyValueRecord> {
         let pairs = self
             .task_daily
@@ -199,17 +202,20 @@ impl PolicyControlState {
                     .keys()
                     .map(|(task, instance)| (task, instance)),
             )
+            .chain(
+                self.failure_settled
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(dispatches.keys().map(|(task, instance)| (task, instance)))
             .collect::<BTreeSet<_>>();
         let mut records = BTreeMap::new();
         for (task_id, instance_id) in pairs {
-            let clock = dispatch_clocks
-                .get(&(task_id.clone(), instance_id.clone()))
-                .copied();
-            let record = PolicyValueRecord::Control(Box::new(self.control_record(
-                task_id,
-                instance_id,
-                clock,
-            )));
+            let pair = (task_id.clone(), instance_id.clone());
+            let clock = dispatch_clocks.get(&pair).copied();
+            let mut record = self.control_record(task_id, instance_id, clock);
+            record.dispatches = dispatches.get(&pair).cloned().unwrap_or_default();
+            let record = PolicyValueRecord::Control(Box::new(record));
             records.insert(record.index_key(), record);
         }
         for ((profile_id, instance_id), (local_day, window_id)) in &self.activity_active {
@@ -294,20 +300,23 @@ impl PolicyControlState {
                     admission: round.admission.clone(),
                     until_unix_ms: round.until_unix_ms,
                     expected_duration_ms: round.expected_duration_ms,
+                    opened: Some(round.opened),
                 }),
             dispatch_clock: dispatch_clock.map(|admitted_at_unix_ms| PolicyDispatchClockRecord {
                 admitted_at_unix_ms,
             }),
             condition_reruns: None,
+            failure_settled: self.failure_settled.get(&pair).copied(),
+            dispatches: Vec::new(),
         }
     }
 
     /// Workflow #422 LN-3 (register L7, L14): applies one value record; the record replaces its
     /// key's whole state. LN-4's start load runs it over the records the index names, in ledger
-    /// order. The dispatch clock is the policy host's, not this state's. The value records carry
-    /// no settlement order, so the Workflow #372 K5 order a continued id's failure state follows
-    /// (`failure_settled`) starts empty and a retry round's order is the order applied.
-    #[cfg(test)]
+    /// order. The dispatch clock is the policy host's, not this state's. Workflow #422 LN-4
+    /// (register §1.184 LN4-2): the record carries the Workflow #372 K5 orders, `failure_settled`
+    /// and the retry round's `opened`, and the counters behind them go on after the largest one
+    /// loaded; a record without a round's order (LN-3's) takes the next one in the order applied.
     pub(crate) fn apply_value_record(
         &mut self,
         record: &PolicyValueRecord,
@@ -365,22 +374,34 @@ impl PolicyControlState {
                         self.failure_streaks.remove(&pair);
                     }
                 }
+                match state.failure_settled {
+                    Some(settled) => {
+                        self.settlements = self.settlements.max(settled);
+                        self.failure_settled.insert(pair.clone(), settled);
+                    }
+                    None => {
+                        self.failure_settled.remove(&pair);
+                    }
+                }
                 match &state.retry_round {
                     Some(round) => {
-                        self.rounds_opened =
-                            self.rounds_opened.checked_add(1).ok_or_else(|| {
+                        let opened = match round.opened {
+                            Some(opened) => opened,
+                            None => self.rounds_opened.checked_add(1).ok_or_else(|| {
                                 fatal(
                                     HostCode::PolicyBudgetCounterOverflow,
                                     HostLocation::RecoverPolicyControl,
                                 )
-                            })?;
+                            })?,
+                        };
+                        self.rounds_opened = self.rounds_opened.max(opened);
                         self.retry_rounds.insert(
                             pair,
                             RetryRound {
                                 admission: round.admission.clone(),
                                 until_unix_ms: round.until_unix_ms,
                                 expected_duration_ms: round.expected_duration_ms,
-                                opened: self.rounds_opened,
+                                opened,
                             },
                         );
                     }
@@ -3266,7 +3287,7 @@ mod tests {
         )
         .expect("runtime events");
         state
-            .value_records(&BTreeMap::new())
+            .value_records(&BTreeMap::new(), &BTreeMap::new())
             .into_values()
             .map(|record| {
                 let payload = match &record {
@@ -3366,8 +3387,8 @@ mod tests {
                 .expect("the record applies");
         }
         assert_eq!(
-            restarted.value_records(&BTreeMap::new()),
-            state.value_records(&BTreeMap::new()),
+            restarted.value_records(&BTreeMap::new(), &BTreeMap::new()),
+            state.value_records(&BTreeMap::new(), &BTreeMap::new()),
             "the records hold the complete state"
         );
 

@@ -52,7 +52,7 @@ const STARTS: [&str; 2] = ["first", "second"];
 // The ledger open's phases, whose sum is its measured time.
 const OPEN_PHASES: [&str; 4] = ["sql_read_ms", "verify_ms", "material_ms", "restore_ms"];
 
-fn scale_instance_id() -> InstanceId {
+pub(super) fn scale_instance_id() -> InstanceId {
     serde_json::from_str(INSTANCE_ID).expect("the fixture instance id")
 }
 

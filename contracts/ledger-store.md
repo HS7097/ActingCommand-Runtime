@@ -1025,11 +1025,18 @@ links and typed payload, with no material access capability. Only ReleaseStaged,
 ReleaseActivated, ReleaseRolledBack and StateMigrated for `release.legacy.baseline` are
 eligible; the Release owner checks the corresponding manifest, transition or migration.
 
-`read_release_baseline_source` verifies the fixed authenticated global prefix in pages
-of at most 256 original records before returning absence or one exact baseline source.
-It reads every original record so damaged filter columns cannot conceal a boundary,
-checks the chain/head and complete native index counts, and reports duplicate boundaries
-with both original locators. No new fact is written. A standalone State database can
+`read_release_baseline_source` returns absence or one exact baseline source as of the
+authenticated head (Workflow #422 LN-DIAG; LEAN-L model §3.2 step 5 X4 and §6, Alice
+10-24 #422 ruling 57). The keyed meta row names the head; the newest stored row must be at
+it and is authenticated with its predecessor against the head hash. The candidates are the
+`state.migrated` records, selected through the event-type index in pages of at most 256
+original records, each authenticated on its own (canonical record and hash, keyed tag,
+predecessor link, indexed columns, links and ordered artifacts); duplicate boundaries are
+reported with both original locators. The read does not grow with the history: a record it
+does not select is not read here, and its damage is found by the open's verification, by
+`ledger-maintenance verify` and, once the open verifies only its tail, by the scrub. It runs
+in the start's `runtime_state` step and inside the boundary's joint append, where the whole
+chain read it replaced took about 87 s each at a million records. No new fact is written. A standalone State database can
 return absence only with format zero and no Ledger tables or other Ledger schema objects;
 partial schema, existing format/metadata declarations and invalid rows fail. A persisted
 locator always fails when its Ledger storage is absent. State also checks all its own

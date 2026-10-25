@@ -64,7 +64,7 @@ impl HostShared {
                 policy
                     .active_loaded_at(&self.ledger, ledger_position)
                     .map_err(project_interface_failure)?,
-                policy.project_dispatches(current_ledger_position, &decision_page)?,
+                policy.project_dispatches(&self.ledger, current_ledger_position, &decision_page)?,
             )
         };
         if decisions.snapshot_ledger_position != ledger_position {

@@ -1167,6 +1167,14 @@ the configured starts; the watch ends with the host.
 - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
   started. The watch never stops or restarts a running emulator, and no record names a device:
   an emulator instance is its `alias`.
+- **Idle stop (IDLE-1).** An instance whose emulator its idle action `stop_emulator` stops, or
+  stopped and has not woken yet ([runtime-config.md](runtime-config.md), "The `idle` section"),
+  is read and recorded but not started again by the watch: its wake starts it, through the same
+  autostart claim (`emulator_autostart_queued` with `idle_action` `stop_emulator`), at its next
+  due task minus `idle.stop_emulator_wake_lead_ms`, or at once for an earlier due task. The idle
+  stop itself is the emulator-control Stop described above, on an emulator-control claim of the
+  instance's key: the fence on the key, the retained session's close, the provider's Stop, the
+  endpoint back to pending.
 
 Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
 keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes

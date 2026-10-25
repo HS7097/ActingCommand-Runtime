@@ -796,7 +796,12 @@ impl HostShared {
             unix_ms: sample.unix_ms,
             monotonic_ms: sample.monotonic_ms,
         };
-        self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)
+        let cycle =
+            self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)?;
+        // IDLE-1: the idle check right after the evaluation and before actingd admits its
+        // dispatches, so a wake's claim holds an idle instance before a due dispatch reaches it.
+        self.check_idle_instances(false)?;
+        Ok(cycle)
     }
 
     #[cfg(test)]
@@ -1227,8 +1232,11 @@ impl HostShared {
             }
             base_facts.priority_offsets.push(offset);
         }
-        base_facts.tasks =
-            policy.task_runtime_snapshots(ledger_position, eligibility_as_of_unix_ms)?;
+        base_facts.tasks = policy.task_runtime_snapshots(
+            &self.ledger,
+            ledger_position,
+            eligibility_as_of_unix_ms,
+        )?;
         base_facts.tasks.retain(|state| {
             base_facts
                 .instances
@@ -1616,7 +1624,7 @@ impl HostShared {
         let result = (|| {
             {
                 let policy = lock(self.policy()?, HostLocation::ValidatePolicyDispatch)?;
-                if let Some(replay) = policy.replay_admission(intent, reason_chain)? {
+                if let Some(replay) = policy.replay_admission(&self.ledger, intent, reason_chain)? {
                     return Ok(replay);
                 }
             }

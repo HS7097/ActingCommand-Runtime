@@ -2150,6 +2150,10 @@
     "install_caveat": {
       "type": "vocab:install_caveat",
       "description": "What an installer command noted while its work went on: something left unchecked, pending or on the previous build."
+    },
+    "idle_action": {
+      "type": "name",
+      "description": "An instance's idle action (IDLE-1): close_app or stop_emulator, as idle.action spells it."
     }
   },
   "vocabularies": {

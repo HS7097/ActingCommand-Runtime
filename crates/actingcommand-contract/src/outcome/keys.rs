@@ -592,4 +592,7 @@ outcome_keys! {
     // Ruling 54 (#420 S4): the kind of `install_caveat_noted`, the one warning of the family.
     install_caveat: vocab(install_caveat),
     // ---- Workflow #421 INST-0: end ----
+    // ---- IDLE-1 (the idle action, Alice's ruling 41): begin ----
+    idle_action: name,
+    // ---- IDLE-1: end ----
 }

@@ -9,7 +9,8 @@
 //! - `open`: an intent of a dispatch, lease transition, task terminal, input or application, added
 //!   when the intent commits and deleted when its result (same action id) commits;
 //! - `request`: the latest record of a write request, a ring of `request_index_records` rows;
-//! - `lifecycle`: `last_start`, `last_close` and `last_fatal`.
+//! - `lifecycle`: `last_start`, `last_close`, `last_fatal` and (Workflow #422 LN-4)
+//!   `tagged_state_enabled`.
 
 use crate::PersistedEvent;
 use actingcommand_contract::outcome::Category;
@@ -55,6 +56,9 @@ pub(super) enum LifecycleSlot {
     Start,
     Close,
     Fatal,
+    /// Workflow #422 LN-4 (§11.5, §11.6): the seeding's marker, `runtime.lifecycle_observed`
+    /// phase `tagged_state_enabled`.
+    TaggedStateEnabled,
 }
 
 impl LifecycleSlot {
@@ -63,6 +67,7 @@ impl LifecycleSlot {
             Self::Start => "last_start",
             Self::Close => "last_close",
             Self::Fatal => "last_fatal",
+            Self::TaggedStateEnabled => "tagged_state_enabled",
         }
     }
 }
@@ -186,6 +191,19 @@ fn tagged_keys(event: &PersistedEvent, policy: &IndexPolicy) -> Vec<String> {
                 .into_iter()
                 .collect()
         }
+        // Workflow #422 LN-4: a wake's session carries the obligation's state on, so the
+        // obligation's row names the session's latest record, and the start loads no obligation
+        // whose session ended.
+        EventPayload::Agent(
+            AgentPayload::SessionStarted(session)
+            | AgentPayload::SessionResumed(session)
+            | AgentPayload::ResponseRecorded(session)
+            | AgentPayload::SessionCompleted(session)
+            | AgentPayload::SessionEscalated(session),
+        ) => id_text(&session.session().status().wake_id())
+            .map(|wake| format!("wake/{wake}"))
+            .into_iter()
+            .collect(),
         _ => input_boundary_key(event)
             .into_iter()
             .chain(monitor_keys(event))
@@ -210,17 +228,51 @@ pub fn instance_fact_state_key(scope: &FactScope, key: &str) -> String {
 /// Workflow #422 LN-3: `monitor/<alias>`, the monitor registry's complete state of one alias. A
 /// record that changes the registry carries that state: the import, for every alias it brings,
 /// and an applied change, for its alias. A change that was not applied changes no state.
+/// Workflow #422 LN-4: the import is also `monitor_import`, with or without instances, so the
+/// start loads the import the registry compares its journal file with.
 fn monitor_keys(event: &PersistedEvent) -> Vec<String> {
     match event.payload().runtime_state() {
-        Some(RuntimeStateFact::MonitorImported { import, .. }) => import
-            .instances
-            .iter()
-            .map(|status| format!("monitor/{}", status.instance_alias()))
-            .collect(),
+        Some(RuntimeStateFact::MonitorImported { import, .. }) => {
+            std::iter::once(MONITOR_IMPORT_KEY.to_owned())
+                .chain(
+                    import
+                        .instances
+                        .iter()
+                        .map(|status| format!("monitor/{}", status.instance_alias())),
+                )
+                .collect()
+        }
         Some(RuntimeStateFact::MonitorChanged { change, .. }) if change.applied => {
             vec![format!("monitor/{}", change.status.instance_alias())]
         }
         _ => Vec::new(),
+    }
+}
+
+/// Workflow #422 LN-4: the `state` key of the monitor registry's import.
+pub(super) const MONITOR_IMPORT_KEY: &str = "monitor_import";
+
+/// Workflow #422 LN-4 (§11.5 step 3): whether the row `key` of `role` names `event`: a `state`
+/// key the record carries (every workbench key counts, so a changed pattern does not refuse a
+/// row an earlier pattern wrote), an `open` intent's own event id, or the `lifecycle` slot the
+/// record fills.
+pub(super) fn row_names_record(
+    role: super::index_read::LedgerIndexRole,
+    key: &str,
+    event: &PersistedEvent,
+) -> bool {
+    use super::index_read::LedgerIndexRole;
+    match role {
+        LedgerIndexRole::State => tagged_keys(event, &IndexPolicy::new(vec!["*".to_owned()], 0))
+            .iter()
+            .any(|tagged| tagged == key),
+        LedgerIndexRole::Open => {
+            matches!(intent_role(event.event_type()), Some(IntentRole::Intent))
+                && id_text(event.event_id()).as_deref() == Some(key)
+        }
+        LedgerIndexRole::Lifecycle => {
+            lifecycle_slot(event).is_some_and(|slot| slot.index_key() == key)
+        }
     }
 }
 
@@ -305,7 +357,8 @@ fn is_request_record(event_type: EventType) -> bool {
 }
 
 /// `last_start`: `runtime.started` or `runtime.takeover`; `last_close`: the shutdown request
-/// (the close record until AO-3's G16 writes its own); `last_fatal`: a fatal `runtime.failed`.
+/// (the close record until AO-3's G16 writes its own); `last_fatal`: a fatal `runtime.failed`;
+/// `tagged_state_enabled` (Workflow #422 LN-4): the seeding's marker.
 fn lifecycle_slot(event: &PersistedEvent) -> Option<LifecycleSlot> {
     match event.payload() {
         EventPayload::Runtime(RuntimePayload::Started(_) | RuntimePayload::Takeover(_)) => {
@@ -315,6 +368,14 @@ fn lifecycle_slot(event: &PersistedEvent) -> Option<LifecycleSlot> {
             if matches!(lifecycle.phase(), RuntimeLifecyclePhase::ShutdownRequested) =>
         {
             Some(LifecycleSlot::Close)
+        }
+        EventPayload::Runtime(RuntimePayload::LifecycleObserved(lifecycle))
+            if matches!(
+                lifecycle.phase(),
+                RuntimeLifecyclePhase::TaggedStateEnabled { .. }
+            ) =>
+        {
+            Some(LifecycleSlot::TaggedStateEnabled)
         }
         EventPayload::Runtime(RuntimePayload::Failed(_))
             if event

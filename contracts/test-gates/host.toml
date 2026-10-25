@@ -1925,6 +1925,29 @@ tests = [
 ]
 incident = ["#422 LN-3"]
 
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25; Workflow #386 comment 6393646823; contracts/runtime-config.md, "The `idle` section"): idle.action defaults to close_app (one of none, close_app, stop_emulator), idle.min_gap_ms to 1800000, idle.close_app_wake_lead_ms to 60000 and idle.stop_emulator_wake_lead_ms to 300000, all settable; each instance's idle keys default to the section's and an instance's own key overrides it for that instance only, from the file and through an instruction; an unknown action, a value out of range or of another type is refused where it enters; a wake lead not shorter than the gap (the section's or an instance's) is section_check at start and through an instruction; stop_emulator is refused on an instance whose emulator the Runtime does not start
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::idle1_tests::idle1_c1_defaults_and_per_instance_keys",
+    "actingcommand-runtime-config::lib::idle1_tests::idle1_c2_bad_values_are_refused",
+]
+incident = ["#386 IDLE-1"]
+
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): the idle planner on a manual clock with neutral instances: a gap to the next due task of at least idle.min_gap_ms runs the action once, a shorter one never; a paused, leased, queued or manually held instance is left alone, and so is one whose plan predates its last work; one whose action in effect cannot bring it back (no startup package, or for stop_emulator no configured emulator start) never acts and is reported once (instance_idle_action_unsupported, naming the member it lacks); close_app brings the instance back at next due minus its lead through the startup package, stop_emulator through the configured emulator start and then the startup package; a due task earlier than planned, or the action switched off, wakes it at once; a failed stop fails only its own instance (no wake, no retry until work held it again) while another instance's wake goes on; none never acts or wakes; through the host (coordinator's follow-up on #1333, #419), a failed stop_emulator is recorded under its instance and goes through contain_failure: no instance_idle_action record and no wake follow for it, the Runtime does not latch, and another instance's run completes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_a_the_action_runs_once_at_the_minimum_gap_and_never_below_it",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_b_a_paused_leased_queued_or_manually_held_instance_is_left_alone",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_c_each_action_brings_the_instance_back_at_next_due_minus_its_lead",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_d_a_due_task_earlier_than_planned_wakes_the_instance_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_e_a_failed_stop_fails_only_that_instance",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_f_none_never_acts_or_wakes",
+    "actingcommand-runtime-host::lib::tests::gate_idle1_host::idle1_g_a_failed_stop_is_contained_to_its_instance_and_the_runtime_goes_on",
+]
+incident = ["#386 IDLE-1"]
+
 # ROUT-L RL-1b A2 (§7.1, §3.3): a placed pack is scheduled within one check interval without a restart, with a higher catalog version and no approval record; a truncated schedule.json is standard_pack_root_invalid exactly once while the last good rules run; the complete file is then composed
 [[gate]]
 coverage = "Y"
@@ -1999,3 +2022,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_c_a_doctored_index_row_stops_the_load_with_ledger_tag_index_mismatch",
 ]
 incident = ["#422 LN-2"]
+
+# LN-4 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §3.6, §5.1 row LN-4; contracts/ledger-observer.md §11.1, §11.5, §11.6; register §1.184): a start without the marker replays once, writes one value record per key and the marker; the next start loads the decision memory, the agent dispatcher and the monitor registry from the records the index names, equal to today's recoveries on the synthetic ledger, and those loads, the dispatch journal among them, read nothing but the index rows, their records and point reads of the dispatches the records name; the dispatch journal is bounded, never by the event count (flat under 10k dispatches); the agent dispatcher's maps are pruned at session end
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_a_seed_then_load_equals_todays_recovery_on_the_synthetic_ledger",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_c_the_journal_size_stays_flat_under_10k_synthetic_dispatches",
+    "actingcommand-runtime-host::lib::tests::agent_sessions::ln4_d_the_agent_maps_are_pruned_at_session_end",
+]
+incident = ["#422 LN-4"]
