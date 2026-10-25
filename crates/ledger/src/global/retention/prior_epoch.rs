@@ -272,7 +272,7 @@ enum PriorOwner {
     /// Sealed and still supported by the native read: its scopes close up to `upper`.
     Sealed { upper: u64 },
     /// Not sealed yet: the import the owner's first open scope writes.
-    Unsealed(PriorEpochOwnerImport),
+    Unsealed(Box<PriorEpochOwnerImport>),
 }
 
 impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore<B> {
@@ -331,7 +331,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                     }
                     appended.push(self.append_prior_epoch_fact(
                         writer,
-                        PriorEpochCloseFact::OwnerImported(record),
+                        PriorEpochCloseFact::OwnerImported(*record),
                         deadline,
                     )?);
                     PriorOwner::Sealed { upper }
@@ -406,7 +406,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         let Some(upper) = upper else {
             return Ok(PriorOwner::Unbounded);
         };
-        Ok(PriorOwner::Unsealed(PriorEpochOwnerImport {
+        Ok(PriorOwner::Unsealed(Box::new(PriorEpochOwnerImport {
             evidence: match native {
                 Some(proof) => proof.clone(),
                 None => journal.observation(owner),
@@ -414,7 +414,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
             basis: current,
             through_sequence: self.retention.through_sequence,
             scope_upper_sequence: upper,
-        }))
+        })))
     }
 
     fn append_prior_epoch_fact(
