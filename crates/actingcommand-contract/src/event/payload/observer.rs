@@ -411,12 +411,17 @@ pub struct PolicyFailureStreakRecord {
 }
 
 /// The normal admission that opened a dispatch pair's retry round (register L7).
+/// Workflow #422 LN-4 (register §1.183 LN4-2): `opened` is the round's place in the order the
+/// rounds were opened (Workflow #372 K5), so a task reads the latest round of its accounting
+/// group after a restart from the records alone; absent in LN-3's records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRetryRoundRecord {
     pub admission: PolicyAdmissionRecord,
     pub until_unix_ms: u64,
     pub expected_duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened: Option<u64>,
 }
 
 /// A dispatch pair's dispatch clock (register L7): when its last dispatch was admitted.
@@ -459,6 +464,13 @@ pub struct PolicyControlStateRecord {
     pub dispatch_clock: Option<PolicyDispatchClockRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_reruns: Option<PolicyConditionReruns>,
+    /// Workflow #422 LN-4 (register §1.183 LN4-2): the place of the pair's latest settlement
+    /// that set or cleared its failure state (a success, or a failure no condition settled) in
+    /// the order of all such settlements (Workflow #372 K5), so a task reads the failure state of
+    /// its accounting group's latest such run after a restart from the records alone; absent
+    /// while the pair has none, and in LN-3's records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_settled: Option<u64>,
 }
 
 impl PolicyControlStateRecord {
@@ -494,9 +506,12 @@ impl PolicyControlStateRecord {
         }
         if let Some(round) = &self.retry_round {
             validate_policy_admission(&round.admission)?;
-            if round.until_unix_ms == 0 {
+            if round.until_unix_ms == 0 || round.opened == Some(0) {
                 return Err(invalid_policy_record("retry_round"));
             }
+        }
+        if self.failure_settled == Some(0) {
+            return Err(invalid_policy_record("failure_settled"));
         }
         if self
             .dispatch_clock

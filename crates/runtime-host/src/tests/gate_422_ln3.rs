@@ -122,15 +122,18 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
         window_runtime_ms: intent.expected_duration_ms,
         active_window: Some(activity.window_id.clone()),
         failure_streak: None,
+        // Workflow #422 LN-4 (register §1.183 LN4-2): the first round this host opened.
         retry_round: Some(PolicyRetryRoundRecord {
             admission: admission.clone(),
             until_unix_ms: window_end,
             expected_duration_ms: intent.expected_duration_ms,
+            opened: Some(1),
         }),
         dispatch_clock: Some(PolicyDispatchClockRecord {
             admitted_at_unix_ms: activity.admitted_at_unix_ms,
         }),
         condition_reruns: None,
+        failure_settled: None,
     };
     let admitted_activity = PolicyActivityStateRecord {
         instance_id: intent.instance_id.clone(),
@@ -169,10 +172,13 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
     let PolicyExecutionOutcome::Succeeded { runtime_ms } = settled.outcome else {
         panic!("expected a success")
     };
+    // Workflow #422 LN-4 (register §1.183 LN4-2): the success is the first settlement that set
+    // or cleared the pair's failure state.
     let settled_pair = PolicyControlStateRecord {
         window_runtime_ms: runtime_ms,
         retry_round: None,
         dispatch_clock: None,
+        failure_settled: Some(1),
         ..admitted
     };
     let settled_activity = PolicyActivityStateRecord {

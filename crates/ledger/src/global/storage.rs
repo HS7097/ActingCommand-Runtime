@@ -185,6 +185,17 @@ pub(super) trait DurableStorage: Send + 'static {
         None
     }
 
+    /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 step 1): the `ledger_index` rows
+    /// of `role` whose key starts with one of `prefixes`, each with the hash of the ledger row its
+    /// sequence names; `None` for a store that keeps no index.
+    fn index_rows(
+        &self,
+        _role: super::index_read::LedgerIndexRole,
+        _prefixes: &[String],
+    ) -> Option<GlobalLedgerResult<Vec<super::index_read::StoredIndexRow>>> {
+        None
+    }
+
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>>;
     /// Workflow #383 AO-2 (`contracts/ledger-observer.md` §8.1, §11.4): commits one batch, its
     /// index rows and a joint record's state work in one transaction. A store without

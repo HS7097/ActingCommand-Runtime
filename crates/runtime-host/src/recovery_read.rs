@@ -21,8 +21,22 @@ pub(crate) fn read_pages(
     through: u64,
     page_events: usize,
 ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+    read_pages_after(ledger, query, 0, through, page_events)
+}
+
+/// Workflow #422 LN-4: [`read_pages`] of the sequences after `after` through `through`.
+pub(crate) fn read_pages_after(
+    ledger: &GlobalLedger,
+    query: &EventQuery,
+    after: u64,
+    through: u64,
+    page_events: usize,
+) -> GlobalLedgerResult<Vec<PersistedEvent>> {
     let mut events = Vec::new();
-    let mut after = 0;
+    let mut after = after;
+    if after >= through {
+        return Ok(events);
+    }
     loop {
         let page = ledger.query_page(query.clone(), after, through, page_events)?;
         let exhausted = page.len() < page_events;
@@ -53,6 +67,32 @@ pub(crate) fn read_event_types(
                 to_sequence: Some(through),
                 ..EventQuery::default()
             },
+            through,
+            page_events,
+        )?);
+    }
+    events.sort_by_key(PersistedEvent::sequence);
+    Ok(events)
+}
+
+/// Workflow #422 LN-4: [`read_event_types`] of the sequences after `after` through `through`.
+pub(crate) fn read_event_types_after(
+    ledger: &GlobalLedger,
+    event_types: &[EventType],
+    after: u64,
+    through: u64,
+    page_events: usize,
+) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+    let mut events = Vec::new();
+    for event_type in event_types {
+        events.extend(read_pages_after(
+            ledger,
+            &EventQuery {
+                event_type: Some(*event_type),
+                to_sequence: Some(through),
+                ..EventQuery::default()
+            },
+            after,
             through,
             page_events,
         )?);

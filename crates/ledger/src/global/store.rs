@@ -104,6 +104,14 @@ pub(super) trait LedgerStore: Send + 'static {
         operation: Location,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
     fn latest_sequence(&self) -> u64;
+    /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 steps 1 to 3): the checked
+    /// records the index rows of `role` with a key starting with one of `prefixes` name.
+    fn index_records(
+        &self,
+        role: super::LedgerIndexRole,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerIndexRecords>;
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -233,6 +241,15 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
 
     fn latest_sequence(&self) -> u64 {
         Self::latest_sequence(self)
+    }
+
+    fn index_records(
+        &self,
+        role: super::LedgerIndexRole,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerIndexRecords> {
+        Self::index_records(self, role, prefixes, work)
     }
 
     fn project_view_page(

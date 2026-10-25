@@ -1122,3 +1122,88 @@ fn startup_recovery_reads_bounded_pages_and_no_whole_ledger_query() {
     );
     reopened.close().expect("close reopened runtime");
 }
+
+// Workflow #422 LN-4, test row 4 (LEAN-L model §1.2 H-i; `contracts/ledger-observer.md` §11.2:
+// sessions are not kept): the agent dispatcher's maps are pruned at session end. While two wakes
+// have live sessions, one of them with a retried response, the maps hold both; once one session
+// completes and the other is escalated to a person, every map is empty, and the state still equals
+// the whole-ledger fold, which prunes the same way.
+#[test]
+fn ln4_d_the_agent_maps_are_pruned_at_session_end() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(3, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    for index in 0..2 {
+        host.record_policy_planning_signal(wake_signal(
+            100 + index,
+            PolicyPlanningSignalKind::TimelineReached,
+        ))
+        .expect("timeline wake signal");
+    }
+    let wake_ids = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        })
+        .expect("the wakes")
+        .into_iter()
+        .map(|event| {
+            let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = event.payload() else {
+                panic!("expected agent wake payload")
+            };
+            payload.wake().wake_id()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wake_ids.len(), 2);
+    let (_, maps) = host
+        .agent_dispatcher_state_for_test()
+        .expect("the agent dispatcher");
+    assert_eq!(maps, [2, 2, 0, 0, 0, 0, 0], "two live wakes, no session");
+
+    let mut client = TestClient::connect(&host);
+    let completed = start_agent_session(&mut client, wake_ids[0]);
+    let escalated = start_agent_session(&mut client, wake_ids[1]);
+    record_agent_response(
+        &mut client,
+        completed,
+        AgentResponseDisposition::RetryableFailure,
+        "fake_sidecar_failed",
+    );
+    let (matches, maps) = host
+        .agent_dispatcher_state_for_test()
+        .expect("the agent dispatcher");
+    assert!(matches, "the live state equals the whole-ledger fold");
+    assert_eq!(
+        maps,
+        [2, 2, 2, 2, 2, 0, 1],
+        "two live sessions and one retried response"
+    );
+
+    record_agent_response(
+        &mut client,
+        completed,
+        AgentResponseDisposition::Completed,
+        "fake_sidecar_completed",
+    );
+    record_agent_response(
+        &mut client,
+        escalated,
+        AgentResponseDisposition::NeedsHuman,
+        "fake_sidecar_failed",
+    );
+    let (matches, maps) = host
+        .agent_dispatcher_state_for_test()
+        .expect("the agent dispatcher");
+    assert!(matches, "the pruned state equals the whole-ledger fold");
+    assert_eq!(maps, [0; 7], "every map is pruned at session end");
+    drop(client);
+    host.close().expect("close runtime");
+}

@@ -199,6 +199,11 @@ impl PolicyControlState {
                     .keys()
                     .map(|(task, instance)| (task, instance)),
             )
+            .chain(
+                self.failure_settled
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
             .collect::<BTreeSet<_>>();
         let mut records = BTreeMap::new();
         for (task_id, instance_id) in pairs {
@@ -294,20 +299,22 @@ impl PolicyControlState {
                     admission: round.admission.clone(),
                     until_unix_ms: round.until_unix_ms,
                     expected_duration_ms: round.expected_duration_ms,
+                    opened: Some(round.opened),
                 }),
             dispatch_clock: dispatch_clock.map(|admitted_at_unix_ms| PolicyDispatchClockRecord {
                 admitted_at_unix_ms,
             }),
             condition_reruns: None,
+            failure_settled: self.failure_settled.get(&pair).copied(),
         }
     }
 
     /// Workflow #422 LN-3 (register L7, L14): applies one value record; the record replaces its
     /// key's whole state. LN-4's start load runs it over the records the index names, in ledger
-    /// order. The dispatch clock is the policy host's, not this state's. The value records carry
-    /// no settlement order, so the Workflow #372 K5 order a continued id's failure state follows
-    /// (`failure_settled`) starts empty and a retry round's order is the order applied.
-    #[cfg(test)]
+    /// order. The dispatch clock is the policy host's, not this state's. Workflow #422 LN-4
+    /// (register §1.183 LN4-2): the record carries the Workflow #372 K5 orders, `failure_settled`
+    /// and the retry round's `opened`, and the counters behind them go on after the largest one
+    /// loaded; a record without a round's order (LN-3's) takes the next one in the order applied.
     pub(crate) fn apply_value_record(
         &mut self,
         record: &PolicyValueRecord,
@@ -365,22 +372,34 @@ impl PolicyControlState {
                         self.failure_streaks.remove(&pair);
                     }
                 }
+                match state.failure_settled {
+                    Some(settled) => {
+                        self.settlements = self.settlements.max(settled);
+                        self.failure_settled.insert(pair.clone(), settled);
+                    }
+                    None => {
+                        self.failure_settled.remove(&pair);
+                    }
+                }
                 match &state.retry_round {
                     Some(round) => {
-                        self.rounds_opened =
-                            self.rounds_opened.checked_add(1).ok_or_else(|| {
+                        let opened = match round.opened {
+                            Some(opened) => opened,
+                            None => self.rounds_opened.checked_add(1).ok_or_else(|| {
                                 fatal(
                                     HostCode::PolicyBudgetCounterOverflow,
                                     HostLocation::RecoverPolicyControl,
                                 )
-                            })?;
+                            })?,
+                        };
+                        self.rounds_opened = self.rounds_opened.max(opened);
                         self.retry_rounds.insert(
                             pair,
                             RetryRound {
                                 admission: round.admission.clone(),
                                 until_unix_ms: round.until_unix_ms,
                                 expected_duration_ms: round.expected_duration_ms,
-                                opened: self.rounds_opened,
+                                opened,
                             },
                         );
                     }

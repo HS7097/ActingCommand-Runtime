@@ -22,8 +22,9 @@ use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, PolicyValueRecord,
     active_activity_window, is_availability_denial,
 };
-use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types, read_event_types_after};
 use crate::suspension_lift::SuspensionLiftView;
+use crate::tagged_state::TaggedStart;
 use crate::{
     InstanceArbitrationRank, PerformanceControlWorkload, ProcedureManifest, RuntimeHostError,
     RuntimeHostResult,
@@ -37,7 +38,7 @@ use actingcommand_contract::{
     PolicyRandomDelay, PolicyReasonRecord, ProjectDecisionPageRequest, RequestId, RunId,
     RuntimeErrorCode, RuntimeRequest, TaskId,
 };
-use actingcommand_ledger::{GlobalLedger, PersistedEvent};
+use actingcommand_ledger::{GlobalLedger, LedgerIndexRole, PersistedEvent};
 use actingcommand_policy::{
     ActivityProfile, CandidateEligibility, CatalogDocumentSource, CatalogSources, CompiledCatalog,
     CompletedActivityWindow, DecisionReason, DecisionReasonChain, DetectionSuggestion,
@@ -1128,9 +1129,81 @@ pub(crate) struct PolicyHost {
     /// not-run explanation. Memory only; a host starts with none.
     explanation: crate::schedule_explanation::ScheduleExplanationTable,
     /// Workflow #422 LN-3 (`contracts/ledger-observer.md` §11.3): per index key of the decision
-    /// memory, the value record the ledger holds as its latest, or, for a key unchanged since the
-    /// open, the state the open replayed.
+    /// memory, the value record the ledger holds as its latest. Workflow #422 LN-4: empty on a
+    /// start that seeds, so its reconciliation writes one record per key.
     recorded_values: BTreeMap<String, PolicyValueRecord>,
+    /// Workflow #422 LN-4: whether `recorded_values` holds the complete decision memory as of
+    /// `values_through`, the sequence of the latest value record (loaded, or seeded and written
+    /// since), so a re-alignment rebuilds the decision memory from them.
+    values_loaded: bool,
+    values_through: u64,
+    /// Workflow #422 LN-4: the ledger position through which the dispatch journal holds every
+    /// dispatch event.
+    journal_through: u64,
+}
+
+/// Workflow #422 LN-4: the dispatch journal while it is rebuilt.
+#[derive(Default)]
+struct DispatchJournal {
+    seen: BTreeMap<String, SeenDispatch>,
+    order: BTreeMap<u64, String>,
+}
+
+/// The policy dispatch event types the journal replays (Workflow #381 R4a: each on its own index).
+const DISPATCH_EVENT_TYPES: [EventType; 5] = [
+    EventType::PolicyDispatchIntent,
+    EventType::PolicyDispatchAdmitted,
+    EventType::PolicyDispatchRejected,
+    EventType::PolicyDispatchCompleted,
+    EventType::PolicyExecutionRecorded,
+];
+
+/// Workflow #422 LN-4: the `state` keys of the decision memory (`contracts/ledger-observer.md`
+/// §11.1).
+const DECISION_MEMORY_PREFIXES: [&str; 2] = ["decision_memory/", "activity_memory/"];
+
+/// Workflow #422 LN-4: the decision memory as its value records hold it.
+struct LoadedDecisionMemory {
+    control: PolicyControlState,
+    records: BTreeMap<String, PolicyValueRecord>,
+    /// The sequence of the latest record.
+    through: u64,
+}
+
+/// Workflow #422 LN-4 (LEAN-L model §1.2 H-e, §3.2 step 5; `contracts/ledger-observer.md` §11.5):
+/// the decision memory from the records the `decision_memory/` and `activity_memory/` rows name,
+/// applied in ledger order with the value records' reducer.
+fn load_decision_memory(ledger: &GlobalLedger) -> RuntimeHostResult<LoadedDecisionMemory> {
+    let rows = crate::tagged_state::index_records(
+        ledger,
+        LedgerIndexRole::State,
+        &DECISION_MEMORY_PREFIXES,
+    )?;
+    let mut loaded = LoadedDecisionMemory {
+        control: PolicyControlState::default(),
+        records: BTreeMap::new(),
+        through: 0,
+    };
+    for row in rows.records {
+        let record = match row.event.payload() {
+            EventPayload::Policy(PolicyPayload::ControlStateRecorded(payload)) => {
+                PolicyValueRecord::Control(Box::new(payload.state().clone()))
+            }
+            EventPayload::Policy(PolicyPayload::ActivityStateRecorded(payload)) => {
+                PolicyValueRecord::Activity(payload.state().clone())
+            }
+            _ => {
+                return Err(fatal(
+                    HostCode::PolicyRecoveryFailed,
+                    HostLocation::RecoverPolicyControl,
+                ));
+            }
+        };
+        loaded.control.apply_value_record(&record)?;
+        loaded.through = loaded.through.max(row.event.sequence());
+        loaded.records.insert(row.key, record);
+    }
+    Ok(loaded)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1140,12 +1213,16 @@ struct DetectionQuotaState {
 }
 
 impl PolicyHost {
+    /// Workflow #422 LN-4 (LEAN-L model §3.2 step 5, §3.6): `tagged` says whether the decision
+    /// memory loads from its value records or is rebuilt from the dispatch history once, for the
+    /// start's reconciliation to seed one record per key.
     pub(crate) fn open(
         state_root: &Path,
         state: Arc<RuntimeStateStore>,
         ledger: &GlobalLedger,
         cadence: PolicyCadence,
         events: &crate::events::RuntimeEvents,
+        tagged: TaggedStart,
     ) -> RuntimeHostResult<Self> {
         let store = CatalogStore::open(state_root, state)?;
         store.migrate_legacy_active_pointer(ledger, events)?;
@@ -1168,13 +1245,59 @@ impl PolicyHost {
             random_delays: RandomDelayTable::default(),
             explanation: crate::schedule_explanation::ScheduleExplanationTable::default(),
             recorded_values: BTreeMap::new(),
+            values_loaded: false,
+            values_through: 0,
+            journal_through: 0,
         };
-        host.recover_dispatches(ledger)?;
-        host.recover_planning_signals(ledger)?;
-        // Workflow #422 LN-3: the replayed state is where the value records start from; seeding
-        // a record for every key once is LN-4's.
-        host.recorded_values = host.current_value_records()?;
+        match tagged {
+            // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
+            // reconciliation writes one value record per key of the replayed state.
+            TaggedStart::Seed => {
+                host.recover_dispatches(ledger, PolicyControlState::default(), 0)?;
+                host.recover_planning_signals(ledger)?;
+            }
+            TaggedStart::Load => {
+                let loaded = load_decision_memory(ledger)?;
+                host.recover_dispatches(ledger, loaded.control, loaded.through)?;
+                host.recover_planning_signals(ledger)?;
+                let current = host.current_value_records()?;
+                host.recorded_values = loaded
+                    .records
+                    .into_iter()
+                    .filter(|(key, _)| current.contains_key(key))
+                    .collect();
+                host.values_loaded = true;
+                host.values_through = loaded.through;
+            }
+        }
         Ok(host)
+    }
+
+    /// Workflow #422 LN-4 (§11.6): the seeding wrote one record of every key the decision memory
+    /// holds; a re-alignment rebuilds the decision memory from the records from now on.
+    pub(crate) fn mark_values_seeded(&mut self) -> RuntimeHostResult<()> {
+        if !self.changed_value_records()?.is_empty() {
+            return Err(fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyControl,
+            ));
+        }
+        self.values_loaded = true;
+        Ok(())
+    }
+
+    /// Workflow #422 LN-4: the keys of the decision memory the ledger holds a record of.
+    pub(crate) fn recorded_value_count(&self) -> usize {
+        self.recorded_values.len()
+    }
+
+    /// Workflow #422 LN-4, tests: the complete decision memory as value records, and the size of
+    /// the dispatch journal.
+    #[cfg(test)]
+    pub(crate) fn decision_memory_for_test(
+        &self,
+    ) -> RuntimeHostResult<(BTreeMap<String, PolicyValueRecord>, usize)> {
+        Ok((self.current_value_records()?, self.seen_dispatches.len()))
     }
 
     /// Workflow #422 LN-3 (`contracts/ledger-observer.md` §11.3): the value record of every key
@@ -1201,9 +1324,16 @@ impl PolicyHost {
             .collect())
     }
 
-    /// Workflow #422 LN-3: the ledger took `record` as the latest value record of `key`.
-    pub(crate) fn note_value_recorded(&mut self, key: String, record: PolicyValueRecord) {
+    /// Workflow #422 LN-3: the ledger took `record` as the latest value record of `key`, at
+    /// `sequence`.
+    pub(crate) fn note_value_recorded(
+        &mut self,
+        key: String,
+        record: PolicyValueRecord,
+        sequence: u64,
+    ) {
         self.recorded_values.insert(key, record);
+        self.values_through = self.values_through.max(sequence);
     }
 
     fn current_value_records(&self) -> RuntimeHostResult<BTreeMap<String, PolicyValueRecord>> {
@@ -1214,38 +1344,82 @@ impl PolicyHost {
     /// latest admitted dispatch that is not completed yet: its dispatch clock, as the start
     /// recovers it (`recovered_dispatch_clocks`).
     fn open_dispatch_clocks(&self) -> RuntimeHostResult<BTreeMap<(String, String), u64>> {
-        let mut latest = BTreeMap::<(String, String), (u64, u64)>::new();
-        for dispatch in self.seen_dispatches.values() {
-            if dispatch.lifecycle != DispatchLifecycle::Admitted {
-                continue;
-            }
-            let admitted_at_unix_ms = dispatch
-                .admission
-                .as_ref()
-                .map(|admission| admission.activity.admitted_at_unix_ms)
-                .ok_or_else(|| {
-                    fatal(
-                        HostCode::PolicyDispatchAdmissionMissing,
-                        HostLocation::RecoverPolicyDispatchClocks,
-                    )
-                })?;
-            let pair = (
-                dispatch.data.task_id.clone(),
-                dispatch.data.instance_id.clone(),
-            );
-            if latest
-                .get(&pair)
-                .is_none_or(|(sequence, _)| *sequence < dispatch.intent_sequence)
-            {
-                latest.insert(pair, (dispatch.intent_sequence, admitted_at_unix_ms));
-            }
-        }
-        Ok(latest
-            .into_iter()
-            .map(|(pair, (_, admitted_at_unix_ms))| (pair, admitted_at_unix_ms))
-            .collect())
+        dispatch_clocks_of(&self.seen_dispatches)
     }
 
+    /// Workflow #422 LN-4, tests: the decision memory today's replay rebuilds from every
+    /// dispatch event, as value records: the reference a loaded decision memory is compared with.
+    #[cfg(test)]
+    pub(crate) fn replayed_decision_memory_for_test(
+        &self,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<BTreeMap<String, PolicyValueRecord>> {
+        let through = ledger.latest_sequence().map_err(|_| {
+            fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyDispatches,
+            )
+        })?;
+        let events = read_event_types(ledger, &DISPATCH_EVENT_TYPES, through, RECOVERY_PAGE_EVENTS)
+            .map_err(|_| {
+                fatal(
+                    HostCode::PolicyRecoveryFailed,
+                    HostLocation::RecoverPolicyDispatches,
+                )
+            })?;
+        let mut journal = DispatchJournal::default();
+        let mut control = PolicyControlState::default();
+        for event in &events {
+            self.apply_dispatch_event(&mut journal, &mut control, 0, false, event)?;
+        }
+        Ok(control.value_records(&dispatch_clocks_of(&journal.seen)?))
+    }
+}
+
+/// Workflow #422 LN-4, tests: the value records the decision memory's rows name.
+#[cfg(test)]
+pub(crate) fn load_decision_memory_for_test(ledger: &GlobalLedger) -> RuntimeHostResult<usize> {
+    Ok(load_decision_memory(ledger)?.records.len())
+}
+
+/// Workflow #422 LN-3 (register L7): per (task, instance), the admission time of the pair's
+/// latest admitted dispatch of `seen` that is not completed yet: its dispatch clock.
+fn dispatch_clocks_of(
+    seen: &BTreeMap<String, SeenDispatch>,
+) -> RuntimeHostResult<BTreeMap<(String, String), u64>> {
+    let mut latest = BTreeMap::<(String, String), (u64, u64)>::new();
+    for dispatch in seen.values() {
+        if dispatch.lifecycle != DispatchLifecycle::Admitted {
+            continue;
+        }
+        let admitted_at_unix_ms = dispatch
+            .admission
+            .as_ref()
+            .map(|admission| admission.activity.admitted_at_unix_ms)
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyDispatchAdmissionMissing,
+                    HostLocation::RecoverPolicyDispatchClocks,
+                )
+            })?;
+        let pair = (
+            dispatch.data.task_id.clone(),
+            dispatch.data.instance_id.clone(),
+        );
+        if latest
+            .get(&pair)
+            .is_none_or(|(sequence, _)| *sequence < dispatch.intent_sequence)
+        {
+            latest.insert(pair, (dispatch.intent_sequence, admitted_at_unix_ms));
+        }
+    }
+    Ok(latest
+        .into_iter()
+        .map(|(pair, (_, admitted_at_unix_ms))| (pair, admitted_at_unix_ms))
+        .collect())
+}
+
+impl PolicyHost {
     pub(crate) fn stage(&self, sources: &CatalogSources) -> RuntimeHostResult<LoadedCatalog> {
         self.store.stage(sources)
     }
@@ -2830,13 +3004,14 @@ impl PolicyHost {
         Ok(())
     }
 
-    /// Rebuilds the dispatch projection from the whole ledger. Since Workflow #191 U5-F1 its
-    /// callers are startup reconciliation (`reconcile_policy_dispatches`), an admission whose
-    /// intent or outcome append returned an error, and an execution or completion append that
-    /// returned an error; each runs it under the guard it appended under.
-    /// `PolicyHost::open` calls `recover_dispatches` directly.
+    /// Re-aligns the dispatch projection with the ledger. Since Workflow #191 U5-F1 its callers
+    /// are startup reconciliation (`reconcile_policy_dispatches`), an admission whose intent or
+    /// outcome append returned an error, and an execution or completion append that returned an
+    /// error; each runs it under the guard it appended under. Workflow #422 LN-4: it reads only
+    /// the dispatch events after the journal's and the value records' positions
+    /// (`refresh_dispatch_tail`), no longer the whole history.
     pub(crate) fn refresh_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
-        self.recover_dispatches(ledger)
+        self.refresh_dispatch_tail(ledger)
     }
 
     pub(crate) fn pinned_catalog(&self, decision_id: &str) -> Option<CatalogGeneration> {
@@ -3554,23 +3729,22 @@ impl PolicyHost {
         ))
     }
 
-    fn recover_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
-        // Workflow #381 R4a: each dispatch type through one position, in bounded pages.
-        let events = ledger
+    /// Rebuilds the dispatch journal from every policy dispatch event through the latest
+    /// sequence, in bounded pages (Workflow #381 R4a). Workflow #422 LN-4: the decision memory
+    /// starts from `control` (empty when it is seeded, the loaded value records otherwise) and
+    /// takes the effect of each admission and execution after `control_after`, the records'
+    /// position; the effects at or before it are in the records already.
+    fn recover_dispatches(
+        &mut self,
+        ledger: &GlobalLedger,
+        control: PolicyControlState,
+        control_after: u64,
+    ) -> RuntimeHostResult<()> {
+        let (events, through) = ledger
             .latest_sequence()
             .and_then(|through| {
-                read_event_types(
-                    ledger,
-                    &[
-                        EventType::PolicyDispatchIntent,
-                        EventType::PolicyDispatchAdmitted,
-                        EventType::PolicyDispatchRejected,
-                        EventType::PolicyDispatchCompleted,
-                        EventType::PolicyExecutionRecorded,
-                    ],
-                    through,
-                    RECOVERY_PAGE_EVENTS,
-                )
+                read_event_types(ledger, &DISPATCH_EVENT_TYPES, through, RECOVERY_PAGE_EVENTS)
+                    .map(|events| (events, through))
             })
             .map_err(|_| {
                 fatal(
@@ -3578,117 +3752,238 @@ impl PolicyHost {
                     HostLocation::RecoverPolicyDispatches,
                 )
             })?;
-        let mut seen_dispatches = BTreeMap::new();
-        let mut dispatch_order = BTreeMap::new();
+        let mut journal = DispatchJournal::default();
+        let mut control = control;
+        for event in &events {
+            self.apply_dispatch_event(&mut journal, &mut control, control_after, false, event)?;
+        }
+        self.pinned_dispatches = self.pinned_of(&journal.seen)?;
+        self.seen_dispatches = journal.seen;
+        self.dispatch_order = journal.order;
+        self.control = control;
+        self.journal_through = through;
+        Ok(())
+    }
+
+    /// Workflow #422 LN-4: re-aligns the dispatch journal and the decision memory with the
+    /// ledger without reading its whole history. The decision memory is rebuilt from the value
+    /// records the ledger holds as latest; the dispatch events after the older of the journal's
+    /// and the records' positions are read, each applied to the journal unless it already is,
+    /// and each admission and execution after the records' position to the decision memory.
+    /// Before the seeding wrote the records, the journal and the decision memory are rebuilt
+    /// from every dispatch event.
+    fn refresh_dispatch_tail(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
+        if !self.values_loaded {
+            return self.recover_dispatches(ledger, PolicyControlState::default(), 0);
+        }
+        let after = self.journal_through.min(self.values_through);
+        let (events, through) = ledger
+            .latest_sequence()
+            .and_then(|through| {
+                read_event_types_after(
+                    ledger,
+                    &DISPATCH_EVENT_TYPES,
+                    after,
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+                .map(|events| (events, through))
+            })
+            .map_err(|_| {
+                fatal(
+                    HostCode::PolicyRecoveryFailed,
+                    HostLocation::RecoverPolicyDispatches,
+                )
+            })?;
         let mut control = PolicyControlState::default();
-        for event in events {
-            let EventPayload::Policy(payload) = event.payload() else {
-                continue;
-            };
-            match payload {
-                PolicyPayload::DispatchIntent(payload) => {
-                    let (decision_id, record) = self.seen_intent(&event, payload)?;
-                    insert_seen_intent(
-                        &mut seen_dispatches,
-                        &mut dispatch_order,
-                        decision_id,
-                        record,
-                        event.sequence(),
-                    )?;
+        for record in self.recorded_values.values() {
+            control.apply_value_record(record)?;
+        }
+        let mut journal = DispatchJournal {
+            seen: self.seen_dispatches.clone(),
+            order: self.dispatch_order.clone(),
+        };
+        for event in &events {
+            self.apply_dispatch_event(
+                &mut journal,
+                &mut control,
+                self.values_through,
+                true,
+                event,
+            )?;
+        }
+        self.pinned_dispatches = self.pinned_of(&journal.seen)?;
+        self.seen_dispatches = journal.seen;
+        self.dispatch_order = journal.order;
+        self.control = control;
+        self.journal_through = through;
+        Ok(())
+    }
+
+    /// One dispatch event applied to `journal` with the checks recovery runs (R1 to R11), and
+    /// its admission or execution to `control` when it lies after `control_after`. With
+    /// `applied_skips` an event the journal already holds is not applied to it again.
+    fn apply_dispatch_event(
+        &self,
+        journal: &mut DispatchJournal,
+        control: &mut PolicyControlState,
+        control_after: u64,
+        applied_skips: bool,
+        event: &PersistedEvent,
+    ) -> RuntimeHostResult<()> {
+        let EventPayload::Policy(payload) = event.payload() else {
+            return Ok(());
+        };
+        let counts = event.sequence() > control_after;
+        match payload {
+            PolicyPayload::DispatchIntent(payload) => {
+                if applied_skips
+                    && journal
+                        .seen
+                        .get(payload.decision_id())
+                        .is_some_and(|seen| seen.intent_sequence == event.sequence())
+                {
+                    return Ok(());
                 }
-                PolicyPayload::DispatchAdmitted(payload) => {
-                    let dispatch = transition_dispatch(
-                        &mut seen_dispatches,
-                        payload,
-                        DispatchLifecycle::Intent,
-                        DispatchLifecycle::Admitted,
-                        event.sequence(),
-                    )?;
+                let (decision_id, record) = self.seen_intent(event, payload)?;
+                insert_seen_intent(
+                    &mut journal.seen,
+                    &mut journal.order,
+                    decision_id,
+                    record,
+                    event.sequence(),
+                )?;
+            }
+            PolicyPayload::DispatchAdmitted(payload) => {
+                let applied = applied_skips
+                    && journal
+                        .seen
+                        .get(payload.decision_id())
+                        .is_some_and(|seen| seen.admitted_sequence == Some(event.sequence()));
+                if !applied {
                     let admission = payload.admission().cloned().ok_or_else(|| {
                         fatal(
                             HostCode::PolicyDispatchAdmissionMissing,
                             HostLocation::RecoverPolicyDispatches,
                         )
                     })?;
+                    let dispatch = transition_dispatch(
+                        &mut journal.seen,
+                        payload,
+                        DispatchLifecycle::Intent,
+                        DispatchLifecycle::Admitted,
+                        event.sequence(),
+                    )?;
+                    dispatch.admission = Some(admission);
+                }
+                if counts {
+                    let dispatch = journal.seen.get(payload.decision_id()).ok_or_else(|| {
+                        fatal(
+                            HostCode::PolicyDispatchIntentMissing,
+                            HostLocation::RecoverPolicyDispatches,
+                        )
+                    })?;
+                    let admission = dispatch.admission.as_ref().ok_or_else(|| {
+                        fatal(
+                            HostCode::PolicyDispatchAdmissionMissing,
+                            HostLocation::RecoverPolicyDispatches,
+                        )
+                    })?;
                     let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-                    let intent = control_intent(&dispatch.data, &catalog.compiled, &admission)?;
+                    let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
                     control.commit_admission(
                         &catalog.compiled,
                         &intent,
-                        &admission,
+                        admission,
                         dispatch.data.reasons.iter().any(|reason| {
                             reason
                                 .0
                                 .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
                         }),
                     )?;
-                    dispatch.admission = Some(admission);
                 }
-                PolicyPayload::DispatchRejected(payload) => {
-                    transition_dispatch(
-                        &mut seen_dispatches,
-                        payload,
-                        DispatchLifecycle::Intent,
-                        DispatchLifecycle::Rejected,
-                        event.sequence(),
-                    )?;
+            }
+            PolicyPayload::DispatchRejected(payload) => {
+                if applied_skips
+                    && journal
+                        .seen
+                        .get(payload.decision_id())
+                        .is_some_and(|seen| seen.rejected_sequence == Some(event.sequence()))
+                {
+                    return Ok(());
                 }
-                PolicyPayload::DispatchCompleted(payload) => {
-                    let dispatch = transition_dispatch(
-                        &mut seen_dispatches,
-                        payload,
-                        DispatchLifecycle::Admitted,
-                        DispatchLifecycle::Completed,
-                        event.sequence(),
-                    )?;
-                    if dispatch.execution.is_none()
-                        || payload.admission() != dispatch.admission.as_ref()
-                    {
-                        return Err(fatal(
-                            HostCode::PolicyDispatchCompletionIncomplete,
-                            HostLocation::RecoverPolicyDispatches,
-                        ));
-                    }
-                    let execution = dispatch.execution.as_ref().ok_or_else(|| {
-                        fatal(
-                            HostCode::PolicyExecutionOutcomeMissing,
-                            HostLocation::RecoverPolicyDispatches,
-                        )
-                    })?;
-                    let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-                    let referenced_outcome_keys = catalog
-                        .compiled()
-                        .referenced_outcome_keys(&dispatch.data.task_id);
-                    dispatch.completed_run = if referenced_outcome_keys.is_empty() {
-                        None
-                    } else {
-                        Some(completed_policy_run_identity(
-                            &event,
-                            &dispatch.data,
-                            execution,
-                            referenced_outcome_keys,
-                        )?)
-                    };
+                transition_dispatch(
+                    &mut journal.seen,
+                    payload,
+                    DispatchLifecycle::Intent,
+                    DispatchLifecycle::Rejected,
+                    event.sequence(),
+                )?;
+            }
+            PolicyPayload::DispatchCompleted(payload) => {
+                if applied_skips
+                    && journal
+                        .seen
+                        .get(payload.decision_id())
+                        .is_some_and(|seen| seen.completed_sequence == Some(event.sequence()))
+                {
+                    return Ok(());
                 }
-                PolicyPayload::ExecutionRecorded(payload) => {
-                    let data = execution_event_data(payload);
-                    let dispatch =
-                        seen_dispatches
-                            .get_mut(payload.decision_id())
-                            .ok_or_else(|| {
-                                fatal(
-                                    HostCode::PolicyDispatchIntentMissing,
-                                    ContractLocation::RecoverPolicyExecution,
-                                )
-                            })?;
-                    if dispatch.lifecycle != DispatchLifecycle::Admitted
-                        || dispatch.execution.is_some()
-                    {
-                        return Err(fatal(
-                            HostCode::PolicyExecutionLifecycleInvalid,
-                            ContractLocation::RecoverPolicyExecution,
-                        ));
-                    }
+                let dispatch = transition_dispatch(
+                    &mut journal.seen,
+                    payload,
+                    DispatchLifecycle::Admitted,
+                    DispatchLifecycle::Completed,
+                    event.sequence(),
+                )?;
+                if dispatch.execution.is_none()
+                    || payload.admission() != dispatch.admission.as_ref()
+                {
+                    return Err(fatal(
+                        HostCode::PolicyDispatchCompletionIncomplete,
+                        HostLocation::RecoverPolicyDispatches,
+                    ));
+                }
+                let execution = dispatch.execution.as_ref().ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyExecutionOutcomeMissing,
+                        HostLocation::RecoverPolicyDispatches,
+                    )
+                })?;
+                let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+                let referenced_outcome_keys = catalog
+                    .compiled()
+                    .referenced_outcome_keys(&dispatch.data.task_id);
+                dispatch.completed_run = if referenced_outcome_keys.is_empty() {
+                    None
+                } else {
+                    Some(completed_policy_run_identity(
+                        event,
+                        &dispatch.data,
+                        execution,
+                        referenced_outcome_keys,
+                    )?)
+                };
+            }
+            PolicyPayload::ExecutionRecorded(payload) => {
+                let data = execution_event_data(payload);
+                let dispatch = journal.seen.get_mut(payload.decision_id()).ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchIntentMissing,
+                        ContractLocation::RecoverPolicyExecution,
+                    )
+                })?;
+                let applied = applied_skips && dispatch.execution.as_ref() == Some(&data);
+                if !applied
+                    && (dispatch.lifecycle != DispatchLifecycle::Admitted
+                        || dispatch.execution.is_some())
+                {
+                    return Err(fatal(
+                        HostCode::PolicyExecutionLifecycleInvalid,
+                        ContractLocation::RecoverPolicyExecution,
+                    ));
+                }
+                if counts {
                     let admission = dispatch.admission.as_ref().ok_or_else(|| {
                         fatal(
                             HostCode::PolicyDispatchAdmissionMissing,
@@ -3705,24 +4000,34 @@ impl PolicyHost {
                         &data,
                         payload.budget_elapsed_ms(),
                     )?;
+                }
+                if !applied {
                     dispatch.execution = Some(data);
                 }
-                // The query reads the dispatch and execution types only; the value records of
-                // the decision memory and the fact-refresh transitions (register L7, L14, D1)
-                // are never replayed here.
-                PolicyPayload::PlanningSignalObserved(_)
-                | PolicyPayload::ControlStateRecorded(_)
-                | PolicyPayload::ActivityStateRecorded(_)
-                | PolicyPayload::FactRefreshTransition(_) => {
-                    return Err(fatal(
-                        SharedCode::PolicyRecoveryQueryMismatch,
-                        HostLocation::RecoverPolicyDispatches,
-                    ));
-                }
+            }
+            // The query reads the dispatch and execution types only; the value records of
+            // the decision memory and the fact-refresh transitions (register L7, L14, D1)
+            // are never replayed here.
+            PolicyPayload::PlanningSignalObserved(_)
+            | PolicyPayload::ControlStateRecorded(_)
+            | PolicyPayload::ActivityStateRecorded(_)
+            | PolicyPayload::FactRefreshTransition(_) => {
+                return Err(fatal(
+                    SharedCode::PolicyRecoveryQueryMismatch,
+                    HostLocation::RecoverPolicyDispatches,
+                ));
             }
         }
+        Ok(())
+    }
+
+    /// The catalog generation each open dispatch of `seen` pinned.
+    fn pinned_of(
+        &self,
+        seen: &BTreeMap<String, SeenDispatch>,
+    ) -> RuntimeHostResult<BTreeMap<String, CatalogGeneration>> {
         let mut pinned_dispatches = BTreeMap::new();
-        for (decision_id, dispatch) in &seen_dispatches {
+        for (decision_id, dispatch) in seen {
             if matches!(
                 dispatch.lifecycle,
                 DispatchLifecycle::Intent | DispatchLifecycle::Admitted
@@ -3735,11 +4040,7 @@ impl PolicyHost {
                 pinned_dispatches.insert(decision_id.clone(), catalog);
             }
         }
-        self.seen_dispatches = seen_dispatches;
-        self.dispatch_order = dispatch_order;
-        self.pinned_dispatches = pinned_dispatches;
-        self.control = control;
-        Ok(())
+        Ok(pinned_dispatches)
     }
 
     fn recover_planning_signals(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {

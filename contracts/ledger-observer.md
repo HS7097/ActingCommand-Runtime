@@ -676,6 +676,15 @@ CREATE TABLE ledger_index (
   - Workflow #422 LN-3 adds `monitor/<alias>` (register §1.182 LN3-4): the monitor registry's
     latest applied change of the alias (`runtime_state` `monitor_changed`), or the import for each
     alias it brings (`monitor_imported`). A change that was not applied is not tagged.
+  - Workflow #422 LN-4 (register §1.183 LN4-1) adds three rules:
+    - `monitor_import` names every import of the monitor registry, with or without instances, so
+      the start finds the import the registry compares its journal file with;
+    - `wake/<wake id>` also names the latest record of the obligation's session
+      (`agent.session_started`, `agent.session_resumed`, `agent.response_recorded`,
+      `agent.session_completed`, `agent.session_escalated`); a row that names a completed session,
+      or one escalated to a person, is an ended obligation;
+    - the `lifecycle` key `tagged_state_enabled` names the seeding's marker
+      (`runtime.lifecycle_observed` phase `tagged_state_enabled`).
   - `open`: the intents `policy.dispatch_intent`, `lease.transition_intent`,
     `task.terminal_intent`, `input.intent` and `application.intent`. A result (dispatch admitted
     or rejected, lease granted, transferred, renewed, released, expired or failed, task
@@ -749,6 +758,14 @@ CREATE TABLE ledger_index (
     with the same wake.
   - The monitor registry's records already carry an alias's complete state; the index tags them
     `monitor/<alias>` (§11.1).
+- **Settlement order, as built by LN-4** (register §1.183 LN4-2). The Workflow #372 K5 orders
+  are part of the pair's record: `failure_settled`, the place of the pair's latest settlement
+  that set or cleared its failure state (a success, or a failure no condition settled) among all
+  such settlements, and the retry round's `opened`, its place among the rounds opened. Both are
+  absent in LN-3's records. Loaded, they keep the order a continued id's failure state and a
+  group's latest round follow, and the counters go on after the largest one loaded. A renamed
+  or continued task therefore reads after a restart the failure state and the round it read
+  before.
 - Derived on load for the instance store: `latest_observed` = the latest record's observation
   time; tombstones = keys whose latest record is an invalidation (≤ key limit; after a tombstone
   rolls out, a resend of the same identity is still refused by `latest_observed` as
@@ -802,6 +819,41 @@ time L that D2 needs (D2 A-7) is the end of step 7.
 | enabled marker present | `ledger_tagged_state_loaded` | load as above; a missing key has no value |
 | history without the marker (first start of the build that brings AO-5 + AO-6) | `ledger_tagged_state_seeded` (info) | seed once (§11.6) |
 | an index row disagrees with its record | `ledger_tag_index_mismatch` (fatal) | refuse to start |
+
+- **As built by LN-4** (Workflow #422, register §1.183; LEAN-L model §3.2 step 5):
+  - The start reads the `lifecycle` row `tagged_state_enabled` first.
+  - Each index read is one writer command (`GlobalLedger::index_records`): the rows of one role
+    with a key prefix, a point read of each row's record by its sequence, and the checks of
+    step 3. A row whose event id, key or hash disagrees with its record is
+    `ledger_tag_index_mismatch` (fatal), relayed by the host.
+  - Loads, when the marker is present:
+    - **decision memory**: the `decision_memory/` and `activity_memory/` records, applied with
+      the value records' reducer. The dispatch journal is still rebuilt from the dispatch
+      records; their admissions and executions after the latest value record's sequence take
+      effect on the loaded state, the earlier ones are in the records already;
+    - **monitor registry**: the `monitor_import` record, then each `monitor/<alias>` change;
+      the revision is the largest the records carry, and the journal file is compared with the
+      import as before;
+    - **agent dispatcher**: the `wake/` rows give the live obligations. The Agent records are
+      read from the earliest live wake's own record on, and only the records of live wakes are
+      folded. With no live obligation, only the rows are read.
+  - A re-alignment of the dispatch journal after an append error (`refresh_dispatches`) no
+    longer reads the whole history. It rebuilds the decision memory from the latest value
+    records, then applies the dispatch records after the older of the journal's and the records'
+    positions.
+  - Without the marker, the start replays once, as today:
+    - the decision memory counts nothing as recorded, so the start's reconciliation writes one
+      `policy.control_state_recorded` and one `policy.activity_state_recorded` per key;
+    - the monitor registry records its import again when no `monitor_import` row names it (a
+      replay of the same import changes nothing), then one applied change of every alias whose
+      state moved since the import;
+    - each live wake without a `wake/` row gets its `agent.wake_obligation_recorded`;
+    - then the marker, whose report is `ledger_tagged_state_seeded` with `count`, the keys
+      seeded.
+  - The agent dispatcher keeps no ended session (§11.2): at a session's end its wake, trigger,
+    session and request records leave memory. A resent response of an ended session is answered
+    from the ledger's record of the request. A planning signal without its wake is looked for
+    only after the previous epoch's start record, against the wakes recorded after it.
 
 ### 11.6 Seeding once, exception reads
 

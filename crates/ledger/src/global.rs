@@ -29,6 +29,9 @@ mod write_failure;
 mod capture;
 mod flush;
 mod index;
+// Workflow #422 LN-4: the start's checked read of the index table (§11.5).
+mod index_read;
+pub use index_read::{LedgerIndexRecord, LedgerIndexRecords, LedgerIndexRole};
 // #411 A51 (R2): the work budget of one read on the writer thread.
 mod read_work;
 pub use capture::{
@@ -1206,6 +1209,13 @@ enum WriterCommand {
     LatestSequence {
         response: SyncSender<GlobalLedgerResult<u64>>,
     },
+    /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5): the checked records of the
+    /// index rows of `role` whose key starts with one of `prefixes`.
+    IndexRecords {
+        role: LedgerIndexRole,
+        prefixes: Vec<String>,
+        response: SyncSender<GlobalLedgerResult<LedgerIndexRecords>>,
+    },
     Subscribe {
         cursor: SubscriptionCursor,
         response: SyncSender<GlobalLedgerResult<SubscriptionRegistration>>,
@@ -1497,6 +1507,9 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
             let _ = response.send(Err(refused));
         }
         WriterCommand::LatestSequence { response } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::IndexRecords { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::Subscribe { response, .. } => {
@@ -2926,6 +2939,7 @@ fn command_operation(command: &WriterCommand) -> Location {
         }
         WriterCommand::Query { .. } => LedgerLocation::QueryEvents.location(),
         WriterCommand::QueryPage { .. } => LedgerLocation::QueryEventPage.location(),
+        WriterCommand::IndexRecords { .. } => LedgerLocation::LedgerIndexRows.location(),
         WriterCommand::ProjectViewPage { .. } => LedgerLocation::ProjectLedgerViewPage.location(),
         WriterCommand::ProjectSchedulingOutcomes { .. } => {
             LedgerLocation::ProjectSchedulingOutcomes.location()
@@ -2952,6 +2966,7 @@ const fn is_read_command(command: &WriterCommand) -> bool {
             | WriterCommand::FrameRetentionView { .. }
             | WriterCommand::Query { .. }
             | WriterCommand::QueryPage { .. }
+            | WriterCommand::IndexRecords { .. }
             | WriterCommand::ProjectViewPage { .. }
             | WriterCommand::ProjectSchedulingOutcomes { .. }
             | WriterCommand::LatestSequence { .. }
@@ -3036,6 +3051,9 @@ fn writer_commands<S: LedgerStore>(
             }
             WriterCommand::Query { .. } => LedgerWriterCommandKind::Query,
             WriterCommand::QueryPage { .. } => LedgerWriterCommandKind::QueryPage,
+            // Workflow #422 LN-4: the index read is a read; the set of command kinds that task
+            // timing records name stays closed.
+            WriterCommand::IndexRecords { .. } => LedgerWriterCommandKind::Query,
             WriterCommand::ProjectViewPage { .. } => LedgerWriterCommandKind::ProjectViewPage,
             WriterCommand::ProjectSchedulingOutcomes { .. } => {
                 LedgerWriterCommandKind::ProjectSchedulingOutcomes
@@ -3290,6 +3308,16 @@ fn writer_commands<S: LedgerStore>(
                     ))
                 };
                 read_events = result.as_ref().map_or(0, Vec::len);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::IndexRecords {
+                role,
+                prefixes,
+                response,
+            } => {
+                let result = store.index_records(role, &prefixes, &work);
+                read_events = result.as_ref().map_or(0, |read| read.records.len());
                 command_succeeded = result.is_ok();
                 command_observation.replied(response.send(result).is_ok());
             }

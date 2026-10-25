@@ -62,6 +62,8 @@ mod schedule_explanation;
 mod strategy;
 mod suspension_lift;
 mod suspension_report;
+// Workflow #422 LN-4: whether a start loads the tagged state or seeds it once.
+mod tagged_state;
 mod time;
 // Workflow #406 T12: the landing history of single-region presses (memory only).
 mod touch_history;

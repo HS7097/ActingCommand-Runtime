@@ -1365,6 +1365,47 @@ fn upsert_index_row(
     Ok(())
 }
 
+/// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 step 1): the index rows of `role`
+/// whose key starts with one of `prefixes`, each with the record hash of the ledger row its
+/// sequence names (none when no ledger row has that sequence).
+fn read_index_rows(
+    database: &RuntimeDatabase,
+    role: super::index_read::LedgerIndexRole,
+    prefixes: &[String],
+) -> GlobalLedgerResult<Vec<super::index_read::StoredIndexRow>> {
+    let operation = LedgerLocation::LedgerIndexRows.location();
+    let connection = database.connection(operation)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT i.sequence,i.key,i.event_id,i.value_sha256,e.record_sha256 FROM ledger_index i LEFT JOIN ledger_events e ON e.sequence=i.sequence WHERE i.role=?1 AND substr(i.key,1,length(?2))=?2 ORDER BY i.sequence,i.key",
+        )
+        .map_err(|error| sql_error(error, operation))?;
+    let mut rows = Vec::new();
+    for prefix in prefixes {
+        let selected = statement
+            .query_map(
+                params_from_iter([
+                    SqlValue::Text(role.column().to_owned()),
+                    SqlValue::Text(prefix.clone()),
+                ]),
+                |row| {
+                    Ok(super::index_read::StoredIndexRow {
+                        sequence: decode(row.get::<_, i64>(0)?),
+                        key: row.get::<_, String>(1)?,
+                        event_id: row.get::<_, String>(2)?,
+                        value_sha256: row.get::<_, String>(3)?,
+                        record_sha256: row.get::<_, Option<String>>(4)?,
+                    })
+                },
+            )
+            .map_err(|error| sql_error(error, operation))?;
+        for row in selected {
+            rows.push(row.map_err(|error| sql_error(error, operation))?);
+        }
+    }
+    Ok(rows)
+}
+
 fn column(row: &SqlRow, position: usize) -> GlobalLedgerResult<SqlValue> {
     row.get(position).cloned().ok_or_else(|| {
         failure(
@@ -1470,6 +1511,14 @@ fn append_detail(error: &mut GlobalLedgerError, suffix: &str) {
 impl DurableStorage for SqliteStorage {
     fn material_root(&self) -> &std::path::Path {
         self.database.root()
+    }
+
+    fn index_rows(
+        &self,
+        role: super::index_read::LedgerIndexRole,
+        prefixes: &[String],
+    ) -> Option<GlobalLedgerResult<Vec<super::index_read::StoredIndexRow>>> {
+        Some(read_index_rows(&self.database, role, prefixes))
     }
 
     fn resolve_artifact(

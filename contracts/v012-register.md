@@ -3291,6 +3291,30 @@ parallel slices.
 | LN3-4 | `ledger_index` `state` key `monitor/<alias>` (L11) | new key rule | LN-3 | LN-3 | the monitor registry's records already carry an alias's complete state (`runtime_state` `monitor_changed`: status, revision, configuration version; `monitor_imported`: every instance it brings). The key names the alias's latest applied change, or the import for each alias it brings; a change that was not applied is not tagged. Tagged records commit on arrival (§11.4). An import of no instance tags nothing |
 | LN3-5 | `PolicyControlState::value_records`, `apply_value_record`; `PolicyHost::changed_value_records` | Runtime-internal interface (memory only) | LN-3 | — | the reducer is test-only until LN-4 wires the start load. The records carry no settlement order, so Workflow #372 K5's `failure_settled` (whose failure state a continued id reads) and a retry round's `opened` cannot be rebuilt from them (LN-4) |
 
+### 1.183 Slice LN-4 (0.12.x): the decision memory, the agent dispatcher and the monitor registry load from their tagged records; seeding once plus the marker (#422 LEAN-L; frozen model v1.0 `rd-1024/lean-ledger/model.md` §1.2 H-c, H-e, H-i, §3.2 step 5, §3.6, §5.1 row LN-4; Alice 10-24 14:0x, #422)
+
+LN-4 is the first loader of L7, L8 and L14 and the first writer of L6 (`tagged_state_enabled`).
+[ledger-observer.md §11.1, §11.3 and §11.5](ledger-observer.md#115-start-loading-ao-6), "As built
+by LN-4", are the contract. No code, location, vocabulary token or configuration key is added;
+the load and the seeding use the registered `ledger_tag_index_mismatch` and
+`ledger_tagged_state_seeded` (L6's report, value `count`). Gates: `gate_422_ln4`,
+`agent_sessions::ln4_d_…`, one row of host.toml. The number 1.183 is provisional for the
+parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN4-1 | `ledger_index` `state` key `monitor_import`; `wake/<wake id>` also for the five session record types; `lifecycle` key `tagged_state_enabled` (L11) | new key rules | LN-4 | LN-4 | `monitor_import` settles LN3-4's import of no instance; a `wake/` row naming a completed or escalated session is an ended obligation; the marker row is one read at start |
+| LN4-2 | L7 `failure_settled?` (u64 ≥ 1); L7 `retry_round.opened?` (u64 ≥ 1) | new optional members of a registered type | LN-4 | LN-4 | settles LN3-5 (register L7 as written carries no settlement order): the Workflow #372 K5 order of the pair's latest settlement that set or cleared its failure state, and of the round's opening; absent in LN-3's records, which the seeding replaces; the smallest addition, since neither order can be rebuilt from L7's other members (a success leaves no failure record, and two rounds of one group may open in one millisecond) |
+| LN4-3 | L6 `runtime.lifecycle_observed` phase `tagged_state_enabled` | first writer of a registered phase | LN-4 | LN-4 | written once by a start without the marker, after the value records it seeds; its report `ledger_tagged_state_seeded` `{count}` is the keys seeded |
+| LN4-4 | `GlobalLedger::index_records(role, prefixes)` | Runtime-internal interface | LN-4 | — | one writer command: the rows of `state`, `open` or `lifecycle` with a key prefix, a point read of each row's record, the §11.5 step 3 checks; a store that keeps no index answers `ledger_selection_query_unsupported`; reads count as `Query` in the writer's peak |
+| LN4-5 | the agent dispatcher prunes an ended session | Runtime-internal behaviour | LN-4 | — | §11.2 "sessions are not kept": at a session's end its wake, trigger, session and request records leave memory; a resent response of an ended session is answered from the ledger; the wake reconciliation reads only the previous epoch's planning signals and wakes |
+| LN4-6 | `refresh_dispatches` | Runtime-internal behaviour | LN-4 | — | rebuilds the decision memory from the latest value records and reads only the dispatch records after the older of the journal's and the records' positions; before the seeding wrote the records it replays as before |
+
+Not in LN-4 yet (the work order's journal items; resume note of the PR): the dispatch journal at
+start is still rebuilt from the dispatch records, so `open` rows and an indexed read per pair do
+not replace it, and the online journal is not pruned to the open dispatches and the latest per
+pair.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
