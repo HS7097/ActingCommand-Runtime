@@ -681,8 +681,8 @@ CREATE TABLE ledger_index (
       the start finds the import the registry compares its journal file with;
     - `wake/<wake id>` also names the latest record of the obligation's session
       (`agent.session_started`, `agent.session_resumed`, `agent.response_recorded`,
-      `agent.session_completed`, `agent.session_escalated`); a row that names a completed session,
-      or one escalated to a person, is an ended obligation;
+      `agent.session_completed`, `agent.session_escalated`); a row that names a completed session
+      is an ended obligation;
     - the `lifecycle` key `tagged_state_enabled` names the seeding's marker
       (`runtime.lifecycle_observed` phase `tagged_state_enabled`).
   - `open`: the intents `policy.dispatch_intent`, `lease.transition_intent`,
@@ -834,9 +834,11 @@ time L that D2 needs (D2 A-7) is the end of step 7.
     - **monitor registry**: the `monitor_import` record, then each `monitor/<alias>` change;
       the revision is the largest the records carry, and the journal file is compared with the
       import as before;
-    - **agent dispatcher**: the `wake/` rows give the live obligations. The Agent records are
-      read from the earliest live wake's own record on, and only the records of live wakes are
-      folded. With no live obligation, only the rows are read.
+    - **agent dispatcher**: the `wake/` rows give the obligations. A completed one is not
+      loaded. A session escalated to a person is loaded with its status and its wake. For the
+      live ones the Agent records are read from the earliest live wake's own record on, and only
+      the records of live wakes are folded. With no live obligation, only the rows and the
+      escalated wakes' records are read.
   - A re-alignment of the dispatch journal after an append error (`refresh_dispatches`) no
     longer reads the whole history. It rebuilds the decision memory from the latest value
     records, then applies the dispatch records after the older of the journal's and the records'
@@ -850,9 +852,10 @@ time L that D2 needs (D2 A-7) is the end of step 7.
     - each live wake without a `wake/` row gets its `agent.wake_obligation_recorded`;
     - then the marker, whose report is `ledger_tagged_state_seeded` with `count`, the keys
       seeded.
-  - The agent dispatcher keeps no ended session (§11.2): at a session's end its wake, trigger,
-    session and request records leave memory. A resent response of an ended session is answered
-    from the ledger's record of the request. A planning signal without its wake is looked for
+  - The agent dispatcher keeps no ended session (§11.2). At a session's end its request records
+    leave memory. A completed session's wake, trigger and session leave too. A session escalated
+    to a person keeps its status and its wake for the person who reads them. A resent response
+    of an ended session is answered from the ledger's record of the request. A planning signal without its wake is looked for
     only after the previous epoch's start record, against the wakes recorded after it.
 
 ### 11.6 Seeding once, exception reads

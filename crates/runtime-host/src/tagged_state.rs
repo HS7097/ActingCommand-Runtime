@@ -17,9 +17,10 @@ const TAGGED_STATE_ENABLED: &str = "tagged_state_enabled";
 /// How this start restores the tagged state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaggedStart {
-    /// The marker is present: the records the index names are the state; no history is
-    /// replayed for it.
-    Load,
+    /// The marker is present, at `marker`: the records the index names are the state; no
+    /// history is replayed for it. Every decision-memory change at or before the marker is in
+    /// its value records (the seeding wrote them before the marker).
+    Load { marker: u64 },
     /// No marker (a new state root, or the first start of the build that brings the load): the
     /// recoveries replay once, one value record per key is written, then the marker.
     Seed,
@@ -28,10 +29,11 @@ pub(crate) enum TaggedStart {
 impl TaggedStart {
     pub(crate) fn read(ledger: &GlobalLedger) -> RuntimeHostResult<Self> {
         let marker = index_records(ledger, LedgerIndexRole::Lifecycle, &[TAGGED_STATE_ENABLED])?;
-        Ok(if marker.records.is_empty() {
-            Self::Seed
-        } else {
-            Self::Load
+        Ok(match marker.records.first() {
+            Some(record) => Self::Load {
+                marker: record.event.sequence(),
+            },
+            None => Self::Seed,
         })
     }
 }

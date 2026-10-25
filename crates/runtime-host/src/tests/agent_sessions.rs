@@ -1125,9 +1125,10 @@ fn startup_recovery_reads_bounded_pages_and_no_whole_ledger_query() {
 
 // Workflow #422 LN-4, test row 4 (LEAN-L model §1.2 H-i; `contracts/ledger-observer.md` §11.2:
 // sessions are not kept): the agent dispatcher's maps are pruned at session end. While two wakes
-// have live sessions, one of them with a retried response, the maps hold both; once one session
-// completes and the other is escalated to a person, every map is empty, and the state still equals
-// the whole-ledger fold, which prunes the same way.
+// have live sessions, one of them with a retried response, the maps hold both. Once one session
+// completes and the other is escalated to a person, the completed one has left every map, the
+// escalated one keeps only its wake and its status for the person, no request record is left,
+// and the state still equals the whole-ledger fold, which prunes the same way.
 #[test]
 fn ln4_d_the_agent_maps_are_pruned_at_session_end() {
     let root = TempDir::new().expect("tempdir");
@@ -1203,7 +1204,11 @@ fn ln4_d_the_agent_maps_are_pruned_at_session_end() {
         .agent_dispatcher_state_for_test()
         .expect("the agent dispatcher");
     assert!(matches, "the pruned state equals the whole-ledger fold");
-    assert_eq!(maps, [0; 7], "every map is pruned at session end");
+    assert_eq!(
+        maps,
+        [1, 1, 1, 1, 0, 0, 0],
+        "only the escalated session's wake and status are left"
+    );
     drop(client);
     host.close().expect("close runtime");
 }

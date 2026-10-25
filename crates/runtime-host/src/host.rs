@@ -1940,7 +1940,7 @@ impl RuntimeHost {
                         .values()
                         .map(|instance| instance.instance_alias.clone());
                     match tagged_start {
-                        TaggedStart::Load => MonitorRegistry::load(
+                        TaggedStart::Load { .. } => MonitorRegistry::load(
                             &config.state_root,
                             aliases,
                             owner_epoch,
@@ -2037,7 +2037,7 @@ impl RuntimeHost {
                     timed(
                         &mut startup_recovery.agent_dispatcher_ms,
                         || match tagged_start {
-                            TaggedStart::Load => AgentDispatcherState::load(
+                            TaggedStart::Load { .. } => AgentDispatcherState::load(
                                 &shared.ledger,
                                 crate::recovery_read::RECOVERY_PAGE_EVENTS,
                             ),

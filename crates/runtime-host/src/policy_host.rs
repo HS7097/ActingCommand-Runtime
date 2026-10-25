@@ -1256,9 +1256,10 @@ impl PolicyHost {
                 host.recover_dispatches(ledger, PolicyControlState::default(), 0)?;
                 host.recover_planning_signals(ledger)?;
             }
-            TaggedStart::Load => {
+            TaggedStart::Load { marker } => {
                 let loaded = load_decision_memory(ledger)?;
-                host.recover_dispatches(ledger, loaded.control, loaded.through)?;
+                let through = loaded.through.max(marker);
+                host.recover_dispatches(ledger, loaded.control, through)?;
                 host.recover_planning_signals(ledger)?;
                 let current = host.current_value_records()?;
                 host.recorded_values = loaded
@@ -1267,7 +1268,7 @@ impl PolicyHost {
                     .filter(|(key, _)| current.contains_key(key))
                     .collect();
                 host.values_loaded = true;
-                host.values_through = loaded.through;
+                host.values_through = through;
             }
         }
         Ok(host)
