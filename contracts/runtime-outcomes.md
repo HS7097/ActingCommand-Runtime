@@ -260,7 +260,7 @@ the slice that removes it.
 - `catalog()` returns the embedded merged file; `catalog_json()` parses it once and shares the
   parsed document with every reader.
 
-## Failure scope (Workflow #419, ISO-M; Runtime 0.12.13)
+## Failure scope (Workflow #419, ISO-M; Runtime 0.12.12)
 
 Alice (#419): one emulator's fault must not stop the whole ActingCommand. Every failure the
 Runtime host meets has exactly one **scope**, and only a `Global` failure may stop the Runtime.
