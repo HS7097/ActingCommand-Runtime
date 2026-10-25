@@ -172,7 +172,15 @@ impl HostShared {
                 )
             })
             .collect::<Vec<_>>();
-        if instances.is_empty() {
+        // Only the instances the configuration names have an idle action; a host started without
+        // actingd's manifest names none and reads nothing more.
+        let mut configured = Vec::with_capacity(instances.len());
+        for (instance_id, alias, emulator_on) in instances {
+            if let Some(config) = self.idle_settings(instance_id)? {
+                configured.push((instance_id, alias, emulator_on, config));
+            }
+        }
+        if configured.is_empty() {
             return Ok(());
         }
         let explanation = {
@@ -191,13 +199,10 @@ impl HostShared {
         };
         let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
         let mut planner = lock(&self.idle, IdleLocation::Check)?;
-        for (instance_id, alias, emulator_on) in instances {
+        for (instance_id, alias, emulator_on, config) in configured {
             if self.fatal.is_shutdown_requested() {
                 break;
             }
-            let Some(config) = self.idle_settings(instance_id)? else {
-                continue;
-            };
             let view = self.idle_view(instance_id, emulator_on)?;
             let plan = idle_plan(&explanation, &alias);
             let Some(step) = planner.check(&alias, &config, view, plan, now_unix_ms) else {
