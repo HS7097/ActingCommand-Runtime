@@ -4139,12 +4139,17 @@ impl RuntimeHost {
         &self,
         query: EventQuery,
     ) -> RuntimeHostResult<Vec<PersistedEvent>> {
-        self.shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
-            .ledger
-            .query(query)
-            .map_err(|_| {
-                ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
-            })
+        // LN-5 (#422, LEAN-L §3.3): the selection is read from the store page by page at the
+        // head, as every other whole-history read of the host; one command per page.
+        crate::recovery_read::read_through_head(
+            &self
+                .shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
+                .ledger,
+            &query,
+        )
+        .map_err(|_| {
+            ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
+        })
     }
 
     /// Workflow #411 B15 R4, test only: the remedy table in effect.
@@ -5788,7 +5793,10 @@ fn ledger_failure_plan(
     // (`ledger_observer.read_budget_ms`, `close_timeout_ms`); both on the plan's clock.
     plan = plan
         .with_read_budget(Duration::from_millis(section.read_budget_ms))
-        .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
+        .with_close_timeout(Duration::from_millis(section.close_timeout_ms))
+        // LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; a value the ledger
+        // does not take is refused when it opens (`invalid_ledger_config`).
+        .with_history_page_rows(usize::try_from(section.history_page_rows).unwrap_or(usize::MAX));
     #[cfg(test)]
     if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
         plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));

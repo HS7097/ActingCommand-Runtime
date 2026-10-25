@@ -141,7 +141,7 @@ impl EventIndexes {
                     event.event_type(),
                     event.severity(),
                     event.origin().source(),
-                    self.lab_related(event, snapshot),
+                    self.lab_related(&LabKeys::of(event.links()), snapshot),
                 );
                 row
             })
