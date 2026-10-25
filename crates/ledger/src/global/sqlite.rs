@@ -2256,8 +2256,8 @@ impl SqliteStorage {
 
     /// The rows of one view page: the committed rows the query and the view select after
     /// `range.0` through `range.1`, in ledger order, at most `limit`, each read and authenticated
-    /// on its own, `read.1` rows per statement. Every row read counts on `read.0`; when its budget
-    /// runs out, the selection ends after that row and names it (#411 A51).
+    /// on its own, at most `read.1` rows per statement. Every row read counts on `read.0`; when
+    /// its budget runs out, the selection ends after that row and names it (#411 A51).
     fn select_view_rows(
         &self,
         connection: &Connection,
@@ -2272,14 +2272,18 @@ impl SqliteStorage {
         let through = snapshot.min(query.to_sequence.unwrap_or(u64::MAX));
         let mut selected = Vec::new();
         while cursor < through {
+            // #422 LN-TUNE: a statement asks for no more rows than the page can still select,
+            // so no statement holds a row past the one the limit is reached at; the next page
+            // starts after that row, and each row is read and authenticated once.
+            let rows = page_rows.min(limit.saturating_sub(selected.len()));
             let page = read_history_rows(
                 &self.database,
                 connection,
                 (selection, view),
                 (cursor, through),
-                page_rows,
+                rows,
             )?;
-            let full = page.len() >= page_rows;
+            let full = page.len() >= rows;
             for event in page {
                 cursor = event.sequence();
                 let going_on = work.visit();

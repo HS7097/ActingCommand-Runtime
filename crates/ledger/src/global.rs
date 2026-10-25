@@ -101,6 +101,9 @@ use std::time::{Duration, Instant};
 use storage::SegmentStore;
 use store::LedgerStore;
 
+/// #422 LN-TUNE: the default of `ledger_observer.writer_reply_timeout_ms`, for a ledger opened
+/// without a failure plan that names one (an offline reader, a test). The Runtime's writer takes
+/// the configured value through its plan.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// #411 A51 (R4): how often a close with a bound looks at the writer and at the clock.
 const CLOSE_POLL: Duration = Duration::from_millis(10);
@@ -893,6 +896,9 @@ pub struct GlobalLedgerConfig {
     /// LN-5 (#422, LEAN-L §3.3, §3.7): the rows of one page of a history read
     /// (`ledger_observer.history_page_rows`).
     history_page_rows: usize,
+    /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
+    #[cfg(test)]
+    history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -935,6 +941,8 @@ impl GlobalLedgerConfig {
             close_timeout: None,
             clock: write_failure::process_clock(),
             history_page_rows: history::DEFAULT_HISTORY_PAGE_ROWS,
+            #[cfg(test)]
+            history_rows_read: None,
         }
     }
 
@@ -986,9 +994,21 @@ impl GlobalLedgerConfig {
         self
     }
 
+    /// #422 LN-TUNE, tests: `counter` counts the rows the store reads and authenticates for
+    /// the writer's history reads.
+    #[cfg(test)]
+    pub(crate) fn with_history_rows_read(
+        mut self,
+        counter: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
+        self.history_rows_read = Some(counter);
+        self
+    }
+
     /// Workflow #383 AO-1: how long a caller waits for one writer reply
-    /// ([`GlobalLedger::REPLY_TIMEOUT`] unless set); a wait that runs out is the error
-    /// `writer_response_timeout`.
+    /// ([`GlobalLedger::REPLY_TIMEOUT`] unless set; the Runtime sets
+    /// `ledger_observer.writer_reply_timeout_ms` through its failure plan, #422 LN-TUNE); a wait
+    /// that runs out is the error `writer_response_timeout`.
     pub fn with_reply_timeout(mut self, timeout: Duration) -> Self {
         self.reply_timeout = timeout;
         self
@@ -1730,6 +1750,9 @@ pub struct LedgerSubscription {
     last_delivered_sequence: u64,
     replay_through_sequence: u64,
     replay_page_events: usize,
+    /// #422 LN-TUNE: how long a replay page waits for the writer's reply, the ledger's
+    /// (`ledger_observer.writer_reply_timeout_ms`).
+    reply_timeout: Duration,
     live: Receiver<PersistedEvent>,
     terminal: Receiver<GlobalLedgerError>,
     terminal_error: Option<GlobalLedgerError>,
@@ -1795,7 +1818,7 @@ impl LedgerSubscription {
         let page = match receive_response(
             receiver,
             LedgerLocation::ReplaySubscription.location(),
-            COMMAND_TIMEOUT,
+            self.reply_timeout,
         ) {
             Ok(Ok(page)) => page,
             Ok(Err(error)) | Err(error) => {
@@ -1905,8 +1928,16 @@ impl fmt::Debug for GlobalLedger {
 }
 
 impl GlobalLedger {
-    /// Wait bound of one writer reply; boundaries confirming deferred appends reuse it.
+    /// The default wait bound of one writer reply (`ledger_observer.writer_reply_timeout_ms`,
+    /// 10 s); a writer opened with a plan that names one waits [`Self::reply_timeout`].
     pub const REPLY_TIMEOUT: Duration = COMMAND_TIMEOUT;
+
+    /// #422 LN-TUNE: the wait bound of one writer reply this ledger uses
+    /// (`ledger_observer.writer_reply_timeout_ms` for the Runtime's writer); boundaries
+    /// confirming deferred appends reuse it.
+    pub fn reply_timeout(&self) -> Duration {
+        self.reply_timeout
+    }
 
     /// Does not enqueue a writer command or wait for an I/O lock.
     pub fn sample_commit_statistics(&self) -> GlobalLedgerResult<GlobalLedgerCommitObservation> {
@@ -2630,6 +2661,7 @@ impl GlobalLedger {
             last_delivered_sequence: cursor.after_sequence,
             replay_through_sequence: registration.replay_through_sequence,
             replay_page_events: options.replay_page_events,
+            reply_timeout: self.reply_timeout,
             live: registration.live,
             terminal: registration.terminal,
             terminal_error: None,
@@ -2740,15 +2772,15 @@ impl GlobalLedger {
         };
         // Deferred appends are confirmed before the writer is asked to stop: a failed reply
         // fails the close with that error and a still-pending reply is fatal, never dropped.
-        let deferred_result = self.confirm_deferred(COMMAND_TIMEOUT).and_then(|summary| {
-            match summary.failed.into_iter().next() {
+        let deferred_result = self
+            .confirm_deferred(self.reply_timeout)
+            .and_then(|summary| match summary.failed.into_iter().next() {
                 Some(first) => Err(first),
                 None if summary.pending > 0 => {
                     Err(self.deferred_unconfirmed(LedgerLocation::ShutdownWriter.location()))
                 }
                 None => Ok(()),
-            }
-        });
+            });
         // Workflow #383 AO-2 (§8.2): the writer drains the capture queue, the dump segment
         // first, before it closes the ledger; the drain takes as long as the queue holds, so the
         // reply is awaited without the reply limit (a stalled attempt is the probe's to stop).

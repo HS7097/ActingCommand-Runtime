@@ -14,7 +14,9 @@ use actingcommand_contract::{
     EventPayload, EventQuery, EventType, InstanceId, PolicyPayload, PolicyPlanningSignalKind,
     ProjectedEvent, ProjectionProfile, RequestId, RuntimeErrorCode, TerminalEvent,
 };
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerResult, LedgerIndexRole, PersistedEvent};
+use actingcommand_ledger::{
+    GlobalLedger, GlobalLedgerError, GlobalLedgerResult, LedgerIndexRole, PersistedEvent,
+};
 use std::collections::BTreeMap;
 
 /// Workflow #422 LN-4: the `state` keys of the wake obligations (`wake/<wake id>`). The row names
@@ -151,7 +153,7 @@ impl AgentDispatcherState {
         page_events: usize,
     ) -> RuntimeHostResult<Self> {
         let (signals, agent_events) = read_recovery_events(ledger, page_events)
-            .map_err(|_| ledger_error(HostLocation::RecoverAgentDispatcher))?;
+            .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
         Self::fold(&signals, &agent_events, instance_ids_by_alias)
     }
 
@@ -226,7 +228,7 @@ impl AgentDispatcherState {
             rows.through_sequence,
             page_events,
         )
-        .map_err(|_| ledger_error(HostLocation::RecoverAgentDispatcher))?;
+        .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
         for event in &events {
             if wake_of(event).is_some_and(|wake_id| live.contains_key(&wake_id)) {
                 state.apply_event(event, None)?;
@@ -254,16 +256,32 @@ impl AgentDispatcherState {
         ]
     }
 
-    /// The fold before Workflow #381 R4a, over one whole-ledger read; the reference the paged
-    /// recovery is checked against.
+    /// The fold before Workflow #381 R4a, once over every event of the ledger through its head;
+    /// the reference the paged recovery is checked against.
+    ///
+    /// Workflow #422 LN-4 follow-up: the events are read in pages pinned to the head, as the
+    /// startup reads page (#411 A65 R1, [`crate::recovery_read::LedgerPages`]): a page the
+    /// writer's read budget stops is read again smaller, so the reference no longer fails with
+    /// `ledger_read_budget_exceeded` on a slow runner, as one unpaged read of the whole ledger
+    /// under the real-clock `ledger_observer.read_budget_ms` did. The fold is unchanged.
     #[cfg(test)]
     pub(crate) fn recover_whole_ledger_for_test(
         ledger: &GlobalLedger,
         instance_ids_by_alias: &BTreeMap<String, InstanceId>,
     ) -> RuntimeHostResult<Self> {
         let events = ledger
-            .query(EventQuery::default())
-            .map_err(|_| ledger_error(crate::codes::HostLocation::RecoverAgentDispatcher))?;
+            .latest_sequence()
+            .and_then(|through| {
+                crate::recovery_read::LedgerPages::new(
+                    ledger,
+                    EventQuery::default(),
+                    0,
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+                .read_all()
+            })
+            .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
         Self::fold(&events, &events, instance_ids_by_alias)
     }
 
@@ -915,7 +933,7 @@ fn wake_record(
             correlation_id: Some(correlation_id),
             ..EventQuery::default()
         })
-        .map_err(|_| ledger_error(HostLocation::RecoverAgentDispatcher))?;
+        .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
     match (requested.pop(), requested.is_empty()) {
         (Some(requested), true) => Ok(requested),
         _ => Err(fatal(
@@ -958,7 +976,7 @@ fn ended_response_replay(
             ],
             ..EventQuery::default()
         })
-        .map_err(|_| ledger_error(ContractLocation::RecordAgentResponse))?;
+        .map_err(|error| ledger_error(&error, ContractLocation::RecordAgentResponse))?;
     for event in &recorded {
         let EventPayload::Agent(
             AgentPayload::ResponseRecorded(payload)
@@ -1004,10 +1022,13 @@ fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostEr
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
-fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
+/// `agent_ledger_failure` (fatal) of `operation`, with the ledger's own failure `error` (its code,
+/// operation and detail) as the native detail (Fail Loud; Workflow #422 LN-4 follow-up).
+fn ledger_error(error: &GlobalLedgerError, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::AgentLedgerFailure,
         operation,
         RuntimeErrorCode::LedgerFailure,
     )
+    .with_native_detail(format!("{error}; detail={:?}", error.detail()))
 }

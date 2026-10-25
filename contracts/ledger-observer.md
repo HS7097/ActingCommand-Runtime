@@ -1070,6 +1070,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `open_timeout_ms` | 600 000 | ms | the deadline of the start's ledger open (was a fixed 120 s); `10000..=600000` (P0-LO) | P0-LO, 0.12.11 |
 | `open_warn_ratio_milli` | 500 | integer | an open whose measured time exceeds `open_timeout_ms` × it / 1000 writes `ledger_open_slow`; `100..=1000` (P0-LO) | P0-LO, 0.12.11 |
 | `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.12 |
+| `writer_reply_timeout_ms` | 10 000 | ms | how long a caller waits for one reply of the ledger writer (was a fixed 10 s); one that runs out is `writer_response_timeout`; `1000..=600000`, above `read_budget_ms` (#422 LN-TUNE) | LN-TUNE, 0.12.13 |
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
@@ -1129,6 +1130,14 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   recovery context by the run's link, and stops within `read_budget_ms` with an incomplete page;
   an artifact's record is one authenticated point read and its eviction proof comes from the
   writer's proof set. No key is added.
+- #422 LN-TUNE (the release after v0.12.12, `actingd-config` revision 12):
+  `writer_reply_timeout_ms` is the wait of every caller of the writer, its replay pages and the
+  confirmations of deferred appends included; it was the ledger's fixed 10 s. It is read when the
+  ledger opens (`false`); the section's check refuses a `read_budget_ms` not below it, as A51's
+  check did against the fixed 10 s. A paged history read with a limit asks the store for no more
+  rows than it can still return (at most `history_page_rows`), so each row is read and
+  authenticated once: the monitor registry's replay reads 128 events a page, and each page read
+  256 rows before.
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
   [runtime-fact-store.md](runtime-fact-store.md));
