@@ -1275,8 +1275,9 @@ impl PolicyHost {
     }
 
     /// Workflow #422 LN-4 (§11.6): the seeding wrote one record of every key the decision memory
-    /// holds; a re-alignment rebuilds the decision memory from the records from now on.
-    pub(crate) fn mark_values_seeded(&mut self) -> RuntimeHostResult<()> {
+    /// holds, so every change through the ledger position `through` is in the records; a
+    /// re-alignment rebuilds the decision memory from them from now on.
+    pub(crate) fn mark_values_seeded(&mut self, through: u64) -> RuntimeHostResult<()> {
         if !self.changed_value_records()?.is_empty() {
             return Err(fatal(
                 HostCode::PolicyRecoveryFailed,
@@ -1284,6 +1285,7 @@ impl PolicyHost {
             ));
         }
         self.values_loaded = true;
+        self.values_through = self.values_through.max(through);
         Ok(())
     }
 

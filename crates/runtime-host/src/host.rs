@@ -5658,7 +5658,11 @@ fn seed_tagged_state(
     agent_dispatcher: &AgentDispatcherState,
 ) -> RuntimeHostResult<()> {
     shared.record_policy_values(policy)?;
-    policy.mark_values_seeded()?;
+    let through = shared
+        .ledger
+        .latest_sequence()
+        .map_err(|_| ledger_error(HostLocation::RecoverPolicyControl))?;
+    policy.mark_values_seeded(through)?;
     let mut seeded = policy.recorded_value_count();
     seeded += monitor_registry.seed(&shared.ledger, &shared.events)?;
     let named = crate::tagged_state::index_records(
