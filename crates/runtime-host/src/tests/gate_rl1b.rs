@@ -614,7 +614,9 @@ fn rl1b_a2_a_placed_pack_is_scheduled_without_a_restart() {
     );
     assert_eq!(bench.active(), two, "the last good rules stay active");
 
-    let fixed = schedule_a(&[(RULE_1, PACKAGE_1, 110), (RULE_2, PACKAGE_2, 90)]);
+    // A changed priority of another length: the file's size changes with its content, whatever
+    // the file system's time resolution.
+    let fixed = schedule_a(&[(RULE_1, PACKAGE_1, 99), (RULE_2, PACKAGE_2, 90)]);
     bench.place(GAME_A, SERVER_A, &[PACKAGE_1, PACKAGE_2], Some(&fixed));
     let after = bench.cycle(POLICY_NOW_UNIX_MS, 4 * INTERVAL_MS);
     assert!(bench.active().catalog_version() > two.catalog_version());
@@ -790,12 +792,7 @@ fn rl1b_a6_a_broken_file_keeps_that_games_last_good_rules_and_spares_the_others(
     );
     assert!(decided(&broken, RULE_B, INSTANCE_B));
     // Game B changes: the workbench composes again, game A still from its last good file.
-    bench.place(
-        GAME_B,
-        SERVER_B,
-        &[PACKAGE_B],
-        Some(&schedule_b(120, false)),
-    );
+    bench.place(GAME_B, SERVER_B, &[PACKAGE_B], Some(&schedule_b(99, false)));
     let changed = bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS);
     assert!(
         decided(&changed, RULE_1, INSTANCE_A),
@@ -900,7 +897,7 @@ fn rl1b_a9_a_dispatch_admitted_under_one_generation_settles_after_the_next() {
         GAME_A,
         SERVER_A,
         &[PACKAGE_1],
-        Some(&schedule_a(&[(RULE_1, PACKAGE_1, 130)])),
+        Some(&schedule_a(&[(RULE_1, PACKAGE_1, 99)])),
     );
     bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS);
     assert!(bench.active().catalog_version() > generation_n.catalog_version());
