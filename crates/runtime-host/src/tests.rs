@@ -405,6 +405,8 @@ mod gate_e4;
 // not-run explanation in the policy host's memory and its read.
 mod gate_mcp19a;
 mod gate_p0;
+// ROUT-L RL-1b (frozen model v1.0 §6.1 row RL-1b, §7.1 A2-A6, A8, A9): the scheduler workbench.
+mod gate_rl1b;
 mod home_entry;
 mod input;
 mod input_failure;

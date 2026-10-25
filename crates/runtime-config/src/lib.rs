@@ -92,7 +92,11 @@ pub use scheduling::{
     QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
     SchedulingConfig, SchedulingFile,
 };
-pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
+pub use standard_packs::{
+    CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,
+    CHECK_INTERVAL_MS as STANDARD_PACKS_CHECK_INTERVAL_MS, ROOT as STANDARD_PACKS_ROOT,
+    StandardPackWorkbenchConfig, StandardPacksDefaultsFile, StandardPacksFile,
+};
 pub use startup_discovery::{StartupDiscoveryConfig, StartupDiscoveryFile};
 pub use table::{
     DefaultSource, FilePath, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, NotSettable, Settable,

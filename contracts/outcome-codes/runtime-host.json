@@ -13343,6 +13343,27 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_pool_reading_unused": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "ROUT-L RL-1b: the scheduler workbench composes the rules, and policy.resources.pools gives a reading for a pool that no composed game declares. The reading is left out of every evaluation, so the other instances are scheduled as before; recorded once per pool.",
+      "common_causes": "A game's schedule.json that declared the pool was removed or changed, or its instances are no longer configured, while the configuration still gives the pool's reading.",
+      "handling": "Remove the reading from policy.resources.pools, or restore the pool in the game's schedule.json."
+    },
     "policy_reason_chain_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -20593,6 +20614,10 @@
         "count": "required",
         "added_package_ids": "optional",
         "removed_package_ids": "optional",
+        "schedule_sha256": "optional",
+        "rules": "optional",
+        "held": "optional",
+        "unclassified": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -20602,7 +20627,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack game root's registry (package id to package directory, from bundle.json) was read at startup, or a run's preparation read a registry that differs from the one read before (Workflow #373 NAV-6): count is its number of packages; the added and removed package ids are listed, at most 64 each with their totals.",
+      "description": "A standard-pack game root's registry (package id to package directory, from bundle.json) was read at startup, or a run's preparation read a registry that differs from the one read before (Workflow #373 NAV-6): count is its number of packages; the added and removed package ids are listed, at most 64 each with their totals. ROUT-L RL-1b: when the scheduler workbench composed a changed schedule.json of a game in use, the record also carries schedule_sha256 and the game's rules, held and unclassified package counts.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
