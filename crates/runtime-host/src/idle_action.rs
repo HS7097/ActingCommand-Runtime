@@ -17,6 +17,10 @@
 //!   once: the instance is `Acting` until the host reports the end, then `Idle`, or `Failed` when
 //!   the action failed (the instance is left as it is; only work on it again ends the wait, so
 //!   the next due task goes through the normal path).
+//! - **An action that cannot work** (Fail Loud): an instance that could not be brought back after
+//!   its action in effect (no startup package, or for `stop_emulator` no configured emulator
+//!   start) never acts, and the planner says so once per action in effect
+//!   ([`IdleStep::Unsupported`], naming what is missing), not silently at every check.
 //! - **The wake** of an idle instance comes at its next due time minus the action's wake lead,
 //!   the earlier of the one planned at the action and the one every later plan gives, or at once
 //!   when a plan shows a due task, or when the action in effect is no longer the one taken (the
@@ -53,11 +57,40 @@ impl IdleView {
         self.leased || self.queued || self.manual
     }
 
-    const fn wakeable(&self, action: IdleAction) -> bool {
-        match action {
-            IdleAction::None => false,
+    /// What the instance lacks to be brought back after `action`; none when it can be (and for
+    /// `none`, which never acts).
+    const fn missing(&self, action: IdleAction) -> Option<IdleRequirement> {
+        let wakeable = match action {
+            IdleAction::None => return None,
             IdleAction::CloseApp => self.app_wakeable,
             IdleAction::StopEmulator => self.emulator_wakeable,
+        };
+        if wakeable {
+            None
+        } else if !self.app_wakeable {
+            Some(IdleRequirement::StartupPackage)
+        } else {
+            Some(IdleRequirement::EmulatorStart)
+        }
+    }
+}
+
+/// What an instance lacks for its idle action to work: the wake needs it to bring the instance
+/// back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdleRequirement {
+    /// Its startup package (both actions' wake runs it).
+    StartupPackage,
+    /// Its configured emulator start (the wake after `stop_emulator` starts the emulator).
+    EmulatorStart,
+}
+
+impl IdleRequirement {
+    /// The member of the instance's `instances[]` entry that configures it.
+    pub(crate) const fn member(self) -> &'static str {
+        match self {
+            Self::StartupPackage => "startup_package",
+            Self::EmulatorStart => actingcommand_runtime_config::START_EMULATOR,
         }
     }
 }
@@ -120,6 +153,12 @@ pub(crate) enum IdleStep {
         action: IdleAction,
         work: &'static [WakeWork],
     },
+    /// Report once that `action`, the action in effect, cannot work on the instance: it lacks
+    /// `missing`. The instance never acts while it does.
+    Unsupported {
+        action: IdleAction,
+        missing: IdleRequirement,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +185,9 @@ struct InstanceIdle {
     phase: Phase,
     /// The last check that found the instance in use: an action waits for a plan made after it.
     in_use_at_unix_ms: Option<u64>,
+    /// The action in effect last reported as unable to work on the instance: it is reported
+    /// once, and again only for another action.
+    unsupported: Option<IdleAction>,
 }
 
 /// The idle state of every instance, by alias (memory only: a start begins with every instance
@@ -155,6 +197,9 @@ pub(crate) struct IdlePlanner {
     instances: BTreeMap<String, InstanceIdle>,
     /// When the lease sweep's idle check last ran (monotonic milliseconds).
     last_sweep_ms: Option<u64>,
+    /// Test only: how many idle actions' workers ended, whatever their result.
+    #[cfg(test)]
+    pub(crate) ended_for_test: u64,
 }
 
 impl IdlePlanner {
@@ -175,6 +220,7 @@ impl IdlePlanner {
             .or_insert(InstanceIdle {
                 phase: Phase::Active,
                 in_use_at_unix_ms: None,
+                unsupported: None,
             });
         let phase = entry.phase;
         match phase {
@@ -282,7 +328,18 @@ fn decide(
     now_unix_ms: u64,
 ) -> Option<IdleStep> {
     let action = config.action;
-    if action == IdleAction::None || view.paused || !view.emulator_on || !view.wakeable(action) {
+    if action == IdleAction::None {
+        return None;
+    }
+    // Fail Loud: an action that cannot bring the instance back never runs, and says so once.
+    if let Some(missing) = view.missing(action) {
+        if entry.unsupported == Some(action) {
+            return None;
+        }
+        entry.unsupported = Some(action);
+        return Some(IdleStep::Unsupported { action, missing });
+    }
+    if view.paused || !view.emulator_on {
         return None;
     }
     let plan = plan?;

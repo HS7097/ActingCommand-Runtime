@@ -1935,7 +1935,7 @@ tests = [
 ]
 incident = ["#386 IDLE-1"]
 
-# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): the idle planner on a manual clock with neutral instances: a gap to the next due task of at least idle.min_gap_ms runs the action once, a shorter one never; a paused, leased, queued or manually held instance is left alone, and so is one whose plan predates its last work; close_app brings the instance back at next due minus its lead through the startup package, stop_emulator through the configured emulator start and then the startup package; a due task earlier than planned, or the action switched off, wakes it at once; a failed stop fails only its own instance (no wake, no retry until work held it again) while another instance's wake goes on; none never acts or wakes
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): the idle planner on a manual clock with neutral instances: a gap to the next due task of at least idle.min_gap_ms runs the action once, a shorter one never; a paused, leased, queued or manually held instance is left alone, and so is one whose plan predates its last work; one whose action in effect cannot bring it back (no startup package, or for stop_emulator no configured emulator start) never acts and is reported once (instance_idle_action_unsupported, naming the member it lacks); close_app brings the instance back at next due minus its lead through the startup package, stop_emulator through the configured emulator start and then the startup package; a due task earlier than planned, or the action switched off, wakes it at once; a failed stop fails only its own instance (no wake, no retry until work held it again) while another instance's wake goes on; none never acts or wakes; through the host (coordinator's follow-up on #1333, #419), a failed stop_emulator is recorded under its instance and goes through contain_failure: no instance_idle_action record and no wake follow for it, the Runtime does not latch, and another instance's run completes
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1945,5 +1945,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_d_a_due_task_earlier_than_planned_wakes_the_instance_at_once",
     "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_e_a_failed_stop_fails_only_that_instance",
     "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_f_none_never_acts_or_wakes",
+    "actingcommand-runtime-host::lib::tests::gate_idle1_host::idle1_g_a_failed_stop_is_contained_to_its_instance_and_the_runtime_goes_on",
 ]
 incident = ["#386 IDLE-1"]

@@ -2881,32 +2881,43 @@ actingcommand_contract::outcome_locations! {
 
 // ---- IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): begin ----
 actingcommand_contract::outcome_codes! {
-    /// The host's one code of the idle action (IDLE-1; #420 S4: one domain code with values).
-    /// Everything else the action and its wake say is an existing code: the stop's and the
-    /// close's own command and failure records, `emulator_autostart_queued` and the startup
-    /// package's `startup_package_scheduled`, `invalid_application_identity`,
-    /// `application_foreground_unknown`.
+    /// The host's codes of the idle action (IDLE-1; #420 S4: one domain code with values, and
+    /// the one warning a code of one category cannot carry). Everything else the action and its
+    /// wake say is an existing code: the stop's and the close's own command and failure records,
+    /// `emulator_autostart_queued` and the startup package's `startup_package_scheduled`,
+    /// `invalid_application_identity`, `application_foreground_unknown`.
     pub(crate) enum IdleCode {
-        /// Info. An idle instance's action ran (`operation` `idle_action`: the game's application
-        /// was stopped, or the instance's sessions were closed and its emulator stopped), or its
-        /// wake was queued (`operation` `idle_wake`). Keys `alias`, `idle_action` (`close_app`
-        /// or `stop_emulator`), `next_occurrence_unix_ms` (the next due time the scheduler gave,
-        /// when it gave one), `at_unix_ms` (the planned wake, when there is one) and, for
-        /// `close_app`, `application_id`. A `device_state_observed` record under the instance
-        /// and the same report line.
+        /// Info. An idle instance's action ran (`operation` `run_idle_action`: the game's
+        /// application was stopped, or the instance's sessions were closed and its emulator
+        /// stopped), or its wake was queued (`operation` `queue_idle_wake`). Keys `alias`,
+        /// `idle_action` (`close_app` or `stop_emulator`), `next_occurrence_unix_ms` (the next
+        /// due time the scheduler gave, when it gave one), `at_unix_ms` (the planned wake, when
+        /// there is one) and, for `close_app`, `application_id`. A `device_state_observed` record
+        /// under the instance and the same report line.
         Taken => "instance_idle_action": info / none,
+        /// Warning (Fail Loud). The instance's idle action in effect cannot work, because the
+        /// instance cannot be brought back after it: `member` names what its `instances[]` entry
+        /// lacks, `startup_package` (both actions) or `start_emulator` (`stop_emulator`). The
+        /// action never runs on it; reported once per action in effect, at the first idle check
+        /// that finds it (`operation` `check_idle_instances`). Keys `alias`, `idle_action`,
+        /// `member`. A `device_state_observed` record under the instance and the same report
+        /// line.
+        Unsupported => "instance_idle_action_unsupported": warning / none,
     }
 }
 
 actingcommand_contract::outcome_locations! {
     /// The host's operations of the idle action (IDLE-1).
     pub(crate) enum IdleLocation {
-        /// The idle check of every instance, at every policy cycle and every lease sweep.
-        Check => "idle_check",
-        /// One instance's idle action on its emulator-control claim.
-        Action => "idle_action",
-        /// One instance's wake: the configured emulator start and the startup package queued.
-        Wake => "idle_wake",
+        /// The idle check of every instance, at every policy cycle and every lease sweep
+        /// (`HostShared::check_idle_instances`).
+        Check => "check_idle_instances",
+        /// One instance's idle action on its emulator-control claim
+        /// (`HostShared::run_idle_action`).
+        Action => "run_idle_action",
+        /// One instance's wake: the configured emulator start and the startup package queued
+        /// (`HostShared::queue_idle_wake`).
+        Wake => "queue_idle_wake",
     }
 }
 // ---- IDLE-1: end ----

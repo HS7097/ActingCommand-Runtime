@@ -36,13 +36,16 @@
 //!   cycle's dispatch is admitted. While an instance's emulator is held stopped, the emulator
 //!   watch does not start it again.
 //! - **Records.** One `instance_idle_action` record per action and per wake (`operation`
-//!   `idle_action` or `idle_wake`, `idle_action` naming the action), a `device_state_observed`
-//!   record under the instance and the same report line.
+//!   `run_idle_action` or `queue_idle_wake`, `idle_action` naming the action), a
+//!   `device_state_observed` record under the instance and the same report line. An instance
+//!   whose action in effect cannot bring it back (no startup package, or for `stop_emulator` no
+//!   configured emulator start) never acts and gets one `instance_idle_action_unsupported`
+//!   warning (`member` naming what it lacks) per action in effect, not a silent skip.
 //! - **Fail loud, one instance (#419).** A failed close or stop is recorded (the existing
-//!   failure records, or `runtime.failed` with the failure) and fails only this instance's
-//!   action, through the one decision point (`contain_failure`): the instance is left as it is,
-//!   no wake follows, and its next due task goes through the normal path. Only a failure that is
-//!   the Runtime's as a whole latches it.
+//!   failure records, or `runtime.failed` with the failure) and goes through the one decision
+//!   point (`contain_failure`), so it fails only this instance's action: the instance is left as
+//!   it is, no wake follows, and its next due task goes through the normal path. Only a failure
+//!   that is the Runtime's as a whole latches it.
 
 use super::failure_scope::Contained;
 use super::host_claims::{HostClaimWork, HostKey};
@@ -51,7 +54,7 @@ use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
 use super::*;
 use crate::codes::{HostCode, IdleCode, IdleLocation};
-use crate::idle_action::{IdlePlan, IdleStep, IdleView, WakeWork};
+use crate::idle_action::{IdlePlan, IdleRequirement, IdleStep, IdleView, WakeWork};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{EmulatorRunningState, RuntimeScheduleExplanation};
 use actingcommand_device::DeviceResourceQuiescence;
@@ -144,6 +147,16 @@ impl HostShared {
     /// instance is contained to it and the next instance goes on; only a failure the Runtime does
     /// not survive is the error.
     pub(super) fn check_idle_instances(&self, from_sweep: bool) -> RuntimeHostResult<()> {
+        self.check_idle(from_sweep, None)
+    }
+
+    /// [`Self::check_idle_instances`]; `plans`, when given (tests), stand for the scheduler's
+    /// latest plan of the instances they name, and an instance they leave out has none.
+    fn check_idle(
+        &self,
+        from_sweep: bool,
+        plans: Option<&BTreeMap<String, IdlePlan>>,
+    ) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() || self.lifecycle_draining()? {
             return Ok(());
         }
@@ -211,7 +224,10 @@ impl HostShared {
                 break;
             }
             let view = self.idle_view(instance_id, emulator_on)?;
-            let plan = idle_plan(&explanation, &alias);
+            let plan = plans.map_or_else(
+                || idle_plan(&explanation, &alias),
+                |given| given.get(&alias).copied(),
+            );
             let Some(step) = planner.check(&alias, &config, view, plan, now_unix_ms) else {
                 continue;
             };
@@ -235,6 +251,9 @@ impl HostShared {
                 }),
                 IdleStep::Wake { action, work } => {
                     self.queue_idle_wake(instance_id, &alias, action, work)
+                }
+                IdleStep::Unsupported { action, missing } => {
+                    self.record_idle_unsupported(instance_id, &alias, action, missing)
                 }
             };
             if let Err(error) = taken {
@@ -344,6 +363,25 @@ impl HostShared {
         })
     }
 
+    /// Fail Loud: the one `instance_idle_action_unsupported` (warning) of an instance whose
+    /// action in effect, `action`, cannot bring it back: it lacks `missing`.
+    fn record_idle_unsupported(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+        action: IdleAction,
+        missing: IdleRequirement,
+    ) -> RuntimeHostResult<()> {
+        self.record_idle(
+            self.idle_links(instance_id)?,
+            Outcome::new(IdleCode::Unsupported)
+                .operation(IdleLocation::Check)
+                .alias(alias)
+                .idle_action(action.as_str())
+                .member(missing.member()),
+        )
+    }
+
     /// The wake of an idle instance after `action`: its record, then `work` queued in order. The
     /// configured emulator start hands the key to the startup package itself, so nothing after
     /// it is queued here.
@@ -413,6 +451,18 @@ impl HostShared {
         pending: &PendingIdleAction,
         key: HostKey,
     ) -> RuntimeHostResult<()> {
+        let ended = self.carry_out_idle_action(pending, key);
+        #[cfg(test)]
+        self.count_idle_action_end();
+        ended
+    }
+
+    /// [`Self::run_idle_action`]'s work.
+    fn carry_out_idle_action(
+        &self,
+        pending: &PendingIdleAction,
+        key: HostKey,
+    ) -> RuntimeHostResult<()> {
         let alias = pending.instance_alias.as_str();
         let paused = self.routine_gate(pending.instance_id)? == ClaimGate::RoutineHeld;
         let queued =
@@ -454,7 +504,9 @@ impl HostShared {
         }
         let application_id = match ended {
             Ok(Ok(application_id)) => application_id,
-            Ok(Err(())) => return Ok(()),
+            Ok(Err(recorded)) => {
+                return self.contain_recorded_idle_failure(pending.instance_id, recorded, links);
+            }
             Err(error) => return self.contain_idle_failure(pending.instance_id, error, links),
         };
         let outcome = idle_outcome(
@@ -473,14 +525,14 @@ impl HostShared {
 
     /// `close_app` on the claim's `key`: the declared application, the check that it is the
     /// assigned one, then the existing application stop on the key, which stays with the claim
-    /// whatever the stop's result. `Ok(Ok(application))` when it stopped; `Ok(Err(()))` when it
-    /// failed and the failure is recorded; `Err` for a failure not recorded yet.
+    /// whatever the stop's result. `Ok(Ok(application))` when it stopped; `Ok(Err(failure))`
+    /// when it failed and `failure` is recorded; `Err` for a failure not recorded yet.
     fn idle_close_app(
         &self,
         pending: &PendingIdleAction,
         key: &HostKey,
         links: EventLinksDraft,
-    ) -> RuntimeHostResult<Result<Option<String>, ()>> {
+    ) -> RuntimeHostResult<Result<Option<String>, RuntimeHostError>> {
         let alias = pending.instance_alias.as_str();
         let declared = match self.declared_application(pending) {
             Ok(declared) => declared,
@@ -491,7 +543,7 @@ impl HostShared {
                     links,
                     None,
                 )?;
-                return Ok(Err(()));
+                return Ok(Err(error));
             }
         };
         // The read-only foreground query reports the instance's assigned application.
@@ -547,7 +599,7 @@ impl HostShared {
                 links,
                 None,
             )?;
-            return Ok(Err(()));
+            return Ok(Err(refusal));
         }
         let action = actingcommand_contract::ApplicationLifecycleAction::Stop;
         let resolved = self
@@ -637,20 +689,21 @@ impl HostShared {
                     stop_links,
                     None,
                 )?;
-                Ok(Err(()))
+                Ok(Err(*failure.error))
             }
         }
     }
 
     /// `stop_emulator` on the claim's `key` through the existing emulator-control path
     /// (`drive_idle_stop`), which records its own failure pair and ends the key's hold.
+    /// `Ok(Err(failure))` when the stop failed and `failure` is recorded.
     fn idle_stop_emulator(
         &self,
         pending: &PendingIdleAction,
         validated: &ValidatedRuntimeRequest<'_>,
         links: EventLinksDraft,
         key: HostKey,
-    ) -> RuntimeHostResult<Result<Option<String>, ()>> {
+    ) -> RuntimeHostResult<Result<Option<String>, RuntimeHostError>> {
         let resolved = match self.resolve_instance(&pending.instance_alias) {
             Ok(resolved) => resolved,
             Err(failure) => {
@@ -662,7 +715,7 @@ impl HostShared {
             Ok(()) => Ok(Ok(None)),
             Err(failure) if failure.poison_runtime => Err((*failure.error).into_fatal()),
             Err(failure) if failure.error.is_fatal() => Err(*failure.error),
-            Err(_) => Ok(Err(())),
+            Err(failure) => Ok(Err(*failure.error)),
         }
     }
 
@@ -734,6 +787,22 @@ impl HostShared {
         }
     }
 
+    /// One instance's idle failure that its own path recorded already (the stop's failure pair,
+    /// the close's `runtime.failed`), through the one decision point (#419), which decides only
+    /// its scope here: a failure of the instance (its fence records itself) or of its operation
+    /// ends only this action; one that is the Runtime's latches it and is the error.
+    fn contain_recorded_idle_failure(
+        &self,
+        instance_id: InstanceId,
+        recorded: RuntimeHostError,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
+        match self.contain_failure(recorded, Some(instance_id), links)? {
+            Contained::Latched(error) => Err(error),
+            Contained::Fenced(_) | Contained::Failed(_) => Ok(()),
+        }
+    }
+
     /// Whether the idle action holds the instance's emulator stopped (`stop_emulator` running or
     /// done, its wake not come yet): the emulator watch does not start it.
     pub(super) fn idle_holds_emulator_stopped(&self, alias: &str) -> RuntimeHostResult<bool> {
@@ -766,5 +835,52 @@ impl HostShared {
             .events
             .system_links()?
             .with_instance_id(self.events.issuer().issue_registered_instance(instance_id)))
+    }
+
+    /// Test only: one more idle action's worker ended, whatever its result.
+    #[cfg(test)]
+    fn count_idle_action_end(&self) {
+        if let Ok(mut planner) = self.idle.lock() {
+            planner.ended_for_test += 1;
+        }
+        self.idle_action_ended.notify_all();
+    }
+
+    /// Test only: the number of idle actions whose worker ended, once it reaches `ended`,
+    /// waiting at most `wait`; `None` when it did not in time.
+    #[cfg(test)]
+    fn await_idle_action_ends(&self, ended: u64, wait: Duration) -> Option<u64> {
+        let deadline = Instant::now() + wait;
+        let mut planner = self.idle.lock().ok()?;
+        loop {
+            if planner.ended_for_test >= ended {
+                return Some(planner.ended_for_test);
+            }
+            let left = deadline.checked_duration_since(Instant::now())?;
+            planner = self.idle_action_ended.wait_timeout(planner, left).ok()?.0;
+        }
+    }
+}
+
+#[cfg(test)]
+impl RuntimeHost {
+    /// IDLE-1, tests: one idle check now, as at a policy cycle, with `plans` standing for the
+    /// scheduler's latest plan of the instances they name (an instance they leave out has none).
+    pub(crate) fn check_idle_instances_for_test(
+        &self,
+        plans: &BTreeMap<String, IdlePlan>,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(IdleLocation::Check)?
+            .check_idle(false, Some(plans))
+    }
+
+    /// IDLE-1, tests: the number of idle actions whose worker ended, once it reaches `ended`,
+    /// waiting at most `wait`; `None` when it did not in time.
+    pub(crate) fn await_idle_action_ends_for_test(
+        &self,
+        ended: u64,
+        wait: Duration,
+    ) -> Option<u64> {
+        self.shared.as_deref()?.await_idle_action_ends(ended, wait)
     }
 }

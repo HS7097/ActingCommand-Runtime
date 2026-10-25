@@ -810,10 +810,16 @@ provider's Stop, never MuMuManager `api`). The wake comes at the next due time m
 wake lead, or at once when a later evaluation shows a due task: after `close_app` the startup
 package is queued, after `stop_emulator` the configured emulator start, which hands the key to the
 startup package. While an instance's emulator is held stopped the emulator watch does not start
-it. Each action and each wake is one `instance_idle_action` record (`operation` `idle_action` or
-`idle_wake`, `idle_action` naming the action). A failed close or stop is recorded and fails only
-that instance's action: the instance is left as it is, no wake follows, and its next due task goes
-through the normal path.
+it. Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
+or `queue_idle_wake`, `idle_action` naming the action). An instance whose action in effect cannot
+bring it back (its `instances[]` entry has no `startup_package`, or for `stop_emulator` no
+`start_emulator`) never acts, and the first idle check that finds it records one
+`instance_idle_action_unsupported` warning (`member` naming what the entry lacks, `operation`
+`check_idle_instances`) and the same report line, once per action in effect; after a start that is
+the first policy cycle or lease sweep. A failed close or stop is recorded and goes through the one
+decision point (`contain_failure`, #419), so it fails only that instance's action: the instance is
+left as it is, no wake follows, its next due task goes through the normal path, and only a failure
+that is the Runtime's as a whole latches it.
 
 ## Facts
 

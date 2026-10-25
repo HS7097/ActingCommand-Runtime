@@ -1781,6 +1781,8 @@ impl RuntimeHost {
             emulator_watch_polled: Condvar::new(),
             idle: Mutex::new(crate::idle_action::IdlePlanner::default()),
             #[cfg(test)]
+            idle_action_ended: Condvar::new(),
+            #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: config
@@ -4836,6 +4838,9 @@ struct HostShared {
     // IDLE-1: every instance's idle state (memory only). Taken by the idle check across its
     // instances, and alone by an action's worker and by the emulator watch.
     idle: Mutex<crate::idle_action::IdlePlanner>,
+    // IDLE-1, test only: notified when an idle action's worker ends.
+    #[cfg(test)]
+    idle_action_ended: Condvar,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
     /// #411 A65 (Codex's counterexample on #420), test only: see

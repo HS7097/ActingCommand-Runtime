@@ -8,7 +8,9 @@
 //! - A gap to the next due task of at least `idle.min_gap_ms` runs the action once; a shorter
 //!   one runs nothing.
 //! - A paused, leased, queued or manually held instance is left alone, and so is one whose plan
-//!   was made before it was last seen in use.
+//!   was made before it was last seen in use. One whose action in effect cannot bring it back
+//!   (no startup package, or for `stop_emulator` no configured emulator start) never acts and is
+//!   reported once, naming what it lacks (Fail Loud).
 //! - `close_app` brings the instance back at next due minus its lead through the startup package;
 //!   `stop_emulator` at next due minus its lead through the configured emulator start and then
 //!   the startup package.
@@ -17,7 +19,7 @@
 //!   action and wake go on.
 //! - `none` never acts and never wakes.
 
-use crate::idle_action::{IdlePlan, IdlePlanner, IdleStep, IdleView, WakeWork};
+use crate::idle_action::{IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, WakeWork};
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
 
 const MINUTE: u64 = 60_000;
@@ -158,13 +160,9 @@ fn idle1_b_a_paused_leased_queued_or_manually_held_instance_is_left_alone() {
             manual: true,
             ..free()
         },
-        // Neither in the state the action leaves nor able to come back.
+        // Not in the state the action leaves.
         IdleView {
             emulator_on: false,
-            ..free()
-        },
-        IdleView {
-            emulator_wakeable: false,
             ..free()
         },
     ];
@@ -175,6 +173,48 @@ fn idle1_b_a_paused_leased_queued_or_manually_held_instance_is_left_alone() {
                 planner.check(NODE_A, &config(action), view, plan(now, far), now),
                 None,
                 "{view:?}"
+            );
+        }
+    }
+    // Not able to come back (Fail Loud, the coordinator's follow-up on #1333): the action never
+    // runs, and the first check reports it once, naming what the instance lacks.
+    let no_startup_package = IdleView {
+        app_wakeable: false,
+        emulator_wakeable: false,
+        ..free()
+    };
+    let no_emulator_start = IdleView {
+        emulator_wakeable: false,
+        ..free()
+    };
+    for (action, view, missing) in [
+        (
+            IdleAction::StopEmulator,
+            no_emulator_start,
+            IdleRequirement::EmulatorStart,
+        ),
+        (
+            IdleAction::StopEmulator,
+            no_startup_package,
+            IdleRequirement::StartupPackage,
+        ),
+        (
+            IdleAction::CloseApp,
+            no_startup_package,
+            IdleRequirement::StartupPackage,
+        ),
+    ] {
+        let mut planner = IdlePlanner::default();
+        assert_eq!(
+            planner.check(NODE_A, &config(action), view, plan(T0, far), T0),
+            Some(IdleStep::Unsupported { action, missing }),
+            "{action:?}, {view:?}"
+        );
+        for now in [T0, T0 + MINUTE] {
+            assert_eq!(
+                planner.check(NODE_A, &config(action), view, plan(now, far), now),
+                None,
+                "{action:?}, {view:?}: reported once, never acted on"
             );
         }
     }
