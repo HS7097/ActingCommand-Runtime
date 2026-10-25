@@ -61,7 +61,7 @@ fn runtime_fact(index: u64) -> (EventOrigin, EventPayloadDraft) {
         RuntimePayloadDraft::fact_recorded(
             RuntimeFactRecord {
                 scope: RuntimeFactScope::Runtime,
-                key: format!("fixture.key_{index}"),
+                key: format!("backend.fixture_key_{index}"),
                 value: FactValue::Integer(1),
                 observed_at_unix_ms: AT_MS,
                 source: OriginModule::Runtime,
