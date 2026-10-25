@@ -1125,24 +1125,7 @@ fn rl1a_t6_no_rules_compose_a_valid_empty_catalog() {
         schedule: None,
         bundle: bundle_maintenance_only(),
     };
-    for (case, roots, instances) in [
-        (
-            "a file without rules",
-            vec![without_rules],
-            vec![(INSTANCE_A, GAME_A, SERVER_A)],
-        ),
-        (
-            "a root without schedule.json",
-            vec![without_file],
-            vec![(INSTANCE_A, GAME_A, SERVER_A)],
-        ),
-        (
-            "no bound instance",
-            vec![game_a(Some(schedule_a()))],
-            vec![],
-        ),
-    ] {
-        let composition = composed(&roots, &instances, None);
+    let empty_catalog = |case: &str, composition: StandardPackComposition| {
         for (list, document) in composed_documents(&composition) {
             assert_eq!(document[list], json!([]), "{case}: {list} is empty");
             assert_eq!(document["catalog"]["approval_refs"], json!([]), "{case}");
@@ -1158,7 +1141,22 @@ fn rl1a_t6_no_rules_compose_a_valid_empty_catalog() {
         .unwrap_or_else(|code| panic!("{case}: the empty catalog evaluates: {code}"));
         assert!(evaluation.decisions.is_empty(), "{case}");
         assert!(evaluation.dispatched.is_empty(), "{case}");
-    }
+    };
+    let bound = [(INSTANCE_A, GAME_A, SERVER_A)];
+    let composition = composed(&[without_rules], &bound, None);
+    assert_eq!(composition.games()[0].tasks, 0);
+    assert!(composition.games()[0].schedule_sha256.is_some());
+    empty_catalog("a file without rules", composition);
+    let composition = composed(&[without_file], &bound, None);
+    assert_eq!(
+        composition.games()[0].schedule_sha256,
+        None,
+        "the bound game has no rules"
+    );
+    empty_catalog("a root without schedule.json", composition);
+    let composition = composed(&[game_a(Some(schedule_a()))], &[], None);
+    assert!(composition.games().is_empty(), "no game is in use");
+    empty_catalog("no bound instance", composition);
 }
 
 /// T7 (the neutral core): every word of every fixture string is in the closed neutral list.
