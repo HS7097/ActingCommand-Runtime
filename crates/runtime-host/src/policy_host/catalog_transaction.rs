@@ -250,10 +250,19 @@ impl CatalogStore {
                 )
             })?
             .clone();
+        // LN-5 (#422, LEAN-L §3.3): the type's history is read from the store page by page.
         let recorded = ledger
-            .query(EventQuery {
-                event_type: Some(EventType::StateMigrated),
-                ..EventQuery::default()
+            .latest_sequence()
+            .and_then(|through| {
+                crate::recovery_read::read_pages(
+                    ledger,
+                    &EventQuery {
+                        event_type: Some(EventType::StateMigrated),
+                        ..EventQuery::default()
+                    },
+                    through,
+                    ledger.history_page_events(),
+                )
             })
             .map_err(|error| catalog_ledger_error(&error))?;
         let mut matching = 0;
@@ -363,9 +372,9 @@ impl CatalogStore {
         ledger: &GlobalLedger,
         through: u64,
     ) -> RuntimeHostResult<(Option<LoadedCatalog>, CatalogLineage)> {
+        // LN-5 (#422, LEAN-L §3.3): each type's history is read from the store page by page.
         let events = catalog_projection_events(through, |query| {
-            ledger
-                .query(query)
+            crate::recovery_read::read_pages(ledger, &query, through, ledger.history_page_events())
                 .map_err(|error| catalog_ledger_error(&error))
         })?;
         let (current, lineage) = self.fold_catalog_events(&events)?;

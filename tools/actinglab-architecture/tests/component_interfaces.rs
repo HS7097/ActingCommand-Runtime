@@ -32,10 +32,11 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `host_claims.run_end_grace_ms`, #411 A66 (same release) adds to it the `watchdog` section
 ///   (`start_window_ms`), PERF-B1 (Workflow #407 B1, register §1.177, same release) the
 ///   optional `execution` section, SCH-M ED-1 (register §1.178, same release) the
-///   expected-duration keys, and emu-watch the emulator watch's `emulator_control` keys;
-///   revisions 5 to 10 are still read, so [5, 11]. IDLE-1 (the release after v0.12.12, Alice's
-///   ruling 41): revision 12 adds the `idle` section and an instance entry's `idle` member;
-///   revisions 5 to 11 are still read, so [5, 12].
+///   expected-duration keys, emu-watch the emulator watch's `emulator_control` keys, and LN-5
+///   (#422, same release) `ledger_observer.history_page_rows`; revisions 5 to 10 are still
+///   read, so [5, 11]. IDLE-1 (the release after v0.12.12, Alice's ruling 41): revision 12
+///   adds the `idle` section and an instance entry's `idle` member; revisions 5 to 11 are
+///   still read, so [5, 12].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

@@ -85,6 +85,7 @@
 //! This holds for the operator's restart and the ladder's emulator-restart rung alike, whose
 //! Stop goes through the same drive; the key is renewed to the wait's bound first.
 
+use super::failure_scope::Contained;
 use super::host_claims::HostKey;
 use super::lease::HostClaim;
 use super::recovery_ladder::PendingRecoveryLadder;
@@ -1120,25 +1121,29 @@ impl HostShared {
         ) {
             Ok(Ok(())) => {}
             Ok(Err(close_error)) => {
-                // Workflow #403: an unconfirmed close fenced the instance; the control fails
-                // with the fence's non-fatal failure.
-                let mut error = self
-                    .retained_close_failure(
+                // ISO-2 (#419, ISO-M row C02): the retained session of a crashed or hung
+                // emulator whose close failed with its resources confirmed is gone and its
+                // failure recorded; the control goes on. Workflow #403: an unconfirmed close
+                // fenced the instance; the control fails with the fence's non-fatal failure.
+                if let Some(mut error) = self
+                    .settle_retained_close_failure(
                         HostLocation::CloseEmulatorDeviceSession,
                         instance_id,
                         &close_error,
                     )
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                error.lifecycle.instance_id = Some(instance_id);
-                return Err(self.control_failed(
-                    mode,
-                    links,
-                    record_action,
-                    error,
-                    RuntimeReceiptState::Failed,
-                    EffectDisposition::NotPerformed,
-                    None,
-                ));
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    error.lifecycle.instance_id = Some(instance_id);
+                    return Err(self.control_failed(
+                        mode,
+                        links,
+                        record_action,
+                        error,
+                        RuntimeReceiptState::Failed,
+                        EffectDisposition::NotPerformed,
+                        None,
+                    ));
+                }
             }
             Err(error) if error.projection().code == RuntimeErrorCode::LeaseBusy => {
                 return Err(self.control_failed(
@@ -2126,13 +2131,25 @@ impl HostShared {
             links.clone(),
             CommandPayloadDraft::rejected(event_action, diagnostic, effect, AuditInput::new()),
         )?;
-        self.record_required_failure(&error, &rejected, links)
+        self.record_required_failure(&error, &rejected, links.clone())
             .map_err(RequestFailure::poison_without_terminal)?;
         let terminal_event = terminal(&rejected);
-        if error.is_fatal() {
-            Ok(RequestFailure::poison(error, Some(terminal_event)))
-        } else {
-            Ok(RequestFailure::request(error, state, Some(terminal_event)))
+        if !error.is_fatal() {
+            return Ok(RequestFailure::request(error, state, Some(terminal_event)));
+        }
+        // ISO-2 (#419 R2; ISO-M rows C05, C22, C31): a fatal failure of the controlled
+        // instance's own session or binding (its endpoint rebind refused, its kernel session
+        // still open) fences that instance, and the control fails with the fence's non-fatal
+        // failure, from the ladder's rung, the autostart and an operator's control alike. A
+        // `Global` failure latches.
+        match self
+            .contain_failure(error, None, links)
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
+            Contained::Latched(error) => Ok(RequestFailure::poison(error, Some(terminal_event))),
+            Contained::Fenced(error) | Contained::Failed(error) => {
+                Ok(RequestFailure::request(error, state, Some(terminal_event)))
+            }
         }
     }
 }

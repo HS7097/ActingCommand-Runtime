@@ -305,7 +305,23 @@ fn diagnostic_statistics(diagnostics: &[CatalogDiagnostic]) -> DiagnosticStatist
 }
 
 pub fn compile_catalog(sources: &CatalogSources) -> Result<CompiledCatalog, CatalogCompileFailure> {
-    let preflight = preflight_sources(sources);
+    compile_catalog_bounded(sources, MAX_DOCUMENT_BYTES)
+}
+
+/// ROUT-L RL-1a (model §3.2 step 4, §9.1 item 13): compiles a catalog the standard-pack composer
+/// joined from the games in use. Its documents are bounded by the 4 MiB catalog bound alone,
+/// instead of 1 MiB each; every other rule is [`compile_catalog`]'s.
+pub fn compile_composed_catalog(
+    sources: &CatalogSources,
+) -> Result<CompiledCatalog, CatalogCompileFailure> {
+    compile_catalog_bounded(sources, MAX_CATALOG_BYTES)
+}
+
+fn compile_catalog_bounded(
+    sources: &CatalogSources,
+    max_document_bytes: usize,
+) -> Result<CompiledCatalog, CatalogCompileFailure> {
+    let preflight = preflight_sources(sources, max_document_bytes);
     if !preflight.is_empty() {
         return Err(CatalogCompileFailure::new(preflight));
     }
@@ -401,7 +417,10 @@ fn collect_parse_error<T>(
     }
 }
 
-fn preflight_sources(sources: &CatalogSources) -> Vec<CatalogDiagnostic> {
+fn preflight_sources(
+    sources: &CatalogSources,
+    max_document_bytes: usize,
+) -> Vec<CatalogDiagnostic> {
     let mut documents = vec![
         (&sources.tasks, SchedulingDocumentKind::Tasks),
         (&sources.pools, SchedulingDocumentKind::Pools),
@@ -424,13 +443,13 @@ fn preflight_sources(sources: &CatalogSources) -> Vec<CatalogDiagnostic> {
         ));
     }
     for (source, kind) in documents {
-        if source.bytes.len() > MAX_DOCUMENT_BYTES {
+        if source.bytes.len() > max_document_bytes {
             diagnostics.push(preflight_diagnostic(
                 source,
                 kind,
                 CatalogDiagnosticCode::DocumentTooLarge,
                 format!(
-                    "document size {} exceeds {MAX_DOCUMENT_BYTES} bytes",
+                    "document size {} exceeds {max_document_bytes} bytes",
                     source.bytes.len()
                 ),
             ));

@@ -72,9 +72,11 @@ pub(super) fn help_data() -> Value {
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>",
                 "--maintenance <JSON array of package_id, server, uses; written into actingcommand.bundle.v4>",
                 "--pages <pages.json>", "--interrupts <interrupts.json>",
-                "--navigation <navigation.json> (root files: cross-checked, laid beside bundle.json)"
+                "--navigation <navigation.json> (root files: cross-checked, laid beside bundle.json)",
+                "--schedule <schedule.json> (the schedule rules: composed as the Runtime composes them, laid beside bundle.json)"
             ],
             "standard-pack check": crate::standard_pack_cli::options(),
+            "standard-pack compose": crate::standard_pack_cli::compose_options(),
             "package fmt": [
                 "--package <content directory>",
                 "--check (writes nothing; fails with package_fmt_check_failed naming every JSON file that is not canonical)"

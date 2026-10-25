@@ -237,8 +237,8 @@ declares.
 
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
 directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]
-[--pages <file>] [--interrupts <file>] [--navigation <file>]` lays out the resource section of
-a standard package:
+[--pages <file>] [--interrupts <file>] [--navigation <file>] [--schedule <file>]` lays out the
+resource section of a standard package:
 
 ```text
 applications.json              the given applications table, copied byte for byte
@@ -246,6 +246,7 @@ bundle.json                    actingcommand.bundle.v4
 pages.json                     with --pages, copied byte for byte (Workflow #373 NAV-T)
 interrupts.json                with --interrupts, copied byte for byte
 navigation.json                with --navigation, copied byte for byte
+schedule.json                  with --schedule, copied byte for byte (ROUT-L RL-1a)
 packs/<package_id>/control.json
 packs/<package_id>/resources/...
 ```
@@ -314,13 +315,20 @@ them, the report of item 5: one `package_bundle_remedy_invalid` warning in `warn
 with `package_id`, `remedy_problem` (`capability_unprovided`: no package of the root provides the
 capability; `cycle`: one entry per package on the cycle; `parameters_mismatch`: two providers of
 one capability declare different parameters) and `need`, `capability` and `outcome_key` where they
-apply; a root whose remedies are all provided reports nothing new. The
+apply; a root whose remedies are all provided reports nothing new. ROUT-L RL-1a
+([standard-pack-schedule.md](standard-pack-schedule.md)): with `--schedule`, every pack is admitted
+for real as with the other root files, and after the report the file is composed by the Runtime's
+composer with one bound instance per server of the registry: a refusal is
+`standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem`
+(`schedule_invalid`, `rule_package_unregistered` or `rule_id_conflict`) and `json_pointer`, and each
+package of the registry that is neither maintenance-role, named by a rule nor held is one
+`standard_pack_package_unclassified` warning (with `game` and `package_id`) in `warnings`. The
 root files are copied byte for byte last.
 
 `actinglab standard-pack check --root <game root>` runs the same checks on an installed game
 root `<standard_packs.root>/<game>/` (the game is the directory's name; its packages are the
-directories its `bundle.json` lists): the root files it holds, the cross-check and the report.
-It only reads. Every package of the registry is admitted, once, by its directory, with or
+directories its `bundle.json` lists): the root files it holds, the cross-check and the report,
+and (ROUT-L RL-1a) the root's `schedule.json` as `--schedule` is checked above. It only reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
 game, root_files, pack_count, warnings}`, given only once every package of the registry was
@@ -338,6 +346,12 @@ gives one, its `line` and `column`, caused by the parser's text (`foreign_data_e
 
 `resource verify` runs this check on the installed root it lays out from the bundle
 ([resource-verify.md](resource-verify.md), Workflow #411 RV-1).
+
+`actinglab standard-pack compose --root <standard_packs.root> --instance <alias>=<game>/<server>
+... --out <new directory>` (ROUT-L RL-1a) composes the schedule rules of the bound games below
+`--root` for the given bindings, as the Runtime composes them, and writes the four V2 documents and
+`manifest.json` into a new directory; its rules and its answer are in
+[standard-pack-schedule.md](standard-pack-schedule.md), "Tools".
 
 The bundle index v4 (`actingcommand_contract::BundleIndex`, checked by `validate()`) is a file
 format only and is never recorded in the ledger:
@@ -602,6 +616,7 @@ data files beside its package directories, one directory per game below the conf
   interrupts.json    actingcommand.interrupts.v1: the shared interrupt pages
   navigation.json    actingcommand.navigation.v1: the edges and the recovery chain (NAV-5)
   tables/            actingcommand.table.v1: the shared tables, <table_id>.json (#357 DB-1)
+  schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   <directory>/       one package directory per bundle pack
 ```
 
@@ -663,6 +678,19 @@ data files beside its package directories, one directory per game below the conf
   its game root; the tables of a broken root are neither read nor listed. In a resource
   repository the tables are `tables/*.json` at the repository root only. The Runtime names no
   table, column or value: they are resource data, final values only.
+- **`schedule.json`** (ROUT-L RL-1a, [standard-pack-schedule.md](standard-pack-schedule.md)).
+  `{schema_version, requires, rules, pools, activity, timeline, held}`: the game's V2 tasks
+  (rules, each naming its `package_id`), pools, activity profiles and timeline events, with no
+  scope, no instance, no package path and no approval; `held` lists the packages kept from
+  scheduling with a reason. It has no `game` member: the game is the directory's. A rule belongs to
+  the server of its package in `bundle.json`. Every package of the registry is maintenance-role by
+  the root files, named by a rule, or held; any other is `standard_pack_package_unclassified` (a
+  warning) and is not scheduled. The file is read by
+  `parse_standard_pack_schedule` and composed per bound instance by the policy crate's
+  `compose_standard_pack_rules`, which the Runtime's scheduler workbench (RL-1b), `package bundle
+  --schedule`, `actinglab standard-pack check` and `standard-pack compose` all run; a refused file
+  is `standard_pack_root_invalid` (problems `schedule_invalid`, `schedule_requires_missing`,
+  `rule_package_unregistered`, `rule_id_conflict`). A run's preparation never reads it.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`,
   `validate_standard_pack_references`, `validate_standard_pack_navigation_references`,

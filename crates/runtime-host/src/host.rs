@@ -592,6 +592,10 @@ pub struct RuntimeHostConfig {
     /// so its ledger is an old one without the anchor.
     #[cfg(test)]
     contained_settlement_unrecorded_for_test: bool,
+    /// #411 A67-R, test only: the memory sample every capture frame store reads in place of the
+    /// host's physical memory.
+    #[cfg(test)]
+    capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -652,7 +656,20 @@ impl RuntimeHostConfig {
             fail_after_start_event_for_test: false,
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: false,
+            #[cfg(test)]
+            capture_memory_sample_for_test: None,
         }
+    }
+
+    /// #411 A67-R, test only: every capture frame store reads `sample` in place of the host's
+    /// physical memory.
+    #[cfg(test)]
+    pub(crate) fn with_capture_memory_sample_for_test(
+        mut self,
+        sample: actingcommand_artifact_store::MemorySample,
+    ) -> Self {
+        self.capture_memory_sample_for_test = Some(sample);
+        self
     }
 
     /// #411 A65, test only: every read on the ledger writer gets `budget` in place of
@@ -1687,6 +1704,9 @@ impl RuntimeHost {
                     },
                 )
             })),
+            frame_store_floor: Arc::default(),
+            #[cfg(test)]
+            capture_memory_sample_for_test: config.capture_memory_sample_for_test,
             governance_write_gate: Mutex::new(()),
             governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),
@@ -2138,6 +2158,9 @@ impl RuntimeHost {
             // so a failed preparation's ladder already has one.
             host_claims::spawn_instance_workers(&shared)?;
             shared.prepare_physical_instances_on_start()?;
+            // #411 A67-R: a preparation whose frame store opened on the floor is in the daemon's
+            // log and the ledger before the start goes on.
+            shared.record_frame_store_floor_entries()?;
             shared.check_install_preparation()?;
             // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
             // after their daemon-start preparation; none without a bound handset.
@@ -3106,9 +3129,23 @@ impl RuntimeHost {
             Err(failure) => {
                 shared.record_scheduled_policy_failure(context, &failure.error)?;
                 let settlement = shared.complete_scheduled_policy_failure(context, &failure);
-                let error = *failure.error;
-                if failure.poison_runtime {
-                    shared.fatal.mark(error.clone())?;
+                let mut error = *failure.error;
+                // ISO-M (#419) R0.5, ISO-2: the scheduled run's boundary. A failure that would
+                // stop the Runtime (a poison, or a fatal failure actingd's driver stops on) goes
+                // to the one decision point against the run's instance: only a `Global` failure
+                // latches; an `Instance` one fences that instance, and the run fails with the
+                // fence's non-fatal failure, so the driver goes on with the other instances.
+                if failure.poison_runtime || error.is_fatal() {
+                    let links = shared.policy_run_event_links(context)?;
+                    error = match shared.contain_failure(
+                        error,
+                        Some(context.lease_token().instance_id()),
+                        links,
+                    )? {
+                        failure_scope::Contained::Latched(error) => error,
+                        failure_scope::Contained::Fenced(error)
+                        | failure_scope::Contained::Failed(error) => error,
+                    };
                 }
                 if let Err(settlement_error) = settlement {
                     shared.record_scheduled_policy_failure(context, &settlement_error)?;
@@ -4142,12 +4179,17 @@ impl RuntimeHost {
         &self,
         query: EventQuery,
     ) -> RuntimeHostResult<Vec<PersistedEvent>> {
-        self.shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
-            .ledger
-            .query(query)
-            .map_err(|_| {
-                ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
-            })
+        // LN-5 (#422, LEAN-L §3.3): the selection is read from the store page by page at the
+        // head, as every other whole-history read of the host; one command per page.
+        crate::recovery_read::read_through_head(
+            &self
+                .shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
+                .ledger,
+            &query,
+        )
+        .map_err(|_| {
+            ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
+        })
     }
 
     /// Workflow #411 B15 R4, test only: the remedy table in effect.
@@ -4670,6 +4712,13 @@ struct HostShared {
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
     frame_retention: Mutex<Option<frame_retention::FrameRetention>>,
+    /// #411 A67-R: the floor watch of every capture frame store's budget; the start's
+    /// preparation and the sweep record the warnings of the budgets that entered the floor
+    /// (`record_frame_store_floor_entries`).
+    frame_store_floor: Arc<actingcommand_artifact_store::BudgetFloorWatch>,
+    /// #411 A67-R, test only: see [`RuntimeHostConfig::with_capture_memory_sample_for_test`].
+    #[cfg(test)]
+    capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
     governance_policy: GovernancePolicy,
@@ -5447,6 +5496,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }
+        // #411 A67-R: a capture frame store's budget that entered the floor since the last tick
+        // (at an open or a frame's refresh) is recorded once.
+        if let Err(error) = shared.record_frame_store_floor_entries() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
         // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and
         // the watch's restarts), on the host clock.
         if let Err(error) = device_link::tick(&shared) {
@@ -5800,7 +5855,10 @@ fn ledger_failure_plan(
     // (`ledger_observer.read_budget_ms`, `close_timeout_ms`); both on the plan's clock.
     plan = plan
         .with_read_budget(Duration::from_millis(section.read_budget_ms))
-        .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
+        .with_close_timeout(Duration::from_millis(section.close_timeout_ms))
+        // LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; a value the ledger
+        // does not take is refused when it opens (`invalid_ledger_config`).
+        .with_history_page_rows(usize::try_from(section.history_page_rows).unwrap_or(usize::MAX));
     #[cfg(test)]
     if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
         plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
