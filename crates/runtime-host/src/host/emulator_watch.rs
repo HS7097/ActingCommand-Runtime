@@ -320,6 +320,10 @@ impl HostShared {
         settings: &EmulatorWatchConfig,
         now_ms: u64,
     ) -> RuntimeHostResult<()> {
+        // IDLE-1: an emulator the idle action stopped stays stopped until its wake starts it.
+        if self.idle_holds_emulator_stopped(alias)? {
+            return Ok(());
+        }
         let busy = {
             let scheduler = lock(&self.scheduler, EmulatorWatchLocation::Watch)?;
             scheduler.active_lease(instance_id).is_some()

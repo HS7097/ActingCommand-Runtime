@@ -21,7 +21,8 @@
 //!   `emulator_control` (#411 A50; emu-watch adds the emulator watch's keys); `watchdog` (#411
 //!   A66, read by the watchdog and `actingctl` from the configuration file,
 //!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
-//!   capture cadence).
+//!   capture cadence); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance with
+//!   no task soon, also per instance).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -37,6 +38,7 @@ pub mod emulator_control;
 pub mod execution;
 mod existing;
 mod host_claims;
+pub mod idle;
 mod instance;
 pub mod lab_module;
 pub mod ledger_observer;
@@ -70,6 +72,7 @@ pub use emulator_control::{
 };
 pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
+pub use idle::{IdleAction, IdleConfig, IdleFile};
 pub use instance::{
     DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR,
     STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS,
@@ -121,6 +124,9 @@ mod device_state_tests;
 // SCH-M ED-1.
 #[cfg(test)]
 mod ed1_tests;
+// IDLE-1.
+#[cfg(test)]
+mod idle1_tests;
 #[cfg(test)]
 mod ladder_tests;
 // Workflow #383 AO-1.

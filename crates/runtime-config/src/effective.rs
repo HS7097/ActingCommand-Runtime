@@ -10,6 +10,7 @@ use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::execution::CaptureCadenceConfig;
+use crate::idle::IdleConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
@@ -21,8 +22,8 @@ use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, f
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, emulator_control, execution, host_claims, instance, ledger_observer,
-    performance, recovery_ladder, scheduling, startup_discovery, touch,
+    device_link, device_state, emulator_control, execution, host_claims, idle, instance,
+    ledger_observer, performance, recovery_ladder, scheduling, startup_discovery, touch,
 };
 use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
@@ -597,6 +598,19 @@ impl EffectiveConfig {
         scheduling::instance_expected_runtime(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
+    /// IDLE-1: the `idle` section in effect, checked whole.
+    pub fn idle_section(&self) -> Result<IdleConfig, ConfigFailure> {
+        idle::section(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// IDLE-1: the idle keys in effect for the instance whose registry id is `instance_id`: each
+    /// of `action`, `min_gap_ms`, `close_app_wake_lead_ms` and `stop_emulator_wake_lead_ms` the
+    /// instance's own `instance.<instance_id>.idle.<member>` when the configuration carries it,
+    /// otherwise the section's `idle.<member>`; checked whole (each wake lead below the gap).
+    pub fn idle(&self, instance_id: &str) -> Result<IdleConfig, ConfigFailure> {
+        idle::instance_idle(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
     /// Workflow #405 D1: the random delay in effect for the instance whose registry id is
     /// `instance_id`: `enabled`, `min_ms` and `max_ms`, each the instance's own
     /// `instance.<instance_id>.scheduling.random_delay.<member>` when the configuration carries
@@ -749,6 +763,9 @@ impl EffectiveConfig {
         }
         if sections.contains(execution::SECTION) {
             self.capture_cadence()?;
+        }
+        if sections.contains(idle::SECTION) {
+            self.idle_section()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

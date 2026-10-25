@@ -763,6 +763,64 @@ member of the section or of one of its objects for `actingctl install`, is `conf
 (`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
 unknown member of the file (`config_decode_failed`).
 
+## The `idle` section (IDLE-1)
+
+IDLE-1 (Alice's ruling 41 of 10-24: when an instance has no task, close the game inside the
+emulator, and the startup package relaunches it when a task is due; her ruling of 10-25:
+「没有任务的时候直接关闭模拟器……任务结束或者接下来一段时间比如30分钟内没有任务的时候关闭应用程序」, two options
+of one function; Workflow #386 comment 6393646823): what the Runtime does with an instance that
+has no task soon, and when it brings the instance back. Each key is also per instance,
+`instance.<instance id>.idle.<member>`, in the file the `idle` member of the `instances[]` entry,
+default the section's key of the same name (`section:idle.<member>`). Every key is settable: the
+Runtime reads them at every idle check, so an instruction takes effect at the next one; an
+instance that is idle when its action in effect changes is brought back at once. `actingd-config`
+revision 12 ([component-interfaces.md](component-interfaces.md)) adds the section and the entry's
+member; a file that names neither keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `idle.action` | one of `none` (nothing ever happens), `close_app` (the game's application is stopped inside the emulator), `stop_emulator` (the instance's sessions are closed and its emulator is stopped) | `close_app` | yes |
+| `idle.min_gap_ms` | milliseconds `60000..=86400000`, the least time to the scheduler's next due task for the instance before the action runs | `1800000` | yes |
+| `idle.close_app_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose application was closed is brought back (the startup package) | `60000` | yes |
+| `idle.stop_emulator_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose emulator was stopped is brought back (the emulator's boot and the startup package) | `300000` | yes |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max` for the milliseconds) at start, in `check-config` and in `ConfigureSettings`; a value
+of another type is `wrong_type`. The whole-section check, the section's and each instance's keys in
+effect: each wake lead is shorter than `idle.min_gap_ms` (`section_check` on the lead's key), and
+an instance whose action in effect is `stop_emulator` is one whose emulator the Runtime starts
+(`instance.<id>.start_emulator` true; `section_check` on `instance.<id>.idle.action`), since its
+wake starts the emulator through that configured start. The rows are those of
+`config.parameters.idle` and, per instance, `config.parameters.instance`.
+
+When (the Runtime host, `host/idle.rs`): at every policy cycle, right after its evaluation and
+before actingd admits its dispatches, and between cycles every second of the lease sweep, the idle
+check takes each registered physical instance the configuration names. The action runs once when
+the instance has no lease, no queued request and no keyless work holding its admission guard, no
+scheduling pause holds it (nor a resource fence), its emulator runs, it can be brought back (a
+startup package, and for `stop_emulator` its configured emulator start), and the latest policy
+evaluation, made after the instance was last seen in use, has no due task for it and no next wake
+closer than `idle.min_gap_ms` (the not-run explanation's due candidates and next wake of the
+instance, the evaluator's own; no other estimate). It runs on an emulator-control claim of the
+instance's key. `close_app` stops the application `<standard_packs.root>/<game>/applications.json`
+declares for the instance's server (`servers.<server>.application_id`), which must be the
+instance's assigned application, through the application lifecycle path; `stop_emulator` is the
+emulator-control Stop on the claim's key (the fence on the key, the retained session's close, the
+provider's Stop, never MuMuManager `api`). The wake comes at the next due time minus the action's
+wake lead, or at once when a later evaluation shows a due task: after `close_app` the startup
+package is queued, after `stop_emulator` the configured emulator start, which hands the key to the
+startup package. While an instance's emulator is held stopped the emulator watch does not start
+it. Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
+or `queue_idle_wake`, `idle_action` naming the action). An instance whose action in effect cannot
+bring it back (its `instances[]` entry has no `startup_package`, or for `stop_emulator` no
+`start_emulator`) never acts, and the first idle check that finds it records one
+`instance_idle_action_unsupported` warning (`member` naming what the entry lacks, `operation`
+`check_idle_instances`) and the same report line, once per action in effect; after a start that is
+the first policy cycle or lease sweep. A failed close or stop is recorded and goes through the one
+decision point (`contain_failure`, #419), so it fails only that instance's action: the instance is
+left as it is, no wake follows, its next due task goes through the normal path, and only a failure
+that is the Runtime's as a whole latches it.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
