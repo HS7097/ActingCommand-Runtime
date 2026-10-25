@@ -15,6 +15,13 @@
       "maxLength": 128,
       "pattern": "^[a-z0-9][a-z0-9._:-]*$"
     },
+    "itemId": {
+      "description": "ROUT-L RL-1a: the id of a task, pool, activity profile or timeline event, and a reference to one. An identifier, or the id <identifier>@<alias> of an instance copy the standard-pack composer makes (contracts/standard-pack-schedule.md); the alias holds no whitespace and no control character. The compiler enforces the 128-byte bound.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._:-]*(@[^\\s\\u0000-\\u001F\\u007F-\\u009F]+)?$"
+    },
     "reference": {
       "type": "string",
       "minLength": 1,
@@ -365,7 +372,7 @@
           "required": ["kind", "event_id"],
           "properties": {
             "kind": { "const": "timeline_active" },
-            "event_id": { "$ref": "#/$defs/identifier" }
+            "event_id": { "$ref": "#/$defs/itemId" }
           },
           "additionalProperties": false
         },
@@ -374,7 +381,7 @@
           "required": ["kind", "pool_id", "comparison", "value"],
           "properties": {
             "kind": { "const": "resource_projection" },
-            "pool_id": { "$ref": "#/$defs/identifier" },
+            "pool_id": { "$ref": "#/$defs/itemId" },
             "comparison": { "$ref": "#/$defs/comparison" },
             "value": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
           },
@@ -424,7 +431,7 @@
           "required": ["kind", "task_id", "terminal_states"],
           "properties": {
             "kind": { "const": "dependency_completed" },
-            "task_id": { "$ref": "#/$defs/identifier" },
+            "task_id": { "$ref": "#/$defs/itemId" },
             "terminal_states": {
               "type": "array",
               "minItems": 1,
@@ -441,7 +448,7 @@
           "required": ["kind", "task_id", "outcome_key", "comparison", "value"],
           "properties": {
             "kind": { "const": "outcome" },
-            "task_id": { "$ref": "#/$defs/identifier" },
+            "task_id": { "$ref": "#/$defs/itemId" },
             "outcome_key": { "$ref": "#/$defs/identifier" },
             "comparison": { "$ref": "#/$defs/comparison" },
             "value": { "$ref": "#/$defs/factValue" }
@@ -454,7 +461,7 @@
       "type": "object",
       "required": ["pool_id", "direction", "observation_source", "confidence_milli"],
       "properties": {
-        "pool_id": { "$ref": "#/$defs/identifier" },
+        "pool_id": { "$ref": "#/$defs/itemId" },
         "direction": { "enum": ["consume", "produce"] },
         "amount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "expected_amount_milli": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
@@ -487,7 +494,7 @@
           "required": ["kind", "pool_id"],
           "properties": {
             "kind": { "const": "pool" },
-            "pool_id": { "$ref": "#/$defs/identifier" }
+            "pool_id": { "$ref": "#/$defs/itemId" }
           },
           "additionalProperties": false
         },
@@ -496,7 +503,7 @@
           "required": ["kind", "task_id", "outcome_key"],
           "properties": {
             "kind": { "const": "outcome" },
-            "task_id": { "$ref": "#/$defs/identifier" },
+            "task_id": { "$ref": "#/$defs/itemId" },
             "outcome_key": { "$ref": "#/$defs/identifier" }
           },
           "additionalProperties": false

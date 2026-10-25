@@ -64,6 +64,15 @@ for its next occurrence (`../README.md`, "Clock Sources"). `missed` under a
 `type_mismatch`, and a V1 document that names it is refused as an unknown
 member. A clock without `missed` serializes, and hashes, exactly as before.
 
+ROUT-L RL-1a ([../../standard-pack-schedule.md](../../standard-pack-schedule.md)): a V2 catalog
+may carry an empty `approval_refs` and an empty task list (the standard-pack composition, which
+has no approval, and a composition without rules); V1 keeps its rules. A V2 task, pool, activity
+profile or timeline event id, and a reference to one, may also be the id `<identifier>@<alias>` of
+an instance copy the composer makes (schema `itemId`: an identifier, `@`, and an instance alias
+without whitespace or a control character, at most 128 bytes in all). One continued id may be
+claimed by several tasks when each is scoped to a different instance (the copies of one rule);
+any other second claim stays a split.
+
 A task may carry `continues_from` (Workflow #372 K5), V2 only: 1 to 8 task
 ids of an earlier catalog that this task continues, each by the rule of a task
 id. Under the active catalog the task accounts as itself and these ids

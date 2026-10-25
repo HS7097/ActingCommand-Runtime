@@ -73,7 +73,7 @@
         "goals"
       ],
       "properties": {
-        "id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "id": { "$ref": "./common.schema.json#/$defs/itemId" },
         "scope": { "$ref": "./common.schema.json#/$defs/scope" },
         "windows": {
           "type": "array",

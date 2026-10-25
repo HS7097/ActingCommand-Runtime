@@ -9,7 +9,7 @@
     "catalog": { "$ref": "./common.schema.json#/$defs/catalog" },
     "tasks": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 4096,
       "items": { "$ref": "#/$defs/task" }
     }
@@ -28,7 +28,7 @@
       "type": "object",
       "required": ["pool_id", "at_least"],
       "properties": {
-        "pool_id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "pool_id": { "$ref": "./common.schema.json#/$defs/itemId" },
         "at_least": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
       },
       "additionalProperties": false
@@ -122,7 +122,7 @@
         "instance_overrides"
       ],
       "properties": {
-        "id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "id": { "$ref": "./common.schema.json#/$defs/itemId" },
         "scope": { "$ref": "./common.schema.json#/$defs/scope" },
         "entrypoint": { "$ref": "#/$defs/operationRef" },
         "procedure_ref": { "$ref": "./common.schema.json#/$defs/identifier" },
