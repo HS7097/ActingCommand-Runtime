@@ -216,6 +216,17 @@ pub(super) trait DurableStorage: Send + 'static {
     /// the last record's), through the time index.
     fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>>;
 
+    /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 step 1): the `ledger_index` rows
+    /// of `role` whose key starts with one of `prefixes`, each with the hash of the ledger row its
+    /// sequence names; `None` for a store that keeps no index.
+    fn index_rows(
+        &self,
+        _role: super::index_read::LedgerIndexRole,
+        _prefixes: &[String],
+    ) -> Option<GlobalLedgerResult<Vec<super::index_read::StoredIndexRow>>> {
+        None
+    }
+
     /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.5): the index table's `state` rows
     /// whose key starts with one of `prefixes`, each with the stored hash of the record its
     /// sequence names; `None` for a store that keeps no index.

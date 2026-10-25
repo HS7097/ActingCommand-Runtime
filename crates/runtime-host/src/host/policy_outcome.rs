@@ -1877,10 +1877,10 @@ pub(super) fn record_policy_values(
             events.system_links()?,
             payload,
         )?;
-        ledger
+        let appended = ledger
             .append(events.sanitize(draft)?)
             .map_err(|_| ledger_error(operation))?;
-        policy.note_value_recorded(key, record);
+        policy.note_value_recorded(key, record, appended.sequence());
     }
     Ok(())
 }

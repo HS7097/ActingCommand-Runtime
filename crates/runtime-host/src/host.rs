@@ -25,6 +25,7 @@ use crate::policy_host::{
 };
 use crate::proposal::prepare_proposal;
 use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
+use crate::tagged_state::TaggedStart;
 use crate::time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock, unix_ms_now};
 use crate::{
     AgentDispatcherConfig, CatalogGeneration, FatalState, MaintenanceLedgerQuery,
@@ -1950,20 +1951,37 @@ impl RuntimeHost {
                 .values()
                 .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
                 .collect::<BTreeMap<_, _>>();
+            // Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5, §11.6): the seeding's
+            // marker decides whether the monitor registry, the policy host's decision memory and
+            // the agent dispatcher load from their tagged records or are seeded once.
+            let tagged_start = TaggedStart::read(&shared.ledger)?;
+            // Workflow #422 LN-4: a root's first start has no earlier epoch to seed and writes
+            // no marker; read before this start's own start record.
+            let earlier_start = crate::tagged_state::earlier_start(&shared.ledger)?;
             // Workflow #381 R6: each recovery step is timed, and the line is printed whether
             // the recovery succeeds or fails.
             let recovery_started = Instant::now();
             let recovered = (|| {
                 let monitor_registry = timed(&mut startup_recovery.monitor_registry_ms, || {
-                    MonitorRegistry::open(
-                        &config.state_root,
-                        registered_instances
-                            .values()
-                            .map(|instance| instance.instance_alias.clone()),
-                        owner_epoch,
-                        &shared.ledger,
-                        &shared.events,
-                    )
+                    let aliases = registered_instances
+                        .values()
+                        .map(|instance| instance.instance_alias.clone());
+                    match tagged_start {
+                        TaggedStart::Load { .. } => MonitorRegistry::load(
+                            &config.state_root,
+                            aliases,
+                            owner_epoch,
+                            &shared.ledger,
+                            &shared.events,
+                        ),
+                        TaggedStart::Seed => MonitorRegistry::open(
+                            &config.state_root,
+                            aliases,
+                            owner_epoch,
+                            &shared.ledger,
+                            &shared.events,
+                        ),
+                    }
                 })?;
                 let mut policy = timed(&mut startup_recovery.policy_host_ms, || {
                     PolicyHost::open(
@@ -1972,6 +1990,7 @@ impl RuntimeHost {
                         &shared.ledger,
                         config.policy_cadence.clone(),
                         &shared.events,
+                        tagged_start,
                     )
                 })?;
                 let unsettled_dispatches =
@@ -2041,9 +2060,19 @@ impl RuntimeHost {
                 timed(&mut startup_recovery.runtime_state_ms, || {
                     reconcile_runtime_state(&shared.state, &shared.ledger, &shared.events)
                 })?;
-                let agent_dispatcher = timed(&mut startup_recovery.agent_dispatcher_ms, || {
-                    AgentDispatcherState::recover(&shared.ledger, &agent_instance_ids)
-                })?;
+                let agent_dispatcher =
+                    timed(
+                        &mut startup_recovery.agent_dispatcher_ms,
+                        || match tagged_start {
+                            TaggedStart::Load { .. } => AgentDispatcherState::load(
+                                &shared.ledger,
+                                crate::recovery_read::RECOVERY_PAGE_EVENTS,
+                            ),
+                            TaggedStart::Seed => {
+                                AgentDispatcherState::recover(&shared.ledger, &agent_instance_ids)
+                            }
+                        },
+                    )?;
                 Ok::<_, RuntimeHostError>((
                     monitor_registry,
                     policy,
@@ -2065,8 +2094,8 @@ impl RuntimeHost {
                 host.startup_recovery = startup_recovery;
             }
             let (
-                monitor_registry,
-                policy,
+                mut monitor_registry,
+                mut policy,
                 authoritative_policy_outcomes,
                 policy_dispatch_clocks,
                 mut agent_dispatcher,
@@ -2097,6 +2126,15 @@ impl RuntimeHost {
                 config.device_diagnostic_mode,
             )?;
             append_instance_binding_events(&shared.ledger, &shared.events, &registered_instances)?;
+            if tagged_start == TaggedStart::Seed {
+                seed_tagged_state(
+                    &shared,
+                    &mut policy,
+                    &mut monitor_registry,
+                    &agent_dispatcher,
+                    earlier_start,
+                )?;
+            }
             #[cfg(test)]
             if config.fail_after_start_event_for_test {
                 return Err(RuntimeHostError::fatal(
@@ -4202,6 +4240,70 @@ impl RuntimeHost {
         Ok(lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?.remedy_table_for_test())
     }
 
+    /// Workflow #422 LN-4, test only: the decision memory the policy host holds, as value
+    /// records; the same rebuilt by today's replay of every dispatch event; and the size of the
+    /// dispatch journal.
+    #[cfg(test)]
+    pub(crate) fn decision_memory_for_test(
+        &self,
+    ) -> RuntimeHostResult<(ValueRecordsForTest, ValueRecordsForTest, usize)> {
+        let shared = self.shared_ref(HostLocation::RecoverPolicyControl)?;
+        let policy = lock(shared.policy()?, HostLocation::RecoverPolicyControl)?;
+        let (held, journal) = policy.decision_memory_for_test()?;
+        let replayed = policy.replayed_decision_memory_for_test(&shared.ledger)?;
+        Ok((held, replayed, journal))
+    }
+
+    /// Workflow #422 LN-4, test only: the policy host's dispatch journal, and today's
+    /// whole-history journal kept by the journal's rule.
+    #[cfg(test)]
+    pub(crate) fn dispatch_journal_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        crate::policy_host::DispatchJournalForTest,
+        crate::policy_host::DispatchJournalForTest,
+    )> {
+        let shared = self.shared_ref(HostLocation::RecoverPolicyDispatches)?;
+        let policy = lock(shared.policy()?, HostLocation::RecoverPolicyDispatches)?;
+        let replayed = policy.replayed_dispatch_journal_for_test(&shared.ledger)?;
+        Ok((policy.dispatch_journal_for_test(), replayed))
+    }
+
+    /// Workflow #422 LN-4, test only: the monitor registry's state, and the same rebuilt by
+    /// today's replay of every Runtime record.
+    #[cfg(test)]
+    pub(crate) fn monitor_state_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        crate::monitor::MonitorStateForTest,
+        crate::monitor::MonitorStateForTest,
+    )> {
+        let shared = self.shared_ref(HostLocation::OpenMonitorRegistry)?;
+        let registry = lock(
+            shared.monitor_registry()?,
+            HostLocation::OpenMonitorRegistry,
+        )?;
+        let replayed = MonitorRegistry::replayed_for_test(
+            registry.aliases_for_test(),
+            shared.owner_epoch,
+            &shared.ledger,
+        )?;
+        Ok((registry.state_for_test(), replayed.state_for_test()))
+    }
+
+    /// Workflow #422 LN-4, test only: whether the agent dispatcher's state equals today's
+    /// whole-ledger fold, and the sizes of its seven maps.
+    #[cfg(test)]
+    pub(crate) fn agent_dispatcher_state_for_test(&self) -> RuntimeHostResult<(bool, [usize; 7])> {
+        let replayed = self.recover_agent_dispatcher_for_test(None)?;
+        let shared = self.shared_ref(HostLocation::RecoverAgentDispatcher)?;
+        let state = lock(
+            &shared.agent_dispatcher,
+            HostLocation::RecoverAgentDispatcher,
+        )?;
+        Ok((*state == replayed, state.map_sizes_for_test()))
+    }
+
     /// Workflow #406 T12, test only: the landing points `instance_alias` keeps for the box
     /// `region`, oldest use first.
     #[cfg(test)]
@@ -5625,6 +5727,80 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
         operation,
         RuntimeErrorCode::LedgerFailure,
     )
+}
+
+/// Workflow #422 LN-4, tests: the decision memory as its value records, by index key.
+#[cfg(test)]
+type ValueRecordsForTest = BTreeMap<String, crate::policy_control::PolicyValueRecord>;
+
+/// Workflow #422 LN-4 (LEAN-L model §3.6; `contracts/ledger-observer.md` §11.6, §12 step 8): on
+/// a start without the marker, the value records the index does not name yet, then the marker
+/// with the seeding's report (`ledger_tagged_state_seeded`, the keys seeded). The decision
+/// memory's records were written by the start's reconciliation, which found none recorded; any
+/// left are written here. The monitor registry's and the live wake obligations' are written
+/// here. Later starts load and never replay. A root's first start (`earlier_start` false: the
+/// ledger holds no `runtime.started` or `runtime.takeover` before it) has no earlier epoch to
+/// seed and writes no marker; the root's next start seeds what that epoch recorded.
+fn seed_tagged_state(
+    shared: &HostShared,
+    policy: &mut PolicyHost,
+    monitor_registry: &mut MonitorRegistry,
+    agent_dispatcher: &AgentDispatcherState,
+    earlier_start: bool,
+) -> RuntimeHostResult<()> {
+    shared.record_policy_values(policy)?;
+    let through = shared
+        .ledger
+        .latest_sequence()
+        .map_err(|_| ledger_error(HostLocation::RecoverPolicyControl))?;
+    policy.mark_values_seeded(through)?;
+    let mut seeded = policy.recorded_value_count();
+    seeded += monitor_registry.seed(&shared.ledger, &shared.events)?;
+    let named = crate::tagged_state::index_records(
+        &shared.ledger,
+        actingcommand_ledger::LedgerIndexRole::State,
+        &[crate::agent_dispatcher::WAKE_KEY_PREFIX],
+    )?
+    .records
+    .into_iter()
+    .map(|record| record.key)
+    .collect::<BTreeSet<_>>();
+    for wake in agent_dispatcher.live_wakes() {
+        let key = format!(
+            "{}{}",
+            crate::agent_dispatcher::WAKE_KEY_PREFIX,
+            crate::failure_identity::identifier_text(&wake.data().wake_id())
+        );
+        if named.contains(&key) {
+            continue;
+        }
+        let draft = shared.events.draft(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::AgentDispatcher,
+            EventActor::Runtime,
+            shared.events.system_links()?,
+            AgentPayloadDraft::wake_obligation_recorded(wake.data().clone(), AuditInput::new()),
+        )?;
+        shared
+            .ledger
+            .append(shared.events.sanitize(draft)?)
+            .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
+        seeded += 1;
+    }
+    if !earlier_start {
+        return Ok(());
+    }
+    shared.append_lifecycle_observed(
+        RuntimeLifecyclePhase::TaggedStateEnabled {
+            outcome: Some(
+                Outcome::new(actingcommand_ledger::LedgerCode::LedgerTaggedStateSeeded.code())
+                    .count(seeded),
+            ),
+        },
+        shared.events.system_links()?,
+    )?;
+    Ok(())
 }
 
 /// #411 A65 (R2): [`ledger_error`] of `operation` with the ledger's own failure as its outcome's
