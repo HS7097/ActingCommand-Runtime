@@ -796,7 +796,12 @@ impl HostShared {
             unix_ms: sample.unix_ms,
             monotonic_ms: sample.monotonic_ms,
         };
-        self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)
+        let cycle =
+            self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)?;
+        // IDLE-1: the idle check right after the evaluation and before actingd admits its
+        // dispatches, so a wake's claim holds an idle instance before a due dispatch reaches it.
+        self.check_idle_instances(false)?;
+        Ok(cycle)
     }
 
     #[cfg(test)]

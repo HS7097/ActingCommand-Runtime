@@ -1925,3 +1925,25 @@ tests = [
     "actingcommand-runtime-host::lib::policy_control::tests::ln3_b_a_restart_from_the_value_records_alone_keeps_runtime_budgets_and_activity_intervals",
 ]
 incident = ["#422 LN-3"]
+
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25; Workflow #386 comment 6393646823; contracts/runtime-config.md, "The `idle` section"): idle.action defaults to close_app (one of none, close_app, stop_emulator), idle.min_gap_ms to 1800000, idle.close_app_wake_lead_ms to 60000 and idle.stop_emulator_wake_lead_ms to 300000, all settable; each instance's idle keys default to the section's and an instance's own key overrides it for that instance only, from the file and through an instruction; an unknown action, a value out of range or of another type is refused where it enters; a wake lead not shorter than the gap (the section's or an instance's) is section_check at start and through an instruction; stop_emulator is refused on an instance whose emulator the Runtime does not start
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::idle1_tests::idle1_c1_defaults_and_per_instance_keys",
+    "actingcommand-runtime-config::lib::idle1_tests::idle1_c2_bad_values_are_refused",
+]
+incident = ["#386 IDLE-1"]
+
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): the idle planner on a manual clock with neutral instances: a gap to the next due task of at least idle.min_gap_ms runs the action once, a shorter one never; a paused, leased, queued or manually held instance is left alone, and so is one whose plan predates its last work; close_app brings the instance back at next due minus its lead through the startup package, stop_emulator through the configured emulator start and then the startup package; a due task earlier than planned, or the action switched off, wakes it at once; a failed stop fails only its own instance (no wake, no retry until work held it again) while another instance's wake goes on; none never acts or wakes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_a_the_action_runs_once_at_the_minimum_gap_and_never_below_it",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_b_a_paused_leased_queued_or_manually_held_instance_is_left_alone",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_c_each_action_brings_the_instance_back_at_next_due_minus_its_lead",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_d_a_due_task_earlier_than_planned_wakes_the_instance_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_e_a_failed_stop_fails_only_that_instance",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_f_none_never_acts_or_wakes",
+]
+incident = ["#386 IDLE-1"]

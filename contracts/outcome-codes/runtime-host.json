@@ -8256,6 +8256,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "alias": "optional",
+        "application_id": "optional",
+        "game": "optional",
+        "server": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -8265,9 +8269,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports invalid application identity.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Runtime host reports invalid application identity. IDLE-1: an idle close_app found no application id for the instance's game and server in the game's standard pack root applications.json (servers.<server>.application_id; the root, the file or the member is missing or unreadable), or one that is not the instance's assigned application (application_id the declared one); the action fails for this instance only, which is left as it is. The detail says which.",
+      "common_causes": "No standard_packs.root is configured, the game's root holds no applications.json, or the instance's configured application_id differs from the one its game's root declares.",
+      "handling": "Install the game's standard pack root with its applications.json, or make the instance's application_id the one it declares; or set the instance's idle.action to none."
     },
     "invalid_capacity_sample_target": {
       "category": "error",
@@ -21682,6 +21686,7 @@
         "alias": "optional",
         "attempts": "optional",
         "limit_count": "optional",
+        "idle_action": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -21691,7 +21696,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line. emu-watch (Alice's ruling 35, R3): the emulator watch found a configured instance's emulator stopped, its key free and no autostart or emulator control claim waiting, and enqueued one autostart claim for it, paused or not: count is 1, alias the instance, attempts this restart's place among the watch's restarts of the instance within emulator_control.restart_window_ms, limit_count emulator_control.restart_attempts; also a device_state_observed record under the instance. The claim's Start and its result follow as every configured start's.",
+      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line. emu-watch (Alice's ruling 35, R3): the emulator watch found a configured instance's emulator stopped, its key free and no autostart or emulator control claim waiting, and enqueued one autostart claim for it, paused or not: count is 1, alias the instance, attempts this restart's place among the watch's restarts of the instance within emulator_control.restart_window_ms, limit_count emulator_control.restart_attempts; also a device_state_observed record under the instance. The claim's Start and its result follow as every configured start's. IDLE-1: the wake of an instance whose idle action stopped its emulator enqueued the same claim (count 1, alias the instance, idle_action stop_emulator).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22330,6 +22335,31 @@
       "description": "A poll of the emulator watch (emu-watch, R3) found the configured instance's emulator stopped, but the watch already started it emulator_control.restart_attempts times (limit_count; attempts in the window) within emulator_control.restart_window_ms: it starts it no more until the oldest of those restarts leaves the window (retry_after_ms) or a person's emulator control of the instance clears the count. Once per streak; a device_state_observed record under the instance and the same report line.",
       "common_causes": "The emulator stops again soon after each start, or its Start keeps failing.",
       "handling": "Look at the instance's emulator and the failures of the watch's starts (emulator_autostart_failed and their causes). Start it by hand with actingctl emulator start (or ac_emulator), which also clears the count, or wait for the window to pass."
+    },
+    "instance_idle_action": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "idle_action": "required",
+        "next_occurrence_unix_ms": "optional",
+        "at_unix_ms": "optional",
+        "application_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): an instance with no task soon. With operation idle_action, its idle action ran: close_app stopped the game's application inside the emulator (application_id, the one the game's standard pack root applications.json declares for the instance's server, which is the instance's assigned application), or stop_emulator closed the instance's sessions and stopped its emulator through the emulator-control path. It ran only with no lease, no queued request and no keyless work on the instance, no scheduling pause holding it, its emulator running and the scheduler's next due time for it (next_occurrence_unix_ms, absent when the latest evaluation gave none) at least idle.min_gap_ms away. With operation idle_wake, the instance's wake was queued: at_unix_ms or earlier when a due task arrived earlier (the startup package; after stop_emulator the configured emulator start first, whose emulator_autostart_queued record follows). at_unix_ms is the planned wake (the next due time minus the action's wake lead), absent when none was planned. idle_action names the action. A device_state_observed record under the instance and the same report line.",
+      "common_causes": "The instance has no task within idle.min_gap_ms, or its wake is due.",
+      "handling": "None needed. Set idle.action (or instance.<id>.idle.action) to none to keep the instance running, or to close_app or stop_emulator to choose the action; idle.min_gap_ms and the wake leads set when it acts and when it comes back."
     }
   },
   "locations": {
@@ -29238,6 +29268,30 @@
       "status": "active",
       "since": "0.12.12",
       "description": "A Runtime host operation: the emulator watch (emu-watch, Alice's ruling 35): its start, which actingd asks for after the configured emulator starts are enqueued, its polls (the emulator status read of every discovery-bound instance and the restarts it requests) and its end with the host."
+    },
+    "idle_check": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A Runtime host operation: the idle check (IDLE-1) of every registered physical instance, at every policy cycle and every lease sweep: whether an instance's idle action runs or an idle instance's wake is queued."
+    },
+    "idle_action": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A Runtime host operation: one instance's idle action (IDLE-1) on its emulator-control claim: close_app stops the game's application, stop_emulator closes the instance's sessions and stops its emulator."
+    },
+    "idle_wake": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A Runtime host operation: one idle instance's wake (IDLE-1): the configured emulator start (after stop_emulator) and the startup package queued."
     }
   }
 }

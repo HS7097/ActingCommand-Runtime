@@ -417,6 +417,33 @@ impl HostShared {
             })
     }
 
+    /// IDLE-1: the idle keys in effect for the instance `instance_id` (its own
+    /// `instance.<id>.idle.*`, else the `idle` section's), read at every idle check; `None` for an
+    /// instance the configuration in effect does not name (a host started without actingd's
+    /// manifest), which has no idle action.
+    pub(super) fn idle_settings(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<actingcommand_runtime_config::IdleConfig>> {
+        let id = crate::failure_identity::identifier_text(&instance_id);
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let named = actingcommand_runtime_config::instance_key(
+            &id,
+            actingcommand_runtime_config::idle::ACTION,
+        );
+        if config.value(&named).is_none() {
+            return Ok(None);
+        }
+        config.idle(&id).map(Some).map_err(|failure| {
+            RuntimeHostError::fatal(
+                failure.failure_code(),
+                ConfigHostLocation::ReadRuntimeConfig,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+            .with_outcome_values(|outcome| failure.with_values(outcome))
+        })
+    }
+
     /// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, read
     /// when a run joins the readings it handed to recognition.
     pub(super) fn recognition_join_timeout(&self) -> RuntimeHostResult<Duration> {

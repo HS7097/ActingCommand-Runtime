@@ -157,6 +157,8 @@ mod gate_369_s6clow;
 // emulators and starts a configured one it finds stopped, within a bound.
 mod gate_372k2;
 mod gate_emu_watch;
+// IDLE-1 (Alice's ruling 41): the idle planner on a manual clock.
+mod gate_idle1;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).

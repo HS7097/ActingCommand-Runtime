@@ -756,6 +756,47 @@ impl HostShared {
         }
     }
 
+    /// IDLE-1: the idle action `stop_emulator` on its emulator-control claim's own `key`: its
+    /// `command.received` (a Runtime-origin intent under the claim's `links`), H-4's stop path
+    /// (`drive_emulator_control`: the fence on the key, the retained session's close, the renewal
+    /// before the provider step, the provider Stop, the endpoint back to pending, the facts'
+    /// invalidation, `command.validated` or the failure pair), then the hold's end as an operator
+    /// stop's: the instance's queued startup claims are cancelled and the key is released. The
+    /// error is the recorded failure, or one the Runtime does not survive.
+    pub(super) fn drive_idle_stop(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        mut key: HostKey,
+    ) -> Result<(), RequestFailure> {
+        let action = EmulatorInstanceAction::Stop;
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            CommandPayloadDraft::received(action.event_action(), AuditInput::new()),
+        )?;
+        let mut driven = match self.drive_emulator_control(resolved, links, action, &mut key, false)
+        {
+            Ok(driven) => driven,
+            Err(failed) => return Err(self.end_failed_emulator_control(request, key, failed)),
+        };
+        match self.end_emulator_control_hold(
+            request,
+            &key,
+            driven.startup_package.take(),
+            driven.ladder.take(),
+        ) {
+            Ok(_) => Ok(()),
+            Err(failure) => {
+                Err(self.cleanup_composite_failure(key.token, key.connection_id, failure))
+            }
+        }
+    }
+
     /// Workflow #369 S6c (H-5, Q-5): a configured start an autostart claim refuses before it
     /// drives anything (no internet access in time, a refused renewal): its intent and the
     /// existing failure pair (`command.rejected` + `runtime.failed`) under the claim's `links`,

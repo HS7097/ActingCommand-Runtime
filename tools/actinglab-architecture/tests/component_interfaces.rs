@@ -33,7 +33,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   (`start_window_ms`), PERF-B1 (Workflow #407 B1, register §1.177, same release) the
 ///   optional `execution` section, SCH-M ED-1 (register §1.178, same release) the
 ///   expected-duration keys, and emu-watch the emulator watch's `emulator_control` keys;
-///   revisions 5 to 10 are still read, so [5, 11].
+///   revisions 5 to 10 are still read, so [5, 11]. IDLE-1 (the release after v0.12.12, Alice's
+///   ruling 41): revision 12 adds the `idle` section and an instance entry's `idle` member;
+///   revisions 5 to 11 are still read, so [5, 12].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -47,7 +49,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused.
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 11]),
+    ("actingd-config", [5, 12]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 4]),

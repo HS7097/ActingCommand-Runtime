@@ -26,10 +26,15 @@
 //! with `blackout_source` `instance`), and `scheduling.day_boundary.quiet`, default the section's
 //! `scheduling.day_boundary.quiet`, settable. SCH-M ED-1 (§3.4 "Configuration") adds
 //! `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms`, in the entry's `scheduling`
-//! member, each defaulting to the `scheduling` section's key of the same name, settable.
+//! member, each defaulting to the `scheduling` section's key of the same name, settable. IDLE-1
+//! adds `idle.action`, `.min_gap_ms`, `.close_app_wake_lead_ms` and `.stop_emulator_wake_lead_ms`,
+//! in the entry's `idle` member, each defaulting to the `idle` section's key of the same name,
+//! settable; checked whole per instance, and `stop_emulator` only on an instance whose emulator
+//! the Runtime starts (`start_emulator`).
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
+use crate::idle;
 use crate::recovery_ladder;
 use crate::scheduling::{
     self, DAY_BOUNDARY_QUIET, DELAY, EXPECTED_RUNTIME_ENABLED, EXPECTED_RUNTIME_MARGIN_MS,
@@ -182,6 +187,12 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         EXPECTED_RUNTIME_MARGIN_RANGE,
     ),
+    // IDLE-1: the instance's own idle keys; the `idle` section's values in effect are their
+    // defaults.
+    idle::INSTANCE_ROWS[0],
+    idle::INSTANCE_ROWS[1],
+    idle::INSTANCE_ROWS[2],
+    idle::INSTANCE_ROWS[3],
 ];
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose
@@ -231,6 +242,21 @@ pub(crate) fn check_instance(
 ) -> Result<(), ConfigFailure> {
     let read = |key: &str| value(key);
     scheduling::instance_blackouts(&read, instance, index)?;
+    // IDLE-1: the instance's idle keys in effect, checked whole; an instance whose action in
+    // effect is `stop_emulator` is one whose emulator the Runtime starts (`start_emulator`), since
+    // its wake starts the emulator through that configured start.
+    let idle_action_key = instance_key(instance, idle::ACTION);
+    if value(&idle_action_key).is_some() {
+        let config = idle::instance_idle(&read, instance)?;
+        if config.action == idle::IdleAction::StopEmulator
+            && value(&instance_key(instance, START_EMULATOR)) != Some(FactScalar::Boolean(true))
+        {
+            return Err(ConfigFailure::invalid_value(
+                idle_action_key,
+                ConfigValueProblem::SectionCheck,
+            ));
+        }
+    }
     let reader = scheduling::Reader { value: &read };
     let delay_keys = [
         RANDOM_DELAY_ENABLED,

@@ -176,6 +176,8 @@ mod emulator_instance;
 mod emulator_watch;
 mod evidence_export;
 mod facts;
+// IDLE-1 (Alice's ruling 41): the idle action of an instance with no task soon, and its wake.
+mod idle;
 // ISO-M (#419): the failure scope core, the closed Global list and `contain_failure`.
 pub(crate) mod failure_scope;
 mod failure_settlement;
@@ -1757,6 +1759,7 @@ impl RuntimeHost {
             emulator_watch: Mutex::new(emulator_watch::EmulatorWatch::default()),
             #[cfg(test)]
             emulator_watch_polled: Condvar::new(),
+            idle: Mutex::new(crate::idle_action::IdlePlanner::default()),
             #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
             #[cfg(test)]
@@ -4781,6 +4784,9 @@ struct HostShared {
     emulator_watch: Mutex<emulator_watch::EmulatorWatch>,
     #[cfg(test)]
     emulator_watch_polled: Condvar,
+    // IDLE-1: every instance's idle state (memory only). Taken by the idle check across its
+    // instances, and alone by an action's worker and by the emulator watch.
+    idle: Mutex<crate::idle_action::IdlePlanner>,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
     /// #411 A65 (Codex's counterexample on #420), test only: see
@@ -5444,6 +5450,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and
         // the watch's restarts), on the host clock.
         if let Err(error) = device_link::tick(&shared) {
+            shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
+        // IDLE-1: the idle check between policy cycles, so a planned wake comes on time. A
+        // failure of one instance is contained to it; only the Runtime's own is returned.
+        if let Err(error) = shared.check_idle_instances(true) {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }

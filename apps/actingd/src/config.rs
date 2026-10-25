@@ -230,6 +230,13 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     execution: Option<actingcommand_runtime_config::ExecutionFile>,
+    /// IDLE-1 (Alice's ruling 41): what the Runtime does with an instance that has no task soon
+    /// (`idle.*`), each member optional; the defaults file holds every default.
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
+    // before IDLE-1 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    idle: Option<actingcommand_runtime_config::IdleFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -778,6 +785,12 @@ struct InstanceConfig {
     /// (`start_emulator_requires_discovery_binding`); absent is off.
     #[serde(default)]
     start_emulator: Option<bool>,
+    /// IDLE-1: the instance's own idle keys (`instance.<id>.idle.*`); a member it leaves out is
+    /// the `idle` section's.
+    // Interface anchor `actingd-config` revision 12: a Runtime before IDLE-1 refuses an entry
+    // that names it, because the entry denies unknown members.
+    #[serde(default)]
+    idle: Option<actingcommand_runtime_config::IdleFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
@@ -1308,6 +1321,13 @@ impl ActingdConfigFile {
                 actingcommand_runtime_config::START_EMULATOR.to_owned(),
                 serde_json::json!(instance.start_emulator),
             );
+            // IDLE-1: reported as `instance.<id>.idle.*`, each member the file leaves out the
+            // `idle` section's.
+            members.insert(
+                actingcommand_runtime_config::idle::SECTION.to_owned(),
+                serde_json::to_value(&instance.idle)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
             // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
             if let Some(device) = &instance.device {
                 members.insert(
@@ -1442,6 +1462,8 @@ impl ActingdConfigFile {
             "watchdog": serde_json::to_value(&self.watchdog)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "execution": serde_json::to_value(&self.execution)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "idle": serde_json::to_value(&self.idle)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self

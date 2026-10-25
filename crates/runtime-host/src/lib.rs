@@ -20,6 +20,8 @@ mod fact_refresh_transitions;
 mod fact_store;
 mod failure_identity;
 mod host;
+// IDLE-1 (Alice's ruling 41): the idle planner, pure.
+mod idle_action;
 mod ipc;
 mod ledger_maintenance;
 mod monitor;
