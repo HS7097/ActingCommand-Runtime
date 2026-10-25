@@ -309,9 +309,30 @@ was for its request does not make it say so. A failure that latched nothing (a r
 observe whose capture failed, an IPC input or safe reset whose backend failed, a contained
 `Instance` failure) answers `host_halted: false`, with its own `runtime_code`. On a host that
 latched, a receipt is as before. A direct contained run's failed receipt keeps its failure's
-severity as `host_halted` until ISO-2 classifies the run's device failures (ISO-M rows E02,
-A01, A03): the client reads it to know whether the run kept its OCR fields report, which the
-host aborts for a fatal failure.
+severity as `host_halted`: the client reads it to know whether the run kept its OCR fields
+report, which the host aborts for a fatal failure. Since ISO-2 a capture of the instance's dead
+session (ISO-M row A01) and a failed geometry read (A03) fail the run non-fatally; a fatal
+input failure (E02) keeps its severity and latches nothing.
+
+**Device and kernel failures** (ISO-2; R1, R2): a failure of the execution kernel (the device,
+its session, its capture and input backends) concerns only the session's instance:
+`RuntimeHostError::execution` tags it `Instance`, of the instance it names, else of its
+boundary's, and keeps the kernel's code and severity. A kernel code on the Global list below
+(the session registry, an OS thread) stays `Global`. So:
+- a scheduled run, a host package run (a startup package, a ladder rung), a handset's link
+  step and an emulator control whose failure would stop the Runtime fence that instance
+  instead, and fail with the fence's non-fatal failure; actingd's driver goes on with the
+  other instances;
+- a run's capture that met its instance's dead, closing or changed session fails only the run,
+  as a capture failure (the failure's close retired the session, and the next capture opens a
+  fresh one); a geometry read that failed with its resources confirmed fails the run as
+  `contained_task_geometry_unavailable`; a frame commit or resolve the session refused fails
+  only its run, observe or Lab operation;
+- every fatal failure of the instance's own application command fences the instance (#411 A46,
+  widened to every kernel code);
+- a retained session's close before an emulator control, a pause or a handset's link loss, and
+  a session close at a lease end, that failed with its resources confirmed holds nothing: its
+  failure is recorded and the work goes on. An unconfirmed close fences the instance (#403).
 
 **A lock of one instance alone** that guards no data (its admission guard, its queue-order lock;
 R8) is taken through `lock_instance`: when a panic left it poisoned, the poison is cleared and
@@ -319,7 +340,7 @@ the work fails with `instance_lock_poisoned` (error, ladder class `none`), an `I
 of that instance. A poisoned lock that every instance shares stays `Global`
 (`runtime_state_poisoned`).
 
-**The closed Global list** (`GLOBAL_CODES`; R0.3), 139 codes in ten families, plus every catalog
+**The closed Global list** (`GLOBAL_CODES`; R0.3), 142 codes in ten families, plus every catalog
 code of category `fatal` (family `CatalogFatal`):
 
 | Family | Codes | List |
@@ -329,8 +350,8 @@ code of category `fatal` (family `CatalogFatal`):
 | the owner lock and the owner journal I/O | 15 | `owner_lock_failed`, `owner_file_open_failed`, `owner_file_missing`, `owner_write_failed`, `owner_sync_failed`, `owner_record_encode_failed`, `owner_revision_overflow`, `owner_epoch_issue_failed`, `owner_compaction_cleanup_failed`, `owner_compaction_rewrite_failed`, `owner_compaction_side_read_failed`, `owner_compaction_stage_failed`, `owner_unlock_failed`, `owner_seek_failed`, `owner_compaction_unrecoverable` |
 | identifier issuance | 14 | `runtime_identifier_issue_failed`, `event_issuer_failed`, `event_id_issue_failed`, `action_id_issue_failed`, `policy_identifier_issue_failed`, `monitor_probe_id_issue_failed`, `run_id_issue_failed`, `task_id_issue_failed`, `agent_wake_issue_failed`, `readonly_capability_issue_failed`, `lab_projection_id_issue_failed`, `lab_frame_id_issue_failed`, `lab_recognition_id_issue_failed`, `observation_recognition_id_issue_failed` |
 | an invalid or regressed clock | 9 | `system_clock_invalid`, `system_clock_overflow`, `monotonic_clock_regressed`, `monotonic_clock_overflow`, `policy_admission_clock_regressed`, `policy_admission_clock_overflow`, `policy_dispatch_clock_regressed`, `policy_execution_clock_regressed`, `clock_before_epoch` |
-| a poisoned lock every instance shares; the kernel session registry | 5 | `runtime_state_poisoned`, `fatal_state_poisoned`, `capacity_projection_poisoned`, `deferred_replies_poisoned`, `execution_kernel_state_poisoned` |
-| the process: IPC listener, OS threads, state root, runtime information file | 20 | `runtime_bind_failed`, `runtime_listener_address_failed`, `runtime_listener_config_failed`, `runtime_socket_mode_failed`, `runtime_accept_failed`, `runtime_accept_spawn_failed`, `runtime_connection_spawn_failed`, `runtime_sweeper_spawn_failed`, `runtime_monitor_spawn_failed`, `runtime_performance_spawn_failed`, `runtime_pack_admission_spawn_failed`, `instance_worker_spawn_failed`, `runtime_thread_panicked`, `state_root_create_failed`, `state_root_inspect_failed`, `runtime_info_invalid`, `runtime_info_create_failed`, `runtime_info_write_failed`, `runtime_info_publish_failed`, `runtime_info_replace_failed` |
+| a poisoned lock every instance shares; the kernel session registry | 7 | `runtime_state_poisoned`, `fatal_state_poisoned`, `capacity_projection_poisoned`, `deferred_replies_poisoned`, `execution_kernel_state_poisoned`, `execution_kernel_closed`, `execution_session_generation_exhausted` |
+| the process: IPC listener, OS threads, state root, runtime information file | 21 | `runtime_bind_failed`, `runtime_listener_address_failed`, `runtime_listener_config_failed`, `runtime_socket_mode_failed`, `runtime_accept_failed`, `runtime_accept_spawn_failed`, `runtime_connection_spawn_failed`, `runtime_sweeper_spawn_failed`, `runtime_monitor_spawn_failed`, `runtime_performance_spawn_failed`, `runtime_pack_admission_spawn_failed`, `instance_worker_spawn_failed`, `execution_session_spawn_failed`, `runtime_thread_panicked`, `state_root_create_failed`, `state_root_inspect_failed`, `runtime_info_invalid`, `runtime_info_create_failed`, `runtime_info_write_failed`, `runtime_info_publish_failed`, `runtime_info_replace_failed` |
 | the scheduler's cross-instance invariants | 6 | `invalid_scheduler_config`, `invalid_connection_id`, `identifier_issuance_failed`, `lease_expiry_overflow`, `lease_queue_sequence_overflow`, `lease_step_sequence_overflow` |
 | the shared policy projection out of step with the ledger | 2 | `policy_admission_event_invalid`, `policy_state_ledger_incomplete` |
 | the installer's transitions | 4 | `runtime_component_not_prepared`, `runtime_component_already_prepared`, `install_abort_state_invalid`, `install_release_state_invalid` |

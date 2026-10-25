@@ -200,8 +200,10 @@ impl HostShared {
                 // #411 A54: `host_halted` is true only when the Runtime latched, not because the
                 // failure was severe for this request. A direct contained run's receipt keeps its
                 // failure's severity: the client reads it to know whether the run kept its fields
-                // report, which the host aborts for a fatal failure. The run's device failures
-                // are ISO-2's (ISO-M rows E02, A01, A03).
+                // report, which the host aborts for a fatal failure. ISO-2: a capture of its
+                // instance's dead session (ISO-M row A01) and a failed geometry read (A03) fail
+                // the run non-fatally; a fatal input failure (E02) keeps its severity and
+                // latches nothing.
                 let outcome = if matches!(
                     request.operation(),
                     RuntimeOperation::RunContainedTask { .. }
@@ -809,6 +811,27 @@ impl RequestFailure {
 
     pub(super) fn poison_without_terminal(error: RuntimeHostError) -> Self {
         Self::poison(error, None)
+    }
+
+    /// ISO-2 (#419 R1; ISO-M rows A05, E14, E15, E16): the kernel refused a frame commit or
+    /// resolve on the instance's own session (`RuntimeHostError::instance_operation`). Only the
+    /// operation fails, non-fatal, with the kernel's code (a run's as its task failure); a
+    /// refusal that keeps its severity poisons as before, and its boundary contains it.
+    pub(super) fn frame_handoff(operation: HostLocation, error: &ExecutionKernelError) -> Self {
+        let error = RuntimeHostError::instance_operation(operation, error);
+        if error.is_fatal() {
+            return Self::poison_without_terminal(error);
+        }
+        Self {
+            state: RuntimeReceiptState::Failed,
+            terminal: None,
+            task_failure: Some(TaskFailureEvidence {
+                outcome: error.outcome(),
+                severe: false,
+            }),
+            error: Box::new(error),
+            poison_runtime: false,
+        }
     }
 
     pub(super) fn replace_with_poison(self, error: RuntimeHostError) -> Self {

@@ -794,6 +794,11 @@ impl RuntimeHostError {
         Self::with_projection(error.code(), operation, error.projection())
     }
 
+    /// A failure of the execution kernel: its device, session or backend failure keeps the
+    /// kernel's code and severity, and (ISO-2, #419 R1) concerns only the session's instance,
+    /// the instance it names, else the instance of the boundary that contains it: the boundary
+    /// fences that instance (or the run fails), and the Runtime does not latch. A kernel code on
+    /// the closed Global list (the session registry, an OS thread) stays `Global`.
     pub(crate) fn execution(operation: impl Into<Location>, error: &ExecutionKernelError) -> Self {
         let kernel_code = error.code().as_str();
         let runtime_code = match kernel_code {
@@ -849,7 +854,7 @@ impl RuntimeHostError {
             code: HostErrorCode::Registered(error.code()),
             operation: HostErrorOperation::Registered(operation.into()),
             projection: Box::new(RuntimeErrorProjection::new(runtime_code, error.is_fatal())),
-            scope: ScopeTag::Untagged,
+            scope: ScopeTag::Instance,
             lifecycle: Box::new(RuntimeHostFailureContext {
                 diagnostics: error.failure_context().clone(),
                 instance_id: error.instance_id(),
@@ -908,6 +913,24 @@ impl RuntimeHostError {
         if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed) {
             *result.projection =
                 RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
+        }
+        result
+    }
+
+    /// ISO-2 (#419 R1; ISO-M rows A05, E14, E15, E16): the kernel refused one operation on its
+    /// instance's session: a frame commit or resolve met a session that was closed, is closing
+    /// or was retired, or a frame that a later capture replaced. Nothing of the instance is
+    /// left held, so only that operation fails, with the kernel's code, non-fatal. An
+    /// unconfirmed close and a code on the closed Global list keep the kernel's severity.
+    pub(crate) fn instance_operation(
+        operation: impl Into<Location>,
+        error: &ExecutionKernelError,
+    ) -> Self {
+        let mut result = Self::execution(operation, error);
+        if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
+            && !crate::host::failure_scope::is_global_code(result.code())
+        {
+            result.projection.fatal = false;
         }
         result
     }

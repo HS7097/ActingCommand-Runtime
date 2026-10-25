@@ -38,6 +38,7 @@
 //! runner on its own key.
 
 use super::contained_task::BusyEnd;
+use super::failure_scope::Contained;
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
 use super::recovery_ladder::PendingRecoveryLadder;
@@ -365,18 +366,25 @@ impl HostShared {
         }
     }
 
-    /// Records a host package's non-fatal failure and returns its code; a fatal one is the
-    /// error, after its record.
+    /// Records a host package's failure and returns its code. ISO-M (#419) R0.5, ISO-2: the host
+    /// package run's boundary. A failure that would stop the Runtime goes to the one decision
+    /// point against the package's instance: a `Global` one is the error (the Runtime latched);
+    /// an `Instance` one fences that instance, and the package fails with the fence's code, so
+    /// the rung or the start fails for that instance only.
     fn host_package_failure(
         &self,
         pending: &PendingStartupPackage,
         failure: RequestFailure,
     ) -> RuntimeHostResult<&'static str> {
         self.record_startup_package_failure(pending, &failure.error)?;
-        if failure.poison_runtime || failure.error.is_fatal() {
-            return Err(*failure.error);
+        if !failure.poison_runtime && !failure.error.is_fatal() {
+            return Ok(failure.error.code());
         }
-        Ok(failure.error.code())
+        let links = EventLinksDraft::default().with_causation_id(pending.causation_id);
+        match self.contain_failure(*failure.error, Some(pending.instance_id), links)? {
+            Contained::Latched(error) => Err(error),
+            Contained::Fenced(error) | Contained::Failed(error) => Ok(error.code()),
+        }
     }
 
     /// Records the scheduling intent under `links` (a fresh causation id) and returns the

@@ -33,7 +33,13 @@
 //! not left unconfirmed, fences that instance the same way, caused by that failure
 //! (`fence_application_backend_failure`). Before, the failure kept its fatal projection, a
 //! ladder rung returned it to the instance's worker, and the worker marked the whole Runtime
-//! fatal: the host stopped, and every start that met the same instance stopped again.
+//! fatal: the host stopped, and every start that met the same instance stopped again. ISO-2
+//! (#419 R2) widens it to every fatal failure of the instance's own application command whose
+//! scope is that instance, whatever its kernel code (ISO-M row C01). A retained session whose
+//! close before an emulator control, a pause or a handset's link loss failed with its resources
+//! confirmed is gone (the kernel took it out of its registry before the close, and the close
+//! recorded its failure), so the work goes on (`settle_retained_close_failure`, rows C02, D54,
+//! E22).
 //!
 //! #411 A38 (10-20 incident: a capture channel that could not open for a moment fenced an
 //! instance, its ladder's emulator restart timed out, and the instance waited two hours for a
@@ -57,7 +63,6 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::identifier_text;
 use crate::time::RuntimeClockSample;
-use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
 use actingcommand_contract::{InstanceFencePersonWait, InstanceResourceFence, LeasePriority};
 use actingcommand_runtime_config::FenceRecheckConfig;
@@ -294,6 +299,12 @@ impl HostShared {
     /// ladder that holds it, a new ladder, or a person). `None`: any other failure, a failure
     /// that names no registered instance, or a ledger failure, which the caller ends with as
     /// before.
+    ///
+    /// ISO-2 (#419 R2, ISO-M row C01): every fatal failure of the instance's own application
+    /// command whose scope is that instance fences it, whatever its kernel code: the retained
+    /// session's close before the command, a lost session thread, a failed frame invalidation,
+    /// a close the backend still requires, a close in progress, a changed endpoint identity.
+    /// A failure on the closed Global list keeps its fatality.
     pub(super) fn fence_application_backend_failure(
         &self,
         error: &RuntimeHostError,
@@ -301,7 +312,10 @@ impl HostShared {
         links: EventLinksDraft,
     ) -> RuntimeHostResult<Option<RuntimeHostError>> {
         if !error.is_fatal()
-            || error.code() != SharedCode::ApplicationBackendOperationFailed.as_str()
+            || !matches!(
+                error.scope_at(Some(instance_id)),
+                crate::FailureScope::Instance(_)
+            )
         {
             return Ok(None);
         }
@@ -1036,5 +1050,27 @@ impl HostShared {
             );
         }
         Ok(error)
+    }
+
+    /// ISO-2 (#419 R1, R2; ISO-M rows C02, C22, C31, D54, E22): a retained-session close of
+    /// `instance_id` that failed before an emulator control, a pause or a handset's link loss.
+    /// - Its resources confirmed: `None`, the work goes on. The kernel took the session out of
+    ///   its registry before the close (the next operation opens a fresh one), and the close
+    ///   recorded its failure (`retire_instance_resources`); nothing of the instance is left
+    ///   held, so the failure is the close's alone.
+    /// - Unconfirmed: the failure the work ends with (`retained_close_failure`): the fence's
+    ///   non-fatal failure once the close fenced the instance, else the close's own failure, an
+    ///   `Instance` failure its boundary fences.
+    pub(super) fn settle_retained_close_failure(
+        &self,
+        operation: HostLocation,
+        instance_id: InstanceId,
+        close_error: &ExecutionKernelError,
+    ) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        if close_error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed) {
+            return Ok(None);
+        }
+        self.retained_close_failure(operation, instance_id, close_error)
+            .map(Some)
     }
 }

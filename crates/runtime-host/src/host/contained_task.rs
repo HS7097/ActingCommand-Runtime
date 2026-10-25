@@ -1795,6 +1795,21 @@ fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> Runtime
     })
 }
 
+/// ISO-2 (#419 R1, ISO-M rows A03, E07): a geometry read or check of the run's own capture
+/// producer that failed fatally with its resources confirmed (the emulator died between the
+/// run's capture and the read) fails only the run, as a task-geometry failure:
+/// `contained_task_geometry_unavailable`, caused by the read's failure. An unconfirmed close
+/// (its fence is the instance's) and a `Global` failure keep their fatality.
+fn geometry_read_failure(error: RuntimeHostError, instance_id: InstanceId) -> RuntimeHostError {
+    if !error.is_fatal()
+        || error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed)
+        || error.scope_at(Some(instance_id)) == crate::FailureScope::Global
+    {
+        return error;
+    }
+    task_geometry_error(HostCode::ContainedTaskGeometryUnavailable).with_caused_by(error.outcome())
+}
+
 fn task_geometry_request_failure(
     error: RuntimeHostError,
     event: Option<&PersistedEvent>,
@@ -1948,7 +1963,14 @@ impl RuntimeContainedTask<'_> {
                 UnconfirmedResources::Retained => {
                     return Err(RequestFailure::poison_without_terminal(error.clone()));
                 }
-                UnconfirmedResources::Confirmed if error.is_fatal() => {
+                // ISO-2 (#419, ISO-M rows A03, E07): a read of the run's own producer that
+                // failed fatally with its resources confirmed is recorded as the geometry
+                // observation below and fails only the run; a `Global` failure poisons.
+                UnconfirmedResources::Confirmed
+                    if error.is_fatal()
+                        && error.scope_at(Some(self.token.instance_id()))
+                            == crate::FailureScope::Global =>
+                {
                     return Err(RequestFailure::poison_without_terminal(error.clone()));
                 }
                 UnconfirmedResources::Confirmed => {}
@@ -2103,7 +2125,10 @@ impl RuntimeContainedTask<'_> {
                 self.geometry_initial = Some((extent, value));
                 Ok(())
             }
-            (_, Err(error)) => Err(task_geometry_request_failure(error, Some(&event))),
+            (_, Err(error)) => Err(task_geometry_request_failure(
+                geometry_read_failure(error, self.token.instance_id()),
+                Some(&event),
+            )),
             (conclusion, Ok(_)) => Err(task_geometry_request_failure(
                 task_geometry_conclusion_error(conclusion),
                 Some(&event),
@@ -2148,7 +2173,13 @@ impl RuntimeContainedTask<'_> {
             .validate_capture_geometry_session(session, self.geometry_deadline.ok_or_else(failure)?)
             .map_err(|error| {
                 task_geometry_request_failure(
-                    RuntimeHostError::execution(HostLocation::ValidateTaskGeometryInput, &error),
+                    geometry_read_failure(
+                        RuntimeHostError::execution(
+                            HostLocation::ValidateTaskGeometryInput,
+                            &error,
+                        ),
+                        self.token.instance_id(),
+                    ),
                     None,
                 )
             })
@@ -4149,7 +4180,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     // instance's capture self-check `failed` (above), and a scheduled run's
                     // failure goes to the recovery ladder by the configuration
                     // (`task_capture_backend`). Every other cause keeps its fatality: that is the
-                    // capture service as a whole.
+                    // capture service as a whole. ISO-2 (#419 R1, ISO-M rows A01, E11-E13): so
+                    // does the instance's own session that died (its thread panicked, ended or
+                    // lost its reply; its state lock poisoned), is being closed by another owner,
+                    // or no longer matches the instance's endpoint. The failure's close above
+                    // retired that session, and the next capture opens a fresh one.
                     if spelled(
                         error.code().as_str(),
                         &[
@@ -4157,6 +4192,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
                             SharedCode::CaptureBackendOperationFailed.code(),
                             SharedCode::CaptureFrameInvalid.code(),
+                            ExecutionKernelCode::ExecutionSessionPanicked.code(),
+                            ExecutionKernelCode::ExecutionSessionStatePoisoned.code(),
+                            ExecutionKernelCode::ExecutionSessionClosed.code(),
+                            ExecutionKernelCode::ExecutionSessionUnavailable.code(),
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                            ExecutionKernelCode::ExecutionSessionCloseInProgress.code(),
+                            ExecutionKernelCode::ExecutionInstanceIdentityMismatch.code(),
                         ],
                     ) {
                         // #316-P4: a physical instance's first capture probes the ADB baseline
@@ -4362,11 +4404,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .execution()?
             .resolve_input_frame(self.instance_alias, reference)
             .map(Some)
+            // ISO-2 (#419, ISO-M rows A05, E16): a resolve refused by the instance's session
+            // fails only this operation.
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    HostLocation::ResolveCommittedInputFrame,
-                    &error,
-                ))
+                RequestFailure::frame_handoff(HostLocation::ResolveCommittedInputFrame, &error)
             })
     }
 
@@ -4629,11 +4670,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             FrameOwner::Lease,
                         )
                         .map(|_| ())
+                        // ISO-2 (#419, ISO-M row A05): a commit refused by the instance's
+                        // session fails only this run.
                         .map_err(|error| {
-                            RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                            RequestFailure::frame_handoff(
                                 HostLocation::CommitCaptureInputFrame,
                                 &error,
-                            ))
+                            )
                         })
                 })();
                 self.task_timing.finish_boundary(observed, result.is_ok());

@@ -1653,17 +1653,19 @@ impl LabOperationRuntime<'_> {
         guard: ContainedTaskGuardOutcome,
     ) -> Result<(), RequestFailure> {
         action.validate().map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
                 HostCode::ContainedTaskEffectInvalid,
                 ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeHalted,
+                self.instance_id,
             ))
         })?;
         let invalid = || {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
                 SharedCode::ContainedTaskStateInvalid,
                 ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeHalted,
+                self.instance_id,
             ))
         };
         let attempt = u32::try_from(self.attempts.len())
@@ -1728,10 +1730,11 @@ impl LabOperationRuntime<'_> {
     ) -> Result<(), RequestFailure> {
         self.clock_read()?;
         let invalid = || {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
                 SharedCode::ContainedTaskStateInvalid,
                 ContractLocation::RunContainedTask,
                 RuntimeErrorCode::RuntimeHalted,
+                self.instance_id,
             ))
         };
         let index = self.attempts.len().checked_sub(1).ok_or_else(invalid)?;
@@ -1747,10 +1750,11 @@ impl LabOperationRuntime<'_> {
             .and_then(|entry| entry.frame.observation.artifact().frame_id);
         if reference.is_some_and(|reference| Some(reference.frame_id) != last_frame) {
             return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
+                RuntimeHostError::instance_fault(
                     HostCode::ContainedTaskEffectFrameIdentityMismatch,
                     ContractLocation::RunContainedTask,
                     RuntimeErrorCode::RuntimeHalted,
+                    self.instance_id,
                 ),
             ));
         }
@@ -1870,11 +1874,10 @@ impl ContainedTaskRuntime for LabOperationRuntime<'_> {
             .execution()?
             .resolve_input_frame(self.instance_alias, reference)
             .map(Some)
+            // ISO-2 (#419, ISO-M rows A05, E16): a resolve refused by the instance's session
+            // fails only this operation.
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    HostLocation::ResolveCommittedInputFrame,
-                    &error,
-                ))
+                RequestFailure::frame_handoff(HostLocation::ResolveCommittedInputFrame, &error)
             })
     }
 
@@ -2006,10 +2009,11 @@ impl ContainedTaskRuntime for LabOperationRuntime<'_> {
         match trace {
             ContainedTaskTrace::StepStarted { .. } => {
                 self.started_attempts = self.started_attempts.checked_add(1).ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
                         SharedCode::ContainedTaskStateInvalid,
                         ContractLocation::RunContainedTask,
                         RuntimeErrorCode::RuntimeHalted,
+                        self.instance_id,
                     ))
                 })?;
                 self.after_input = false;
