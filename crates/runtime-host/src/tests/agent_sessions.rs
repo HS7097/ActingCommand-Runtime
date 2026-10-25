@@ -1212,3 +1212,38 @@ fn ln4_d_the_agent_maps_are_pruned_at_session_end() {
     drop(client);
     host.close().expect("close runtime");
 }
+
+// Workflow #422 LN-4 follow-up (Fail Loud): the agent dispatcher's ledger failure keeps the
+// ledger's own failure as its native detail. The recovery's first page read is one the ledger
+// refuses (`invalid_query_page`: a page of no events); the dispatcher's failure is still the
+// fatal `agent_ledger_failure`, and its native detail names the ledger's code.
+#[test]
+fn ln4_e_an_agent_ledger_failure_keeps_the_ledgers_failure_as_its_native_detail() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let error = host
+        .recover_agent_dispatcher_for_test(Some(0))
+        .expect_err("the ledger refuses a page of no events");
+    assert_eq!(
+        error.code(),
+        crate::codes::HostCode::AgentLedgerFailure.as_str()
+    );
+    assert!(error.is_fatal(), "agent_ledger_failure stays fatal");
+    let detail = error
+        .native_detail()
+        .expect("the ledger's failure as the native detail");
+    assert!(
+        detail.contains(actingcommand_ledger::LedgerCode::InvalidQueryPage.as_str()),
+        "{detail}"
+    );
+    host.close().expect("close runtime");
+}
