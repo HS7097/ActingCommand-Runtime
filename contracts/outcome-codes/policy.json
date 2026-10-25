@@ -2113,7 +2113,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.13",
+      "since": "0.12.12",
       "description": "Scheduling decision reason (SCH-M CF-1, contracts/scheduling/README.md \"Condition edges\"): a `dependency_completed` predicate with `since_own_run: true` is false. The predecessor's latest terminal state (predecessor_task_id) is one the predicate accepts, but this task (task_id) already served it: its latest run on the instance succeeded and was dispatched no earlier than the predecessor's latest dispatch. The edge is true again after the predecessor's next accepted terminal. When the predicate decides the trigger, the decision ends with trigger_false.",
       "common_causes": "The successor already ran successfully after the predecessor's latest run.",
       "handling": "None. The task becomes due after the predecessor's next run ends in an accepted state."
@@ -2135,7 +2135,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.13",
+      "since": "0.12.12",
       "description": "Scheduling decision reason (SCH-M CF-1, contracts/scheduling/README.md \"Condition edges\"): a `fact_time_reached` predicate with `once_per_reading: true` is false because the time its fact holds was already served: this task's latest run on the instance succeeded and was dispatched (served_by_dispatch_unix_ms) at or after that time plus the predicate's offset_ms and at or after the reading's observation. It stays false, with no wake, until a reading observed after that dispatch gives a time; that reading's publication wakes the scheduler. When the predicate decides the trigger, the decision ends with trigger_false.",
       "common_causes": "The task already ran after the time the latest reading gave; the work it serves shows no new time (for example a slot left empty shows no countdown).",
       "handling": "None. A newer reading of the fact makes the task due again; a catalog that names a free-slot fact in an `any` covers an emptied slot."
