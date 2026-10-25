@@ -42,8 +42,8 @@ const CHILD_TEST: &str = "tests::lean_scale::lean_scale_start_child";
 const DEFAULT_SIZES: [u64; 2] = [10_000, 1_000_000];
 const DEFAULT_SETTLE_MS: u64 = 10_000;
 // The host test configuration's salt (`config`), also the State database's bootstrap seed here.
-const SALT: &[u8] = b"runtime-host-test-salt";
-const OWNER: &str = "lean-scale-fixture";
+pub(super) const SALT: &[u8] = b"runtime-host-test-salt";
+pub(super) const OWNER: &str = "lean-scale-fixture";
 // The fixture instance: the host registers it under `POLICY_INSTANCE_ALIAS`, and the synthetic
 // history's runs, inputs and facts name it.
 const INSTANCE_ID: &str = "\"instance_000000000000000000000000000000a1\"";
@@ -102,7 +102,7 @@ fn scale_config(root: &Path) -> RuntimeHostConfig {
 
 // A closed formal root as acsetup leaves it: the State database, the formal empty ledger, and
 // one writer open and close, whose owner metadata every later open reads.
-fn formal_root(root: &Path) {
+pub(super) fn formal_root(root: &Path) {
     let database =
         Arc::new(RuntimeStateStore::open_database(root, SALT).expect("the State database"));
     let limits = MaintenanceLimits::default();

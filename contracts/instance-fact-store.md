@@ -12,8 +12,9 @@ Runtime's facts about itself live in the separate runtime fact store
 
 Every change is one ledger event under the `fact_write_gate`: `fact.published`
 carries one observation (1–256 records of one scope and one
-`source_snapshot_id`), `fact.invalidated` drops one record. The store recovers
-at startup by replaying every event, afterwards synchronizes incrementally from
+`source_snapshot_id`), `fact.invalidated` drops one record. The store loads
+at startup from the ledger's tagged state (Workflow #422 LN-2; "Start load" below),
+afterwards synchronizes incrementally from
 `last_sequence + 1`, and can replay history at an exact ledger position
 (`at_position`; position 0 or one beyond the latest sequence is refused).
 `docs/live-fact-pools.md` describes the adapter publication path and the
@@ -70,6 +71,12 @@ AO-3 implements the entry, the revisions and the gate order; AO-6 the start load
   the ledger; `latest_observed`, tombstones and the input boundary are derived from the same
   records. Tombstones stay in the store (at most 256). History at a ledger position
   (`at_position`) remains for forensics only.
+  - **As built by LN-2** (Workflow #422, register §1.183): the load equals the replay of every
+    event in its active records (with their sequence, event id, scope instances and
+    publisher), `latest_observed`, input boundaries, the latest tombstone of each key without an
+    active record, pending invalidations (a fact whose trigger came before the stop but whose
+    `fact.invalidated` was not written) and position. A tombstone older than its key's latest
+    record is no longer in memory; the State document's tombstone still refuses the snapshot.
 - The projection below reads the store at the evaluation's revision pair instead of a
   `ledger_position` (AO-4; the `input_ledger_position` member of the dispatch intent follows
   [the v0.12.0 plan](v012-register.md)).

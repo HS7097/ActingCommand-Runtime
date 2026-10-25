@@ -35,7 +35,8 @@ pub(crate) struct ApprovalProjection {
 
 /// The approval projection last built for a read position (Workflow #317 item H). A later
 /// position folds only the decisions after the built one, the same position reuses it, and
-/// an earlier position is rebuilt from the start.
+/// an earlier position is rebuilt from the start. Workflow #422 LN-2: it stays resident, so it
+/// keeps the latest record only of the approvals it lists (`active` and `recent`, at most 512).
 #[derive(Default)]
 pub(crate) struct ApprovalRecordsAt {
     built: Option<(u64, ApprovalProjection)>,
@@ -52,7 +53,7 @@ impl ApprovalRecordsAt {
             return Err(approval_fatal(HostCode::ApprovalProjectionPositionInvalid));
         }
         // Taken before folding: a failed read keeps nothing, so the next read rebuilds.
-        let projection = match self.built.take() {
+        let mut projection = match self.built.take() {
             Some((built_at, projection)) if built_at == ledger_position => projection,
             Some((built_at, mut projection)) if built_at < ledger_position => {
                 projection.extend(ledger, built_at, ledger_position)?;
@@ -60,6 +61,7 @@ impl ApprovalRecordsAt {
             }
             _ => ApprovalProjection::project(ledger, state, Some(ledger_position), false)?,
         };
+        projection.retain_listed_latest();
         let records = projection.records();
         self.built = Some((ledger_position, projection));
         Ok(records)
@@ -212,6 +214,17 @@ impl ApprovalProjection {
             }
         }
         Ok(())
+    }
+
+    /// Workflow #422 LN-2: drops the latest record of every approval that is neither active nor
+    /// recent, so a resident projection does not grow with the decisions ever made. A later
+    /// decision of a dropped id is folded without the target check against its earlier record;
+    /// the governance write path checks it on its own full projection.
+    fn retain_listed_latest(&mut self) {
+        let (active, recent) = (&self.active, &self.recent);
+        self.latest.retain(|approval_id, _| {
+            active.contains_key(approval_id) || recent.contains_key(approval_id)
+        });
     }
 
     fn validate_capacity(&self) -> RuntimeHostResult<()> {
