@@ -525,7 +525,12 @@ fn intent<'a>(cycle: &'a PolicyCycle, task_id: &str) -> Option<&'a DispatchInten
 fn admit(bench: &Bench, cycle: &PolicyCycle, task_id: &str) -> (DispatchIntent, PolicyRunContext) {
     let evaluation = cycle.evaluation.as_ref().expect("an evaluation");
     let intent = intent(cycle, task_id)
-        .unwrap_or_else(|| panic!("{task_id} is selected: {evaluation:#?}"))
+        .unwrap_or_else(|| {
+            panic!(
+                "{task_id} is selected: {:#?} {evaluation:#?}",
+                bench.standard_pack_reads()
+            )
+        })
         .clone();
     let reasons = evaluation
         .reason_chains
@@ -569,7 +574,11 @@ fn rl1b_a2_a_placed_pack_is_scheduled_without_a_restart() {
         Some(&schedule_a(&[(RULE_1, PACKAGE_1, 100)])),
     );
     let first = bench.cycle(POLICY_NOW_UNIX_MS, 0);
-    assert!(intent(&first, RULE_1).is_some(), "R1 is due: {first:#?}");
+    assert!(
+        intent(&first, RULE_1).is_some(),
+        "R1 is due: {:#?} {first:#?}",
+        bench.standard_pack_reads()
+    );
     let one = bench.active();
     assert_eq!(one.catalog_id(), STANDARD_PACKS_CATALOG_ID);
     assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
@@ -650,7 +659,11 @@ fn rl1b_a3_a_game_left_out_frees_its_generation() {
         Some(&schedule_b(100, false)),
     );
     let first = bench.cycle(POLICY_NOW_UNIX_MS, 0);
-    assert!(decided(&first, RULE_1, INSTANCE_A) && decided(&first, RULE_B, INSTANCE_B));
+    assert!(
+        decided(&first, RULE_1, INSTANCE_A) && decided(&first, RULE_B, INSTANCE_B),
+        "both games are composed: {:#?} {first:#?}",
+        bench.standard_pack_reads()
+    );
     let (_, old) = bench
         .host
         .policy_catalog_memory_for_test()
@@ -1027,7 +1040,11 @@ fn rl1b_item1_a_stale_pool_reading_never_stops_the_other_games() {
     );
     bench.place(GAME_B, SERVER_B, &[PACKAGE_B], Some(&schedule_b(100, true)));
     let first = bench.cycle(POLICY_NOW_UNIX_MS, 0);
-    assert!(decided(&first, RULE_1, INSTANCE_A) && decided(&first, RULE_B, INSTANCE_B));
+    assert!(
+        decided(&first, RULE_1, INSTANCE_A) && decided(&first, RULE_B, INSTANCE_B),
+        "both games are composed: {:#?} {first:#?}",
+        bench.standard_pack_reads()
+    );
     assert!(
         bench
             .reads_of(HostCode::PolicyPoolReadingUnused, None)
