@@ -803,6 +803,17 @@ time L that D2 needs (D2 A-7) is the end of step 7.
 | history without the marker (first start of the build that brings AO-5 + AO-6) | `ledger_tagged_state_seeded` (info) | seed once (§11.6) |
 | an index row disagrees with its record | `ledger_tag_index_mismatch` (fatal) | refuse to start |
 
+- **As built by LN-2** (Workflow #422, register §1.183): the instance store runs steps 1–4
+  through `GlobalLedger::tagged_state` over `instance_facts/` and `input_boundary/`. A row
+  agrees with its record when the record has the row's sequence and event id, carries the row's
+  key and its stored hash is `value_sha256`. A loaded publication loads only the records its rows
+  name. For each loaded publication the first later event that would have invalidated it is read
+  through the type index (an input type only when a scope instance's boundary lies after the
+  publication), so an invalidation not written before the stop is the same pending invalidation
+  replay would make; today's reducer applies records and triggers in ledger order. The read
+  volume is the index rows, their point reads and those trigger reads. Steps 5 and 6, lineages,
+  seeding and the other stores are not LN-2's; the decision memory and the monitor are LN-4's.
+
 ### 11.6 Seeding once, exception reads
 
 - **Seeding** (AO-5): with history but no `tagged_state_enabled`, step 3 runs today's recovery

@@ -145,20 +145,13 @@ fn tagged_keys(event: &PersistedEvent, policy: &IndexPolicy) -> Vec<String> {
     match event.payload() {
         EventPayload::Fact(FactPayload::Published(published)) => published
             .records()
-            .map(|record| {
-                format!(
-                    "instance_facts/{}/{}",
-                    fact_scope(&record.scope),
-                    record.key
-                )
-            })
+            .map(|record| instance_fact_state_key(&record.scope, &record.key))
             .collect(),
         EventPayload::Fact(FactPayload::Invalidated(invalidated)) => {
             let invalidation = invalidated.invalidation();
-            vec![format!(
-                "instance_facts/{}/{}",
-                fact_scope(&invalidation.scope),
-                invalidation.key
+            vec![instance_fact_state_key(
+                &invalidation.scope,
+                &invalidation.key,
             )]
         }
         EventPayload::Runtime(RuntimePayload::FactRecorded(recorded)) => {
@@ -198,6 +191,20 @@ fn tagged_keys(event: &PersistedEvent, policy: &IndexPolicy) -> Vec<String> {
             .chain(monitor_keys(event))
             .collect(),
     }
+}
+
+/// Workflow #422 LN-2 (§11.5 step 3): whether `key` is one of the record's tagged keys under any
+/// workbench pattern, so a changed `tag.workbench_patterns` does not refuse a row it wrote before.
+pub(super) fn names_key(event: &PersistedEvent, key: &str) -> bool {
+    tagged_keys(event, &IndexPolicy::new(vec!["*".to_owned()], 0))
+        .iter()
+        .any(|tagged| tagged == key)
+}
+
+/// Workflow #422 LN-2: the `state` key of an instance store record,
+/// `instance_facts/<scope>/<fact key>` (§11.1).
+pub fn instance_fact_state_key(scope: &FactScope, key: &str) -> String {
+    format!("instance_facts/{}/{key}", fact_scope(scope))
 }
 
 /// Workflow #422 LN-3: `monitor/<alias>`, the monitor registry's complete state of one alias. A

@@ -7,53 +7,46 @@ use crate::codes::HostLocation;
 use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, SharedCode};
 use actingcommand_contract::outcome::{Location, Outcome};
 
-/// Every `ArtifactVerified` reference read so far, in ledger order (Workflow #317 item C).
-/// The first read after start reads every verified event; each later read starts after the
-/// last verified event already seen.
-#[derive(Default)]
-pub(super) struct VerifiedArtifactIndex {
-    through: u64,
-    references: Vec<(u64, ProjectedArtifactReference)>,
-}
-
 impl HostShared {
-    /// Brings the verified artifact index up to the ledger tail and hands `read` every
-    /// verified reference with its event sequence, in ledger order.
+    /// Hands `read` every verified artifact reference with its event sequence, in ledger order.
+    /// Workflow #422 LN-2: read on demand, by the `artifact.verified` type index in pages through
+    /// the ledger's latest position at the call; nothing stays resident.
     fn read_verified_artifacts<T>(
         &self,
         operation: impl Into<Location>,
         read: impl FnOnce(&[(u64, ProjectedArtifactReference)]) -> T,
     ) -> RuntimeHostResult<T> {
         let operation: Location = operation.into();
-        let mut index = lock(&self.verified_artifacts, operation)?;
-        // LN-5 (#422, LEAN-L §3.3): the type's history is read from the store page by page.
-        let events = self
+        // #411 A51 (R3): a read the writer did not answer in time fails only the request.
+        let through = self
             .ledger
             .latest_sequence()
-            .and_then(|through| {
-                crate::recovery_read::read_pages(
-                    &self.ledger,
-                    &EventQuery {
-                        event_type: Some(EventType::ArtifactVerified),
-                        from_sequence: (index.through != 0).then_some(index.through + 1),
-                        ..EventQuery::default()
-                    },
-                    through,
-                    self.ledger.history_page_events(),
-                )
-            })
-            // #411 A51 (R3): a read the writer did not answer in time fails only the request.
             .map_err(|error| ledger_read_error(&error, operation))?;
-        for event in &events {
-            index.references.extend(
-                event
-                    .artifacts()
-                    .iter()
-                    .map(|artifact| (event.sequence(), artifact.project(true))),
-            );
-            index.through = event.sequence();
+        let mut pages = crate::recovery_read::LedgerPages::new(
+            &self.ledger,
+            EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            },
+            0,
+            through,
+            self.ledger.history_page_events(),
+        );
+        let mut references = Vec::new();
+        while let Some(page) = pages
+            .next_page()
+            .map_err(|error| ledger_read_error(&error, operation))?
+        {
+            for event in &page {
+                references.extend(
+                    event
+                        .artifacts()
+                        .iter()
+                        .map(|artifact| (event.sequence(), artifact.project(true))),
+                );
+            }
         }
-        Ok(read(&index.references))
+        Ok(read(&references))
     }
 
     pub(super) fn record_policy_planning_signal(

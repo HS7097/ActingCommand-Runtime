@@ -1925,3 +1925,13 @@ tests = [
     "actingcommand-runtime-host::lib::policy_control::tests::ln3_b_a_restart_from_the_value_records_alone_keeps_runtime_budgets_and_activity_intervals",
 ]
 incident = ["#422 LN-3"]
+
+# LN-2 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §5.1 row LN-2, §7 A3 and A6; contracts/ledger-observer.md §11.3, §11.5; register §1.183): the instance fact store loads from the tagged `state` rows and equals the whole-ledger replay (active records with their sources, latest_observed, input boundaries, the latest tombstone of each key without an active record, pending invalidations, position) on the synthetic ledger and on fixtures with input boundaries, with no whole-ledger query and no read larger than the tagged rows; a row that disagrees with its record stops the load with the fatal ledger_tag_index_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_a_the_tagged_load_equals_the_replay_on_the_synthetic_ledger",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_b_the_tagged_load_equals_the_replay_with_input_boundaries",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_c_a_doctored_index_row_stops_the_load_with_ledger_tag_index_mismatch",
+]
+incident = ["#422 LN-2"]

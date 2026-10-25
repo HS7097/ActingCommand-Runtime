@@ -47,6 +47,7 @@ mod release_source;
 // LN-1 (Workflow #422): the scale harness's synthetic ledger commits its batches here.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(super) mod synthetic;
+mod tagged;
 mod views;
 pub use release_source::*;
 
@@ -1524,6 +1525,13 @@ impl DurableStorage for SqliteStorage {
             observation,
             (Some(&self.prefix), work),
         )
+    }
+
+    fn state_index_rows(
+        &self,
+        prefixes: &[String],
+    ) -> Option<GlobalLedgerResult<Vec<super::tagged::StateIndexRow>>> {
+        Some(tagged::state_index_rows(&self.database, prefixes))
     }
 
     fn history_page(
