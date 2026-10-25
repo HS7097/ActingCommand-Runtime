@@ -43,7 +43,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
-    let Some(policy) = policy.as_ref() else {
+    // ROUT-L RL-1b: the report reads the configured catalog; composer mode names none.
+    let Some(catalog) = policy.as_ref().and_then(|policy| policy.catalog.as_ref()) else {
         let code = SharedCode::SuspendedPolicyUnconfigured;
         return Err(ActingdError::refused(
             code,
@@ -54,7 +55,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         config_path: &config_path,
         config_modified_unix_ms,
         host: &host,
-        catalog: &policy.catalog,
+        catalog,
     })
     .map_err(|error| ActingdError::refused(error.code(), error.outcome().clone()))?;
     match report {

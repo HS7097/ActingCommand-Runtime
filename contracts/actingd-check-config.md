@@ -335,6 +335,12 @@ The members of `report`:
       ([resource-readings.md](resource-readings.md), "Completion times");
       a pack that declares one is placed only on a Runtime that names this
       row.
+    - `standard_pack_schedule` (ROUT-L RL-1b): always on
+      (`config_subsystem_always_on`). The scheduler workbench composes the
+      standard packs' `schedule.json` when the `policy` section names no
+      `catalog` ([standard-pack-schedule.md](standard-pack-schedule.md), "The
+      scheduler workbench (RL-1b)"); a `schedule.json` that requires it is
+      composed only by a Runtime that names this row.
     - `env_overrides`: on only when `allow_env_overrides` is `true`
       (`config_subsystem_configured`, `config_subsystem_configured_off` or
       `config_subsystem_flag_absent`). When the flag is off, the outcome
@@ -434,6 +440,15 @@ The members of `report`:
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
+- `standard_pack_schedule` is present when the configuration has a `policy`
+  section (ROUT-L RL-1b): `{ composer_mode, games, rules, pools, profiles,
+  events, unclassified, problems, left_out }`, the composition the scheduler
+  workbench would make for the configured instances from the game roots below
+  `standard_packs.root`, in either mode; `composer_mode` is `true` when the
+  `policy` section names no `catalog`. Each refused `schedule.json`
+  (`standard_pack_root_invalid`) is in `problems` and is also a note of
+  `check_config_passed`; a game in use whose game root is broken is in
+  `left_out` (its problem is `standard_packs`'s).
 
 What the check noted is not a member of `report`: each is one `note` link of
 `check_config_passed` (Workflow #378 A6a; v1's `warnings` strings and

@@ -120,10 +120,11 @@ pub(crate) fn missing_reader_warnings(
     policy: Option<&PolicyBootstrap>,
     marked: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<Vec<Outcome>, Code> {
-    let Some(policy) = policy else {
+    // ROUT-L RL-1b: in composer mode there is no configured catalog to read.
+    let Some(catalog) = policy.and_then(|policy| policy.catalog.as_ref()) else {
         return Ok(Vec::new());
     };
-    let compiled = actingcommand_policy::compile_catalog(&policy.catalog).map_err(|_| {
+    let compiled = actingcommand_policy::compile_catalog(catalog).map_err(|_| {
         actingcommand_contract::codes::SharedCode::PolicyCatalogCompileFailed.code()
     })?;
     Ok(actingcommand_runtime_host::missing_fact_readers(
