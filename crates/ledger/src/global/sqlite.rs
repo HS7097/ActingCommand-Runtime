@@ -2267,6 +2267,11 @@ impl SqliteStorage {
         lab: &LabRelations,
         (work, page_rows): (&ReadWork, usize),
     ) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, Option<u64>)> {
+        // LN-7 (#422): a page of no rows selects none; asking a statement for no rows would read
+        // nothing and never advance (as `read_history` answers a limit of 0).
+        if limit == 0 {
+            return Ok((Vec::new(), None));
+        }
         let query = selection.query;
         let mut cursor = after.max(query.from_sequence.map_or(0, |from| from.saturating_sub(1)));
         let through = snapshot.min(query.to_sequence.unwrap_or(u64::MAX));
@@ -3463,6 +3468,27 @@ impl ViewCondition {
     }
 }
 
+/// LN-7 (#422): the stored keys of `ids` as one JSON array for `json_each`; `None` when it has
+/// none.
+fn key_list<T: serde::Serialize>(ids: &BTreeSet<T>) -> GlobalLedgerResult<Option<SqlValue>> {
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let keys = ids
+        .iter()
+        .map(views::key)
+        .collect::<GlobalLedgerResult<Vec<_>>>()?;
+    serde_json::to_string(&keys)
+        .map(|text| Some(SqlValue::Text(text)))
+        .map_err(|error| {
+            GlobalLedgerError::json(
+                LedgerCode::EventSerializationFailed.code(),
+                LedgerLocation::EncodeLedgerQuery.location(),
+                &error,
+            )
+        })
+}
+
 /// The statement of one history page and its bound values: the query's conditions that have a
 /// column or an index, and `view`'s, every value bound, in placeholder order.
 fn history_statement(
@@ -3571,6 +3597,37 @@ fn history_statement(
             "json_extract(CAST(e.canonical_record AS TEXT),'{DECISION_PATH}')=?"
         ));
         values.push(SqlValue::Text(decision.to_owned()));
+    }
+    // LN-7 (#422, LEAN-L §3.5): a link set selects the rows linked to one of its identifiers,
+    // each dimension through its link index, and the rows carrying one of its artifacts through
+    // the `artifact_id` index of `ledger_artifacts`. An empty set selects no row.
+    if let Some(set) = selection.links {
+        let mut alternatives = Vec::new();
+        for (column, keys) in [
+            ("l.run_id", key_list(&set.runs)?),
+            ("l.lease_id", key_list(&set.leases)?),
+            ("l.frame_id", key_list(&set.frames)?),
+            ("l.request_id", key_list(&set.requests)?),
+            ("l.correlation_id", key_list(&set.correlations)?),
+        ] {
+            if let Some(keys) = keys {
+                links = true;
+                alternatives.push(format!("{column} IN (SELECT value FROM json_each(?))"));
+                values.push(keys);
+            }
+        }
+        if let Some(keys) = key_list(&set.artifacts)? {
+            alternatives.push(
+                "e.sequence IN (SELECT a.sequence FROM ledger_artifacts a WHERE a.artifact_id IN (SELECT value FROM json_each(?)))"
+                    .to_owned(),
+            );
+            values.push(keys);
+        }
+        clauses.push(if alternatives.is_empty() {
+            "0".to_owned()
+        } else {
+            format!("({})", alternatives.join(" OR "))
+        });
     }
     if let Some(view) = view {
         links |= view.links;

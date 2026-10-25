@@ -14,8 +14,8 @@ use super::{GlobalLedgerResult, projection::EventIndexes};
 use crate::PersistedEvent;
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::{
-    CorrelationId, EventId, EventPayload, EventQuery, LedgerView, PolicyPayload, RequestId, RunId,
-    TerminalEvent,
+    ArtifactId, CorrelationId, EventId, EventPayload, EventQuery, FrameId, LeaseId, LedgerView,
+    PolicyPayload, RequestId, RunId, TerminalEvent,
 };
 use std::collections::BTreeSet;
 
@@ -33,6 +33,8 @@ pub(super) const MAX_HISTORY_PAGE_ROWS: usize = 4096;
 pub(super) struct HistorySelection<'a> {
     pub(super) query: &'a EventQuery,
     pub(super) decision_id: Option<&'a str>,
+    /// LN-7 (#422, LEAN-L §3.5): when set, only the records linked to one of its identifiers.
+    pub(super) links: Option<&'a LinkSet>,
 }
 
 impl<'a> HistorySelection<'a> {
@@ -40,6 +42,16 @@ impl<'a> HistorySelection<'a> {
         Self {
             query,
             decision_id: None,
+            links: None,
+        }
+    }
+
+    /// LN-7: the records `query` selects that are linked to one of `links`' identifiers.
+    pub(super) const fn linked(query: &'a EventQuery, links: &'a LinkSet) -> Self {
+        Self {
+            query,
+            decision_id: None,
+            links: Some(links),
         }
     }
 
@@ -49,6 +61,54 @@ impl<'a> HistorySelection<'a> {
             && self
                 .decision_id
                 .is_none_or(|decision| decision_of(event) == Some(decision))
+            && self.links.is_none_or(|links| links.matches(event))
+    }
+}
+
+/// LN-7 (#422, LEAN-L §3.5): the identifiers a retention read selects records by: a record is
+/// selected when its run, lease, frame, request or correlation link is one of them, or when one
+/// of the artifacts it carries is (`ledger_artifacts`, by its `artifact_id` index).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct LinkSet {
+    pub(super) runs: BTreeSet<RunId>,
+    pub(super) leases: BTreeSet<LeaseId>,
+    pub(super) frames: BTreeSet<FrameId>,
+    pub(super) requests: BTreeSet<RequestId>,
+    pub(super) correlations: BTreeSet<CorrelationId>,
+    pub(super) artifacts: BTreeSet<ArtifactId>,
+}
+
+impl LinkSet {
+    pub(super) fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+            && self.leases.is_empty()
+            && self.frames.is_empty()
+            && self.requests.is_empty()
+            && self.correlations.is_empty()
+            && self.artifacts.is_empty()
+    }
+
+    /// Whether `event` is linked to one of these identifiers.
+    pub(super) fn matches<E: LedgerEventRead>(&self, event: &E) -> bool {
+        let links = event.links();
+        links.run_id().is_some_and(|run| self.runs.contains(run))
+            || links
+                .lease_id()
+                .is_some_and(|lease| self.leases.contains(lease))
+            || links
+                .frame_id()
+                .is_some_and(|frame| self.frames.contains(frame))
+            || links
+                .request_id()
+                .is_some_and(|request| self.requests.contains(request))
+            || links
+                .correlation_id()
+                .is_some_and(|correlation| self.correlations.contains(correlation))
+            || !self.artifacts.is_empty()
+                && event
+                    .projected_artifacts(false)
+                    .iter()
+                    .any(|artifact| self.artifacts.contains(&artifact.artifact_id))
     }
 }
 

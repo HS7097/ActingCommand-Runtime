@@ -544,7 +544,21 @@ impl<B: DurableStorage> EventStore<B> {
                     return Err(error);
                 }
             };
-        let retention = RetentionIndex::from_events(events)?;
+        let mut retention = RetentionIndex::from_events(events)?;
+        // LN-7 (#422, LEAN-L §3.5): of the frames, only the facts of those present in the live
+        // frame store stay resident (with what their classes read).
+        let live = match super::retention::live_frame_ids(backend.material_root()) {
+            Ok(live) => live,
+            Err(error) => {
+                backend.close()?;
+                return Err(GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::OpenRuntimeLedger.location(),
+                    &error,
+                ));
+            }
+        };
+        retention.retain_frames(&live);
         let recovering_retention = retention.has_pending();
         Ok(Self {
             commit_statistics,
@@ -647,6 +661,7 @@ impl<B: DurableStorage> EventStore<B> {
                 LedgerLocation::ImportLedgerDump.location(),
             ));
         }
+        self.load_retention_sources(&event)?;
         self.retention
             .validate(&event, &self.history(), false, true)?;
         let write_sync_ns = self.persist_retried(&event, None)?;
@@ -771,6 +786,7 @@ impl<B: DurableStorage> EventStore<B> {
         self.history().select(&HistorySelection {
             query: &query,
             decision_id: Some(decision_id),
+            links: None,
         })
     }
 
@@ -1731,11 +1747,15 @@ impl<B: DurableStorage> EventStore<B> {
         self.persist_retention_checked_observed(event, false, observation)
     }
 
+    /// LN-7 (#422, LEAN-L §3.5): what the record names that the writer no longer holds is loaded
+    /// again from the store first (`load_retention_sources`), so its identity checks read the
+    /// artifact's first reference through the `artifact_id` index.
     pub(super) fn validate_retention_admission(
-        &self,
+        &mut self,
         event: &PersistedEvent,
         guarded: bool,
     ) -> GlobalLedgerResult<()> {
+        self.load_retention_sources(event)?;
         if self.recovering_retention
             && event.event_type() != EventType::LedgerRecovered
             && !(guarded && event.event_type() == EventType::ArtifactEvictionOutcome)

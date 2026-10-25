@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::PoisonError;
 
 /// A frame is in an error window when its capture time lies in `[t - 30 s, t]`.
-const ERROR_WINDOW_MS: u64 = 30_000;
+pub(super) const ERROR_WINDOW_MS: u64 = 30_000;
 /// A frame settles no earlier than 60 s after its capture.
 const SETTLE_AGE_MS: u64 = 60_000;
 const DAY_MS: u64 = 86_400_000;
@@ -463,6 +463,118 @@ impl FrameFacts {
         }
     }
 
+    /// LN-7 (#422, LEAN-L §3.5): whether a record of `run` was taken in.
+    pub(super) fn knows_run(&self, run: &RunId) -> bool {
+        self.runs.contains_key(run)
+    }
+
+    /// LN-7: the runs that hold back the frames of their instance (`holds_neighbours`).
+    pub(super) fn open_runs(&self) -> BTreeSet<RunId> {
+        self.runs
+            .keys()
+            .filter(|run| self.holds_neighbours(run))
+            .copied()
+            .collect()
+    }
+
+    /// LN-7: the marker neighbours (one hop) of `frames`: each one's representative and the
+    /// frame it is the representative of.
+    pub(super) fn neighbours(&self, frames: &BTreeSet<FrameId>) -> BTreeSet<FrameId> {
+        frames
+            .iter()
+            .flat_map(|frame| {
+                self.predecessors
+                    .get(frame)
+                    .into_iter()
+                    .chain(self.successors.get(frame))
+            })
+            .copied()
+            .collect()
+    }
+
+    /// LN-7: keeps the error points whose window can hold a live frame (`live_at`, the capture
+    /// times of the live frames of each instance, sorted): a point naming a live artifact or
+    /// frame, a point whose own window `[t - 30 s, t]` holds one, and a point of one of `runs`
+    /// (a late point is dated at its run's last frame). Returns the runs of the points kept. A
+    /// point dropped here can hold no frame captured later: its window ends before them.
+    pub(super) fn retain_points(
+        &mut self,
+        live_at: &BTreeMap<InstanceId, Vec<u64>>,
+        artifacts: &BTreeSet<ArtifactId>,
+        frames: &BTreeSet<FrameId>,
+        runs: &BTreeSet<RunId>,
+    ) -> BTreeSet<RunId> {
+        self.points.retain(|point| {
+            point
+                .named_artifacts
+                .iter()
+                .any(|artifact| artifacts.contains(artifact))
+                || point
+                    .named_frames
+                    .iter()
+                    .any(|frame| frames.contains(frame))
+                || point.run.as_ref().is_some_and(|run| runs.contains(run))
+                || live_at.get(&point.instance).is_some_and(|times| {
+                    let start =
+                        times.partition_point(|at| *at < point.at.saturating_sub(ERROR_WINDOW_MS));
+                    times.get(start).is_some_and(|at| *at <= point.at)
+                })
+        });
+        self.points.iter().filter_map(|point| point.run).collect()
+    }
+
+    /// LN-7: keeps only the facts of the frames, artifacts, runs and leases given; the starts and
+    /// the aliases (one per start and binding) stay.
+    pub(super) fn retain(
+        &mut self,
+        frames: &BTreeSet<FrameId>,
+        artifacts: &BTreeSet<ArtifactId>,
+        runs: &BTreeSet<RunId>,
+        leases: &BTreeSet<LeaseId>,
+    ) {
+        self.runs.retain(|run, _| runs.contains(run));
+        self.releases.retain(|lease, _| leases.contains(lease));
+        self.completed.retain(|frame| frames.contains(frame));
+        self.predecessors.retain(|frame, _| frames.contains(frame));
+        self.successors.retain(|frame, _| frames.contains(frame));
+        self.before_frames.retain(|frame| frames.contains(frame));
+        self.published_frames.retain(|frame| frames.contains(frame));
+        self.readings.retain(|frame, _| frames.contains(frame));
+        self.published_artifacts
+            .retain(|artifact| artifacts.contains(artifact));
+        self.summary_pins
+            .retain(|artifact| artifacts.contains(artifact));
+    }
+
+    /// LN-7: takes in `run`'s facts from `loaded`, which applied the run's records alone (in
+    /// ledger order), with the `Performed` releases of `leases` there. A run already known stays
+    /// as it is.
+    pub(super) fn adopt_run(
+        &mut self,
+        loaded: &mut FrameFacts,
+        run: &RunId,
+        leases: &BTreeSet<LeaseId>,
+    ) {
+        if self.runs.contains_key(run) {
+            return;
+        }
+        if let Some(facts) = loaded.runs.remove(run) {
+            self.runs.insert(*run, facts);
+        }
+        for lease in leases {
+            let Some(released) = loaded.releases.remove(lease) else {
+                continue;
+            };
+            let known = self.releases.entry(*lease).or_default();
+            for release in released {
+                if !known.contains(&release) {
+                    known.push(release);
+                }
+            }
+            known.sort_unstable_by_key(|(sequence, _)| *sequence);
+        }
+    }
+
     /// The alias bound to `instance` at `sequence`, made safe for a folder name; the
     /// instance id when no binding precedes it.
     fn alias(&self, instance: &InstanceId, sequence: u64) -> String {
@@ -597,7 +709,7 @@ impl RetentionIndex {
         if let Some(cached) = cache.as_ref().filter(|cached| {
             cached.through_sequence == self.through_sequence && cached.switches == switches
         }) {
-            return Ok(cached.classified.at(self.through_sequence, now));
+            return Ok(self.without_ghosts(cached.classified.at(self.through_sequence, now)));
         }
         let frames = self.view_frames(related, work)?;
         let classified = classify(
@@ -620,7 +732,17 @@ impl RetentionIndex {
             switches,
             classified,
         });
-        Ok(view)
+        Ok(self.without_ghosts(view))
+    }
+
+    /// LN-7 (#422, LEAN-L §3.5): the view without the frames that left the live frame store; they
+    /// were classed only for the live frames they stand beside.
+    fn without_ghosts(&self, mut view: FrameRetentionView) -> FrameRetentionView {
+        if !self.ghosts.is_empty() {
+            view.frames
+                .retain(|frame| !self.ghosts.contains(&frame.reference.artifact_id));
+        }
+        view
     }
 
     fn view_frames(
@@ -1130,6 +1252,35 @@ impl super::super::GlobalLedger {
         now_unix_ms: u64,
         switches: FrameRetentionSwitches,
     ) -> GlobalLedgerResult<FrameRetentionView> {
+        self.frame_retention_view_of(now_unix_ms, switches, None)
+    }
+
+    /// LN-7 (#422, LEAN-L §3.5): the frame view after the writer dropped the facts of every frame
+    /// that left the live frame store under `root`, which is listed here, on the caller's thread.
+    /// The frame cleaner reads it once per sweep start. A listing failure is this read's error
+    /// (`ledger_io`, not fatal); the cleaner reads again at its next round.
+    pub fn frame_retention_view_live(
+        &self,
+        now_unix_ms: u64,
+        switches: FrameRetentionSwitches,
+        root: &std::path::Path,
+    ) -> GlobalLedgerResult<FrameRetentionView> {
+        let live = super::live_frame_ids(root).map_err(|error| {
+            super::super::GlobalLedgerError::request(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::FrameRetentionView.location(),
+            )
+            .with_detail(error.to_string())
+        })?;
+        self.frame_retention_view_of(now_unix_ms, switches, Some(Box::new(live)))
+    }
+
+    fn frame_retention_view_of(
+        &self,
+        now_unix_ms: u64,
+        switches: FrameRetentionSwitches,
+        live: Option<Box<BTreeSet<ArtifactId>>>,
+    ) -> GlobalLedgerResult<FrameRetentionView> {
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1140,6 +1291,7 @@ impl super::super::GlobalLedger {
             super::super::WriterCommand::FrameRetentionView {
                 now_unix_ms,
                 switches,
+                live,
                 response,
             },
             LedgerLocation::FrameRetentionView.location(),
