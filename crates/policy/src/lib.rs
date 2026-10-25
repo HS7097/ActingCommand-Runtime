@@ -67,4 +67,7 @@ mod tests {
 
     // SCH-M ED-1 (Workflow #405; SCH-M §3.4 D-12, D-15): the expected duration E.
     mod gate_ed1;
+
+    // ROUT-L RL-1a (frozen model v1.0 §6.1): `schedule.json` v1 and the pure composer.
+    mod gate_rl1a;
 }
