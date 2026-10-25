@@ -1029,7 +1029,6 @@ tests = [
 ]
 incident = ["#386 SR-3"]
 
-
 # Workflow #390 EXEC-3 (FCM E-02; register §1.70): the live settlement of a scheduled page-graph run writes its failure identity (format v2: the failure code as its base, the run's package_id as its main package), so a failure scheduled for a retry is admitted again at the next evaluation after its backoff and the activity's sampled interval as failure_retry_immediate, before its trigger is due (R22), as a linear_steps task's is; a required-entry check made first is the run's gate scope and its entry recovery package its layer scope (wave 14 ruling 3); contained_task_step_unconfirmed in the main scope outside the restart segment pauses by repeating and a changed package lifts the pause (R21, wave 14 ruling 4)
 [[gate]]
 key = "93"
@@ -1948,6 +1947,71 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_idle1_host::idle1_g_a_failed_stop_is_contained_to_its_instance_and_the_runtime_goes_on",
 ]
 incident = ["#386 IDLE-1"]
+
+# ROUT-L RL-1b A2 (§7.1, §3.3): a placed pack is scheduled within one check interval without a restart, with a higher catalog version and no approval record; a truncated schedule.json is standard_pack_root_invalid exactly once while the last good rules run; the complete file is then composed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a2_a_placed_pack_is_scheduled_without_a_restart",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A3 (§7.1, §3.3 Unload): a game left out of the composition frees its generation with cached_generations 0; the memory holds at most 1 + cached generations and no source byte
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a3_a_game_left_out_frees_its_generation",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A4 (§7.1, §3.3 Load): a game root without a bound instance is never opened and gets no schedule values
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a4_a_root_without_a_bound_instance_is_never_read",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A5 (§7.1, §3.5): a composed generation is activated and runs a dispatch with no approval decision in the ledger
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a5_a_composed_generation_runs_dispatches_without_any_approval",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A6 (§7.1, §3.6): a broken schedule.json keeps that game's last good rules, is recorded once per sha256, and the other games are unaffected
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a6_a_broken_file_keeps_that_games_last_good_rules_and_spares_the_others",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A8 (§7.1, §9.1 item 10): with a configured catalog the dual source is inert: the evaluation equals that of a root without schedule.json, and nothing is composed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a8_a_configured_catalog_evaluates_as_before",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A9 (§7.1, §6.1 row RL-1b): a dispatch admitted under generation N settles after N+1 is active with cached_generations 0; the first composition switches from a configured catalog with the same task ids
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a9_a_dispatch_admitted_under_one_generation_settles_after_the_next",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a9_the_first_composition_switches_from_a_configured_catalog_with_the_same_task_ids",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b RL-1a review item 1 (#386 6399836824; #419; §3.6): a configured pool reading for a pool no composed game declares never stops the evaluation of the other games' instances and is recorded once as policy_pool_reading_unused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_item1_a_stale_pool_reading_never_stops_the_other_games",
+]
+incident = ["#420 ROUT-L RL-1b"]
 
 # LN-2 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §5.1 row LN-2, §7 A3 and A6; contracts/ledger-observer.md §11.3, §11.5; register §1.183): the instance fact store loads from the tagged `state` rows and equals the whole-ledger replay (active records with their sources, latest_observed, input boundaries, the latest tombstone of each key without an active record, pending invalidations, position) on the synthetic ledger and on fixtures with input boundaries, with no whole-ledger query and no read larger than the tagged rows; a row that disagrees with its record stops the load with the fatal ledger_tag_index_mismatch
 [[gate]]

@@ -1721,6 +1721,22 @@
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
     },
+    "schedule_sha256": {
+      "type": "hash",
+      "description": "The sha256 of the schedule.json of a standard-pack game root the scheduler workbench composed (ROUT-L RL-1b)."
+    },
+    "rules": {
+      "type": "integer",
+      "description": "The rules a game's schedule.json gave the composition: its composed tasks (ROUT-L RL-1b)."
+    },
+    "held": {
+      "type": "integer",
+      "description": "The packages a game's schedule.json holds out of the routine, each with a reason (ROUT-L RL-1b)."
+    },
+    "unclassified": {
+      "type": "integer",
+      "description": "The packages of a game root that are neither maintenance-role, named by a rule nor held (ROUT-L RL-1b)."
+    },
     "registry_problem": {
       "type": "vocab:registry_problem",
       "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a)."

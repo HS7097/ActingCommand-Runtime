@@ -4,7 +4,7 @@ ROUT-L (frozen model `rd-1024/rout-lean/model.md` v1.0, §3.1–§3.2, §3.5–�
 Alice's ruling 51 (#386, #405): the schedule rules live in the standard package and the
 scheduler workbench loads them when they are used, with no approval step. This document is the
 file format and the composition; the workbench in the Runtime (loading, unloading, last good
-rules, activation) is RL-1b's and is described there.
+rules, activation) is RL-1b's and is described in "The scheduler workbench".
 
 The core stays game-neutral: the Runtime compares every id, package and server as an opaque
 string and names no game here.
@@ -157,8 +157,52 @@ composes a valid empty catalog (V2 accepts an empty task list and an empty `appr
   profiles, events, games, manifest, warnings}`. Under `--dry-run` it is refused
   (`dry_run_unsupported`; alternative `standard-pack check`).
 
+## The scheduler workbench (RL-1b)
+
+Model §3.3–§3.6 and §3.9. The workbench runs in the Runtime when the `policy` section names no
+`catalog` (composer mode); `standard_packs.root` is then required. A configuration that names
+`policy.catalog` keeps the configured catalog path for this one release, and the workbench reads
+nothing.
+
+- **Check.** At the start of a policy cycle, at most once per
+  `standard_packs.check_interval_ms` (default 60 000) and at the first cycle. The games in use are
+  the games of the configured instances (`policy.facts.instances`). A whole-instance pause does
+  not unload a game's rules (pending decision 58, recommended answer A). Each check `stat`s
+  `schedule.json` and `bundle.json` of each game in use and reads the game roots only when one of
+  them, or the bound instances, changed: 「用到的时候再加载」. A game root without a bound
+  instance is never read.
+- **Compose and activate.** The roots are composed with `compose_standard_pack_rules`, its
+  `requires` checked against the configuration manifest's subsystems (this build names
+  `standard_pack_schedule`), and the catalog version is the ledger head plus one. A composition
+  whose rules digest differs from the active one's is staged as a generation directory with its
+  documents, `fragments/<game>.json` (each game's `schedule.json` as composed) and
+  `standard-packs.json` (the rules digest, each game's `schedule.json` sha256, the composed
+  procedures and pools), then activated with the existing `catalog.transition_intent` and
+  `catalog.activated` records, with no promotion and no approval decision. Each changed
+  `schedule.json` gives one `standard_pack_registered` record with `schedule_sha256`, `rules`,
+  `held` and `unclassified`. The procedure manifest is the composition's: one binding per
+  `package.<package_id>`, `operation.package.run`, no yield point. A scheduled run of a composed
+  procedure names its package as the game's registry places it when it is dispatched.
+- **Unload.** A game whose instances are gone, or whose root holds no `schedule.json`, is left
+  out of the next composition; activating it drops the previous generation, and the memory keeps
+  at most `standard_packs.cached_generations` older generations (default 1): 「不用了直接从内存卸载」.
+  A composed generation keeps no source bytes in memory; a dispatch pinned to an older generation
+  reads it back from its directory to settle.
+- **Last good rules.** A `schedule.json` the composer refuses is recorded once per (game,
+  sha256) as `standard_pack_root_invalid`, and that game keeps the `schedule.json` of the active
+  generation's `fragments/`; a game that never had a good one has no rules. The other games are
+  composed as they are. A broken game root (its `bundle.json` or siblings) is recorded once and
+  keeps the active generation until it is fixed. An unclassified package is recorded once per
+  (game, package, sha256).
+- **Static pool readings.** Under a composed generation a `policy.resources.pools` reading for a
+  pool no composed game declares is left out of the evaluation and recorded once as
+  `policy_pool_reading_unused` (`pool_id`), so it never stops the other instances.
+- **Approval.** An intent of a composed generation names no approval, so its admission reads no
+  approval projection.
+
 ## What does not change
 
 No ledger record type or member is added. A composed generation is activated with the existing
-catalog records and no approval (RL-1b). The configuration's catalog section, its approvals and
+catalog records and no approval (RL-1b); `standard_pack_registered` gains the optional values
+`schedule_sha256`, `rules`, `held` and `unclassified`. The configuration's catalog section, its approvals and
 its procedure manifest stay as they are until RL-C removes them.

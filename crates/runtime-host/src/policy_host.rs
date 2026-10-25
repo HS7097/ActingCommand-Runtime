@@ -69,6 +69,10 @@ const MAX_POINTER_BYTES: usize = 16 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 // Published generations are immutable, so verified compiled catalogs are memoised by hash.
 const MAX_CATALOG_MEMO_GENERATIONS: usize = 8;
+/// ROUT-L RL-1b (frozen model v1.0 §3.3): a composed generation's directory holds each game's
+/// `schedule.json` as composed under `fragments/`, and the composition record.
+const FRAGMENTS_DIR: &str = "fragments";
+const COMPOSITION_RECORD_FILE: &str = "standard-packs.json";
 const DEFAULT_DEBOUNCE_MS: u64 = 250;
 const DEFAULT_COOLDOWN_MS: u64 = 1_000;
 const DEFAULT_RECONCILIATION_INTERVAL_MS: u64 = 60_000;
@@ -452,8 +456,12 @@ pub(crate) enum PolicyExecutionPreparation {
 #[derive(Clone)]
 pub(crate) struct LoadedCatalog {
     generation: CatalogGeneration,
-    compiled: CompiledCatalog,
-    sources: CatalogSources,
+    /// ROUT-L RL-1b (frozen model v1.0 §3.3): behind an `Arc`, so a copy of a loaded catalog
+    /// (`active_loaded`, the memo) is a pointer, not a deep copy of the compiled catalog.
+    compiled: Arc<CompiledCatalog>,
+    /// The documents as read. ROUT-L RL-1b: `None` for a generation the scheduler workbench
+    /// composed: its source bytes are not kept in memory; they stay in its directory.
+    sources: Option<Arc<CatalogSources>>,
 }
 
 impl LoadedCatalog {
@@ -461,13 +469,47 @@ impl LoadedCatalog {
         &self.generation
     }
 
-    pub(crate) fn sources(&self) -> &CatalogSources {
-        &self.sources
+    /// The documents as read; `None` for a composed generation (ROUT-L RL-1b).
+    pub(crate) fn sources(&self) -> Option<&CatalogSources> {
+        self.sources.as_deref()
     }
 
     pub(crate) fn compiled(&self) -> &CompiledCatalog {
         &self.compiled
     }
+
+    /// ROUT-L RL-1b: the compiled catalog's shared handle, which a test downgrades to see that
+    /// an unloaded generation's memory is freed (acceptance A3).
+    #[cfg(test)]
+    pub(crate) fn compiled_handle(&self) -> &Arc<CompiledCatalog> {
+        &self.compiled
+    }
+
+    /// ROUT-L RL-1b: the source bytes this catalog keeps in memory (acceptance A3).
+    #[cfg(test)]
+    fn source_bytes(&self) -> usize {
+        self.sources.as_deref().map_or(0, |sources| {
+            [
+                &sources.tasks,
+                &sources.pools,
+                &sources.activity,
+                &sources.timeline,
+            ]
+            .into_iter()
+            .chain(sources.selection.as_ref())
+            .map(|source| source.bytes.len())
+            .sum()
+        })
+    }
+}
+
+/// ROUT-L RL-1b (frozen model v1.0 §3.3, acceptance A3): what the catalog memory holds: the
+/// generations the memo keeps besides the active one, and the source bytes of both.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CatalogResidency {
+    pub(crate) memo_generations: usize,
+    pub(crate) source_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1939,7 +1981,55 @@ impl PolicyHost {
     }
 
     pub(crate) fn active_sources(&self) -> Option<CatalogSources> {
-        self.active.as_ref().map(|catalog| catalog.sources.clone())
+        self.active
+            .as_ref()
+            .and_then(|catalog| catalog.sources.as_deref().cloned())
+    }
+
+    /// ROUT-L RL-1b (frozen model v1.0 §3.3): stages a composed generation: its four documents,
+    /// `fragments/<game>.json` (each game's `schedule.json` as composed) and the composition
+    /// record beside its manifest. The compiled catalog is the composition's own; no source byte
+    /// is kept in memory.
+    pub(crate) fn stage_composed(
+        &self,
+        composition: &actingcommand_policy::StandardPackComposition,
+        fragments: &BTreeMap<String, Vec<u8>>,
+        record: &[u8],
+    ) -> RuntimeHostResult<LoadedCatalog> {
+        self.store.stage_composed(composition, fragments, record)
+    }
+
+    /// ROUT-L RL-1b: the composition record of the generation `hash`, `None` when it has none
+    /// (a configured generation).
+    pub(crate) fn composition_record(&self, hash: &str) -> RuntimeHostResult<Option<Vec<u8>>> {
+        self.store.read_composed_file(hash, COMPOSITION_RECORD_FILE)
+    }
+
+    /// ROUT-L RL-1b (model §3.6): the `schedule.json` of `game` the generation `hash` composed,
+    /// `None` when it composed none.
+    pub(crate) fn composed_fragment(
+        &self,
+        hash: &str,
+        game: &str,
+    ) -> RuntimeHostResult<Option<Vec<u8>>> {
+        self.store
+            .read_composed_file(hash, &format!("{FRAGMENTS_DIR}/{game}.json"))
+    }
+
+    /// ROUT-L RL-1b (`standard_packs.cached_generations`): the memo keeps the active generation
+    /// and at most `cached` older ones.
+    pub(crate) fn set_cached_generations(&self, cached: usize) -> RuntimeHostResult<()> {
+        self.store.set_memo_capacity(cached.saturating_add(1))
+    }
+
+    /// ROUT-L RL-1b (acceptance A3): what the catalog memory holds now.
+    #[cfg(test)]
+    pub(crate) fn residency(&self) -> RuntimeHostResult<CatalogResidency> {
+        let (memo_generations, memo_bytes) = self.store.memo_residency()?;
+        Ok(CatalogResidency {
+            memo_generations,
+            source_bytes: memo_bytes + self.active.as_ref().map_or(0, LoadedCatalog::source_bytes),
+        })
     }
 
     pub(crate) fn active_loaded(&self) -> Option<LoadedCatalog> {
@@ -5577,13 +5667,33 @@ struct CatalogStore {
 /// Bounded least-recently-used memo of verified, compiled generations keyed by
 /// catalog hash. A generation directory is immutable once published, so the
 /// hash alone identifies its verified content.
-#[derive(Default)]
 struct CatalogMemo {
     // Least recently used first, most recently used last.
     entries: Vec<(String, Arc<LoadedCatalog>)>,
+    /// ROUT-L RL-1b: how many generations the memo keeps: `standard_packs.cached_generations`
+    /// plus the active one, once the scheduler workbench sets it.
+    capacity: usize,
+}
+
+impl Default for CatalogMemo {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            capacity: MAX_CATALOG_MEMO_GENERATIONS,
+        }
+    }
 }
 
 impl CatalogMemo {
+    /// ROUT-L RL-1b: keeps at most `capacity` generations from now on, dropping the least
+    /// recently used ones beyond it.
+    fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity.max(1);
+        while self.entries.len() > self.capacity {
+            self.entries.remove(0);
+        }
+    }
+
     fn get(&mut self, hash: &str) -> Option<Arc<LoadedCatalog>> {
         let position = self.entries.iter().position(|(key, _)| key == hash)?;
         let entry = self.entries.remove(position);
@@ -5596,7 +5706,7 @@ impl CatalogMemo {
         if let Some(position) = self.entries.iter().position(|(key, _)| *key == hash) {
             self.entries.remove(position);
         }
-        while self.entries.len() >= MAX_CATALOG_MEMO_GENERATIONS {
+        while self.entries.len() >= self.capacity {
             self.entries.remove(0);
         }
         self.entries.push((hash, loaded));
@@ -5691,6 +5801,119 @@ impl CatalogStore {
         }
         self.load_generation(&generation.catalog_hash)
             .map(|loaded| LoadedCatalog::clone(&loaded))
+    }
+
+    /// ROUT-L RL-1b: [`PolicyHost::stage_composed`]. A generation directory already published
+    /// under the composed hash is loaded as it is (it is immutable).
+    fn stage_composed(
+        &self,
+        composition: &actingcommand_policy::StandardPackComposition,
+        fragments: &BTreeMap<String, Vec<u8>>,
+        record: &[u8],
+    ) -> RuntimeHostResult<LoadedCatalog> {
+        let sources = composition.sources();
+        let generation = generation_from(composition.compiled(), sources);
+        let path = self.generation_path(&generation.catalog_hash)?;
+        if path.exists() {
+            return self
+                .load_generation(&generation.catalog_hash)
+                .map(|loaded| LoadedCatalog::clone(&loaded));
+        }
+        let temporary = self.generations.join(format!(
+            ".tmp-{}-{}",
+            std::process::id(),
+            NEXT_TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&temporary).map_err(|_| {
+            fatal(
+                HostCode::CatalogGenerationCreateFailed,
+                HostLocation::StageCatalogGeneration,
+            )
+        })?;
+        let result = (|| {
+            write_new_file(&temporary.join("tasks.json"), &sources.tasks.bytes)?;
+            write_new_file(&temporary.join("pools.json"), &sources.pools.bytes)?;
+            write_new_file(&temporary.join("activity.json"), &sources.activity.bytes)?;
+            write_new_file(&temporary.join("timeline.json"), &sources.timeline.bytes)?;
+            let fragments_dir = temporary.join(FRAGMENTS_DIR);
+            fs::create_dir(&fragments_dir).map_err(|_| {
+                fatal(
+                    HostCode::CatalogGenerationCreateFailed,
+                    HostLocation::StageCatalogGeneration,
+                )
+            })?;
+            for (game, bytes) in fragments {
+                write_new_file(&fragments_dir.join(format!("{game}.json")), bytes)?;
+            }
+            write_new_file(&temporary.join(COMPOSITION_RECORD_FILE), record)?;
+            let manifest = serde_json::to_vec_pretty(&generation).map_err(|_| {
+                fatal(
+                    HostCode::CatalogManifestEncodeFailed,
+                    HostLocation::StageCatalogGeneration,
+                )
+            })?;
+            write_new_file(&temporary.join("manifest.json"), &manifest)?;
+            fs::rename(&temporary, &path).map_err(|_| {
+                fatal(
+                    HostCode::CatalogGenerationPublishFailed,
+                    HostLocation::StageCatalogGeneration,
+                )
+            })?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            remove_directory_if_exists(&temporary)?;
+            return Err(error);
+        }
+        let hash = generation.catalog_hash.clone();
+        let loaded = Arc::new(LoadedCatalog {
+            generation,
+            compiled: Arc::new(composition.compiled().clone()),
+            sources: None,
+        });
+        self.memoise_generation(&hash, Arc::clone(&loaded))?;
+        Ok(LoadedCatalog::clone(&loaded))
+    }
+
+    /// ROUT-L RL-1b: the file `relative` of the generation `hash`'s directory, `None` when the
+    /// directory holds none.
+    fn read_composed_file(&self, hash: &str, relative: &str) -> RuntimeHostResult<Option<Vec<u8>>> {
+        let path = self.generation_path(hash)?.join(relative);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        read_bounded(&path, actingcommand_policy::MAX_CATALOG_BYTES).map(Some)
+    }
+
+    fn set_memo_capacity(&self, capacity: usize) -> RuntimeHostResult<()> {
+        self.memo
+            .lock()
+            .map_err(|_| {
+                fatal(
+                    HostCode::RuntimeStatePoisoned,
+                    HostLocation::LoadCatalogGeneration,
+                )
+            })?
+            .set_capacity(capacity);
+        Ok(())
+    }
+
+    /// The generations the memo holds and their source bytes.
+    #[cfg(test)]
+    fn memo_residency(&self) -> RuntimeHostResult<(usize, usize)> {
+        let memo = self.memo.lock().map_err(|_| {
+            fatal(
+                HostCode::RuntimeStatePoisoned,
+                HostLocation::LoadCatalogGeneration,
+            )
+        })?;
+        Ok((
+            memo.entries.len(),
+            memo.entries
+                .iter()
+                .map(|(_, loaded)| loaded.source_bytes())
+                .sum(),
+        ))
     }
 
     fn load_active(&self) -> RuntimeHostResult<Option<LoadedCatalog>> {
@@ -5798,18 +6021,36 @@ impl CatalogStore {
             .iter()
             .any(|record| record.kind == "selection")
         {
-            Some(self.load_source(&path, &generation, "selection")?)
+            Some(self.load_source(
+                &path,
+                &generation,
+                "selection",
+                actingcommand_policy::MAX_DOCUMENT_BYTES,
+            )?)
         } else {
             None
         };
+        // ROUT-L RL-1b (model §3.2 step 4): a composed generation's documents are bounded by the
+        // catalog bound, and its source bytes are not kept once it is compiled.
+        let composed = generation.catalog_id == actingcommand_policy::STANDARD_PACKS_CATALOG_ID;
+        let bound = if composed {
+            actingcommand_policy::MAX_CATALOG_BYTES
+        } else {
+            actingcommand_policy::MAX_DOCUMENT_BYTES
+        };
         let sources = CatalogSources {
-            tasks: self.load_source(&path, &generation, "tasks")?,
-            pools: self.load_source(&path, &generation, "pools")?,
-            activity: self.load_source(&path, &generation, "activity")?,
-            timeline: self.load_source(&path, &generation, "timeline")?,
+            tasks: self.load_source(&path, &generation, "tasks", bound)?,
+            pools: self.load_source(&path, &generation, "pools", bound)?,
+            activity: self.load_source(&path, &generation, "activity", bound)?,
+            timeline: self.load_source(&path, &generation, "timeline", bound)?,
             selection,
         };
-        let compiled = compile_catalog(&sources).map_err(|_| {
+        let compiled = if composed {
+            actingcommand_policy::compile_composed_catalog(&sources)
+        } else {
+            compile_catalog(&sources)
+        }
+        .map_err(|_| {
             fatal(
                 HostCode::CatalogGenerationInvalid,
                 HostLocation::LoadCatalogGeneration,
@@ -5826,8 +6067,8 @@ impl CatalogStore {
         }
         Ok(LoadedCatalog {
             generation,
-            compiled,
-            sources,
+            compiled: Arc::new(compiled),
+            sources: (!composed).then(|| Arc::new(sources)),
         })
     }
 
@@ -5861,6 +6102,7 @@ impl CatalogStore {
         path: &Path,
         generation: &CatalogGeneration,
         kind: &str,
+        maximum_bytes: usize,
     ) -> RuntimeHostResult<CatalogDocumentSource> {
         let record = generation
             .sources
@@ -5872,10 +6114,7 @@ impl CatalogStore {
                     HostLocation::LoadCatalogGeneration,
                 )
             })?;
-        let bytes = read_bounded(
-            &path.join(format!("{kind}.json")),
-            actingcommand_policy::MAX_DOCUMENT_BYTES,
-        )?;
+        let bytes = read_bounded(&path.join(format!("{kind}.json")), maximum_bytes)?;
         if sha256(&bytes) != record.sha256 {
             return Err(fatal(
                 HostCode::CatalogSourceHashMismatch,

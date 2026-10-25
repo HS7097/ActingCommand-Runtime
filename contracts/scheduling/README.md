@@ -229,7 +229,12 @@ A catalog comes from one of two sources:
   rewritten and `continues_from` the file's id, with two or more. The composed documents are
   bounded by the 4 MiB catalog bound, not 1 MiB each (`compile_composed_catalog`); every other
   compiler rule applies. A composition without rules is a valid empty catalog. The scheduler
-  workbench that loads, composes and activates it is RL-1b's.
+  workbench that loads, composes and activates it is RL-1b's
+  ([standard-pack-schedule.md](../standard-pack-schedule.md), "The scheduler workbench
+  (RL-1b)"): it runs when the `policy` section names no `catalog`, and a configuration that
+  names one keeps the configured path for this release. Under a composed generation a
+  `policy.resources.pools` reading for a pool no composed game declares is left out of the
+  evaluation (`policy_pool_reading_unused`), and `continues_from` is read per instance.
 
 Both sources compile into the same `CompiledCatalog` and are evaluated alike: the evaluator
 orders candidates by score, tie-breaker, task id and instance, never by document order.

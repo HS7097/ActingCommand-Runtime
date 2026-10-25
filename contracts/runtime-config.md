@@ -257,6 +257,8 @@ included) keeps its behaviour from before C-43.
 | Key | Type | Default |
 |---|---|---|
 | `standard_packs.root` | string (a path), not settable (read once at assembly) | none: without it no standard-pack root is read |
+| `standard_packs.check_interval_ms` | milliseconds, `1000..=3600000`, settable (ROUT-L RL-1b, since 0.12.13) | `60000` |
+| `standard_packs.cached_generations` | integer, `0..=8`, settable (ROUT-L RL-1b, since 0.12.13) | `1` |
 
 The directory that holds one root per game (`<root>/<game>/`), written once by the installer. A
 relative path resolves against the configuration file's directory; an empty one is refused.
@@ -264,6 +266,16 @@ D1c moves the section's structure from actingd's own configuration into this cra
 deviation 5); the file member and its meaning are unchanged, and `config.parameters.standard_packs`
 reports it as the file writes it when the file names it. Changing it needs a commit and a
 restart.
+
+ROUT-L RL-1b (frozen model v1.0 §3.3, §3.8; [standard-pack-schedule.md](standard-pack-schedule.md),
+"The scheduler workbench"): when the `policy` section names no `catalog` (composer mode), the
+scheduler workbench composes the rules from the `schedule.json` of the games in use, and
+`standard_packs.root` is required (`config_value_invalid`, `config_key` `standard_packs.root`).
+`check_interval_ms` is the least time between two checks of the games in use, at the start of a
+policy cycle; `cached_generations` is how many composed generations older than the active one
+stay in memory (it replaces the fixed bound of 8). Both are read at each check and can change
+while the Runtime runs. A configuration that names `policy.catalog` keeps the configured catalog
+path as before; the workbench then reads nothing.
 
 ## The performance section (Workflow #385 P-c)
 

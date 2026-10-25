@@ -241,6 +241,9 @@ mod signatures;
 mod standard_pack;
 pub(crate) use standard_pack::read_registries;
 pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_standard_packs};
+// ROUT-L RL-1b: the scheduler workbench, which composes the standard packs' schedule rules.
+mod standard_pack_schedule;
+pub use standard_pack_schedule::{StandardPackSchedulePreview, preview_standard_pack_schedule};
 mod startup_package;
 mod state_control;
 mod task_diagnostic;
@@ -553,6 +556,8 @@ pub struct RuntimeHostConfig {
     /// Workflow #373 NAV-3a: its registries are where every prerequisite package and every
     /// return-home package is found (M-373 §4.3).
     standard_packs_root: Option<PathBuf>,
+    /// ROUT-L RL-1b: the scheduler workbench composes the rules (no configured catalog).
+    standard_pack_schedule: bool,
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.2 step 4): where the ledger reports
     /// a retried write and its fatal stop; actingd's sink writes its lines and ends the process.
     /// Without one the ledger's writer ends at the stop and every later write fails.
@@ -639,6 +644,7 @@ impl RuntimeHostConfig {
             stuck_recovery: BTreeMap::new(),
             recognition_packages: BTreeMap::new(),
             standard_packs_root: None,
+            standard_pack_schedule: false,
             ledger_failure_sink: None,
             runtime_commit: None,
             daemon_reporter: None,
@@ -979,6 +985,18 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench composes the schedule
+    /// rules from the standard packs of the games in use, instead of a configured catalog.
+    pub fn with_standard_pack_schedule(mut self, enabled: bool) -> Self {
+        self.standard_pack_schedule = enabled;
+        self
+    }
+
+    /// ROUT-L RL-1b: whether the scheduler workbench composes the rules.
+    pub const fn standard_pack_schedule(&self) -> bool {
+        self.standard_pack_schedule
+    }
+
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1, §9.2 step 4): where the ledger
     /// reports a retried write (`ledger_write_retried`) and the fatal stop after its dump
     /// (`ledger_write_failed`, `ledger_dump_failed`).
@@ -1198,6 +1216,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             )
             .field("stuck_recovery", &self.stuck_recovery)
             .field("standard_packs_root", &self.standard_packs_root)
+            .field("standard_pack_schedule", &self.standard_pack_schedule)
             .field("ledger_failure_sink", &self.ledger_failure_sink.is_some())
             .field("runtime_commit", &self.runtime_commit)
             .finish()
@@ -1816,7 +1835,14 @@ impl RuntimeHost {
             fact_refresh_recorder: Mutex::new(
                 crate::fact_refresh_transitions::FactRefreshRecorder::default(),
             ),
-            standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
+            standard_packs: standard_pack::StandardPackRoots::new(
+                config.standard_packs_root,
+                config.standard_pack_schedule.then(|| {
+                    standard_pack_schedule::StandardPackWorkbench::new(
+                        config.config_manifest.as_ref(),
+                    )
+                }),
+            ),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             lift_checks: crate::suspension_lift::LiftChecks::default(),
             pack_admission: crate::pack_admission::PackAdmission::new(
@@ -1993,6 +2019,29 @@ impl RuntimeHost {
                         tagged_start,
                     )
                 })?;
+                // ROUT-L RL-1b (model §3.4): in composer mode the procedures of the active
+                // composed generation are scheduled runs too, so a run a stop cut is told apart
+                // as the configured ones are.
+                let scheduled_procedures = if config.standard_pack_schedule {
+                    let mut procedures = config.scheduled_procedures.clone();
+                    if let Some(active) = policy.active_loaded()
+                        && active.generation().catalog_id()
+                            == actingcommand_policy::STANDARD_PACKS_CATALOG_ID
+                    {
+                        procedures.extend(
+                            active
+                                .compiled()
+                                .catalog()
+                                .tasks
+                                .tasks
+                                .iter()
+                                .map(|task| task.procedure_ref.clone()),
+                        );
+                    }
+                    procedures
+                } else {
+                    config.scheduled_procedures.clone()
+                };
                 let unsettled_dispatches =
                     timed(&mut startup_recovery.policy_dispatches_ms, || {
                         // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
@@ -2001,7 +2050,7 @@ impl RuntimeHost {
                             ended_without_release: shared.recover_unreleased_policy_runs(
                                 &policy,
                                 &registered_instances,
-                                &config.scheduled_procedures,
+                                &scheduled_procedures,
                             )?,
                             unsettled: Vec::new(),
                             #[cfg(test)]
@@ -2015,10 +2064,7 @@ impl RuntimeHost {
                         )?;
                         // #670 final review (Fail Loud): a scheduled dispatch still open here is
                         // recorded, never left silently.
-                        shared.record_open_scheduled_dispatches(
-                            &policy,
-                            &config.scheduled_procedures,
-                        )?;
+                        shared.record_open_scheduled_dispatches(&policy, &scheduled_procedures)?;
                         Ok::<_, RuntimeHostError>(settlement.unsettled)
                     })?;
                 let authoritative_policy_outcomes =
@@ -2557,6 +2603,18 @@ impl RuntimeHost {
             .plan_policy_catalog_transition(sources, request, approval_ids)
     }
 
+    /// ROUT-L RL-1b (frozen model v1.0 §3.4): the request of a scheduled run of a composed
+    /// procedure (`package.<package_id>`): its package as the game's registry places it now,
+    /// with the longest response deadline. `None` for a procedure the scheduler workbench did not
+    /// compose (a configured binding or the fact refresh's).
+    pub fn standard_pack_request(
+        &self,
+        procedure_ref: &str,
+    ) -> RuntimeHostResult<Option<ContainedTaskRequest>> {
+        self.work_ref(HostLocation::StandardPackRead)?
+            .standard_pack_request(procedure_ref)
+    }
+
     /// Workflow #361 C2: records a planned transition; the first catalog write of startup.
     pub fn apply_policy_catalog_transition(
         &self,
@@ -2748,6 +2806,36 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::HostLocation::RecordFactRefreshTransitions)?
             .replace_fact_refresh_recorder_for_test(recorder)
+    }
+
+    /// ROUT-L RL-1b, test only (acceptance A4): how many times the scheduler workbench opened
+    /// `game`'s `schedule.json`.
+    #[cfg(test)]
+    pub(crate) fn standard_pack_schedule_reads_for_test(
+        &self,
+        game: &str,
+    ) -> RuntimeHostResult<u64> {
+        self.shared_ref(HostLocation::StandardPackRead)?
+            .standard_pack_schedule_reads(game)
+    }
+
+    /// ROUT-L RL-1b, test only (acceptance A3): what the catalog memory holds, and a handle that
+    /// upgrades only while the active generation's compiled catalog is still in memory.
+    #[cfg(test)]
+    pub(crate) fn policy_catalog_memory_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        crate::policy_host::CatalogResidency,
+        Option<std::sync::Weak<actingcommand_policy::CompiledCatalog>>,
+    )> {
+        let shared = self.shared_ref(HostLocation::StandardPackRead)?;
+        let policy = lock(shared.policy()?, HostLocation::StandardPackRead)?;
+        Ok((
+            policy.residency()?,
+            policy
+                .active_loaded()
+                .map(|loaded| Arc::downgrade(loaded.compiled_handle())),
+        ))
     }
 
     #[cfg(test)]

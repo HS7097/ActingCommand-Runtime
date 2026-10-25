@@ -443,6 +443,12 @@ outcome_keys! {
     added_package_ids: list(name),
     removed_package_ids: list(name),
     // ---- Workflow #373 NAV-6: end ----
+    // ROUT-L RL-1b (frozen model v1.0 §3.8): what a game's `schedule.json` gave the scheduler
+    // workbench: its sha256 and its rules, held and unclassified packages.
+    schedule_sha256: hash,
+    rules: integer,
+    held: integer,
+    unclassified: integer,
     // Workflow #373 NAV-3a: why a prerequisite package is not bound.
     registry_problem: vocab(registry_problem),
     // Workflow #373 NAV-5: which navigation bound a run reached.
