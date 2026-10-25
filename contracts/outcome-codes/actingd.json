@@ -2125,6 +2125,22 @@
       "description": "An instance names start_emulator true but has no emulator the daemon can start (Workflow #369 S6a): it is a fixture, or it is not bound by instance_index or instance_name. alias names the instance. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
       "common_causes": "start_emulator set on an explicit or fixture instance.",
       "handling": "Bind the instance by instance_index or instance_name, or remove start_emulator. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
+    },
+    "check_config_install_root_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "actingd check-config --install-root named a directory that is not an install root: it does not exist or has no runtime\\BUILD-MANIFEST.json. path is the given root.",
+      "common_causes": "A typo in the root, or a root that was never installed.",
+      "handling": "Name the root that holds runtime\\BUILD-MANIFEST.json."
     }
   },
   "locations": {

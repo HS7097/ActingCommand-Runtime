@@ -701,7 +701,11 @@ impl StabilityCounter {
     /// Counts one committed record (§3.4): a warning or worse, on an instance no ladder climbs
     /// on, not committed while manual work holds the instance's key under
     /// `rules.direct_runs = exempt` (B1, the fence's set), whose code the first
-    /// stability-warnings trigger item matches. Workflow #387 D1c-H: the record counts only as
+    /// stability-warnings trigger item matches. emu-watch (Alice's ruling 35, R3): nor committed
+    /// while an autostart claim holds the key: a configured emulator start (the daemon start's or
+    /// the emulator watch's) is bounded by the watch's own restarts per window, and its failures
+    /// admit no ladder whose emulator-restart rung would start the emulator beyond that bound.
+    /// Workflow #387 D1c-H: the record counts only as
     /// the first matching record of its failure (`FailureIdentity`); the `count`-th failure
     /// within the item's window registers a burst. Whether it is then admitted or suppressed,
     /// every window of the instance starts empty again, and the failures it counted stay
@@ -718,6 +722,7 @@ impl StabilityCounter {
             record.severity,
             EventSeverity::Warning | EventSeverity::Error | EventSeverity::Fatal
         ) || self.climbing.contains(&record.instance_id)
+            || self.key_holders.get(&record.instance_id) == Some(&ClaimKind::Autostart)
             || direct_run_exempt(
                 &config.rules,
                 self.key_holders

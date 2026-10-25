@@ -19,8 +19,8 @@ pub(crate) use planning_transaction::planning_transaction_error;
 use crate::catalog_plan::CatalogLineage;
 use crate::codes::HostCode;
 use crate::policy_control::{
-    PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
-    is_availability_denial,
+    PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, PolicyValueRecord,
+    active_activity_window, is_availability_denial,
 };
 use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use crate::suspension_lift::SuspensionLiftView;
@@ -1127,6 +1127,10 @@ pub(crate) struct PolicyHost {
     /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-2): the latest evaluated cycle's
     /// not-run explanation. Memory only; a host starts with none.
     explanation: crate::schedule_explanation::ScheduleExplanationTable,
+    /// Workflow #422 LN-3 (`contracts/ledger-observer.md` §11.3): per index key of the decision
+    /// memory, the value record the ledger holds as its latest, or, for a key unchanged since the
+    /// open, the state the open replayed.
+    recorded_values: BTreeMap<String, PolicyValueRecord>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1163,10 +1167,83 @@ impl PolicyHost {
             remedies: crate::remedy::RemedyState::default(),
             random_delays: RandomDelayTable::default(),
             explanation: crate::schedule_explanation::ScheduleExplanationTable::default(),
+            recorded_values: BTreeMap::new(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
+        // Workflow #422 LN-3: the replayed state is where the value records start from; seeding
+        // a record for every key once is LN-4's.
+        host.recorded_values = host.current_value_records()?;
         Ok(host)
+    }
+
+    /// Workflow #422 LN-3 (`contracts/ledger-observer.md` §11.3): the value record of every key
+    /// of the decision memory whose state changed since its latest record, with the key's
+    /// complete state, in key order. A key the state no longer holds means a replay lost state
+    /// its records hold, which is fatal.
+    pub(crate) fn changed_value_records(
+        &self,
+    ) -> RuntimeHostResult<Vec<(String, PolicyValueRecord)>> {
+        let current = self.current_value_records()?;
+        if self
+            .recorded_values
+            .keys()
+            .any(|key| !current.contains_key(key))
+        {
+            return Err(fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyControl,
+            ));
+        }
+        Ok(current
+            .into_iter()
+            .filter(|(key, record)| self.recorded_values.get(key) != Some(record))
+            .collect())
+    }
+
+    /// Workflow #422 LN-3: the ledger took `record` as the latest value record of `key`.
+    pub(crate) fn note_value_recorded(&mut self, key: String, record: PolicyValueRecord) {
+        self.recorded_values.insert(key, record);
+    }
+
+    fn current_value_records(&self) -> RuntimeHostResult<BTreeMap<String, PolicyValueRecord>> {
+        Ok(self.control.value_records(&self.open_dispatch_clocks()?))
+    }
+
+    /// Workflow #422 LN-3 (register L7): per (task, instance), the admission time of the pair's
+    /// latest admitted dispatch that is not completed yet: its dispatch clock, as the start
+    /// recovers it (`recovered_dispatch_clocks`).
+    fn open_dispatch_clocks(&self) -> RuntimeHostResult<BTreeMap<(String, String), u64>> {
+        let mut latest = BTreeMap::<(String, String), (u64, u64)>::new();
+        for dispatch in self.seen_dispatches.values() {
+            if dispatch.lifecycle != DispatchLifecycle::Admitted {
+                continue;
+            }
+            let admitted_at_unix_ms = dispatch
+                .admission
+                .as_ref()
+                .map(|admission| admission.activity.admitted_at_unix_ms)
+                .ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchAdmissionMissing,
+                        HostLocation::RecoverPolicyDispatchClocks,
+                    )
+                })?;
+            let pair = (
+                dispatch.data.task_id.clone(),
+                dispatch.data.instance_id.clone(),
+            );
+            if latest
+                .get(&pair)
+                .is_none_or(|(sequence, _)| *sequence < dispatch.intent_sequence)
+            {
+                latest.insert(pair, (dispatch.intent_sequence, admitted_at_unix_ms));
+            }
+        }
+        Ok(latest
+            .into_iter()
+            .map(|(pair, (_, admitted_at_unix_ms))| (pair, admitted_at_unix_ms))
+            .collect())
     }
 
     pub(crate) fn stage(&self, sources: &CatalogSources) -> RuntimeHostResult<LoadedCatalog> {

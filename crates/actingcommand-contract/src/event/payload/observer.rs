@@ -554,6 +554,20 @@ pub struct PolicyControlStatePayload {
 }
 
 impl PolicyControlStatePayload {
+    /// Workflow #422 LN-3: the value record of one dispatch pair's complete decision memory.
+    pub(super) fn new(
+        state: PolicyControlStateRecord,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::PolicyControlState,
+            state: Box::new(state),
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub fn state(&self) -> &PolicyControlStateRecord {
         &self.state
     }
@@ -576,6 +590,21 @@ pub struct PolicyActivityStatePayload {
 }
 
 impl PolicyActivityStatePayload {
+    /// Workflow #422 LN-3: the value record of one (instance, activity profile)'s complete
+    /// activity state.
+    pub(super) fn new(
+        state: PolicyActivityStateRecord,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::PolicyControlState,
+            state: Box::new(state),
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub fn state(&self) -> &PolicyActivityStateRecord {
         &self.state
     }
@@ -636,6 +665,20 @@ pub struct AgentWakeObligationPayload {
 }
 
 impl AgentWakeObligationPayload {
+    /// Workflow #422 LN-3: the value record of one wake obligation.
+    pub(super) fn new(
+        wake: AgentWakeData,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::AgentWake,
+            wake,
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub const fn wake(&self) -> &AgentWakeData {
         &self.wake
     }
