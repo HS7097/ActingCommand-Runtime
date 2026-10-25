@@ -1730,7 +1730,6 @@ impl RuntimeHost {
             authoritative_policy_outcomes: Mutex::new(BTreeMap::new()),
             procedure_manifest: Mutex::new(config.procedure_manifest),
             verified_materials: Mutex::new(material_read::VerifiedMaterialCache::default()),
-            verified_artifacts: Mutex::new(planning::VerifiedArtifactIndex::default()),
             approval_records: Mutex::new(crate::approval::ApprovalRecordsAt::default()),
             owner: Mutex::new(owner),
             ledger,
@@ -4760,9 +4759,7 @@ struct HostShared {
     procedure_manifest: Mutex<Option<ProcedureManifest>>,
     // Whole verified material objects, so chunked reads verify each object once.
     verified_materials: Mutex<material_read::VerifiedMaterialCache>,
-    // Workflow #317 read face: verified artifact references read so far (item C) and the
-    // approval projection last built for a read position (item H).
-    verified_artifacts: Mutex<planning::VerifiedArtifactIndex>,
+    // Workflow #317 read face: the approval projection last built for a read position (item H).
     approval_records: Mutex<crate::approval::ApprovalRecordsAt>,
     ledger: GlobalLedger,
     artifacts: Arc<ArtifactStore>,
