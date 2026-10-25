@@ -420,9 +420,11 @@ impl Bench {
         );
         match schedule {
             Some(schedule) => write_json(&self.path(game, "schedule.json"), schedule),
-            None => {
-                let _ = fs::remove_file(self.path(game, "schedule.json"));
-            }
+            None => match fs::remove_file(self.path(game, "schedule.json")) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("remove schedule.json: {error}"),
+            },
         }
     }
 
@@ -973,8 +975,10 @@ fn rl1b_a9_the_first_composition_switches_from_a_configured_catalog_with_the_sam
         .expect("activate the configured catalog");
     assert_eq!(bench.active().catalog_id(), "fixture.catalog-a");
 
+    // The restarted host evaluates at the fixture's restart instant, after every record of the
+    // first start (board #71, TCLOCK).
     let bench = bench.restart(true);
-    let cycle = bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    let cycle = bench.cycle(POLICY_RESTART_UNIX_MS, 0);
     let active = bench.active();
     assert_eq!(active.catalog_id(), STANDARD_PACKS_CATALOG_ID);
     let activated = bench.events(EventType::CatalogActivated);

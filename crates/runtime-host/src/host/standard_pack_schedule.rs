@@ -489,7 +489,7 @@ impl HostShared {
                     "composition:{:?}",
                     schedules
                         .values()
-                        .map(|bytes| sha256(bytes))
+                        .map(|bytes| sha256(bytes.as_slice()))
                         .collect::<Vec<_>>()
                 );
                 for issue in whole {
