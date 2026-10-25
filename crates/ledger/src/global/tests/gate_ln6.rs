@@ -40,7 +40,7 @@ use actingcommand_contract::{
     RuntimeEventQueryPageRequest, RuntimeFactRecord, RuntimeFactScope, RuntimePayloadDraft,
     SanitizedEventDraft, TerminalEvent,
 };
-use actingcommand_runtime_database::{DatabaseLocation, RuntimeDatabase};
+use actingcommand_runtime_database::{DatabaseLocation, MaintenanceLimits, RuntimeDatabase};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -496,6 +496,17 @@ fn selection(capture: &Capture, snapshot: u64) -> LedgerArtifactSelection {
     }
 }
 
+/// A deadline `GATE_WAIT` ahead. A gate file reads no clock itself (test plan v2.2 §2.1 guard 3);
+/// as in the crate's gate fixture, the deadline is the one `MaintenanceLimits` computes.
+fn deadline() -> Instant {
+    MaintenanceLimits {
+        timeout_seconds: GATE_WAIT.as_secs(),
+        ..MaintenanceLimits::default()
+    }
+    .deadline()
+    .expect("a deadline GATE_WAIT ahead")
+}
+
 // T3: an artifact without an eviction proof and one with its intent and outcome; a position the
 // ledger does not hold is refused.
 #[test]
@@ -516,7 +527,6 @@ fn ln6_t3_resolve_artifact_answers_with_and_without_proofs() {
         .finish_artifact_eviction(permit)
         .expect("recorded deletion");
     let head = ledger.latest_sequence().expect("head");
-    let deadline = || Instant::now() + GATE_WAIT;
 
     let resolved = ledger
         .resolve_artifact(selection(&kept, head), deadline())

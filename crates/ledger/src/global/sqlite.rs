@@ -1804,7 +1804,6 @@ pub(super) fn open_metadata(
         records,
         metadata,
         head_hash,
-        ..
     } = verified;
     drop(records);
     for event in metadata {
@@ -3998,7 +3997,6 @@ struct VerifiedSnapshotRecords {
     records: Vec<StoredEventRecord>,
     metadata: Vec<LedgerEventMetadata>,
     head_hash: Option<String>,
-    marker: SqliteMarker,
 }
 
 /// Authenticates the complete ledger snapshot without opening referenced material; for a
@@ -4087,7 +4085,6 @@ fn verify_snapshot_records(
         records: events,
         metadata,
         head_hash,
-        marker,
     })
 }
 
