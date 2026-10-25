@@ -767,8 +767,11 @@ pub struct StandardPackSchedulePreview {
     pub profiles: usize,
     pub events: usize,
     pub unclassified: usize,
-    /// One `standard_pack_root_invalid` or `standard_pack_root_unreadable` per problem.
+    /// One `standard_pack_root_invalid` per refusal of a `schedule.json`.
     pub problems: Vec<Outcome>,
+    /// The games in use whose game root is broken (listed with their problem in check-config's
+    /// `standard_packs`), left out of the preview.
+    pub left_out: Vec<String>,
 }
 
 /// ROUT-L RL-1b: check-config's preview of the composition for the bound instances
@@ -788,6 +791,7 @@ pub fn preview_standard_pack_schedule(
         events: 0,
         unclassified: 0,
         problems: Vec::new(),
+        left_out: Vec::new(),
     };
     let Some(root) = root else {
         return preview;
@@ -805,7 +809,9 @@ pub fn preview_standard_pack_schedule(
                 read.insert(game.clone(), files);
             }
             Ok(None) => {}
-            Err(failure) => preview.problems.push(failure.outcome(Some(game))),
+            // A broken game root is check-config's `standard_packs` problem (and its note)
+            // already; here the game is left out, as the workbench keeps its rules.
+            Err(_) => preview.left_out.push(game.clone()),
         }
     }
     let inputs = read

@@ -3307,6 +3307,25 @@ provisional for the parallel slices.
 | LN2-3 | `ApprovalRecordsAt` | Runtime-internal (memory only) | LN-2 | — | the resident read projection keeps the latest record only of the approvals in `active` and `recent` (at most 512); a later decision of a dropped id is folded without the target check against its earlier record, which the governance path's own full projection keeps |
 | LN2-4 | `VerifiedArtifactIndex` removed | Runtime-internal (memory only) | LN-2 | — | `artifact.verified` is read on demand, by its type index in pages through the ledger's latest position at the call; the three callers read the same references in ledger order |
 
+### 1.184 Slice RL-1b (0.12.x): the scheduler workbench in the host: load when used, unload when not, no approval (#420 ROUT-L; frozen model v1.0 `rd-1024/rout-lean/model.md` §3.3–§3.6, §3.8, §3.9, §6.1 row RL-1b, §7.1 A2–A6, A8, A9; Alice's ruling 51, #386 6380164487: 「直接动态加载，用到的时候再加载，不用了直接从内存卸载，这个应该是要放到调度器工作台的」)
+
+[standard-pack-schedule.md](standard-pack-schedule.md), "The scheduler workbench (RL-1b)", is the
+contract. Pending decision 58 takes its recommended answer A (a pause does not unload a game's
+rules). One code is added (`policy_pool_reading_unused`), four optional values of
+`standard_pack_registered`, two configuration keys and one subsystem; `actingd-config` revision
+12. Gates: the `gate_rl1b` tests, eight rows of host.toml. The number 1.184 is provisional for the
+parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RL1B-1 | a `policy` section without `catalog`, `catalog_approval_ids` and `procedure_manifest` (composer mode) | configuration (revision 12) | RL-1b | the person | requires `standard_packs.root` (`config_value_invalid`, `config_key` `standard_packs.root`); approval ids, a manifest or a `catalog_transition` without `catalog` are refused; with `catalog` the configured path is unchanged for this release |
+| RL1B-2 | `standard_packs.check_interval_ms` (1000..=3600000, default 60000), `standard_packs.cached_generations` (0..=8, default 1), both settable | configuration keys (revision 12) | RL-1b | the person | read at each check; `cached_generations` replaces the memo's fixed bound of 8 once the workbench runs |
+| RL1B-3 | a composed generation directory: the four documents, `fragments/<game>.json`, `standard-packs.json` (`actingcommand.standard-pack-composition.v1`: `rules_digest`, `games`, `procedures`, `pools`), `manifest.json` | Runtime state (immutable, by content hash) | RL-1b | RL-1b | activated with the existing `catalog.transition_intent` / `catalog.activated`, no promotion, no approval decision; read back with the 4 MiB catalog bound |
+| RL1B-4 | `standard_pack_registered` values `schedule_sha256`, `rules`, `held`, `unclassified` | outcome values (optional) | RL-1b | RL-1b | one record per changed `schedule.json` of a game in use |
+| RL1B-5 | `policy_pool_reading_unused` (warning, `pool_id`) | outcome code | RL-1b | RL-1b | a configured static pool reading for a pool no composed game declares is left out of the evaluation; recorded once per pool (RL-1a review item 1) |
+| RL1B-6 | `config.subsystems` row `standard_pack_schedule` (always on) | new row value of an existing fact | RL-1b | RL-1b | a `schedule.json` that requires it is composed only by a Runtime that names it |
+| RL1B-7 | check-config `report.standard_pack_schedule` (`composer_mode`, `games`, `rules`, `pools`, `profiles`, `events`, `unclassified`, `problems`, `left_out`) | check-config report member | RL-1b | — | the composition the workbench would make for the configured instances, in either mode; each problem is a note |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
