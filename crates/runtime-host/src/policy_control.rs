@@ -15,7 +15,8 @@ use actingcommand_contract::{
     PolicyBudgetReceipt, PolicyConditionSettlement, PolicyControlStateRecord, PolicyDailyCount,
     PolicyDispatchClockRecord, PolicyExecutionEventData, PolicyExecutionOutcome,
     PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, PolicyFailureStreakRecord,
-    PolicyRetryRoundRecord, RuntimeErrorCode, scheduled_failure_code_str,
+    PolicyJournalDispatchRecord, PolicyRetryRoundRecord, RuntimeErrorCode,
+    scheduled_failure_code_str,
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
@@ -160,10 +161,12 @@ impl PolicyControlState {
     /// Workflow #422 LN-3 (register L7, L14): the value record of every key this state holds,
     /// each with the key's complete state. `dispatch_clocks` are the admission times of the
     /// pairs' admitted dispatches that are not completed yet, per (task, instance); the policy
-    /// host keeps them.
+    /// host keeps them. Workflow #422 LN-4 (register §1.183 LN4-7): `dispatches` are the
+    /// dispatches the policy host's journal keeps per pair, which its record names.
     pub(crate) fn value_records(
         &self,
         dispatch_clocks: &BTreeMap<(String, String), u64>,
+        dispatches: &BTreeMap<(String, String), Vec<PolicyJournalDispatchRecord>>,
     ) -> BTreeMap<String, PolicyValueRecord> {
         let pairs = self
             .task_daily
@@ -204,17 +207,15 @@ impl PolicyControlState {
                     .keys()
                     .map(|(task, instance)| (task, instance)),
             )
+            .chain(dispatches.keys().map(|(task, instance)| (task, instance)))
             .collect::<BTreeSet<_>>();
         let mut records = BTreeMap::new();
         for (task_id, instance_id) in pairs {
-            let clock = dispatch_clocks
-                .get(&(task_id.clone(), instance_id.clone()))
-                .copied();
-            let record = PolicyValueRecord::Control(Box::new(self.control_record(
-                task_id,
-                instance_id,
-                clock,
-            )));
+            let pair = (task_id.clone(), instance_id.clone());
+            let clock = dispatch_clocks.get(&pair).copied();
+            let mut record = self.control_record(task_id, instance_id, clock);
+            record.dispatches = dispatches.get(&pair).cloned().unwrap_or_default();
+            let record = PolicyValueRecord::Control(Box::new(record));
             records.insert(record.index_key(), record);
         }
         for ((profile_id, instance_id), (local_day, window_id)) in &self.activity_active {
@@ -306,6 +307,7 @@ impl PolicyControlState {
             }),
             condition_reruns: None,
             failure_settled: self.failure_settled.get(&pair).copied(),
+            dispatches: Vec::new(),
         }
     }
 
@@ -3277,7 +3279,7 @@ mod tests {
         )
         .expect("runtime events");
         state
-            .value_records(&BTreeMap::new())
+            .value_records(&BTreeMap::new(), &BTreeMap::new())
             .into_values()
             .map(|record| {
                 let payload = match &record {
@@ -3377,8 +3379,8 @@ mod tests {
                 .expect("the record applies");
         }
         assert_eq!(
-            restarted.value_records(&BTreeMap::new()),
-            state.value_records(&BTreeMap::new()),
+            restarted.value_records(&BTreeMap::new(), &BTreeMap::new()),
+            state.value_records(&BTreeMap::new(), &BTreeMap::new()),
             "the records hold the complete state"
         );
 

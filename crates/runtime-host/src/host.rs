@@ -1951,6 +1951,9 @@ impl RuntimeHost {
             // marker decides whether the monitor registry, the policy host's decision memory and
             // the agent dispatcher load from their tagged records or are seeded once.
             let tagged_start = TaggedStart::read(&shared.ledger)?;
+            // Workflow #422 LN-4: a root's first start has no earlier epoch to seed and writes
+            // no marker; read before this start's own start record.
+            let earlier_start = crate::tagged_state::earlier_start(&shared.ledger)?;
             // Workflow #381 R6: each recovery step is timed, and the line is printed whether
             // the recovery succeeds or fails.
             let recovery_started = Instant::now();
@@ -2125,6 +2128,7 @@ impl RuntimeHost {
                     &mut policy,
                     &mut monitor_registry,
                     &agent_dispatcher,
+                    earlier_start,
                 )?;
             }
             #[cfg(test)]
@@ -4224,16 +4228,27 @@ impl RuntimeHost {
     #[cfg(test)]
     pub(crate) fn decision_memory_for_test(
         &self,
-    ) -> RuntimeHostResult<(
-        BTreeMap<String, crate::policy_control::PolicyValueRecord>,
-        BTreeMap<String, crate::policy_control::PolicyValueRecord>,
-        usize,
-    )> {
+    ) -> RuntimeHostResult<(ValueRecordsForTest, ValueRecordsForTest, usize)> {
         let shared = self.shared_ref(HostLocation::RecoverPolicyControl)?;
         let policy = lock(shared.policy()?, HostLocation::RecoverPolicyControl)?;
         let (held, journal) = policy.decision_memory_for_test()?;
         let replayed = policy.replayed_decision_memory_for_test(&shared.ledger)?;
         Ok((held, replayed, journal))
+    }
+
+    /// Workflow #422 LN-4, test only: the policy host's dispatch journal, and today's
+    /// whole-history journal kept by the journal's rule.
+    #[cfg(test)]
+    pub(crate) fn dispatch_journal_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        crate::policy_host::DispatchJournalForTest,
+        crate::policy_host::DispatchJournalForTest,
+    )> {
+        let shared = self.shared_ref(HostLocation::RecoverPolicyDispatches)?;
+        let policy = lock(shared.policy()?, HostLocation::RecoverPolicyDispatches)?;
+        let replayed = policy.replayed_dispatch_journal_for_test(&shared.ledger)?;
+        Ok((policy.dispatch_journal_for_test(), replayed))
     }
 
     /// Workflow #422 LN-4, test only: the monitor registry's state, and the same rebuilt by
@@ -5686,17 +5701,24 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     )
 }
 
+/// Workflow #422 LN-4, tests: the decision memory as its value records, by index key.
+#[cfg(test)]
+type ValueRecordsForTest = BTreeMap<String, crate::policy_control::PolicyValueRecord>;
+
 /// Workflow #422 LN-4 (LEAN-L model §3.6; `contracts/ledger-observer.md` §11.6, §12 step 8): on
 /// a start without the marker, the value records the index does not name yet, then the marker
 /// with the seeding's report (`ledger_tagged_state_seeded`, the keys seeded). The decision
 /// memory's records were written by the start's reconciliation, which found none recorded; any
 /// left are written here. The monitor registry's and the live wake obligations' are written
-/// here. Later starts load and never replay.
+/// here. Later starts load and never replay. A root's first start (`earlier_start` false: the
+/// ledger holds no `runtime.started` or `runtime.takeover` before it) has no earlier epoch to
+/// seed and writes no marker; the root's next start seeds what that epoch recorded.
 fn seed_tagged_state(
     shared: &HostShared,
     policy: &mut PolicyHost,
     monitor_registry: &mut MonitorRegistry,
     agent_dispatcher: &AgentDispatcherState,
+    earlier_start: bool,
 ) -> RuntimeHostResult<()> {
     shared.record_policy_values(policy)?;
     let through = shared
@@ -5737,6 +5759,9 @@ fn seed_tagged_state(
             .append(shared.events.sanitize(draft)?)
             .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
         seeded += 1;
+    }
+    if !earlier_start {
+        return Ok(());
     }
     shared.append_lifecycle_observed(
         RuntimeLifecyclePhase::TaggedStateEnabled {

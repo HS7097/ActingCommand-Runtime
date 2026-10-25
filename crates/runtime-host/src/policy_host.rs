@@ -34,9 +34,9 @@ use actingcommand_contract::{
     IssuedCorrelationId, IssuedRunId, IssuedTaskId, LeaseId, LeaseToken, OwnerEpoch,
     PerformanceContext, PolicyAdmissionRecord, PolicyConditionSettlement,
     PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    PolicyRandomDelay, PolicyReasonRecord, ProjectDecisionPageRequest, RequestId, RunId,
-    RuntimeErrorCode, RuntimeRequest, TaskId,
+    PolicyExecutionOutcome, PolicyJournalDispatchRecord, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, PolicyRandomDelay, PolicyReasonRecord,
+    ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode, RuntimeRequest, TaskId,
 };
 use actingcommand_ledger::{GlobalLedger, LedgerIndexRole, PersistedEvent};
 use actingcommand_policy::{
@@ -481,6 +481,10 @@ struct SeenDispatch {
     rejected_sequence: Option<u64>,
     completed_sequence: Option<u64>,
     lifecycle: DispatchLifecycle,
+    /// Workflow #422 LN-4 (coordinator ruling 2, 10-26): once completed, the consecutive failed
+    /// runs of its (task, instance) pair through it, 0 after a success, maintained at each
+    /// completion from the pair's previous completed dispatch, never folded over all runs.
+    failures: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1138,8 +1142,12 @@ pub(crate) struct PolicyHost {
     values_loaded: bool,
     values_through: u64,
     /// Workflow #422 LN-4: the ledger position through which the dispatch journal holds every
-    /// dispatch event.
+    /// dispatch event it keeps.
     journal_through: u64,
+    /// Workflow #422 LN-4 (coordinator ruling 2, 10-26): the (task, instance) pairs whose earlier
+    /// admitted dispatches the journal no longer holds (pruned, or not loaded), so a projection
+    /// at an older position reads the history on demand.
+    pruned_pairs: BTreeSet<(String, String)>,
 }
 
 /// Workflow #422 LN-4: the dispatch journal while it is rebuilt.
@@ -1147,6 +1155,317 @@ pub(crate) struct PolicyHost {
 struct DispatchJournal {
     seen: BTreeMap<String, SeenDispatch>,
     order: BTreeMap<u64, String>,
+    pruned: BTreeSet<(String, String)>,
+}
+
+impl DispatchJournal {
+    fn prune(&mut self) {
+        prune_journal(&mut self.seen, &mut self.order, &mut self.pruned);
+    }
+}
+
+/// Workflow #422 LN-4 (coordinator ruling 2, 10-26; LEAN-L model §3.1 "bounded, none by event
+/// count"): what the dispatch journal keeps per (task, instance) pair: every open dispatch, the
+/// pair's latest intent (the not-run explanation names its state) and its latest
+/// [`REMEDY_JOURNAL_MAX_RUNS`] admitted dispatches, which hold the latest completed one and the
+/// remedy journal's runs. The rest is read on demand. A pair that loses an admitted dispatch is
+/// noted in `pruned`.
+fn prune_journal(
+    seen: &mut BTreeMap<String, SeenDispatch>,
+    order: &mut BTreeMap<u64, String>,
+    pruned: &mut BTreeSet<(String, String)>,
+) {
+    let mut pairs = BTreeMap::<(String, String), (Vec<u64>, u64)>::new();
+    for dispatch in seen.values() {
+        let entry = pairs
+            .entry((
+                dispatch.data.task_id.clone(),
+                dispatch.data.instance_id.clone(),
+            ))
+            .or_default();
+        entry.1 = entry.1.max(dispatch.intent_sequence);
+        if let Some(sequence) = dispatch.admitted_sequence {
+            entry.0.push(sequence);
+        }
+    }
+    let bounds = pairs
+        .into_iter()
+        .map(|(pair, (mut runs, latest_intent))| {
+            runs.sort_unstable();
+            let oldest_kept = runs
+                .get(runs.len().saturating_sub(REMEDY_JOURNAL_MAX_RUNS))
+                .copied();
+            (pair, (oldest_kept, latest_intent))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let removed = seen
+        .iter()
+        .filter(|(_, dispatch)| {
+            matches!(
+                dispatch.lifecycle,
+                DispatchLifecycle::Rejected | DispatchLifecycle::Completed
+            )
+        })
+        .filter_map(|(decision_id, dispatch)| {
+            let pair = (
+                dispatch.data.task_id.clone(),
+                dispatch.data.instance_id.clone(),
+            );
+            let (oldest_kept, latest_intent) = bounds.get(&pair).copied()?;
+            let kept = dispatch.intent_sequence == latest_intent
+                || dispatch
+                    .admitted_sequence
+                    .is_some_and(|sequence| oldest_kept.is_some_and(|oldest| sequence >= oldest));
+            (!kept).then(|| {
+                (
+                    decision_id.clone(),
+                    dispatch.intent_sequence,
+                    dispatch.admitted_sequence.is_some(),
+                    pair,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    for (decision_id, intent_sequence, admitted, pair) in removed {
+        seen.remove(&decision_id);
+        order.remove(&intent_sequence);
+        if admitted {
+            pruned.insert(pair);
+        }
+    }
+}
+
+/// Workflow #422 LN-4 (coordinator ruling 2, 10-26): the consecutive failed runs of the pair of
+/// `dispatch` through it as it completes: 0 after a success, otherwise one more than through the
+/// pair's previous completed dispatch in `seen` (the journal never prunes a pair's latest
+/// completed dispatch).
+fn failures_through(
+    seen: &BTreeMap<String, SeenDispatch>,
+    decision_id: &str,
+    dispatch: &SeenDispatch,
+) -> u64 {
+    let failed = matches!(
+        dispatch
+            .execution
+            .as_ref()
+            .map(|execution| &execution.outcome),
+        Some(PolicyExecutionOutcome::Failed { .. })
+    );
+    if !failed {
+        return 0;
+    }
+    seen.iter()
+        .filter(|(other_id, other)| {
+            other_id.as_str() != decision_id
+                && other.data.task_id == dispatch.data.task_id
+                && other.data.instance_id == dispatch.data.instance_id
+                && other.completed_sequence.is_some()
+        })
+        .max_by_key(|(_, other)| other.completed_sequence)
+        .and_then(|(_, other)| other.failures)
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+/// Workflow #422 LN-4 (register §1.183 LN4-7): per (task, instance), the dispatches its value
+/// record names, in intent order: every open one, the latest completed one and, for a task of
+/// the remedy journal (`remedy_task`), every admitted one the journal keeps.
+fn journal_records_of(
+    seen: &BTreeMap<String, SeenDispatch>,
+    remedy_task: &dyn Fn(&str) -> bool,
+) -> BTreeMap<(String, String), Vec<PolicyJournalDispatchRecord>> {
+    let mut latest_completed = BTreeMap::<(&str, &str), (u64, u64)>::new();
+    for dispatch in seen.values() {
+        let Some(completed) = dispatch.completed_sequence else {
+            continue;
+        };
+        let pair = (
+            dispatch.data.task_id.as_str(),
+            dispatch.data.instance_id.as_str(),
+        );
+        if latest_completed
+            .get(&pair)
+            .is_none_or(|(latest, _)| *latest < completed)
+        {
+            latest_completed.insert(pair, (completed, dispatch.intent_sequence));
+        }
+    }
+    let mut records = BTreeMap::<(String, String), Vec<PolicyJournalDispatchRecord>>::new();
+    for dispatch in seen.values() {
+        let pair = (
+            dispatch.data.task_id.as_str(),
+            dispatch.data.instance_id.as_str(),
+        );
+        let named = matches!(
+            dispatch.lifecycle,
+            DispatchLifecycle::Intent | DispatchLifecycle::Admitted
+        ) || latest_completed
+            .get(&pair)
+            .is_some_and(|(_, intent)| *intent == dispatch.intent_sequence)
+            || (dispatch.admitted_sequence.is_some()
+                && remedy_task(dispatch.data.task_id.as_str()));
+        if !named {
+            continue;
+        }
+        records
+            .entry((pair.0.to_owned(), pair.1.to_owned()))
+            .or_default()
+            .push(PolicyJournalDispatchRecord {
+                intent_sequence: dispatch.intent_sequence,
+                admitted_sequence: dispatch.admitted_sequence,
+                completed_sequence: dispatch.completed_sequence,
+                failures: dispatch.completed_sequence.and(dispatch.failures),
+            });
+    }
+    for dispatches in records.values_mut() {
+        dispatches.sort_by_key(|dispatch| dispatch.intent_sequence);
+    }
+    records
+}
+
+/// Workflow #422 LN-4: the record of `event_type` at `sequence`, by one point read.
+fn read_record_at(
+    ledger: &GlobalLedger,
+    sequence: u64,
+    event_type: EventType,
+) -> RuntimeHostResult<PersistedEvent> {
+    let mut events = ledger
+        .query_page(
+            EventQuery {
+                from_sequence: Some(sequence),
+                to_sequence: Some(sequence),
+                event_type: Some(event_type),
+                ..EventQuery::default()
+            },
+            sequence.saturating_sub(1),
+            sequence,
+            2,
+        )
+        .map_err(|_| {
+            fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyDispatches,
+            )
+        })?;
+    match (events.pop(), events.is_empty()) {
+        (Some(event), true) if event.sequence() == sequence => Ok(event),
+        _ => Err(fatal(
+            HostCode::PolicyRecoveryFailed,
+            HostLocation::RecoverPolicyDispatches,
+        )),
+    }
+}
+
+/// Workflow #422 LN-4 (coordinator ruling 2, 10-26; LEAN-L model §3.2 step 5): the dispatch
+/// journal from the dispatches the pairs' value records name. Each dispatch's intent, admission
+/// and completion are point reads by the sequences its record names; its execution, which the
+/// record does not name, is read among the executions between its admission and its completion
+/// (an open dispatch's: through `through`, the records' position; a later one is in the tail
+/// the start reads after it). They are applied in ledger order with the checks recovery runs
+/// (R1 to R11), and each completed dispatch takes the failure count its record holds. Every pair
+/// with a completed dispatch counts as pruned: its earlier history is not read.
+fn load_dispatch_journal(
+    store: &CatalogStore,
+    ledger: &GlobalLedger,
+    records: &BTreeMap<String, PolicyValueRecord>,
+    through: u64,
+) -> RuntimeHostResult<DispatchJournal> {
+    let mut events = Vec::new();
+    let mut failures = BTreeMap::<u64, u64>::new();
+    let mut pruned = BTreeSet::new();
+    for record in records.values() {
+        let PolicyValueRecord::Control(state) = record else {
+            continue;
+        };
+        for dispatch in &state.dispatches {
+            let intent = read_record_at(
+                ledger,
+                dispatch.intent_sequence,
+                EventType::PolicyDispatchIntent,
+            )?;
+            let EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) = intent.payload()
+            else {
+                return Err(fatal(
+                    HostCode::PolicyRecoveryFailed,
+                    HostLocation::RecoverPolicyDispatches,
+                ));
+            };
+            let decision_id = payload.decision_id().to_owned();
+            events.push(intent);
+            if let Some(admitted) = dispatch.admitted_sequence {
+                events.push(read_record_at(
+                    ledger,
+                    admitted,
+                    EventType::PolicyDispatchAdmitted,
+                )?);
+                let executions_through = dispatch.completed_sequence.unwrap_or(through);
+                if executions_through > admitted {
+                    events.extend(
+                        read_event_types_after(
+                            ledger,
+                            &[EventType::PolicyExecutionRecorded],
+                            admitted,
+                            executions_through,
+                            RECOVERY_PAGE_EVENTS,
+                        )
+                        .map_err(|_| {
+                            fatal(
+                                HostCode::PolicyRecoveryFailed,
+                                HostLocation::RecoverPolicyDispatches,
+                            )
+                        })?
+                        .into_iter()
+                        .filter(|event| {
+                            matches!(
+                                event.payload(),
+                                EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution))
+                                    if execution.decision_id() == decision_id
+                            )
+                        }),
+                    );
+                }
+            }
+            if let Some(completed) = dispatch.completed_sequence {
+                // Earlier runs of the pair may precede it; they are not read.
+                pruned.insert((state.task_id.clone(), state.instance_id.clone()));
+                events.push(read_record_at(
+                    ledger,
+                    completed,
+                    EventType::PolicyDispatchCompleted,
+                )?);
+                failures.insert(
+                    dispatch.intent_sequence,
+                    dispatch.failures.ok_or_else(|| {
+                        fatal(
+                            HostCode::PolicyRecoveryFailed,
+                            HostLocation::RecoverPolicyDispatches,
+                        )
+                    })?,
+                );
+            }
+        }
+    }
+    events.sort_by_key(PersistedEvent::sequence);
+    let mut journal = DispatchJournal::default();
+    let mut control = PolicyControlState::default();
+    for event in &events {
+        apply_dispatch_event(store, &mut journal, &mut control, u64::MAX, false, event)?;
+    }
+    for (intent_sequence, count) in failures {
+        let dispatch = journal
+            .order
+            .get(&intent_sequence)
+            .and_then(|decision_id| journal.seen.get_mut(decision_id))
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyRecoveryFailed,
+                    HostLocation::RecoverPolicyDispatches,
+                )
+            })?;
+        dispatch.failures = Some(count);
+    }
+    journal.pruned = pruned;
+    Ok(journal)
 }
 
 /// The policy dispatch event types the journal replays (Workflow #381 R4a: each on its own index).
@@ -1248,6 +1567,7 @@ impl PolicyHost {
             values_loaded: false,
             values_through: 0,
             journal_through: 0,
+            pruned_pairs: BTreeSet::new(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -1256,19 +1576,28 @@ impl PolicyHost {
                 host.recover_dispatches(ledger, PolicyControlState::default(), 0)?;
                 host.recover_planning_signals(ledger)?;
             }
+            // Workflow #422 LN-4 (coordinator ruling 2, 10-26): the dispatch journal loads from
+            // the dispatches the records name, and only the dispatch records after the records'
+            // position are read (`refresh_dispatch_tail`), which rebuilds the decision memory
+            // from the records too.
             TaggedStart::Load { marker } => {
                 let loaded = load_decision_memory(ledger)?;
                 let through = loaded.through.max(marker);
-                host.recover_dispatches(ledger, loaded.control, through)?;
-                host.recover_planning_signals(ledger)?;
-                let current = host.current_value_records()?;
-                host.recorded_values = loaded
-                    .records
-                    .into_iter()
-                    .filter(|(key, _)| current.contains_key(key))
-                    .collect();
+                let journal = load_dispatch_journal(&host.store, ledger, &loaded.records, through)?;
+                host.pinned_dispatches = host.pinned_of(&journal.seen)?;
+                host.seen_dispatches = journal.seen;
+                host.dispatch_order = journal.order;
+                host.pruned_pairs = journal.pruned;
+                host.journal_through = through;
+                host.control = loaded.control;
+                host.recorded_values = loaded.records;
                 host.values_loaded = true;
                 host.values_through = through;
+                host.refresh_dispatch_tail(ledger)?;
+                host.recover_planning_signals(ledger)?;
+                let current = host.current_value_records()?;
+                host.recorded_values
+                    .retain(|key, _| current.contains_key(key));
             }
         }
         Ok(host)
@@ -1340,7 +1669,25 @@ impl PolicyHost {
     }
 
     fn current_value_records(&self) -> RuntimeHostResult<BTreeMap<String, PolicyValueRecord>> {
-        Ok(self.control.value_records(&self.open_dispatch_clocks()?))
+        Ok(self.control.value_records(
+            &self.open_dispatch_clocks()?,
+            &self.journal_records(&self.seen_dispatches),
+        ))
+    }
+
+    /// Workflow #422 LN-4 (register §1.183 LN4-7): the dispatches each pair's value record names
+    /// of `seen`; a task of the remedy journal (one that declares a remedy or provides a
+    /// capability) has its runs named.
+    fn journal_records(
+        &self,
+        seen: &BTreeMap<String, SeenDispatch>,
+    ) -> BTreeMap<(String, String), Vec<PolicyJournalDispatchRecord>> {
+        let remedy_tasks = self
+            .remedies
+            .table()
+            .map(|table| table.journal_tasks())
+            .unwrap_or_default();
+        journal_records_of(seen, &|task_id| remedy_tasks.contains(task_id))
     }
 
     /// Workflow #422 LN-3 (register L7): per (task, instance), the admission time of the pair's
@@ -1373,16 +1720,173 @@ impl PolicyHost {
         let mut journal = DispatchJournal::default();
         let mut control = PolicyControlState::default();
         for event in &events {
-            self.apply_dispatch_event(&mut journal, &mut control, 0, false, event)?;
+            apply_dispatch_event(&self.store, &mut journal, &mut control, 0, false, event)?;
         }
-        Ok(control.value_records(&dispatch_clocks_of(&journal.seen)?))
+        journal.prune();
+        Ok(control.value_records(
+            &dispatch_clocks_of(&journal.seen)?,
+            &self.journal_records(&journal.seen),
+        ))
     }
+
+    /// Workflow #422 LN-4, tests: the dispatch journal as the decision ids it holds, each with
+    /// its lifecycle and failure count, and the pairs it holds pruned.
+    #[cfg(test)]
+    pub(crate) fn dispatch_journal_for_test(&self) -> DispatchJournalForTest {
+        journal_for_test(&self.seen_dispatches, &self.pruned_pairs)
+    }
+
+    /// Workflow #422 LN-4, tests: today's whole-history journal, pruned by the journal's rule.
+    #[cfg(test)]
+    pub(crate) fn replayed_dispatch_journal_for_test(
+        &self,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<DispatchJournalForTest> {
+        let through = ledger.latest_sequence().map_err(|_| {
+            fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyDispatches,
+            )
+        })?;
+        let mut journal =
+            self.rebuilt_journal(ledger, through, HostLocation::RecoverPolicyDispatches)?;
+        journal.prune();
+        Ok(journal_for_test(&journal.seen, &journal.pruned))
+    }
+}
+
+/// Workflow #422 LN-4, tests: a dispatch journal's decision ids with their lifecycle and failure
+/// count, and its pruned pairs.
+#[cfg(test)]
+pub(crate) type DispatchJournalForTest = (
+    BTreeMap<String, (String, Option<u64>)>,
+    BTreeSet<(String, String)>,
+);
+
+#[cfg(test)]
+fn journal_for_test(
+    seen: &BTreeMap<String, SeenDispatch>,
+    pruned: &BTreeSet<(String, String)>,
+) -> DispatchJournalForTest {
+    (
+        seen.iter()
+            .map(|(decision_id, dispatch)| {
+                (
+                    decision_id.clone(),
+                    (format!("{:?}", dispatch.lifecycle), dispatch.failures),
+                )
+            })
+            .collect(),
+        pruned.clone(),
+    )
 }
 
 /// Workflow #422 LN-4, tests: the value records the decision memory's rows name.
 #[cfg(test)]
 pub(crate) fn load_decision_memory_for_test(ledger: &GlobalLedger) -> RuntimeHostResult<usize> {
     Ok(load_decision_memory(ledger)?.records.len())
+}
+
+/// Workflow #422 LN-4, tests: the dispatch journal a loading start reads from the dispatches the
+/// value records name, as its size.
+#[cfg(test)]
+pub(crate) fn load_dispatch_journal_for_test(
+    state_root: &Path,
+    state: Arc<RuntimeStateStore>,
+    ledger: &GlobalLedger,
+) -> RuntimeHostResult<usize> {
+    let loaded = load_decision_memory(ledger)?;
+    let store = CatalogStore::open_read_only(state_root, state);
+    Ok(
+        load_dispatch_journal(&store, ledger, &loaded.records, loaded.through)?
+            .seen
+            .len(),
+    )
+}
+
+/// Workflow #422 LN-4, tests ("the journal size stays flat under 10k synthetic dispatches"):
+/// `dispatches` synthetic dispatches of one (task, instance) pair, each completed in turn, kept
+/// by the journal's rule after each completion; the largest journal seen.
+#[cfg(test)]
+pub(crate) fn largest_journal_for_synthetic_dispatches_for_test(dispatches: u64) -> usize {
+    let mut seen = BTreeMap::new();
+    let mut order = BTreeMap::new();
+    let mut pruned = BTreeSet::new();
+    let mut largest = 0;
+    for index in 0..dispatches {
+        let decision_id = format!("decision-{index}");
+        let intent_sequence = index * 4 + 1;
+        let data = PolicyDispatchEventData {
+            decision_id: decision_id.clone(),
+            task_id: "task-synthetic".to_owned(),
+            instance_id: "instance-synthetic".to_owned(),
+            operation_id: "operation-synthetic".to_owned(),
+            procedure_binding_digest: format!("sha256:{}", "0".repeat(64)),
+            reason_chain_id: format!("chain-{index}"),
+            reasons: Vec::new(),
+            catalog_hash: format!("sha256:{}", "1".repeat(64)),
+            catalog_version: 1,
+            input_ledger_position: intent_sequence - 1,
+            fact_snapshot_id: format!("snapshot-{index}"),
+            approval_fact_ids: Vec::new(),
+            urgency_milli: 0,
+        };
+        let dispatch = SeenDispatch {
+            execution: Some(PolicyExecutionEventData {
+                decision_id: decision_id.clone(),
+                task_id: data.task_id.clone(),
+                instance_id: data.instance_id.clone(),
+                observed_at_unix_ms: intent_sequence,
+                outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 1 },
+            }),
+            data,
+            admission: None,
+            completed_run: None,
+            intent_sequence,
+            admitted_sequence: Some(intent_sequence + 1),
+            rejected_sequence: None,
+            completed_sequence: Some(intent_sequence + 3),
+            lifecycle: DispatchLifecycle::Completed,
+            failures: None,
+        };
+        let failures = failures_through(&seen, &decision_id, &dispatch);
+        order.insert(intent_sequence, decision_id.clone());
+        seen.insert(
+            decision_id,
+            SeenDispatch {
+                failures: Some(failures),
+                ..dispatch
+            },
+        );
+        prune_journal(&mut seen, &mut order, &mut pruned);
+        largest = largest.max(seen.len()).max(order.len());
+    }
+    largest
+}
+
+/// One dispatch of `seen` as a decision page shows it at `snapshot_ledger_position`.
+fn project_dispatch(
+    seen: &BTreeMap<String, SeenDispatch>,
+    decision_id: &str,
+    snapshot_ledger_position: u64,
+) -> RuntimeHostResult<PolicyDispatchProjection> {
+    let dispatch = seen.get(decision_id).ok_or_else(|| {
+        fatal(
+            HostCode::PolicyDispatchOrderCorrupt,
+            HostLocation::ProjectPolicyDispatches,
+        )
+    })?;
+    if dispatch.intent_sequence > snapshot_ledger_position {
+        return Err(fatal(
+            HostCode::PolicyDispatchSnapshotInvalid,
+            HostLocation::ProjectPolicyDispatches,
+        ));
+    }
+    Ok(PolicyDispatchProjection {
+        data: dispatch.data.clone(),
+        state: dispatch.projected_state_at(snapshot_ledger_position),
+        intent_sequence: dispatch.intent_sequence,
+    })
 }
 
 /// Workflow #422 LN-3 (register L7): per (task, instance), the admission time of the pair's
@@ -1467,8 +1971,12 @@ impl PolicyHost {
         self.store.project_catalog_source(ledger, ledger_position)
     }
 
+    /// Workflow #422 LN-4 (coordinator ruling 1, 10-26; LEAN-L model §3.3): a decision page reads
+    /// the dispatch history on demand, paged through the ledger's SQLite reads under its read
+    /// budget, through the page's snapshot position; the resident journal holds no full history.
     pub(crate) fn project_dispatches(
         &self,
+        ledger: &GlobalLedger,
         current_ledger_position: u64,
         page_request: &ProjectDecisionPageRequest,
     ) -> RuntimeHostResult<PolicyDispatchPage> {
@@ -1489,11 +1997,16 @@ impl PolicyHost {
                 HostLocation::ProjectPolicyDispatches,
             ));
         }
+        let journal = self.rebuilt_journal(
+            ledger,
+            snapshot_ledger_position,
+            HostLocation::ProjectPolicyDispatches,
+        )?;
         let limit = usize::from(page_request.limit());
         let mut dispatches = Vec::with_capacity(limit.saturating_add(1));
         if let Some(cursor) = page_request.cursor() {
-            if self
-                .dispatch_order
+            if journal
+                .order
                 .get(&cursor.before_intent_sequence())
                 .is_none_or(|decision_id| decision_id != cursor.before_decision_id())
             {
@@ -1502,22 +2015,30 @@ impl PolicyHost {
                     HostLocation::ProjectPolicyDispatches,
                 ));
             }
-            for (_, decision_id) in self
-                .dispatch_order
+            for (_, decision_id) in journal
+                .order
                 .range(..cursor.before_intent_sequence())
                 .rev()
                 .take(limit.saturating_add(1))
             {
-                dispatches.push(self.project_dispatch(decision_id, snapshot_ledger_position)?);
+                dispatches.push(project_dispatch(
+                    &journal.seen,
+                    decision_id,
+                    snapshot_ledger_position,
+                )?);
             }
         } else {
-            for (_, decision_id) in self
-                .dispatch_order
+            for (_, decision_id) in journal
+                .order
                 .range(..=snapshot_ledger_position)
                 .rev()
                 .take(limit.saturating_add(1))
             {
-                dispatches.push(self.project_dispatch(decision_id, snapshot_ledger_position)?);
+                dispatches.push(project_dispatch(
+                    &journal.seen,
+                    decision_id,
+                    snapshot_ledger_position,
+                )?);
             }
         }
         let has_more = dispatches.len() > limit;
@@ -1530,28 +2051,30 @@ impl PolicyHost {
         })
     }
 
-    fn project_dispatch(
+    /// Workflow #422 LN-4: the dispatch journal of every dispatch record through `through`, read
+    /// on demand page by page (LN-5's SQLite reads), with the checks recovery runs; the decision
+    /// memory is not touched. A read that fails is fatal at `location`.
+    fn rebuilt_journal(
         &self,
-        decision_id: &str,
-        snapshot_ledger_position: u64,
-    ) -> RuntimeHostResult<PolicyDispatchProjection> {
-        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
-            fatal(
-                HostCode::PolicyDispatchOrderCorrupt,
-                HostLocation::ProjectPolicyDispatches,
-            )
-        })?;
-        if dispatch.intent_sequence > snapshot_ledger_position {
-            return Err(fatal(
-                HostCode::PolicyDispatchSnapshotInvalid,
-                HostLocation::ProjectPolicyDispatches,
-            ));
+        ledger: &GlobalLedger,
+        through: u64,
+        location: HostLocation,
+    ) -> RuntimeHostResult<DispatchJournal> {
+        let events = read_event_types(ledger, &DISPATCH_EVENT_TYPES, through, RECOVERY_PAGE_EVENTS)
+            .map_err(|_| fatal(HostCode::PolicyRecoveryFailed, location))?;
+        let mut journal = DispatchJournal::default();
+        let mut control = PolicyControlState::default();
+        for event in &events {
+            apply_dispatch_event(
+                &self.store,
+                &mut journal,
+                &mut control,
+                u64::MAX,
+                false,
+                event,
+            )?;
         }
-        Ok(PolicyDispatchProjection {
-            data: dispatch.data.clone(),
-            state: dispatch.projected_state_at(snapshot_ledger_position),
-            intent_sequence: dispatch.intent_sequence,
-        })
+        Ok(journal)
     }
 
     pub(crate) fn pending_dispatches(&self) -> Vec<PolicyDispatchProjection> {
@@ -1574,8 +2097,68 @@ impl PolicyHost {
     /// `eligibility_as_of_unix_ms` names the evaluation instant, and only for an age that
     /// started strictly before it (a younger one is zero and reads as absent). A
     /// position-only projection reports none.
+    ///
+    /// Workflow #422 LN-4 (coordinator ruling 1, 10-26): the resident journal answers a position
+    /// at which every pair whose earlier dispatches it no longer holds has a dispatch admitted and
+    /// one completed at or before it; any other position reads the dispatch history through it on
+    /// demand.
     pub(crate) fn task_runtime_snapshots(
         &self,
+        ledger: &GlobalLedger,
+        ledger_position: u64,
+        eligibility_as_of_unix_ms: Option<u64>,
+    ) -> RuntimeHostResult<Vec<TaskRuntimeSnapshot>> {
+        if self.journal_answers_at(ledger_position) {
+            return self.task_runtime_snapshots_of(
+                &self.seen_dispatches,
+                ledger_position,
+                eligibility_as_of_unix_ms,
+            );
+        }
+        let journal = self.rebuilt_journal(
+            ledger,
+            ledger_position,
+            HostLocation::ProjectPolicyTaskState,
+        )?;
+        self.task_runtime_snapshots_of(&journal.seen, ledger_position, eligibility_as_of_unix_ms)
+    }
+
+    /// Workflow #422 LN-4: whether the resident journal holds, for each pair it holds pruned, a
+    /// dispatch admitted and a dispatch completed at or before `ledger_position`. A pair's pruned
+    /// dispatches are older than every admitted one it keeps, so its latest admitted and its
+    /// latest completed dispatch at that position are then resident.
+    fn journal_answers_at(&self, ledger_position: u64) -> bool {
+        if self.pruned_pairs.is_empty() {
+            return true;
+        }
+        let mut earliest = BTreeMap::<(&str, &str), (Option<u64>, Option<u64>)>::new();
+        for dispatch in self.seen_dispatches.values() {
+            let entry = earliest
+                .entry((
+                    dispatch.data.task_id.as_str(),
+                    dispatch.data.instance_id.as_str(),
+                ))
+                .or_default();
+            if let Some(admitted) = dispatch.admitted_sequence {
+                entry.0 = Some(entry.0.map_or(admitted, |current| current.min(admitted)));
+            }
+            if let Some(completed) = dispatch.completed_sequence {
+                entry.1 = Some(entry.1.map_or(completed, |current| current.min(completed)));
+            }
+        }
+        self.pruned_pairs.iter().all(|(task_id, instance_id)| {
+            earliest
+                .get(&(task_id.as_str(), instance_id.as_str()))
+                .is_some_and(|(admitted, completed)| {
+                    admitted.is_some_and(|sequence| sequence <= ledger_position)
+                        && completed.is_some_and(|sequence| sequence <= ledger_position)
+                })
+        })
+    }
+
+    fn task_runtime_snapshots_of(
+        &self,
+        seen: &BTreeMap<String, SeenDispatch>,
         ledger_position: u64,
         eligibility_as_of_unix_ms: Option<u64>,
     ) -> RuntimeHostResult<Vec<TaskRuntimeSnapshot>> {
@@ -1602,7 +2185,7 @@ impl PolicyHost {
                 .or_else(|| accounting.get(task_id).copied())
         };
         let settlements = fold_settlements_by(
-            self.seen_dispatches.values().filter(|dispatch| {
+            seen.values().filter(|dispatch| {
                 accounted(dispatch.data.task_id.as_str()).is_some()
                     && dispatch
                         .completed_sequence
@@ -1611,7 +2194,7 @@ impl PolicyHost {
             &accounting,
         )?;
         let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
-        for dispatch in self.seen_dispatches.values() {
+        for dispatch in seen.values() {
             let Some(task_id) = accounted(dispatch.data.task_id.as_str()) else {
                 continue;
             };
@@ -2810,15 +3393,50 @@ impl PolicyHost {
         Ok(active.generation.clone())
     }
 
+    /// Workflow #422 LN-4 (coordinator ruling 2, 10-26): a decision the journal no longer holds
+    /// is looked up on demand among the intents after its input ledger position, the earliest
+    /// place its intent can be at.
     pub(crate) fn replay_admission(
         &self,
+        ledger: &GlobalLedger,
         intent: &DispatchIntent,
         reason_chain: &DecisionReasonChain,
     ) -> RuntimeHostResult<Option<PolicyDispatchAdmission>> {
-        let Some(seen) = self.seen_dispatches.get(&intent.decision_id) else {
-            return Ok(None);
+        let (data, intent_sequence) = match self.seen_dispatches.get(&intent.decision_id) {
+            Some(seen) => (seen.data.clone(), seen.intent_sequence),
+            None => {
+                let events = ledger
+                    .latest_sequence()
+                    .and_then(|through| {
+                        read_event_types_after(
+                            ledger,
+                            &[EventType::PolicyDispatchIntent],
+                            intent.input_ledger_position,
+                            through,
+                            RECOVERY_PAGE_EVENTS,
+                        )
+                    })
+                    .map_err(|_| {
+                        fatal(
+                            HostCode::PolicyRecoveryFailed,
+                            HostLocation::ReplayPolicyDispatch,
+                        )
+                    })?;
+                let recorded = events.iter().find_map(|event| match event.payload() {
+                    EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                        if payload.decision_id() == intent.decision_id =>
+                    {
+                        Some((payload, event.sequence()))
+                    }
+                    _ => None,
+                });
+                let Some((payload, sequence)) = recorded else {
+                    return Ok(None);
+                };
+                (event_data(payload)?, sequence)
+            }
         };
-        if seen.data != dispatch_event_data(intent, reason_chain)? {
+        if data != dispatch_event_data(intent, reason_chain)? {
             return Err(fatal(
                 HostCode::PolicyDecisionIdentityConflict,
                 HostLocation::ReplayPolicyDispatch,
@@ -2826,13 +3444,13 @@ impl PolicyHost {
         }
         let catalog = self
             .store
-            .load_generation(&seen.data.catalog_hash)?
+            .load_generation(&data.catalog_hash)?
             .generation
             .clone();
         Ok(Some(PolicyDispatchAdmission::ReplaySuppressed {
             decision_id: intent.decision_id.clone(),
             catalog,
-            original_intent_sequence: seen.intent_sequence,
+            original_intent_sequence: intent_sequence,
         }))
     }
 
@@ -3004,6 +3622,12 @@ impl PolicyHost {
         if let Some(generation) = pinned {
             self.pinned_dispatches.insert(decision_id, generation);
         }
+        // Workflow #422 LN-4 (coordinator ruling 2): a pair's earlier rejected intent leaves.
+        prune_journal(
+            &mut self.seen_dispatches,
+            &mut self.dispatch_order,
+            &mut self.pruned_pairs,
+        );
         Ok(())
     }
 
@@ -3416,6 +4040,10 @@ impl PolicyHost {
         decision_id: &str,
         completion: &PersistedEvent,
     ) -> RuntimeHostResult<()> {
+        // Workflow #422 LN-4 (coordinator ruling 2): the pair's failure count through it.
+        let failures = self.seen_dispatches.get(decision_id).map_or(0, |dispatch| {
+            failures_through(&self.seen_dispatches, decision_id, dispatch)
+        });
         let dispatch = self.seen_dispatches.get_mut(decision_id).ok_or_else(|| {
             fatal(
                 HostCode::PolicyDispatchStateIncomplete,
@@ -3490,6 +4118,13 @@ impl PolicyHost {
         dispatch.completed_run = completed_run;
         dispatch.completed_sequence = Some(completion.sequence());
         dispatch.lifecycle = DispatchLifecycle::Completed;
+        dispatch.failures = Some(failures);
+        // Workflow #422 LN-4 (coordinator ruling 2): the journal keeps only what it bounds.
+        prune_journal(
+            &mut self.seen_dispatches,
+            &mut self.dispatch_order,
+            &mut self.pruned_pairs,
+        );
         Ok(())
     }
 
@@ -3714,22 +4349,7 @@ impl PolicyHost {
         event: &PersistedEvent,
         payload: &actingcommand_contract::PolicyDispatchPayload,
     ) -> RuntimeHostResult<(String, SeenDispatch)> {
-        let data = event_data(payload)?;
-        self.store.load_generation(payload.catalog_hash())?;
-        Ok((
-            payload.decision_id().to_owned(),
-            SeenDispatch {
-                data,
-                admission: None,
-                execution: None,
-                completed_run: None,
-                intent_sequence: event.sequence(),
-                admitted_sequence: None,
-                rejected_sequence: None,
-                completed_sequence: None,
-                lifecycle: DispatchLifecycle::Intent,
-            },
-        ))
+        seen_intent_of(&self.store, event, payload)
     }
 
     /// Rebuilds the dispatch journal from every policy dispatch event through the latest
@@ -3758,11 +4378,20 @@ impl PolicyHost {
         let mut journal = DispatchJournal::default();
         let mut control = control;
         for event in &events {
-            self.apply_dispatch_event(&mut journal, &mut control, control_after, false, event)?;
+            apply_dispatch_event(
+                &self.store,
+                &mut journal,
+                &mut control,
+                control_after,
+                false,
+                event,
+            )?;
         }
+        journal.prune();
         self.pinned_dispatches = self.pinned_of(&journal.seen)?;
         self.seen_dispatches = journal.seen;
         self.dispatch_order = journal.order;
+        self.pruned_pairs = journal.pruned;
         self.control = control;
         self.journal_through = through;
         Ok(())
@@ -3805,9 +4434,11 @@ impl PolicyHost {
         let mut journal = DispatchJournal {
             seen: self.seen_dispatches.clone(),
             order: self.dispatch_order.clone(),
+            pruned: self.pruned_pairs.clone(),
         };
         for event in &events {
-            self.apply_dispatch_event(
+            apply_dispatch_event(
+                &self.store,
                 &mut journal,
                 &mut control,
                 self.values_through,
@@ -3815,212 +4446,13 @@ impl PolicyHost {
                 event,
             )?;
         }
+        journal.prune();
         self.pinned_dispatches = self.pinned_of(&journal.seen)?;
         self.seen_dispatches = journal.seen;
         self.dispatch_order = journal.order;
+        self.pruned_pairs = journal.pruned;
         self.control = control;
         self.journal_through = through;
-        Ok(())
-    }
-
-    /// One dispatch event applied to `journal` with the checks recovery runs (R1 to R11), and
-    /// its admission or execution to `control` when it lies after `control_after`. With
-    /// `applied_skips` an event the journal already holds is not applied to it again.
-    fn apply_dispatch_event(
-        &self,
-        journal: &mut DispatchJournal,
-        control: &mut PolicyControlState,
-        control_after: u64,
-        applied_skips: bool,
-        event: &PersistedEvent,
-    ) -> RuntimeHostResult<()> {
-        let EventPayload::Policy(payload) = event.payload() else {
-            return Ok(());
-        };
-        let counts = event.sequence() > control_after;
-        match payload {
-            PolicyPayload::DispatchIntent(payload) => {
-                if applied_skips
-                    && journal
-                        .seen
-                        .get(payload.decision_id())
-                        .is_some_and(|seen| seen.intent_sequence == event.sequence())
-                {
-                    return Ok(());
-                }
-                let (decision_id, record) = self.seen_intent(event, payload)?;
-                insert_seen_intent(
-                    &mut journal.seen,
-                    &mut journal.order,
-                    decision_id,
-                    record,
-                    event.sequence(),
-                )?;
-            }
-            PolicyPayload::DispatchAdmitted(payload) => {
-                let applied = applied_skips
-                    && journal
-                        .seen
-                        .get(payload.decision_id())
-                        .is_some_and(|seen| seen.admitted_sequence == Some(event.sequence()));
-                if !applied {
-                    let admission = payload.admission().cloned().ok_or_else(|| {
-                        fatal(
-                            HostCode::PolicyDispatchAdmissionMissing,
-                            HostLocation::RecoverPolicyDispatches,
-                        )
-                    })?;
-                    let dispatch = transition_dispatch(
-                        &mut journal.seen,
-                        payload,
-                        DispatchLifecycle::Intent,
-                        DispatchLifecycle::Admitted,
-                        event.sequence(),
-                    )?;
-                    dispatch.admission = Some(admission);
-                }
-                if counts {
-                    let dispatch = journal.seen.get(payload.decision_id()).ok_or_else(|| {
-                        fatal(
-                            HostCode::PolicyDispatchIntentMissing,
-                            HostLocation::RecoverPolicyDispatches,
-                        )
-                    })?;
-                    let admission = dispatch.admission.as_ref().ok_or_else(|| {
-                        fatal(
-                            HostCode::PolicyDispatchAdmissionMissing,
-                            HostLocation::RecoverPolicyDispatches,
-                        )
-                    })?;
-                    let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-                    let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
-                    control.commit_admission(
-                        &catalog.compiled,
-                        &intent,
-                        admission,
-                        dispatch.data.reasons.iter().any(|reason| {
-                            reason
-                                .0
-                                .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
-                        }),
-                    )?;
-                }
-            }
-            PolicyPayload::DispatchRejected(payload) => {
-                if applied_skips
-                    && journal
-                        .seen
-                        .get(payload.decision_id())
-                        .is_some_and(|seen| seen.rejected_sequence == Some(event.sequence()))
-                {
-                    return Ok(());
-                }
-                transition_dispatch(
-                    &mut journal.seen,
-                    payload,
-                    DispatchLifecycle::Intent,
-                    DispatchLifecycle::Rejected,
-                    event.sequence(),
-                )?;
-            }
-            PolicyPayload::DispatchCompleted(payload) => {
-                if applied_skips
-                    && journal
-                        .seen
-                        .get(payload.decision_id())
-                        .is_some_and(|seen| seen.completed_sequence == Some(event.sequence()))
-                {
-                    return Ok(());
-                }
-                let dispatch = transition_dispatch(
-                    &mut journal.seen,
-                    payload,
-                    DispatchLifecycle::Admitted,
-                    DispatchLifecycle::Completed,
-                    event.sequence(),
-                )?;
-                if dispatch.execution.is_none()
-                    || payload.admission() != dispatch.admission.as_ref()
-                {
-                    return Err(fatal(
-                        HostCode::PolicyDispatchCompletionIncomplete,
-                        HostLocation::RecoverPolicyDispatches,
-                    ));
-                }
-                let execution = dispatch.execution.as_ref().ok_or_else(|| {
-                    fatal(
-                        HostCode::PolicyExecutionOutcomeMissing,
-                        HostLocation::RecoverPolicyDispatches,
-                    )
-                })?;
-                let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-                let referenced_outcome_keys = catalog
-                    .compiled()
-                    .referenced_outcome_keys(&dispatch.data.task_id);
-                dispatch.completed_run = if referenced_outcome_keys.is_empty() {
-                    None
-                } else {
-                    Some(completed_policy_run_identity(
-                        event,
-                        &dispatch.data,
-                        execution,
-                        referenced_outcome_keys,
-                    )?)
-                };
-            }
-            PolicyPayload::ExecutionRecorded(payload) => {
-                let data = execution_event_data(payload);
-                let dispatch = journal.seen.get_mut(payload.decision_id()).ok_or_else(|| {
-                    fatal(
-                        HostCode::PolicyDispatchIntentMissing,
-                        ContractLocation::RecoverPolicyExecution,
-                    )
-                })?;
-                let applied = applied_skips && dispatch.execution.as_ref() == Some(&data);
-                if !applied
-                    && (dispatch.lifecycle != DispatchLifecycle::Admitted
-                        || dispatch.execution.is_some())
-                {
-                    return Err(fatal(
-                        HostCode::PolicyExecutionLifecycleInvalid,
-                        ContractLocation::RecoverPolicyExecution,
-                    ));
-                }
-                if counts {
-                    let admission = dispatch.admission.as_ref().ok_or_else(|| {
-                        fatal(
-                            HostCode::PolicyDispatchAdmissionMissing,
-                            ContractLocation::RecoverPolicyExecution,
-                        )
-                    })?;
-                    let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-                    let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
-                    // #385 P-k (register P6): a record settled on its budget time replays on it.
-                    control.commit_paced_execution(
-                        &catalog.compiled,
-                        &intent,
-                        admission,
-                        &data,
-                        payload.budget_elapsed_ms(),
-                    )?;
-                }
-                if !applied {
-                    dispatch.execution = Some(data);
-                }
-            }
-            // The query reads the dispatch and execution types only; the value records of
-            // the decision memory and the fact-refresh transitions (register L7, L14, D1)
-            // are never replayed here.
-            PolicyPayload::PlanningSignalObserved(_)
-            | PolicyPayload::ControlStateRecorded(_)
-            | PolicyPayload::ActivityStateRecorded(_)
-            | PolicyPayload::FactRefreshTransition(_) => {
-                return Err(fatal(
-                    SharedCode::PolicyRecoveryQueryMismatch,
-                    HostLocation::RecoverPolicyDispatches,
-                ));
-            }
-        }
         Ok(())
     }
 
@@ -4082,6 +4514,239 @@ impl PolicyHost {
         }
         Ok(())
     }
+}
+
+/// One intent event as recovery records it (R1, R2); shared by `recover_dispatches`,
+/// `apply_admission_events` (Workflow #191 U5-F1) and the journal's load (Workflow #422 LN-4).
+fn seen_intent_of(
+    store: &CatalogStore,
+    event: &PersistedEvent,
+    payload: &actingcommand_contract::PolicyDispatchPayload,
+) -> RuntimeHostResult<(String, SeenDispatch)> {
+    let data = event_data(payload)?;
+    store.load_generation(payload.catalog_hash())?;
+    Ok((
+        payload.decision_id().to_owned(),
+        SeenDispatch {
+            data,
+            admission: None,
+            execution: None,
+            completed_run: None,
+            intent_sequence: event.sequence(),
+            admitted_sequence: None,
+            rejected_sequence: None,
+            completed_sequence: None,
+            lifecycle: DispatchLifecycle::Intent,
+            failures: None,
+        },
+    ))
+}
+
+/// One dispatch event applied to `journal` with the checks recovery runs (R1 to R11), and
+/// its admission or execution to `control` when it lies after `control_after`. With
+/// `applied_skips` an event the journal already holds is not applied to it again.
+fn apply_dispatch_event(
+    store: &CatalogStore,
+    journal: &mut DispatchJournal,
+    control: &mut PolicyControlState,
+    control_after: u64,
+    applied_skips: bool,
+    event: &PersistedEvent,
+) -> RuntimeHostResult<()> {
+    let EventPayload::Policy(payload) = event.payload() else {
+        return Ok(());
+    };
+    let counts = event.sequence() > control_after;
+    match payload {
+        PolicyPayload::DispatchIntent(payload) => {
+            if applied_skips
+                && journal
+                    .seen
+                    .get(payload.decision_id())
+                    .is_some_and(|seen| seen.intent_sequence == event.sequence())
+            {
+                return Ok(());
+            }
+            let (decision_id, record) = seen_intent_of(store, event, payload)?;
+            insert_seen_intent(
+                &mut journal.seen,
+                &mut journal.order,
+                decision_id,
+                record,
+                event.sequence(),
+            )?;
+        }
+        PolicyPayload::DispatchAdmitted(payload) => {
+            let applied = applied_skips
+                && journal
+                    .seen
+                    .get(payload.decision_id())
+                    .is_some_and(|seen| seen.admitted_sequence == Some(event.sequence()));
+            if !applied {
+                let admission = payload.admission().cloned().ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchAdmissionMissing,
+                        HostLocation::RecoverPolicyDispatches,
+                    )
+                })?;
+                let dispatch = transition_dispatch(
+                    &mut journal.seen,
+                    payload,
+                    DispatchLifecycle::Intent,
+                    DispatchLifecycle::Admitted,
+                    event.sequence(),
+                )?;
+                dispatch.admission = Some(admission);
+            }
+            if counts {
+                let dispatch = journal.seen.get(payload.decision_id()).ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchIntentMissing,
+                        HostLocation::RecoverPolicyDispatches,
+                    )
+                })?;
+                let admission = dispatch.admission.as_ref().ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchAdmissionMissing,
+                        HostLocation::RecoverPolicyDispatches,
+                    )
+                })?;
+                let catalog = store.load_generation(&dispatch.data.catalog_hash)?;
+                let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+                control.commit_admission(
+                    &catalog.compiled,
+                    &intent,
+                    admission,
+                    dispatch.data.reasons.iter().any(|reason| {
+                        reason
+                            .0
+                            .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
+                    }),
+                )?;
+            }
+        }
+        PolicyPayload::DispatchRejected(payload) => {
+            if applied_skips
+                && journal
+                    .seen
+                    .get(payload.decision_id())
+                    .is_some_and(|seen| seen.rejected_sequence == Some(event.sequence()))
+            {
+                return Ok(());
+            }
+            transition_dispatch(
+                &mut journal.seen,
+                payload,
+                DispatchLifecycle::Intent,
+                DispatchLifecycle::Rejected,
+                event.sequence(),
+            )?;
+        }
+        PolicyPayload::DispatchCompleted(payload) => {
+            if applied_skips
+                && journal
+                    .seen
+                    .get(payload.decision_id())
+                    .is_some_and(|seen| seen.completed_sequence == Some(event.sequence()))
+            {
+                return Ok(());
+            }
+            // Workflow #422 LN-4 (coordinator ruling 2): the pair's failure count through it.
+            let failures = journal
+                .seen
+                .get(payload.decision_id())
+                .map_or(0, |dispatch| {
+                    failures_through(&journal.seen, payload.decision_id(), dispatch)
+                });
+            let dispatch = transition_dispatch(
+                &mut journal.seen,
+                payload,
+                DispatchLifecycle::Admitted,
+                DispatchLifecycle::Completed,
+                event.sequence(),
+            )?;
+            if dispatch.execution.is_none() || payload.admission() != dispatch.admission.as_ref() {
+                return Err(fatal(
+                    HostCode::PolicyDispatchCompletionIncomplete,
+                    HostLocation::RecoverPolicyDispatches,
+                ));
+            }
+            let execution = dispatch.execution.as_ref().ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyExecutionOutcomeMissing,
+                    HostLocation::RecoverPolicyDispatches,
+                )
+            })?;
+            let catalog = store.load_generation(&dispatch.data.catalog_hash)?;
+            let referenced_outcome_keys = catalog
+                .compiled()
+                .referenced_outcome_keys(&dispatch.data.task_id);
+            dispatch.completed_run = if referenced_outcome_keys.is_empty() {
+                None
+            } else {
+                Some(completed_policy_run_identity(
+                    event,
+                    &dispatch.data,
+                    execution,
+                    referenced_outcome_keys,
+                )?)
+            };
+            dispatch.failures = Some(failures);
+        }
+        PolicyPayload::ExecutionRecorded(payload) => {
+            let data = execution_event_data(payload);
+            let dispatch = journal.seen.get_mut(payload.decision_id()).ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyDispatchIntentMissing,
+                    ContractLocation::RecoverPolicyExecution,
+                )
+            })?;
+            let applied = applied_skips && dispatch.execution.as_ref() == Some(&data);
+            if !applied
+                && (dispatch.lifecycle != DispatchLifecycle::Admitted
+                    || dispatch.execution.is_some())
+            {
+                return Err(fatal(
+                    HostCode::PolicyExecutionLifecycleInvalid,
+                    ContractLocation::RecoverPolicyExecution,
+                ));
+            }
+            if counts {
+                let admission = dispatch.admission.as_ref().ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchAdmissionMissing,
+                        ContractLocation::RecoverPolicyExecution,
+                    )
+                })?;
+                let catalog = store.load_generation(&dispatch.data.catalog_hash)?;
+                let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+                // #385 P-k (register P6): a record settled on its budget time replays on it.
+                control.commit_paced_execution(
+                    &catalog.compiled,
+                    &intent,
+                    admission,
+                    &data,
+                    payload.budget_elapsed_ms(),
+                )?;
+            }
+            if !applied {
+                dispatch.execution = Some(data);
+            }
+        }
+        // The query reads the dispatch and execution types only; the value records of
+        // the decision memory and the fact-refresh transitions (register L7, L14, D1)
+        // are never replayed here.
+        PolicyPayload::PlanningSignalObserved(_)
+        | PolicyPayload::ControlStateRecorded(_)
+        | PolicyPayload::ActivityStateRecorded(_)
+        | PolicyPayload::FactRefreshTransition(_) => {
+            return Err(fatal(
+                SharedCode::PolicyRecoveryQueryMismatch,
+                HostLocation::RecoverPolicyDispatches,
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl DetectionQuotaState {
@@ -4739,21 +5404,50 @@ fn fold_settlements<'a>(
 
 /// `fold_settlements` with each run of an id in `accounting` (a continued id, with the task
 /// that continues it) folded as a run of that task (Workflow #372 K5).
+///
+/// Workflow #422 LN-4 (coordinator ruling 2, 10-26): no fold over all runs. Each key's latest
+/// executed run in admission order settles it; its failure streak is the failure count its
+/// completion keeps for its own (task, instance) pair, or for an executed run not completed
+/// yet, 0 after a success and otherwise one more than the key's latest completed run among
+/// `runs`.
 fn fold_settlements_by<'a>(
     runs: impl Iterator<Item = &'a SeenDispatch>,
     accounting: &BTreeMap<&str, &str>,
 ) -> RuntimeHostResult<BTreeMap<(String, String), PolicySettlement>> {
-    let mut executed = runs
-        .filter_map(|dispatch| {
-            dispatch
-                .execution
-                .as_ref()
-                .map(|execution| (dispatch, execution))
-        })
-        .collect::<Vec<_>>();
-    executed.sort_by_key(|(dispatch, _)| (dispatch.admitted_sequence, dispatch.intent_sequence));
-    let mut latest = BTreeMap::<(String, String), PolicySettlement>::new();
-    for (dispatch, execution) in executed {
+    let mut latest = BTreeMap::<(String, String), &SeenDispatch>::new();
+    let mut completed = BTreeMap::<(String, String), &SeenDispatch>::new();
+    for dispatch in runs {
+        if dispatch.execution.is_none() {
+            continue;
+        }
+        let task_id = accounting
+            .get(dispatch.data.task_id.as_str())
+            .copied()
+            .unwrap_or(dispatch.data.task_id.as_str());
+        let key = (task_id.to_owned(), dispatch.data.instance_id.clone());
+        let order = (dispatch.admitted_sequence, dispatch.intent_sequence);
+        if latest
+            .get(&key)
+            .is_none_or(|current| (current.admitted_sequence, current.intent_sequence) < order)
+        {
+            latest.insert(key.clone(), dispatch);
+        }
+        if dispatch.completed_sequence.is_some()
+            && completed
+                .get(&key)
+                .is_none_or(|current| (current.admitted_sequence, current.intent_sequence) < order)
+        {
+            completed.insert(key, dispatch);
+        }
+    }
+    let mut settlements = BTreeMap::new();
+    for (key, dispatch) in latest {
+        let execution = dispatch.execution.as_ref().ok_or_else(|| {
+            fatal(
+                HostCode::PolicyExecutionOutcomeMissing,
+                HostLocation::ProjectPolicySettlement,
+            )
+        })?;
         let admission = dispatch.admission.as_ref().ok_or_else(|| {
             fatal(
                 HostCode::PolicyDispatchAdmissionMissing,
@@ -4770,23 +5464,24 @@ fn fold_settlements_by<'a>(
                     .saturating_sub(admission.activity.admitted_at_unix_ms),
             ),
         };
-        let task_id = accounting
-            .get(dispatch.data.task_id.as_str())
-            .copied()
-            .unwrap_or(dispatch.data.task_id.as_str());
-        let key = (task_id.to_owned(), dispatch.data.instance_id.clone());
-        let failure_streak = if succeeded {
-            0
-        } else {
-            latest
+        let failure_streak = match (succeeded, dispatch.completed_sequence) {
+            (true, _) => 0,
+            (false, Some(_)) => dispatch.failures.ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyDispatchCompletionIncomplete,
+                    HostLocation::ProjectPolicySettlement,
+                )
+            })?,
+            (false, None) => completed
                 .get(&key)
-                .map_or(0, |previous| previous.failure_streak)
-                .saturating_add(1)
+                .and_then(|run| run.failures)
+                .unwrap_or(0)
+                .saturating_add(1),
         };
-        latest.insert(
-            key,
+        settlements.insert(
+            key.clone(),
             PolicySettlement {
-                catalog_task_id: task_id.to_owned(),
+                catalog_task_id: key.0,
                 instance_alias: dispatch.data.instance_id.clone(),
                 duration_ms,
                 succeeded,
@@ -4795,7 +5490,7 @@ fn fold_settlements_by<'a>(
             },
         );
     }
-    Ok(latest)
+    Ok(settlements)
 }
 
 fn execution_event_data(

@@ -828,9 +828,17 @@ time L that D2 needs (D2 A-7) is the end of step 7.
     `ledger_tag_index_mismatch` (fatal), relayed by the host.
   - Loads, when the marker is present:
     - **decision memory**: the `decision_memory/` and `activity_memory/` records, applied with
-      the value records' reducer. The dispatch journal is still rebuilt from the dispatch
-      records; their admissions and executions after the latest value record's sequence take
-      effect on the loaded state, the earlier ones are in the records already;
+      the value records' reducer. The admissions and executions after the records' position (the
+      latest value record's sequence, at least the marker's) take effect on the loaded state; the
+      earlier ones are in the records already;
+    - **dispatch journal** (register §1.183 LN4-7; coordinator ruling 10-26): each pair's record
+      names, by the sequences of their records, the dispatches the journal keeps of it: the open
+      ones, the latest completed one with the pair's consecutive-failure count, and for a task of
+      the remedy journal its latest runs. Each is read by point reads of its intent, admission and
+      completion, and its execution among the executions between its admission and its
+      completion (an open one's: through the records' position). They are applied in ledger
+      order with recovery's checks. Then only the dispatch records after the records' position
+      are read;
     - **monitor registry**: the `monitor_import` record, then each `monitor/<alias>` change;
       the revision is the largest the records carry, and the journal file is compared with the
       import as before;
@@ -843,6 +851,19 @@ time L that D2 needs (D2 A-7) is the end of step 7.
     longer reads the whole history. It rebuilds the decision memory from the latest value
     records, then applies the dispatch records after the older of the journal's and the records'
     positions.
+  - The resident dispatch journal is bounded, never by the event count (LEAN-L model §3.1;
+    coordinator ruling 10-26). Per (task, instance) it keeps every open dispatch, the latest
+    intent (the not-run explanation names its state) and the latest 64 admitted dispatches
+    (`REMEDY_JOURNAL_MAX_RUNS`), which hold the latest completed one and the remedy journal's
+    runs. Each completed dispatch keeps the pair's consecutive failed runs through it, counted at
+    its completion from the pair's previous completed dispatch, never folded over all runs.
+    Everything else is read on demand (§3.3 of the model), page by page under the read budget:
+    - a decision page reads the dispatch records through its snapshot position;
+    - the task runtime projection at a position the journal does not answer (a pair whose
+      earlier dispatches it no longer holds and that has no dispatch admitted and none completed
+      at or before the position) reads the dispatch records through that position;
+    - a replayed admission of a decision the journal does not hold looks for its intent among
+      the intents after the decision's input ledger position.
   - Without the marker, the start replays once, as today:
     - the decision memory counts nothing as recorded, so the start's reconciliation writes one
       `policy.control_state_recorded` and one `policy.activity_state_recorded` per key;
@@ -851,7 +872,9 @@ time L that D2 needs (D2 A-7) is the end of step 7.
       state moved since the import;
     - each live wake without a `wake/` row gets its `agent.wake_obligation_recorded`;
     - then the marker, whose report is `ledger_tagged_state_seeded` with `count`, the keys
-      seeded.
+      seeded. A root's first start (the ledger holds no `runtime.started` or
+      `runtime.takeover` before it) has no earlier epoch to seed and writes no marker; the
+      root's next start seeds what that epoch recorded.
   - The agent dispatcher keeps no ended session (§11.2). At a session's end its request records
     leave memory. A completed session's wake, trigger and session leave too. A session escalated
     to a person keeps its status and its wake for the person who reads them. A resent response

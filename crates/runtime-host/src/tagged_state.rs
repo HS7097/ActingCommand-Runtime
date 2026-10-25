@@ -14,6 +14,9 @@ use actingcommand_ledger::{GlobalLedger, GlobalLedgerError, LedgerIndexRecords, 
 /// The `lifecycle` key of the seeding's marker.
 const TAGGED_STATE_ENABLED: &str = "tagged_state_enabled";
 
+/// The `lifecycle` key of the latest start record (`runtime.started`, `runtime.takeover`).
+const LAST_START: &str = "last_start";
+
 /// How this start restores the tagged state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaggedStart {
@@ -36,6 +39,18 @@ impl TaggedStart {
             None => Self::Seed,
         })
     }
+}
+
+/// Workflow #422 LN-4: whether the ledger holds a start record (`runtime.started` or
+/// `runtime.takeover`, the `lifecycle` row `last_start`), read before this start writes its own.
+/// Without one this is the root's first start: it has no earlier epoch to seed, so it writes no
+/// marker, and the root's next start seeds what this epoch recorded.
+pub(crate) fn earlier_start(ledger: &GlobalLedger) -> RuntimeHostResult<bool> {
+    Ok(
+        !index_records(ledger, LedgerIndexRole::Lifecycle, &[LAST_START])?
+            .records
+            .is_empty(),
+    )
 }
 
 /// [`GlobalLedger::index_records`] with the host's error: the ledger's own code and operation,

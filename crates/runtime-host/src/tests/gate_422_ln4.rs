@@ -4,6 +4,8 @@
 // §11.5, §11.6): the policy host's decision memory, the agent dispatcher and the monitor registry
 // load from their tagged records. A start without the marker replays once and writes one value
 // record per key, then the marker; a later start loads from the records the index names.
+// Workflow #422 LN-4 (coordinator ruling 2, 10-26): the dispatch journal is bounded, never by the
+// event count, and a loading start reads it from the dispatches the records name.
 //
 // The history is the ledger crate's synthetic ledger (LN-1) with the fixture's own records after
 // it: one settled run of a dispatch pair (its decision memory and its activity state), one live
@@ -17,7 +19,7 @@ use actingcommand_ledger::{
     LedgerIndexRole, LedgerMaintenance, SyntheticInstance, SyntheticLedgerSpec,
     write_synthetic_ledger,
 };
-use actingcommand_runtime_database::{DatabaseLocation, MaintenanceLimits, RuntimeDatabase};
+use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 
 // The host test configuration's salt (`config`), also the State database's bootstrap seed.
 const SALT: &[u8] = b"runtime-host-test-salt";
@@ -120,11 +122,11 @@ fn assert_equals_todays_recovery(host: &RuntimeHost, start: &str) {
 }
 
 // LN-4 test row 1: seed, then load, equals today's recovery (a shadow comparison) on the
-// synthetic ledger. The first start of a build that brings the load finds history and no
-// marker (the fixture removes the marker row a start of this build wrote, so the history reads
-// as an earlier build's): it replays once, writes one value record per key and the marker
-// (`ledger_tagged_state_seeded`). The next start loads: it writes no value record, and its
-// decision memory, agent dispatcher and monitor registry equal today's whole-history recoveries.
+// synthetic ledger. The root's first start (the synthetic history holds no start record) has no
+// earlier epoch to seed and writes no marker. The next start finds history and no marker: it
+// replays once, writes one value record per key and the marker (`ledger_tagged_state_seeded`).
+// The start after it loads: it writes no value record, and its decision memory, dispatch
+// journal, agent dispatcher and monitor registry equal today's whole-history recoveries.
 #[test]
 fn ln4_a_seed_then_load_equals_todays_recovery_on_the_synthetic_ledger() {
     let root = synthetic_root();
@@ -156,25 +158,11 @@ fn ln4_a_seed_then_load_equals_todays_recovery_on_the_synthetic_ledger() {
         detection_budget: None,
     })
     .expect("the planning signal");
-    assert_eq!(
-        markers(&host).len(),
-        1,
-        "a start of this build marks its root"
+    assert!(
+        markers(&host).is_empty(),
+        "a root's first start has no earlier epoch to seed and writes no marker"
     );
     host.close().expect("close the host");
-
-    // The history now reads as an earlier build's: no marker.
-    let database = RuntimeDatabase::open_existing(root.path(), false).expect("the root's database");
-    let removed = database
-        .connection(DatabaseLocation::OpenExistingDatabase.location())
-        .expect("database connection")
-        .execute(
-            "DELETE FROM ledger_index WHERE role='lifecycle' AND key='tagged_state_enabled'",
-            [],
-        )
-        .expect("remove the marker row");
-    assert_eq!(removed, 1);
-    drop(database);
 
     // Seed: today's recoveries once, one record per key, then the marker.
     let host = start_host(&root, &clock);
@@ -185,6 +173,14 @@ fn ln4_a_seed_then_load_equals_todays_recovery_on_the_synthetic_ledger() {
         "the seeding's marker with its report"
     );
     assert_equals_todays_recovery(&host, "the seeding start");
+    // The seeded journal is today's whole-history journal, kept by the journal's rule.
+    let (journal, replayed) = host.dispatch_journal_for_test().expect("the journal");
+    assert_eq!(journal, replayed, "the seeding start: the dispatch journal");
+    assert_eq!(
+        journal.0.values().cloned().collect::<Vec<_>>(),
+        vec![("Completed".to_owned(), Some(0))],
+        "the settled run, with no failure through it"
+    );
     host.close().expect("close the seeding host");
 
     // Load: the records alone; no value record is written again.
@@ -194,16 +190,23 @@ fn ln4_a_seed_then_load_equals_todays_recovery_on_the_synthetic_ledger() {
         before,
         "a loading start writes no value record of an unchanged key"
     );
-    assert_eq!(markers(&host).len(), 2, "a loading start writes no marker");
+    assert_eq!(markers(&host).len(), 1, "a loading start writes no marker");
     assert_equals_todays_recovery(&host, "the loading start");
+    // The loaded journal holds what the records name: here the pair's latest completed run.
+    let (journal, replayed) = host.dispatch_journal_for_test().expect("the journal");
+    assert_eq!(
+        journal.0, replayed.0,
+        "the loading start: the dispatch journal"
+    );
     host.close().expect("close the loading host");
 }
 
 // LN-4 test row 2: a second start reads no typed history for the tagged state. On the root the
 // first test's history leaves (synthetic history, a settled run, a live wake, the import), the
-// three loads a marked start runs read nothing but the index rows and the records they name: the
-// writer's largest read is at most the rows read (`writer_largest_read_events` <= index rows),
-// and no read scans the whole ledger.
+// four loads a marked start runs (the monitor registry, the decision memory, the dispatch journal
+// and the agent dispatcher) read nothing but the index rows, the records they name and the run's
+// execution between its admission and its completion: the writer's largest read is at most the
+// rows read (`writer_largest_read_events` <= index rows), and no read scans the whole ledger.
 #[test]
 fn ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state() {
     let root = synthetic_root();
@@ -268,6 +271,12 @@ fn ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state() {
     .expect("the monitor registry loads");
     let decision_memory =
         crate::policy_host::load_decision_memory_for_test(&ledger).expect("the decision memory");
+    let journal = crate::policy_host::load_dispatch_journal_for_test(
+        root.path(),
+        Arc::clone(&database),
+        &ledger,
+    )
+    .expect("the dispatch journal loads");
     let agent = AgentDispatcherState::load(&ledger, crate::recovery_read::RECOVERY_PAGE_EVENTS)
         .expect("the agent dispatcher loads");
     let peak = ledger.take_writer_peak();
@@ -283,6 +292,7 @@ fn ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state() {
         })
         .sum::<usize>();
     assert_eq!(decision_memory, 2, "the pair's and its activity's records");
+    assert_eq!(journal, 1, "the pair's latest completed run");
     assert_eq!(agent.map_sizes_for_test()[0], 1, "the live wake");
     assert!(rows >= 4, "the rows read: {rows}");
     assert!(
@@ -292,4 +302,19 @@ fn ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state() {
     );
     assert_eq!(peak.whole_ledger_queries, 0, "{peak:?}");
     ledger.close().expect("close the writer");
+}
+
+// LN-4 test row 3: the journal size stays flat under 10k synthetic dispatches. One pair's
+// dispatches complete one after another; after each completion the journal keeps the pair's
+// latest runs the remedy journal reads, never one per dispatch ever made.
+#[test]
+fn ln4_c_the_journal_size_stays_flat_under_10k_synthetic_dispatches() {
+    let at_1k = crate::policy_host::largest_journal_for_synthetic_dispatches_for_test(1_000);
+    let at_10k = crate::policy_host::largest_journal_for_synthetic_dispatches_for_test(10_000);
+    assert_eq!(
+        at_10k,
+        actingcommand_policy::REMEDY_JOURNAL_MAX_RUNS,
+        "the journal holds the pair's latest runs"
+    );
+    assert_eq!(at_1k, at_10k, "the journal size is flat");
 }
