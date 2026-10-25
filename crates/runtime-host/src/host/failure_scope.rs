@@ -425,7 +425,21 @@ pub(crate) const GLOBAL_CODES: &[GlobalCode] = &[
         GlobalFamily::SharedLock,
         ExecutionKernelCode::ExecutionKernelStatePoisoned.code(),
     ),
+    // ISO-2 (#419 R1): the kernel's session registry closed, or out of session generations.
+    global(
+        GlobalFamily::SharedLock,
+        ExecutionKernelCode::ExecutionKernelClosed.code(),
+    ),
+    global(
+        GlobalFamily::SharedLock,
+        ExecutionKernelCode::ExecutionSessionGenerationExhausted.code(),
+    ),
     // The process's own resources.
+    // ISO-2 (#419 R1): the OS refused a session thread.
+    global(
+        GlobalFamily::ProcessResource,
+        ExecutionKernelCode::ExecutionSessionSpawnFailed.code(),
+    ),
     global(
         GlobalFamily::ProcessResource,
         HostCode::RuntimeBindFailed.code(),
@@ -607,6 +621,12 @@ impl HostShared {
         boundary_instance: Option<InstanceId>,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<Contained> {
+        // ISO-2: a Runtime that latched already (an owner retained for unconfirmed resources
+        // no single instance owns, `retain_owner_unconfirmed`) keeps its first condition; a
+        // failure met after it fences nothing.
+        if self.fatal.current()?.is_some() {
+            return self.latch_failure(error);
+        }
         match error.scope_at(boundary_instance) {
             FailureScope::Global => self.latch_failure(error),
             FailureScope::Instance(instance_id) => {
