@@ -30,7 +30,7 @@ impl HostShared {
             },
             0,
             through,
-            crate::recovery_read::RECOVERY_PAGE_EVENTS,
+            self.ledger.history_page_events(),
         );
         let mut references = Vec::new();
         while let Some(page) = pages

@@ -7,11 +7,13 @@
 //! row that disagrees stops the read with the fatal `ledger_tag_index_mismatch`: the persisted
 //! state breaks an invariant and would break it again at every start.
 
+use super::history::HistorySelection;
 use super::read_work::ReadWork;
 use super::storage::{DurableStorage, EventStore};
 use super::{GlobalLedgerError, GlobalLedgerResult};
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
+use actingcommand_contract::EventQuery;
 use actingcommand_contract::outcome::Outcome;
 
 /// One `state` row of the index table as stored (§11.1), with the stored hash of the record its
@@ -41,8 +43,10 @@ pub struct LedgerTaggedState {
 }
 
 impl<B: DurableStorage> EventStore<B> {
-    /// The tagged state under `prefixes`: index rows plus as many point reads, whatever the
-    /// ledger's length. A store that keeps no index (the test-only segment store) cannot answer.
+    /// The tagged state under `prefixes`: index rows plus as many point reads of the store,
+    /// whatever the ledger's length. Each row counts on `work`; a spent budget answers
+    /// `ledger_read_budget_exceeded` (#411 A51). A store that keeps no index (the test-only
+    /// segment store) cannot answer.
     pub(super) fn tagged_state(
         &self,
         prefixes: &[String],
@@ -56,23 +60,28 @@ impl<B: DurableStorage> EventStore<B> {
                 operation,
             ))
         })?;
+        let all = EventQuery::default();
+        let selection = HistorySelection::of(&all);
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
             if !work.visit() {
                 return Err(ReadWork::exceeded(operation));
             }
-            // A point read by the row's sequence: the committed records are held in sequence
-            // order, so it costs no scan of the records after it (LN-5 reads it from SQLite).
-            let mut event = match self
-                .events
-                .binary_search_by_key(&row.sequence, PersistedEvent::sequence)
-            {
-                Ok(position) if row.sequence <= through_sequence => self.events[position].clone(),
-                _ => return Err(mismatch(&row)),
+            // LN-5 (LEAN-L §3.3): a point read of the store by the row's sequence, through the
+            // sequence key, the record authenticated on its own; no other record is read. A
+            // sequence past the head or without a record names no record.
+            let read = match row.sequence.checked_sub(1) {
+                Some(after) if row.sequence <= through_sequence => self.backend.history_page(
+                    &selection,
+                    (after, row.sequence),
+                    1,
+                    &self.retention,
+                )?,
+                _ => Vec::new(),
             };
-            if !agrees(&row, &event) {
+            let Some(mut event) = read.into_iter().find(|event| agrees(&row, event)) else {
                 return Err(mismatch(&row));
-            }
+            };
             self.retention.annotate_event(&mut event);
             records.push(LedgerTaggedRecord {
                 key: row.key,

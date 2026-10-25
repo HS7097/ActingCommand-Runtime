@@ -3,7 +3,7 @@
 //! Ledger-rebuilt fact projection shared by policy and execution boundaries.
 
 use crate::codes::{HostCode, HostLocation};
-use crate::recovery_read::{LedgerPages, RECOVERY_PAGE_EVENTS, read_pages, read_through_head};
+use crate::recovery_read::{LedgerPages, read_pages, read_through_head};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
@@ -646,14 +646,8 @@ impl InstanceFactStore {
         ledger: &GlobalLedger,
         state: Arc<RuntimeStateStore>,
     ) -> RuntimeHostResult<Self> {
-        let through = ledger.latest_sequence().map_err(fact_transaction_error)?;
-        let events = read_pages(
-            ledger,
-            &EventQuery::default(),
-            through,
-            RECOVERY_PAGE_EVENTS,
-        )
-        .map_err(fact_transaction_error)?;
+        let events =
+            read_through_head(ledger, &EventQuery::default()).map_err(fact_transaction_error)?;
         let mut store = Self::empty(state);
         for event in &events {
             store.replay_event(event, ledger)?;
@@ -1937,7 +1931,7 @@ fn first_triggers(
                         },
                         *published,
                         through,
-                        RECOVERY_PAGE_EVENTS,
+                        ledger.history_page_events(),
                     );
                     let mut found = None;
                     while found.is_none() {
