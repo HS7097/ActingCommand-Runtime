@@ -2572,15 +2572,6 @@ impl RuntimeHost {
             .standard_pack_request(procedure_ref)
     }
 
-    /// ROUT-L RL-1b: whether the scheduler workbench composes the rules (composer mode).
-    pub fn composes_standard_pack_rules(&self) -> RuntimeHostResult<bool> {
-        Ok(self
-            .work_ref(HostLocation::StandardPackRead)?
-            .standard_packs
-            .schedule
-            .is_some())
-    }
-
     /// Workflow #361 C2: records a planned transition; the first catalog write of startup.
     pub fn apply_policy_catalog_transition(
         &self,
