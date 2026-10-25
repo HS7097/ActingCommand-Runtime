@@ -104,6 +104,13 @@ pub(super) trait LedgerStore: Send + 'static {
         operation: Location,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
     fn latest_sequence(&self) -> u64;
+    /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.5): the tagged keys under
+    /// `prefixes` with their checked latest records.
+    fn tagged_state(
+        &self,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerTaggedState>;
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -233,6 +240,14 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
 
     fn latest_sequence(&self) -> u64 {
         Self::latest_sequence(self)
+    }
+
+    fn tagged_state(
+        &self,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerTaggedState> {
+        Self::tagged_state(self, prefixes, work)
     }
 
     fn project_view_page(

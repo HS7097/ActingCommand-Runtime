@@ -29,11 +29,15 @@ mod write_failure;
 mod capture;
 mod flush;
 mod index;
+pub use index::instance_fact_state_key;
 // #411 A51 (R2): the work budget of one read on the writer thread.
 mod read_work;
+// Workflow #422 LN-2: the tagged state a start loads (`contracts/ledger-observer.md` §11.5).
+mod tagged;
 pub use capture::{
     DEFAULT_TAG_WORKBENCH_PATTERNS, LedgerCaptureHandle, LedgerCapturePolicy, LedgerCaptureStatus,
 };
+pub use tagged::{LedgerTaggedRecord, LedgerTaggedState};
 // The capture queue's tiers are the shared watermark arithmetic (§7.1).
 pub use actingcommand_artifact_store::WatermarkRatios;
 pub use migration::*;
@@ -1191,6 +1195,12 @@ enum WriterCommand {
         page_events: usize,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
     },
+    /// Workflow #422 LN-2: the tagged state under the key prefixes. Its writer command kind is
+    /// `Query`, so task timing records keep their closed set of command kinds.
+    TaggedState {
+        prefixes: Vec<String>,
+        response: SyncSender<GlobalLedgerResult<LedgerTaggedState>>,
+    },
     ProjectViewPage {
         query: EventQuery,
         profile: ProjectionProfile,
@@ -1488,6 +1498,9 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
             let _ = response.send(Err(refused));
         }
         WriterCommand::QueryPage { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::TaggedState { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::ProjectViewPage { response, .. } => {
@@ -2398,6 +2411,34 @@ impl GlobalLedger {
         )?
     }
 
+    /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.5 steps 1–3): the tagged keys whose
+    /// `state` row key starts with one of `prefixes`, each with its latest record, read by the
+    /// index row's sequence and checked against the row; a row that disagrees with its record is
+    /// the fatal `ledger_tag_index_mismatch`. The read is index rows plus as many point reads,
+    /// whatever the ledger's length.
+    pub fn tagged_state(&self, prefixes: &[&str]) -> GlobalLedgerResult<LedgerTaggedState> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::LedgerIndexRows.location(),
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::TaggedState {
+                prefixes: prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
+                response,
+            },
+            LedgerLocation::LedgerIndexRows.location(),
+        )?;
+        receive_response(
+            receiver,
+            LedgerLocation::LedgerIndexRows.location(),
+            self.reply_timeout,
+        )?
+    }
+
     pub fn project_view_page(
         &self,
         query: EventQuery,
@@ -2926,6 +2967,7 @@ fn command_operation(command: &WriterCommand) -> Location {
         }
         WriterCommand::Query { .. } => LedgerLocation::QueryEvents.location(),
         WriterCommand::QueryPage { .. } => LedgerLocation::QueryEventPage.location(),
+        WriterCommand::TaggedState { .. } => LedgerLocation::LedgerIndexRows.location(),
         WriterCommand::ProjectViewPage { .. } => LedgerLocation::ProjectLedgerViewPage.location(),
         WriterCommand::ProjectSchedulingOutcomes { .. } => {
             LedgerLocation::ProjectSchedulingOutcomes.location()
@@ -2952,6 +2994,7 @@ const fn is_read_command(command: &WriterCommand) -> bool {
             | WriterCommand::FrameRetentionView { .. }
             | WriterCommand::Query { .. }
             | WriterCommand::QueryPage { .. }
+            | WriterCommand::TaggedState { .. }
             | WriterCommand::ProjectViewPage { .. }
             | WriterCommand::ProjectSchedulingOutcomes { .. }
             | WriterCommand::LatestSequence { .. }
@@ -3034,7 +3077,9 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::ReconcileScheduledPolicySettlement { .. } => {
                 LedgerWriterCommandKind::ReconcileScheduledPolicySettlement
             }
-            WriterCommand::Query { .. } => LedgerWriterCommandKind::Query,
+            WriterCommand::Query { .. } | WriterCommand::TaggedState { .. } => {
+                LedgerWriterCommandKind::Query
+            }
             WriterCommand::QueryPage { .. } => LedgerWriterCommandKind::QueryPage,
             WriterCommand::ProjectViewPage { .. } => LedgerWriterCommandKind::ProjectViewPage,
             WriterCommand::ProjectSchedulingOutcomes { .. } => {
@@ -3290,6 +3335,12 @@ fn writer_commands<S: LedgerStore>(
                     ))
                 };
                 read_events = result.as_ref().map_or(0, Vec::len);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::TaggedState { prefixes, response } => {
+                let result = store.tagged_state(&prefixes, &work);
+                read_events = result.as_ref().map_or(0, |state| state.records.len());
                 command_succeeded = result.is_ok();
                 command_observation.replied(response.send(result).is_ok());
             }

@@ -3,19 +3,22 @@
 //! Ledger-rebuilt fact projection shared by policy and execution boundaries.
 
 use crate::codes::{HostCode, HostLocation};
-use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages};
+#[cfg(test)]
+use crate::recovery_read::read_pages;
+use crate::recovery_read::{LedgerPages, RECOVERY_PAGE_EVENTS};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     EventActor, EventId, EventPayload, EventQuery, EventType, FactContent,
-    FactInvalidationEventData, FactPayload, FactRecord, FactScalar as ContractFactScalar,
-    FactScope, FactValue as ContractFactValue, InstanceFactContext, InstanceFactSnapshot,
-    RESOURCE_TARGETS_FACT_KEY, RuntimeErrorCode, priority_offset_task_id,
+    FactInvalidationEventData, FactPayload, FactPublishedPayload, FactRecord,
+    FactScalar as ContractFactScalar, FactScope, FactValue as ContractFactValue,
+    InstanceFactContext, InstanceFactSnapshot, RESOURCE_TARGETS_FACT_KEY, RuntimeErrorCode,
+    priority_offset_task_id,
 };
 use actingcommand_ledger::{
-    GlobalLedger, LedgerTransactionWork, PersistedEvent, TransactionStateObservation,
-    TransactionWorkError,
+    GlobalLedger, LedgerCode, LedgerTransactionWork, PersistedEvent, TransactionStateObservation,
+    TransactionWorkError, instance_fact_state_key,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, FactScalar as PolicyFactScalar,
@@ -33,6 +36,14 @@ use std::sync::Arc;
 type FactIdentity = (FactScope, String);
 type InvalidationIdentity = (FactScope, String, String, EventId);
 type HistoricalInvalidationIdentity = (FactIdentity, String);
+
+/// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.1, §11.5): the index key prefixes of
+/// the instance store's tagged state, its facts and its instances' input boundaries.
+pub(crate) const TAGGED_STATE_PREFIXES: [&str; 2] = ["instance_facts/", "input_boundary/"];
+
+/// One event of the start load: the event and, for a tagged record, the index keys that name it
+/// (a publication loads only those records); `None` for an event read as a trigger.
+type LoadedEvent = (PersistedEvent, Option<BTreeSet<String>>);
 
 /// Replay metadata, retained even when no fact is active for an instance.
 #[derive(Clone, Default)]
@@ -549,11 +560,8 @@ impl InstanceFactStore {
         Ok(projection.records())
     }
 
-    pub(crate) fn recover(
-        ledger: &GlobalLedger,
-        state: Arc<RuntimeStateStore>,
-    ) -> RuntimeHostResult<Self> {
-        let mut store = Self {
+    fn empty(state: Arc<RuntimeStateStore>) -> Self {
+        Self {
             active: BTreeMap::new(),
             latest_observed: BTreeMap::new(),
             input_boundaries: InputInvalidationBoundaries::default(),
@@ -561,36 +569,142 @@ impl InstanceFactStore {
             pending: BTreeMap::new(),
             last_sequence: 0,
             state,
-        };
-        // Workflow #381 R4a: the whole Ledger through one position, in bounded pages.
-        let events = ledger
-            .latest_sequence()
-            .and_then(|through| {
-                read_pages(
-                    ledger,
-                    &EventQuery::default(),
-                    through,
-                    RECOVERY_PAGE_EVENTS,
-                )
-            })
-            .map_err(|_| {
-                fact_fatal(
-                    HostCode::FactStoreRecoveryFailed,
-                    HostLocation::RecoverFactStore,
-                )
-            })?;
-        let mut history = HistoricalFactProjection::default();
-        for event in &events {
-            history.replay(event)?;
         }
-        store
-            .state
-            .recover_fact_projections(&events)
-            .map_err(fact_state_error)?;
-        for event in events {
-            store.replay_event(&event, ledger)?;
+    }
+
+    /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.3, §11.5; LEAN-L §3.2 step 5): the
+    /// store as replaying the whole ledger would leave it, loaded from the tagged state instead.
+    /// The index names each key's latest record: a fact's latest publication or invalidation and
+    /// each instance's latest `input.committed` and `input.failed`. For each loaded publication
+    /// the first later event that would have invalidated it is read through the type index (an
+    /// input type only when an instance's boundary of that type lies after the publication), so
+    /// a fact whose invalidation was not written yet becomes the pending invalidation replay
+    /// makes. Today's reducer then applies the records and the triggers in ledger order. The
+    /// `latest_observed` of a key whose latest record is an invalidation is its invalidation time.
+    pub(crate) fn recover(
+        ledger: &GlobalLedger,
+        state: Arc<RuntimeStateStore>,
+    ) -> RuntimeHostResult<Self> {
+        let tagged = ledger
+            .tagged_state(&TAGGED_STATE_PREFIXES)
+            .map_err(tagged_state_error)?;
+        let through = tagged.through_sequence;
+        let mut events = BTreeMap::<u64, LoadedEvent>::new();
+        for record in tagged.records {
+            events
+                .entry(record.event.sequence())
+                .or_insert_with(|| (record.event, Some(BTreeSet::new())))
+                .1
+                .get_or_insert_with(BTreeSet::new)
+                .insert(record.key);
+        }
+        for trigger in first_triggers(ledger, &events, through)? {
+            events.entry(trigger.sequence()).or_insert((trigger, None));
+        }
+        let mut store = Self::empty(state);
+        for (event, named) in events.values() {
+            store.load_event(event, named.as_ref(), ledger)?;
+        }
+        if through > 0 {
+            store.advance(through, HostLocation::RecoverFactStore)?;
         }
         Ok(store)
+    }
+
+    /// One event of the start load through today's reducer: a tagged publication loads only the
+    /// records its index keys name; a loaded invalidation sets its key's `latest_observed`.
+    fn load_event(
+        &mut self,
+        event: &PersistedEvent,
+        named: Option<&BTreeSet<String>>,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<()> {
+        match event.payload() {
+            EventPayload::Fact(FactPayload::Published(payload)) => {
+                self.replay_publication(event, payload, named, ledger)
+            }
+            EventPayload::Fact(FactPayload::Invalidated(payload)) => {
+                self.replay_event(event, ledger)?;
+                let data = payload.invalidation();
+                self.latest_observed
+                    .entry((data.scope.clone(), data.key.clone()))
+                    .and_modify(|at| *at = (*at).max(data.invalidated_at_unix_ms))
+                    .or_insert(data.invalidated_at_unix_ms);
+                Ok(())
+            }
+            _ => self.replay_event(event, ledger),
+        }
+    }
+
+    /// Workflow #422 LN-2, tests: the store replaying every event of the ledger, as the start
+    /// built it before LN-2; the tagged load must equal it.
+    #[cfg(test)]
+    pub(crate) fn replay_for_test(
+        ledger: &GlobalLedger,
+        state: Arc<RuntimeStateStore>,
+    ) -> RuntimeHostResult<Self> {
+        let through = ledger.latest_sequence().map_err(fact_transaction_error)?;
+        let events = read_pages(
+            ledger,
+            &EventQuery::default(),
+            through,
+            RECOVERY_PAGE_EVENTS,
+        )
+        .map_err(fact_transaction_error)?;
+        let mut store = Self::empty(state);
+        for event in &events {
+            store.replay_event(event, ledger)?;
+        }
+        Ok(store)
+    }
+
+    /// Workflow #422 LN-2, tests: what the tagged load must reproduce (§11.3): the active records
+    /// with their sources, `latest_observed`, the input boundaries, the latest tombstone of each
+    /// key without an active record, the pending invalidations and the position.
+    #[cfg(test)]
+    pub(crate) fn view_for_test(&self) -> FactStoreView {
+        let mut tombstones = BTreeMap::<FactIdentity, (FactInvalidationEventData, u64)>::new();
+        for ((identity, _), tombstone) in &self.invalidated {
+            if self.active.contains_key(identity)
+                || tombstones
+                    .get(identity)
+                    .is_some_and(|(_, sequence)| *sequence >= tombstone.sequence)
+            {
+                continue;
+            }
+            tombstones.insert(
+                identity.clone(),
+                (tombstone.data.clone(), tombstone.sequence),
+            );
+        }
+        FactStoreView {
+            active: self
+                .active
+                .values()
+                .map(|stored| ActiveFactView {
+                    record: stored.record.clone(),
+                    sequence: stored.sequence,
+                    event_id: stored.event_id,
+                    scope_instances: stored.scope_instances.clone(),
+                    publisher: stored.publisher,
+                })
+                .collect(),
+            latest_observed: self.latest_observed.clone(),
+            input_boundaries: self.input_boundaries.by_instance.clone(),
+            tombstones,
+            pending: self
+                .pending
+                .values()
+                .map(|pending| {
+                    (
+                        pending.data.clone(),
+                        pending.published_sequence,
+                        pending.trigger_sequence,
+                    )
+                })
+                .collect(),
+            last_sequence: self.last_sequence,
+        }
     }
 
     pub(crate) fn synchronize(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
@@ -799,42 +913,7 @@ impl InstanceFactStore {
     ) -> RuntimeHostResult<()> {
         match event.payload() {
             EventPayload::Fact(FactPayload::Published(payload)) => {
-                self.input_boundaries
-                    .check(payload.record(), payload.scope_instances())
-                    .map_err(|_| {
-                        fact_fatal(
-                            HostCode::FactObservationPrecedesInput,
-                            HostLocation::ReplayFactEvent,
-                        )
-                    })?;
-                let mut complete = self.clone();
-                for record in payload.records() {
-                    if complete
-                        .persisted_tombstone(
-                            ledger,
-                            &record.scope,
-                            &record.key,
-                            &record.source_snapshot_id,
-                        )?
-                        .is_some_and(|tombstone| tombstone.sequence <= event.sequence())
-                    {
-                        return Err(fact_fatal(
-                            HostCode::FactSourceSnapshotRepublished,
-                            HostLocation::ReplayFactEvent,
-                        ));
-                    }
-                    complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
-                    let stored = complete
-                        .active
-                        .get_mut(&(record.scope.clone(), record.key.clone()))
-                        .ok_or_else(|| {
-                            fact_fatal(HostCode::FactCommitMissing, HostLocation::ReplayFactEvent)
-                        })?;
-                    stored.scope_instances = payload.scope_instances().to_vec();
-                    stored.publisher = event.origin().actor();
-                }
-                *self = complete;
-                Ok(())
+                self.replay_publication(event, payload, None, ledger)
             }
             EventPayload::Fact(FactPayload::Invalidated(payload)) => {
                 let data = payload.invalidation();
@@ -881,6 +960,58 @@ impl InstanceFactStore {
                 self.advance(event.sequence(), HostLocation::ReplayFactEvent)
             }
         }
+    }
+
+    /// A `fact.published` through today's reducer: every record, or only the records whose index
+    /// keys are in `named` (Workflow #422 LN-2: a key whose latest record came later is not loaded
+    /// from this one).
+    fn replay_publication(
+        &mut self,
+        event: &PersistedEvent,
+        payload: &FactPublishedPayload,
+        named: Option<&BTreeSet<String>>,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<()> {
+        self.input_boundaries
+            .check(payload.record(), payload.scope_instances())
+            .map_err(|_| {
+                fact_fatal(
+                    HostCode::FactObservationPrecedesInput,
+                    HostLocation::ReplayFactEvent,
+                )
+            })?;
+        let mut complete = self.clone();
+        for record in payload.records().filter(|record| {
+            named.is_none_or(|keys| {
+                keys.contains(&instance_fact_state_key(&record.scope, &record.key))
+            })
+        }) {
+            if complete
+                .persisted_tombstone(
+                    ledger,
+                    &record.scope,
+                    &record.key,
+                    &record.source_snapshot_id,
+                )?
+                .is_some_and(|tombstone| tombstone.sequence <= event.sequence())
+            {
+                return Err(fact_fatal(
+                    HostCode::FactSourceSnapshotRepublished,
+                    HostLocation::ReplayFactEvent,
+                ));
+            }
+            complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
+            let stored = complete
+                .active
+                .get_mut(&(record.scope.clone(), record.key.clone()))
+                .ok_or_else(|| {
+                    fact_fatal(HostCode::FactCommitMissing, HostLocation::ReplayFactEvent)
+                })?;
+            stored.scope_instances = payload.scope_instances().to_vec();
+            stored.publisher = event.origin().actor();
+        }
+        *self = complete;
+        Ok(())
     }
 
     pub(crate) fn preview_publish(
@@ -1724,6 +1855,160 @@ pub(crate) fn resolve_priority_offsets(
         }
     }
     resolved
+}
+
+/// Workflow #422 LN-2: for each tagged publication in `events`, the first event after it through
+/// `through` that replay would have invalidated its records on: an event of a type in the
+/// records' `invalidate_on` (the records of one publication share it and its scope instances)
+/// whose scope matches (`invalidation_scope_matches`). A fact's own events are never triggers.
+/// An input type is read only when a scope instance's boundary of that type lies after the
+/// publication, by the type and those instances; any other type is read by its type index.
+fn first_triggers(
+    ledger: &GlobalLedger,
+    events: &BTreeMap<u64, LoadedEvent>,
+    through: u64,
+) -> RuntimeHostResult<Vec<PersistedEvent>> {
+    let mut boundaries = BTreeMap::<(actingcommand_contract::InstanceId, bool), u64>::new();
+    for (sequence, (event, _)) in events {
+        let failed = match event.event_type() {
+            EventType::InputCommitted => false,
+            EventType::InputFailed => true,
+            _ => continue,
+        };
+        if let Some(instance) = event.links().instance_id() {
+            boundaries.insert((*instance, failed), *sequence);
+        }
+    }
+    let mut triggers = BTreeMap::<u64, PersistedEvent>::new();
+    for (published, (event, named)) in events {
+        let (EventPayload::Fact(FactPayload::Published(payload)), Some(_)) =
+            (event.payload(), named)
+        else {
+            continue;
+        };
+        let instances = payload.scope_instances();
+        let mut first: Option<PersistedEvent> = None;
+        for trigger_type in &payload.record().invalidate_on {
+            let found = match trigger_type {
+                EventType::FactPublished | EventType::FactInvalidated => None,
+                EventType::InputCommitted | EventType::InputFailed => {
+                    let failed = *trigger_type == EventType::InputFailed;
+                    let after_publication = instances.iter().any(|instance| {
+                        boundaries
+                            .get(&(*instance, failed))
+                            .is_some_and(|boundary| boundary > published)
+                    });
+                    if after_publication {
+                        ledger
+                            .query_page(
+                                EventQuery {
+                                    event_type: Some(*trigger_type),
+                                    instance_ids: instances.to_vec(),
+                                    ..EventQuery::default()
+                                },
+                                *published,
+                                through,
+                                1,
+                            )
+                            .map_err(trigger_read_error)?
+                            .into_iter()
+                            .find(|candidate| invalidation_scope_matches(candidate, instances))
+                    } else {
+                        None
+                    }
+                }
+                _ => {
+                    let mut pages = LedgerPages::new(
+                        ledger,
+                        EventQuery {
+                            event_type: Some(*trigger_type),
+                            ..EventQuery::default()
+                        },
+                        *published,
+                        through,
+                        RECOVERY_PAGE_EVENTS,
+                    );
+                    let mut found = None;
+                    while found.is_none() {
+                        let Some(page) = pages.next_page().map_err(trigger_read_error)? else {
+                            break;
+                        };
+                        found = page
+                            .into_iter()
+                            .find(|candidate| invalidation_scope_matches(candidate, instances));
+                    }
+                    found
+                }
+            };
+            if let Some(found) = found
+                && first
+                    .as_ref()
+                    .is_none_or(|first| found.sequence() < first.sequence())
+            {
+                first = Some(found);
+            }
+        }
+        if let Some(first) = first {
+            triggers.insert(first.sequence(), first);
+        }
+    }
+    Ok(triggers.into_values().collect())
+}
+
+/// The tagged state's read failed. A row that disagrees with its record is relayed as the
+/// ledger's fatal `ledger_tag_index_mismatch` with the ledger's values; any other failure stops
+/// the start as `fact_store_recovery_failed` with the ledger's failure as its detail.
+fn tagged_state_error(error: actingcommand_ledger::GlobalLedgerError) -> RuntimeHostError {
+    if error.code() != LedgerCode::LedgerTagIndexMismatch.as_str() {
+        return trigger_read_error(error);
+    }
+    let relayed = RuntimeHostError::relayed_fatal(
+        error.code(),
+        error.operation(),
+        RuntimeErrorCode::LedgerFailure,
+    )
+    .with_native_detail(format!("{error}; detail={:?}", error.detail()));
+    match error.outcome_values() {
+        Some(values) => {
+            let values = values.clone();
+            relayed.with_outcome_values(|_| values)
+        }
+        None => relayed,
+    }
+}
+
+fn trigger_read_error(error: actingcommand_ledger::GlobalLedgerError) -> RuntimeHostError {
+    fact_fatal(
+        HostCode::FactStoreRecoveryFailed,
+        HostLocation::RecoverFactStore,
+    )
+    .with_native_detail(format!("{error}; detail={:?}", error.detail()))
+}
+
+/// Workflow #422 LN-2, tests: [`InstanceFactStore::view_for_test`].
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FactStoreView {
+    pub(crate) active: Vec<ActiveFactView>,
+    pub(crate) latest_observed: BTreeMap<(FactScope, String), u64>,
+    pub(crate) input_boundaries: BTreeMap<actingcommand_contract::InstanceId, [u64; 2]>,
+    /// The latest tombstone of each key without an active record, with its sequence.
+    pub(crate) tombstones: BTreeMap<(FactScope, String), (FactInvalidationEventData, u64)>,
+    /// Each pending invalidation with its publication's and its trigger's sequences.
+    pub(crate) pending: Vec<(FactInvalidationEventData, u64, u64)>,
+    pub(crate) last_sequence: u64,
+}
+
+/// Workflow #422 LN-2, tests: one active record with its publication's sequence, event id,
+/// scope instances and publisher.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ActiveFactView {
+    pub(crate) record: FactRecord,
+    pub(crate) sequence: u64,
+    pub(crate) event_id: EventId,
+    pub(crate) scope_instances: Vec<actingcommand_contract::InstanceId>,
+    pub(crate) publisher: EventActor,
 }
 
 fn invalidation_identity(data: &FactInvalidationEventData) -> InvalidationIdentity {
