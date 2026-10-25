@@ -2023,7 +2023,7 @@ tests = [
 ]
 incident = ["#422 LN-2"]
 
-# LN-4 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §3.6, §5.1 row LN-4; contracts/ledger-observer.md §11.1, §11.5, §11.6; register §1.184): a start without the marker replays once, writes one value record per key and the marker; the next start loads the decision memory, the agent dispatcher and the monitor registry from the records the index names, equal to today's recoveries on the synthetic ledger, and those loads, the dispatch journal among them, read nothing but the index rows, their records and point reads of the dispatches the records name; the dispatch journal is bounded, never by the event count (flat under 10k dispatches); the agent dispatcher's maps are pruned at session end
+# LN-4 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §3.6, §5.1 row LN-4; contracts/ledger-observer.md §11.1, §11.5, §11.6; register §1.184): a start without the marker replays once, writes one value record per key and the marker; the next start loads the decision memory, the agent dispatcher and the monitor registry from the records the index names, equal to today's recoveries on the synthetic ledger, and those loads, the dispatch journal among them, read nothing but the index rows, their records and point reads of the dispatches the records name; the dispatch journal is bounded, never by the event count (flat under 10k dispatches); the agent dispatcher's maps are pruned at session end; the agent dispatcher's ledger failure (agent_ledger_failure) keeps the ledger's own failure as its native detail (LN-4 follow-up)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2031,6 +2031,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state",
     "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_c_the_journal_size_stays_flat_under_10k_synthetic_dispatches",
     "actingcommand-runtime-host::lib::tests::agent_sessions::ln4_d_the_agent_maps_are_pruned_at_session_end",
+    "actingcommand-runtime-host::lib::tests::agent_sessions::ln4_e_an_agent_ledger_failure_keeps_the_ledgers_failure_as_its_native_detail",
 ]
 incident = ["#422 LN-4"]
 
