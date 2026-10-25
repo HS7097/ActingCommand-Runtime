@@ -142,7 +142,7 @@ warning `frame_store_budget_floor_applied` (`memory_total_bytes`,
 budget stands on the floor. A sample that leaves at least the floor is used as
 before.
 
-#411 A67-R (0.12.12): the Runtime records that warning when the budget of its
+#411 A67-R (0.12.13): the Runtime records that warning when the budget of its
 capture frame stores enters the floor, at the start (the daemon-start preparation's
 open) or at a refresh (a later open, a frame's budget refresh or an admission's
 limit): its daemon lines in actingd's log (the developer line
