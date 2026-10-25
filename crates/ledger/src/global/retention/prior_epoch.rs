@@ -8,6 +8,12 @@ use actingcommand_contract::{
 };
 use std::{sync::Arc, time::Instant};
 
+/// One page of prior-epoch scopes and the cursor of the page after it.
+type PriorEpochPage = (
+    Vec<(ClosureScope, (TerminalEvent, u64))>,
+    Option<PriorEpochScope>,
+);
+
 impl ClosureScope {
     pub(super) fn from_subject(value: PriorEpochScope) -> Self {
         Self {
@@ -172,10 +178,7 @@ impl RetentionIndex {
         &self,
         owners: &BTreeSet<OwnerEpoch>,
         after: Option<PriorEpochScope>,
-    ) -> (
-        Vec<(ClosureScope, (TerminalEvent, u64))>,
-        Option<PriorEpochScope>,
-    ) {
+    ) -> PriorEpochPage {
         use std::ops::Bound::{Excluded, Unbounded};
         let page = self
             .scope_sources
