@@ -180,13 +180,16 @@ pub(super) trait DurableStorage: Send + 'static {
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact>;
 
+    /// LN-6 (#422, LEAN-L §3.3): one view page, its rows selected within `read.0`'s budget and
+    /// read `read.1` (`ledger_observer.history_page_rows`) rows at a time; `retention`'s eviction
+    /// proofs annotate them.
     fn project_view_page(
         &self,
         query: &actingcommand_contract::EventQuery,
         profile: actingcommand_contract::ProjectionProfile,
         request: &actingcommand_contract::RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
-        work: &super::read_work::ReadWork,
+        read: (&super::read_work::ReadWork, usize),
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>;
 
@@ -1842,8 +1845,14 @@ impl<B: DurableStorage> EventStore<B> {
         observation: &mut Option<LedgerProjectViewObservation>,
         work: &super::read_work::ReadWork,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
-        self.backend
-            .project_view_page(query, profile, request, observation, work, &self.retention)
+        self.backend.project_view_page(
+            query,
+            profile,
+            request,
+            observation,
+            (work, self.history_page_rows),
+            &self.retention,
+        )
     }
 
     /// The events after `range.0` through `range.1`, at most `page_events`, for a
@@ -1958,7 +1967,7 @@ impl DurableStorage for SegmentStorage {
         profile: actingcommand_contract::ProjectionProfile,
         request: &actingcommand_contract::RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
-        work: &super::read_work::ReadWork,
+        (work, _): (&super::read_work::ReadWork, usize),
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
         *observation = None;

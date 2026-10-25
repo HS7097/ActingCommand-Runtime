@@ -2924,3 +2924,6 @@ mod gate_411_a24;
 // LN-5 (#422, LEAN-L): the writer's reads and its append checks read the history from the store.
 #[path = "tests/gate_ln5.rs"]
 mod gate_ln5;
+// LN-6 (#422, LEAN-L): the Runtime's view pages and artifact resolution read the store.
+#[path = "tests/gate_ln6.rs"]
+mod gate_ln6;

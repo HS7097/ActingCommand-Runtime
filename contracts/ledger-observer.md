@@ -1121,6 +1121,14 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   staged records with nothing to rebuild; every refusal of a batch write ends the writer (§9.2).
   The open still reads every record (until LN-8) and keeps only the retention state.
   `history_page_rows` is read when the ledger opens (`false`).
+- #422 LN-6 (LEAN-L): the Runtime's view pages and artifact resolution read SQLite as well; the
+  writer keeps no verified prefix of the history (its second copy of every record's metadata,
+  indexes and retention state). A view page authenticates the meta row against the writer's head,
+  selects its rows through the indexes and the stored view's predicate (the Lab view through the
+  Lab relations as of the page's snapshot), reads each row it uses on its own, the related-run
+  recovery context by the run's link, and stops within `read_budget_ms` with an incomplete page;
+  an artifact's record is one authenticated point read and its eviction proof comes from the
+  writer's proof set. No key is added.
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
   [runtime-fact-store.md](runtime-fact-store.md));

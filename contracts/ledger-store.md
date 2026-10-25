@@ -491,10 +491,18 @@ records and the metadata already constructed and structurally validated for each
 record. It is returned only after all rows, relations, head and migration-marker
 checks succeed. Offline and read-only query preparation consumes that metadata
 after the requested prefix/hash check, retaining its per-item budget checks and
-retention annotation. A Runtime query borrows the writer prefix built from this
-metadata instead; its retention and event indexes advance only with rows that
-the read transaction authenticated (Workflow #191 C). The original records are
-released before preparation uses the metadata.
+retention annotation. The original records are released before preparation uses
+the metadata. #422 LN-6: a Runtime view page or artifact resolution keeps no
+verified prefix of the history. In one read transaction it authenticates the keyed
+meta row against the writer's head and head hash (the stored rows end at that head,
+the view schema is the declared one), selects its rows through the indexes and the
+view's condition (the stored view's predicate; for Lab, the anchors and the records
+whose request, correlation or run the Lab relations through the page's snapshot
+hold), `history_page_rows` rows per statement within `read_budget_ms`, and reads
+and authenticates each row it uses on its own, the related-run recovery context
+included (by the run's link, at most 1 025 rows). Artifact resolution reads the
+selected record by one authenticated point read; its eviction proof comes from the
+writer's resident proof set.
 Metadata opening uses the same authenticated result; recovery and schema upgrade
 continue to consume the original records. These representations belong only to
 the current call and confer no artifact availability capability.
