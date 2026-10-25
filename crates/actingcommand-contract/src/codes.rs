@@ -435,6 +435,15 @@ crate::outcome_codes! {
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.
         StandardPackRootInvalid => "standard_pack_root_invalid": error / declaration_error,
+        // Workflow #357 DB-1 (M-357a v1.1 §2.3, §6.1): a table file of a game root's `tables/`
+        // breaks its shape or a limit (keys `game`, `path`, `standard_pack_problem`,
+        // `json_pointer`); the Runtime's startup, check-config, `actingctl packs` and the
+        // resource tools share the same check.
+        StandardPackTableInvalid => "standard_pack_table_invalid": error / declaration_error,
+        // Workflow #357 DB-1: a table file of a game root's `tables/`, or that directory, could
+        // not be read; the OS error is the cause (key `path`; optional `game`). Shared because
+        // `actingctl packs` reports it beside the Runtime (register §1.65 TB4).
+        StandardPackTableUnreadable => "standard_pack_table_unreadable": error / declaration_error,
         StateDirectorySyncFailed => "state_directory_sync_failed": error / none,
         StateDocumentChanged => "state_document_changed": error / none,
         StateRootCreateFailed => "state_root_create_failed": error / none,

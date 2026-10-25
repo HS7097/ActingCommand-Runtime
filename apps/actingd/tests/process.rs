@@ -2953,6 +2953,135 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
     );
 }
 
+/// Workflow #357 DB-1 (model M-357a v1.1 §2.2, §2.3, §8 the DB-1 test list; register §1.65
+/// TB3): check-config lists a sound game root's tables (row count, refusal, expired columns),
+/// adds each refused table and each expired column as a note, and the check stays ok. The
+/// table's `secondary_milli` expired in 2001, its `primary_milli` expires in 2096.
+#[test]
+fn db1_check_config_lists_tables_expired_columns_and_their_notes_and_stays_ok() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config JSON");
+    config["standard_packs"] = json!({"root": "packages"});
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("config JSON"),
+    )
+    .expect("write config");
+    let game = root.path().join("packages").join("neutral");
+    let tables = game.join("tables");
+    fs::create_dir_all(&tables).expect("tables directory");
+    let write = |path: PathBuf, value: Value| {
+        fs::write(path, serde_json::to_vec(&value).expect("fixture JSON")).expect("write fixture");
+    };
+    write(
+        game.join("bundle.json"),
+        json!({
+            "schema_version": "actingcommand.bundle.v4",
+            "game": "neutral",
+            "packs": [{"package_id": "neutral.test.task", "server": "test",
+                       "entry_task_id": "task", "path": "packs/neutral.test.task",
+                       "file_count": 1, "byte_count": 1}]
+        }),
+    );
+    let table = |table_id: &str, rows: Value| {
+        json!({
+            "schema_version": "actingcommand.table.v1",
+            "game": "neutral",
+            "table_id": table_id,
+            "row_key": ["unit"],
+            "columns": [
+                {"name": "unit", "type": "key"},
+                {"name": "primary_milli", "type": "integer", "min": 0, "max": 100000,
+                 "nullable": true, "valid_until_unix_s": 4_000_000_000_i64},
+                {"name": "secondary_milli", "type": "integer", "min": 0, "max": 100000,
+                 "nullable": true, "valid_until_unix_s": 1_000_000_000_i64}
+            ],
+            "rows": rows
+        })
+    };
+    write(
+        tables.join("unit_scores.json"),
+        table(
+            "unit_scores",
+            json!([["unit.a", 87500, 21300], ["unit.b", null, null]]),
+        ),
+    );
+    write(
+        tables.join("unit_ranks.json"),
+        table("unit_ranks", json!([["unit.a", 1, 2], ["unit.a", 3, 4]])),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args([
+            "check-config",
+            "--config",
+            config_path.to_str().expect("config path"),
+        ])
+        .output()
+        .expect("run actingd check-config");
+    let checked: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "check-config report: {error}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    assert!(output.status.success(), "{checked}");
+    assert_eq!(checked["outcome"]["code"], "check_config_passed");
+    let games = checked["report"]["standard_packs"]["games"]
+        .as_array()
+        .expect("games");
+    assert_eq!(games.len(), 1, "{checked}");
+    assert_eq!(games[0]["game"], "neutral");
+    assert_eq!(games[0]["problem"], Value::Null);
+    let listed = games[0]["tables"].as_array().expect("the root's tables");
+    assert_eq!(listed.len(), 2, "{checked}");
+    // File name order: unit_ranks, then unit_scores.
+    assert_eq!(listed[0]["table_id"], "unit_ranks");
+    assert_eq!(listed[0].get("row_count"), None);
+    assert_eq!(listed[0]["problem"]["code"], "standard_pack_table_invalid");
+    assert_eq!(
+        listed[0]["problem"]["values"]["standard_pack_problem"],
+        "table_row_duplicate"
+    );
+    assert_eq!(listed[0]["problem"]["values"]["json_pointer"], "/rows/1");
+    assert_eq!(listed[1]["table_id"], "unit_scores");
+    assert!(
+        listed[1]["path"].as_str().is_some_and(
+            |path| Path::new(path).ends_with(Path::new("tables").join("unit_scores.json"))
+        ),
+        "{checked}"
+    );
+    assert_eq!(listed[1]["row_count"], 2);
+    assert_eq!(listed[1].get("problem"), None);
+    assert_eq!(listed[1]["expired_columns"], json!(["secondary_milli"]));
+
+    let notes = notes(&checked);
+    let invalid = notes
+        .iter()
+        .filter(|note| note["code"] == "standard_pack_table_invalid")
+        .collect::<Vec<_>>();
+    assert_eq!(invalid.len(), 1, "{checked}");
+    assert_eq!(invalid[0]["category"], "error");
+    assert_eq!(invalid[0]["values"]["game"], "neutral");
+    let expired = notes
+        .iter()
+        .filter(|note| note["code"] == "standard_pack_table_column_expired")
+        .collect::<Vec<_>>();
+    assert_eq!(expired.len(), 1, "{checked}");
+    assert_eq!(expired[0]["category"], "warning");
+    assert_eq!(expired[0]["values"]["game"], "neutral");
+    assert_eq!(expired[0]["values"]["table_column"], "secondary_milli");
+}
+
 /// Workflow #385 P-c, Tc-2 and Tc-5 at the process (PERF §4.1, §10.4, §11): a `performance`
 /// section that breaks a rule refuses `check-config` and the start alike with
 /// `perf_config_invalid` and exit code 1, before any ledger is opened.

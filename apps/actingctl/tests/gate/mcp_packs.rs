@@ -236,3 +236,110 @@ fn gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuratio
         }
     }
 }
+
+/// Workflow #357 DB-1 (model M-357a v1.1 §8, the DB-1 test list; register §1.65 TB4): with
+/// `standard_packs.root` set, `actingctl packs` and `ac_packs` answer the same document, and it
+/// lists the tables of each sound game root as check-config does: file name order, a read
+/// table's row count and expired columns, a refused table's problem. Neither `instance` nor
+/// `role` narrows it.
+#[test]
+fn gate_packs_and_ac_packs_list_the_standard_pack_tables() {
+    let root = TempDir::new().expect("tempdir");
+    let root = root.path();
+    fs::write(
+        root.join("actingd.config.json"),
+        json!({"instances": [], "standard_packs": {"root": "packages"}}).to_string(),
+    )
+    .expect("write configuration");
+    let game = root.join("packages").join("neutral");
+    fs::create_dir_all(game.join("tables")).expect("create the tables directory");
+    fs::write(
+        game.join("bundle.json"),
+        json!({
+            "schema_version": "actingcommand.bundle.v4",
+            "game": "neutral",
+            "packs": [{"package_id": "neutral.test.task", "server": "test",
+                       "entry_task_id": "task", "path": "packs/neutral.test.task",
+                       "file_count": 1, "byte_count": 1}]
+        })
+        .to_string(),
+    )
+    .expect("write bundle.json");
+    // `secondary_milli` expired in 2001; `primary_milli` expires in 2096.
+    let table = |table_id: &str, rows: Value| {
+        json!({
+            "schema_version": "actingcommand.table.v1",
+            "game": "neutral",
+            "table_id": table_id,
+            "row_key": ["unit"],
+            "columns": [
+                {"name": "unit", "type": "key"},
+                {"name": "primary_milli", "type": "integer", "min": 0, "max": 100000,
+                 "nullable": true, "valid_until_unix_s": 4_000_000_000_i64},
+                {"name": "secondary_milli", "type": "integer", "min": 0, "max": 100000,
+                 "nullable": true, "valid_until_unix_s": 1_000_000_000_i64}
+            ],
+            "rows": rows
+        })
+        .to_string()
+    };
+    fs::write(
+        game.join("tables").join("unit_scores.json"),
+        table(
+            "unit_scores",
+            json!([["unit.a", 87500, 21300], ["unit.b", null, null]]),
+        ),
+    )
+    .expect("write unit_scores.json");
+    fs::write(
+        game.join("tables").join("unit_ranks.json"),
+        table("unit_ranks", json!([["unit.a", 1, 2], ["unit.a", 3, 4]])),
+    )
+    .expect("write unit_ranks.json");
+
+    let mut mcp = McpServer::spawn_at_root(root);
+    mcp.initialize();
+    for (id, arguments, flags) in [
+        (2, json!({}), Vec::new()),
+        (3, json!({"role": "startup"}), vec!["--role", "startup"]),
+    ] {
+        let cli = cli_packs(root, &flags);
+        let answer = mcp.call_tool(id, "ac_packs", arguments.clone());
+        assert_eq!(
+            cli,
+            mcp_document(&answer),
+            "actingctl packs {flags:?} and ac_packs {arguments} answer differently: {answer}"
+        );
+        let packs = &cli["standard_packs"];
+        assert_eq!(
+            packs["root"],
+            json!(root.join("packages").display().to_string()),
+            "{cli}"
+        );
+        let games = packs["games"].as_array().expect("the game roots");
+        assert_eq!(games.len(), 1, "{cli}");
+        assert_eq!(games[0]["game"], "neutral");
+        let tables = games[0]["tables"].as_array().expect("the root's tables");
+        assert_eq!(tables.len(), 2, "{cli}");
+        assert_eq!(tables[0]["table_id"], "unit_ranks");
+        assert_eq!(
+            tables[0]["path"],
+            json!(
+                game.join("tables")
+                    .join("unit_ranks.json")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert_eq!(tables[0].get("row_count"), None);
+        assert_eq!(tables[0]["problem"]["code"], "standard_pack_table_invalid");
+        assert_eq!(
+            tables[0]["problem"]["values"]["standard_pack_problem"],
+            "table_row_duplicate"
+        );
+        assert_eq!(tables[1]["table_id"], "unit_scores");
+        assert_eq!(tables[1]["row_count"], 2);
+        assert_eq!(tables[1].get("problem"), None);
+        assert_eq!(tables[1]["expired_columns"], json!(["secondary_milli"]));
+    }
+}

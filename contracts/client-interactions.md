@@ -240,8 +240,10 @@ completed receipt carries the success code of its request kind
 A Denied/Failed receipt carries its refusal or failure: the host's closed failure code on top
 (the contract's validation code when the request failed validation), with the values
 `runtime_code` (the `RuntimeErrorCode`), `operation` (where the host failed, a registered
-location), `host_halted` (the v1 `fatal`), `holder_id` and `lease_id` (the v1
-`current_holder_id`/`current_lease_id`) and `retry_after_ms`; a refusal without a more specific
+location), `host_halted` (the v1 `fatal`; since #419 ISO-1, `true` only when the Runtime
+latched, except as `runtime-outcomes.md`, "Failure scope", says for a direct contained run; a
+failure that latched nothing no longer latches the client's session), `holder_id` and
+`lease_id` (the v1 `current_holder_id`/`current_lease_id`) and `retry_after_ms`; a refusal without a more specific
 code has the `RuntimeErrorCode` itself on top. A failed material read and a failed contained Lab
 operation carry the host's failure on top the same way, with the values its code declares. A
 consumer judges a refusal by the receipt's `state` (`denied` or `failed`); the outcome's category

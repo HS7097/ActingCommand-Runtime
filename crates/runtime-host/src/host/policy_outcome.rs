@@ -4,6 +4,7 @@ use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::failure_identity::identifier_text;
+use crate::policy_control::PolicyValueRecord;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Location, Outcome};
 
@@ -79,6 +80,7 @@ impl HostShared {
                     HostLocation::RecoverOnlinePolicyOutcomes,
                 )? = recover_authoritative_policy_outcomes(&policy, &self.ledger)?;
             }
+            self.record_policy_values(&mut policy)?;
             // Reconciled settlements carry their four settlement facts too (Workflow #308
             // slice 5b).
             let mut settlements = Vec::new();
@@ -1436,6 +1438,7 @@ impl HostShared {
             if let Some(existing) = replay {
                 let mut policy = lock(self.policy()?, HostLocation::FinishReplayedPolicyOutcome)?;
                 self.finish_policy_dispatch_outcome(&mut policy, &existing, context, cache_update)?;
+                self.record_policy_values(&mut policy)?;
                 let settlement = policy
                     .latest_settlement(&existing.task_id, &existing.instance_id)?
                     .ok_or_else(policy_settlement_missing)?;
@@ -1576,6 +1579,7 @@ impl HostShared {
                 PolicyExecutionPreparation::Replay(data) => data,
             };
             self.finish_policy_dispatch_outcome(&mut policy, &data, context, cache_update)?;
+            self.record_policy_values(&mut policy)?;
             // The settled run's four settlement facts (Workflow #308 slice 5b).
             let settlement = policy
                 .latest_settlement(&data.task_id, &data.instance_id)?
@@ -1684,6 +1688,16 @@ impl HostShared {
         )?
         .remove(decision_id);
         Ok(())
+    }
+
+    /// Workflow #422 LN-3: [`record_policy_values`] on this host's ledger.
+    pub(super) fn record_policy_values(&self, policy: &mut PolicyHost) -> RuntimeHostResult<()> {
+        record_policy_values(
+            policy,
+            &self.ledger,
+            &self.events,
+            HostLocation::AppendRuntimeEvent,
+        )
     }
 
     /// Workflow #191 U5-F1 (I-W c): an execution or completion append that returned an error
@@ -1810,6 +1824,43 @@ fn settlement_refusal_or_ledger_error(
     }
 }
 
+/// Workflow #422 LN-3 (`contracts/ledger-observer.md` §11.3): appends one value record for every
+/// key of the decision memory whose state changed (a dispatch pair, `policy.control_state_recorded`;
+/// an instance's activity profile, `policy.activity_state_recorded`), each with the key's complete
+/// state, under the policy guard the change was made under, through the ledger's append path. A
+/// record the ledger did not take stays unrecorded and fails at `operation`.
+pub(super) fn record_policy_values(
+    policy: &mut PolicyHost,
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    operation: HostLocation,
+) -> RuntimeHostResult<()> {
+    for (key, record) in policy.changed_value_records()? {
+        let payload = match &record {
+            PolicyValueRecord::Control(state) => PolicyPayloadDraft::control_state_recorded(
+                state.as_ref().clone(),
+                AuditInput::new(),
+            ),
+            PolicyValueRecord::Activity(state) => {
+                PolicyPayloadDraft::activity_state_recorded(state.clone(), AuditInput::new())
+            }
+        };
+        let draft = events.draft(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::Policy,
+            EventActor::Scheduler,
+            events.system_links()?,
+            payload,
+        )?;
+        ledger
+            .append(events.sanitize(draft)?)
+            .map_err(|_| ledger_error(operation))?;
+        policy.note_value_recorded(key, record);
+    }
+    Ok(())
+}
+
 pub(super) fn reconcile_policy_dispatches(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
@@ -1839,7 +1890,12 @@ pub(super) fn reconcile_policy_dispatches(
     policy.refresh_dispatches(ledger)?;
     let pending = policy.pending_dispatches();
     if pending.is_empty() {
-        return Ok(());
+        return record_policy_values(
+            policy,
+            ledger,
+            events,
+            HostLocation::ReconcilePolicyDispatches,
+        );
     }
     // Every read below is pinned to one position and goes through an index (Workflow #317
     // rf2), never the whole ledger; the original predicates still select the events.
@@ -1894,7 +1950,13 @@ pub(super) fn reconcile_policy_dispatches(
             .append(draft)
             .map_err(|_| ledger_error(HostLocation::ReconcilePolicyDispatches))?;
     }
-    policy.refresh_dispatches(ledger)
+    policy.refresh_dispatches(ledger)?;
+    record_policy_values(
+        policy,
+        ledger,
+        events,
+        HostLocation::ReconcilePolicyDispatches,
+    )
 }
 
 fn reconcile_scheduled_policy_outcomes(

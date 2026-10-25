@@ -1945,7 +1945,11 @@ pub enum RuntimeLifecyclePhase {
     /// handset held), `device_hold_lifted` (info; a hold lifted), `device_screen_woken` (info;
     /// the wake key lit the screen) or `device_state_unreadable` (error; a read failed or
     /// answered an unknown shape, once per failing streak of the sampling). No value names a
-    /// device serial: a handset is its label `handset:<alias>`.
+    /// device serial: a handset is its label `handset:<alias>`. emu-watch: the emulator watch's
+    /// observations of an emulator instance too, linked to its instance: `outcome` is
+    /// `emulator_watch_state_changed` (info), `emulator_state_read_failed` (warning, once per
+    /// failing streak), `emulator_autostart_queued` (info; the watch enqueued a restart) or
+    /// `emulator_watch_restart_exhausted` (warning); an emulator instance is its `alias`.
     DeviceStateObserved {
         outcome: Outcome,
     },
@@ -10946,6 +10950,8 @@ enum PolicyDraftKind {
     Completed(PolicyDispatchDraft),
     Execution(PolicyExecutionDraft),
     PlanningSignal(PolicyPlanningSignalDraft),
+    ControlState(Box<PolicyControlStateRecord>, AuditInput),
+    ActivityState(Box<PolicyActivityStateRecord>, AuditInput),
 }
 
 pub struct PolicyPayloadDraft(PolicyDraftKind);
@@ -11081,6 +11087,18 @@ impl PolicyPayloadDraft {
             data,
             audit,
         }))
+    }
+
+    /// Workflow #422 LN-3 (register L7): one dispatch pair's complete decision memory after a
+    /// change.
+    pub fn control_state_recorded(state: PolicyControlStateRecord, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::ControlState(Box::new(state), audit))
+    }
+
+    /// Workflow #422 LN-3 (register L14): one (instance, activity profile)'s complete activity
+    /// state after a change.
+    pub fn activity_state_recorded(state: PolicyActivityStateRecord, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::ActivityState(Box::new(state), audit))
     }
 }
 
@@ -11224,6 +11242,7 @@ impl ReleasePayloadDraft {
 
 enum AgentDraftKind {
     WakeRequested(AgentWakeDraft),
+    WakeObligation(AgentWakeDraft),
     SessionStarted(AgentSessionDraft),
     SessionResumed(AgentSessionDraft),
     ResponseRecorded(AgentSessionDraft),
@@ -11236,6 +11255,14 @@ pub struct AgentPayloadDraft(AgentDraftKind);
 impl AgentPayloadDraft {
     pub fn wake_requested(wake: AgentWakeData, audit: AuditInput) -> Self {
         Self(AgentDraftKind::WakeRequested(AgentWakeDraft {
+            wake,
+            audit,
+        }))
+    }
+
+    /// Workflow #422 LN-3 (register L8): the value record of one wake obligation.
+    pub fn wake_obligation_recorded(wake: AgentWakeData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::WakeObligation(AgentWakeDraft {
             wake,
             audit,
         }))
@@ -12108,6 +12135,15 @@ impl EventPayloadDraft {
                 PolicyDraftKind::PlanningSignal(detail) => {
                     PolicyPayload::PlanningSignalObserved(detail.sanitize(fingerprinter)?)
                 }
+                PolicyDraftKind::ControlState(state, audit) => PolicyPayload::ControlStateRecorded(
+                    PolicyControlStatePayload::new(*state, audit.sanitize(fingerprinter)?)?,
+                ),
+                PolicyDraftKind::ActivityState(state, audit) => {
+                    PolicyPayload::ActivityStateRecorded(PolicyActivityStatePayload::new(
+                        *state,
+                        audit.sanitize(fingerprinter)?,
+                    )?)
+                }
             }),
             Self::Catalog(value) => EventPayload::Catalog(match value.0 {
                 CatalogDraftKind::TransitionIntent(detail) => {
@@ -12148,6 +12184,12 @@ impl EventPayloadDraft {
             Self::Agent(value) => EventPayload::Agent(match value.0 {
                 AgentDraftKind::WakeRequested(detail) => {
                     AgentPayload::WakeRequested(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::WakeObligation(detail) => {
+                    AgentPayload::WakeObligationRecorded(AgentWakeObligationPayload::new(
+                        detail.wake,
+                        detail.audit.sanitize(fingerprinter)?,
+                    )?)
                 }
                 AgentDraftKind::SessionStarted(detail) => {
                     AgentPayload::SessionStarted(detail.sanitize(fingerprinter)?)

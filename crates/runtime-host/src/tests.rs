@@ -153,7 +153,10 @@ mod gate_369_s6c;
 // Workflow #369 S6c review low (b): a failed resume or self-check preparation with no ladder
 // releases the queued startup claim.
 mod gate_369_s6clow;
+// emu-watch (Alice's ruling 35): a pause never holds the emulator start; the Runtime polls its
+// emulators and starts a configured one it finds stopped, within a bound.
 mod gate_372k2;
+mod gate_emu_watch;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
@@ -169,6 +172,9 @@ mod gate_373_nav5;
 mod gate_411_b37_entry;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
+// Workflow #357 DB-1: the shared tables of a standard-pack game root at startup and in
+// check-config's report.
+mod gate_357_db1;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
@@ -306,6 +312,9 @@ mod gate_411_a47;
 // #411 A64: a run's resource close that meets its lapsed lease fences only its instance; the
 // Runtime, the run's own terminal and the other instances go on.
 mod gate_411_a64;
+// ISO-1 (#419, ISO-M): the failure scope core: the scope classification, `contain_failure` at a
+// boundary (fence, fail, latch, a failed fence latches) and the receipt's `host_halted` (A54).
+mod gate_419_iso1;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;
@@ -361,8 +370,14 @@ mod gate_406_t3;
 // #412 Lab B-3 S2 (host keys 152 to 155), register §1.162: the host runs one declared operation
 // over the Lab lease and writes its LR-10 records.
 mod gate_412_b3_s2;
+// LN-3 (Workflow #422, LEAN-L model §3.6): each change of the decision memory and each wake
+// obligation writes one value record with the complete state, and its `state` row names it.
+mod gate_422_ln3;
 
 mod gate_epoch_close;
+// #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
+// read, and of the epochs before a start that failed after appending its start event.
+mod gate_411_a65;
 // #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
 // fatal the Runtime under test latched and its shutdown flag.
 mod gate_411_harness_diag;

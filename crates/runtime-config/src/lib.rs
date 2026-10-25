@@ -18,8 +18,10 @@
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
 //!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8);
 //!   `startup_discovery` (Workflow #390 DISC-1); `touch` (Workflow #406 T12);
-//!   `emulator_control` (#411 A50); `execution` (PERF-B1, Workflow #407 B1: the kernel's capture
-//!   cadence).
+//!   `emulator_control` (#411 A50; emu-watch adds the emulator watch's keys); `watchdog` (#411
+//!   A66, read by the watchdog and `actingctl` from the configuration file,
+//!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
+//!   capture cadence).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -47,6 +49,7 @@ pub mod startup_discovery;
 mod table;
 pub mod touch;
 mod value;
+pub mod watchdog;
 
 pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
@@ -61,7 +64,8 @@ pub use effective::{
     OVERRIDE_VALUE_JSON, OverridesInvalid, RestoreNote,
 };
 pub use emulator_control::{
-    EmulatorControlFile, RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
+    EmulatorControlFile, EmulatorWatchConfig,
+    RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };
 pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
@@ -80,9 +84,10 @@ pub use recovery_ladder::{
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
-    BlackoutConfig, CostCommitConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
-    HostBlackout, InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay,
-    RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+    BlackoutConfig, BlackoutEntry, BlackoutWindow, CostCommitConfig, ExpectedRuntimeConfig,
+    FactRefreshConfig, FeatureLockConfig, InstanceSchedulingFile, PacingStage, PackAdmissionConfig,
+    QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
+    SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
 pub use startup_discovery::{StartupDiscoveryConfig, StartupDiscoveryFile};
@@ -129,6 +134,9 @@ mod perf_tests;
 mod rd4_tests;
 #[cfg(test)]
 mod scheduling_tests;
+// Workflow #386 SR-4a1.
+#[cfg(test)]
+mod sr4a1_tests;
 #[cfg(test)]
 mod tests;
 // Workflow #406 T12.

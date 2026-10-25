@@ -445,6 +445,7 @@ fn nt_1_package_bundle_lays_the_root_files_beside_bundle_json_byte_for_byte() {
             pages: Some(&pages),
             interrupts: Some(&interrupts),
             navigation: Some(&navigation),
+            tables: false,
         },
         GAME,
     )

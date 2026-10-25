@@ -34,6 +34,12 @@
 //!   its server's edges and recovery chain beside its interrupt pages ([`RunNavigation`]); the
 //!   entry gate's full-match routing is `host/navigation.rs`. The feature package is admitted
 //!   once per run for both.
+//! - **Shared tables** (Workflow #357 DB-1, M-357a v1.1 §2.3, §2.4; register §1.65 TB2, TB3).
+//!   A game root's `tables/` directory makes the directory a game root as the root files do. At
+//!   startup every table of a sound game root is read only to report the refused ones (one more
+//!   `standard_pack_read` record each); nothing is kept. check-config lists each sound root's
+//!   tables with their row counts, problems and expired columns. The tables of a broken root are
+//!   neither read nor listed. A run reads no table before DB-2.
 
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
 use super::navigation::{RunNavigation, run_navigation};
@@ -42,9 +48,10 @@ use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
     MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_PAGES_FILE, StandardPackInterrupts, StandardPackNavigation, StandardPackPages,
-    StandardPackRegistry, StandardPackRootBytes, StandardPackRootIssue, TaskEntryRecoveryRole,
-    TaskInterruptThen, read_standard_pack_root,
+    STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackInterrupts,
+    StandardPackNavigation, StandardPackPages, StandardPackRegistry, StandardPackRootBytes,
+    StandardPackRootIssue, StandardPackTableReport, TaskEntryRecoveryRole, TaskInterruptThen,
+    read_standard_pack_root, read_standard_pack_tables,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -241,12 +248,26 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
     let pages = read_root_file(&path_of(STANDARD_PACK_PAGES_FILE))?;
     let interrupts = read_root_file(&path_of(STANDARD_PACK_INTERRUPTS_FILE))?;
     let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?;
+    // Workflow #357 DB-1 (M-357a v1.1 §2.1): `tables/` makes the directory a game root.
+    let tables_path = path_of(STANDARD_PACK_TABLES_DIRECTORY);
+    let tables = match fs::symlink_metadata(&tables_path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(RootFailure::Unreadable {
+                path: tables_path,
+                error,
+                op: IoOp::Metadata,
+            });
+        }
+    };
     let root = read_standard_pack_root(
         StandardPackRootBytes {
             bundle: bundle.as_deref(),
             pages: pages.as_deref(),
             interrupts: interrupts.as_deref(),
             navigation: navigation.as_deref(),
+            tables,
         },
         game,
     )
@@ -312,6 +333,13 @@ pub struct StandardPackGameReport {
     pub root_files: Vec<&'static str>,
     /// `standard_pack_root_invalid` or `standard_pack_root_unreadable` when the root is broken.
     pub problem: Option<Outcome>,
+    /// Workflow #357 DB-1 (register §1.65 TB3): the tables of `tables/` in file name order,
+    /// empty without one; `None` when the root is broken (its tables are not read).
+    pub tables: Option<Vec<StandardPackTableReport>>,
+    /// Workflow #357 DB-1: `standard_pack_table_unreadable` when `tables/` itself cannot be
+    /// listed (then `tables` is empty); a note of check-config, not a report member.
+    #[serde(skip)]
+    pub tables_problem: Option<Outcome>,
 }
 
 impl StandardPacksReport {
@@ -323,10 +351,64 @@ impl StandardPacksReport {
                 .map(|problem| (game.game.as_str(), problem))
         })
     }
+
+    /// Workflow #357 DB-1 (register §1.65 TB3): check-config's notes of the tables of the sound
+    /// roots: each refused table's problem, a `tables/` that cannot be listed, and one
+    /// `standard_pack_table_column_expired` warning per expired column.
+    pub fn table_notes(&self) -> Vec<Outcome> {
+        let mut notes = Vec::new();
+        for game in &self.games {
+            notes.extend(game.tables_problem.iter().cloned());
+            for table in game.tables.iter().flatten() {
+                notes.extend(table.problem.iter().cloned());
+                for column in table.expired_columns.iter().flatten() {
+                    notes.push(
+                        Outcome::new(HostCode::StandardPackTableColumnExpired)
+                            .operation(HostLocation::StandardPackRead)
+                            .game(game.game.as_str())
+                            .path(&table.path)
+                            .table_column(column.as_str()),
+                    );
+                }
+            }
+        }
+        notes
+    }
+}
+
+/// Workflow #357 DB-1 (register §1.65 TB3): the tables of the sound game root `directory` at
+/// `now_unix_ms`, each refused one's problem located at `standard_pack_read`; a `tables/` that
+/// cannot be listed lists none and is the second member.
+fn inspect_tables(
+    directory: &Path,
+    game: &str,
+    now_unix_ms: u64,
+) -> (Vec<StandardPackTableReport>, Option<Outcome>) {
+    match read_standard_pack_tables(directory, game) {
+        Ok(files) => (
+            files
+                .iter()
+                .map(|file| {
+                    let mut report = StandardPackTableReport::of(file, now_unix_ms);
+                    report.problem = report
+                        .problem
+                        .map(|problem| problem.operation(HostLocation::StandardPackRead));
+                    report
+                })
+                .collect(),
+            None,
+        ),
+        Err(problem) => (
+            Vec::new(),
+            Some(problem.operation(HostLocation::StandardPackRead)),
+        ),
+    }
 }
 
 /// Workflow #373 NAV-6: reads every game root below `root` as startup does, for check-config.
-pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
+/// Workflow #357 DB-1: and the tables of each sound root, their column expiries judged at
+/// `now_unix_ms`.
+pub fn inspect_standard_packs(root: Option<&Path>, now_unix_ms: u64) -> StandardPacksReport {
     let Some(root) = root else {
         return StandardPacksReport {
             root: None,
@@ -358,19 +440,27 @@ pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
             .collect::<Vec<_>>();
             match read_game_root(&directory, &game) {
                 Ok(None) => None,
-                Ok(Some(read)) => Some(StandardPackGameReport {
-                    game,
-                    bundle_version: Some(read.registry.bundle_version()),
-                    pack_count: Some(read.registry.len()),
-                    root_files,
-                    problem: None,
-                }),
+                Ok(Some(read)) => {
+                    let (tables, tables_problem) =
+                        inspect_tables(&read.directory, &game, now_unix_ms);
+                    Some(StandardPackGameReport {
+                        game,
+                        bundle_version: Some(read.registry.bundle_version()),
+                        pack_count: Some(read.registry.len()),
+                        root_files,
+                        problem: None,
+                        tables: Some(tables),
+                        tables_problem,
+                    })
+                }
                 Err(failure) => Some(StandardPackGameReport {
                     problem: Some(failure.outcome(Some(&game))),
                     game,
                     bundle_version: None,
                     pack_count: None,
                     root_files,
+                    tables: None,
+                    tables_problem: None,
                 }),
             }
         })
@@ -458,8 +548,36 @@ impl HostShared {
         for (game, directory) in games {
             match read_game_root(&directory, &game) {
                 Ok(None) => {}
-                Ok(Some(read)) => self.note_standard_pack_registry(&game, &read.registry)?,
+                Ok(Some(read)) => {
+                    self.note_standard_pack_registry(&game, &read.registry)?;
+                    self.record_refused_standard_pack_tables(&game, &read.directory)?;
+                }
                 Err(failure) => self.record_standard_pack_read(failure.outcome(Some(&game)))?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #357 DB-1 (M-357a v1.1 §2.4; register §1.65 TB2): reads every table of the sound
+    /// game root `directory` at startup only to report the refused ones, one
+    /// `standard_pack_read` record each (`standard_pack_table_invalid` or
+    /// `standard_pack_table_unreadable`, also for a `tables/` that cannot be listed). Nothing is
+    /// kept; a refused table never fails its root or the start.
+    fn record_refused_standard_pack_tables(
+        &self,
+        game: &str,
+        directory: &Path,
+    ) -> RuntimeHostResult<()> {
+        let files = match read_standard_pack_tables(directory, game) {
+            Ok(files) => files,
+            Err(problem) => {
+                return self
+                    .record_standard_pack_read(problem.operation(HostLocation::StandardPackRead));
+            }
+        };
+        for file in files {
+            if let Err(problem) = file.read {
+                self.record_standard_pack_read(problem.operation(HostLocation::StandardPackRead))?;
             }
         }
         Ok(())

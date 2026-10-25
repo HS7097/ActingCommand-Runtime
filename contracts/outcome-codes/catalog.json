@@ -278,6 +278,22 @@
       "type": "integer",
       "description": "Free space on a volume, in bytes."
     },
+    "memory_total_bytes": {
+      "type": "integer",
+      "description": "Physical memory in total, in bytes, as a memory sample read it."
+    },
+    "memory_available_bytes": {
+      "type": "integer",
+      "description": "Physical memory available, in bytes, as a memory sample read it."
+    },
+    "memory_reserve_bytes": {
+      "type": "integer",
+      "description": "The memory, in bytes, a budget leaves to the operating system (the frame store OS reserve)."
+    },
+    "memory_floor_bytes": {
+      "type": "integer",
+      "description": "The budget, in bytes, a memory budget falls back to when its sample leaves less after the reserve (frame_store.floor_mem_bytes)."
+    },
     "carried_bytes": {
       "type": "integer",
       "description": "The size of the release an offline installer carries, in bytes."
@@ -1621,6 +1637,10 @@
       "type": "unix_ms",
       "description": "When a blackout starts, in Unix milliseconds."
     },
+    "blackout_source": {
+      "type": "vocab:blackout_source",
+      "description": "Which of the three sources a blackout comes from: the host list, the instance's own list or a catalog maintenance event (Workflow #386 SR-4a1)."
+    },
     "pacing_stage": {
       "type": "vocab:pacing_stage",
       "description": "The performance pacing stage of an instance."
@@ -1675,7 +1695,7 @@
     },
     "standard_pack_problem": {
       "type": "vocab:standard_pack_problem",
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6)."
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6) or table file (Workflow #357 DB-1)."
     },
     "json_pointer": {
       "type": "pointer",
@@ -2078,6 +2098,42 @@
     "served_by_dispatch_unix_ms": {
       "type": "unix_ms",
       "description": "When the task's latest successful run that served a fact_time_reached time was dispatched, in Unix milliseconds (SCH-M CF-1)."
+    },
+    "table_column": {
+      "type": "token",
+      "description": "The name of a column of a standard-pack table (Workflow #357 DB-1, M-357a v1.1 section 6.1)."
+    },
+    "install_operation_id": {
+      "type": "id",
+      "description": "An installer operation's id, op-<unix_ms> (contracts/install-cli.md)."
+    },
+    "plan_id": {
+      "type": "id",
+      "description": "An installer plan's id, plan-<16 hex> (contracts/install-cli.md)."
+    },
+    "install_refusal": {
+      "type": "vocab:install_refusal",
+      "description": "Why an installer command refused, or failed without leaving an unfinished operation."
+    },
+    "release_checks": {
+      "type": "list<vocab:release_check>",
+      "description": "The failed checks of a release folder."
+    },
+    "rollback_gate_parts": {
+      "type": "list<vocab:rollback_gate_part>",
+      "description": "The failed parts of the rollback gate."
+    },
+    "ledger_sequence": {
+      "type": "integer",
+      "description": "A ledger event sequence."
+    },
+    "install_guards": {
+      "type": "list<vocab:install_guard>",
+      "description": "The installer guards that failed or could not be evaluated."
+    },
+    "install_caveat": {
+      "type": "vocab:install_caveat",
+      "description": "What an installer command noted while its work went on: something left unchecked, pending or on the previous build."
     }
   },
   "vocabularies": {
@@ -5246,6 +5302,25 @@
         }
       }
     },
+    "blackout_source": {
+      "description": "Where a blackout comes from (Workflow #386 SR-4a1, SCH-M section 3.2 D-1): the configuration list a refused entry is in, or the source of the entry a blackout judgement reports.",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/outcome/vocabulary.rs",
+        "enum": "BlackoutSource"
+      },
+      "tokens": {
+        "host": {
+          "description": "The machine-wide list scheduling.blackout.host; it covers every instance."
+        },
+        "instance": {
+          "description": "The instance's own list instance.<instance id>.scheduling.blackout; it covers that instance only."
+        },
+        "catalog": {
+          "description": "A maintenance event of the active catalog's timeline whose scope matches the instance."
+        }
+      }
+    },
     "ladder_class": {
       "description": "How the recovery ladder's trigger matching reads a code (Workflow #387). Every code entry names exactly one class: the first of these tokens, in this order, whose rule the code meets.",
       "tokens": {
@@ -5438,10 +5513,10 @@
       }
     },
     "standard_pack_problem": {
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6).",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6) or table file (Workflow #357 DB-1).",
       "tokens": {
         "malformed": {
-          "description": "The file is not JSON of the file's shape and version."
+          "description": "The file is not JSON of the file's shape and version; for a table, not canonical JSON either (a floating point number, an unsafe integer or a duplicate key)."
         },
         "game_mismatch": {
           "description": "The file's game is not the game directory it sits in."
@@ -5450,7 +5525,7 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json, navigation.json or pages.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json, pages.json or (Workflow #357 DB-1) a tables directory but no bundle.json."
         },
         "pages_missing": {
           "description": "The game root holds interrupts.json or navigation.json but no pages.json."
@@ -5520,6 +5595,27 @@
         },
         "recovery_chain_duplicate": {
           "description": "recovery_chain names a package twice (Workflow #373 NAV-5)."
+        },
+        "table_id_mismatch": {
+          "description": "A table's table_id is not its file name without .json, or the file name is no table id (Workflow #357 DB-1)."
+        },
+        "table_column_invalid": {
+          "description": "A table's columns break a rule: their count (2 to 32), a name, a repeated name, a type's declaration (min and max, allowed), a second key column, or valid_until_unix_s on a column that is not nullable (Workflow #357 DB-1)."
+        },
+        "table_row_key_invalid": {
+          "description": "A table's row_key is empty or longer than 8, repeats a column, does not start with the key column, or names an undeclared or nullable column (Workflow #357 DB-1)."
+        },
+        "table_row_invalid": {
+          "description": "A table has no row, a row is not as long as columns, or a cell is not of its column's type (Workflow #357 DB-1)."
+        },
+        "table_value_out_of_range": {
+          "description": "A table cell is outside its column's min and max or allowed values, or is null in a column that is not nullable (Workflow #357 DB-1)."
+        },
+        "table_row_duplicate": {
+          "description": "Two rows of a table have the same row key (Workflow #357 DB-1)."
+        },
+        "table_too_large": {
+          "description": "A table holds more than 8192 rows or 2 MiB, or is a game root's 65th table or later by file name (Workflow #357 DB-1)."
         }
       }
     },
@@ -6332,6 +6428,244 @@
       "tokens": {
         "array_of_arrays": {
           "description": "An array whose every element is an array: a page rule's any_of, a list of groups of target ids (contracts/resource-declarations.md)."
+        }
+      }
+    },
+    "install_refusal": {
+      "description": "Why an installer command refused, or failed without leaving an unfinished operation (contracts/install-cli.md, \"Outcome codes\").",
+      "tokens": {
+        "not_single_location": {
+          "description": "The root is no single-location root: runtime\\BUILD-MANIFEST.json is not a file."
+        },
+        "layout_ab_unsupported": {
+          "description": "The root holds install\\active.json (path): an A/B installation, which acsetup installs, not actingctl install."
+        },
+        "not_adopted": {
+          "description": "install\\state.json is missing: run actingctl install adopt first."
+        },
+        "state_invalid": {
+          "description": "install\\state.json, install\\current.json or an operation journal is not what this build writes (path)."
+        },
+        "operation_unfinished": {
+          "description": "Another installer operation is unfinished (install\\current.json, install_operation_id): every other mutating command refuses until install resume or install undo ends it."
+        },
+        "foreign_part": {
+          "description": "A staging part (.part) of another operation lies in the root (path); Tools never removes it."
+        },
+        "writer_lock_failed": {
+          "description": "install\\writer.lock could not be taken within install.lock_wait_ms."
+        },
+        "release_check_failed": {
+          "description": "A release folder failed its checks; release_checks lists every failed check."
+        },
+        "live_build_invalid": {
+          "description": "The live runtime\\ and tools\\ manifests are unreadable or name different commits."
+        },
+        "live_build_modified": {
+          "description": "A file that a live manifest lists differs from it or is missing (count, files)."
+        },
+        "build_not_kept": {
+          "description": "The named build is not kept under install\\builds."
+        },
+        "build_invalid": {
+          "description": "The kept build does not verify against its own manifests (commit_sha, path)."
+        },
+        "config_unreadable": {
+          "description": "The root's actingd.config.json, or the standard-pack root it names, cannot be read or is not JSON."
+        },
+        "install_section_invalid": {
+          "description": "The configuration's install section breaks its rules (config_value_invalid is the link)."
+        },
+        "config_refused_by_target": {
+          "description": "check-config of the build that will run refused the configuration: the live one for an update or rollback, the candidate for a configuration commit (INST-3); its outcome is the link."
+        },
+        "check_config_unanswered": {
+          "description": "check-config of a build could not be run or answered no report."
+        },
+        "config_base_changed": {
+          "description": "The configuration candidate was built on a live file that has changed since (INST-3)."
+        },
+        "lab_options_locked": {
+          "description": "config set may not write a Lab option (config_key); only config lab-options writes them (INST-3)."
+        },
+        "catalog_plan_unexpected": {
+          "description": "The candidate changes the catalog plan without a policy write (INST-3)."
+        },
+        "runtime_running": {
+          "description": "An actingcommand-actingd.exe runs under the root."
+        },
+        "owner_lock_held": {
+          "description": "The state root's owner lock is held (a Runtime, ledger-maintenance or unlock-owner)."
+        },
+        "processes_unreadable": {
+          "description": "The processes under the root could not be read."
+        },
+        "running_image_blocks": {
+          "description": "A running process's image under the root would change and may not be renamed aside (path, pid): any image but actingctl.exe, and adb.exe always."
+        },
+        "interface_edge": {
+          "description": "An interface edge failed; the result's edges list it."
+        },
+        "ledger_verify_failed": {
+          "description": "The target build's ledger-maintenance verify did not pass."
+        },
+        "ledger_head_unreadable": {
+          "description": "The ledger head (S0) could not be read with the live build's actingledger."
+        },
+        "plan_changed": {
+          "description": "The plan recomputed under the writer lock differs from the plan_id the apply was given: something changed since the plan."
+        },
+        "rollback_gate_failed": {
+          "description": "The rollback gate failed (rollback_gate_parts); ledger_sequence is the first sequence of a page the target's own reader refused. Only a forward fix remains."
+        },
+        "guard_failed": {
+          "description": "A guard failed or could not be evaluated and was not acknowledged with --ack-guard (install_guards; INST-2)."
+        },
+        "runtime_start_failed": {
+          "description": "The installer's start ended without a ready Runtime (INST-2): the start path's own code is the link (exited_during_startup, or start_timeout with its timeout_ms, after which the process is left running)."
+        },
+        "pack_invalid": {
+          "description": "A bundle zip failed the placement checks (game; INST-4)."
+        },
+        "pack_binding_broken": {
+          "description": "A package the configuration binds is not in the new bundle (package_id; INST-4)."
+        },
+        "pack_maintenance_drift": {
+          "description": "A server's maintenance role moves to another package while an instance binds the old one (package_id; INST-4)."
+        },
+        "instances_not_idle": {
+          "description": "A hot placement found the affected instances not idle in time (aliases); they stay paused (INST-4)."
+        },
+        "instance_invalid": {
+          "description": "An instance add or remove was refused (alias; INST-5)."
+        }
+      }
+    },
+    "install_caveat": {
+      "description": "What an installer command noted while its work went on (contracts/install-cli.md, \"Outcome codes\").",
+      "tokens": {
+        "release_unconfirmed": {
+          "description": "A release folder was checked without a release-facts file: the files match SHA256SUMS and their manifests, but the tag and the published asset digests were not checked."
+        },
+        "mcp_clients_on_previous_build": {
+          "description": "An update or rollback renamed running actingctl images aside (MCP servers, reads) that keep running on the previous build (count); their clients reconnect to use the new build."
+        },
+        "pack_declaration_unknown": {
+          "description": "A placed game root's package interface is not known (adopted roots keep no interfaces.json), so the package edge could not be checked for it (game)."
+        },
+        "post_check_mismatch": {
+          "description": "A post-check after an installer start did not match (count); the Runtime stays up and the hold stays (INST-2)."
+        },
+        "restart_required": {
+          "description": "A configuration was committed while the Runtime runs: it takes effect at the next start, a watchdog restart after a crash included (INST-3)."
+        },
+        "config_overridden_by_instruction": {
+          "description": "A configuration key written to the candidate is overridden by a run-time instruction (config_key; INST-3)."
+        },
+        "pack_restart_needed": {
+          "description": "A placement changes the reading keys of a bound recognition package, which the Runtime reads only at start (package_id; INST-4)."
+        },
+        "pack_full_check_skipped": {
+          "description": "No actinglab.exe under the root's tools\\, so a placed game root got the Runtime reader's check only (path; INST-4)."
+        }
+      }
+    },
+    "release_check": {
+      "description": "A check of a release folder (contracts/install-cli.md, release verify).",
+      "tokens": {
+        "zip_set": {
+          "description": "Not exactly one Runtime zip and one Tools zip of the same commit."
+        },
+        "sums_missing": {
+          "description": "SHA256SUMS is missing, unreadable, or does not list a zip."
+        },
+        "sums_mismatch": {
+          "description": "A zip's SHA-256 differs from SHA256SUMS."
+        },
+        "facts_missing": {
+          "description": "release stage was given neither --facts nor --local-build."
+        },
+        "facts_invalid": {
+          "description": "The release-facts file is unreadable or not actingcommand.release-facts.v1."
+        },
+        "digest_mismatch": {
+          "description": "A zip's or SHA256SUMS' SHA-256 differs from its asset digest in the facts."
+        },
+        "facts_commit_mismatch": {
+          "description": "The facts' commit is not the zips' commit."
+        },
+        "tag_mismatch": {
+          "description": "--expect-tag differs from the facts' tag."
+        },
+        "commit_prefix_mismatch": {
+          "description": "--expect-commit is not a prefix of the zips' commit."
+        },
+        "zip_unreadable": {
+          "description": "A zip cannot be read or extracted."
+        },
+        "manifest_invalid": {
+          "description": "A zip holds no readable BUILD-MANIFEST.json at its root."
+        },
+        "manifest_layout": {
+          "description": "A manifest's payload layout is not distribution-v1 (Runtime) or platform-tools-v3 (Tools)."
+        },
+        "manifest_repository": {
+          "description": "A manifest's repository is not the facts' repository."
+        },
+        "manifest_commit": {
+          "description": "A manifest's commit_sha is not the zips' commit."
+        },
+        "file_set": {
+          "description": "The extracted files are not exactly the manifest's files and BUILD-MANIFEST.json."
+        },
+        "file_mismatch": {
+          "description": "An extracted file's size or SHA-256 differs from its manifest entry."
+        },
+        "interfaces_invalid": {
+          "description": "A manifest's interfaces declaration breaks the parse rules of component-interfaces.md."
+        },
+        "interfaces_differ": {
+          "description": "The Runtime and Tools manifests declare different interfaces."
+        }
+      }
+    },
+    "rollback_gate_part": {
+      "description": "A part of the rollback gate (contracts/install-cli.md, the rollback gate).",
+      "tokens": {
+        "interface_edges": {
+          "description": "The interface edges of the rollback (the live build's ledger maximum in the target's range)."
+        },
+        "ledger_readability": {
+          "description": "The target build's own reader reads every ledger page after S0."
+        },
+        "open_time": {
+          "description": "The estimated ledger open of the target lies within its deadline minus the margin."
+        },
+        "config": {
+          "description": "The live configuration passes the target build's check-config."
+        }
+      }
+    },
+    "install_guard": {
+      "description": "An installer guard (contracts/install-cli.md, guards).",
+      "tokens": {
+        "memory": {
+          "description": "Available physical memory at least install.guard.min_available_memory_mb."
+        },
+        "schedule_near": {
+          "description": "No affected instance due within install.guard.before_next_start_ms."
+        },
+        "blocked_window": {
+          "description": "Now lies in no configured blocked window."
+        },
+        "foreign_pauses": {
+          "description": "No global pause and no unnamed pause of another party."
+        },
+        "ladder_holding": {
+          "description": "No affected instance in a ladder busy hold."
+        },
+        "adb": {
+          "description": "Each configured instance with a known port answers through the root's running adb server."
         }
       }
     }

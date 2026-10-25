@@ -65,16 +65,19 @@ pub const MAX_NAVIGATION_RECORDED_PAGES: usize = 8;
 
 crate::outcome_vocabulary! {
     /// What is wrong with a standard-pack root file (vocabulary `standard_pack_problem`,
-    /// Workflow #373 NAV-6).
+    /// Workflow #373 NAV-6) or, since Workflow #357 DB-1, a table file of the root's `tables/`
+    /// (M-357a v1.1 §6.2).
     pub enum StandardPackProblem: "standard_pack_problem" {
-        /// The file is not JSON of the file's shape and version.
+        /// The file is not JSON of the file's shape and version (for a table: not canonical
+        /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
+        /// key).
         Malformed => "malformed",
         /// The file's `game` is not the game directory it sits in.
         GameMismatch => "game_mismatch",
         /// `bundle.json` breaks the bundle index rules (M-PKG).
         BundleInvalid => "bundle_invalid",
-        /// The game root holds `interrupts.json`, `navigation.json` or `pages.json` but no
-        /// `bundle.json`.
+        /// The game root holds `interrupts.json`, `navigation.json`, `pages.json` or (Workflow
+        /// #357 DB-1) a `tables/` directory but no `bundle.json`.
         BundleMissing => "bundle_missing",
         /// The game root holds `interrupts.json` or `navigation.json` but no `pages.json`.
         PagesMissing => "pages_missing",
@@ -125,6 +128,27 @@ crate::outcome_vocabulary! {
         RecoveryChainCount => "recovery_chain_count",
         /// Workflow #373 NAV-5: `recovery_chain` names a package twice.
         RecoveryChainDuplicate => "recovery_chain_duplicate",
+        /// Workflow #357 DB-1: a table's `table_id` is not its file name without `.json`, or the
+        /// file name is no table id.
+        TableIdMismatch => "table_id_mismatch",
+        /// Workflow #357 DB-1: a table's columns break a rule: their count, a name, a repeated
+        /// name, a type's declaration (`min`/`max`, `allowed`), a second `key` column, or
+        /// `valid_until_unix_s` on a column that is not nullable.
+        TableColumnInvalid => "table_column_invalid",
+        /// Workflow #357 DB-1: a table's `row_key` is empty or longer than 8, repeats a column,
+        /// does not start with the `key` column, or names an undeclared or nullable column.
+        TableRowKeyInvalid => "table_row_key_invalid",
+        /// Workflow #357 DB-1: a table has no row, a row is not as long as `columns`, or a cell
+        /// is not of its column's type.
+        TableRowInvalid => "table_row_invalid",
+        /// Workflow #357 DB-1: a table cell is outside its column's `[min, max]` or `allowed`,
+        /// or is `null` in a column that is not nullable.
+        TableValueOutOfRange => "table_value_out_of_range",
+        /// Workflow #357 DB-1: two rows of a table have the same row key.
+        TableRowDuplicate => "table_row_duplicate",
+        /// Workflow #357 DB-1: a table holds more than 8192 rows or 2 MiB, or is a game root's
+        /// 65th table or later by file name.
+        TableTooLarge => "table_too_large",
     }
 }
 
@@ -717,6 +741,10 @@ pub struct StandardPackRootBytes<'a> {
     pub pages: Option<&'a [u8]>,
     pub interrupts: Option<&'a [u8]>,
     pub navigation: Option<&'a [u8]>,
+    /// Workflow #357 DB-1 (M-357a v1.1 §2.1): whether the root holds the `tables/` directory,
+    /// which makes a directory a game root as the root files do. The tables themselves are read
+    /// on their own ([`crate::read_standard_pack_tables`]).
+    pub tables: bool,
 }
 
 /// One game root as every reader reads it (§3.9): its registry and the root files it holds.
@@ -731,8 +759,8 @@ pub struct StandardPackRoot {
 /// Workflow #373 NAV-T (§3.9, "one check, three readers"): the structure check of one game root
 /// that the Runtime's root reader, check-config, `package bundle` and `actinglab standard-pack
 /// check` all run, for the game directory `game`. `None` when the root holds none of the files;
-/// `pages.json`, `interrupts.json` or `navigation.json` without `bundle.json` is
-/// `bundle_missing`, and `interrupts.json` or `navigation.json` without `pages.json` is
+/// `pages.json`, `interrupts.json`, `navigation.json` or (Workflow #357 DB-1) a `tables/`
+/// directory without `bundle.json` is `bundle_missing`, and `interrupts.json` or `navigation.json` without `pages.json` is
 /// `pages_missing`. Each file is checked as its own parser checks it, and every package the page
 /// list, the interrupts and the navigation data name is a package of the registry.
 pub fn read_standard_pack_root(
@@ -740,7 +768,11 @@ pub fn read_standard_pack_root(
     game: &str,
 ) -> Result<Option<StandardPackRoot>, StandardPackRootIssue> {
     let Some(bundle) = files.bundle else {
-        if files.pages.is_none() && files.interrupts.is_none() && files.navigation.is_none() {
+        if files.pages.is_none()
+            && files.interrupts.is_none()
+            && files.navigation.is_none()
+            && !files.tables
+        {
             return Ok(None);
         }
         return Err(StandardPackRootIssue::new(

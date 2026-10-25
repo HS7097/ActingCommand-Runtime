@@ -29,6 +29,9 @@ mod held_runtime;
 mod mcp;
 mod packs;
 mod process_probe;
+// Workflow #421 INST-1: `install`, the command-line installer of a single-location root.
+#[cfg(windows)]
+mod install;
 // Workflow #389 MCP-10: `start` and `restart`.
 #[cfg(windows)]
 mod runtime_start;
@@ -167,6 +170,13 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     {
         if let Some(exit) = watchdog::dispatch(&arguments) {
+            return exit;
+        }
+    }
+    // Workflow #421 INST-1: `install` takes `--root`, not `--state-root`; CLI only.
+    #[cfg(windows)]
+    {
+        if let Some(exit) = install::dispatch(&arguments) {
             return exit;
         }
     }
