@@ -1122,6 +1122,14 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   staged records with nothing to rebuild; every refusal of a batch write ends the writer (§9.2).
   The open still reads every record (until LN-8) and keeps only the retention state.
   `history_page_rows` is read when the ledger opens (`false`).
+- #422 LN-6 (LEAN-L): the Runtime's view pages and artifact resolution read SQLite as well; the
+  writer keeps no verified prefix of the history (its second copy of every record's metadata,
+  indexes and retention state). A view page authenticates the meta row against the writer's head,
+  selects its rows through the indexes and the stored view's predicate (the Lab view through the
+  Lab relations as of the page's snapshot), reads each row it uses on its own, the related-run
+  recovery context by the run's link, and stops within `read_budget_ms` with an incomplete page;
+  an artifact's record is one authenticated point read and its eviction proof comes from the
+  writer's proof set. No key is added.
 - #422 LN-TUNE (the release after v0.12.12, `actingd-config` revision 12):
   `writer_reply_timeout_ms` is the wait of every caller of the writer, its replay pages and the
   confirmations of deferred appends included; it was the ledger's fixed 10 s. It is read when the
