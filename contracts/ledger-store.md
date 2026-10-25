@@ -293,6 +293,12 @@ owner/instance/run/lease or request/correlation inside. A scope close references
 its exact import and original scope source. Replay checks each fact against only
 its preceding authenticated prefix. Errors or an exhausted deadline stop startup;
 uncertain commits are recovered from Ledger, never blindly resent.
+#422 LN-7 (LEAN-L §3.5): the writer visits only the scopes of the owner epoch that
+ended right before its own, and of each owner whose import or scope close that
+epoch wrote (a start that stopped before it closed every scope is resumed by the
+next start); an older epoch was closed by the start that followed it. A sealed
+import is checked against the native read once per owner and command, not once
+per scope.
 
 These facts close only Runtime-owned sessions and cached Unconfirmed resources
 covered by the native positive evidence. They add no task terminal, LeaseReleased,

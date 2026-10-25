@@ -44,6 +44,8 @@ pub(super) struct RetentionIndex {
     sealed_scopes: BTreeSet<RetentionScope>,
     scheduled_runs: BTreeSet<RunId>,
     run_terminals: BTreeMap<RunId, RunTerminal>,
+    /// LN-7 (#422, LEAN-L §3.5): the owner epoch from each owner change on, by the sequence of
+    /// the change; a record that repeats the current owner adds nothing.
     owner_epochs: BTreeMap<u64, OwnerEpoch>,
     owner_ends: BTreeMap<OwnerEpoch, u64>,
     reopened_owners: BTreeSet<OwnerEpoch>,
@@ -52,6 +54,8 @@ pub(super) struct RetentionIndex {
         BTreeMap<OwnerEpoch, (TerminalEvent, actingcommand_contract::PriorEpochOwnerImport)>,
     prior_epoch_closes:
         BTreeMap<ClosureScope, (TerminalEvent, actingcommand_contract::PriorEpochScopeClose)>,
+    /// LN-7: the writer epoch of each prior owner's latest import or scope close.
+    prior_epoch_writers: BTreeMap<OwnerEpoch, OwnerEpoch>,
     closures: BTreeMap<ClosureScope, ClosureFacts>,
     released_leases: BTreeMap<(OwnerEpoch, InstanceId, LeaseId), TerminalEvent>,
     quiescent_instances: BTreeMap<(OwnerEpoch, InstanceId), TerminalEvent>,
@@ -774,15 +778,18 @@ impl RetentionIndex {
 
     pub(super) fn apply<E: LedgerEventRead>(&mut self, event: &E) {
         if let Some(epoch) = recorded_owner(event) {
-            if let Some(previous) = self.owner_at(self.through_sequence)
-                && previous != epoch
-            {
-                self.owner_ends.insert(previous, event.sequence() - 1);
-                if self.owner_ends.contains_key(&epoch) {
-                    self.reopened_owners.insert(epoch);
+            let current = self.owner_at(self.through_sequence);
+            if current != Some(epoch) {
+                if let Some(previous) = current {
+                    self.owner_ends.insert(previous, event.sequence() - 1);
+                    if self.owner_ends.contains_key(&epoch) {
+                        self.reopened_owners.insert(epoch);
+                    }
                 }
+                // LN-7: only an owner change is kept; `owner_at` reads the same epoch at every
+                // sequence as it would with every owner record kept.
+                self.owner_epochs.insert(event.sequence(), epoch);
             }
-            self.owner_epochs.insert(event.sequence(), epoch);
         }
         self.apply_prior_epoch(event);
         self.apply_run_terminal(event);
