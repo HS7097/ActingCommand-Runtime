@@ -4561,6 +4561,8 @@ impl PolicyHost {
         Ok(pinned_dispatches)
     }
 
+    /// The planning signals after the State's planning checkpoint, page by page; each page's
+    /// commit advances the checkpoint, so a later start reads only after it (#422 LN-TUNE).
     fn recover_planning_signals(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
         let latest = ledger
             .latest_sequence()
@@ -4576,6 +4578,10 @@ impl PolicyHost {
             let page = ledger
                 .planning_signal_recovery_page(after_sequence, latest)
                 .map_err(planning_transaction_error)?;
+            #[cfg(test)]
+            PLANNING_RECOVERY_READS.with_borrow_mut(|reads| {
+                reads.push((page.after_sequence(), page.through_sequence()));
+            });
             let prepared = self
                 .store
                 .state
@@ -4597,6 +4603,14 @@ impl PolicyHost {
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #422 LN-TUNE, tests: the intervals `(after, through]` of the planning pages the start
+    /// recoveries on this thread read, oldest first.
+    pub(crate) static PLANNING_RECOVERY_READS: std::cell::RefCell<Vec<(u64, u64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// One intent event as recovery records it (R1, R2); shared by `recover_dispatches`,

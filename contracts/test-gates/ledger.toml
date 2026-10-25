@@ -627,3 +627,22 @@ tests = [
     "actingcommand-ledger::lib::global::sqlite::tests::ln_diag_the_release_baseline_read_reads_only_the_records_it_selects",
 ]
 incident = ["#422 LN-DIAG"]
+
+# LN-6 (#422, LEAN-L §3.3, §5 LN-6): the Runtime's view pages and artifact resolution read the store; the writer keeps no verified prefix of the history. On a SQLite store with two-row history pages, each of the six views returns, page by page, the rows its stored view (`ledger_view_*_v1`) selects at the page's snapshot, each row naming the views whose stored view selects it and each page the in-memory projection's (again after the writer is opened anew); the Lab view relates a record through an anchor's request or correlation, directly or through its run, from the anchor's position on; `resolve_artifact` answers an artifact without an eviction proof and one with its intent and outcome by one authenticated point read and refuses a position the ledger does not hold; a view page its work budget stops answers incomplete and its cursors read the whole selection
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t1_each_view_returns_what_its_stored_view_selects",
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t2_the_lab_view_relates_records_through_the_anchors_links_from_its_position",
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t3_resolve_artifact_answers_with_and_without_proofs",
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t4_a_view_page_over_its_budget_answers_incomplete_and_its_cursors_read_it_whole",
+]
+incident = ["#422 LN-6"]
+
+# LN-TUNE (#422, brief rd-1026 item 2): a paged history read with a limit asks the store for no more rows than it can still return, so the monitor registry's replay (pages of half a history page) reads and authenticates each Runtime record once, and its pages hold what one unpaged read of the same query holds
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln_tune::ln_tune_every_monitor_row_is_authenticated_once_per_read",
+]
+incident = ["#422 LN-TUNE"]

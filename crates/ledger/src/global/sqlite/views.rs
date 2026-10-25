@@ -58,7 +58,18 @@ fn name(view: LedgerView) -> GlobalLedgerResult<String> {
 }
 
 fn select(view: LedgerView) -> GlobalLedgerResult<String> {
-    let predicate = match view.definition() {
+    let Some(predicate) = predicate(view)? else {
+        return lab_select();
+    };
+    Ok(format!(
+        "SELECT e.*,e.sequence AS available_from_sequence FROM ledger_events e WHERE {predicate}"
+    ))
+}
+
+/// LN-6 (#422, LEAN-L §3.3): the condition the stored view of `view` puts on a `ledger_events`
+/// row, over its own columns; `None` for the Lab view, whose condition is a relation.
+pub(super) fn predicate(view: LedgerView) -> GlobalLedgerResult<Option<String>> {
+    Ok(Some(match view.definition() {
         LedgerViewDefinition::All => "1".to_owned(),
         LedgerViewDefinition::Types { families, events } => {
             let families = families
@@ -83,11 +94,8 @@ fn select(view: LedgerView) -> GlobalLedgerResult<String> {
                 .collect::<GlobalLedgerResult<Vec<_>>>()?;
             format!("severity IN ({})", values.join(","))
         }
-        LedgerViewDefinition::LabContext => return lab_select(),
-    };
-    Ok(format!(
-        "SELECT e.*,e.sequence AS available_from_sequence FROM ledger_events e WHERE {predicate}"
-    ))
+        LedgerViewDefinition::LabContext => return Ok(None),
+    }))
 }
 
 fn lab_select() -> GlobalLedgerResult<String> {

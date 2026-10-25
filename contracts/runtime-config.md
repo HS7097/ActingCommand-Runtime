@@ -494,6 +494,7 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.open_timeout_ms` (P0-LO) | milliseconds `10000..=600000` | `600000` | no |
 | `ledger_observer.open_warn_ratio_milli` (P0-LO) | integer `100..=1000` (thousandths) | `500` | no |
 | `ledger_observer.history_page_rows` (#422 LN-5) | integer `1..=4096` | `256` | no |
+| `ledger_observer.writer_reply_timeout_ms` (#422 LN-TUNE) | milliseconds `1000..=600000`, above `read_budget_ms` | `10000` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -505,8 +506,9 @@ the tiers rise strictly within (0, 1] (`tier1_ratio` above 0 and below `tier2_ra
 `tier2_ratio` below `tier3_ratio`, `tier3_ratio` at most 1); `hysteresis_ratio` lies within
 (0, 1); (`tier3_ratio` − `tier2_ratio`) × `buffer_bytes` is at least `spill_batch_bytes`;
 `write_retry_backoff_ms` lists exactly `write_attempts` waits; the tag lists hold non-empty texts
-without spaces or control characters; `read_budget_ms` lies below the writer's 10 s reply limit
-and `close_timeout_ms` above `read_budget_ms` (#411 A51). A ratio or a wait of the wrong type is `wrong_type`.
+without spaces or control characters; `read_budget_ms` lies below the writer's reply limit
+`writer_reply_timeout_ms` (#411 A51; #422 LN-TUNE) and `close_timeout_ms` above `read_budget_ms`
+(#411 A51). A ratio or a wait of the wrong type is `wrong_type`.
 
 P0-LO (Runtime v0.12.11, `actingd-config` revision 10): `open_timeout_ms` is the deadline of the
 start's ledger open (it was a fixed 120 s): the host's own open takes it as its maintenance
@@ -526,6 +528,15 @@ history reads take as many events per page, at most a query page's 1 024
 ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). It is read
 when the ledger opens (not settable); a value outside `1..=4096` is `config_value_invalid`
 (`out_of_range`).
+
+#422 LN-TUNE (`actingd-config` revision 12): `writer_reply_timeout_ms` is how long a caller waits
+for one reply of the ledger writer (until LN-TUNE the ledger's fixed 10 s): every writer command,
+a subscription's replay page, the close's confirmation of deferred appends and the host's
+boundaries that confirm them wait it; one that runs out is `writer_response_timeout`
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). It is read
+when the ledger opens (not settable); a value outside `1000..=600000` is `config_value_invalid`
+(`out_of_range`), and a `read_budget_ms` not below it is `config_value_invalid`
+(`section_check`) for `read_budget_ms`.
 
 ## The `device_link` section (Workflow #398 RD-2)
 

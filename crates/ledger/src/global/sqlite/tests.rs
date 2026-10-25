@@ -319,16 +319,18 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             }
             transaction.rollback().unwrap();
         }
+        // LN-6 (#422, LEAN-L §6.2): a Runtime view page authenticates the meta row, the head
+        // and every row it reads; the Events view reads both records.
         let query_error = ledger
             .project_view_page(
                 EventQuery {
-                    view: Some(LedgerView::Health),
+                    view: Some(LedgerView::Events),
                     ..EventQuery::default()
                 },
                 ProjectionProfile::Ui,
                 RuntimeEventQueryPageRequest::default(),
             )
-            .expect_err("an empty view must still reject a corrupt full snapshot");
+            .expect_err("a view page that reads the changed material refuses it");
         assert!(query_error.is_fatal(), "{label}: {query_error}");
         assert_eq!(
             subscription

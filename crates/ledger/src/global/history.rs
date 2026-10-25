@@ -315,13 +315,28 @@ impl<B: DurableStorage> EventStore<B> {
             .min(query.to_sequence.unwrap_or(u64::MAX))
             .min(self.backend.head());
         while cursor < through {
+            // #422 LN-TUNE: a read with a limit asks for no more rows than it can still
+            // return, so no page holds a row past the one the limit is reached at; the next
+            // read starts after that row, and each row is read and authenticated once.
+            let page_rows = limit.map_or(self.history_page_rows, |limit| {
+                limit
+                    .saturating_sub(events.len())
+                    .min(self.history_page_rows)
+            });
             let page = self.backend.history_page(
                 &selection,
                 (cursor, through),
-                self.history_page_rows,
+                page_rows,
                 &self.retention,
             )?;
-            let full = page.len() >= self.history_page_rows;
+            #[cfg(test)]
+            if let Some(counter) = &self.history_rows_read {
+                counter.fetch_add(
+                    u64::try_from(page.len()).unwrap_or(u64::MAX),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+            }
+            let full = page.len() >= page_rows;
             for mut event in page {
                 cursor = event.sequence();
                 let going_on = work.visit();

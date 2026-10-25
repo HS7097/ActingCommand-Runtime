@@ -9,7 +9,8 @@
 //! the deadline of the start's ledger open and the share of it above which the open writes the
 //! warning `ledger_open_slow`; both are read when the ledger opens. LN-5 (#422, LEAN-L,
 //! `actingd-config` revision 11) adds the rows of one page of a history read, read when the
-//! ledger opens.
+//! ledger opens. LN-TUNE (#422, `actingd-config` revision 12) adds how long a caller waits for
+//! one reply of the ledger writer, read when the ledger opens.
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -83,17 +84,21 @@ pub const OPEN_WARN_RATIO_MILLI: &str = "ledger_observer.open_warn_ratio_milli";
 /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; the ledger reads its
 /// history from the store a page at a time.
 pub const HISTORY_PAGE_ROWS: &str = "ledger_observer.history_page_rows";
+/// #422 LN-TUNE: how long a caller waits for one reply of the ledger writer, in milliseconds
+/// (10 000 by default; until LN-TUNE the ledger's constant). A read's budget stays below it, so
+/// a read stops before its caller stops waiting for it.
+pub const WRITER_REPLY_TIMEOUT_MS: &str = "ledger_observer.writer_reply_timeout_ms";
 
-/// #411 A51: how long a caller waits for one reply of the ledger writer (the ledger's
-/// `GlobalLedger::REPLY_TIMEOUT`, 10 s). A read's budget stays below it, so a read stops before
-/// its caller stops waiting for it.
-pub const WRITER_REPLY_TIMEOUT_MS: i64 = 10_000;
-
-/// #411 A51: `read_budget_ms` lies below the writer's reply limit.
-const READ_BUDGET_RANGE: KeyRange = KeyRange::Integer {
-    min: 1,
-    max: WRITER_REPLY_TIMEOUT_MS - 1,
+/// #422 LN-TUNE: the writer's reply limit lies within 1 s and the 600 s the maintenance limits
+/// accept.
+const WRITER_REPLY_TIMEOUT_RANGE: KeyRange = KeyRange::Integer {
+    min: 1_000,
+    max: 600_000,
 };
+
+/// #411 A51: `read_budget_ms` lies below the writer's default reply limit; the section check
+/// keeps it below the reply limit in effect too (`writer_reply_timeout_ms`, #422 LN-TUNE).
+const READ_BUDGET_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 9_999 };
 
 /// P0-LO: the open's deadline lies within 10 s and the 600 s the maintenance limits accept.
 const OPEN_TIMEOUT_RANGE: KeyRange = KeyRange::Integer {
@@ -171,6 +176,11 @@ pub struct LedgerObserverFile {
     // file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     history_page_rows: Option<Value>,
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
+    // before LN-TUNE refuses a file that names it, because the section denies unknown members; a
+    // file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writer_reply_timeout_ms: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -399,6 +409,13 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "LN-5",
         since: "0.12.12",
     },
+    // #422 LN-TUNE: read when the ledger opens, as the writer's other limits are.
+    row_since(
+        WRITER_REPLY_TIMEOUT_MS,
+        WRITER_REPLY_TIMEOUT_RANGE,
+        "LN-TUNE",
+        "0.12.13",
+    ),
 ];
 
 /// A milliseconds key read when the ledger opens, with the release that added its row.
@@ -460,6 +477,8 @@ pub struct LedgerObserverConfig {
     pub open_warn_ratio_milli: u64,
     /// LN-5 (#422): the rows of one page of a history read.
     pub history_page_rows: u64,
+    /// #422 LN-TUNE: how long a caller waits for one reply of the ledger writer.
+    pub writer_reply_timeout_ms: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -587,12 +606,11 @@ impl LedgerObserverConfig {
                 ConfigValueProblem::SectionCheck,
             ));
         }
-        // #411 A51: a read stops before its caller stops waiting for it, and the close waits
-        // longer than one read.
+        // #411 A51: a read stops before its caller stops waiting for it (#422 LN-TUNE: the
+        // reply limit in effect), and the close waits longer than one read.
+        let writer_reply_timeout_ms = reader.duration(WRITER_REPLY_TIMEOUT_MS)?;
         let read_budget_ms = reader.duration(READ_BUDGET_MS)?;
-        if read_budget_ms == 0
-            || i64::try_from(read_budget_ms).unwrap_or(i64::MAX) >= WRITER_REPLY_TIMEOUT_MS
-        {
+        if read_budget_ms == 0 || read_budget_ms >= writer_reply_timeout_ms {
             return Err(invalid(READ_BUDGET_MS, ConfigValueProblem::SectionCheck));
         }
         let close_timeout_ms = reader.duration(CLOSE_TIMEOUT_MS)?;
@@ -623,6 +641,7 @@ impl LedgerObserverConfig {
             open_timeout_ms: reader.duration(OPEN_TIMEOUT_MS)?,
             open_warn_ratio_milli: reader.count(OPEN_WARN_RATIO_MILLI)?,
             history_page_rows: reader.count(HISTORY_PAGE_ROWS)?,
+            writer_reply_timeout_ms,
         })
     }
 }

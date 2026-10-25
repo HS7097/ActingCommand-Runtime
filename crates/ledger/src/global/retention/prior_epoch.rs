@@ -491,7 +491,7 @@ impl super::super::GlobalLedger {
             )?;
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
-                .min(super::super::COMMAND_TIMEOUT);
+                .min(self.reply_timeout);
             let next = receiver.recv_timeout(remaining).map_err(|error| {
                 invalid(match error {
                     std::sync::mpsc::RecvTimeoutError::Timeout => {

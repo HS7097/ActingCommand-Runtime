@@ -14,7 +14,7 @@ use actingcommand_contract::{
 use std::collections::{BTreeMap, BTreeSet};
 
 mod views;
-pub(super) use views::{PageSelection, page_bounds};
+pub(super) use views::{PageContext, PageSelection, page_bounds, project_selected};
 
 /// The closed Lab link paths are shared by the in-memory and SQLite selectors.
 #[derive(Clone, Copy)]
