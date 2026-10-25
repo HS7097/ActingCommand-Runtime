@@ -155,6 +155,15 @@ fn assert_only_x_fenced(host: &RuntimeHost, x_alias: &str, x: InstanceId, y_alia
     }
 }
 
+/// Closes the host of a test whose injected close failure may still sit on a session X holds:
+/// the shutdown's close of that session then fails with the backend's close code
+/// (`lifecycle.rs`), which is the fault's own record, not this test's subject.
+fn close_after_injected_close_failure(host: RuntimeHost) {
+    if let Err(error) = host.close() {
+        assert!(error.code().ends_with("_close_failed"), "{error:?}");
+    }
+}
+
 /// Neither instance is fenced.
 fn assert_none_fenced(host: &RuntimeHost, x_alias: &str, y_alias: &str) {
     assert_eq!(status_fence(host, x_alias), None, "X is not fenced");
@@ -664,7 +673,7 @@ fn iso2_f_an_application_stop_failing_with_another_kernel_code_fences_x() {
         assert_only_x_fenced(&fixture.host, X_ALIAS, fixture.x, Y_ALIAS);
         assert_run_completes(&fixture.host, Y_ALIAS, &fixture.y_package, 4200);
         drop(client);
-        fixture.host.close().expect("close host");
+        close_after_injected_close_failure(fixture.host);
     }
 }
 
@@ -726,7 +735,7 @@ fn iso2_g_a_failed_pre_close_in_the_emulator_rung_lets_the_restart_go_on() {
         "Y is not fenced"
     );
     assert_run_completes(&fixture.host, Y_ALIAS, &fixture.y_package, 4201);
-    fixture.host.close().expect("close host");
+    close_after_injected_close_failure(fixture.host);
 }
 
 /// A host whose X is emulator-controlled and configured for the autostart, beside Y.
@@ -814,7 +823,7 @@ fn iso2_h_a_failed_pre_close_in_the_autostart_lets_the_start_go_on() {
         "Y is not fenced"
     );
     assert_run_completes(&fixture.host, Y_ALIAS, &fixture.y_package, 4203);
-    fixture.host.close().expect("close host");
+    close_after_injected_close_failure(fixture.host);
 }
 
 /// i (C31): an operator's restart of X pre-closes X's retained session, and the close fails with
@@ -860,7 +869,7 @@ fn iso2_i_a_failed_pre_close_in_an_operator_restart_lets_the_restart_go_on() {
     assert_running(&fixture.host);
     assert_none_fenced(&fixture.host, X_ALIAS, Y_ALIAS);
     assert_run_completes(&fixture.host, Y_ALIAS, &fixture.y_package, 4206);
-    fixture.host.close().expect("close host");
+    close_after_injected_close_failure(fixture.host);
 }
 
 /// j (D54, C32): X and Y both capture through the Nemu IPC, so a pause closes X's session. The
@@ -894,7 +903,7 @@ fn iso2_j_a_failed_session_close_at_a_pause_lets_the_pause_hold() {
     assert_running(&fixture.host);
     assert_none_fenced(&fixture.host, X_ALIAS, Y_ALIAS);
     assert_run_completes(&fixture.host, Y_ALIAS, &fixture.y_package, 4209);
-    fixture.host.close().expect("close host");
+    close_after_injected_close_failure(fixture.host);
 }
 
 /// k (E22): handset X leaves `device` for `offline`; closing its retained session fails with
@@ -978,7 +987,7 @@ fn iso2_k_a_failed_session_close_at_a_handset_link_loss_lets_the_handset_wait() 
     assert_running(&host);
     assert_none_fenced(&host, POLICY_INSTANCE_ALIAS, POLICY_INSTANCE_ALIAS_B);
     assert_run_completes(&host, POLICY_INSTANCE_ALIAS_B, &other_package, 4211);
-    host.close().expect("close host");
+    close_after_injected_close_failure(host);
 }
 
 /// l (B35): X and Y both capture through the Nemu IPC, so X's session closes at its lease end.
@@ -1017,5 +1026,5 @@ fn iso2_l_a_failed_session_close_at_a_lease_end_ends_the_lease() {
     assert_none_fenced(&fixture.host, X_ALIAS, Y_ALIAS);
     assert_run_completes(&fixture.host, Y_ALIAS, &fixture.y_package, 4212);
     drop(client);
-    fixture.host.close().expect("close host");
+    close_after_injected_close_failure(fixture.host);
 }

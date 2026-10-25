@@ -314,10 +314,10 @@ report, which the host aborts for a fatal failure. Since ISO-2 a capture of the 
 session (ISO-M row A01) and a failed geometry read (A03) fail the run non-fatally; a fatal
 input failure (E02) keeps its severity and latches nothing.
 
-**Device and kernel failures** (ISO-2; R1, R2): a failure of the execution kernel (the device,
-its session, its capture and input backends) concerns only the session's instance:
-`RuntimeHostError::execution` tags it `Instance`, of the instance it names, else of its
-boundary's, and keeps the kernel's code and severity. A kernel code on the Global list below
+**Device and kernel failures** (ISO-2, Runtime 0.12.13; R1, R2): a failure of the execution
+kernel (the device, its session, its capture and input backends) concerns only the session's
+instance: `RuntimeHostError::execution` tags it `Instance`, of the instance it names, else of
+its boundary's, and keeps the kernel's code and severity. A kernel code on the Global list below
 (the session registry, an OS thread) stays `Global`. So:
 - a scheduled run, a host package run (a startup package, a ladder rung), a handset's link
   step and an emulator control whose failure would stop the Runtime fence that instance
