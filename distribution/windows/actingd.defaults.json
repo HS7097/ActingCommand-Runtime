@@ -461,6 +461,10 @@
     "restart_attempts": 3,
     "restart_window_ms": 1800000
   },
+  "standard_packs": {
+    "check_interval_ms": 60000,
+    "cached_generations": 1
+  },
   "watchdog": {
     "start_window_ms": 900000
   },

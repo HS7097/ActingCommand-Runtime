@@ -389,7 +389,16 @@ impl HostShared {
             let base = policy
                 .load_generation(proposal.base_catalog_hash())
                 .map_err(proposal_request_failure)?;
-            let prepared = prepare_proposal(base.generation(), base.sources(), proposal)
+            // ROUT-L RL-1b (model §3.5): a composed generation keeps no source documents, and
+            // only the scheduler workbench writes the active generation in composer mode.
+            let sources = base.sources().ok_or_else(|| {
+                proposal_request_failure(RuntimeHostError::request(
+                    HostCode::ProposalBaseCatalogUnavailable,
+                    ContractLocation::PromoteProposal,
+                    RuntimeErrorCode::InvalidRequest,
+                ))
+            })?;
+            let prepared = prepare_proposal(base.generation(), sources, proposal)
                 .map_err(proposal_request_failure)?;
             (prepared, policy.active_generation())
         };
@@ -615,12 +624,19 @@ impl HostShared {
             })?;
             let (report_reference, prepared_artifact) =
                 self.prepare_or_reuse_strategic_report(&bytes)?;
-            let proposal =
-                build_strategy_proposal(&projection, loaded.sources(), report_reference.clone())?;
+            // ROUT-L RL-1b (model §3.5): a composed generation keeps no source documents, so the
+            // report proposes no catalog change; the scheduler workbench writes the rules.
+            let proposal = match loaded.sources() {
+                Some(sources) => {
+                    build_strategy_proposal(&projection, sources, report_reference.clone())?
+                }
+                None => None,
+            };
             let preview = proposal
                 .as_ref()
-                .map(|proposal| {
-                    prepare_proposal(loaded.generation(), loaded.sources(), proposal)
+                .zip(loaded.sources())
+                .map(|(proposal, sources)| {
+                    prepare_proposal(loaded.generation(), sources, proposal)
                         .and_then(|prepared| prepared.into_ready().map(|(preview, _)| preview))
                 })
                 .transpose()?;

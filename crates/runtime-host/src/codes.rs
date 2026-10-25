@@ -1011,6 +1011,9 @@ actingcommand_contract::outcome_codes! {
         PolicyOutcomeTerminalNotUnique => "policy_outcome_terminal_not_unique": error / none,
         PolicyPoolAuthorityConflict => "policy_pool_authority_conflict": error / none,
         PolicyPoolBindingInvalid => "policy_pool_binding_invalid": error / none,
+        // ROUT-L RL-1b (RL-1a review, #386 6399836824 item 1): a configured static pool reading
+        // names a pool no composed game declares; it is left out of the evaluation (`pool_id`).
+        PolicyPoolReadingUnused => "policy_pool_reading_unused": warning / none,
         PolicyReasonChainMismatch => "policy_reason_chain_mismatch": error / none,
         PolicyRecomputePositionRegressed => "policy_recompute_position_regressed": error / none,
         PolicyRecomputeProjectionInvalid => "policy_recompute_projection_invalid": error / none,

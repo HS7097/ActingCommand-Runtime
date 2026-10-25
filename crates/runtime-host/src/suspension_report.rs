@@ -1118,20 +1118,23 @@ fn clock_slots(
         // Workflow #372 K5: a record of an id the configured catalog's task continues settles
         // against the next admission of that id or of that task.
         let next_dispatch = payload.task_id().and_then(|task_id| {
-            [Some(task_id), catalog.continued_by(task_id)]
-                .into_iter()
-                .flatten()
-                .filter_map(|id| {
-                    dispatches
-                        .get(&(id.to_owned(), payload.instance_id().to_owned()))
-                        .and_then(|admitted| {
-                            admitted
-                                .iter()
-                                .find(|dispatch| dispatch.sequence > event.sequence())
-                                .copied()
-                        })
-                })
-                .min_by_key(|dispatch| dispatch.sequence)
+            [
+                Some(task_id),
+                catalog.continued_by_on(task_id, payload.instance_id()),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|id| {
+                dispatches
+                    .get(&(id.to_owned(), payload.instance_id().to_owned()))
+                    .and_then(|admitted| {
+                        admitted
+                            .iter()
+                            .find(|dispatch| dispatch.sequence > event.sequence())
+                            .copied()
+                    })
+            })
+            .min_by_key(|dispatch| dispatch.sequence)
         });
         let signal = SlotSignal {
             sequence: event.sequence(),

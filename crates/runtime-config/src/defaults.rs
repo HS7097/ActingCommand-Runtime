@@ -9,7 +9,7 @@
 //! AO-1 adds `ledger_observer`; Workflow #398 RD-2 adds `device_link`; Workflow #398 RD-5b adds
 //! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
 //! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
-//! `execution`).
+//! `execution`; ROUT-L RL-1b adds `standard_packs`, the scheduler workbench's two keys).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
@@ -21,6 +21,7 @@ use crate::performance::PerformanceFile;
 use crate::recovery_ladder::RecoveryLadderFile;
 use crate::resolve::member;
 use crate::scheduling::SchedulingFile;
+use crate::standard_packs::StandardPacksDefaultsFile;
 use crate::startup_discovery::StartupDiscoveryFile;
 use crate::table::find_row;
 use crate::touch::TouchFile;
@@ -74,6 +75,9 @@ pub struct DefaultsFile {
     /// PERF-B1 (Workflow #407 B1).
     #[serde(default)]
     pub execution: Option<ExecutionFile>,
+    /// ROUT-L RL-1b: `check_interval_ms` and `cached_generations` (no root).
+    #[serde(default)]
+    pub standard_packs: Option<StandardPacksDefaultsFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

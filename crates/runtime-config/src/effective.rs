@@ -529,6 +529,15 @@ impl EffectiveConfig {
         scheduling::lift_check_min_interval_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// ROUT-L RL-1b (frozen model v1.0 §3.8): `standard_packs.check_interval_ms` and
+    /// `standard_packs.cached_generations` in effect, read at each check of the scheduler
+    /// workbench.
+    pub fn standard_pack_workbench(
+        &self,
+    ) -> Result<crate::StandardPackWorkbenchConfig, ConfigFailure> {
+        crate::standard_packs::workbench(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-3: the `scheduling.pack_admission` keys in effect (the admission check of
     /// `check-config` and of the background after start, and the suspend codes).
     pub fn pack_admission(&self) -> Result<PackAdmissionConfig, ConfigFailure> {

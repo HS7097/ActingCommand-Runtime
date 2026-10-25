@@ -159,6 +159,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // ROUT-L RL-1b (frozen model v1.0 §3.8): this build's scheduler workbench composes the
+        // standard packs' `schedule.json` (composer mode, without `policy.catalog`); a pack
+        // that requires it is placed only on a Runtime that names it.
+        subsystem(
+            "standard_pack_schedule",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
     let explicit_or_default = |present: bool| {

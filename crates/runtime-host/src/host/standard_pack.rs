@@ -68,13 +68,20 @@ type Registered = (BTreeSet<(String, String)>, BTreeMap<String, String>);
 pub(super) struct StandardPackRoots {
     root: Option<PathBuf>,
     registered: Mutex<BTreeMap<String, Registered>>,
+    /// ROUT-L RL-1b: the scheduler workbench, present when the configuration names no catalog
+    /// (composer mode); `None` keeps the configured catalog path as it was.
+    pub(super) schedule: Option<super::standard_pack_schedule::StandardPackWorkbench>,
 }
 
 impl StandardPackRoots {
-    pub(super) fn new(root: Option<PathBuf>) -> Self {
+    pub(super) fn new(
+        root: Option<PathBuf>,
+        schedule: Option<super::standard_pack_schedule::StandardPackWorkbench>,
+    ) -> Self {
         Self {
             root,
             registered: Mutex::new(BTreeMap::new()),
+            schedule,
         }
     }
 
@@ -165,7 +172,7 @@ pub(super) struct GameRoot {
 }
 
 /// Why a game root (or the root itself) cannot be used.
-enum RootFailure {
+pub(super) enum RootFailure {
     Invalid {
         path: PathBuf,
         issue: StandardPackRootIssue,
@@ -202,7 +209,7 @@ impl RootFailure {
         }
     }
 
-    fn outcome(&self, game: Option<&str>) -> Outcome {
+    pub(super) fn outcome(&self, game: Option<&str>) -> Outcome {
         self.values(
             game,
             Outcome::new(self.code()).operation(HostLocation::StandardPackRead),
@@ -223,7 +230,7 @@ impl RootFailure {
 }
 
 /// A root file's bytes; `None` when the file does not exist.
-fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure> {
+pub(super) fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -586,7 +593,7 @@ impl HostShared {
     /// Records `standard_pack_registered` when `registry` differs from the one last read for
     /// `game` (the first read included), its return-home packages included (Workflow #373
     /// NAV-3a), and remembers it (§4.3).
-    fn note_standard_pack_registry(
+    pub(super) fn note_standard_pack_registry(
         &self,
         game: &str,
         registry: &StandardPackRegistry,

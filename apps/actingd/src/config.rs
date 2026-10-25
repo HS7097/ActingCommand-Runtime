@@ -577,8 +577,17 @@ struct AgentDispatcherConfigFile {
 struct PolicyConfigFile {
     facts: EvaluationFacts,
     resources: EvaluationResources,
-    catalog: PolicyCatalogConfigFile,
+    /// ROUT-L RL-1b (frozen model v1.0 §3.3, §6.4; a dual source for one release): absent means
+    /// composer mode, in which the scheduler workbench composes the rules from the standard
+    /// packs of the games in use (`standard_packs.root` is then required), and
+    /// `catalog_approval_ids` and `procedure_manifest` are absent or empty.
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): an
+    // earlier Runtime refuses a file without it.
+    #[serde(default)]
+    catalog: Option<PolicyCatalogConfigFile>,
+    #[serde(default)]
     catalog_approval_ids: Vec<String>,
+    #[serde(default)]
     procedure_manifest: Vec<ProcedureBindingConfigFile>,
     /// Workflow #361 A: the explicit transition to another catalog id or to a generation that
     /// was active before; absent means the forward-only rule.
@@ -993,7 +1002,8 @@ pub(super) fn validate_resource_packages(
 
 pub(super) struct PolicyBootstrap {
     pub(super) catalog_approval_ids: Vec<String>,
-    pub(super) catalog: CatalogSources,
+    /// ROUT-L RL-1b: `None` in composer mode, where the scheduler workbench composes the rules.
+    pub(super) catalog: Option<CatalogSources>,
     /// Workflow #361 A: the configured `replace` transition, if any.
     pub(super) catalog_transition: Option<CatalogTransitionRequest>,
     pub(super) scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
@@ -1456,6 +1466,20 @@ impl ActingdConfigFile {
                 }
             })
             .transpose()?;
+        // ROUT-L RL-1b (frozen model v1.0 §3.6): composer mode reads the rules from the
+        // standard packs, so it requires their root.
+        if policy
+            .as_ref()
+            .is_some_and(|policy| policy.catalog.is_none())
+            && standard_packs_root.is_none()
+        {
+            let failure = actingcommand_runtime_config::ConfigFailure::invalid_value(
+                actingcommand_runtime_config::STANDARD_PACKS_ROOT,
+                actingcommand_runtime_config::ConfigValueProblem::SectionCheck,
+            );
+            *refused = Some(failure.outcome());
+            return Err(failure.failure_code().code());
+        }
         // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
         // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections; P-c:
         // the `performance` section; #386 SR-1: `scheduling`; #389 U-2: the two Lab options;
@@ -1552,8 +1576,13 @@ impl ActingdConfigFile {
             // was cut before its first task event; the host tells them apart by these refs.
             host = host
                 .with_policy_inputs(policy.inputs)
-                .with_procedure_manifest(policy.procedure_manifest)
                 .with_scheduled_procedures(policy.scheduled_tasks.keys().cloned());
+            // ROUT-L RL-1b: without a configured catalog the scheduler workbench composes the
+            // rules and builds the manifest from the composition.
+            host = match policy.procedure_manifest {
+                Some(manifest) => host.with_procedure_manifest(manifest),
+                None => host.with_standard_pack_schedule(true),
+            };
             Some(PolicyBootstrap {
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
@@ -1650,9 +1679,12 @@ pub(super) fn env_overrides(
 
 struct PolicyAssembly {
     inputs: PolicyInputSnapshot,
-    procedure_manifest: ProcedureManifest,
+    /// ROUT-L RL-1b: `None` in composer mode, where the workbench builds the manifest from the
+    /// composition.
+    procedure_manifest: Option<ProcedureManifest>,
     catalog_approval_ids: Vec<String>,
-    catalog: CatalogSources,
+    /// ROUT-L RL-1b: `None` in composer mode.
+    catalog: Option<CatalogSources>,
     catalog_transition: Option<CatalogTransitionRequest>,
     scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
     scheduled_instance_scopes: Vec<(String, String)>,
@@ -1662,6 +1694,30 @@ struct PolicyAssembly {
 
 impl PolicyConfigFile {
     fn assemble(self, source_root: &Path) -> Result<PolicyAssembly, Code> {
+        let Some(configured_catalog) = self.catalog else {
+            // ROUT-L RL-1b (model §3.3, §3.5): composer mode names no catalog, no approval and
+            // no procedure binding; the scheduler workbench composes all three.
+            if !self.catalog_approval_ids.is_empty() {
+                return Err(ActingdCode::PolicyCatalogApprovalMismatch.code());
+            }
+            if !self.procedure_manifest.is_empty() {
+                return Err(ActingdCode::ProcedureManifestSizeInvalid.code());
+            }
+            if self.catalog_transition.is_some() {
+                return Err(ActingdCode::CatalogTransitionInvalid.code());
+            }
+            let monitor = self.monitor.unwrap_or_default().parameters()?;
+            return Ok(PolicyAssembly {
+                inputs: PolicyInputSnapshot::new(self.facts, self.resources),
+                procedure_manifest: None,
+                catalog_approval_ids: Vec::new(),
+                catalog: None,
+                catalog_transition: None,
+                scheduled_tasks: BTreeMap::new(),
+                scheduled_instance_scopes: Vec::new(),
+                monitor,
+            });
+        };
         if self.procedure_manifest.is_empty() || self.procedure_manifest.len() > MAX_TASKS {
             return Err(ActingdCode::ProcedureManifestSizeInvalid.code());
         }
@@ -1678,7 +1734,7 @@ impl PolicyConfigFile {
         }
         let procedure_manifest = ProcedureManifest::new(bindings)
             .map_err(|_| ActingdCode::ProcedureManifestInvalid.code())?;
-        let catalog = self.catalog.sources(source_root)?;
+        let catalog = configured_catalog.sources(source_root)?;
         let compiled =
             compile_catalog(&catalog).map_err(|_| SharedCode::PolicyCatalogCompileFailed.code())?;
         let configured_approvals = self
@@ -1758,9 +1814,9 @@ impl PolicyConfigFile {
             .collect();
         Ok(PolicyAssembly {
             inputs: PolicyInputSnapshot::new(self.facts, self.resources),
-            procedure_manifest,
+            procedure_manifest: Some(procedure_manifest),
             catalog_approval_ids: self.catalog_approval_ids,
-            catalog,
+            catalog: Some(catalog),
             catalog_transition,
             scheduled_tasks,
             scheduled_instance_scopes,

@@ -716,6 +716,12 @@ fn initialize_policy(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
 ) -> Result<PolicyCycleExecution, ActingdError> {
+    // ROUT-L RL-1b (frozen model v1.0 §3.3, §3.5): in composer mode the first cycle's workbench
+    // check composes the standard packs' rules and activates them; nothing is planned, approved
+    // or transcribed.
+    let Some(catalog) = policy.catalog.as_ref() else {
+        return execute_policy_cycle(host, policy, PolicyTrigger::Recovery);
+    };
     // Workflow #361 C2: plan and check everything first; the catalog pointer moves only after
     // every check passed, so a refused configuration leaves no catalog event behind. The plan
     // reads the host's complete ledger-verified approval projection (Workflow #191 D2), builds
@@ -724,7 +730,7 @@ fn initialize_policy(
     // the planned catalog supersedes (Workflow #330 H2, #361 A).
     let plan = host
         .plan_policy_catalog_transition(
-            &policy.catalog,
+            catalog,
             policy.catalog_transition.as_ref(),
             &policy.catalog_approval_ids,
         )
@@ -859,9 +865,18 @@ fn execute_policy_cycle_with(
         let refresh_request = host
             .fact_refresh_request(intent)
             .map_err(ActingdError::runtime)?;
+        // ROUT-L RL-1b (model §3.4): a composed procedure runs its package as the game's registry
+        // places it when it is dispatched, on the instance's own backend.
+        let composed_request = if scheduled_task.is_none() && refresh_request.is_none() {
+            host.standard_pack_request(&intent.procedure_ref)
+                .map_err(ActingdError::runtime)?
+        } else {
+            None
+        };
         let scheduled_request = scheduled_task
             .map(|task| &task.request)
-            .or(refresh_request.as_ref());
+            .or(refresh_request.as_ref())
+            .or(composed_request.as_ref());
         let admission_context = PolicyAdmissionContext {
             fact_ledger_position: intent.input_ledger_position,
             fact_snapshot_id: intent.fact_snapshot_id.clone(),
@@ -2627,7 +2642,7 @@ mod tests {
         .expect("start formal-provider runtime");
         let policy = PolicyBootstrap {
             catalog_approval_ids: vec!["approval:fixture-a".to_string()],
-            catalog,
+            catalog: Some(catalog),
             catalog_transition: None,
             scheduled_tasks: BTreeMap::from([(
                 "procedure.observe".to_string(),
