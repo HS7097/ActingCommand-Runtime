@@ -213,6 +213,27 @@ V1 rejects unknown fields and any schema version other than the exact supported 
 
 The `env.*` namespace remains an ordinary fact-key family. Existing execution substitutions that use `{env:...}` remain an execution-boundary concern; scheduling predicates reference the same stored values through typed `fact` predicates without changing that substitution syntax.
 
+## Catalog Source
+
+ROUT-L (frozen model v1.0 §3.1–§3.2; slice RL-1a; [standard-pack-schedule.md](../standard-pack-schedule.md)).
+A catalog comes from one of two sources:
+
+- **The configuration** (today's path): `policy.catalog` names the four documents, and
+  `policy.catalog_approval_ids` and `policy.procedure_manifest` bind them. Everything below
+  ("Catalog Lineage", "Scope And Overrides") describes that path. RL-C removes it.
+- **The standard packs**: each game root may hold `schedule.json`, the game's rules without
+  scope, instance or approval. The policy crate's `compose_standard_pack_rules` composes the
+  games of the bound instances into one V2 catalog `{catalog_id: "standard-packs",
+  catalog_version, approval_refs: []}`: one copy of each rule and item per bound instance, the
+  file's ids with one instance per (game, server) and `<id>@<alias>` ids, with references
+  rewritten and `continues_from` the file's id, with two or more. The composed documents are
+  bounded by the 4 MiB catalog bound, not 1 MiB each (`compile_composed_catalog`); every other
+  compiler rule applies. A composition without rules is a valid empty catalog. The scheduler
+  workbench that loads, composes and activates it is RL-1b's.
+
+Both sources compile into the same `CompiledCatalog` and are evaluated alike: the evaluator
+orders candidates by score, tie-breaker, task id and instance, never by document order.
+
 ## Catalog Lineage
 
 Workflow #361 A. A state root is not bound to one catalog id. The generations that were active

@@ -39,6 +39,7 @@
 //! No record names a device serial: a handset is its label `handset:<alias>`.
 
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
+use super::failure_scope::Contained;
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
 use super::*;
@@ -802,9 +803,15 @@ impl HostShared {
             };
             match result {
                 Ok(()) => {}
+                // ISO-M (#419) R0.5, ISO-2 (row E22): one handset's step of this pass. A failure
+                // that would stop the Runtime goes to the one decision point against the
+                // handset: a `Global` one latches and ends the pass; an `Instance` one fences that
+                // handset, and the next action goes on.
                 Err(error) if error.is_fatal() => {
-                    self.fatal.mark(error.clone())?;
-                    return Err(error);
+                    match self.contain_failure(error, Some(instance_id), links)? {
+                        Contained::Latched(error) => return Err(error),
+                        Contained::Fenced(_) | Contained::Failed(_) => {}
+                    }
                 }
                 Err(error) => self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::OperationCleanup,
@@ -870,11 +877,16 @@ impl HostShared {
         drop(admission);
         match closed {
             Ok(()) => Ok(()),
-            Err(close_error) => Err(self.retained_close_failure(
+            // ISO-2 (#419, ISO-M row E22): a close whose resources were confirmed is gone and
+            // its failure recorded; the handset waits as after a clean close.
+            Err(close_error) => match self.settle_retained_close_failure(
                 HostLocation::DeviceLinkSessionClose,
                 instance_id,
                 &close_error,
-            )?),
+            )? {
+                None => Ok(()),
+                Some(error) => Err(error),
+            },
         }
     }
 

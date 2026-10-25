@@ -194,18 +194,22 @@ impl HostShared {
                 thread::sleep(Duration::from_millis(spec.interval_ms()));
             }
         }
+        // ISO-2 (#419, ISO-M row E48): an invariant of this sequence's own result is the
+        // observed instance's failure alone; its boundary fences that instance.
         let sequence = CaptureSequence::new(spec, observations).map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
                 HostCode::CaptureSequenceResultInvalid,
                 ContractLocation::CaptureSequence,
                 RuntimeErrorCode::RuntimeHalted,
+                resolved.instance_id(),
             ))
         })?;
         let terminal_event = last_terminal.ok_or_else(|| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
                 HostCode::CaptureSequenceTerminalMissing,
                 ContractLocation::CaptureSequence,
                 RuntimeErrorCode::RuntimeHalted,
+                resolved.instance_id(),
             ))
         })?;
         Ok(OperationSuccess {
@@ -602,12 +606,16 @@ impl HostShared {
                 .map_err(RequestFailure::poison_without_terminal)?,
             reference.project(true),
         )
+        // ISO-2 (#419, ISO-M row E48): the observed instance's failure alone.
         .map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            let mut error = RuntimeHostError::fatal(
                 HostCode::ReadonlyObservationInvalid,
                 ContractLocation::ObserveReadonly,
                 RuntimeErrorCode::RuntimeHalted,
-            ))
+            )
+            .instance_scoped();
+            error.lifecycle.instance_id = links.instance_id().copied();
+            RequestFailure::poison_without_terminal(error)
         })?;
         self.append_capture_completed(
             links.clone(),
@@ -645,11 +653,14 @@ impl HostShared {
                 },
                 owner,
             )
+            // ISO-2 (#419, ISO-M rows E14, E15): a commit refused by the instance's session
+            // fails only this observe.
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                RequestFailure::frame_handoff(
                     HostLocation::CommitCaptureInputFrame,
                     &error,
-                ))
+                    links.instance_id().copied(),
+                )
             })?;
         Ok(CompletedReadonlyObservation {
             observation,

@@ -1267,7 +1267,7 @@ fn failures_through(
         .saturating_add(1)
 }
 
-/// Workflow #422 LN-4 (register §1.183 LN4-7): per (task, instance), the dispatches its value
+/// Workflow #422 LN-4 (register §1.184 LN4-7): per (task, instance), the dispatches its value
 /// record names, in intent order: every open one, the latest completed one and, for a task of
 /// the remedy journal (`remedy_task`), every admitted one the journal keeps.
 fn journal_records_of(
@@ -1675,7 +1675,7 @@ impl PolicyHost {
         ))
     }
 
-    /// Workflow #422 LN-4 (register §1.183 LN4-7): the dispatches each pair's value record names
+    /// Workflow #422 LN-4 (register §1.184 LN4-7): the dispatches each pair's value record names
     /// of `seen`; a task of the remedy journal (one that declares a remedy or provides a
     /// capability) has its runs named.
     fn journal_records(

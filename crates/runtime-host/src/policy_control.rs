@@ -161,7 +161,7 @@ impl PolicyControlState {
     /// Workflow #422 LN-3 (register L7, L14): the value record of every key this state holds,
     /// each with the key's complete state. `dispatch_clocks` are the admission times of the
     /// pairs' admitted dispatches that are not completed yet, per (task, instance); the policy
-    /// host keeps them. Workflow #422 LN-4 (register §1.183 LN4-7): `dispatches` are the
+    /// host keeps them. Workflow #422 LN-4 (register §1.184 LN4-7): `dispatches` are the
     /// dispatches the policy host's journal keeps per pair, which its record names.
     pub(crate) fn value_records(
         &self,
@@ -314,7 +314,7 @@ impl PolicyControlState {
     /// Workflow #422 LN-3 (register L7, L14): applies one value record; the record replaces its
     /// key's whole state. LN-4's start load runs it over the records the index names, in ledger
     /// order. The dispatch clock is the policy host's, not this state's. Workflow #422 LN-4
-    /// (register §1.183 LN4-2): the record carries the Workflow #372 K5 orders, `failure_settled`
+    /// (register §1.184 LN4-2): the record carries the Workflow #372 K5 orders, `failure_settled`
     /// and the retry round's `opened`, and the counters behind them go on after the largest one
     /// loaded; a record without a round's order (LN-3's) takes the next one in the order applied.
     pub(crate) fn apply_value_record(

@@ -2587,15 +2587,18 @@ impl HostShared {
                     &admission,
                 ) {
                     Ok(Ok(())) => Ok(()),
-                    // Workflow #403: an unconfirmed close fenced the instance; the pause fails
-                    // with the fence's non-fatal failure.
-                    Ok(Err(close_error)) => Err(scheduling_pause_release_failure(
-                        self.retained_close_failure(
-                            HostLocation::ClosePausedInstanceSession,
-                            instance_id,
-                            &close_error,
-                        )?,
-                    )),
+                    // ISO-2 (#419, ISO-M rows D54, C32): a close whose resources were confirmed
+                    // is gone and its failure recorded; the pause holds. Workflow #403: an
+                    // unconfirmed close fenced the instance; the pause fails with the fence's
+                    // non-fatal failure.
+                    Ok(Err(close_error)) => match self.settle_retained_close_failure(
+                        HostLocation::ClosePausedInstanceSession,
+                        instance_id,
+                        &close_error,
+                    )? {
+                        None => Ok(()),
+                        Some(error) => Err(scheduling_pause_release_failure(error)),
+                    },
                     Err(error) => Err(scheduling_pause_release_failure(error)),
                 };
             }

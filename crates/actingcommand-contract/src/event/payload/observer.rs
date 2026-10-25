@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 /// The most day entries a decision-memory record holds (register L7).
 pub const MAX_POLICY_CONTROL_STATE_DAYS: usize = 32;
 
-/// Workflow #422 LN-4 (register §1.183 LN4-7): the most dispatches a decision-memory record names,
+/// Workflow #422 LN-4 (register §1.184 LN4-7): the most dispatches a decision-memory record names,
 /// twice a remedy journal's runs (Workflow #411 B15, at most 64), which leaves room for the open
 /// dispatches beside them.
 pub const MAX_POLICY_CONTROL_STATE_DISPATCHES: usize = 128;
@@ -416,7 +416,7 @@ pub struct PolicyFailureStreakRecord {
 }
 
 /// The normal admission that opened a dispatch pair's retry round (register L7).
-/// Workflow #422 LN-4 (register §1.183 LN4-2): `opened` is the round's place in the order the
+/// Workflow #422 LN-4 (register §1.184 LN4-2): `opened` is the round's place in the order the
 /// rounds were opened (Workflow #372 K5), so a task reads the latest round of its accounting
 /// group after a restart from the records alone; absent in LN-3's records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -436,7 +436,7 @@ pub struct PolicyDispatchClockRecord {
     pub admitted_at_unix_ms: u64,
 }
 
-/// Workflow #422 LN-4 (register §1.183 LN4-7): one dispatch the policy host's journal keeps for a
+/// Workflow #422 LN-4 (register §1.184 LN4-7): one dispatch the policy host's journal keeps for a
 /// dispatch pair, by the sequences of its records, so a start reads it by point reads: its intent,
 /// its admission (absent while it is an intent), its completion (absent while it is open) and,
 /// once completed, `failures`, the pair's consecutive failed runs through it (0 after a success).
@@ -485,14 +485,14 @@ pub struct PolicyControlStateRecord {
     pub dispatch_clock: Option<PolicyDispatchClockRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_reruns: Option<PolicyConditionReruns>,
-    /// Workflow #422 LN-4 (register §1.183 LN4-2): the place of the pair's latest settlement
+    /// Workflow #422 LN-4 (register §1.184 LN4-2): the place of the pair's latest settlement
     /// that set or cleared its failure state (a success, or a failure no condition settled) in
     /// the order of all such settlements (Workflow #372 K5), so a task reads the failure state of
     /// its accounting group's latest such run after a restart from the records alone; absent
     /// while the pair has none, and in LN-3's records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_settled: Option<u64>,
-    /// Workflow #422 LN-4 (register §1.183 LN4-7; coordinator ruling 10-26): the dispatches of
+    /// Workflow #422 LN-4 (register §1.184 LN4-7; coordinator ruling 10-26): the dispatches of
     /// the pair the journal keeps resident, in intent order: the open ones, the latest completed
     /// one with the pair's consecutive-failure count, and for a task of the remedy journal its
     /// latest runs. Empty while the pair has none.

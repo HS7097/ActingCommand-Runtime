@@ -17,7 +17,8 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
   does, in this process, with this build's own checks. The repository is read as the **source of
   a standard-package bundle**:
   - the root inputs of `package bundle`: `applications.json`, `maintenance.json` and the root
-    files `pages.json`, `interrupts.json` and `navigation.json` when present;
+    files `pages.json`, `interrupts.json`, `navigation.json` and (ROUT-L RL-1a) `schedule.json`
+    when present;
   - `packs/<package_id>/`, the bundle index v4 `path` form;
   - `declaration-exclusions.json`;
   - `regression/`, the regression cases (their checks arrive with Workflow #411 RV-2a).

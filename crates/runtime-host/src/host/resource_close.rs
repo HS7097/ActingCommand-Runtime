@@ -290,6 +290,17 @@ impl HostShared {
             {
                 Ok(())
             }
+            // ISO-2 (#419, ISO-M row B35): a close at a lease end that failed with its
+            // resources confirmed (the emulator is gone) left nothing held: the kernel took the
+            // session out of its registry, and the close recorded its failure and ended its
+            // step (`retire_instance_resources`). The lease ends. A shutdown keeps its close as
+            // before.
+            Err(error)
+                if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
+                    && !self.fatal.is_shutdown_requested() =>
+            {
+                Ok(())
+            }
             Err(error) => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::execution(HostLocation::CloseExecutionSession, &error),
             )),
@@ -716,10 +727,19 @@ impl HostShared {
         let result = self
             .close_instance_resources_result(&token, connection_id, links)
             .map_err(|failure| *failure.error)?;
-        let confirmed = result
-            .as_ref()
-            .err()
-            .is_none_or(|error| error.resource_quiescence() == Some(ResourceQuiescence::Confirmed));
+        // ISO-2 (#419): outside a shutdown, a close that failed without leaving its resources
+        // unconfirmed ended its step and holds nothing (`retire_instance_resources`), so its
+        // dedicated lease ends too, and the work that asked for the close goes on
+        // (`settle_retained_close_failure`). A shutdown keeps its close as before.
+        let confirmed =
+            result
+                .as_ref()
+                .err()
+                .is_none_or(|error| match error.resource_quiescence() {
+                    Some(ResourceQuiescence::Confirmed) => true,
+                    Some(ResourceQuiescence::Unconfirmed) => false,
+                    None => !self.fatal.is_shutdown_requested(),
+                });
         if acquired && confirmed {
             self.cleanup_token_inner(&token, connection_id, release_reason, None, Some(admission))?;
         }

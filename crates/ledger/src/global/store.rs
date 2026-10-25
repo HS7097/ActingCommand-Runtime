@@ -113,6 +113,13 @@ pub(super) trait LedgerStore: Send + 'static {
         prefixes: &[String],
         work: &ReadWork,
     ) -> GlobalLedgerResult<super::LedgerIndexRecords>;
+    /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.5): the tagged keys under
+    /// `prefixes` with their checked latest records.
+    fn tagged_state(
+        &self,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerTaggedState>;
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -247,6 +254,14 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         work: &ReadWork,
     ) -> GlobalLedgerResult<super::LedgerIndexRecords> {
         Self::index_records(self, role, prefixes, work)
+    }
+
+    fn tagged_state(
+        &self,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerTaggedState> {
+        Self::tagged_state(self, prefixes, work)
     }
 
     fn project_view_page(

@@ -676,7 +676,7 @@ CREATE TABLE ledger_index (
   - Workflow #422 LN-3 adds `monitor/<alias>` (register §1.182 LN3-4): the monitor registry's
     latest applied change of the alias (`runtime_state` `monitor_changed`), or the import for each
     alias it brings (`monitor_imported`). A change that was not applied is not tagged.
-  - Workflow #422 LN-4 (register §1.183 LN4-1) adds three rules:
+  - Workflow #422 LN-4 (register §1.184 LN4-1) adds three rules:
     - `monitor_import` names every import of the monitor registry, with or without instances, so
       the start finds the import the registry compares its journal file with;
     - `wake/<wake id>` also names the latest record of the obligation's session
@@ -758,7 +758,7 @@ CREATE TABLE ledger_index (
     with the same wake.
   - The monitor registry's records already carry an alias's complete state; the index tags them
     `monitor/<alias>` (§11.1).
-- **Settlement order, as built by LN-4** (register §1.183 LN4-2). The Workflow #372 K5 orders
+- **Settlement order, as built by LN-4** (register §1.184 LN4-2). The Workflow #372 K5 orders
   are part of the pair's record: `failure_settled`, the place of the pair's latest settlement
   that set or cleared its failure state (a success, or a failure no condition settled) among all
   such settlements, and the retry round's `opened`, its place among the rounds opened. Both are
@@ -820,7 +820,18 @@ time L that D2 needs (D2 A-7) is the end of step 7.
 | history without the marker (first start of the build that brings AO-5 + AO-6) | `ledger_tagged_state_seeded` (info) | seed once (§11.6) |
 | an index row disagrees with its record | `ledger_tag_index_mismatch` (fatal) | refuse to start |
 
-- **As built by LN-4** (Workflow #422, register §1.183; LEAN-L model §3.2 step 5):
+- **As built by LN-2** (Workflow #422, register §1.183): the instance store runs steps 1–4
+  through `GlobalLedger::tagged_state` over `instance_facts/` and `input_boundary/`. A row
+  agrees with its record when the record has the row's sequence and event id, carries the row's
+  key and its stored hash is `value_sha256`. A loaded publication loads only the records its rows
+  name. For each loaded publication the first later event that would have invalidated it is read
+  through the type index (an input type only when a scope instance's boundary lies after the
+  publication), so an invalidation not written before the stop is the same pending invalidation
+  replay would make; today's reducer applies records and triggers in ledger order. The read
+  volume is the index rows, their point reads and those trigger reads. Steps 5 and 6, lineages,
+  seeding and the other stores are not LN-2's; the decision memory and the monitor are LN-4's.
+
+- **As built by LN-4** (Workflow #422, register §1.184; LEAN-L model §3.2 step 5):
   - The start reads the `lifecycle` row `tagged_state_enabled` first.
   - Each index read is one writer command (`GlobalLedger::index_records`): the rows of one role
     with a key prefix, a point read of each row's record by its sequence, and the checks of
@@ -831,7 +842,7 @@ time L that D2 needs (D2 A-7) is the end of step 7.
       the value records' reducer. The admissions and executions after the records' position (the
       latest value record's sequence, at least the marker's) take effect on the loaded state; the
       earlier ones are in the records already;
-    - **dispatch journal** (register §1.183 LN4-7; coordinator ruling 10-26): each pair's record
+    - **dispatch journal** (register §1.184 LN4-7; coordinator ruling 10-26): each pair's record
       names, by the sequences of their records, the dispatches the journal keeps of it: the open
       ones, the latest completed one with the pair's consecutive-failure count, and for a task of
       the remedy journal its latest runs. Each is read by point reads of its intent, admission and

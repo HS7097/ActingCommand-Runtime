@@ -109,10 +109,13 @@ impl HostShared {
             .min(token.expires_at_monotonic_ms());
         if let Some(control) = &control {
             if control.deadline() == 0 {
-                return Err(RuntimeHostError::fatal(
+                // ISO-2 (#419, ISO-M row E47): the run's own control has no deadline, a fault
+                // of that run's instance alone.
+                return Err(RuntimeHostError::instance_fault(
                     HostCode::NemuInputTaskDeadlineMissing,
                     HostLocation::PrepareNemuInput,
                     RuntimeErrorCode::RuntimeHalted,
+                    token.instance_id(),
                 ));
             }
             hard_deadline = hard_deadline.min(control.deadline());

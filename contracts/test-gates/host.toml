@@ -1926,7 +1926,17 @@ tests = [
 ]
 incident = ["#422 LN-3"]
 
-# LN-4 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §3.6, §5.1 row LN-4; contracts/ledger-observer.md §11.1, §11.5, §11.6; register §1.183): a start without the marker replays once, writes one value record per key and the marker; the next start loads the decision memory, the agent dispatcher and the monitor registry from the records the index names, equal to today's recoveries on the synthetic ledger, and those loads, the dispatch journal among them, read nothing but the index rows, their records and point reads of the dispatches the records name; the dispatch journal is bounded, never by the event count (flat under 10k dispatches); the agent dispatcher's maps are pruned at session end
+# LN-2 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §5.1 row LN-2, §7 A3 and A6; contracts/ledger-observer.md §11.3, §11.5; register §1.183): the instance fact store loads from the tagged `state` rows and equals the whole-ledger replay (active records with their sources, latest_observed, input boundaries, the latest tombstone of each key without an active record, pending invalidations, position) on the synthetic ledger and on fixtures with input boundaries, with no whole-ledger query and no read larger than the tagged rows; a row that disagrees with its record stops the load with the fatal ledger_tag_index_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_a_the_tagged_load_equals_the_replay_on_the_synthetic_ledger",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_b_the_tagged_load_equals_the_replay_with_input_boundaries",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_c_a_doctored_index_row_stops_the_load_with_ledger_tag_index_mismatch",
+]
+incident = ["#422 LN-2"]
+
+# LN-4 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §3.6, §5.1 row LN-4; contracts/ledger-observer.md §11.1, §11.5, §11.6; register §1.184): a start without the marker replays once, writes one value record per key and the marker; the next start loads the decision memory, the agent dispatcher and the monitor registry from the records the index names, equal to today's recoveries on the synthetic ledger, and those loads, the dispatch journal among them, read nothing but the index rows, their records and point reads of the dispatches the records name; the dispatch journal is bounded, never by the event count (flat under 10k dispatches); the agent dispatcher's maps are pruned at session end
 [[gate]]
 coverage = "Y"
 tests = [

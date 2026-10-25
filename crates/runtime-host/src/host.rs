@@ -1729,7 +1729,6 @@ impl RuntimeHost {
             authoritative_policy_outcomes: Mutex::new(BTreeMap::new()),
             procedure_manifest: Mutex::new(config.procedure_manifest),
             verified_materials: Mutex::new(material_read::VerifiedMaterialCache::default()),
-            verified_artifacts: Mutex::new(planning::VerifiedArtifactIndex::default()),
             approval_records: Mutex::new(crate::approval::ApprovalRecordsAt::default()),
             owner: Mutex::new(owner),
             ledger,
@@ -3164,9 +3163,23 @@ impl RuntimeHost {
             Err(failure) => {
                 shared.record_scheduled_policy_failure(context, &failure.error)?;
                 let settlement = shared.complete_scheduled_policy_failure(context, &failure);
-                let error = *failure.error;
-                if failure.poison_runtime {
-                    shared.fatal.mark(error.clone())?;
+                let mut error = *failure.error;
+                // ISO-M (#419) R0.5, ISO-2: the scheduled run's boundary. A failure that would
+                // stop the Runtime (a poison, or a fatal failure actingd's driver stops on) goes
+                // to the one decision point against the run's instance: only a `Global` failure
+                // latches; an `Instance` one fences that instance, and the run fails with the
+                // fence's non-fatal failure, so the driver goes on with the other instances.
+                if failure.poison_runtime || error.is_fatal() {
+                    let links = shared.policy_run_event_links(context)?;
+                    error = match shared.contain_failure(
+                        error,
+                        Some(context.lease_token().instance_id()),
+                        links,
+                    )? {
+                        failure_scope::Contained::Latched(error) => error,
+                        failure_scope::Contained::Fenced(error)
+                        | failure_scope::Contained::Failed(error) => error,
+                    };
                 }
                 if let Err(settlement_error) = settlement {
                     shared.record_scheduled_policy_failure(context, &settlement_error)?;
@@ -4843,9 +4856,7 @@ struct HostShared {
     procedure_manifest: Mutex<Option<ProcedureManifest>>,
     // Whole verified material objects, so chunked reads verify each object once.
     verified_materials: Mutex<material_read::VerifiedMaterialCache>,
-    // Workflow #317 read face: verified artifact references read so far (item C) and the
-    // approval projection last built for a read position (item H).
-    verified_artifacts: Mutex<planning::VerifiedArtifactIndex>,
+    // Workflow #317 read face: the approval projection last built for a read position (item H).
     approval_records: Mutex<crate::approval::ApprovalRecordsAt>,
     ledger: GlobalLedger,
     artifacts: Arc<ArtifactStore>,

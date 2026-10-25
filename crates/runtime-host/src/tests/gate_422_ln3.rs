@@ -123,7 +123,7 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
     let admission = context.admission().clone();
     let activity = &admission.activity;
     let window_end = u64::try_from(activity.local_day + 1).expect("a day") * DAY_MS;
-    // Workflow #422 LN-4 (register §1.183 LN4-7): the record names the open dispatch by the
+    // Workflow #422 LN-4 (register §1.184 LN4-7): the record names the open dispatch by the
     // sequences of its intent and its admission.
     let journal_dispatch = PolicyJournalDispatchRecord {
         intent_sequence: last_sequence(&host, EventType::PolicyDispatchIntent),
@@ -142,7 +142,7 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
         window_runtime_ms: intent.expected_duration_ms,
         active_window: Some(activity.window_id.clone()),
         failure_streak: None,
-        // Workflow #422 LN-4 (register §1.183 LN4-2): the first round this host opened.
+        // Workflow #422 LN-4 (register §1.184 LN4-2): the first round this host opened.
         retry_round: Some(PolicyRetryRoundRecord {
             admission: admission.clone(),
             until_unix_ms: window_end,
@@ -193,7 +193,7 @@ fn ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names
     let PolicyExecutionOutcome::Succeeded { runtime_ms } = settled.outcome else {
         panic!("expected a success")
     };
-    // Workflow #422 LN-4 (register §1.183 LN4-2): the success is the first settlement that set
+    // Workflow #422 LN-4 (register §1.184 LN4-2): the success is the first settlement that set
     // or cleared the pair's failure state.
     let settled_pair = PolicyControlStateRecord {
         window_runtime_ms: runtime_ms,

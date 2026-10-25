@@ -315,6 +315,11 @@ mod gate_411_a64;
 // ISO-1 (#419, ISO-M): the failure scope core: the scope classification, `contain_failure` at a
 // boundary (fence, fail, latch, a failed fence latches) and the receipt's `host_halted` (A54).
 mod gate_419_iso1;
+// ISO-2 (#419, ISO-M): a device or kernel failure of one instance stays with that instance: the
+// scheduled and host package run boundaries, the session, geometry and frame failures, the
+// widened A46 fence and the retained-session closes of the emulator rung, the autostart, an
+// operator's restart, a pause, a handset and a lease end.
+mod gate_419_iso2;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;
@@ -370,6 +375,9 @@ mod gate_406_t3;
 // #412 Lab B-3 S2 (host keys 152 to 155), register §1.162: the host runs one declared operation
 // over the Lab lease and writes its LR-10 records.
 mod gate_412_b3_s2;
+// LN-2 (Workflow #422, LEAN-L model §3.2 step 5): the instance fact store loads from the tagged
+// `state` rows, equal to the whole-ledger replay; a doctored row stops the load.
+mod gate_422_ln2;
 // LN-3 (Workflow #422, LEAN-L model §3.6): each change of the decision memory and each wake
 // obligation writes one value record with the complete state, and its `state` row names it.
 mod gate_422_ln3;

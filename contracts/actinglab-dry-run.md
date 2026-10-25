@@ -206,6 +206,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `resource check-release` | no_effect | | retired (Workflow #411 RV-1): always refused with `resource_check_release_retired` (exit 2), which names `resource verify` |
 | `resource verify` | refused | `dry_run_unsupported` | flag parsing (Workflow #411 RV-1: it writes its work directory and report); no alternative |
 | `standard-pack check` | no_effect | | reads an installed game root only (Workflow #373 NAV-T) |
+| `standard-pack compose` | refused | `dry_run_unsupported` | flag parsing only (ROUT-L RL-1a: it writes a new directory); alternative `standard-pack check` |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |
 | `ledger show` | no_effect | | retired |

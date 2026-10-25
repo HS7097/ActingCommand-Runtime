@@ -7,6 +7,8 @@
 mod canonical;
 mod codes;
 mod compiler;
+// ROUT-L RL-1a: the composer of the standard packs' schedule rules.
+mod compose;
 mod evaluator;
 mod forward;
 mod remedy;
@@ -18,6 +20,7 @@ mod validation;
 
 pub use codes::{PolicyCode, RefreshLimit};
 pub use compiler::*;
+pub use compose::*;
 pub use evaluator::*;
 pub use forward::*;
 pub use remedy::*;
@@ -64,4 +67,7 @@ mod tests {
 
     // SCH-M ED-1 (Workflow #405; SCH-M §3.4 D-12, D-15): the expected duration E.
     mod gate_ed1;
+
+    // ROUT-L RL-1a (frozen model v1.0 §6.1): `schedule.json` v1 and the pure composer.
+    mod gate_rl1a;
 }

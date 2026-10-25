@@ -808,3 +808,59 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ed1::ed1_t6_the_same_snapshot_evaluated_twice_is_identical",
 ]
 incident = ["#405 ED-1"]
+
+# ROUT-L RL-1a (frozen model v1.0 §3.1, §3.2, §6.1 row RL-1a, §6.3, §7.1 A1a; contracts/standard-pack-schedule.md): the neutral catalog-a in the as-is shape, converted by the as-is rules into schedule.json, composes back element by element apart from the descriptor, and both decide alike over a 7-day grid at 5-minute steps
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t1_catalog_a_converted_by_the_as_is_rules_composes_back_and_decides_alike",
+]
+incident = ["#420 ROUT-L RL-1a"]
+
+# ROUT-L RL-1a (frozen model v1.0 §3.2 step 3, §6.1 row RL-1a; contracts/standard-pack-schedule.md): one instance per (game, server) keeps the file's ids; two give <id>@<alias> copies with their references rewritten and continues_from the file's id
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t2_one_instance_keeps_the_ids_and_two_suffix_them_and_continue_the_id",
+]
+incident = ["#420 ROUT-L RL-1a"]
+
+# ROUT-L RL-1a (frozen model v1.0 §3.1 "No instance names", §6.1 row RL-1a; contracts/standard-pack-schedule.md): a scope at any depth or an instance override in schedule.json is refused as schedule_invalid with its JSON pointer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t3_a_scope_or_an_instance_override_in_the_file_is_refused_with_its_pointer",
+]
+incident = ["#420 ROUT-L RL-1a"]
+
+# ROUT-L RL-1a (frozen model v1.0 §3.6, §6.1 row RL-1a; contracts/standard-pack-schedule.md): an unregistered package, an id or a package two games compose, and a requires the Runtime does not name are refused with rule_package_unregistered, rule_id_conflict and schedule_requires_missing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t4_an_unregistered_package_an_id_clash_and_a_missing_requirement_are_refused",
+]
+incident = ["#420 ROUT-L RL-1a"]
+
+# ROUT-L RL-1a (frozen model v1.0 §3.1 "Classification", §6.1 row RL-1a; contracts/standard-pack-schedule.md): an unclassified package is one standard_pack_package_unclassified warning and the rest of the game runs; a held package is not scheduled
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t5_an_unclassified_package_warns_and_a_held_one_is_not_scheduled",
+]
+incident = ["#420 ROUT-L RL-1a"]
+
+# ROUT-L RL-1a (frozen model v1.0 §3.6 "No rules at all is a valid state", §3.5, §6.1 row RL-1a; contracts/standard-pack-schedule.md): no rules, no schedule.json or no bound instance compose a valid empty V2 catalog with no approval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t6_no_rules_compose_a_valid_empty_catalog",
+]
+incident = ["#420 ROUT-L RL-1a"]
+
+# ROUT-L RL-1a (frozen model v1.0 §6.1 row RL-1a; the neutral core): every word of every fixture string of the RL-1a tests is in a closed neutral word list
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t7_no_fixture_names_a_game",
+]
+incident = ["#420 ROUT-L RL-1a"]
