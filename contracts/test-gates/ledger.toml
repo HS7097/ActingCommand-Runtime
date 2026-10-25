@@ -619,3 +619,11 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t5_the_settlement_continuation_reads_its_chain_from_the_store",
 ]
 incident = ["#422 LN-5"]
+
+# LN-DIAG (#422, LEAN-L §3.2 step 5 X4, §6; Alice 10-24 #422 ruling 57; contracts/ledger-store.md "Release source references"): the Release baseline read selects the `state.migrated` records through the event-type index and authenticates each on its own, with the newest row at the authenticated head; it finds the one boundary with its original locator and absence without one, refuses two boundaries (`release_baseline_source_conflict`), a damaged boundary (`ledger_record_mismatch`) and a history short of its head (`ledger_meta_mismatch`), and reads no record it does not select, so the start's `runtime_state` step and the boundary's joint append no longer read the whole history
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::tests::ln_diag_the_release_baseline_read_reads_only_the_records_it_selects",
+]
+incident = ["#422 LN-DIAG"]
