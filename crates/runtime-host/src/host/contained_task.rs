@@ -3898,7 +3898,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             self.run_id.transport(),
                         )
                         .map_err(online_observation::observation_artifact_failure)?,
-                        frame_retention::capture_frame_store_config(),
+                        self.host.capture_frame_store_config(),
                     )
                     .map_err(online_observation::observation_artifact_failure)?,
                 );
@@ -3982,8 +3982,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                             .take()
                                             .expect("capture memory owner prepared"),
                                         CapturePipelineConfig {
-                                            frame_store:
-                                                frame_retention::capture_frame_store_config(),
+                                            frame_store: self.host.capture_frame_store_config(),
                                             retention_class: RetentionClass::DebugFull,
                                             redaction_state: ArtifactRedactionState::NotRequired,
                                             ..CapturePipelineConfig::default()
@@ -9745,21 +9744,24 @@ impl HostShared {
         draft: &ContainedTaskTerminalDraft,
         links: &EventLinksDraft,
     ) -> Result<ContainedTaskTerminalCheck, RequestFailure> {
-        let chain_events = self
-            .ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the run's chain is read from the store page by page at the
+        // head; a long run's records are never one command.
+        let chain_events = crate::recovery_read::read_through_head(
+            &self.ledger,
+            &EventQuery {
                 instance_id: Some(token.instance_id()),
                 correlation_id: Some(request.correlation_id()),
                 task_id: Some(*draft.task_id.transport()),
                 run_id: Some(*draft.run_id.transport()),
                 lease_id: Some(token.lease_id()),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::CheckContainedTaskTerminal,
-                ))
-            })?;
+            },
+        )
+        .map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error(
+                HostLocation::CheckContainedTaskTerminal,
+            ))
+        })?;
         let terminals = chain_events
             .iter()
             .filter_map(|event| match event.payload() {

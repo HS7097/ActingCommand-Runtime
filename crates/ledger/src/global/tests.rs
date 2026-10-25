@@ -2679,6 +2679,8 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         .expect("capture queue"),
     );
     let ledger = GlobalLedger {
+        // LN-5 (#422): the default rows of one page of a history read.
+        history_page_rows: super::history::DEFAULT_HISTORY_PAGE_ROWS,
         sender: Some(sender),
         writer: Some(writer),
         commit_statistics: Arc::new(CommitStatistics::new(0).expect("statistics")),
@@ -2919,3 +2921,6 @@ mod gate_0121_a4;
 // its position.
 #[path = "tests/gate_411_a24.rs"]
 mod gate_411_a24;
+// LN-5 (#422, LEAN-L): the writer's reads and its append checks read the history from the store.
+#[path = "tests/gate_ln5.rs"]
+mod gate_ln5;

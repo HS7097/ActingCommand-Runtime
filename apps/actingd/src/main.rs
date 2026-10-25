@@ -172,6 +172,12 @@ impl RuntimeDaemonReporter for DaemonReporter {
     fn step_skipped(&self, outcome: &Outcome) {
         write_stderr(&developer_line(outcome, None));
     }
+
+    /// #411 A67-R: a warning the host records while it runs (`frame_store_budget_floor_applied`
+    /// with its four values) is its daemon lines, as the start's `ledger_open_slow` is.
+    fn warning_recorded(&self, outcome: &Outcome) {
+        write_stderr(&daemon_lines(outcome, None));
+    }
 }
 
 /// The developer-line level of a category (model section 7.4): `INFO` for a success or an info.

@@ -390,7 +390,7 @@ impl HostShared {
         let frame_store = actingcommand_artifact_store::FrameStore::new(
             frame_retention::spill_root(self.artifacts.root(), frame_id)
                 .map_err(online_observation::observation_artifact_failure)?,
-            frame_retention::capture_frame_store_config(),
+            self.capture_frame_store_config(),
         )
         .map_err(online_observation::observation_artifact_failure)?;
         let memory = frame_store.memory_budget();
@@ -523,7 +523,7 @@ impl HostShared {
             Arc::clone(&self.artifacts),
             frame_store,
             CapturePipelineConfig {
-                frame_store: frame_retention::capture_frame_store_config(),
+                frame_store: self.capture_frame_store_config(),
                 retention_class: if request.actor() == EventActor::Lab
                     && request.source() == EventSource::Lab
                 {

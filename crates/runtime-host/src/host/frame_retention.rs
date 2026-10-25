@@ -3,7 +3,7 @@
 use crate::codes::HostLocation;
 use actingcommand_artifact_store::{
     ArtifactStore, ArtifactStoreError, ArtifactStoreResult, FrameFileOutcome, KEPT_DIRECTORY,
-    KeptMoves, move_frame_file, remove_frame_file, try_artifact_delete_guard,
+    KeptMoves, StoreLocation, move_frame_file, remove_frame_file, try_artifact_delete_guard,
 };
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::outcome::Code;
@@ -21,23 +21,80 @@ use actingcommand_ledger::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::codes::HostCode;
 use crate::{RuntimeHostError, RuntimeHostResult, events::RuntimeEvents};
 
-pub(super) fn capture_frame_store_config() -> actingcommand_artifact_store::FrameStoreConfig {
-    actingcommand_artifact_store::FrameStoreConfig::default().with_memory_source(
-        actingcommand_artifact_store::MemorySampleSource::live(|| {
-            let sample = actingcommand_host_metrics::sample_physical_memory().map_err(|code| {
-                ArtifactStoreError::fatal(code.as_str(), "sample_capture_memory", code.as_str())
-            })?;
-            Ok(actingcommand_artifact_store::MemorySample {
-                total_bytes: sample.total_bytes,
-                available_bytes: sample.available_bytes,
-            })
-        }),
-    )
+impl super::HostShared {
+    /// The configuration of every capture frame store the host opens: the host's physical memory
+    /// sample, and (#411 A67-R) the host's one floor watch, so the budgets of all of them enter
+    /// and leave the floor together.
+    pub(super) fn capture_frame_store_config(
+        &self,
+    ) -> actingcommand_artifact_store::FrameStoreConfig {
+        let config = actingcommand_artifact_store::FrameStoreConfig::default()
+            .with_floor_watch(Arc::clone(&self.frame_store_floor));
+        #[cfg(test)]
+        if let Some(sample) = self.capture_memory_sample_for_test {
+            return config.with_memory_source(
+                actingcommand_artifact_store::MemorySampleSource::fixed(sample),
+            );
+        }
+        config.with_memory_source(actingcommand_artifact_store::MemorySampleSource::live(
+            || {
+                let sample =
+                    actingcommand_host_metrics::sample_physical_memory().map_err(|code| {
+                        ArtifactStoreError::fatal(
+                            code.as_str(),
+                            "sample_capture_memory",
+                            code.as_str(),
+                        )
+                    })?;
+                Ok(actingcommand_artifact_store::MemorySample {
+                    total_bytes: sample.total_bytes,
+                    available_bytes: sample.available_bytes,
+                })
+            },
+        ))
+    }
+
+    /// #411 A67-R (A67 R5): records each `frame_store_budget_floor_applied` the capture frame
+    /// stores' budget entered since the last call, at the start's preparation or at a refresh:
+    /// first to the daemon's log, then as one Warning `runtime.failed` with system links whose
+    /// outcome is the warning, as the host's other warnings are. A budget that stays on the floor
+    /// has nothing more to record; one that left it and came back is recorded again.
+    pub(super) fn record_frame_store_floor_entries(&self) -> RuntimeHostResult<()> {
+        let entered = self
+            .frame_store_floor
+            .take_entered()
+            .map_err(RuntimeHostError::artifact)?;
+        for warning in entered {
+            self.fatal.report_warning(&warning);
+            self.append_event_raw(
+                // The envelope derives the record's severity from the warning's category.
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    warning,
+                    DiagnosticDetailDraft::new(
+                        StoreLocation::FrameStore.as_str(),
+                        StoreLocation::FrameStore,
+                        "artifact_store",
+                        StoreLocation::FrameStore.as_str(),
+                    ),
+                    AuditInput::new(),
+                ),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn capture_pin_reason(

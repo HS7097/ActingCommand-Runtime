@@ -255,7 +255,7 @@ impl HostShared {
         let frame_store = actingcommand_artifact_store::FrameStore::new(
             frame_retention::spill_root(self.artifacts.root(), frame_id)
                 .map_err(RuntimeHostError::artifact)?,
-            frame_retention::capture_frame_store_config(),
+            self.capture_frame_store_config(),
         )
         .map_err(RuntimeHostError::artifact)?;
         let memory = frame_store.memory_budget();
@@ -363,7 +363,7 @@ impl HostShared {
                 Arc::clone(&self.artifacts),
                 frame_store,
                 CapturePipelineConfig {
-                    frame_store: frame_retention::capture_frame_store_config(),
+                    frame_store: self.capture_frame_store_config(),
                     retention_class: RetentionClass::Adaptive,
                     redaction_state: ArtifactRedactionState::NotRequired,
                     ..CapturePipelineConfig::default()
