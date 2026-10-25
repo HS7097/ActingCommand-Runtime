@@ -7,10 +7,12 @@
 //! is computed. Workflow #373 NAV-T (M-373 v1.1 §3.1, §3.9): the standard-pack root files given
 //! (`pages.json`, `interrupts.json`, `navigation.json`) are checked with the game root the
 //! bundle makes, its packages cross-checked for the parts the files name them for
-//! (`standard_pack_check`), and laid beside `bundle.json` byte for byte.
+//! (`standard_pack_check`), and laid beside `bundle.json` byte for byte. ROUT-L RL-1a: so is
+//! `schedule.json` (`--schedule`), checked by the Runtime's composer (`standard_pack_schedule`).
 
 use crate::codes::ResourceToolingCode;
 use crate::standard_pack_check::{RootFileInputs, cross_check};
+use crate::standard_pack_schedule::check_schedule;
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
@@ -273,6 +275,16 @@ fn write_bundle(
             &|directory: &str| packs_dir.join(directory),
             admitted,
         )?);
+        // ROUT-L RL-1a: `--schedule`, composed with this root as the Runtime composes it.
+        if let Some(schedule) = root_files.schedule() {
+            warnings.extend(check_schedule(
+                &applications.game,
+                &root,
+                index.maintenance(),
+                &schedule.bytes,
+                &schedule.path,
+            )?);
+        }
     }
     write_new(&staging.join("applications.json"), applications_bytes)?;
     write_new(&bundle_path, &encoded)?;

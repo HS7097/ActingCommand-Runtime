@@ -11,7 +11,7 @@ use serde_json::Value;
 /// <directory>`, with `--source-repository` and `--source-commit` together or not at all; it
 /// writes bundle v4 (Workflow #336 PKG-S5). Workflow #373 NAV-T: `--pages`, `--interrupts` and
 /// `--navigation` name the standard-pack root files it checks, cross-checks and lays beside
-/// `bundle.json`.
+/// `bundle.json`; ROUT-L RL-1a: so does `--schedule` (`schedule.json`).
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
     let maintenance = if flags.flags.contains_key("--maintenance") {
         use std::io::Read;
@@ -68,6 +68,7 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
             pages: root_file("--pages")?,
             interrupts: root_file("--interrupts")?,
             navigation: root_file("--navigation")?,
+            schedule: root_file("--schedule")?,
         },
     };
     let mut lab = super::env_detection::build_readonly_lab()?;
