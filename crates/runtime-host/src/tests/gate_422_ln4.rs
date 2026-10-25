@@ -251,6 +251,8 @@ fn ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state() {
     let ledger = maintenance
         .open_writer(Arc::clone(&database), "ln4-load-reads".into())
         .expect("the writer");
+    let state =
+        Arc::new(RuntimeStateStore::from_database(Arc::clone(&database)).expect("state store"));
     let events =
         crate::events::RuntimeEvents::new(SALT, Arc::new(crate::SystemRuntimeClock::new()))
             .expect("runtime events");
@@ -271,12 +273,8 @@ fn ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state() {
     .expect("the monitor registry loads");
     let decision_memory =
         crate::policy_host::load_decision_memory_for_test(&ledger).expect("the decision memory");
-    let journal = crate::policy_host::load_dispatch_journal_for_test(
-        root.path(),
-        Arc::clone(&database),
-        &ledger,
-    )
-    .expect("the dispatch journal loads");
+    let journal = crate::policy_host::load_dispatch_journal_for_test(root.path(), state, &ledger)
+        .expect("the dispatch journal loads");
     let agent = AgentDispatcherState::load(&ledger, crate::recovery_read::RECOVERY_PAGE_EVENTS)
         .expect("the agent dispatcher loads");
     let peak = ledger.take_writer_peak();
