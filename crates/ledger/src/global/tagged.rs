@@ -12,7 +12,6 @@ use super::storage::{DurableStorage, EventStore};
 use super::{GlobalLedgerError, GlobalLedgerResult};
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
-use actingcommand_contract::EventQuery;
 use actingcommand_contract::outcome::Outcome;
 
 /// One `state` row of the index table as stored (§11.1), with the stored hash of the record its
@@ -59,23 +58,22 @@ impl<B: DurableStorage> EventStore<B> {
         })?;
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
-            let mut events = if (1..=through_sequence).contains(&row.sequence) {
-                self.query_within(
-                    &EventQuery {
-                        from_sequence: Some(row.sequence),
-                        to_sequence: Some(row.sequence),
-                        ..EventQuery::default()
-                    },
-                    work,
-                    operation,
-                )?
-            } else {
-                Vec::new()
-            };
-            let event = match (events.pop(), events.is_empty()) {
-                (Some(event), true) if agrees(&row, &event) => event,
+            if !work.visit() {
+                return Err(ReadWork::exceeded(operation));
+            }
+            // A point read by the row's sequence: the committed records are held in sequence
+            // order, so it costs no scan of the records after it (LN-5 reads it from SQLite).
+            let mut event = match self
+                .events
+                .binary_search_by_key(&row.sequence, PersistedEvent::sequence)
+            {
+                Ok(position) if row.sequence <= through_sequence => self.events[position].clone(),
                 _ => return Err(mismatch(&row)),
             };
+            if !agrees(&row, &event) {
+                return Err(mismatch(&row));
+            }
+            self.retention.annotate_event(&mut event);
             records.push(LedgerTaggedRecord {
                 key: row.key,
                 event,
