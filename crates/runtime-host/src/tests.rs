@@ -388,6 +388,8 @@ mod gate_422_ln3;
 // LN-4 (Workflow #422, LEAN-L model §3.2, §3.6): the decision memory, the agent dispatcher and the
 // monitor registry load from their tagged records; a start without the marker seeds them once.
 mod gate_422_ln4;
+// #422 LN-TUNE: a second start reads no planning history before the planning checkpoint.
+mod gate_ln_tune;
 
 mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged

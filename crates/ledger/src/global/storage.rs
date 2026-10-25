@@ -363,6 +363,9 @@ pub(super) struct EventStore<B> {
     pub(super) staged: Vec<PersistedEvent>,
     /// LN-5 (§3.3): `ledger_observer.history_page_rows`, the rows of one page of a history read.
     pub(super) history_page_rows: usize,
+    /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
+    #[cfg(test)]
+    pub(super) history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
     pub(super) retention: RetentionIndex,
     pub(super) recovering_retention: bool,
     /// Workflow #383 AO-1: the running Runtime's write-failure state; `None` for an offline
@@ -487,6 +490,8 @@ impl SegmentStore {
             next_sequence,
             staged: Vec::new(),
             history_page_rows: config.history_page_rows,
+            #[cfg(test)]
+            history_rows_read: config.history_rows_read.clone(),
             retention,
             recovering_retention,
             write_failure: None,
@@ -544,6 +549,8 @@ impl<B: DurableStorage> EventStore<B> {
             next_sequence,
             staged: Vec::new(),
             history_page_rows: super::history::DEFAULT_HISTORY_PAGE_ROWS,
+            #[cfg(test)]
+            history_rows_read: None,
             retention,
             recovering_retention,
             write_failure: None,
@@ -578,6 +585,10 @@ impl<B: DurableStorage> EventStore<B> {
     ) -> GlobalLedgerResult<bool> {
         self.index_policy = config.capture_policy.index_policy();
         self.history_page_rows = config.history_page_rows;
+        #[cfg(test)]
+        {
+            self.history_rows_read = config.history_rows_read.clone();
+        }
         self.write_failure = config.write_failure.clone();
         match self.write_failure.clone() {
             Some(state) => super::write_failure::import_dumps(self, &state),
