@@ -484,7 +484,8 @@ impl LoadedCatalog {
         &self.compiled
     }
 
-    /// ROUT-L RL-1b: the source bytes this catalog keeps in memory.
+    /// ROUT-L RL-1b: the source bytes this catalog keeps in memory (acceptance A3).
+    #[cfg(test)]
     fn source_bytes(&self) -> usize {
         self.sources.as_deref().map_or(0, |sources| {
             [
@@ -503,6 +504,7 @@ impl LoadedCatalog {
 
 /// ROUT-L RL-1b (frozen model v1.0 §3.3, acceptance A3): what the catalog memory holds: the
 /// generations the memo keeps besides the active one, and the source bytes of both.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CatalogResidency {
     pub(crate) memo_generations: usize,
@@ -1345,6 +1347,7 @@ impl PolicyHost {
     }
 
     /// ROUT-L RL-1b (acceptance A3): what the catalog memory holds now.
+    #[cfg(test)]
     pub(crate) fn residency(&self) -> RuntimeHostResult<CatalogResidency> {
         let (memo_generations, memo_bytes) = self.store.memo_residency()?;
         Ok(CatalogResidency {
@@ -4890,6 +4893,7 @@ impl CatalogStore {
     }
 
     /// The generations the memo holds and their source bytes.
+    #[cfg(test)]
     fn memo_residency(&self) -> RuntimeHostResult<(usize, usize)> {
         let memo = self.memo.lock().map_err(|_| {
             fatal(

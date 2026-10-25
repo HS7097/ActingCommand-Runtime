@@ -547,7 +547,7 @@ fn admit(bench: &Bench, cycle: &PolicyCycle, task_id: &str) -> (DispatchIntent, 
     else {
         panic!("{task_id} is granted");
     };
-    (intent, context)
+    (intent, *context)
 }
 
 // ---------------------------------------------------------------------------------------------
