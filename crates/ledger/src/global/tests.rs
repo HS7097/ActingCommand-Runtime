@@ -2696,6 +2696,10 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         writer_work: Arc::new(super::WriterWork::default()),
         // LN-9 (#422): a writer without a failure plan has no scrub.
         scrub: None,
+        // LN-7c Q (#422): a hand-built writer has no frame query database; the check interval
+        // is `ledger_observer.read_check_vm_steps`'s default.
+        frame_query_database: None,
+        read_check_vm_steps: super::read_work::DEFAULT_READ_CHECK_VM_STEPS,
     };
     let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();

@@ -442,7 +442,12 @@ pub(super) struct FrameRetention {
 /// One pass: what it still examines, what it queued, its pace and its counts.
 struct Pass {
     started_ms: u64,
+    /// The Runtime's clock at the pass start, when W answered: statement L examines every chunk
+    /// at it (review F1: a frame settled at a later round's clock could be held back by a run
+    /// that started after W).
+    started_unix_ms: u64,
     waits: FrameWaits,
+    /// The round's clock (a re-check runs at it), the switches and the evidence age.
     settings: FrameQuerySettings,
     /// Live frames due for examination, not yet asked about.
     live: VecDeque<ArtifactId>,
@@ -792,6 +797,7 @@ impl FrameRetention {
             .collect();
         let mut pass = Pass {
             started_ms: clock.monotonic_ms,
+            started_unix_ms: now,
             waits,
             settings: FrameQuerySettings {
                 now_unix_ms: now,
@@ -861,7 +867,11 @@ impl FrameRetention {
     }
 
     /// The next chunk of live frames (statement L), else of kept frames (statement K); queues the
-    /// frames to act on and schedules the others (§1.4).
+    /// frames to act on and schedules the others (§1.4). Statement L examines at the pass
+    /// start's clock, the one W answered at (review F1): W lists the runs open then, so a frame
+    /// is settled only if every run that can hold it back had begun by then. A later round's
+    /// clock would settle a frame captured in the 30 s before the pass start while a run that
+    /// started after it, which W does not hold, still waits for it.
     fn examine(
         &mut self,
         pass: &mut Pass,
@@ -875,12 +885,15 @@ impl FrameRetention {
                 .live
                 .drain(..chunk.min(pass.live.len()))
                 .collect::<Vec<_>>();
-            let (answered, steps) =
-                match answers.answer_live(&frames, &pass.waits, &pass.settings)? {
-                    FrameQueryOutcome::Answered { value, steps } => (value, steps),
-                    FrameQueryOutcome::Incomplete => return Ok(Step::Incomplete),
-                    FrameQueryOutcome::Stopped => return Ok(Step::Stopped),
-                };
+            let examined_at = FrameQuerySettings {
+                now_unix_ms: pass.started_unix_ms,
+                ..pass.settings
+            };
+            let (answered, steps) = match answers.answer_live(&frames, &pass.waits, &examined_at)? {
+                FrameQueryOutcome::Answered { value, steps } => (value, steps),
+                FrameQueryOutcome::Incomplete => return Ok(Step::Incomplete),
+                FrameQueryOutcome::Stopped => return Ok(Step::Stopped),
+            };
             pass.paced(clock.monotonic_ms, steps, settings.steps_per_second);
             for answer in answered {
                 self.decide_live(pass, &answer);
@@ -950,7 +963,9 @@ impl FrameRetention {
 
     /// At most 16 queued frames within 1 s, each re-checked on a fresh snapshot (statements L
     /// and K for those frames only, with the pass's W) and acted on by that answer (§1.2, "Never
-    /// a stale class"). A frame that is absent costs a stat and no action.
+    /// a stale class"). The re-check runs at the round's clock: a queued live frame was settled
+    /// at the pass start, so a run that began after W is more than its window after it. A frame
+    /// that is absent costs a stat and no action.
     #[allow(clippy::too_many_arguments)]
     fn act(
         &mut self,

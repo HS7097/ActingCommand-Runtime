@@ -85,15 +85,6 @@ pub(super) struct LinkSet {
 }
 
 impl LinkSet {
-    pub(super) fn is_empty(&self) -> bool {
-        self.runs.is_empty()
-            && self.leases.is_empty()
-            && self.frames.is_empty()
-            && self.requests.is_empty()
-            && self.correlations.is_empty()
-            && self.artifacts.is_empty()
-    }
-
     /// Whether `event` is linked to one of these identifiers.
     pub(super) fn matches<E: LedgerEventRead>(&self, event: &E) -> bool {
         let links = event.links();

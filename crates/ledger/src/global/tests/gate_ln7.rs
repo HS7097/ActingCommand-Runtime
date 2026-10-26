@@ -13,6 +13,8 @@
 //!   left in the store, whose epoch-end point keeps a frame of another run) and E4, the one
 //!   difference the design accounts that the fixture has (a run-less Warning that names a frame:
 //!   the query keeps it as an error frame, the full view does not). E3 and E5 do not arise here;
+//! - T-eq, review F3 (fix round 1): a frame with a Lab-reason pin is Lab by statement L's pin
+//!   term alone (L with its run-scope term switched off), and Lab as the full view classes it;
 //! - a record that references an artifact the writer no longer holds with another reference is
 //!   refused `artifact_identity_conflict`: its identity is read through the `artifact_id` index.
 //!
@@ -21,6 +23,7 @@
 
 use super::missing_material::{formal_root, material_store};
 use crate::PersistedEvent;
+use crate::global::sqlite::frame_query::LIVE;
 use crate::global::{
     FrameQueryAction, FrameQueryOutcome, FrameQuerySettings, FrameRetentionClass,
     FrameRetentionFrame, FrameRetentionSwitches, FrameRetentionView, KeptFrameFolder,
@@ -349,6 +352,19 @@ impl<'a> Corpus<'a> {
         run: Option<IssuedRunId>,
         at: u64,
     ) -> Frame {
+        self.frame_pinned(links, correlation, run, at, ArtifactPinReason::Explicit)
+    }
+
+    /// #422 LN-7c Q (review F3): `frame` with a pin of `reason`, triggered by the frame's own
+    /// `artifact.verified` (a Lab pin's trigger must be in a Lab scope).
+    pub(super) fn frame_pinned(
+        &self,
+        links: EventLinksDraft,
+        correlation: IssuedCorrelationId,
+        run: Option<IssuedRunId>,
+        at: u64,
+        reason: ArtifactPinReason,
+    ) -> Frame {
         let frame = self.ids.mint_frame_id().expect("frame");
         let links = links.with_frame_id(frame);
         let mut artifact_links = ArtifactLinksDraft::default()
@@ -409,7 +425,7 @@ impl<'a> Corpus<'a> {
             ArtifactPayloadDraft::retention(
                 ArtifactRetentionFact::PinRecorded(ArtifactPinRecord {
                     identity,
-                    reason: ArtifactPinReason::Explicit,
+                    reason,
                     trigger: terminal(&verified),
                 }),
                 AuditInput::new(),
@@ -1011,6 +1027,110 @@ fn ln7c_q_teq_the_query_decides_each_live_frame_of_the_case_fixture_as_the_full_
             expected_action(frame, NOW),
             "the action of {id:?} ({:?})",
             frame.class
+        );
+        assert_eq!(folder, &frame.folder, "the kept folder of {id:?}");
+    }
+}
+
+/// #422 LN-7c Q, T-eq, review F3 (fix round 1): statement L's Lab-pin term, a pin's reason read
+/// from the pin record's JSON. The writer admits a Lab pin only when its trigger is in a Lab scope
+/// (`artifact_pin_reason_conflict` otherwise), and for a run's frame that scope makes the run a
+/// Lab run in L too, so no ledger the writer accepts holds a Lab-pinned frame outside every Lab
+/// scope. So L is also run with its run-scope term switched off (its text with `d.lab_run`
+/// replaced by 0): the frame with a Lab pin is Lab by the pin alone, and the frame of the same run
+/// with an Explicit pin is not, so a wrong path in the pin term fails here. As it is, L classes
+/// both Lab, with the full view's actions and folders.
+#[test]
+fn ln7c_q_teq_a_lab_reason_pin_keeps_its_frame_lab_by_statement_ls_pin_term() {
+    const RUN_SCOPE_TERM: &str = "((d.lab_run";
+    let root = tempfile::tempdir().expect("root");
+    let (_database, ledger) = formal_root(root.path());
+    let artifacts = material_store(root.path());
+    let corpus = Corpus::new(&ledger, &artifacts);
+    corpus.start(at(0));
+    corpus.owner_recorded(at(1));
+    // A run whose correlation the Lab used before its frames, so a pin of its frame may be a Lab
+    // pin; the two frames differ only in their pin's reason.
+    let run = corpus.run(at(10));
+    corpus.lab_anchor(
+        EventLinksDraft::default()
+            .with_request_id(corpus.request())
+            .with_correlation_id(run.correlation),
+        at(11),
+    );
+    let pinned = corpus.frame_pinned(
+        run.links.clone(),
+        run.correlation,
+        Some(run.id),
+        at(12),
+        ArtifactPinReason::Lab,
+    );
+    let explicit = corpus.run_frame(&run, at(13));
+    corpus.close(&run.links, &[&pinned, &explicit], at(14));
+    let live = BTreeSet::from([pinned.id(), explicit.id()]);
+    let decided = query_decisions(&ledger, &live, NOW);
+
+    // L without its run-scope term: only the pin can make a frame of a run Lab.
+    assert_eq!(
+        LIVE.matches(RUN_SCOPE_TERM).count(),
+        1,
+        "statement L's run-scope term"
+    );
+    let pin_term_only = LIVE.replacen(RUN_SCOPE_TERM, "((0", 1);
+    let mut query = ledger
+        .frame_query(Arc::new(|| false))
+        .expect("the writer's frame query");
+    let FrameQueryOutcome::Answered { value: waits, .. } = query.waits().expect("statement W")
+    else {
+        panic!("statement W answered nothing");
+    };
+    let ids = live.iter().copied().collect::<Vec<_>>();
+    let FrameQueryOutcome::Answered { value: answers, .. } = query
+        .live_statement(&pin_term_only, &ids, &waits, &settings(NOW))
+        .expect("statement L without its run-scope term")
+    else {
+        panic!("statement L without its run-scope term answered nothing");
+    };
+    let class_of = |id: ArtifactId| {
+        answers
+            .iter()
+            .find(|answer| answer.artifact_id == id)
+            .map(|answer| answer.class)
+    };
+    assert_eq!(
+        class_of(pinned.id()),
+        Some(FrameRetentionClass::Lab),
+        "the Lab pin alone keeps its frame Lab"
+    );
+    assert_eq!(
+        class_of(explicit.id()),
+        Some(FrameRetentionClass::Default),
+        "without the run-scope term, a frame of the Lab run with an Explicit pin is not Lab"
+    );
+    drop(query);
+    ledger.close().expect("close the writer");
+
+    // As it is, L decides both frames as the full view does: Lab.
+    let full = GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(root.path()).sqlite_material_not_read(),
+        |_| None,
+    )
+    .expect("the whole opening")
+    .frame_retention_view(NOW, SWITCHES)
+    .expect("the full view");
+    for id in [pinned.id(), explicit.id()] {
+        let frame = full
+            .frames
+            .iter()
+            .find(|frame| frame.reference.artifact_id == id)
+            .expect("a live frame is in the view");
+        assert_eq!(frame.class, FrameRetentionClass::Lab, "the full view: Lab");
+        let (answer, folder) = &decided[&id];
+        assert_eq!(answer.class, frame.class, "the class of {id:?}");
+        assert_eq!(
+            answer.action,
+            expected_action(frame, NOW),
+            "the action of {id:?}"
         );
         assert_eq!(folder, &frame.folder, "the kept folder of {id:?}");
     }

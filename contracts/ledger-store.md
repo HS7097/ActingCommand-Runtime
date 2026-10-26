@@ -154,9 +154,14 @@ records were not read brings its object as the intent records it), the owner cha
 imports and closes, the scopes a start may still close, and the objects of the capture
 frames that records appended or loaded since the open named; at each pass start the
 cleaner hands the writer its listing of the live frame store, and the writer keeps of those
-objects only the frames in it and the proof set (`frame_retention_live_objects`). A record
-that names a capture frame the writer does not hold, or a run it has applied no record of
-since the open, loads it from the store before it is checked, as above.
+objects only the frames in it and the proof set (`frame_retention_live_objects`). With them
+(review F5, as LN-7 dropped the rest at each sweep start) it keeps of the run- and
+scope-keyed facts only those of the kept objects' runs and of the runs it knows that have no
+terminal yet, of their scopes and the sealed scopes, and the closes, scope extents and lease
+releases of the owners a start may still close and of the kept objects; a run whose facts are
+dropped is no longer known. A record that names a capture frame the writer does not hold, or
+a run it does not know (it has applied or loaded no record of it since the open, or dropped
+it since), loads it from the store before it is checked, as above.
 #422 LN-7c R (`rd-1026/ln7c/final-query.md` §3): every batch transaction (append and
 segment import) also writes the frame index rows of its records, the frames, artifacts and runs
 a capture summary, a publication, an input intent, a dedup marker or an evidence read
@@ -955,10 +960,14 @@ writer keeps no frame facts and answers no frame view.
   error and not fatal: the next pass starts after the interval.
 - **The statements** (§1.2). W, once per pass: the open runs of the current owner epoch
   (their instance and first frame time). L, per chunk of at most
-  `ledger_observer.frame_query_chunk_frames` (256) live frames due for examination: each
-  frame's class (`running`, `lab`, `error`, `resource`, `duplicate`, `default`) and action
-  (`running`, `keep`, `keep_resource`, `move_lab`, `move_error`, `remove`,
-  `remove_duplicate`, `remove_confirmed`). K, per chunk of the kept listing: `keep`,
+  `ledger_observer.frame_query_chunk_frames` (256) live frames due for examination, every
+  chunk at the pass start's time, the time W answered at (review F1: a later chunk's time
+  would settle a frame captured in the 30 s before the pass start while a run that began
+  after W, which W does not hold, still waits for it); a round's re-check of the frames it
+  queued runs at the round's time. L answers each frame's class (`running`, `lab`,
+  `error`, `resource`, `duplicate`, `default`) and action (`running`, `keep`,
+  `keep_resource`, `move_lab`, `move_error`, `remove`, `remove_duplicate`,
+  `remove_confirmed`). K, per chunk of the kept listing: `keep`,
   `remove_confirmed` or `remove_expired`. Every access is pinned (`INDEXED BY`,
   `CROSS JOIN`, unary `+`, `MATERIALIZED`), so a missing index fails the statement instead
   of reading the whole history; their plans on an empty database pass the rule of §1.3
@@ -1136,11 +1145,15 @@ between the two is found by the walk, and a frame found in both places counts
   `--paths`): each selected settled frame's `path` (`kept/…` when the walk found it, else
   its object key) and `class`; running frames have no path.
 - **#422 LN-7c Q: the cleaner's statements.** The classes and due times of the frames in
-  the live frame store are statement L's answers (W, then L per chunk of 256, on a
-  read-only connection of the listing's own), so the listing classes as the cleaner does;
-  a frame no longer in the store keeps the view's class. `evidence` holds statement K's
-  answers over the kept listing, with `frame_retention_evidence_max_age_days` from the same
-  `config.parameters.top_level` fact (its default 15 when the fact does not name it):
+  the live frame store are statement L's answers (W, then L per chunk of
+  `ledger_observer.frame_query_chunk_frames`'s default, on a read-only connection of the
+  listing's own that looks at its stop every `ledger_observer.read_check_vm_steps`'s
+  default), so the listing classes as the cleaner does; a frame no longer in the store keeps
+  the view's class. `evidence` holds statement K's answers over the kept listing, with
+  `frame_retention_evidence_max_age_days` from the same `config.parameters.top_level` fact
+  (its default when the fact does not name it). The defaults are read from actingd's
+  defaults file `actingd.defaults.json`, embedded as the key table embeds it (review F4);
+  one it does not name is `frame_switches_unavailable`:
   `max_age_days`; `kept_staying`, `kept_remove_confirmed`, `kept_remove_expired` and
   `kept_unknown` (kept files this ledger has no `artifact.verified` record of), each as
   `frames` and `bytes`; `live_remove_confirmed` (live Lab and error frames the next pass

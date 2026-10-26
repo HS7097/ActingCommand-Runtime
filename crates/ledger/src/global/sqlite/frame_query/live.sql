@@ -187,7 +187,9 @@ dx AS MATERIALIZED (
   FROM fe JOIN nb3 n ON n.artifact_id = fe.artifact_id
   LEFT JOIN named nm ON nm.artifact_id = fe.artifact_id
 ),
-decided AS (
+-- materialized as every CTE is (review F2): flattened, each CASE below that names a column ran
+-- its correlated subqueries again
+decided AS MATERIALIZED (
   SELECT d.artifact_id, d.at, d.entry,
     (d.entry IS NULL
      OR EXISTS (SELECT 1 FROM waits w WHERE w.instance_id = d.instance_id AND w.first_at <= d.at + :window_ms)) AS running,

@@ -11,7 +11,10 @@
 //! - T-schedule: a live frame is examined at its settle age, then at 1 day (`keep`) and at 7 days
 //!   (`keep_resource`) after its ingestion time, a running frame at every pass; a late window
 //!   point after the frame settled moves it at its 1-day examination; a class that changes between
-//!   the queueing and the round is acted on by the round's answer.
+//!   the queueing and the round is acted on by the round's answer. Review F1 (fix round 1): every
+//!   chunk is examined at the pass start's clock, the one W answered at, so a frame captured in
+//!   the 30 s before the pass start and examined in a later chunk is not settled by that chunk's
+//!   later clock while a run that started after W waits for it; the next pass's W holds it.
 //! - T-evidence (the cleaner's half): a kept evidence frame is removed by the round's answer
 //!   (confirmed, or at its maximum age), with its empty leaf and date folder; a kept file this
 //!   ledger has no record of is left and counted; the maximum age is the one in effect at the
@@ -38,6 +41,9 @@ const ERROR_LEAF: &str = "node_a-151234-contained_task_page_unknown";
 const LAB_LEAF: &str = "lab-node_a";
 /// The settle age of a frame (the view's and statement L's).
 const SETTLE_MS: u64 = 60_000;
+/// Statement L's window: an open run of W whose first frame is at most this long after a frame
+/// holds the frame back (`running`).
+const WINDOW_MS: u64 = 30_000;
 /// The settings of the tests' passes: the keys' defaults.
 const SETTINGS: CleanerSettings = CleanerSettings {
     evidence_max_age_days: 15,
@@ -69,6 +75,13 @@ struct Fake {
     /// Statement W answers `Incomplete`, or `Stopped`.
     incomplete: bool,
     stopped: bool,
+    /// Review F1: the first frame times of the runs open in the fake ledger now, all on the
+    /// root's one instance (a test adds one when a run starts), and those statement W answered
+    /// at the pass start, which statement L holds frames back by.
+    open_runs: Vec<u64>,
+    waits: Vec<u64>,
+    /// The frame and action of every row statement L answered, in order.
+    answered_live: Vec<(ArtifactId, FrameQueryAction)>,
 }
 
 impl Fake {
@@ -85,16 +98,25 @@ impl Fake {
         }
     }
 
-    /// Statement L's rules: no row before the settle age; a confirmed evidence frame is removed;
-    /// a Lab or error frame moved; a resource, duplicate or default frame removed at its due time
-    /// and kept before it.
+    /// Statement L's rules: no row before the settle age; a frame an open run of the pass's W
+    /// holds back is running; a confirmed evidence frame is removed; a Lab or error frame moved;
+    /// a resource, duplicate or default frame removed at its due time and kept before it.
     fn live_answer(&self, frame: &FakeFrame, now: u64) -> Option<LiveFrameAnswer> {
         let at = frame.frame.reference.created_at_unix_ms;
         if at + SETTLE_MS > now {
             return None;
         }
+        let held = self
+            .waits
+            .iter()
+            .any(|first_at| *first_at <= at + WINDOW_MS);
+        let class = if held {
+            FrameRetentionClass::Running
+        } else {
+            frame.class
+        };
         let due = frame.due.is_some_and(|due| due <= now);
-        let action = match frame.class {
+        let action = match class {
             FrameRetentionClass::Running => FrameQueryAction::Running,
             FrameRetentionClass::Lab | FrameRetentionClass::Error if frame.confirmed => {
                 FrameQueryAction::RemoveConfirmed
@@ -110,7 +132,7 @@ impl Fake {
         Some(LiveFrameAnswer {
             artifact_id: frame.frame.reference.artifact_id,
             created_at_unix_ms: at,
-            class: frame.class,
+            class,
             action,
         })
     }
@@ -118,6 +140,8 @@ impl Fake {
 
 impl FrameAnswers for Fake {
     fn answer_waits(&mut self) -> RuntimeHostResult<FrameQueryOutcome<FrameWaits>> {
+        // The runs open now are the pass's W: a run that starts later is not in it.
+        self.waits = self.open_runs.clone();
         Ok(self.answered(FrameWaits::none()))
     }
 
@@ -133,7 +157,12 @@ impl FrameAnswers for Fake {
             .iter()
             .filter_map(|id| self.frames.get(id))
             .filter_map(|frame| self.live_answer(frame, settings.now_unix_ms))
-            .collect();
+            .collect::<Vec<_>>();
+        self.answered_live.extend(
+            answers
+                .iter()
+                .map(|answer| (answer.artifact_id, answer.action)),
+        );
         Ok(self.answered(answers))
     }
 
@@ -1015,6 +1044,116 @@ fn ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_eve
     assert_eq!(asked, ids(&[reading, running]));
     assert!(!root.object(reading).exists(), "removed at 7 days");
     assert!(root.object(running).is_file(), "a running frame stays");
+}
+
+/// T-schedule, review F1 (fix round 1): statement L examines every chunk at the pass start's
+/// clock, the one W answered at. A near-duplicate captured 25 s before the pass start is the
+/// pass's second chunk (chunks of one frame, each statement paced 1 s); after W a run starts on
+/// its instance, its first frame 2 s after the pass start, within 30 s of the frame. The second
+/// chunk is examined 40 s after the pass start, when a round's clock would settle the frame and
+/// W does not hold the run: the frame is not removed. The next pass's W holds the run, and the
+/// frame is running.
+#[test]
+fn ln7c_q_t_schedule_a_frame_unsettled_at_the_pass_start_waits_for_a_run_w_does_not_hold() {
+    /// Each statement's steps: 1 s at the default rate.
+    const STEPS: u64 = 500_000;
+    let start = NOW;
+    let mut root = Root::new();
+    let one = root.frame_at(
+        FrameRetentionClass::Default,
+        start - 2 * SETTLE_MS,
+        Some(start + DAY_MS),
+        None,
+        true,
+    );
+    let two = root.frame_at(
+        FrameRetentionClass::Default,
+        start - 2 * SETTLE_MS,
+        Some(start + DAY_MS),
+        None,
+        true,
+    );
+    // Chunks follow the artifact ids: the later id is the second chunk, the near-duplicate.
+    let (first, near) = if root.id(one) < root.id(two) {
+        (one, two)
+    } else {
+        (two, one)
+    };
+    let captured = start - 25_000;
+    let duplicate = &mut root.frames[near];
+    duplicate.class = FrameRetentionClass::Duplicate;
+    duplicate.due = None;
+    duplicate.frame.reference.created_at_unix_ms = captured;
+    let settings = CleanerSettings {
+        chunk_frames: 1,
+        ..SETTINGS
+    };
+    let mut fake = root.answers();
+    fake.steps = STEPS;
+    let mut retention = cleaner();
+    retention
+        .begin_pass(
+            &mut fake,
+            root.live(),
+            Vec::new(),
+            clock(start, 0),
+            settings,
+        )
+        .expect("a pass begins");
+    // A run starts after W: its first frame within 30 s after the near-duplicate.
+    let run_first_at = start + 2_000;
+    assert!(run_first_at <= captured + WINDOW_MS);
+    fake.open_runs.push(run_first_at);
+    let mut ended = None;
+    for elapsed in [1_000, 40_000, 41_000, 42_000, 43_000] {
+        if retention.pass.is_none() {
+            break;
+        }
+        ended = retention
+            .round(
+                &mut fake,
+                &root.path,
+                clock(start + elapsed, elapsed),
+                settings,
+                &|| false,
+                &mut |_| Ok(()),
+            )
+            .expect("round");
+    }
+    assert!(retention.pass.is_none(), "the pass ends");
+    let Some(PassEnd::Completed(report)) = ended else {
+        panic!("the first pass prints its line");
+    };
+    assert_eq!((report.frames, report.deleted), (0, 0), "{report:?}");
+    assert!(
+        root.object(near).is_file(),
+        "the near-duplicate waits for the run W does not hold"
+    );
+    assert_eq!(
+        fake.asked_live,
+        vec![(start, vec![root.id(first)]), (start, vec![root.id(near)])],
+        "both chunks are examined at the pass start's clock"
+    );
+    assert!(
+        !fake
+            .answered_live
+            .iter()
+            .any(|(id, _)| *id == root.id(near)),
+        "not settled at the pass start: no row"
+    );
+
+    // The next pass: its W holds the run, so the frame is running.
+    fake.steps = 0;
+    fake.answered_live.clear();
+    let asked = pass_at(&mut retention, &root, &mut fake, start + 10 * 60_000);
+    assert!(asked.contains(&root.id(near)));
+    assert!(
+        fake.answered_live
+            .contains(&(root.id(near), FrameQueryAction::Running)),
+        "{:?}",
+        fake.answered_live
+    );
+    assert!(root.object(near).is_file(), "a running frame stays");
 }
 
 /// T-evidence (the cleaner's half): the kept frames' evidence rule, acted on by the round's

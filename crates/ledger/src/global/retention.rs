@@ -81,7 +81,8 @@ pub(super) struct RetentionIndex {
     frame_facts: view::FrameFacts,
     frame_view: bool,
     /// #422 LN-7c Q: the runs a record of was applied or loaded, so a record of another run
-    /// loads that run's earlier records once (`load_retention_sources`).
+    /// loads that run's earlier records once (`load_retention_sources`). A pass start drops a
+    /// run with its facts (`retain_live_objects`, review F5), so it is loaded again then.
     known_runs: BTreeSet<RunId>,
     through_sequence: u64,
     /// #422 LN-7c O: why the open read every owner record (`retention/owner_read.rs`): its

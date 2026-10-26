@@ -10,14 +10,20 @@
 //! model #375 §2.1: a `Cancelled` terminal counts only at Warning or higher; an Error event
 //! without an instance keeps nothing). Points depend only on outcome, severity and links, never
 //! on code text. Every timestamp is a fixed instant after `T0`.
+//!
+//! #422 LN-7c Q, T-eq on the same rows (review F3, fix round 1): statement L's error-window
+//! predicate keeps a frame captured shortly before each row's event exactly when the full view
+//! does, so L's predicate is pinned on these cases, not only the view's.
 
 use super::fixture::FormalRoot;
+use super::gate_ln7::{expected_action, query_decisions};
 use super::retention_events::{RetentionEvents, code_of};
 use crate::global::{
-    FrameErrorPoint, FrameRetentionSwitches, FrameRetentionView, GlobalLedger,
+    FrameErrorPoint, FrameRetentionClass, FrameRetentionSwitches, FrameRetentionView, GlobalLedger,
     GlobalLedgerEvidenceConfig,
 };
 use actingcommand_contract::{EventLinksDraft, EventSeverity, TaskOutcome};
+use std::collections::BTreeSet;
 
 /// 2026-01-01 00:00:00 UTC.
 const T0: u64 = 1_767_225_600_000;
@@ -134,6 +140,95 @@ fn gate_error_points_depend_only_on_outcome_severity_and_links() {
         assert!(!point.epoch_end, "row {row}");
         assert_eq!(point.event_type, event.event_type(), "row {row}");
         assert_eq!(point.at_unix_ms, at, "row {row}");
+    }
+}
+
+/// #422 LN-7c Q, T-eq on gate L-2's rows (review F3, fix round 1): the rows of
+/// `gate_error_points_depend_only_on_outcome_severity_and_links`, each two minutes after the one
+/// before and each with a run-less closed capture on the instance 2 s before its event, so the
+/// frame's 30 s window holds that event and no other row's. The full view classes the frame error
+/// exactly when the row's event is an error point, and statement L (W, then L, then the moved
+/// frame's kept folder) decides each frame as the full view does: its class, its action at E1's
+/// due time and its kept folder.
+#[test]
+fn ln7c_q_teq_statement_l_keeps_the_frames_of_the_same_error_points_as_the_full_view() {
+    use Event::{MonitorDegraded, RuntimeFailed, Terminal};
+    use EventSeverity::{Error, Info, Warning};
+    use Links::{InstanceAndRun, InstanceOnly, RunOnly};
+    use TaskOutcome::{Cancelled, Failure, Success};
+    /// Rows this far apart: no frame's window reaches another row.
+    const ROW_SPACING_MS: u64 = 120_000;
+    let rows = [
+        (1, Terminal(Failure), InstanceAndRun, Info, true),
+        (2, Terminal(Cancelled), InstanceAndRun, Info, false),
+        (3, Terminal(Cancelled), InstanceAndRun, Warning, true),
+        (4, Terminal(Success), InstanceAndRun, Info, false),
+        (5, RuntimeFailed, InstanceAndRun, Warning, true),
+        (6, RuntimeFailed, RunOnly, Warning, true),
+        (7, RuntimeFailed, InstanceOnly, Warning, false),
+        (8, RuntimeFailed, InstanceOnly, Error, true),
+        (10, MonitorDegraded, InstanceOnly, Error, false),
+    ];
+    let root = FormalRoot::create();
+    let events = RetentionEvents::new(&root);
+    let instance = events.instance();
+    let mut frames = Vec::new();
+    for (index, (row, event, shape, severity, expected)) in rows.into_iter().enumerate() {
+        let base = T0 + index as u64 * ROW_SPACING_MS;
+        // The frame is captured at `base + 1`, its window ends at `base + 30_001`.
+        let frame = events.closed_capture(instance, format!("row {row} frame").as_bytes(), base);
+        let links = match shape {
+            InstanceOnly => EventLinksDraft::default().with_instance_id(instance),
+            InstanceAndRun | RunOnly => {
+                let run = events.run(instance);
+                events.task_started(&run, base + 1_000);
+                match shape {
+                    RunOnly => EventLinksDraft::default().with_run_id(run.id),
+                    _ => run.links.clone(),
+                }
+            }
+        };
+        let at = base + 2_000;
+        match event {
+            Terminal(outcome) => {
+                let failure_code = (outcome != Success).then(|| code_of(severity));
+                events.terminal(links, outcome, failure_code, severity, at);
+            }
+            RuntimeFailed => {
+                events.runtime_failed(links, severity, at);
+            }
+            MonitorDegraded => {
+                events.monitor_degraded(links, severity, at);
+            }
+        }
+        frames.push((row, frame.artifact_id, expected));
+    }
+
+    let live = frames.iter().map(|(_, id, _)| *id).collect::<BTreeSet<_>>();
+    let decided = query_decisions(root.ledger(), &live, NOW);
+    let view = view(&root);
+    for (row, id, expected) in frames {
+        let frame = view
+            .frames
+            .iter()
+            .find(|frame| frame.reference.artifact_id == id)
+            .unwrap_or_else(|| panic!("row {row}: the frame is in the full view"));
+        let class = if expected {
+            FrameRetentionClass::Error
+        } else {
+            FrameRetentionClass::Default
+        };
+        assert_eq!(frame.class, class, "row {row}: the full view's class");
+        let Some((answer, folder)) = decided.get(&id) else {
+            panic!("row {row}: statement L answers no row for the frame");
+        };
+        assert_eq!(answer.class, frame.class, "row {row}: the class");
+        assert_eq!(
+            answer.action,
+            expected_action(frame, NOW),
+            "row {row}: the action"
+        );
+        assert_eq!(folder, &frame.folder, "row {row}: the kept folder");
     }
 }
 

@@ -45,12 +45,19 @@ pub const KEPT_FOLDER_CLEARED_FACT_KEY: &str = "host.kept_folder_cleared";
 const RETENTION_ENABLED_KEY: &str = "frame_retention_enabled";
 const DEDUP_ERROR_KEY: &str = "frame_retention_dedup_error";
 const DEDUP_LAB_KEY: &str = "frame_retention_dedup_lab";
-/// #422 LN-7c Q: the evidence-frame rule's age (actingd-config revision 16), and its default for a
-/// fact written before the key.
+/// #422 LN-7c Q: the evidence-frame rule's age (actingd-config revision 16). A fact written before
+/// the key leaves the listing at the key's default, and the statements take the defaults of
+/// `ledger_observer.read_check_vm_steps` and `ledger_observer.frame_query_chunk_frames`: all three
+/// are read from actingd's defaults file (`SHIPPED_DEFAULTS`; review F4), not kept here.
 const EVIDENCE_MAX_AGE_KEY: &str = "frame_retention_evidence_max_age_days";
-const EVIDENCE_MAX_AGE_DEFAULT_DAYS: u64 = 15;
-/// The frames of one statement L or K: `ledger_observer.frame_query_chunk_frames`'s default.
-const QUERY_CHUNK_FRAMES: usize = 256;
+const CHECK_VM_STEPS_KEY: &str = "ledger_observer.read_check_vm_steps";
+const CHUNK_FRAMES_KEY: &str = "ledger_observer.frame_query_chunk_frames";
+/// #422 LN-7c Q (review F4): actingd's defaults file, as the program embeds it (the key table of
+/// `actingcommand-runtime-config` reads the same bytes, `SHIPPED_DEFAULTS` there).
+const SHIPPED_DEFAULTS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../distribution/windows/actingd.defaults.json"
+));
 const DAY_MS: i64 = 86_400_000;
 const DAY: u64 = 86_400_000;
 /// A resource reading frame stays 7 days.
@@ -458,16 +465,29 @@ pub fn list_frames(request: ForensicFramesRequest) -> ForensicResult<ForensicOut
         .map_err(map_ledger_error)?;
     drop(snapshot);
     // #422 LN-7c Q: the cleaner's own answers, on a read-only connection of the listing's own.
+    // Review F4: the keys' defaults come from actingd's defaults file.
+    let max_age_days = match facts.evidence_max_age_days {
+        Some(days) => days,
+        None => shipped_default(EVIDENCE_MAX_AGE_KEY)?,
+    };
+    let chunk_frames = usize::try_from(shipped_default(CHUNK_FRAMES_KEY)?)
+        .unwrap_or(usize::MAX)
+        .max(1);
+    let check_vm_steps = u32::try_from(shipped_default(CHECK_VM_STEPS_KEY)?).unwrap_or(u32::MAX);
     let settings = FrameQuerySettings {
         now_unix_ms,
         switches,
-        evidence_max_age_ms: facts
-            .evidence_max_age_days
-            .unwrap_or(EVIDENCE_MAX_AGE_DEFAULT_DAYS)
-            .saturating_mul(DAY),
+        evidence_max_age_ms: max_age_days.saturating_mul(DAY),
     };
-    let mut query = FrameQuery::open_state_root(&request.state_root).map_err(map_ledger_error)?;
-    let confirmed_live = class_live_frames(&request.state_root, &mut query, &mut view, &settings)?;
+    let mut query = FrameQuery::open_state_root(&request.state_root, check_vm_steps)
+        .map_err(map_ledger_error)?;
+    let confirmed_live = class_live_frames(
+        &request.state_root,
+        &mut query,
+        &mut view,
+        &settings,
+        chunk_frames,
+    )?;
     let kept_leaves = list_kept_folders(&request.state_root).map_err(|error| {
         ForensicError::relayed(
             error.code(),
@@ -481,9 +501,8 @@ pub fn list_frames(request: ForensicFramesRequest) -> ForensicResult<ForensicOut
         &kept_leaves,
         &confirmed_live,
         &settings,
-        facts
-            .evidence_max_age_days
-            .unwrap_or(EVIDENCE_MAX_AGE_DEFAULT_DAYS),
+        max_age_days,
+        chunk_frames,
     )?;
     drop(query);
     let before_unix_ms = match request.before {
@@ -508,6 +527,25 @@ pub fn list_frames(request: ForensicFramesRequest) -> ForensicResult<ForensicOut
     ))))
 }
 
+/// #422 LN-7c Q (review F4): the defaults file's value of `key` (a top-level member, or
+/// `<section>.<member>`), a non-negative integer. A defaults file that does not name it leaves the
+/// listing without the cleaner's settings: `frame_switches_unavailable`, as for the switches.
+fn shipped_default(key: &str) -> ForensicResult<u64> {
+    let unavailable = || {
+        ForensicError::new(
+            ForensicsCode::FrameSwitchesUnavailable.code(),
+            ForensicsLocation::ListFrames.location(),
+            format!("the defaults file does not name {key} as an integer"),
+        )
+    };
+    let defaults =
+        serde_json::from_str::<serde_json::Value>(SHIPPED_DEFAULTS).map_err(|_| unavailable())?;
+    key.split('.')
+        .try_fold(&defaults, |value, member| value.get(member))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(unavailable)
+}
+
 /// The frame index does not cover the ledger: the cleaner decides nothing, nor does the listing.
 fn frame_refs_incomplete() -> ForensicError {
     ForensicError::new(
@@ -527,13 +565,14 @@ fn answered<T>(outcome: FrameQueryOutcome<T>) -> ForensicResult<T> {
 }
 
 /// #422 LN-7c Q: classes the frames in the live frame store by statement L, as the cleaner does
-/// (W once, L per chunk), and sets each one's due time from its action. Returns the live frames L
-/// removes as confirmed evidence.
+/// (W once, L per chunk of `chunk_frames`), and sets each one's due time from its action. Returns
+/// the live frames L removes as confirmed evidence.
 fn class_live_frames(
     root: &Path,
     query: &mut FrameQuery,
     view: &mut FrameRetentionView,
     settings: &FrameQuerySettings,
+    chunk_frames: usize,
 ) -> ForensicResult<Vec<LiveFrameAnswer>> {
     let live = live_frame_ids(root)
         .map_err(|error| {
@@ -560,7 +599,7 @@ fn class_live_frames(
         .map(|(position, frame)| (frame.reference.artifact_id, position))
         .collect::<BTreeMap<_, _>>();
     let mut confirmed = Vec::new();
-    for chunk in live.chunks(QUERY_CHUNK_FRAMES) {
+    for chunk in live.chunks(chunk_frames) {
         for answer in answered(
             query
                 .live(chunk, &waits, settings)
@@ -601,8 +640,9 @@ fn due_of(answer: &LiveFrameAnswer, now: u64) -> Option<u64> {
     }
 }
 
-/// #422 LN-7c Q: statement K over the kept listing, and who confirmed each confirmed evidence
-/// frame (the kept ones K removes as confirmed, and `confirmed_live`).
+/// #422 LN-7c Q: statement K over the kept listing (per chunk of `chunk_frames`), and who
+/// confirmed each confirmed evidence frame (the kept ones K removes as confirmed, and
+/// `confirmed_live`).
 fn evidence_report(
     query: &mut FrameQuery,
     view: &FrameRetentionView,
@@ -610,6 +650,7 @@ fn evidence_report(
     confirmed_live: &[LiveFrameAnswer],
     settings: &FrameQuerySettings,
     max_age_days: u64,
+    chunk_frames: usize,
 ) -> ForensicResult<EvidenceFramesReport> {
     let mut report = EvidenceFramesReport {
         max_age_days,
@@ -638,7 +679,7 @@ fn evidence_report(
     }
     let ids = kept.keys().copied().collect::<Vec<_>>();
     let mut answered_ids = BTreeSet::new();
-    for chunk in ids.chunks(QUERY_CHUNK_FRAMES) {
+    for chunk in ids.chunks(chunk_frames) {
         for answer in answered(query.kept(chunk, settings).map_err(map_ledger_error)?)? {
             let Some((path, bytes)) = kept.get(&answer.artifact_id) else {
                 continue;

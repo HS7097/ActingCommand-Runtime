@@ -78,13 +78,8 @@ const RUN_FRAMES: &str = "SELECT a.artifact_id FROM ledger_links l INDEXED BY le
 /// A record's time.
 const RECORD_TIME: &str = "SELECT timestamp_unix_ms FROM ledger_events WHERE sequence = ?1";
 
-/// How often a query looks at its stop inside a statement when no writer names it (an offline
-/// listing): `ledger_observer.read_check_vm_steps`'s default.
-const OFFLINE_CHECK_VM_STEPS: u32 = 10_000;
 /// The evidence age a confirmation's count uses: never reached.
 const COVERS_MAX_AGE_MS: u64 = 3_650 * DAY_MS;
-/// The frames of one statement L of a confirmation's count.
-const COVERS_CHUNK_FRAMES: usize = 256;
 
 /// #422 LN-7c Q: the stop a frame query watches inside its statements.
 pub type FrameQueryStop = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -522,8 +517,10 @@ impl FrameQuery {
     }
 
     /// A query on the state database of `state_root`, read-only, without a stop: the offline
-    /// frame listing (`actingledger frames`) and a confirmation's count.
-    pub fn open_state_root(state_root: &Path) -> GlobalLedgerResult<Self> {
+    /// frame listing (`actingledger frames`) and a confirmation's count. `check_vm_steps` is the
+    /// caller's `ledger_observer.read_check_vm_steps` (review F4: the offline tools read it from
+    /// the key table, not from a constant of this crate).
+    pub fn open_state_root(state_root: &Path, check_vm_steps: u32) -> GlobalLedgerResult<Self> {
         let database = RuntimeDatabase::open_existing_unchecked(state_root)?;
         if !has_schema(&database)? {
             return Err(GlobalLedgerError::request(
@@ -531,11 +528,7 @@ impl FrameQuery {
                 location(),
             ));
         }
-        Self::open(
-            Arc::new(database),
-            Arc::new(|| false),
-            OFFLINE_CHECK_VM_STEPS,
-        )
+        Self::open(Arc::new(database), Arc::new(|| false), check_vm_steps)
     }
 
     /// One statement in a read transaction of its own, run only while the frame index covers the
@@ -616,6 +609,18 @@ impl FrameQuery {
         waits: &FrameWaits,
         settings: &FrameQuerySettings,
     ) -> GlobalLedgerResult<FrameQueryOutcome<Vec<LiveFrameAnswer>>> {
+        self.live_statement(LIVE, artifacts, waits, settings)
+    }
+
+    /// `live` with the statement text `sql`: statement L, or in a ledger test a variant of it
+    /// that switches one of its terms off (review F3).
+    pub(in crate::global) fn live_statement(
+        &mut self,
+        sql: &str,
+        artifacts: &[ArtifactId],
+        waits: &FrameWaits,
+        settings: &FrameQuerySettings,
+    ) -> GlobalLedgerResult<FrameQueryOutcome<Vec<LiveFrameAnswer>>> {
         let waits = serde_json::to_string(&waits.rows).map_err(|error| {
             GlobalLedgerError::json(
                 LedgerCode::EventSerializationFailed.code(),
@@ -640,7 +645,7 @@ impl FrameQuery {
                 SqlValue::Integer(i64::from(settings.switches.dedup_lab)),
             ),
         ];
-        self.run(LIVE, &parameters, |rows| {
+        self.run(sql, &parameters, |rows| {
             rows.into_iter()
                 .map(|row| match row.as_slice() {
                     [
@@ -979,15 +984,19 @@ fn class_of(text: &str) -> Option<FrameRetentionClass> {
 /// cleaner's classification (`switches`, at `now_unix_ms`) and the kept listing: the target's
 /// frames captured at or before the confirmation that are in `kept\` (`in_kept`), and those still
 /// live whose class is Lab or error. A frame index that does not cover the ledger counts nothing
-/// and is this read's error (`ledger_index_mismatch`).
+/// and is this read's error (`ledger_index_mismatch`). `check_vm_steps` and `chunk_frames` are the
+/// caller's `ledger_observer.read_check_vm_steps` and `ledger_observer.frame_query_chunk_frames`
+/// (review F4: read from the key table, not from constants of this crate).
 pub fn evidence_covers(
     state_root: &Path,
     target: EvidenceTarget,
     confirmation_sequence: u64,
     switches: FrameRetentionSwitches,
     now_unix_ms: u64,
+    check_vm_steps: u32,
+    chunk_frames: usize,
 ) -> GlobalLedgerResult<EvidenceCovers> {
-    let mut query = FrameQuery::open_state_root(state_root)?;
+    let mut query = FrameQuery::open_state_root(state_root, check_vm_steps)?;
     let confirmed_at = query.record_time(confirmation_sequence)?.ok_or_else(|| {
         GlobalLedgerError::request(LedgerCode::ArtifactEventNotFound.code(), location())
     })?;
@@ -1053,7 +1062,7 @@ pub fn evidence_covers(
                 return Err(incomplete());
             }
         };
-        for chunk in in_live.chunks(COVERS_CHUNK_FRAMES) {
+        for chunk in in_live.chunks(chunk_frames.max(1)) {
             match query.live(chunk, &waits, &settings)? {
                 FrameQueryOutcome::Answered { value, .. } => {
                     live_evidence += value

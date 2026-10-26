@@ -5,9 +5,11 @@
 //! facts and reads no frame at its open. Besides the eviction proof set and the owner changes,
 //! ends, imports and closes, it keeps the objects of the capture frames its records named since
 //! the open, which `retain_live_objects` drops at each cleaner pass start unless the frame is
-//! still in the live frame store. A record that names a run or a capture frame the writer does not
-//! hold loads it again from the store, by its link or its `artifact_id` index, before the record
-//! is checked; `apply` is fed those records unchanged, in ledger order.
+//! still in the live frame store, and with them the run- and scope-keyed facts of the runs and
+//! scopes no kept object or open run needs (review F5). A record that names a run or a capture
+//! frame the writer does not hold loads it again from the store, by its link or its
+//! `artifact_id` index, before the record is checked; `apply` is fed those records unchanged, in
+//! ledger order.
 
 use super::*;
 use crate::global::history::{HistorySelection, LinkSet};
@@ -106,7 +108,16 @@ impl RetentionIndex {
     /// #422 LN-7c Q (final-query §2): at each frame cleaner pass start, keeps of the capture frame
     /// objects only those of the frames in `live` (the live frame store's listing) and the
     /// eviction proof set. A dropped object is loaded again from the store when a record names it
-    /// (`load_retention_sources`); nothing else of the index is dropped.
+    /// (`load_retention_sources`).
+    ///
+    /// Review F5 (fix round 1): the run- and scope-keyed facts are trimmed as LN-7's
+    /// `retain_frames` trimmed them, to the retained objects and owners. Kept are the runs of the
+    /// retained objects and the runs a record was applied or loaded of that have no terminal
+    /// yet (the open runs this writer knows); the scopes of the retained objects, those runs'
+    /// scopes and the sealed scopes; and the closes, scope extents and lease releases of the
+    /// owners a start may still close and of the retained objects' identities. A dropped run
+    /// leaves `known_runs` with its facts, so its next record loads it again from the store
+    /// (`load_run`), as LN-7's dropped runs were.
     pub(in crate::global) fn retain_live_objects(&mut self, live: &BTreeSet<ArtifactId>) {
         self.objects.retain(|id, object| {
             object.reference.kind != ArtifactKind::CaptureFrame
@@ -120,6 +131,60 @@ impl RetentionIndex {
         });
         let frames = &self.frames;
         self.seen_frames.retain(|frame| frames.contains_key(frame));
+        let mut runs = self
+            .known_runs
+            .iter()
+            .filter(|run| !self.run_terminals.contains_key(*run))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut scopes = self.sealed_scopes.clone();
+        let mut identities = BTreeSet::new();
+        let mut lease_keys = BTreeSet::new();
+        for object in self.objects.values() {
+            scopes.extend(object.reference_scopes.iter().copied());
+            if let Some(identity) = object.identity.as_ref() {
+                runs.extend(identity.run_id);
+                identities.insert(ClosureScope::from_identity(identity));
+                if let Some(lease) = identity.lease_id {
+                    lease_keys.insert((identity.owner_epoch, identity.instance_id, lease));
+                }
+            }
+        }
+        for run in &runs {
+            scopes.insert(RetentionScope::Run(*run));
+            if let Some(linked) = self.run_scopes.get(run) {
+                scopes.extend(linked.keys().copied());
+            }
+        }
+        let sealed_runs = self
+            .sealed_scopes
+            .iter()
+            .filter_map(|scope| match scope {
+                RetentionScope::Run(run) => Some(*run),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let owners = self.retained_owners();
+        let closing =
+            |scope: &ClosureScope| owners.contains(&scope.owner) || identities.contains(scope);
+        self.recent.retain(|scope, _| scopes.contains(scope));
+        self.linked_runs.retain(|scope, linked| {
+            linked.retain(|run| runs.contains(run) || sealed_runs.contains(run));
+            !linked.is_empty()
+                && (scopes.contains(scope) || linked.iter().any(|run| sealed_runs.contains(run)))
+        });
+        self.run_scopes.retain(|run, _| runs.contains(run));
+        self.lab_anchors.retain(|scope, _| scopes.contains(scope));
+        self.material_scope_activity
+            .retain(|scope, _| scopes.contains(scope));
+        self.scheduled_runs.retain(|run| runs.contains(run));
+        self.run_terminals.retain(|run, _| runs.contains(run));
+        self.scope_sources.retain(|scope, _| closing(scope));
+        self.closures.retain(|scope, _| closing(scope));
+        self.prior_epoch_closes.retain(|scope, _| closing(scope));
+        self.released_leases
+            .retain(|key, _| owners.contains(&key.0) || lease_keys.contains(key));
+        self.known_runs.retain(|run| runs.contains(run));
     }
 
     /// LN-7: the owners whose scopes a start may still close (`prior_epoch_owners`): the latest

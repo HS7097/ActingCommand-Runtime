@@ -158,13 +158,18 @@ pub(crate) fn confirm(
 
 /// #422 LN-7c Q (final-query §4): `{evidence_frames, in_kept}` of the confirmation at `sequence`,
 /// with the switches of the Runtime's latest `config.parameters.top_level` at the Runtime's
-/// clock (one fact snapshot read, which records nothing).
+/// clock (one fact snapshot read, which records nothing). The statements' stop interval and
+/// chunk are the defaults of `ledger_observer.read_check_vm_steps` and
+/// `ledger_observer.frame_query_chunk_frames`, read from the key table and the defaults file.
 fn covers(
     client: &RuntimeClient,
     state_root: &Path,
     target: Target,
     sequence: u64,
 ) -> Result<Value, Outcome> {
+    let observer = actingcommand_runtime_config::EffectiveConfig::default()
+        .ledger_observer()
+        .map_err(|failure| failure.outcome())?;
     let snapshot = client
         .runtime_fact_snapshot()
         .map_err(|error| error.outcome())?;
@@ -174,6 +179,8 @@ fn covers(
         sequence,
         switches(&snapshot.records),
         snapshot.taken_at_unix_ms,
+        u32::try_from(observer.read_check_vm_steps).unwrap_or(u32::MAX),
+        usize::try_from(observer.frame_query_chunk_frames).unwrap_or(usize::MAX),
     )
     .map_err(|error| Outcome::relayed(error.code()))?;
     Ok(json!({

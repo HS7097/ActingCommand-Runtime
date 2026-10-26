@@ -2361,13 +2361,14 @@ tests = [
 ]
 incident = ["#419 DIAG-RUN"]
 
-# LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1.4, §1.5, §4, §5; brief rd-1026/brief-ln7c-q.md): the frame cleaner by query, on a fake clock and step counter: a statement starts no earlier than the one before plus its steps at frame_query_steps_per_second, so the steps never exceed the rate by more than one statement, and a raised stop interrupts the pass (T-pace); a live frame is examined at settle, at 1 day and at 7 days by its answers, a running one at every pass, a late window point after settle moves the frame at 1 day, and a class change between queueing and the round is acted on by the round's answer (T-schedule); kept frames go when confirmed or at the age the pass starts with, and a changed age takes effect at the next pass (T-evidence); frame_retention_evidence_max_age_days is 15 by default, settable within 1..=3650 and refused outside it, frame_query_steps_per_second settable and frame_query_chunk_frames read at start
+# LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1.4, §1.5, §4, §5; brief rd-1026/brief-ln7c-q.md): the frame cleaner by query, on a fake clock and step counter: a statement starts no earlier than the one before plus its steps at frame_query_steps_per_second, so the steps never exceed the rate by more than one statement, and a raised stop interrupts the pass (T-pace); a live frame is examined at settle, at 1 day and at 7 days by its answers, a running one at every pass, a late window point after settle moves the frame at 1 day, and a class change between queueing and the round is acted on by the round's answer, and every chunk is examined at the pass start's clock, so a frame captured in the 30 s before the pass start waits for a run that started after W (T-schedule; fix round 1, review F1); kept frames go when confirmed or at the age the pass starts with, and a changed age takes effect at the next pass (T-evidence); frame_retention_evidence_max_age_days is 15 by default, settable within 1..=3650 and refused outside it, frame_query_steps_per_second settable and frame_query_chunk_frames read at start
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_pace_steps_never_exceed_the_rate_by_more_than_one_statement",
     "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_pace_the_stop_interrupts",
     "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_every_pass",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_schedule_a_frame_unsettled_at_the_pass_start_waits_for_a_run_w_does_not_hold",
     "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_evidence_kept_frames_go_when_confirmed_or_at_the_age_the_pass_starts_with",
     "actingcommand-runtime-config::lib::gate_ln7c_q::ln7c_q_t_evidence_the_evidence_age_is_settable_within_its_range_and_refused_outside_it",
 ]
