@@ -40,6 +40,7 @@ use super::{
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{OperationRunCap, RunDecisionError, RunDirective, RunMaxRunsEnd, RunStateMachine};
+use actingcommand_contract::TaskSchema;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_recognition_pack::{
@@ -48,8 +49,8 @@ use actingcommand_recognition_pack::{
 };
 use serde::Deserialize;
 
-/// The task schema that admits both declarations.
-const TASK_SCHEMA: &str = "0.9";
+/// The first task schema that admits these declarations.
+const TASK_SCHEMA: TaskSchema = TaskSchema::V0_9;
 
 /// An operation's `when`, as the package writes it: `{"present": "<target>"}` or
 /// `{"absent": "<target>"}`.
@@ -218,15 +219,13 @@ pub(super) fn validate_operation(
     operation: &TaskOperation,
     schema_version: &str,
 ) -> Result<(), ContainedTaskError> {
-    if operation
-        .when
-        .as_ref()
-        .is_some_and(|when| schema_version != TASK_SCHEMA || when.target_id().trim().is_empty())
-    {
+    if operation.when.as_ref().is_some_and(|when| {
+        !TaskSchema::at_least(schema_version, TASK_SCHEMA) || when.target_id().trim().is_empty()
+    }) {
         return Err(invalid(operation, "when"));
     }
     if let Some(refusal) = &operation.on_guard_refused
-        && (schema_version != TASK_SCHEMA
+        && (!TaskSchema::at_least(schema_version, TASK_SCHEMA)
             || operation.click.is_none()
             || operation.guard.is_none()
             || operation.unguarded_trusted_coordinate
@@ -237,7 +236,7 @@ pub(super) fn validate_operation(
         return Err(invalid(operation, "on_guard_refused"));
     }
     if operation.max_runs.is_some_and(|max_runs| {
-        schema_version != TASK_SCHEMA
+        !TaskSchema::at_least(schema_version, TASK_SCHEMA)
             || !(1..=actingcommand_contract::MAX_TASK_OPERATION_RUNS).contains(&max_runs)
             || operation.on_max_runs.is_none()
     }) {

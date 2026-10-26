@@ -28,6 +28,7 @@ use super::{
 };
 use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
+use actingcommand_contract::TaskSchema;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
@@ -549,7 +550,9 @@ impl TaskProgram {
                 },
             )
         };
-        if self.schema_version != "0.9" || control.schema_version != PHASED_CONTROL_SCHEMA {
+        if !self.schema_at_least(TaskSchema::V0_9)
+            || control.schema_version != PHASED_CONTROL_SCHEMA
+        {
             return Err(invalid("schema_version", None));
         }
         if self.phases.is_some() || control.phases.is_some() {

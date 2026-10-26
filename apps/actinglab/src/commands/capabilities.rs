@@ -665,7 +665,8 @@ pub(crate) fn schema_capabilities() -> Value {
         "cli_envelope": {"supported": [actingcommand_contract::CLI_SCHEMA_VERSION]},
         "legacy_task": {"supported": ["0.1"]},
         "task_operation": {
-            "supported": ["0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"],
+            "supported": actingcommand_contract::TaskSchema::ALL
+                .map(actingcommand_contract::TaskSchema::as_str),
             "validation": "version_specific_fields_required"
         },
         "recognition_pack": {"supported": ["0.1", "0.3", "0.4", "0.5", "0.6", "0.7"]},

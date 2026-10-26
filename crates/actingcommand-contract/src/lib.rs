@@ -47,6 +47,8 @@ pub mod standard_pack_schedule;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root (M-357a v1.1 §2).
 pub mod standard_pack_table;
 pub mod state;
+// Workflow #392 DA-5a: the ordered task schema of a `task.json`.
+pub mod task_schema;
 pub mod taskflow;
 pub mod types;
 
@@ -79,6 +81,7 @@ pub use standard_pack_display::*;
 pub use standard_pack_schedule::*;
 pub use standard_pack_table::*;
 pub use state::*;
+pub use task_schema::TaskSchema;
 pub use taskflow::*;
 pub use types::{
     AcquisitionCapture, ContractResult, DurationMillis, ENGINE_DELEGATED, ENGINE_NATIVE,

@@ -22,7 +22,7 @@ use actingcommand_contract::{
     SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
     SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
-    TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
+    TaskPhaseEvidence, TaskSchema, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
     TaskTimingStage, validate_resource_adjustments, validate_resource_readings,
 };
 // #411 A20: a phased route's refusal names the refused member.
@@ -7989,23 +7989,36 @@ struct TaskProgram {
 }
 
 impl TaskProgram {
+    /// Workflow #392 DA-5a: the task schema the program's `schema_version` names, if any.
+    fn schema(&self) -> Option<TaskSchema> {
+        TaskSchema::of(self.schema_version.as_str())
+    }
+
+    /// Workflow #392 DA-5a: whether the program's `schema_version` names `minimum` or a later
+    /// task schema.
+    fn schema_at_least(&self, minimum: TaskSchema) -> bool {
+        TaskSchema::at_least(self.schema_version.as_str(), minimum)
+    }
+
     fn validate(
         &self,
         control: &TaskControl,
         bundle: &LoadedBundle,
         detector: &PageDetector,
     ) -> Result<(), ContainedTaskError> {
-        let schema_valid = match self.schema_version.as_str() {
-            "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
-            "0.7" => self.post_admission_ocr.as_ref().is_some_and(|value| {
+        let schema_valid = match self.schema() {
+            Some(TaskSchema::V0_3 | TaskSchema::V0_4 | TaskSchema::V0_5 | TaskSchema::V0_6) => {
+                self.post_admission_ocr.is_none()
+            }
+            Some(TaskSchema::V0_7) => self.post_admission_ocr.as_ref().is_some_and(|value| {
                 serde_json::from_value::<PostAdmissionOcrDeclaration>(value.clone()).is_ok()
             }),
-            "0.8" => self.post_admission_ocr.as_ref().is_some_and(|value| {
+            Some(TaskSchema::V0_8) => self.post_admission_ocr.as_ref().is_some_and(|value| {
                 serde_json::from_value::<OcrFieldsDeclaration>(value.clone()).is_ok()
             }),
-            "0.9" => self.post_admission_ocr.is_none(),
-            _ => false,
-        } && (self.schema_version == "0.9"
+            Some(TaskSchema::V0_9) => self.post_admission_ocr.is_none(),
+            None => false,
+        } && (self.schema_at_least(TaskSchema::V0_9)
             || !matches!(self.entry_page, Some(EntryPageDeclaration::Set(_))));
         if !schema_valid
             || self.task_id != control.entry_task_id
@@ -8032,7 +8045,7 @@ impl TaskProgram {
                     reason,
                 )
             };
-            if !matches!(self.schema_version.as_str(), "0.8" | "0.9") {
+            if !self.schema_at_least(TaskSchema::V0_8) {
                 return Err(invalid("schema_version_unsupported"));
             }
             if self.scheduling_outcome.is_none() {
@@ -8049,7 +8062,7 @@ impl TaskProgram {
                     reason,
                 )
             };
-            if !matches!(self.schema_version.as_str(), "0.8" | "0.9") {
+            if !self.schema_at_least(TaskSchema::V0_8) {
                 return Err(invalid("schema_version_unsupported"));
             }
             if self.scheduling_outcome.is_none() {
@@ -8067,9 +8080,10 @@ impl TaskProgram {
             )
             .map_err(|code| invalid(code.as_str()))?;
         }
-        if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
+        if self.schema_at_least(TaskSchema::V0_9)
+            != (control.schema_version == PHASED_CONTROL_SCHEMA)
             || self.phases != control.phases
-            || (self.phases.is_some() && self.schema_version != "0.9")
+            || (self.phases.is_some() && !self.schema_at_least(TaskSchema::V0_9))
         {
             return Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
@@ -8132,7 +8146,8 @@ impl TaskProgram {
                         .count()
                         != 1
                 })
-                || (declaration.designated_effects().is_some() && self.schema_version != "0.9")
+                || (declaration.designated_effects().is_some()
+                    && !self.schema_at_least(TaskSchema::V0_9))
             {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
@@ -8534,12 +8549,14 @@ impl TaskProgram {
     }
 
     fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
-        let valid = match self.schema_version.as_str() {
-            "0.3" | "0.4" | "0.5" | "0.6" => self.timeout_ms.is_none(),
-            "0.7" | "0.8" | "0.9" => self
+        let valid = match self.schema() {
+            Some(TaskSchema::V0_3 | TaskSchema::V0_4 | TaskSchema::V0_5 | TaskSchema::V0_6) => {
+                self.timeout_ms.is_none()
+            }
+            Some(TaskSchema::V0_7 | TaskSchema::V0_8 | TaskSchema::V0_9) => self
                 .timeout_ms
                 .is_none_or(|timeout_ms| control.timeout_ms == Some(timeout_ms)),
-            _ => false,
+            None => false,
         };
         if valid {
             Ok(())
@@ -8551,12 +8568,16 @@ impl TaskProgram {
     }
 
     fn validate_task_max_steps(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
-        let valid = match self.schema_version.as_str() {
-            "0.3" | "0.4" | "0.5" | "0.6" => self.max_steps.is_none(),
-            "0.7" | "0.8" | "0.9" => self.max_steps.is_none_or(|max_steps| {
-                (1..=MAX_STEPS).contains(&max_steps) && control.max_steps == Some(max_steps)
-            }),
-            _ => false,
+        let valid = match self.schema() {
+            Some(TaskSchema::V0_3 | TaskSchema::V0_4 | TaskSchema::V0_5 | TaskSchema::V0_6) => {
+                self.max_steps.is_none()
+            }
+            Some(TaskSchema::V0_7 | TaskSchema::V0_8 | TaskSchema::V0_9) => {
+                self.max_steps.is_none_or(|max_steps| {
+                    (1..=MAX_STEPS).contains(&max_steps) && control.max_steps == Some(max_steps)
+                })
+            }
+            None => false,
         };
         if valid {
             Ok(())
@@ -10659,7 +10680,7 @@ impl TaskClick {
                 }
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                if !matches!(schema_version, "0.7" | "0.8" | "0.9")
+                if !TaskSchema::at_least(schema_version, TaskSchema::V0_7)
                     || self.x.is_some()
                     || self.y.is_some()
                     || self.width.is_some()

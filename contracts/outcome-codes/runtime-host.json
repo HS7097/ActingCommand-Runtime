@@ -20542,7 +20542,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.14",
+      "since": "0.12.15",
       "description": "A Runtime-started policy run on an instance whose scheduling.day_boundary.quiet is true in effect would not end, by its expected duration (required_ms), before the end of the activity window it would be admitted in (window_end_unix_ms; in a bookkeeping-day profile the game's reset); it is deferred and wakes at the start of the profile's next window (next_eligible_unix_ms). Shorter work still runs up to the window's end. Admission refuses an intent that no longer fits with the same code (SCH-M D-6, Workflow #386 SR-4a2).",
       "common_causes": "A long task became due shortly before the end of its activity window.",
       "handling": "Nothing to repair. To let such runs start anyway, set scheduling.day_boundary.quiet (or the instance's own key) to false."
@@ -22457,7 +22457,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.14",
+      "since": "0.12.15",
       "description": "SCH-M ED-2 (contracts/instance-fact-store.md, Run duration facts): a publication named health.run_duration (fact_key), the instance store record of the run-duration samples, which only the Runtime writes at the settlement of a successful scheduled run. A client's PublishFact or PublishFacts, and any other publication path of the Runtime, is refused before the fact write gate and nothing is appended. Not fatal.",
       "common_causes": "A script that copies or restores an instance's facts, run-duration samples included.",
       "handling": "Leave the key out: the samples come only from the instance's successful scheduled runs; to stop using them, set scheduling.expected_runtime.enabled to false."
@@ -22479,7 +22479,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.14",
+      "since": "0.12.15",
       "description": "SCH-M ED-2 (Fail Loud): a row of the instance's health.run_duration record (instance_id, the instance alias) was dropped, or a run's sample was not recorded: a new package's row beyond the 256-row bound dropped the row with the oldest at (package_id that row's); the write dropped a stored row it could not read (package_id when it could be read); or the store refused the record's publication (package_id the run's, the refusal as the caused_by link). That package's next expected duration is its declared one until it has runs again. One runtime.failed record with system links (operation record_run_duration_sample) and the same line in the daemon's log.",
       "common_causes": "More than 256 task packages ran on one instance; or the instance fact store is full (fact_store_capacity_exceeded as the cause).",
       "handling": "None for the bound: the oldest package gets its samples again from its next runs. For a refusal, read the cause; a full store is booked in the capacity ledger of contracts/instance-fact-store.md."
@@ -29421,7 +29421,7 @@
       "layer": "host",
       "review": "pending",
       "status": "active",
-      "since": "0.12.14",
+      "since": "0.12.15",
       "description": "A Runtime host operation (SCH-M ED-2): one successful scheduled run's duration written as the newest sample of its package's row in its instance's health.run_duration record, at the settlement that recorded its execution, and the record published."
     },
     "project_expected_runtime": {
@@ -29429,7 +29429,7 @@
       "layer": "host",
       "review": "pending",
       "status": "active",
-      "since": "0.12.14",
+      "since": "0.12.15",
       "description": "A Runtime host operation (SCH-M ED-2): the expected duration E of each evaluated (task, instance) pair projected from its instance's health.run_duration record into the evaluation's task states."
     }
   }
