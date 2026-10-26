@@ -167,6 +167,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCH-M ED-2 (frozen model v1.0 §3.4, §3.8): this build keeps the run-duration samples
+        // (`health.run_duration`) and dispatches by the expected duration E; the catalog
+        // generator emits catalog v35 only for a Runtime that names it.
+        subsystem(
+            "expected_runtime",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
     let explicit_or_default = |present: bool| {

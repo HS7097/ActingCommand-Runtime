@@ -527,6 +527,9 @@ struct SeenDispatch {
     /// runs of its (task, instance) pair through it, 0 after a success, maintained at each
     /// completion from the pair's previous completed dispatch, never folded over all runs.
     failures: Option<u64>,
+    /// SCH-M ED-2 (coordinator ruling 10-24 14:1x): the duration its intent record says it
+    /// reserved, when that is not its task spec's declared one; recovery reserves it again.
+    expected_duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1885,6 +1888,7 @@ pub(crate) fn largest_journal_for_synthetic_dispatches_for_test(dispatches: u64)
             completed_sequence: Some(intent_sequence + 3),
             lifecycle: DispatchLifecycle::Completed,
             failures: None,
+            expected_duration_ms: None,
         };
         let failures = failures_through(&seen, &decision_id, &dispatch);
         order.insert(intent_sequence, decision_id.clone());
@@ -1899,6 +1903,15 @@ pub(crate) fn largest_journal_for_synthetic_dispatches_for_test(dispatches: u64)
         largest = largest.max(seen.len()).max(order.len());
     }
     largest
+}
+
+/// SCH-M ED-2 (§3.4 D-15): the duration an admission's own projection gives an intent's pair:
+/// the expected duration E its task state carries, when it carries one, and the configured
+/// declared duration of a fact refresh read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AdmissionDuration {
+    pub(crate) expected_runtime_ms: Option<u64>,
+    pub(crate) refresh_declared_ms: u64,
 }
 
 /// One dispatch of `seen` as a decision page shows it at `snapshot_ledger_position`.
@@ -2460,7 +2473,12 @@ impl PolicyHost {
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+        let intent = control_intent(
+            &dispatch.data,
+            dispatch.expected_duration_ms,
+            &catalog.compiled,
+            admission,
+        )?;
         crate::policy_control::runtime_budget_exceeded(&intent, admission, runtime_ms)
     }
 
@@ -2846,9 +2864,45 @@ impl PolicyHost {
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
         // Workflow #386 SR-6b, MCP-19a (register §1.143): the not-run explanation of this
-        // evaluation, before the host adds its notes to the decisions.
-        self.explanation
-            .record(&evaluation, active.compiled.catalog_hash(), time.unix_ms);
+        // evaluation, before the host adds its notes to the decisions. SCH-M ED-2 (§3.4
+        // "Visible"): each row with the duration its dispatch would reserve.
+        let mut expected = BTreeMap::<&str, BTreeMap<&str, (u64, u8)>>::new();
+        for state in &facts.tasks {
+            if let (Some(expected_ms), Some(runs)) =
+                (state.expected_runtime_ms, state.expected_runtime_runs)
+            {
+                expected
+                    .entry(state.task_id.as_str())
+                    .or_default()
+                    .insert(state.instance_id.as_str(), (expected_ms, runs));
+            }
+        }
+        let refresh_declared_ms = fact_refresh.settings.expected_duration_ms;
+        let compiled = &active.compiled;
+        self.explanation.record(
+            &evaluation,
+            active.compiled.catalog_hash(),
+            time.unix_ms,
+            &|task_id: &str, alias: &str| match expected
+                .get(task_id)
+                .and_then(|instances| instances.get(alias))
+            {
+                Some((expected_ms, runs)) => Some((
+                    compiled
+                        .dispatch_task(task_id)
+                        .map_or(*expected_ms, |task| {
+                            (*expected_ms).min(task.loop_budget.max_runtime_ms)
+                        }),
+                    format!("runs:{runs}"),
+                )),
+                None if task_id == FACT_REFRESH_TASK_ID => {
+                    Some((refresh_declared_ms, "declared".to_owned()))
+                }
+                None => compiled
+                    .dispatch_task(task_id)
+                    .map(|task| (task.expected_duration_ms, "declared".to_owned())),
+            },
+        );
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);
         }
@@ -3358,6 +3412,7 @@ impl PolicyHost {
         context: &PolicyAdmissionContext,
         owner_epoch: OwnerEpoch,
         ledger_high_watermark: u64,
+        duration: AdmissionDuration,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let active = self.active.as_ref().ok_or_else(|| {
             request(
@@ -3384,9 +3439,20 @@ impl PolicyHost {
                 )
             })?;
         let descriptor = &active.compiled.catalog().tasks.catalog;
+        // SCH-M ED-2 (§3.4 D-15): the duration the admission's own projection gives the pair:
+        // its expected duration E, at most the task's runtime ceiling as the evaluation caps it,
+        // else the declared one (a fact refresh's configured, a catalog task's own).
+        let expected_runtime_ms = duration
+            .expected_runtime_ms
+            .map(|expected| expected.min(task.loop_budget.max_runtime_ms));
+        let declared_ms = if intent.task_id == FACT_REFRESH_TASK_ID {
+            duration.refresh_declared_ms
+        } else {
+            task.expected_duration_ms
+        };
         if task.entrypoint.operation_id != intent.operation_id
             || task.procedure_ref != intent.procedure_ref
-            || task.expected_duration_ms != intent.expected_duration_ms
+            || (expected_runtime_ms.is_none() && declared_ms != intent.expected_duration_ms)
             || task.yield_points != intent.yield_points
             || task.load_profile != intent.load_profile
             || task.loop_budget.daily_limit != intent.prerequisites.daily_limit
@@ -3418,6 +3484,14 @@ impl PolicyHost {
         {
             return Err(request(
                 HostCode::PolicyFactPositionMismatch,
+                HostLocation::ValidatePolicyDispatch,
+            ));
+        }
+        // SCH-M ED-2 (§3.4 "Identity"): a sample that landed after the evaluation changed the
+        // pair's E; the next cycle evaluates again.
+        if expected_runtime_ms.is_some_and(|expected| expected != intent.expected_duration_ms) {
+            return Err(request(
+                HostCode::PolicyFactsStale,
                 HostLocation::ValidatePolicyDispatch,
             ));
         }
@@ -3487,56 +3561,86 @@ impl PolicyHost {
         intent: &DispatchIntent,
         reason_chain: &DecisionReasonChain,
     ) -> RuntimeHostResult<Option<PolicyDispatchAdmission>> {
-        let (data, intent_sequence) = match self.seen_dispatches.get(&intent.decision_id) {
-            Some(seen) => (seen.data.clone(), seen.intent_sequence),
-            None => {
-                let events = ledger
-                    .latest_sequence()
-                    .and_then(|through| {
-                        read_event_types_after(
-                            ledger,
-                            &[EventType::PolicyDispatchIntent],
-                            intent.input_ledger_position,
-                            through,
-                            RECOVERY_PAGE_EVENTS,
-                        )
-                    })
-                    .map_err(|_| {
-                        fatal(
-                            HostCode::PolicyRecoveryFailed,
-                            HostLocation::ReplayPolicyDispatch,
-                        )
-                    })?;
-                let recorded = events.iter().find_map(|event| match event.payload() {
-                    EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
-                        if payload.decision_id() == intent.decision_id =>
-                    {
-                        Some((payload, event.sequence()))
-                    }
-                    _ => None,
-                });
-                let Some((payload, sequence)) = recorded else {
-                    return Ok(None);
-                };
-                (event_data(payload)?, sequence)
-            }
-        };
+        let (data, intent_sequence, recorded_duration_ms) =
+            match self.seen_dispatches.get(&intent.decision_id) {
+                Some(seen) => (
+                    seen.data.clone(),
+                    seen.intent_sequence,
+                    seen.expected_duration_ms,
+                ),
+                None => {
+                    let events = ledger
+                        .latest_sequence()
+                        .and_then(|through| {
+                            read_event_types_after(
+                                ledger,
+                                &[EventType::PolicyDispatchIntent],
+                                intent.input_ledger_position,
+                                through,
+                                RECOVERY_PAGE_EVENTS,
+                            )
+                        })
+                        .map_err(|_| {
+                            fatal(
+                                HostCode::PolicyRecoveryFailed,
+                                HostLocation::ReplayPolicyDispatch,
+                            )
+                        })?;
+                    let recorded = events.iter().find_map(|event| match event.payload() {
+                        EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                            if payload.decision_id() == intent.decision_id =>
+                        {
+                            Some((payload, event.sequence()))
+                        }
+                        _ => None,
+                    });
+                    let Some((payload, sequence)) = recorded else {
+                        return Ok(None);
+                    };
+                    (
+                        event_data(payload)?,
+                        sequence,
+                        payload.expected_duration_ms(),
+                    )
+                }
+            };
         if data != dispatch_event_data(intent, reason_chain)? {
             return Err(fatal(
                 HostCode::PolicyDecisionIdentityConflict,
                 HostLocation::ReplayPolicyDispatch,
             ));
         }
-        let catalog = self
-            .store
-            .load_generation(&data.catalog_hash)?
-            .generation
-            .clone();
+        let loaded = self.store.load_generation(&data.catalog_hash)?;
+        // SCH-M ED-2: the replayed intent reserves what its record says it reserved.
+        let recorded_ms = match recorded_duration_ms {
+            Some(recorded) => Some(recorded),
+            None => loaded
+                .compiled
+                .dispatch_task(&data.task_id)
+                .map(|task| task.expected_duration_ms),
+        };
+        if recorded_ms.is_some_and(|recorded| recorded != intent.expected_duration_ms) {
+            return Err(fatal(
+                HostCode::PolicyDecisionIdentityConflict,
+                HostLocation::ReplayPolicyDispatch,
+            ));
+        }
+        let catalog = loaded.generation.clone();
         Ok(Some(PolicyDispatchAdmission::ReplaySuppressed {
             decision_id: intent.decision_id.clone(),
             catalog,
             original_intent_sequence: intent_sequence,
         }))
+    }
+
+    /// SCH-M ED-2 (coordinator ruling 10-24 14:1x): the declared `expected_duration_ms` of the
+    /// task spec a dispatch of `task_id` runs under in the active catalog; an intent whose
+    /// duration differs records it. `None` without an active catalog or such a task.
+    pub(crate) fn declared_duration_ms(&self, task_id: &str) -> Option<u64> {
+        self.active
+            .as_ref()
+            .and_then(|active| active.compiled.dispatch_task(task_id))
+            .map(|task| task.expected_duration_ms)
     }
 
     pub(crate) fn preview_admission(
@@ -4046,7 +4150,12 @@ impl PolicyHost {
                 )
             })?;
             let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-            let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+            let intent = control_intent(
+                &dispatch.data,
+                dispatch.expected_duration_ms,
+                &catalog.compiled,
+                admission,
+            )?;
             let workload = PerformanceControlWorkload {
                 arbitration: self.arbitration.get(&intent.instance_id).copied(),
                 instance_id: intent.instance_id.clone(),
@@ -4274,7 +4383,12 @@ impl PolicyHost {
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+        let intent = control_intent(
+            &dispatch.data,
+            dispatch.expected_duration_ms,
+            &catalog.compiled,
+            admission,
+        )?;
         self.control
             .preview_paced_settlement(
                 &catalog.compiled,
@@ -4328,7 +4442,12 @@ impl PolicyHost {
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+        let intent = control_intent(
+            &dispatch.data,
+            dispatch.expected_duration_ms,
+            &catalog.compiled,
+            admission,
+        )?;
         self.control.commit_paced_execution(
             &catalog.compiled,
             &intent,
@@ -4635,6 +4754,7 @@ fn seen_intent_of(
             completed_sequence: None,
             lifecycle: DispatchLifecycle::Intent,
             failures: None,
+            expected_duration_ms: payload.expected_duration_ms(),
         },
     ))
 }
@@ -4709,7 +4829,12 @@ fn apply_dispatch_event(
                     )
                 })?;
                 let catalog = store.load_generation(&dispatch.data.catalog_hash)?;
-                let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+                let intent = control_intent(
+                    &dispatch.data,
+                    dispatch.expected_duration_ms,
+                    &catalog.compiled,
+                    admission,
+                )?;
                 control.commit_admission(
                     &catalog.compiled,
                     &intent,
@@ -4816,7 +4941,12 @@ fn apply_dispatch_event(
                     )
                 })?;
                 let catalog = store.load_generation(&dispatch.data.catalog_hash)?;
-                let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+                let intent = control_intent(
+                    &dispatch.data,
+                    dispatch.expected_duration_ms,
+                    &catalog.compiled,
+                    admission,
+                )?;
                 // #385 P-k (register P6): a record settled on its budget time replays on it.
                 control.commit_paced_execution(
                     &catalog.compiled,
@@ -5602,8 +5732,13 @@ fn execution_event_data(
     }
 }
 
+/// The dispatch intent recovery and replay settle a recorded dispatch under: its record's
+/// identity with its pinned catalog's task spec. SCH-M ED-2 (coordinator ruling 10-24 14:1x): its
+/// duration is the one its intent record carries (`recorded_duration_ms`), else the spec's
+/// declared one, so a dispatch that reserved its expected duration E replays its receipt.
 fn control_intent(
     data: &PolicyDispatchEventData,
+    recorded_duration_ms: Option<u64>,
     catalog: &CompiledCatalog,
     admission: &PolicyAdmissionRecord,
 ) -> RuntimeHostResult<DispatchIntent> {
@@ -5627,7 +5762,7 @@ fn control_intent(
         fact_snapshot_id: data.fact_snapshot_id.clone(),
         approval_refs: data.approval_fact_ids.clone(),
         reason_chain_id: data.reason_chain_id.clone(),
-        expected_duration_ms: task.expected_duration_ms,
+        expected_duration_ms: recorded_duration_ms.unwrap_or(task.expected_duration_ms),
         yield_points: task.yield_points.clone(),
         load_profile: task.load_profile.clone(),
         prerequisites: DispatchPrerequisites {

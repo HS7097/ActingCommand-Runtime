@@ -228,6 +228,23 @@ impl HostShared {
         Ok(())
     }
 
+    /// SCH-M ED-2 (§3.4 D-13): the `package_id` of the main package a scheduled run's
+    /// preparation admitted, while its resolution is held (until its execution record is
+    /// written); `None` for a run whose preparation admitted none, and for a dispatch no
+    /// scheduled path ran.
+    pub(super) fn scheduled_main_package(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<String>> {
+        Ok(lock(
+            &self.scheduled_resolutions,
+            HostLocation::ReadScheduledResolution,
+        )?
+        .get(decision_id)
+        .and_then(|resolution| resolution.main.as_ref())
+        .map(|main| main.package_id.clone()))
+    }
+
     /// Drops a decision's resolution once its execution record is written.
     pub(super) fn forget_scheduled_resolution(&self, decision_id: &str) -> RuntimeHostResult<()> {
         lock(

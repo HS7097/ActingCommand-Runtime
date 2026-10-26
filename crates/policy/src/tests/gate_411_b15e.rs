@@ -1327,6 +1327,7 @@ fn refresh() -> FactRefreshInputs {
             daily_limit: 96,
             failure_backoff_ms: 600_000,
             max_consecutive_failures: 3,
+            expected_duration_ms: crate::FACT_REFRESH_EXPECTED_DURATION_MS,
         },
         readers: Vec::new(),
         instance_facts_loaded_at_unix_ms: None,

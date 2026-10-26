@@ -175,6 +175,9 @@ pub(super) enum FactPublicationPurpose {
     /// `base_sequence` carried. Under `fact_write_gate` the record is refused when another
     /// record of the key has replaced that one since.
     ResourceAdjustment { base_sequence: u64 },
+    /// SCH-M ED-2 (§3.4 D-14): the Runtime's own write of one instance's `health.run_duration`
+    /// record at a settlement, the key's only entry.
+    RunDuration,
 }
 
 /// Where one publication landed: the event that holds its records, the sequence of the
@@ -347,9 +350,26 @@ impl HostShared {
                     )
                     .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
                 }
+                // SCH-M ED-2 (§3.4 D-14): the Runtime is the only writer of the run-duration
+                // samples; any other publication of the key is refused before the gate.
+                if purpose != FactPublicationPurpose::RunDuration
+                    && let Some(record) = observation
+                        .records
+                        .iter()
+                        .find(|record| record.key == crate::run_duration::RUN_DURATION_FACT_KEY)
+                {
+                    let fact_key = record.key.clone();
+                    return Err(RuntimeHostError::request(
+                        crate::codes::RunDurationCode::KeyReserved,
+                        ContractLocation::PublishFacts,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+                }
                 // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
                 match purpose {
                     FactPublicationPurpose::Ordinary
+                    | FactPublicationPurpose::RunDuration
                     | FactPublicationPurpose::ResourceAdjustment { .. } => {
                         if observation
                             .records

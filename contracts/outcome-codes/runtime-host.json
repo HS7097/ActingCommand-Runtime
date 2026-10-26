@@ -22408,6 +22408,49 @@
       "description": "IDLE-1 (Fail Loud): the instance's idle action in effect (idle_action, close_app or stop_emulator) cannot work, because the instance cannot be brought back after it: member names what its instances[] entry lacks, startup_package (either action: the wake runs the startup package) or start_emulator (stop_emulator: the wake starts the emulator through the configured start). The action never runs on the instance and the instance keeps running. Reported once per action in effect, at the first idle check that finds it (operation check_idle_instances), which after a start is the first policy cycle or lease sweep; an instruction that sets another action that cannot work reports it again. A device_state_observed record under the instance and the same report line.",
       "common_causes": "The instance's entry configures no startup_package while idle.action is close_app (the default) or stop_emulator.",
       "handling": "Configure the instance's startup_package (and, for stop_emulator, start_emulator), or set instance.<id>.idle.action to none."
+    },
+    "run_duration_key_reserved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "SCH-M ED-2 (contracts/instance-fact-store.md, Run duration facts): a publication named health.run_duration (fact_key), the instance store record of the run-duration samples, which only the Runtime writes at the settlement of a successful scheduled run. A client's PublishFact or PublishFacts, and any other publication path of the Runtime, is refused before the fact write gate and nothing is appended. Not fatal.",
+      "common_causes": "A script that copies or restores an instance's facts, run-duration samples included.",
+      "handling": "Leave the key out: the samples come only from the instance's successful scheduled runs; to stop using them, set scheduling.expected_runtime.enabled to false."
+    },
+    "run_duration_row_dropped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "SCH-M ED-2 (Fail Loud): a row of the instance's health.run_duration record (instance_id, the instance alias) was dropped, or a run's sample was not recorded: a new package's row beyond the 256-row bound dropped the row with the oldest at (package_id that row's); the write dropped a stored row it could not read (package_id when it could be read); or the store refused the record's publication (package_id the run's, the refusal as the caused_by link). That package's next expected duration is its declared one until it has runs again. One runtime.failed record with system links (operation record_run_duration_sample) and the same line in the daemon's log.",
+      "common_causes": "More than 256 task packages ran on one instance; or the instance fact store is full (fact_store_capacity_exceeded as the cause).",
+      "handling": "None for the bound: the oldest package gets its samples again from its next runs. For a refusal, read the cause; a full store is booked in the capacity ledger of contracts/instance-fact-store.md."
     }
   },
   "locations": {
@@ -29340,6 +29383,22 @@
       "status": "active",
       "since": "0.12.13",
       "description": "A Runtime host operation: one idle instance's wake (IDLE-1): the configured emulator start (after stop_emulator) and the startup package queued."
+    },
+    "record_run_duration_sample": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "A Runtime host operation (SCH-M ED-2): one successful scheduled run's duration written as the newest sample of its package's row in its instance's health.run_duration record, at the settlement that recorded its execution, and the record published."
+    },
+    "project_expected_runtime": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "A Runtime host operation (SCH-M ED-2): the expected duration E of each evaluated (task, instance) pair projected from its instance's health.run_duration record into the evaluation's task states."
     }
   }
 }

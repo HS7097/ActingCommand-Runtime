@@ -227,6 +227,9 @@ mod resource_close;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod resource_fence;
 mod resource_targets;
+// SCH-M ED-2: the run-duration samples at settlement and the expected duration E in the
+// evaluation's task states.
+mod run_duration;
 mod runtime_config;
 mod runtime_facts;
 mod saved_artifact_ocr;
@@ -4355,6 +4358,44 @@ impl RuntimeHost {
         let policy = lock(shared.policy()?, HostLocation::RecoverPolicyDispatches)?;
         let replayed = policy.replayed_dispatch_journal_for_test(&shared.ledger)?;
         Ok((policy.dispatch_journal_for_test(), replayed))
+    }
+
+    /// SCH-M ED-2, test only: one run-duration sample of `package_id` on the instance `alias`,
+    /// written as a settlement writes it, the run's terminal at `terminal_unix_ms`.
+    #[cfg(test)]
+    pub(crate) fn add_run_duration_sample_for_test(
+        &self,
+        alias: &str,
+        package_id: &str,
+        duration_ms: u64,
+        terminal_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::RunDurationLocation::RecordSample)?
+            .add_run_duration_sample_for_test(alias, package_id, duration_ms, terminal_unix_ms)
+    }
+
+    /// SCH-M ED-2, test only: the rows of the instance `alias`'s `health.run_duration` record as
+    /// the store holds it now.
+    #[cfg(test)]
+    pub(crate) fn run_durations_for_test(
+        &self,
+        alias: &str,
+    ) -> RuntimeHostResult<crate::run_duration::RunDurations> {
+        self.shared_ref(crate::codes::RunDurationLocation::RecordSample)?
+            .run_durations_for_test(alias)
+    }
+
+    /// SCH-M ED-2, test only: the package admission read `package_id` at `path`, as the admission
+    /// after start or a scheduled run's preparation reads it.
+    #[cfg(test)]
+    pub(crate) fn learn_package_for_test(
+        &self,
+        path: &str,
+        package_id: &str,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::RunDurationLocation::Project)?
+            .pack_admission
+            .learn(path, package_id)
     }
 
     /// Workflow #422 LN-4, test only: the monitor registry's state, and the same rebuilt by

@@ -56,12 +56,15 @@ impl ScheduleExplanationTable {
     /// catalog's, `evaluated_at_unix_ms` its time). A row's `since_unix_ms` carries over from the
     /// table it replaces while the same (instance, task) keeps the same `why` code, and the
     /// not-running row's while the same (instance, task or none) keeps it; otherwise it is this
-    /// evaluation's time.
+    /// evaluation's time. SCH-M ED-2 (§3.4 "Visible"): `expected` gives, for a (task, instance
+    /// alias), the duration its dispatch would reserve and where it comes from (`declared` or
+    /// `runs:<n>`); a row carries both.
     pub(crate) fn record(
         &mut self,
         evaluation: &PolicyEvaluation,
         catalog_hash: &str,
         evaluated_at_unix_ms: u64,
+        expected: &dyn Fn(&str, &str) -> Option<(u64, String)>,
     ) {
         let previous = self.latest.take();
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();
@@ -102,7 +105,14 @@ impl ScheduleExplanationTable {
                 .and_then(|explanation| explanation.instances.get(alias));
             let candidates = rows
                 .iter()
-                .map(|draft| candidate_row(draft, earlier, evaluated_at_unix_ms))
+                .map(|draft| {
+                    candidate_row(
+                        draft,
+                        earlier,
+                        evaluated_at_unix_ms,
+                        expected(&draft.decision.task_id, alias),
+                    )
+                })
                 .collect::<Vec<_>>();
             let next_wake_unix_ms = wakes.get(alias).copied().flatten();
             let not_running = not_running_row(
@@ -220,6 +230,7 @@ fn candidate_row(
     draft: &Draft<'_>,
     earlier: Option<&InstanceRows>,
     evaluated_at_unix_ms: u64,
+    expected: Option<(u64, String)>,
 ) -> ScheduleExplanationCandidate {
     let decision = draft.decision;
     let omitted = decision
@@ -257,6 +268,8 @@ fn candidate_row(
         reasons_omitted: (omitted > 0).then(|| u32::try_from(omitted).unwrap_or(u32::MAX)),
         next_wake_unix_ms: decision.next_wake_unix_ms,
         since_unix_ms,
+        expected_runtime_ms: expected.as_ref().map(|(expected_ms, _)| *expected_ms),
+        expected_runtime_source: expected.map(|(_, source)| source),
     }
 }
 

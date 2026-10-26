@@ -215,6 +215,12 @@ impl PackAdmission {
         Ok(())
     }
 
+    /// SCH-M ED-2: the `package_id` admission read at each package location so far (the
+    /// admission after start and each scheduled run's preparation), by location.
+    pub(crate) fn package_ids(&self) -> RuntimeHostResult<BTreeMap<String, String>> {
+        Ok(self.state()?.ids.clone())
+    }
+
     /// Suspends the task package `package_id`, which admission at `path` refused with `code`:
     /// its content hash is measured once, right after the refusal (M-PKG §3.3). A package already
     /// suspended on the same content hash keeps its suspension and what was copied of it.
