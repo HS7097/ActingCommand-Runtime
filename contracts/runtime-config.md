@@ -88,7 +88,9 @@ only when it is `true`, and only the installer's Lab transaction writes them. Un
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
 `startup_discovery` section below (default `file`, not settable, read once at assembly).
 Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
-the `execution` section below (default `file`, settable). A
+the `execution` section below (default `file`, settable). Workflow #392 DA-4b-D's rows: the
+`display_safe_area` section below (default `file`, settable) and the per-instance
+`display_safe_area.model` (string, default `section:display_safe_area.model`, settable). A
 manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -879,6 +881,33 @@ the first policy cycle or lease sweep. A failed close or stop is recorded and go
 decision point (`contain_failure`, #419), so it fails only that instance's action: the instance is
 left as it is, no wake follows, its next due task goes through the normal path, and only a failure
 that is the Runtime's as a whole latches it.
+
+## The `display_safe_area` section (Workflow #392 DA-4b-D)
+
+Workflow #392 DA-4b-D (Alice's ruling 69 of 2026-10-26: 「只有安全区适配不做，但是需要留出来声明式的安全区接口，
+也就是说可以依照声明的文件直接切换安全区形态」, 「一份文件对应一个机型或多个机型，并且修改设置后实时生效」;
+[display-adapter.md](display-adapter.md) section 9): where the declared safe areas live, how often
+the Runtime reads them, and which device model an instance declares. The model is also per
+instance, `instance.<instance id>.display_safe_area.model`, in the file the `display_safe_area`
+member (`{model}`) of the `instances[]` entry, default the section's key
+(`section:display_safe_area.model`). Every key is settable: the Runtime reads them at every frame
+of a run whose game's display declaration measures on the safe area, so an instruction takes
+effect from the next frame. `actingd-config` revision 15
+([component-interfaces.md](component-interfaces.md)) adds the section and the entry's member; a
+file that names neither keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `display_safe_area.directory` | string, the directory of the declaration files (`actingcommand.display-safe-area.v1`); a relative path resolves against the Runtime's state root | `display-safe-area` | yes |
+| `display_safe_area.check_interval_ms` | milliseconds `0..=3600000`, the least time between two reads of the directory; 0 reads it at every frame that needs it | `1000` | yes |
+| `display_safe_area.model` | string, the device model every instance declares unless it names its own; empty declares none | empty | yes |
+
+A value of another type is `config_value_invalid` (`wrong_type`); an empty directory or an interval
+outside its range is `out_of_range`, at start, in `check-config` and in `ConfigureSettings`. The
+rows are those of `config.parameters.display_safe_area` and, per instance,
+`config.parameters.instance`. What the declarations hold, which insets a frame takes and how a
+broken declaration is refused (`display_map_unresolved` with its `display_problem`) is
+[display-adapter.md](display-adapter.md) section 9.
 
 ## Facts
 

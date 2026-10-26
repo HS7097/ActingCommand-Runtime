@@ -48,9 +48,21 @@ actingcommand_contract::outcome_vocabulary! {
         /// run ends.
         InputScaleUnsupported => "input_scale_unsupported",
         /// Workflow #392 DA-2a: the game's declaration measures on the safe area and the frame's
-        /// geometry read no insets (no backend reads them before DA-4b); the value of the host's
+        /// geometry has no insets: a handset that declares no device model (Workflow #392
+        /// DA-4b-D: no backend reads a cutout); the value of the host's
         /// `contained_task_geometry_unavailable`.
         SafeAreaUnavailable => "safe_area_unavailable",
+        /// Workflow #392 DA-4b-D: the safe-area declaration directory or one of its files cannot
+        /// be read, or a file breaks `actingcommand.display-safe-area.v1` (value `json_pointer`).
+        SafeAreaDeclarationInvalid => "safe_area_declaration_invalid",
+        /// Workflow #392 DA-4b-D: two declaration files declare one device model.
+        SafeAreaModelRepeated => "safe_area_model_repeated",
+        /// Workflow #392 DA-4b-D: no declaration file declares the device model the instance
+        /// declares.
+        SafeAreaModelUndeclared => "safe_area_model_undeclared",
+        /// Workflow #392 DA-4b-D: the device model's declaration file covers no display size and
+        /// rotation the frame shows.
+        SafeAreaFormUndeclared => "safe_area_form_undeclared",
     }
 }
 

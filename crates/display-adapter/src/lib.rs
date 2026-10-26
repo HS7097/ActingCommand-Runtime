@@ -689,8 +689,10 @@ impl DisplayMap {
     /// The map as a task geometry record's `display_map` (Workflow #392 DA-2a, register §1.25
     /// X7): its kind, `s`, the scale space, the base, and the rule it was measured by. Without a
     /// declaration that is the rule the map was built by: the width over the base's, on the
-    /// screen, the anchors on the screen. A rule that measures on the safe area names the device's
-    /// report as its insets' source, the only insets a frame's geometry carries.
+    /// screen, the anchors on the screen. A rule that measures on the safe area names a
+    /// declaration as its insets' source: Workflow #392 DA-4b-D (Alice's ruling 69) reads no
+    /// device's cutout, so the only insets a frame's geometry carries are the declared ones (an
+    /// emulator's 0 included).
     pub fn record(&self) -> TaskGeometryDisplayMap {
         let rule = self.rule.unwrap_or(DisplayRule {
             scale_by: DisplayScaleBy::Width,
@@ -710,7 +712,7 @@ impl DisplayMap {
             scale_by: rule.scale_by,
             scale_area: rule.scale_area,
             anchor_area: rule.anchor_area,
-            insets_source: safe_area.then_some(DisplayInsetsSource::Reported),
+            insets_source: safe_area.then_some(DisplayInsetsSource::Declared),
             declared: self.rule.is_some(),
         }
     }

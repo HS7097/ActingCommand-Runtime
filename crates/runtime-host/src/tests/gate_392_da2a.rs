@@ -8,13 +8,15 @@
 //! `extent_changed`, with its `display_map`), the instance's display facts follow it, and the run
 //! goes on. Until the input side maps (DA-3) an input waits for a frame whose map is the plain
 //! identity: under a pure scale the run ends `display_map_unresolved` (`input_scale_unsupported`)
-//! with no input. A declaration that measures on the safe area finds no insets before DA-4b:
-//! `contained_task_geometry_unavailable` (`safe_area_unavailable`), no input.
+//! with no input. A declaration that measures on the safe area finds no insets on a handset that
+//! declares no device model (Workflow #392 DA-4b-D): `contained_task_geometry_unavailable`
+//! (`safe_area_unavailable`), no input.
 //!
 //! A synthetic `neutral` game, server `test`. The device instance is bound to a neutral loopback
 //! endpoint; its frames show `home` (red) until the run's one input and `terminal` (blue) after it,
 //! in the frame's 2x2 top-left block, so a pure scale of 3/2 keeps the colour of its first pixel.
 
+use super::gate_398_rd1b::{bound, resolved_handset};
 use super::*;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -23,19 +25,24 @@ use actingcommand_contract::{
 };
 use serde_json::{Value, json};
 
-const ALIAS: &str = "neutral.instance";
+pub(super) const ALIAS: &str = "neutral.instance";
 const GAME: &str = "neutral";
-const HOME: [u8; 3] = [255, 0, 0];
-const TERMINAL: [u8; 3] = [0, 0, 255];
+pub(super) const HOME: [u8; 3] = [255, 0, 0];
+pub(super) const TERMINAL: [u8; 3] = [0, 0, 255];
+/// Workflow #392 DA-4b-D: the neutral fake serial of `device_host`'s handset.
+const HANDSET_SERIAL: &str = "TESTSERIAL0393";
 
 /// A host whose one instance is bound to a device endpoint whose frames and display are
 /// `width`x`height` with rotation `r0` observed (after the run's input `after` when given),
 /// reading the standard packs of `root`; every frame shows the page in its 2x2 top-left block.
+/// Workflow #392 DA-4b-D: the device is an emulator's endpoint, or with `handset` a bound handset
+/// (a neutral fake serial).
 fn device_host(
     temp: &TempDir,
     root: Option<&Path>,
     (width, height): (u32, u32),
     after: Option<(u32, u32)>,
+    handset: bool,
 ) -> (RuntimeHost, Arc<FakeState>) {
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
@@ -68,15 +75,23 @@ fn device_host(
         },
     ));
     let registered = instance_id();
-    let resolved = ResolvedExecutionInstance::new(registered, "127.0.0.1:16384").with_adb_endpoint(
-        actingcommand_execution_kernel::ResolvedAdbEndpoint::new("127.0.0.1", 16384, false),
-    );
+    let provider = FakeProvider::one(ALIAS, registered, Arc::clone(&state));
+    let provider = if handset {
+        state.observed_open.store(true, Ordering::Release);
+        provider.with_resolved_for(
+            ALIAS,
+            resolved_handset(ALIAS, registered, bound(ALIAS, HANDSET_SERIAL)),
+        )
+    } else {
+        let resolved =
+            ResolvedExecutionInstance::new(registered, "127.0.0.1:16384").with_adb_endpoint(
+                actingcommand_execution_kernel::ResolvedAdbEndpoint::new("127.0.0.1", 16384, false),
+            );
+        provider.with_resolved_override(Arc::new(std::sync::Mutex::new(resolved)))
+    };
     let host = RuntimeHost::start(
         config(temp).with_standard_packs_root(root.map(Path::to_path_buf)),
-        Arc::new(
-            FakeProvider::one(ALIAS, registered, Arc::clone(&state))
-                .with_resolved_override(Arc::new(std::sync::Mutex::new(resolved))),
-        ),
+        Arc::new(provider),
     )
     .expect("runtime host with a device instance");
     (host, state)
@@ -85,7 +100,7 @@ fn device_host(
 /// A navigable route package of the game whose resolution and coordinate spaces are
 /// `width`x`height`: the page colour at (0, 0) and one trusted tap at (1, 0) from `home` to
 /// `terminal`. Its timeouts leave room for full-size frames.
-fn package_at(width: u32, height: u32) -> Vec<u8> {
+pub(super) fn package_at(width: u32, height: u32) -> Vec<u8> {
     let space = json!({"width": width, "height": height});
     let control = json!({
         "schema_version": "Lab-1y.control.v1",
@@ -153,7 +168,7 @@ fn package_at(width: u32, height: u32) -> Vec<u8> {
 
 /// The standard-pack root `<temporary>/packs/` with the game root `neutral/`: a `bundle.json`
 /// listing one package no run here uses, and `declaration` as `display-layout.json`.
-fn pack_root(temp: &TempDir, declaration: &Value) -> PathBuf {
+pub(super) fn pack_root(temp: &TempDir, declaration: &Value) -> PathBuf {
     let root = temp.path().join("packs");
     let game = root.join(GAME);
     fs::create_dir_all(&game).expect("game root");
@@ -182,13 +197,13 @@ fn pack_root(temp: &TempDir, declaration: &Value) -> PathBuf {
     root
 }
 
-struct Run {
-    receipt: RuntimeReceipt,
+pub(super) struct Run {
+    pub(super) receipt: RuntimeReceipt,
     events: Vec<PersistedEvent>,
 }
 
 impl Run {
-    fn geometry(&self) -> Vec<TaskGeometryObservation> {
+    pub(super) fn geometry(&self) -> Vec<TaskGeometryObservation> {
         self.events
             .iter()
             .filter_map(|event| match event.payload() {
@@ -205,7 +220,7 @@ impl Run {
 }
 
 /// Runs `package` (written as `<name>.zip`) on the instance and reads its records back.
-fn run(host: &RuntimeHost, temp: &TempDir, name: &str, package: &[u8]) -> Run {
+pub(super) fn run(host: &RuntimeHost, temp: &TempDir, name: &str, package: &[u8]) -> Run {
     let path = temp.path().join(format!("{name}.zip"));
     fs::write(&path, package).expect("write run package");
     let task_request = ContainedTaskRequest::new(path.display().to_string()).expect("task request");
@@ -236,11 +251,11 @@ fn run(host: &RuntimeHost, temp: &TempDir, name: &str, package: &[u8]) -> Run {
     Run { receipt, events }
 }
 
-fn text<'a>(outcome: &'a Outcome, key: &str) -> Option<&'a str> {
+pub(super) fn text<'a>(outcome: &'a Outcome, key: &str) -> Option<&'a str> {
     outcome.value(key).and_then(Value::as_str)
 }
 
-fn number(outcome: &Outcome, key: &str) -> Option<u64> {
+pub(super) fn number(outcome: &Outcome, key: &str) -> Option<u64> {
     outcome.value(key).and_then(Value::as_u64)
 }
 
@@ -296,7 +311,7 @@ fn declaration(scale_area: &str) -> Value {
 fn da2a_t9_a_frame_that_changes_its_size_rebuilds_the_map_and_the_run_goes_on() {
     let temp = TempDir::new().expect("tempdir");
     let root = pack_root(&temp, &declaration("screen"));
-    let (host, state) = device_host(&temp, Some(&root), (720, 1280), Some((1080, 1920)));
+    let (host, state) = device_host(&temp, Some(&root), (720, 1280), Some((1080, 1920)), false);
     let run = run(&host, &temp, "changed", &package_at(720, 1280));
     assert_eq!(
         run.receipt.state(),
@@ -370,7 +385,7 @@ fn da2a_t9_a_frame_that_changes_its_size_rebuilds_the_map_and_the_run_goes_on() 
 #[test]
 fn da2a_an_input_waits_for_the_input_side_under_a_pure_scale() {
     let temp = TempDir::new().expect("tempdir");
-    let (host, state) = device_host(&temp, None, (1920, 1080), None);
+    let (host, state) = device_host(&temp, None, (1920, 1080), None, false);
     let run = run(&host, &temp, "scaled", &package_at(1280, 720));
     host.close().expect("close runtime host");
     assert_eq!(
@@ -405,15 +420,17 @@ fn da2a_an_input_waits_for_the_input_side_under_a_pure_scale() {
     );
 }
 
-/// The safe area before DA-4b (model 392 v1.2 §4.5): a declaration whose scale is measured on the
-/// safe area finds no insets on the first frame, so the run ends
+/// The safe area without insets (model 392 v1.2 §4.5): a declaration whose scale is measured on
+/// the safe area finds no insets on the first frame, so the run ends
 /// `contained_task_geometry_unavailable` with `safe_area_unavailable`, after its geometry record
-/// and before any input.
+/// and before any input. Workflow #392 DA-4b-D (Alice's ruling 69; work order test 4) adapted the
+/// device: no backend reads a cutout and an emulator's insets are 0, so the frame without insets
+/// is a handset's that declares no device model (it was an emulator's).
 #[test]
 fn da2a_a_safe_area_declaration_finds_no_insets_before_da_4b() {
     let temp = TempDir::new().expect("tempdir");
     let root = pack_root(&temp, &declaration("safe_area"));
-    let (host, state) = device_host(&temp, Some(&root), (720, 1280), None);
+    let (host, state) = device_host(&temp, Some(&root), (720, 1280), None, true);
     let run = run(&host, &temp, "safe-area", &package_at(720, 1280));
     host.close().expect("close runtime host");
     assert_eq!(
