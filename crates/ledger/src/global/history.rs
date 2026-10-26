@@ -14,8 +14,8 @@ use super::{GlobalLedgerResult, projection::EventIndexes};
 use crate::PersistedEvent;
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::{
-    ArtifactId, CorrelationId, EventId, EventPayload, EventQuery, FrameId, LeaseId, LedgerView,
-    PolicyPayload, RequestId, RunId, TerminalEvent,
+    ArtifactId, CorrelationId, EventId, EventPayload, EventQuery, FrameId, InstanceId, LeaseId,
+    LedgerView, PolicyPayload, RequestId, RunId, TerminalEvent,
 };
 use std::collections::BTreeSet;
 
@@ -126,6 +126,77 @@ pub(super) fn decision_of<E: LedgerEventRead>(event: &E) -> Option<&str> {
         }
         _ => None,
     }
+}
+
+/// LN-7 (#422, LEAN-L §3.5): one closure scope of a range of records: its instance and its run
+/// and lease links, or without a run its request and correlation links, with its first record and
+/// the sequence of its last. A retention fact names no scope source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ScopeExtent {
+    pub(super) instance: InstanceId,
+    pub(super) run: Option<RunId>,
+    pub(super) lease: Option<LeaseId>,
+    pub(super) request: Option<RequestId>,
+    pub(super) correlation: Option<CorrelationId>,
+    pub(super) first: TerminalEvent,
+    pub(super) last: u64,
+}
+
+/// LN-7: the scope extents of `events` (in ledger order), as a replay groups them (the test
+/// medium's grouping; SQLite groups through its link index).
+#[cfg(test)]
+pub(super) fn scope_extents<'e, E: LedgerEventRead + 'e>(
+    events: impl IntoIterator<Item = &'e E>,
+) -> Vec<ScopeExtent> {
+    let mut extents = std::collections::BTreeMap::new();
+    for event in events {
+        if event.payload().artifact_retention().is_some() {
+            continue;
+        }
+        let links = event.links();
+        let Some(instance) = links.instance_id().copied() else {
+            continue;
+        };
+        let run = links.run_id().copied();
+        let (request, correlation) = match run {
+            Some(_) => (None, None),
+            None => match (links.request_id(), links.correlation_id()) {
+                (Some(request), Some(correlation)) => (Some(*request), Some(*correlation)),
+                _ => continue,
+            },
+        };
+        let key = (
+            instance,
+            run,
+            links.lease_id().copied(),
+            request,
+            correlation,
+        );
+        extents
+            .entry(key)
+            .and_modify(|value: &mut (TerminalEvent, u64)| value.1 = event.sequence())
+            .or_insert((
+                TerminalEvent {
+                    event_id: *event.event_id(),
+                    sequence: event.sequence(),
+                },
+                event.sequence(),
+            ));
+    }
+    extents
+        .into_iter()
+        .map(
+            |((instance, run, lease, request, correlation), (first, last))| ScopeExtent {
+                instance,
+                run,
+                lease,
+                request,
+                correlation,
+                first,
+                last,
+            },
+        )
+        .collect()
 }
 
 /// LN-5: the Lab relations of the history through one position (`LAB_RELATIONS`): the requests

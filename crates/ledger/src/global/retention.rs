@@ -21,6 +21,7 @@ use actingcommand_contract::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod material;
+mod open;
 mod prior_epoch;
 mod resident;
 mod view;
@@ -428,6 +429,8 @@ impl RetentionIndex {
         self.closures.get(scope)?.close.as_ref()
     }
 
+    /// The full build over `events`; LN-7: only the test media and tests build from every record.
+    #[cfg(test)]
     pub(super) fn from_events<E: LedgerEventRead>(events: &[E]) -> GlobalLedgerResult<Self> {
         Self::from_events_checked(events, &mut |_| Ok(()))
     }

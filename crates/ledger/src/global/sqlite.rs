@@ -2,7 +2,7 @@
 
 //! Candidate durable medium. Typed semantics remain in EventStore/GlobalLedger.
 
-use super::history::{HistorySelection, LabRelations};
+use super::history::{HistorySelection, LabRelations, ScopeExtent};
 use super::index::{IndexChange, IndexRows};
 use super::projection::{EventIndexes, LAB_ANCHOR_SOURCE, LAB_ANCHOR_TYPE, LabKeys};
 use super::read_only::check_read_budget;
@@ -660,10 +660,10 @@ pub(super) fn open_formal(
         marker,
         meta_has_marker,
     };
-    // LN-5 (#422, LEAN-L §5 LN-5): the open still reads every record (until LN-8), derives the
-    // retention state from them and drops them; the writer reads its history from the store.
-    let mut store = EventStore::recovered(backend, next, &events)?;
+    // LN-5 (#422, LEAN-L §5 LN-5): the open still reads every record (until LN-8) and drops
+    // them; LN-7: the retention state is read by type and by index, not from them.
     drop(events);
+    let mut store = EventStore::recovered(backend, next)?;
     // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.4, §12 step 2): a dump an earlier run
     // left is imported after the ledger is verified and before any new record; AO-2 (§10, §12
     // step 5): then the previous epoch's unconfirmed tail.
@@ -912,9 +912,10 @@ impl SqliteLedgerStore {
             marker: SqliteMarker::candidate(),
             meta_has_marker,
         };
-        // LN-5 (#422): the records are dropped once the retention state is derived from them.
-        let mut store = Self::recovered(backend, next, &events)?;
+        // LN-5 (#422): the records are dropped; LN-7: the retention state is read by type and by
+        // index, not from them.
         drop(events);
+        let mut store = Self::recovered(backend, next)?;
         // Workflow #383 AO-1: a candidate opened with a failure plan writes and imports as the
         // running Runtime's writer does (`contracts/ledger-observer.md` §9); AO-2: and records
         // the previous epoch's unconfirmed tail (§10).
@@ -1644,6 +1645,28 @@ impl DurableStorage for SqliteStorage {
             .database
             .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
         read_lab_relations(&connection, through, seed)
+    }
+
+    fn scope_extents(&self, (from, through): (u64, u64)) -> GlobalLedgerResult<Vec<ScopeExtent>> {
+        let connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        let mut parameters = vec![
+            SqlValue::Integer(encode(from)),
+            SqlValue::Integer(encode(through)),
+        ];
+        for event_type in [
+            EventType::ArtifactPinRecorded,
+            EventType::ArtifactPinReleased,
+            EventType::ArtifactEvictionIntent,
+            EventType::ArtifactEvictionOutcome,
+        ] {
+            parameters.push(SqlValue::Text(views::key(event_type)?));
+        }
+        read_rows_bound(&connection, SCOPE_EXTENTS, &parameters, None, &mut 0, false)?
+            .into_iter()
+            .map(scope_extent)
+            .collect()
     }
 
     fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>> {
@@ -3742,6 +3765,60 @@ fn link_texts(rows: Vec<SqlRow>) -> GlobalLedgerResult<Vec<String>> {
             )),
         })
         .collect()
+}
+
+/// LN-7 (#422, LEAN-L §3.5): the closure scopes of the rows with a sequence in `?1..=?2` that
+/// are no retention fact (`?3` to `?6`), grouped by instance, run and lease link and, without a
+/// run, request and correlation link, as a replay keys them; each with its first row's sequence
+/// and event id and its last row's sequence, in the order of their first rows.
+const SCOPE_EXTENTS: &str = "SELECT g.instance_id, g.run_id, g.lease_id, g.request_id, g.correlation_id, g.first, f.event_id, g.last FROM (SELECT l.instance_id AS instance_id, l.run_id AS run_id, l.lease_id AS lease_id, CASE WHEN l.run_id IS NULL THEN l.request_id END AS request_id, CASE WHEN l.run_id IS NULL THEN l.correlation_id END AS correlation_id, MIN(e.sequence) AS first, MAX(e.sequence) AS last FROM ledger_events e JOIN ledger_links l ON l.sequence=e.sequence WHERE e.sequence>=?1 AND e.sequence<=?2 AND l.instance_id IS NOT NULL AND (l.run_id IS NOT NULL OR (l.request_id IS NOT NULL AND l.correlation_id IS NOT NULL)) AND e.event_type NOT IN (?3,?4,?5,?6) GROUP BY l.instance_id, l.run_id, l.lease_id, CASE WHEN l.run_id IS NULL THEN l.request_id END, CASE WHEN l.run_id IS NULL THEN l.correlation_id END) g JOIN ledger_events f ON f.sequence=g.first ORDER BY g.first";
+
+/// LN-7: one row of `SCOPE_EXTENTS`.
+fn scope_extent(row: SqlRow) -> GlobalLedgerResult<ScopeExtent> {
+    let invalid = || {
+        failure(
+            LedgerCode::InvalidEventLink.code(),
+            LedgerLocation::ReadLedgerView.location(),
+        )
+    };
+    let Ok(
+        [
+            SqlValue::Text(instance),
+            run,
+            lease,
+            request,
+            correlation,
+            SqlValue::Integer(first),
+            SqlValue::Text(event_id),
+            SqlValue::Integer(last),
+        ],
+    ) = <[SqlValue; 8]>::try_from(row)
+    else {
+        return Err(invalid());
+    };
+    let optional = |value: SqlValue| match value {
+        SqlValue::Null => Ok(None),
+        SqlValue::Text(text) => Ok(Some(text)),
+        _ => Err(invalid()),
+    };
+    Ok(ScopeExtent {
+        instance: id_from_text(&instance)?,
+        run: optional(run)?.map(|text| id_from_text(&text)).transpose()?,
+        lease: optional(lease)?
+            .map(|text| id_from_text(&text))
+            .transpose()?,
+        request: optional(request)?
+            .map(|text| id_from_text(&text))
+            .transpose()?,
+        correlation: optional(correlation)?
+            .map(|text| id_from_text(&text))
+            .transpose()?,
+        first: actingcommand_contract::TerminalEvent {
+            event_id: id_from_text(&event_id)?,
+            sequence: decode(first),
+        },
+        last: decode(last),
+    })
 }
 
 /// An identifier from its stored text (its serialization).

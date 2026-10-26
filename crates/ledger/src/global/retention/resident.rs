@@ -206,7 +206,7 @@ impl RetentionIndex {
     /// LN-7: the owners whose scopes a start may still close (`prior_epoch_owners`): the latest
     /// owner and the one before it, and each owner whose import or a scope close of it one of
     /// those two wrote.
-    fn retained_owners(&self) -> BTreeSet<OwnerEpoch> {
+    pub(super) fn retained_owners(&self) -> BTreeSet<OwnerEpoch> {
         let mut changes = self.owner_epochs.values().rev().copied();
         let mut owners = BTreeSet::new();
         if let Some(latest) = changes.next() {

@@ -219,6 +219,14 @@ pub(super) trait DurableStorage: Send + 'static {
     /// the last record's), through the time index.
     fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>>;
 
+    /// LN-7 (#422, LEAN-L §3.5): the closure scopes of the committed records with a sequence in
+    /// `range.0..=range.1` (`history::scope_extents`), grouped through the link index, so a start
+    /// knows the scopes of the epochs whose closes it may write without reading their records.
+    fn scope_extents(
+        &self,
+        range: (u64, u64),
+    ) -> GlobalLedgerResult<Vec<super::history::ScopeExtent>>;
+
     /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 step 1): the `ledger_index` rows
     /// of `role` whose key starts with one of `prefixes`, each with the hash of the ledger row its
     /// sequence names; `None` for a store that keeps no index.
@@ -529,24 +537,18 @@ impl SegmentStore {
 }
 
 impl<B: DurableStorage> EventStore<B> {
-    /// LN-5 (#422): the writer of a verified store whose records are `events`. Only the retention
-    /// state is derived from them; the caller drops them once the writer exists.
-    pub(super) fn recovered(
-        mut backend: B,
-        next_sequence: u64,
-        events: &[PersistedEvent],
-    ) -> GlobalLedgerResult<Self> {
-        let commit_statistics =
-            match CommitStatistics::new(events.last().map_or(0, PersistedEvent::sequence)) {
-                Ok(statistics) => Arc::new(statistics),
-                Err(error) => {
-                    backend.close()?;
-                    return Err(error);
-                }
-            };
-        let mut retention = RetentionIndex::from_events(events)?;
-        // LN-7 (#422, LEAN-L §3.5): of the frames, only the facts of those present in the live
-        // frame store stay resident (with what their classes read).
+    /// LN-7 (#422, LEAN-L §3.5): the writer of a verified store. Its retention state is read by
+    /// type and by index (`open_retention`), not from the open's read of every record: of the
+    /// frames, only the facts of those present in the live frame store stay resident, with what
+    /// their classes read.
+    pub(super) fn recovered(mut backend: B, next_sequence: u64) -> GlobalLedgerResult<Self> {
+        let commit_statistics = match CommitStatistics::new(backend.head()) {
+            Ok(statistics) => Arc::new(statistics),
+            Err(error) => {
+                backend.close()?;
+                return Err(error);
+            }
+        };
         let live = match super::retention::live_frame_ids(backend.material_root()) {
             Ok(live) => live,
             Err(error) => {
@@ -558,9 +560,7 @@ impl<B: DurableStorage> EventStore<B> {
                 ));
             }
         };
-        retention.retain_frames(&live);
-        let recovering_retention = retention.has_pending();
-        Ok(Self {
+        let mut store = Self {
             commit_statistics,
             backend,
             next_sequence,
@@ -568,12 +568,16 @@ impl<B: DurableStorage> EventStore<B> {
             history_page_rows: super::history::DEFAULT_HISTORY_PAGE_ROWS,
             #[cfg(test)]
             history_rows_read: None,
-            retention,
-            recovering_retention,
+            retention: RetentionIndex::default(),
+            recovering_retention: false,
             write_failure: None,
             index_policy: IndexPolicy::default(),
             revisions: BTreeMap::new(),
-        })
+        };
+        if let Err(error) = store.open_retention(&live) {
+            return Err(error.with_close_result(store.backend.close()));
+        }
+        Ok(store)
     }
 
     /// Workflow #383 AO-1, AO-2: the running Runtime's writer: the index policy, the
@@ -2061,6 +2065,15 @@ impl DurableStorage for SegmentStorage {
             .iter()
             .map(PersistedEvent::timestamp_unix_ms)
             .max())
+    }
+
+    fn scope_extents(
+        &self,
+        (from, through): (u64, u64),
+    ) -> GlobalLedgerResult<Vec<super::history::ScopeExtent>> {
+        Ok(super::history::scope_extents(self.events.iter().filter(
+            |event| (from..=through).contains(&event.sequence()),
+        )))
     }
 
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
