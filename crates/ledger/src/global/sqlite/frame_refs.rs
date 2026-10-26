@@ -33,7 +33,9 @@
 //!   reports one warning ([`LedgerFrameRefsNote`], a `note` link of `ledger_opened`).
 //! - **The checks.** The scrub (LN-9) and `ledger-maintenance verify` compare, for every record they
 //!   authenticate inside the extent, its rows with [`frame_refs`]; a difference is
-//!   `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs`).
+//!   `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs`). Either marks
+//!   the extent untrusted ([`mark_untrusted`]), so the next writer open rebuilds the index. The
+//!   scrub's finding is non-fatal and never stops the Runtime; `verify`, a tool run, still fails.
 //!
 //! Nothing decides on the rows yet (slice Q will). No name starts with `ledger_view_`, so an older
 //! build opens, writes and scrubs the database unchanged (§8).
@@ -842,6 +844,53 @@ fn compare(expected: &[(u64, Vec<FrameRef>)], stored: &[StoredRef]) -> GlobalLed
             }
         }
     }
+}
+
+/// #422 LN-7c R: marks the extent untrusted after a check found the index wrong: the extent becomes
+/// `through + 1..=through`, which covers no record. Appends go on extending it, and the next
+/// writer open removes every row below it and rebuilds them by its backfill; a later query never
+/// trusts a row outside the extent. One statement on the shared connection.
+pub(super) fn mark_untrusted(database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
+    let operation = LedgerLocation::VerifyLedgerFrameRefs.location();
+    let connection = database.connection(operation)?;
+    connection
+        .execute(
+            "UPDATE ledger_frame_refs_extent SET from_sequence=through_sequence+1 WHERE singleton=1",
+            [],
+        )
+        .map_err(|error| sql_error(error, operation))?;
+    Ok(())
+}
+
+/// The scrub's non-fatal finding about the derived index: `ledger_index_mismatch` of
+/// `verify_ledger_frame_refs` with what and where (`error`'s detail, and its code when it is
+/// another), `context`, and whether the extent was marked untrusted.
+pub(super) fn untrusted_finding(
+    error: &GlobalLedgerError,
+    marked: &GlobalLedgerResult<()>,
+    context: &str,
+) -> GlobalLedgerError {
+    let mut detail = error
+        .detail()
+        .unwrap_or("table=ledger_frame_refs")
+        .to_owned();
+    if error.code() != LedgerCode::LedgerIndexMismatch.as_str() {
+        detail.push_str(&format!(
+            "; cause={} cause_operation={}",
+            error.code(),
+            error.operation()
+        ));
+    }
+    detail.push_str(&format!("; {context}"));
+    match marked {
+        Ok(()) => detail.push_str("; extent=untrusted"),
+        Err(mark) => detail.push_str(&format!("; extent_mark_failed={}", mark.code())),
+    }
+    GlobalLedgerError::request(
+        LedgerCode::LedgerIndexMismatch.code(),
+        LedgerLocation::VerifyLedgerFrameRefs.location(),
+    )
+    .with_detail(detail)
 }
 
 /// LN-9's scrub, in the read transaction of one chunk: the rows of the records `after < sequence

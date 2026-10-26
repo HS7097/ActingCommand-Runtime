@@ -161,7 +161,9 @@ within the open's deadline. The derived index never fails the open or an append:
 stops (a damaged record, the deadline) leaves the extent short and the next open tries again, and
 the open reports one warning as a `note` of `ledger_opened`. The background scrub and
 `ledger-maintenance verify` compare the rows inside the extent with the records
-(`ledger_index_mismatch`, `verify_ledger_frame_refs`).
+(`ledger_index_mismatch`, `verify_ledger_frame_refs`). A difference marks the extent untrusted, so
+that the next writer open rebuilds the index. The scrub's finding there is non-fatal and never stops
+the Runtime; `verify` still fails.
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit

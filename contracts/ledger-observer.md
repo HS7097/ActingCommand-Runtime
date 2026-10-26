@@ -950,7 +950,7 @@ CREATE TABLE ledger_frame_refs_extent (
 
 - **The rule: the derived table never fails an open or an append.** It is derived from the
   records and can be rebuilt, and nothing reads it yet, so no state of it fails the writer open or
-  an append or stops the Runtime from either. Each case below ends in one warning: the open's is a
+  an append, or stops the Runtime (the scrub's findings about it included, below). Each case below ends in one warning: the open's is a
   `note` link of `ledger_opened` (`ledger_index_mismatch` of `fill_ledger_frame_refs`, its `stage`
   naming what was found and `ledger_sequence` where; the catalog fixes that code's category, and no
   new code is added). The open itself fails only where it failed before this table existed.
@@ -993,6 +993,17 @@ CREATE TABLE ledger_frame_refs_extent (
   checked. A difference, or an extent that is not `1 <= from <= through + 1 <= head + 1`, is
   `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs` and the sequence
   in its detail; the scrub adds `phase=scrub`). No new code (#420 S4).
+  - **The scrub's finding about the derived table is non-fatal.** This covers a difference and an
+    extent table the scrub cannot read. It is recorded (`GlobalLedger::scrub_frame_refs_finding`,
+    with what and where in its detail), the host does not latch it, and the Runtime keeps running.
+    The scrub stops checking the index for the rest of the pass and goes on with the chain.
+    Findings in the primary ledger tables stay fatal, as before.
+  - **The extent is marked untrusted**: it becomes `through + 1..=through`, which covers no record
+    (one statement on the shared connection, the scrub's only write; `extent=untrusted` in the
+    finding's detail). Later batches extend it from there. The next writer open removes every row
+    below it and rebuilds them by its backfill, and a later query never trusts a row outside it.
+  - **`ledger-maintenance verify`**, a tool run, still fails on the same difference with a non-zero
+    exit. It marks the extent untrusted in the same way before it returns.
 - **Compatibility** (`final-query.md` §8): no name starts with `ledger_view_`, and `table_count`
   counts only the four ledger tables, so an older build opens, writes and scrubs the database
   unchanged; it writes no rows and leaves `through_sequence` behind, and the next open of this
@@ -1279,7 +1290,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `sequence_discontinuity`, `ledger_meta_mismatch`, `corrupt_ledger_record`, ...;
   `state_database_corrupt` from `quick_check`, of the location `ledger_scrub`) and `phase=scrub` in
   its detail; every other failure of the scrub (its connection, a statement, a panic) is reported
-  the same way. The scrub stops at its finding, and the host's health check
+  the same way (#422 LN-7c R: except a finding about the derived frame index, which is non-fatal,
+  §11.7). The scrub stops at its finding, and the host's health check
   (`GlobalLedger::scrub_finding`) latches it as a Global failure
   ([runtime-outcomes.md](runtime-outcomes.md), "Failure scope"), so the Runtime stops with the code
   a start gave for the same damage before LN-8. The scrub keeps nothing that grows with the

@@ -2623,9 +2623,20 @@ impl SqliteLedgerReadOnly {
         timing.events = raw.events.len() as u64;
         let marker = SqliteMarker::parse(&raw.meta)?;
         let (events, hash) = verify_snapshot_unread(database, raw, timing)?;
-        // #422 LN-7c R (final-query.md §3.4): the frame index rows inside their extent.
-        if let Some(stored_refs) = &stored_refs {
-            frame_refs::verify_stored(&events, stored_refs)?;
+        // #422 LN-7c R (final-query.md §3.4): the frame index rows inside their extent. A
+        // difference marks the extent untrusted (the next writer open rebuilds the index) and
+        // still fails the tool run.
+        if let Some(stored_refs) = &stored_refs
+            && let Err(mut error) = frame_refs::verify_stored(&events, stored_refs)
+        {
+            append_detail(
+                &mut error,
+                match frame_refs::mark_untrusted(database) {
+                    Ok(()) => "extent=untrusted",
+                    Err(_) => "extent_mark_failed",
+                },
+            );
+            return Err(error);
         }
         let status = marker.status(&events, hash);
         Ok((events, status))

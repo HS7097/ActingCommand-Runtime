@@ -9,8 +9,9 @@
 //! - Records appended by a writer that skips the rows (as an older build does) are filled at the
 //!   next open, and the extent moves to the head.
 //! - A root without the extent is fully backfilled (its untrusted rows replaced).
-//! - A doctored row is a scrub finding `ledger_index_mismatch` (and `ledger-maintenance verify`
-//!   refuses it the same way).
+//! - A doctored row is a non-fatal scrub finding `ledger_index_mismatch`: the Runtime keeps
+//!   running, the extent is marked untrusted and the next open rebuilds the index
+//!   (`ledger-maintenance verify` still refuses the same damage, and marks the extent too).
 //! - The table never fails an open or an append (§11.7, coordinator's fix round): an extent past
 //!   the head is rebuilt with one warning; a batch the extent does not end before commits without
 //!   its rows, the extent stays and the next open fills the gap with one warning; a fill that meets
@@ -927,22 +928,24 @@ fn verify(root: &Path, database: &RuntimeDatabase) -> GlobalLedgerError {
 }
 
 #[test]
-fn ln7c_r6_a_doctored_row_is_a_scrub_finding() {
+fn ln7c_r6_a_doctored_row_is_a_non_fatal_scrub_finding_and_the_next_open_rebuilds_the_index() {
     let clock = SteppingScrubClock::new();
     let (dir, database, ledger) = scrubbed_root(&clock);
     let records = Records::new(&ledger);
-    let mut doctored = None;
+    let mut written = Vec::new();
     for _ in 0..4 {
-        let pointers = pointer_records(&records);
-        doctored = doctored.or(pointers.first().map(|row| row.0));
+        written.extend(pointer_records(&records));
     }
-    let doctored = doctored.expect("an input's row");
+    let doctored = written[0].0;
     let head = ledger.latest_sequence().expect("head");
     assert!(
         clock.wait_idle(GATE_WAIT),
         "the scrub waits for its first pass"
     );
-    assert!(ledger.scrub_finding().is_none(), "nothing found yet");
+    assert!(
+        ledger.scrub_frame_refs_finding().is_none(),
+        "nothing found yet"
+    );
 
     // The input's row names another frame.
     doctor(
@@ -952,11 +955,18 @@ fn ln7c_r6_a_doctored_row_is_a_scrub_finding() {
             stored(doctored)
         ),
     );
+    // One pass: every chunk is due by its last chunk's time; the next pass is not.
     clock.run_until(head.div_ceil(CHUNK_ROWS as u64).saturating_sub(1) * CHUNK_MS);
-    assert!(clock.wait_idle(GATE_WAIT), "the scrub stops");
-    assert!(clock.has_ended(), "the scrub ended at its finding");
-    let finding = ledger.scrub_finding().expect("the scrub's finding");
-    assert!(finding.is_fatal(), "a finding is fatal");
+    assert!(clock.wait_idle(GATE_WAIT), "the pass ends");
+
+    // The finding is recorded, non-fatal; the scrub and the Runtime go on.
+    let finding = ledger
+        .scrub_frame_refs_finding()
+        .expect("the finding is recorded");
+    assert!(
+        !finding.is_fatal(),
+        "the derived index's finding is not fatal"
+    );
     assert_eq!(
         (finding.code(), finding.operation()),
         (
@@ -968,17 +978,68 @@ fn ln7c_r6_a_doctored_row_is_a_scrub_finding() {
     assert!(
         detail.contains("phase=scrub")
             && detail.contains("table=ledger_frame_refs")
-            && detail.contains(&format!("sequence={doctored}")),
-        "{detail}"
+            && detail.contains(&format!("sequence={doctored}"))
+            && detail.contains("extent=untrusted"),
+        "what and where: {detail}"
     );
+    assert!(
+        ledger.scrub_finding().is_none(),
+        "no fatal finding: the host latches nothing"
+    );
+    assert!(!clock.has_ended(), "the scrub goes on to its next pass");
+
+    // The extent is marked untrusted: it covers no record.
+    assert_eq!(
+        extent(&database),
+        Some((head + 1, head)),
+        "the extent is marked untrusted"
+    );
+    // The writer keeps appending; its batches extend the marked extent.
+    let after = pointer_records(&records);
+    let appended = ledger.latest_sequence().expect("head");
+    assert_eq!(appended, head + 6, "every batch committed");
+    assert_eq!(extent(&database), Some((head + 1, appended)));
     ledger.close().expect("close the writer");
 
+    // The next open rebuilds the index by its backfill and ends with matching rows.
+    let (reopened, _) = reopen_noted(&database, PAGE_ROWS, 4_096);
+    assert_eq!(reopened, appended);
+    written.extend(after);
+    assert_eq!(
+        rows(&database),
+        written,
+        "the index ends with matching rows"
+    );
+    assert_eq!(
+        extent(&database),
+        Some((1, reopened)),
+        "over the whole history"
+    );
+
+    // `ledger-maintenance verify`, a tool run, still fails on the same damage, and marks the
+    // extent untrusted as well.
+    doctor(
+        &database,
+        &format!(
+            "UPDATE ledger_frame_refs SET target_id='frame_000000000000000000000000000000f2' WHERE sequence={} AND pointer='before_frame'",
+            stored(doctored)
+        ),
+    );
     let full = verify(dir.path(), &database);
+    assert!(full.is_fatal(), "the tool run fails");
     assert_eq!(
         (full.code(), full.operation()),
         (finding.code(), finding.operation()),
-        "the full verification refuses it the same way"
+        "with the scrub's code and operation"
     );
+    assert!(
+        full.detail()
+            .unwrap_or_default()
+            .contains("extent=untrusted"),
+        "{:?}",
+        full.detail()
+    );
+    assert_eq!(extent(&database), Some((reopened + 1, reopened)));
 }
 
 #[test]

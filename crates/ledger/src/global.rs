@@ -2017,6 +2017,17 @@ impl GlobalLedger {
             .and_then(sqlite::scrub::ScrubThread::finding)
     }
 
+    /// #422 LN-7c R (`contracts/ledger-observer.md` §11.7): what the background scrub found wrong
+    /// with the derived frame index (`ledger_index_mismatch` of `verify_ledger_frame_refs`, with
+    /// what and where in its detail), once it found it. Non-fatal: the host does not latch it,
+    /// the Runtime keeps running, and the scrub marked the extent untrusted so that the next
+    /// writer open rebuilds the index. Does not enqueue a writer command.
+    pub fn scrub_frame_refs_finding(&self) -> Option<GlobalLedgerError> {
+        self.scrub
+            .as_ref()
+            .and_then(sqlite::scrub::ScrubThread::frame_refs_finding)
+    }
+
     /// LN-9: the scrub's rate from its next chunk on (`ledger_observer.scrub_rows_per_second`,
     /// settable), `1..=100000`; any other value is `invalid_ledger_config`. A ledger without a
     /// scrub has no rate to change.
