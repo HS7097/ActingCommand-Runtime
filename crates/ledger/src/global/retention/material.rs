@@ -47,6 +47,10 @@ pub struct LedgerOpenTiming {
     /// LN-8: a dump an earlier run left imported, the previous epoch's tail gap and the stale
     /// owner's recovery record written.
     pub import_ms: u64,
+    /// #422 LN-7c O: whether the writer open read every owner record of the history instead
+    /// of those of the two latest owner epochs, because it could not place a retained owner in
+    /// a start's epoch (an owner in no start's epoch). Not part of the line above.
+    pub owner_read_full: bool,
 }
 
 impl std::fmt::Display for LedgerOpenTiming {

@@ -682,6 +682,8 @@ pub(super) fn open_formal(
     })();
     timing.index_ms = elapsed_ms(indexing);
     let (mut store, stale) = indexed?;
+    // #422 LN-7c O: an open that read every owner record says why.
+    timing.owner_read_full = store.retention.owner_read_full();
     // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.4, §12 step 2): a dump an earlier run
     // left is imported after the ledger is verified and before any new record; AO-2 (§10, §12
     // step 5): then the previous epoch's unconfirmed tail.

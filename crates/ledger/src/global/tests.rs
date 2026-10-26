@@ -2950,3 +2950,7 @@ mod gate_ln8d;
 // never holds the writer.
 #[path = "tests/gate_ln9.rs"]
 mod gate_ln9;
+// #422 LN-7c O: the open reads the owner records of the two latest owner epochs (and of the older
+// owners a start may still close) and keeps the owner state of the read of every owner record.
+#[path = "tests/gate_ln7c_o.rs"]
+mod gate_ln7c_o;

@@ -13,7 +13,7 @@ use std::time::Instant;
 /// The record types whose payload can name an owner epoch (`recorded_owner`): lifecycle
 /// observations (with the prior-epoch imports and closes and the quiescences), capacity samples
 /// and runtime-state facts.
-const OWNER_TYPES: [EventType; 5] = [
+pub(super) const OWNER_TYPES: [EventType; 5] = [
     EventType::RuntimeLifecycleObserved,
     EventType::PerformanceSummary,
     EventType::CommandValidated,
@@ -68,7 +68,7 @@ fn publishes_on(
 
 impl RetentionIndex {
     /// The sequence ranges in which `owner` is the recorded owner, the last one through `head`.
-    fn owner_ranges(&self, owner: OwnerEpoch, head: u64) -> Vec<(u64, u64)> {
+    pub(super) fn owner_ranges(&self, owner: OwnerEpoch, head: u64) -> Vec<(u64, u64)> {
         let mut ranges = Vec::new();
         let mut changes = self.owner_epochs.iter().peekable();
         while let Some((start, epoch)) = changes.next() {
@@ -98,17 +98,28 @@ impl<B: DurableStorage> EventStore<B> {
         deadline: Option<Instant>,
     ) -> GlobalLedgerResult<()> {
         let head = self.backend.head();
-        let owner_records = self
-            .history_until(deadline)
-            .select_where(&HistorySelection::of(&typed(&OWNER_TYPES)), |event| {
-                recorded_owner(event).is_some()
-            })?;
-        let owners = RetentionIndex::scratch(&RetentionIndex::default(), owner_records.clone());
-        let mut selected = Selected::new();
-        keep(&mut selected, owner_records);
+        // #422 LN-7c O: the starts are read first; the owner records are those of the two
+        // latest owner epochs and of the older owners a start may still close (`owner_records`).
         let rare = self
             .history_until(deadline)
             .select(&HistorySelection::of(&typed(&RARE_TYPES)))?;
+        let starts = rare
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type(),
+                    EventType::RuntimeStarted | EventType::RuntimeTakeover
+                )
+            })
+            .map(PersistedEvent::sequence)
+            .collect::<Vec<_>>();
+        let super::owner_read::OwnerRead {
+            records: owner_records,
+            full,
+        } = self.owner_records(&starts, deadline)?;
+        let owners = RetentionIndex::scratch(&RetentionIndex::default(), owner_records.clone());
+        let mut selected = Selected::new();
+        keep(&mut selected, owner_records);
         let mut frames = live.clone();
         frames.extend(rare.iter().filter_map(|event| {
             Some(
@@ -163,6 +174,9 @@ impl<B: DurableStorage> EventStore<B> {
         }
         retention.through_sequence = head;
         retention.retain_frames(live);
+        retention.owner_read_full = full;
+        #[cfg(test)]
+        retention.keep_owner_state_for_test(head);
         self.recovering_retention = retention.has_pending();
         self.retention = retention;
         Ok(())

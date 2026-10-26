@@ -675,3 +675,12 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln8d::ln8d_the_opens_deadline_stops_its_retention_read",
 ]
 incident = ["#422 LN-8d"]
+
+# LN-7c O (#422; rd-1026/ln7c/final-query.md §7 row O, §2): the writer open reads the owner records of the two latest owner epochs: those after the start before the latest one by the type index, read back in forward chunks to the first record of that owner, and of each older owner a start may still close, read back the same way; the owner state it keeps (the retained owners, the owners a next start closes, and of each retained owner its epochs, end, reopening, import, closes, their writer, quiescences, scope sources and releases) equals the read of every owner record on roots with many starts, a takeover, a dump import of the previous owner, a reopened owner and a prior-epoch close; a retained owner in no start's epoch makes the open read every owner record and say why (`owner_in_no_start_epoch`); the owner rows read stay in the two latest epochs and are the same on histories of 3 000, 12 000 and 30 000 records (`LedgerReadCounts`)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o1_the_open_keeps_the_owner_state_of_the_read_of_every_owner_record",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o2_the_owner_rows_read_at_open_stay_in_the_two_latest_epochs_whatever_the_history",
+]
+incident = ["#422 LN-7c O"]

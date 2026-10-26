@@ -146,6 +146,26 @@ longer holds loads it again from the store, by its link and the `artifact_id` in
 before it is checked, so an old artifact's identity is still its first reference (a
 differing reference is refused `artifact_identity_conflict`) and a Lab pin release finds
 a kept frame's pins.
+#422 LN-7c O (rd-1026/ln7c/final-query.md §2, §7): the open reads the owner records of
+the two latest owner epochs, not of the whole history. It reads the starts first, then
+the owner records after the start before the latest one by the type index. A start writes
+its first owner records (its capacity sample, its prior-epoch imports and closes, its
+startup recovery) before its `runtime.started` or `runtime.takeover`, so the open reads
+back from there, in chunks that are forward reads of the same index (the first one
+`ledger_observer.history_page_rows` sequences long, each next twice as long), to the
+first record of that owner, and keeps the owner record right before it. A retained owner
+whose records precede that point (the owner it ended, when a start still closes its
+scopes, or when it is the owner before the latest) is read back the same way, from its
+last record to its first. Reading an owner back never passes the start before its own.
+Each retained owner then has its epochs, end, reopening, import, the closes of its scopes
+and their writer, its quiescences, scope sources and releases as the read of every owner
+record gives them; an owner change older than that read is not resident. When a retained
+owner's first block holds no start record (an owner in no start's epoch: a start that
+stopped before its start record) or reading it back reaches the start before its own, the
+open reads every owner record, as before, and actingd prints
+`actingd ledger_open owner_read=full reason=owner_in_no_start_epoch`
+(`LedgerOpenTiming::owner_read_full`). An open with fewer than two starts reads every
+owner record. Nothing is written: an older build opens the same root unchanged.
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit
