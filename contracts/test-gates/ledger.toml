@@ -676,6 +676,15 @@ tests = [
 ]
 incident = ["#422 LN-8d"]
 
+# LN-7c F6 (#422; rd-1026/ln7c/final-query.md §1.1, §1.3, §7 F6; ruling 70): capture frames by ingestion time, the plain partial index `ledger_artifacts_created` (never a `ledger_view_*` object, so an older build opens, writes and scrubs a root that has it): a new root has it from `schema.sql`, a root without it gets it at its first writer open, over every capture frame, and a second open leaves it as it is; the plan check for ledger tests holds a statement's plan on an empty database to the §1.3 rule and rejects a statement doctored to read the whole history (a scan of a ledger table, its alias or index, an automatic index on one, the type index without a sequence bound, a history-wide index)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_a_root_without_the_frame_time_index_gets_it_at_its_first_writer_open",
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_the_plan_check_rejects_a_doctored_statement_that_reads_the_whole_history",
+]
+incident = ["#422 LN-7c F6"]
+
 # LN-7c O (#422; rd-1026/ln7c/final-query.md §7 row O, §2): the writer open reads the owner records of the two latest owner epochs: those after the start before the latest one by the type index, read back in forward chunks to the first record of that owner, and of each older owner a start may still close, read back the same way; the owner state it keeps (the retained owners, the owners a next start closes, and of each retained owner its epochs, end, reopening, import, closes, their writer, quiescences, scope sources and releases) equals the read of every owner record on roots with many starts, a takeover, a dump import of the previous owner, a reopened owner and a prior-epoch close; a retained owner in no start's epoch makes the open read every owner record and say why (`owner_in_no_start_epoch`); the owner rows read stay in the two latest epochs and are the same on histories of 3 000, 12 000 and 30 000 records (`LedgerReadCounts`)
 [[gate]]
 coverage = "Y"

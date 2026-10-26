@@ -10,6 +10,11 @@
 //! `contain_failure`, so it fails only X's action: no `instance_idle_action` record and no wake
 //! follow for X, the Runtime does not latch, Y is not fenced and Y's run completes. Every wait
 //! returns as soon as what it waits for has happened; `WAIT` only bounds a broken run.
+//!
+//! IDLE-2 (the owed wake; v0.12.13 in production on 10-26): X's stop succeeds, a check meets X
+//! while the test holds its admission guard (as the emulator watch's status read does), and X
+//! still owes its wake: one action, then at next due minus the default lead its wake and the
+//! configured emulator start it queues.
 
 use super::emulator_controller::{
     EmulatorCall, FAKE_EMULATOR_PORT, ScriptedControl, running_state,
@@ -18,7 +23,7 @@ use super::gate_369_s6c::{claims_after, connectivity, head};
 use super::gate_403::status_fence;
 use super::instance_workers::{all_events, phases};
 use super::*;
-use crate::codes::{HostCode, IdleCode};
+use crate::codes::{HostCode, IdleCode, IdleLocation};
 use crate::idle_action::IdlePlan;
 use actingcommand_contract::{
     EmulatorInstanceAction, InstanceStuckRecovery, RuntimeConfigManifest, RuntimeLifecyclePhase,
@@ -39,6 +44,9 @@ const Y_ALIAS: &str = "idle1.instance.y";
 const NOW_UNIX_MS: u64 = 1_000;
 /// X's next due task in the plan: four hours away, past `idle.min_gap_ms`'s default.
 const NEXT_DUE_UNIX_MS: u64 = NOW_UNIX_MS + 4 * 3_600_000;
+const MINUTE_MS: u64 = 60_000;
+/// `idle.stop_emulator_wake_lead_ms`'s default.
+const STOP_EMULATOR_LEAD_MS: u64 = 300_000;
 
 fn instance_text(instance: InstanceId) -> String {
     match serde_json::to_value(instance).expect("instance id encodes") {
@@ -77,6 +85,7 @@ struct Fixture {
     x: InstanceId,
     x_state: Arc<FakeState>,
     y_package: String,
+    clock: Arc<ManualRuntimeClock>,
     _root: TempDir,
 }
 
@@ -102,9 +111,10 @@ fn fixture() -> Fixture {
         .expect("startup package request");
     let x = instance_id();
     let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let clock = Arc::new(ManualRuntimeClock::new(NOW_UNIX_MS, 0));
     let host = RuntimeHost::start(
         config(&root)
-            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(NOW_UNIX_MS, 0)))
+            .with_runtime_clock(clock.clone())
             .with_stuck_recovery(BTreeMap::from([(
                 X_ALIAS.to_owned(),
                 InstanceStuckRecovery {
@@ -127,6 +137,7 @@ fn fixture() -> Fixture {
         x,
         x_state,
         y_package,
+        clock,
         _root: root,
     }
 }
@@ -155,6 +166,18 @@ fn x_plan(due_now: bool) -> BTreeMap<String, IdlePlan> {
             evaluated_at_unix_ms: NOW_UNIX_MS,
             due_now,
             next_wake_unix_ms: (!due_now).then_some(NEXT_DUE_UNIX_MS),
+        },
+    )])
+}
+
+/// X's plan evaluated at `at`: no task due, the next one at `NEXT_DUE_UNIX_MS`.
+fn x_plan_at(at: u64) -> BTreeMap<String, IdlePlan> {
+    BTreeMap::from([(
+        X_ALIAS.to_owned(),
+        IdlePlan {
+            evaluated_at_unix_ms: at,
+            due_now: false,
+            next_wake_unix_ms: Some(NEXT_DUE_UNIX_MS),
         },
     )])
 }
@@ -278,6 +301,100 @@ fn idle1_g_a_failed_stop_is_contained_to_its_instance_and_the_runtime_goes_on() 
             })
         ),
         "{receipt:?}"
+    );
+    let Fixture { host, _root, .. } = fixture;
+    host.close().expect("close the host");
+}
+
+#[test]
+fn idle2_h_a_held_admission_guard_keeps_the_idle_instances_wake_through_the_host() {
+    let fixture = fixture();
+    let before = head(&fixture.host);
+
+    // 1. X's action succeeds (an unscripted Stop is confirmed).
+    fixture
+        .host
+        .check_idle_instances_for_test(&x_plan(false))
+        .expect("the idle check");
+    assert_eq!(
+        fixture.host.await_idle_action_ends_for_test(1, WAIT),
+        Some(1),
+        "X's idle action ended"
+    );
+
+    // 2. A check while the test holds X's admission guard, as the emulator watch's status read
+    // does.
+    let admission = fixture
+        .host
+        .instance_admission_for_test(X_ALIAS)
+        .expect("X's admission guard");
+    let read = NOW_UNIX_MS + MINUTE_MS;
+    fixture.clock.set_unix_ms(read);
+    {
+        let _read = admission.lock().expect("hold X's admission guard");
+        fixture
+            .host
+            .check_idle_instances_for_test(&x_plan_at(read))
+            .expect("the idle check during the read");
+    }
+
+    // 3. The guard is free again: a check with a fresh far plan.
+    let fresh = read + MINUTE_MS;
+    fixture.clock.set_unix_ms(fresh);
+    fixture
+        .host
+        .check_idle_instances_for_test(&x_plan_at(fresh))
+        .expect("the idle check after the read");
+
+    // 4. The clock at X's wake: next due minus the default lead.
+    let wake = NEXT_DUE_UNIX_MS - STOP_EMULATOR_LEAD_MS;
+    fixture.clock.set_unix_ms(wake);
+    fixture
+        .host
+        .check_idle_instances_for_test(&x_plan_at(wake))
+        .expect("the idle check at the wake");
+
+    // X's idle records and its wake's claim record, in order.
+    let events = all_events(&fixture.host);
+    let records = phases(&events)
+        .into_iter()
+        .filter(|(event, _)| {
+            event.sequence() > before && event.links().instance_id() == Some(&fixture.x)
+        })
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::DeviceStateObserved { outcome } => {
+                let code = outcome.code().as_str();
+                if code == IdleCode::Taken.as_str() {
+                    let operation = outcome
+                        .value("operation")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    Some(format!("{code} {operation}"))
+                } else if code == HostCode::EmulatorAutostartQueued.as_str() {
+                    Some(code.to_owned())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records,
+        [
+            format!(
+                "{} {}",
+                IdleCode::Taken.as_str(),
+                IdleLocation::Action.as_str()
+            ),
+            format!(
+                "{} {}",
+                IdleCode::Taken.as_str(),
+                IdleLocation::Wake.as_str()
+            ),
+            HostCode::EmulatorAutostartQueued.as_str().to_owned(),
+        ],
+        "one action for X, then its wake and the wake's claim"
     );
     let Fixture { host, _root, .. } = fixture;
     host.close().expect("close the host");

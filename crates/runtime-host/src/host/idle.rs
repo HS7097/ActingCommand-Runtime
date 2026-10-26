@@ -3,7 +3,8 @@
 //! IDLE-1 (Alice's ruling 41 of 10-24: when an instance has no task, close the game inside the
 //! emulator, and the startup package relaunches it when a task is due; her ruling of 10-25:
 //! 「没有任务的时候直接关闭模拟器……任务结束或者接下来一段时间比如30分钟内没有任务的时候关闭应用程序」, two
-//! options of one function; Workflow #386 comment 6393646823): the host side of the idle action.
+//! options of one function; Workflow #386 comment 6393646823; IDLE-2, the owed wake): the host
+//! side of the idle action.
 //!
 //! - **When.** At every policy cycle, right after its evaluation and before actingd admits its
 //!   dispatches, and at every lease sweep, the idle check reads, for every registered physical
@@ -29,12 +30,17 @@
 //!   close, the provider Stop through the configured or internal control, never `api`, the
 //!   endpoint back to pending), so the next start finds no dead retained session.
 //! - **The wake** at the next due time minus the action's wake lead, or at once for an earlier
-//!   due task: after `close_app` the startup package is queued (`startup_package_scheduled`);
-//!   after `stop_emulator` the configured emulator start (emu-watch's autostart claim, with its
-//!   `emulator_autostart_queued`), whose start hands the key to the startup package as every
-//!   configured start does. Queued at the cycle, the wake's claim holds the instance before the
-//!   cycle's dispatch is admitted. While an instance's emulator is held stopped, the emulator
-//!   watch does not start it again.
+//!   due task (a fact-refresh reading too) or a switched action: after `close_app` the startup
+//!   package is queued (`startup_package_scheduled`); after `stop_emulator` the configured
+//!   emulator start (emu-watch's autostart claim, with its `emulator_autostart_queued`), whose
+//!   start hands the key to the startup package as every configured start does. Queued at the
+//!   cycle, the wake's claim holds the instance before the cycle's dispatch is admitted. An
+//!   instance the action left owes its wake until it is queued: what holds it in between (a
+//!   claim, a queued request, its admission guard held by the emulator watch's status read or a
+//!   keyless observe, the action's own claim) neither cancels the wake nor lets the action run
+//!   again before it, and a wake due while the instance is held is queued all the same, its
+//!   claims waiting behind the holder. While an instance's emulator is held stopped, the
+//!   emulator watch does not start it again.
 //! - **Records.** One `instance_idle_action` record per action and per wake (`operation`
 //!   `run_idle_action` or `queue_idle_wake`, `idle_action` naming the action), a
 //!   `device_state_observed` record under the instance and the same report line. An instance
@@ -48,9 +54,16 @@
 //!   blackout's end, when the sweep's pump grants them.
 //! - **Fail loud, one instance (#419).** A failed close or stop is recorded (the existing
 //!   failure records, or `runtime.failed` with the failure) and goes through the one decision
-//!   point (`contain_failure`), so it fails only this instance's action: the instance is left as
-//!   it is, no wake follows, and its next due task goes through the normal path. Only a failure
-//!   that is the Runtime's as a whole latches it.
+//!   point (`contain_failure`), so it fails only this instance's action. Only a failure that is
+//!   the Runtime's as a whole latches it. What the planner is told (`IdleEnd`):
+//!   - a `close_app` that failed before its stop request (the declared application, the check
+//!     that it is the assigned one, the foreground query, the request itself) and every failed
+//!     `stop_emulator` were not performed: the instance is left as it is, no wake follows, and
+//!     its next due task goes through the normal path (a stopped emulator is started again by
+//!     the emulator watch);
+//!   - a `close_app` whose stop request failed (`application_control` or after it) may have
+//!     closed the application, so it is indeterminate: the instance owes its wake as after a
+//!     close that succeeded, and no `instance_idle_action` record says the action ran.
 
 use super::failure_scope::Contained;
 use super::host_claims::{HostClaimWork, HostKey};
@@ -59,7 +72,7 @@ use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
 use super::*;
 use crate::codes::{HostCode, IdleCode, IdleLocation};
-use crate::idle_action::{IdlePlan, IdleRequirement, IdleStep, IdleView, WakeWork};
+use crate::idle_action::{IdleEnd, IdlePlan, IdleRequirement, IdleStep, IdleView, WakeWork};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{EmulatorRunningState, RuntimeScheduleExplanation};
 use actingcommand_device::DeviceResourceQuiescence;
@@ -263,7 +276,8 @@ impl HostShared {
             };
             if let Err(error) = taken {
                 if matches!(step, IdleStep::Act { .. }) {
-                    planner.finished(&alias, false);
+                    // The action's claim was not queued: nothing was sent.
+                    planner.finished(&alias, IdleEnd::NotPerformed);
                 }
                 self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)?;
             }
@@ -498,14 +512,27 @@ impl HostShared {
         // The stop ends its key's hold itself; the close leaves the key with the claim, which
         // releases it only once the planner knows the action's end, so no check meanwhile takes
         // the free instance for one that was never acted on.
+        let mut stop_sent = false;
         let (ended, held) = match pending.action {
             IdleAction::StopEmulator => (
                 self.idle_stop_emulator(pending, &validated, links.clone(), key),
                 None,
             ),
-            _ => (self.idle_close_app(pending, &key, links.clone()), Some(key)),
+            _ => (
+                self.idle_close_app(pending, &key, links.clone(), &mut stop_sent),
+                Some(key),
+            ),
         };
-        lock(&self.idle, IdleLocation::Action)?.finished(alias, matches!(ended, Ok(Ok(_))));
+        // IDLE-2: a close whose stop request was sent and failed may have closed the application,
+        // so the instance owes its wake. Every other failure was not performed: a close that
+        // failed before its stop request, and any failed stop_emulator (the emulator watch starts
+        // a stopped emulator again).
+        let end = match &ended {
+            Ok(Ok(_)) => IdleEnd::Done,
+            _ if stop_sent => IdleEnd::Indeterminate,
+            _ => IdleEnd::NotPerformed,
+        };
+        lock(&self.idle, IdleLocation::Action)?.finished(alias, end);
         if let Some(key) = &held
             && let Err(error) = self.release_host_key(key)
         {
@@ -536,11 +563,14 @@ impl HostShared {
     /// assigned one, then the existing application stop on the key, which stays with the claim
     /// whatever the stop's result. `Ok(Ok(application))` when it stopped; `Ok(Err(failure))`
     /// when it failed and `failure` is recorded; `Err` for a failure not recorded yet.
+    /// `stop_sent` is set when the stop request is sent (`application_control`): a failure from
+    /// there on leaves the application's state unknown.
     fn idle_close_app(
         &self,
         pending: &PendingIdleAction,
         key: &HostKey,
         links: EventLinksDraft,
+        stop_sent: &mut bool,
     ) -> RuntimeHostResult<Result<Option<String>, RuntimeHostError>> {
         let alias = pending.instance_alias.as_str();
         let declared = match self.declared_application(pending) {
@@ -668,6 +698,7 @@ impl HostShared {
             )?;
         }
         // The key is the claim's and stays with it whatever the stop's result, as a ladder's.
+        *stop_sent = true;
         match self.application_control(
             &stop,
             &key.token,
