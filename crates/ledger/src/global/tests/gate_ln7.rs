@@ -870,7 +870,8 @@ fn ln7_a6_bounded_frame_decisions_equal_the_full_views() {
 /// LN-7 (§3.5, "write-side validate"): a frame the writer no longer holds (its file left the
 /// store before the writer opened) and that a record references again with another reference is
 /// refused `artifact_identity_conflict`; its identity is its first reference, read through the
-/// `artifact_id` index.
+/// `artifact_id` index. The refusal is fatal, as the write-side identity check's is today
+/// (`retention.rs` `invalid`): the writer ends, so its close fails.
 #[test]
 fn ln7_an_old_artifacts_identity_refusal_goes_through_the_index() {
     let root = tempfile::tempdir().expect("root");
@@ -913,4 +914,8 @@ fn ln7_an_old_artifacts_identity_refusal_goes_through_the_index() {
         .append(draft)
         .expect_err("another reference of an old artifact is refused");
     assert_eq!(refused.code(), "artifact_identity_conflict");
+    assert!(refused.is_fatal(), "an identity conflict ends the writer");
+    reopened
+        .close()
+        .expect_err("the fatal identity refusal terminated the writer");
 }
