@@ -2301,3 +2301,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_a_safe_area_declaration_finds_no_insets_before_da_4b",
 ]
 incident = ["#392 DA-2a"]
+
+# LN-7c R (#422; ledger-observer.md §11.7; coordinator 10-26): the ledger scrub's finding about the derived frame index `ledger_frame_refs` is non-fatal: the host hands it to the daemon's log once (one line with the code, what, where and `extent=untrusted`), latches nothing, and the Runtime keeps running and closes as usual
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln9::ln7c_r_a_frame_index_finding_is_one_daemon_line_and_the_runtime_keeps_running",
+]
+incident = ["#422 LN-7c R"]

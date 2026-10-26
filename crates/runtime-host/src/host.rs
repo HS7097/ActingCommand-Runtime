@@ -2629,6 +2629,11 @@ impl RuntimeHost {
                 .with_native_detail(format!("{finding:?}")),
             )?;
         }
+        // #422 LN-7c R (ledger-observer.md §11.7): what the scrub found wrong with the derived
+        // frame index is non-fatal: one daemon line, once, and nothing is latched.
+        if let Some(finding) = shared.ledger.scrub_frame_refs_finding() {
+            shared.fatal.report_ledger_index_finding(&finding);
+        }
         if let Err(error) = shared.ledger.check_writer_health() {
             shared.fatal.mark(RuntimeHostError::relayed_fatal(
                 error.code(),

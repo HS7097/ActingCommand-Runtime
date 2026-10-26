@@ -178,6 +178,13 @@ impl RuntimeDaemonReporter for DaemonReporter {
     fn warning_recorded(&self, outcome: &Outcome) {
         write_stderr(&daemon_lines(outcome, None));
     }
+
+    /// #422 LN-7c R: the ledger scrub's non-fatal finding about its derived frame index is one
+    /// developer line, written once: `ERROR actingd: ledger_index_mismatch operation=<operation>
+    /// <what and where>; phase=scrub; extent=untrusted`. Nothing is latched.
+    fn ledger_index_finding(&self, outcome: &Outcome, developer: &str) {
+        write_stderr(&developer_line(outcome, Some(developer)));
+    }
 }
 
 /// The developer-line level of a category (model section 7.4): `INFO` for a success or an info.

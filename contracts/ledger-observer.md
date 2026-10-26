@@ -996,6 +996,11 @@ CREATE TABLE ledger_frame_refs_extent (
   - **The scrub's finding about the derived table is non-fatal.** This covers a difference and an
     extent table the scrub cannot read. It is recorded (`GlobalLedger::scrub_frame_refs_finding`,
     with what and where in its detail), the host does not latch it, and the Runtime keeps running.
+    The host hands it once to the daemon's log through #411 A51's reporter
+    (`RuntimeDaemonReporter::ledger_index_finding`). actingd writes it as one line:
+    `ERROR actingd: ledger_index_mismatch operation=verify_ledger_frame_refs table=ledger_frame_refs
+    sequence=<n>; after_sequence=<chunk start>; phase=scrub; extent=untrusted`. The next open's
+    rebuild needs no further line.
     The scrub stops checking the index for the rest of the pass and goes on with the chain.
     Findings in the primary ledger tables stay fatal, as before.
   - **The extent is marked untrusted**: it becomes `through + 1..=through`, which covers no record
