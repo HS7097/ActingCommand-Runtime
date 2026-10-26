@@ -417,10 +417,11 @@ fn case_records(case: &Value) -> u64 {
 
 // The case with the fewest records (`fewest`) or the most.
 fn case_by_size(cases: &[Value], fewest: bool) -> Option<&Value> {
+    let records = |case: &&Value| case_records(case);
     if fewest {
-        cases.iter().min_by_key(|case| case_records(case))
+        cases.iter().min_by_key(records)
     } else {
-        cases.iter().max_by_key(|case| case_records(case))
+        cases.iter().max_by_key(records)
     }
 }
 

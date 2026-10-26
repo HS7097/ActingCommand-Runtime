@@ -4,9 +4,9 @@
 // open over N and 4N records reads each event and link row once and opens no artifact file; a
 // root with ten times the material gives the same read count). The requirements:
 // - `contracts/ledger-store.md` (LedgerStore): the formal SQLite constructor authenticates the
-//   keyed meta row, then reads and verifies the history in one pass, reading no further than the
-//   authenticated head; open time grows linearly with the committed history. The constructor runs
-//   on the opening thread.
+//   keyed meta row, then reads and verifies (#422 LN-8) the newest records in one pass, reading no
+//   further than the authenticated head; these roots are within the open's tail, so the pass
+//   reads every record and grows with them. The constructor runs on the opening thread.
 // - `contracts/ledger-store.md` (Workflow #375 R5a): the formal openings, the startup writer open
 //   included, never open, hash or stat a referenced artifact file.
 // - Test plan v2.2 row L-3: I5 read counters, G9 #375 linear.
@@ -20,10 +20,12 @@
 // committed records: one `ledger_events` row and one `ledger_links` row per record, one
 // `ledger_artifacts` row per artifact reference.
 //
-// #422 LN-7 (LEAN-L §3.5, `contracts/ledger-store.md`): until LN-8 drops the full read, the open
-// also reads its retention state by type and by index besides the pass. The pass is counted by
-// the set of sequences it saw (each event and link row, none past the head); the extra reads are
-// the rows read again and the rows read without an identity (a predecessor's stored hash). They
+// #422 LN-7 (LEAN-L §3.5, `contracts/ledger-store.md`): the open also reads its retention state by
+// type and by index besides the pass. #422 LN-8: the pass is the open's tail, the newest
+// `ledger_observer.open_verify_tail_records` records, here every record of these small roots, and
+// the open reads `MAX(sequence)` before it. The pass is counted by the set of sequences it saw
+// (each event and link row, none past the head); the extra reads are the rows read again and the
+// rows read without an identity (a predecessor's stored hash, the one `MAX(sequence)`). They
 // follow the live frames, not the records: the owner records (here each capture's two
 // quiescences) and what the classes of the frames present in the store read. A root whose frames
 // were all deleted by hand reads again only its owner records, none of its frames' records.
@@ -263,7 +265,8 @@ fn gate_l3_g9_ten_times_larger_material_reads_the_same_rows() {
 }
 
 // #422 LN-7: an open of a root without live frames reads again its owner records (by type), each
-// with at most one predecessor's hash, and nothing else: none of its frames' records.
+// with at most one predecessor's hash, and nothing else: none of its frames' records. #422 LN-8:
+// besides them the open reads one row without an identity, its `MAX(sequence)`.
 fn assert_no_frame_record_read_again(root: &Root, counts: &LedgerReadCounts) {
     assert_eq!(
         (
@@ -276,10 +279,10 @@ fn assert_no_frame_record_read_again(root: &Root, counts: &LedgerReadCounts) {
         root.owner_records
     );
     assert!(
-        counts.unidentified.events <= root.owner_records
+        counts.unidentified.events <= root.owner_records + 1
             && counts.unidentified.links == 0
             && counts.unidentified.artifacts == 0,
-        "at most one predecessor's hash per owner record: {counts:?}"
+        "at most one predecessor's hash per owner record, and the open's MAX(sequence): {counts:?}"
     );
 }
 

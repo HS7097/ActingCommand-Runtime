@@ -155,62 +155,82 @@ fn damage(root: &Root, sql: &str) {
         .expect("damage the fixture");
 }
 
+// One damage of the tail: its label, its SQL for a root's head, and the code and operation both
+// refusals give.
+struct TailDamage {
+    label: &'static str,
+    sql: fn(u64) -> String,
+    code: &'static str,
+    operation: &'static str,
+}
+
 #[test]
 fn ln8_damage_in_the_tail_is_refused_at_open_as_verify_refuses_it() {
-    let cases: [(&str, fn(u64) -> String, (&str, &str)); 5] = [
-        (
-            "a tail row's tag",
-            |head| {
+    let cases = [
+        TailDamage {
+            label: "a tail row's tag",
+            sql: |head| {
                 format!(
                     "UPDATE ledger_events SET integrity_tag='ln8-invalid-tag' WHERE sequence={}",
                     stored(head - 1)
                 )
             },
-            ("ledger_record_mismatch", "verify_sqlite_record"),
-        ),
-        (
-            "the head's record",
-            |head| {
+            code: "ledger_record_mismatch",
+            operation: "verify_sqlite_record",
+        },
+        TailDamage {
+            label: "the head's record",
+            sql: |head| {
                 format!(
                     "UPDATE ledger_events SET canonical_record=CAST('ln8-invalid-json' AS BLOB) WHERE sequence={}",
                     stored(head)
                 )
             },
-            ("corrupt_ledger_record", "parse_sqlite_record"),
-        ),
-        (
-            "a tail row's link",
-            |head| {
+            code: "corrupt_ledger_record",
+            operation: "parse_sqlite_record",
+        },
+        TailDamage {
+            label: "a tail row's link",
+            sql: |head| {
                 format!(
                     "UPDATE ledger_links SET run_id='ln8-invalid-run' WHERE sequence={}",
                     stored(head - 2)
                 )
             },
-            ("ledger_index_mismatch", "verify_sqlite_relations"),
-        ),
-        (
-            "the hash the oldest tail row chains to",
-            |head| {
+            code: "ledger_index_mismatch",
+            operation: "verify_sqlite_relations",
+        },
+        TailDamage {
+            label: "the hash the oldest tail row chains to",
+            sql: |head| {
                 format!(
                     "UPDATE ledger_events SET record_sha256='sha256:{}' WHERE sequence={}",
                     "0".repeat(64),
                     stored(head - TAIL as u64)
                 )
             },
-            ("ledger_record_mismatch", "verify_sqlite_record"),
-        ),
-        (
-            "the head row",
-            |head| {
+            code: "ledger_record_mismatch",
+            operation: "verify_sqlite_record",
+        },
+        TailDamage {
+            label: "the head row",
+            sql: |head| {
                 let head = stored(head);
                 format!(
                     "DELETE FROM ledger_links WHERE sequence={head}; DELETE FROM ledger_artifacts WHERE sequence={head}; DELETE FROM ledger_events WHERE sequence={head}"
                 )
             },
-            ("ledger_meta_mismatch", "verify_sqlite_head"),
-        ),
+            code: "ledger_meta_mismatch",
+            operation: "verify_sqlite_head",
+        },
     ];
-    for (label, sql, (code, operation)) in cases {
+    for TailDamage {
+        label,
+        sql,
+        code,
+        operation,
+    } in cases
+    {
         let root = build();
         damage(&root, &sql(root.head));
         // `ledger-maintenance verify` reads every row and refuses the damage.
