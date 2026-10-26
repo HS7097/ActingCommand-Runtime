@@ -1205,6 +1205,8 @@ enum WriterCommand {
     FrameRetentionView {
         now_unix_ms: u64,
         switches: FrameRetentionSwitches,
+        /// LN-7 (#422): the frames present in the live frame store, at a sweep start.
+        live: Option<std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
         response: SyncSender<GlobalLedgerResult<FrameRetentionView>>,
     },
     AdmitArtifactEviction {
@@ -3275,9 +3277,11 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::FrameRetentionView {
                 now_unix_ms,
                 switches,
+                live,
                 response,
             } => {
-                let result = store.frame_retention_view(now_unix_ms, switches, &work);
+                let result =
+                    store.frame_retention_view(now_unix_ms, switches, live.as_ref(), &work);
                 command_succeeded = result.is_ok();
                 if let Err(error) = &result
                     && error.terminal()

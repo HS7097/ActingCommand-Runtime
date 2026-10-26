@@ -6,8 +6,11 @@
 //! or any other table or view), and so is every artifact material file the ledger asks its
 //! verifier to open. A row of the three ledger tables read by a statement that selects
 //! `sequence` first (and `ordinal` second, for an artifact row) carries its identity, so a row
-//! read again is counted as repeated. Dropping the counter stops counting. Counting changes
-//! nothing the medium reads or returns.
+//! read again is counted as repeated, and the counter knows the sequences of the event and link
+//! rows it saw; a row of a statement that selects no identity (an aggregate such as `COUNT(*)`,
+//! or one column such as a predecessor's stored hash) is counted apart, as unidentified (#422
+//! LN-7). Dropping the counter stops counting. Counting changes nothing the medium reads or
+//! returns.
 //!
 //! The counters are per thread because an opening runs on the opening thread
 //! (`contracts/ledger-store.md`: the constructor "runs on the opening thread"), before the writer
@@ -29,12 +32,31 @@ pub struct LedgerTableReads {
     pub repeated: u64,
 }
 
+/// #422 LN-7: the rows of each ledger table whose statement selected no identity. They count
+/// in their table's `rows` too, never as `repeated`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerUnidentifiedRows {
+    pub events: u64,
+    pub links: u64,
+    pub artifacts: u64,
+}
+
+/// #422 LN-7: the sequences of the event rows and of the link rows a counter saw with their
+/// identity, each once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LedgerSequencesRead {
+    pub events: BTreeSet<u64>,
+    pub links: BTreeSet<u64>,
+}
+
 /// What the SQLite medium read on one thread since its counter started.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LedgerReadCounts {
     pub events: LedgerTableReads,
     pub links: LedgerTableReads,
     pub artifacts: LedgerTableReads,
+    /// The rows among those of `events`, `links` and `artifacts` that carry no identity.
+    pub unidentified: LedgerUnidentifiedRows,
     /// Rows of any other table or view (the meta row, the index table, the views).
     pub other_rows: u64,
     /// Artifact material files the ledger asked its verifier to open.
@@ -86,6 +108,34 @@ impl LedgerReadCounter {
                 .unwrap_or_default()
         })
     }
+
+    /// #422 LN-7: the sequences of the event and link rows read with their identity since the
+    /// counter started.
+    pub fn sequences_read(&self) -> LedgerSequencesRead {
+        COUNTING.with(|counting| {
+            let mut read = LedgerSequencesRead::default();
+            if let Some(counting) = counting.borrow().as_ref() {
+                for (table, sequence, _) in &counting.seen {
+                    let sequence = decoded(*sequence);
+                    match table {
+                        Table::Events => {
+                            read.events.insert(sequence);
+                        }
+                        Table::Links => {
+                            read.links.insert(sequence);
+                        }
+                        Table::Artifacts | Table::Other => {}
+                    }
+                }
+            }
+            read
+        })
+    }
+}
+
+/// A stored sequence decoded: the medium's order-preserving `encode` (`global/sqlite.rs`) undone.
+fn decoded(value: i64) -> u64 {
+    (value as u64) ^ (1_u64 << 63)
 }
 
 impl Drop for LedgerReadCounter {
@@ -97,20 +147,29 @@ impl Drop for LedgerReadCounter {
 impl Counting {
     fn count_row(&mut self, sql: &str, row: &[Value]) {
         let table = table_of(sql);
-        let reads = match table {
-            Table::Events => &mut self.counts.events,
-            Table::Links => &mut self.counts.links,
-            Table::Artifacts => &mut self.counts.artifacts,
+        let (reads, unidentified) = match table {
+            Table::Events => (
+                &mut self.counts.events,
+                &mut self.counts.unidentified.events,
+            ),
+            Table::Links => (&mut self.counts.links, &mut self.counts.unidentified.links),
+            Table::Artifacts => (
+                &mut self.counts.artifacts,
+                &mut self.counts.unidentified.artifacts,
+            ),
             Table::Other => {
                 self.counts.other_rows += 1;
                 return;
             }
         };
         reads.rows += 1;
-        if let Some((sequence, ordinal)) = identity(table, sql, row)
-            && !self.seen.insert((table, sequence, ordinal))
-        {
-            reads.repeated += 1;
+        match identity(table, sql, row) {
+            Some((sequence, ordinal)) => {
+                if !self.seen.insert((table, sequence, ordinal)) {
+                    reads.repeated += 1;
+                }
+            }
+            None => *unidentified += 1,
         }
     }
 }
@@ -135,7 +194,8 @@ fn table_of(sql: &str) -> Table {
 /// first; `None` when the row carries no identity.
 fn identity(table: Table, sql: &str, row: &[Value]) -> Option<(i64, i64)> {
     let mut columns = sql.trim_start().strip_prefix("SELECT ")?.split([',', ' ']);
-    if columns.next() != Some("sequence") {
+    // #422 LN-7: a history page selects the same column through its alias (`e.sequence`).
+    if !matches!(columns.next(), Some("sequence" | "e.sequence")) {
         return None;
     }
     let Some(Value::Integer(sequence)) = row.first() else {
