@@ -181,15 +181,16 @@ pub(super) trait DurableStorage: Send + 'static {
     ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact>;
 
     /// LN-6 (#422, LEAN-L §3.3): one view page, its rows selected within `read.0`'s budget and
-    /// read `read.1` (`ledger_observer.history_page_rows`) rows at a time; `retention`'s eviction
-    /// proofs annotate them.
+    /// read `read.1` (`ledger_observer.history_page_rows`) rows at a time, each history statement
+    /// spanning at most `read.2` sequences (`ledger_observer.history_scan_rows`, #422 LN-WS);
+    /// `retention`'s eviction proofs annotate them.
     fn project_view_page(
         &self,
         query: &actingcommand_contract::EventQuery,
         profile: actingcommand_contract::ProjectionProfile,
         request: &actingcommand_contract::RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
-        read: (&super::read_work::ReadWork, usize),
+        read: (&super::read_work::ReadWork, usize, usize),
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>;
 
@@ -206,6 +207,20 @@ pub(super) trait DurableStorage: Send + 'static {
         rows: usize,
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
+
+    /// #422 LN-WS (R1): [`Self::history_page`] of a read that `work` bounds: `None` when the
+    /// bound of its statements stopped it (a medium without statements reads the page whole).
+    fn history_page_within(
+        &self,
+        selection: &HistorySelection<'_>,
+        range: (u64, u64),
+        rows: usize,
+        retention: &RetentionIndex,
+        _work: &super::read_work::ReadWork,
+    ) -> GlobalLedgerResult<Option<Vec<PersistedEvent>>> {
+        self.history_page(selection, range, rows, retention)
+            .map(Some)
+    }
 
     /// LN-5 (§3.4): the sequence of the committed record with `event_id`, by its unique index.
     fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>>;
@@ -374,6 +389,9 @@ pub(super) struct EventStore<B> {
     pub(super) staged: Vec<PersistedEvent>,
     /// LN-5 (§3.3): `ledger_observer.history_page_rows`, the rows of one page of a history read.
     pub(super) history_page_rows: usize,
+    /// #422 LN-WS (R2): `ledger_observer.history_scan_rows`, the sequences one history statement
+    /// of a view page spans at most.
+    pub(super) history_scan_rows: usize,
     /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
     #[cfg(test)]
     pub(super) history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
@@ -501,6 +519,7 @@ impl SegmentStore {
             next_sequence,
             staged: Vec::new(),
             history_page_rows: config.history_page_rows,
+            history_scan_rows: config.history_scan_rows,
             #[cfg(test)]
             history_rows_read: config.history_rows_read.clone(),
             retention,
@@ -573,6 +592,7 @@ impl<B: DurableStorage> EventStore<B> {
             next_sequence,
             staged: Vec::new(),
             history_page_rows: page_rows,
+            history_scan_rows: super::history::DEFAULT_HISTORY_SCAN_ROWS,
             #[cfg(test)]
             history_rows_read: None,
             retention: RetentionIndex::default(),
@@ -613,6 +633,8 @@ impl<B: DurableStorage> EventStore<B> {
     ) -> GlobalLedgerResult<bool> {
         self.index_policy = config.capture_policy.index_policy();
         self.history_page_rows = config.history_page_rows;
+        // #422 LN-WS (R2): the span of a view page's history statement.
+        self.history_scan_rows = config.history_scan_rows;
         #[cfg(test)]
         {
             self.history_rows_read = config.history_rows_read.clone();
@@ -1892,7 +1914,7 @@ impl<B: DurableStorage> EventStore<B> {
             profile,
             request,
             observation,
-            (work, self.history_page_rows),
+            (work, self.history_page_rows, self.history_scan_rows),
             &self.retention,
         )
     }
@@ -2009,7 +2031,7 @@ impl DurableStorage for SegmentStorage {
         profile: actingcommand_contract::ProjectionProfile,
         request: &actingcommand_contract::RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
-        (work, _): (&super::read_work::ReadWork, usize),
+        (work, _, _): (&super::read_work::ReadWork, usize, usize),
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
         *observation = None;

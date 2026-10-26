@@ -42,10 +42,12 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   LN-8 (#422, the release after v0.12.13): revision 13 adds
 ///   `ledger_observer.open_verify_tail_records`, and LN-9 (#422, same release) the scrub's
 ///   `ledger_observer` keys `scrub_rows_per_second`, `scrub_chunk_rows` and
-///   `scrub_pass_interval_ms`; revisions 5 to 12 are still read, so [5, 13]. Workflow #392
-///   DA-4b-D (v0.12.16, Alice's ruling 69): revision 15 adds the `display_safe_area` section and
-///   an instance entry's `display_safe_area` member (#422 LN-WS takes revision 14 in the release
-///   after v0.12.15); revisions 5 to 14 are still read, so [5, 15].
+///   `scrub_pass_interval_ms`; revisions 5 to 12 are still read, so [5, 13]. LN-WS (#422,
+///   v0.12.15): revision 14 adds `ledger_observer.read_check_vm_steps` and
+///   `ledger_observer.history_scan_rows`; revisions 5 to 13 are still read, so [5, 14].
+///   Workflow #392 DA-4b-D (v0.12.16, Alice's ruling 69): revision 15 adds the `display_safe_area`
+///   section and an instance entry's `display_safe_area` member; revisions 5 to 14 are still read,
+///   so [5, 15].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

@@ -157,13 +157,14 @@ fn ao1_keys_every_ledger_observer_key_has_its_contract_default() {
     }
     // The 21 keys of §15, #411 A51's `read_budget_ms` and `close_timeout_ms`, P0-LO's
     // `open_timeout_ms` and `open_warn_ratio_milli`, LN-5's `history_page_rows`, LN-TUNE's
-    // `writer_reply_timeout_ms`, LN-8's `open_verify_tail_records` and LN-9's three scrub keys.
+    // `writer_reply_timeout_ms`, LN-8's `open_verify_tail_records`, LN-9's three scrub keys and
+    // LN-WS's `read_check_vm_steps` and `history_scan_rows`.
     assert_eq!(
         parameters
             .iter()
             .filter(|parameter| parameter.key.starts_with("ledger_observer."))
             .count(),
-        31
+        33
     );
 
     let config = from_file(json!({}));

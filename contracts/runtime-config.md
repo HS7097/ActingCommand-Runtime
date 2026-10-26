@@ -504,6 +504,8 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.scrub_rows_per_second` (#422 LN-9) | integer `1..=100000` | `625` | yes |
 | `ledger_observer.scrub_chunk_rows` (#422 LN-9) | integer `1..=4096` | `256` | no |
 | `ledger_observer.scrub_pass_interval_ms` (#422 LN-9) | milliseconds `60000..=86400000` | `2400000` | no |
+| `ledger_observer.read_check_vm_steps` (#422 LN-WS) | integer `100..=1000000` | `10000` | no |
+| `ledger_observer.history_scan_rows` (#422 LN-WS) | integer `1024..=1048576` | `65536` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -565,6 +567,14 @@ read transaction of its own, and `scrub_pass_interval_ms` the least time from th
 pass to the start of the next; both are read when the ledger opens (not settable). The defaults
 read 1.5 million records in about 40 minutes. A value outside its range is
 `config_value_invalid` (`out_of_range`).
+
+#422 LN-WS (`actingd-config` revision 14; the production stop of 2026-10-26 19:12:43):
+`read_check_vm_steps` is how often, in SQLite virtual-machine steps, a read that serves a Runtime
+request looks at its `read_budget_ms` inside a statement, and `history_scan_rows` how many
+sequences one history statement of a view page spans at most
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). Both are
+read when the ledger opens (not settable); a value outside its range is `config_value_invalid`
+(`out_of_range`).
 
 ## The `device_link` section (Workflow #398 RD-2)
 

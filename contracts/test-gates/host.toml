@@ -2334,3 +2334,20 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t4_an_emulator_takes_insets_0_and_a_screen_layout_no_declaration",
 ]
 incident = ["#392 DA-4b-D"]
+
+# LN-7c R (#422; ledger-observer.md §11.7; coordinator 10-26): the ledger scrub's finding about the derived frame index `ledger_frame_refs` is non-fatal: the host hands it to the daemon's log once (one line with the code, what, where and `extent=untrusted`), latches nothing, and the Runtime keeps running and closes as usual
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln9::ln7c_r_a_frame_index_finding_is_one_daemon_line_and_the_runtime_keeps_running",
+]
+incident = ["#422 LN-7c R"]
+
+# LN-WS (#422; brief rd-1026/brief-ln-ws.md; root cause rd-1026/writer-stall/root-cause.md §5; the production stop of 2026-10-26 19:12:43): on a host over a production-shaped synthetic ledger with the shipped `ledger_observer.read_check_vm_steps` and `history_scan_rows`, a fake writer clock and a 600 s reply limit, each read of the incident's table (the 19:12:24, 19:11:30 and 19:12:38 calls, a run listing page, a run evidence read) sent as QueryEvents while an append through append_runtime_event is in flight behind it answers a page, complete or incomplete at its budget, the append commits and the Runtime keeps running; an append the writer does not answer within its reply limit fails with ledger_failure whose cause names writer_response_timeout
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws::ln_ws_t6_the_incident_reads_answer_while_an_append_commits_and_the_runtime_runs",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws::ln_ws_t7_an_append_not_answered_in_time_fails_naming_writer_response_timeout",
+]
+incident = ["#422 LN-WS"]

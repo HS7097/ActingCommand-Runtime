@@ -2632,6 +2632,11 @@ impl RuntimeHost {
                 .with_native_detail(format!("{finding:?}")),
             )?;
         }
+        // #422 LN-7c R (ledger-observer.md §11.7): what the scrub found wrong with the derived
+        // frame index is non-fatal: one daemon line, once, and nothing is latched.
+        if let Some(finding) = shared.ledger.scrub_frame_refs_finding() {
+            shared.fatal.report_ledger_index_finding(&finding);
+        }
         if let Err(error) = shared.ledger.check_writer_health() {
             shared.fatal.mark(RuntimeHostError::relayed_fatal(
                 error.code(),
@@ -6103,7 +6108,7 @@ pub(crate) fn ledger_open_outcome(
     timing: &actingcommand_ledger::LedgerOpenTiming,
     timeout_ms: u64,
 ) -> Outcome {
-    Outcome::new(code)
+    let outcome = Outcome::new(code)
         .event_count(timing.events)
         .artifact_count(timing.artifacts)
         .artifact_bytes(timing.artifact_bytes)
@@ -6116,7 +6121,16 @@ pub(crate) fn ledger_open_outcome(
         .tail_ms(timing.tail_ms)
         .index_ms(timing.index_ms)
         .import_ms(timing.import_ms)
-        .timeout_ms(timeout_ms)
+        .timeout_ms(timeout_ms);
+    // #422 LN-7c R (ledger-observer.md §11.7): the open's one warning about the derived frame
+    // index, as a `note` link; the index never fails the open.
+    match timing.frame_refs {
+        Some(note) => outcome.link(
+            actingcommand_contract::outcome::CauseRelation::Note,
+            note.outcome(),
+        ),
+        None => outcome,
+    }
 }
 
 /// The measured time of a ledger open: the sum of every phase it reports.
@@ -6270,7 +6284,12 @@ fn ledger_failure_plan(
         // LN-8 (#422, LEAN-L §3.2 step 2): the newest records the open authenticates.
         .with_open_verify_tail_records(
             usize::try_from(section.open_verify_tail_records).unwrap_or(usize::MAX),
-        );
+        )
+        // #422 LN-WS (R1, R2): how often a request's read looks at its budget inside a statement,
+        // and the span of a view page's history statement; a value the ledger does not take is
+        // refused when it opens (`invalid_ledger_config`).
+        .with_read_check_vm_steps(u32::try_from(section.read_check_vm_steps).unwrap_or(u32::MAX))
+        .with_history_scan_rows(usize::try_from(section.history_scan_rows).unwrap_or(usize::MAX));
     #[cfg(test)]
     if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
         plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
