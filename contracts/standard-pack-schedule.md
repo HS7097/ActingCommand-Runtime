@@ -141,6 +141,10 @@ composes a valid empty catalog (V2 accepts an empty task list and an empty `appr
   index").
 - `actinglab standard-pack check --root <game root>` reads `schedule.json` beside the other root
   files and checks it the same way.
+- `actinglab resource validate` reads a resource repository's root `schedule.json` by
+  `parse_standard_pack_schedule` alone (RL-T; [resource-declarations.md](resource-declarations.md)):
+  the repository holds no registry, so the references and the composition are left to `package
+  bundle --schedule`.
 - Both compose the file with one bound instance per server of the registry, an alias of the
   check's own (`standard-pack-check.<server>`), so every rule and item is placed and compiled as
   the Runtime places it for one instance of each server. A refusal is
@@ -148,7 +152,8 @@ composes a valid empty catalog (V2 accepts an empty task list and an empty `appr
   `standard_pack_package_unclassified` in `warnings`.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
-  the given bindings (`--instance` once per bound instance) and writes `tasks.json`,
+  the given bindings (`--instance` once per bound instance; given after the command's words it is
+  the command's own and not the global `--instance`, RL-T) and writes `tasks.json`,
   `pools.json`, `activity.json`, `timeline.json` (as compiled) and `manifest.json`
   (`{rules_digest, procedures: [{procedure_ref, game_id, package_id, directory}]}`) into
   `<out>.part`, renamed to `--out` once complete; `--out` and `<out>.part` must not exist, and a

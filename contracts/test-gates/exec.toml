@@ -2144,3 +2144,20 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_d_a_declared_interval_above_the_configured_ceiling_is_refused",
 ]
 incident = ["#407 B1"]
+
+# ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_386_rlt::rlt_1_standard_pack_compose_receives_every_instance_of_its_command_line",
+]
+incident = ["#386 ROUT-L RL-T"]
+
+# ROUT-L RL-T (#386; contracts/resource-declarations.md): resource validate reads a repository root's schedule.json by parse_standard_pack_schedule: a valid file is family standard_pack_schedule with no warning; an invalid one is resource_declaration_invalid naming the file, its standard_pack_problem and its json_pointer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_386_rlt::rlt_2_resource_validate_accepts_a_valid_root_schedule_json",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_386_rlt::rlt_2_resource_validate_refuses_an_invalid_root_schedule_json_with_its_pointer",
+]
+incident = ["#386 ROUT-L RL-T"]
