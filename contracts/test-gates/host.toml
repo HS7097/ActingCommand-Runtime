@@ -2043,3 +2043,20 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_tune::ln_tune_a_second_start_reads_no_planning_history_before_the_checkpoint",
 ]
 incident = ["#422 LN-TUNE"]
+
+# Workflow #386 SR-4a3 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a3; frozen scheduling model v1.4.2 §5.2a, §5.3 rule 3, C-3, rows T17, T17b, T17c, T46; contracts/scheduling-blackout.md, "Complete silence"; register §1.187): inside a blackout the ladders of a task failure, a daemon-start preparation and a person's self-check are dropped, never queued (recovery_ladder_suppressed blackout until the end), and so is a ladder claim waiting for the key when it starts; the self-check itself runs; a climbing ladder starts no rung whose time limit plus quiet_margin_ms reaches the next blackout and ends with the same suppression, its key released; the startup package waits queued inside a blackout or when its deadline would reach the next one, and runs at the end; the monitor probe takes no frame and records nothing; an autostart claim inside a blackout gets no key and no Start, the same configuration outside one starts at once, and the first round after the end starts it once; a direct run and a Lab operation pass
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_a_a_failed_runs_ladder_inside_a_blackout_is_dropped_never_queued",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_b_a_failed_daemon_start_preparation_inside_a_blackout_raises_no_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17c_a_persons_self_check_runs_inside_a_blackout_and_raises_no_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_d_a_ladder_claim_waiting_when_a_blackout_starts_is_dropped",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17b_a_a_climbing_ladder_starts_no_rung_whose_limit_reaches_the_next_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_e_inside_a_blackout_the_startup_package_waits_for_the_end_and_a_direct_run_passes",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17b_b_a_startup_package_waits_when_its_deadline_reaches_the_next_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_f_the_monitor_probe_takes_no_frame_inside_a_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_g_a_lab_operation_passes_a_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t46_an_autostart_inside_a_blackout_takes_no_key_and_starts_once_after_it",
+]
+incident = ["#386 SR-4a3"]

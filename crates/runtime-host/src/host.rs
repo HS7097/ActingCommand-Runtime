@@ -2683,6 +2683,13 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// Workflow #386 SR-4a3: the due monitor probes a blackout skipped so far.
+    #[cfg(test)]
+    pub(crate) fn monitor_probes_silenced_for_test(&self) -> RuntimeHostResult<u64> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?
+            .monitor_probes_silenced_for_test()
+    }
+
     /// Workflow #361 B1: the held scheduling pauses, global and per instance alias.
     #[cfg(test)]
     pub(crate) fn scheduling_pauses_for_test(
