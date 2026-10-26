@@ -306,6 +306,16 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
         &self,
         selection: &HistorySelection<'_>,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        self.select_where(selection, |_| true)
+    }
+
+    /// LN-7 (#422): the records `selection` selects that `keep` keeps, committed or staged, in
+    /// ledger order; the others are held only while their page is read.
+    pub(super) fn select_where(
+        &self,
+        selection: &HistorySelection<'_>,
+        keep: impl Fn(&PersistedEvent) -> bool,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         let head = self.backend.head();
         let through = selection.query.to_sequence.map_or(head, |to| to.min(head));
         let mut after = selection
@@ -325,7 +335,10 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
                 break;
             };
             after = last;
-            events.extend(page.into_iter().filter(|event| selection.selects(event)));
+            events.extend(
+                page.into_iter()
+                    .filter(|event| selection.selects(event) && keep(event)),
+            );
             if !full {
                 break;
             }
@@ -333,7 +346,7 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
         events.extend(
             self.staged
                 .iter()
-                .filter(|event| selection.selects(*event))
+                .filter(|event| selection.selects(*event) && keep(*event))
                 .cloned(),
         );
         Ok(events)

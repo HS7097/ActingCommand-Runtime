@@ -77,10 +77,9 @@ impl<B: DurableStorage> EventStore<B> {
         let head = self.backend.head();
         let owner_records = self
             .history()
-            .select(&HistorySelection::of(&typed(&OWNER_TYPES)))?
-            .into_iter()
-            .filter(|event| recorded_owner(event).is_some())
-            .collect::<Vec<_>>();
+            .select_where(&HistorySelection::of(&typed(&OWNER_TYPES)), |event| {
+                recorded_owner(event).is_some()
+            })?;
         let owners = RetentionIndex::scratch(&RetentionIndex::default(), owner_records.clone());
         let mut selected = Selected::new();
         keep(&mut selected, owner_records);
