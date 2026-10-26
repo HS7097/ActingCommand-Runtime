@@ -44,9 +44,10 @@ pub struct LedgerMaintenanceRequest {
     pub artifact_root: Option<PathBuf>,
     #[serde(default)]
     pub limits: MaintenanceLimits,
-    /// #422 LN-7c V (`--frame-query`, `verify` only): after the complete read of a formal root,
-    /// also check the frame cleaner's statements against the full view. Off, `verify` is the
-    /// complete read alone: no retention index, no statement, no count.
+    /// #422 LN-7c V (`--frame-query`): after the complete read of a formal root, also check the
+    /// frame cleaner's statements against the full view. Another operation, or a root that is
+    /// not formal, refuses it (`maintenance_arguments_invalid`). Off, `verify` is the complete
+    /// read alone: no retention index, no statement, no count.
     #[serde(default)]
     pub frame_query: bool,
 }
@@ -244,6 +245,18 @@ fn run_locked(
             || request.operation == LedgerMaintenanceOperation::Backup
             || request.operation == LedgerMaintenanceOperation::Restore,
     )?);
+    // #422 LN-7c V fix round 1b (Fail Loud): `--frame-query` checks a formal root only; on any
+    // other root (Segment, candidate) it is refused as an argument, never ignored. The refusal
+    // follows the root's classification by its keyed meta row and precedes the State digest
+    // and the status read.
+    if request.frame_query && !maintenance.formal_ready(&database)? {
+        let mut refused = failure(
+            HostCode::MaintenanceArgumentsInvalid,
+            HostLocation::ValidateLedgerMaintenance,
+        );
+        refused.cause.push_str("; frame_query_requires_formal_root");
+        return Err(refused);
+    }
     let state = RuntimeStateStore::from_database(Arc::clone(&database))?;
     let state_sha256 = state.maintenance_digest(request.limits, deadline)?;
     // Workflow #375 H2: a formal root is classified by its keyed meta row, as startup does,

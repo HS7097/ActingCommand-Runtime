@@ -345,7 +345,7 @@ actingctl resume --state-root <state-root> --instance <alias>
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance import  --config runtime.json --backup frozen-backup
-actingcommand-actingd ledger-maintenance verify  --config runtime.json [--frame-query]     # --frame-query（需显式开启）：另用完整帧视图核对帧清理器的查询；它在 verify 的时限内重建整个保留索引，账本很大时可能超时
+actingcommand-actingd ledger-maintenance verify  --config runtime.json [--frame-query]     # --frame-query（需显式开启）：另用完整帧视图核对帧清理器的查询；它在 verify 的时限内重建整个保留索引，账本很大时可能超时。绝不静默忽略：根不是正式根（Segment、候选）或操作不是 verify 时，以 maintenance_arguments_invalid 拒绝
 actingcommand-actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target <restore-dir> [--artifact-root <dir>]
 
 # 无副作用的配置检查（与启动相同的加载/装配/校验；不触碰 state_root 下任何内容）

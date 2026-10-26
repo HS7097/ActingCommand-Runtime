@@ -15,19 +15,25 @@
 //!   of `verify_frame_query`, R1's `artifact_id`, `field` `/class`.
 //! - Without the flag, `verify` of the same matching root answers as before the check existed: the
 //!   receipt of the complete read alone, and no count for actingd's stderr line.
+//! - Fix round 1b (Fail Loud): the flag is never ignored. With an operation other than `verify`,
+//!   or on a root that is not formal (a Segment root), it is refused with
+//!   `maintenance_arguments_invalid`, and nothing is written.
 
 use super::gate_ln7::{CHUNK_FRAMES, DAY_MS, EVIDENCE_MAX_AGE_MS, SWITCHES, T0, corpus};
 use super::missing_material::{formal_root, material_store};
 use crate::global::read_work::DEFAULT_READ_CHECK_VM_STEPS;
 use crate::global::sqlite::frame_refs::LedgerFrameRefsOmitGate;
 use crate::global::{
-    FrameQueryCheck, FrameQueryCheckSettings, LedgerMaintenance, LedgerOpenTiming,
+    FrameQueryCheck, FrameQueryCheckSettings, GlobalLedger, GlobalLedgerConfig, LedgerMaintenance,
+    LedgerOpenTiming,
 };
 use actingcommand_contract::{ArtifactId, IdentifierIssuer};
 use actingcommand_runtime_database::{DatabaseLocation, MaintenanceLimits, RuntimeDatabase};
 use actingcommand_runtime_host::{
     LedgerMaintenanceOperation, LedgerMaintenanceRequest, RuntimeHost, RuntimeHostConfig,
 };
+use actingcommand_runtime_state::RuntimeStateStore;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -35,6 +41,8 @@ use std::sync::Arc;
 const NOW: u64 = T0 + 2 * DAY_MS;
 /// The fingerprint salt of `RuntimeHost::maintain_ledger`, as `missing_material.rs` passes it.
 const SALT: &[u8] = b"runtime-host-test-salt";
+/// The owner journal in a state root (`contracts/owner-journal.md`).
+const OWNER_JOURNAL: &str = "owner.lock";
 
 fn text<T: serde::Serialize>(id: &T) -> String {
     match serde_json::to_value(id) {
@@ -111,26 +119,107 @@ fn complete_read_status(root: &Path, database: &Arc<RuntimeDatabase>) -> serde_j
     serde_json::to_value(ledger).expect("the ledger status")
 }
 
-/// `ledger-maintenance verify` of `root` through the host, at its clock and keys, with or
-/// without `--frame-query`.
-fn host_verify(
-    root: &Path,
-    frame_query: bool,
-) -> Result<
+type HostAnswer = Result<
     actingcommand_runtime_host::LedgerMaintenanceReceipt,
     actingcommand_runtime_host::LedgerMaintenanceFailure,
-> {
+>;
+
+/// `ledger-maintenance <operation>` of `root` through the host, at its clock and keys.
+fn host_maintain(
+    root: &Path,
+    operation: LedgerMaintenanceOperation,
+    backup: Option<PathBuf>,
+    target: Option<PathBuf>,
+    frame_query: bool,
+) -> HostAnswer {
     RuntimeHost::maintain_ledger(
         RuntimeHostConfig::new(root, SALT),
         LedgerMaintenanceRequest {
-            operation: LedgerMaintenanceOperation::Verify,
-            backup: None,
-            target: None,
+            operation,
+            backup,
+            target,
             artifact_root: None,
             limits: MaintenanceLimits::default(),
             frame_query,
         },
     )
+}
+
+/// `ledger-maintenance verify` of `root` through the host, with or without `--frame-query`.
+fn host_verify(root: &Path, frame_query: bool) -> HostAnswer {
+    host_maintain(
+        root,
+        LedgerMaintenanceOperation::Verify,
+        None,
+        None,
+        frame_query,
+    )
+}
+
+/// A refusal's code and operation.
+fn refusal(answer: HostAnswer) -> (String, Option<String>) {
+    let failure = answer.expect_err("the request is refused");
+    let outcome = failure.outcome();
+    (
+        outcome.code().as_str().to_owned(),
+        outcome
+            .value("operation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    )
+}
+
+/// The refusal of `--frame-query` where the check cannot run (fix round 1b).
+fn arguments_invalid() -> (String, Option<String>) {
+    (
+        "maintenance_arguments_invalid".to_owned(),
+        Some("validate_ledger_maintenance".to_owned()),
+    )
+}
+
+/// A Segment root (not formal): the State material and a closed Segment ledger, as a root before
+/// its cutover.
+fn segment_root() -> tempfile::TempDir {
+    let root = tempfile::tempdir().expect("root");
+    drop(RuntimeStateStore::open(root.path(), SALT).expect("the State material"));
+    GlobalLedger::open(GlobalLedgerConfig::new(
+        root.path().join("ledger"),
+        "ln7c-v-segment",
+    ))
+    .expect("a Segment ledger")
+    .close()
+    .expect("close the Segment ledger");
+    root
+}
+
+/// Every file under `root` with its bytes, but SQLite's own `-wal` and `-shm` sidecars.
+fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).expect("a directory of the root") {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                directories.push(path);
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            if name.ends_with("-wal") || name.ends_with("-shm") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("a file of the root");
+            files.insert(
+                path.strip_prefix(root)
+                    .expect("a path under the root")
+                    .to_path_buf(),
+                bytes,
+            );
+        }
+    }
+    files
 }
 
 /// The matching root: the case fixture with L2, a Lab frame, moved into `kept\` as the cleaner
@@ -271,4 +360,66 @@ fn ln7c_v_a_consistently_removed_frame_index_row_is_reported() {
             && detail.contains("differences=1"),
         "{detail}"
     );
+}
+
+/// Fix round 1b (a): `--frame-query` with an operation other than `verify` is refused as an
+/// argument before the root is touched: no file of the root changes and none appears (not even
+/// the owner journal), and no destination is created.
+#[test]
+fn ln7c_v_frame_query_with_another_operation_is_refused_before_the_root_is_touched() {
+    let root = segment_root();
+    let destinations = tempfile::tempdir().expect("maintenance destinations");
+    let backup = destinations.path().join("backup");
+    let restored = destinations.path().join("restored");
+    let before = files(root.path());
+    for (operation, target) in [
+        (LedgerMaintenanceOperation::DryRun, None),
+        (LedgerMaintenanceOperation::Import, None),
+        (LedgerMaintenanceOperation::Backup, None),
+        (LedgerMaintenanceOperation::Restore, Some(restored.clone())),
+    ] {
+        assert_eq!(
+            refusal(host_maintain(
+                root.path(),
+                operation,
+                Some(backup.clone()),
+                target,
+                true,
+            )),
+            arguments_invalid(),
+            "{operation:?} --frame-query"
+        );
+        assert_eq!(
+            files(root.path()),
+            before,
+            "{operation:?} --frame-query touches nothing"
+        );
+        assert!(!backup.exists() && !restored.exists(), "{operation:?}");
+    }
+}
+
+/// Fix round 1b (b): `--frame-query` on a root that is not formal (a Segment root) is refused as
+/// an argument, never ignored; without the flag the same root verifies. The refusal writes
+/// nothing: every file is unchanged but the owner journal, which only gains the records every
+/// maintenance pass appends (SQLite's own `-wal` and `-shm` sidecars are not compared).
+#[test]
+fn ln7c_v_frame_query_on_a_non_formal_root_is_refused() {
+    let root = segment_root();
+    let verified = host_verify(root.path(), false).expect("verify passes the Segment root");
+    assert_eq!(verified.status, "verified-segment");
+    assert!(verified.frame_query.is_none());
+
+    let mut before = files(root.path());
+    assert_eq!(refusal(host_verify(root.path(), true)), arguments_invalid());
+    let mut after = files(root.path());
+    let journal = Path::new(OWNER_JOURNAL);
+    let (journal_before, journal_after) = (
+        before.remove(journal).expect("the owner journal"),
+        after.remove(journal).expect("the owner journal"),
+    );
+    assert!(
+        journal_after.starts_with(&journal_before),
+        "the owner journal is only appended to"
+    );
+    assert_eq!(after, before, "no other file changes or appears");
 }

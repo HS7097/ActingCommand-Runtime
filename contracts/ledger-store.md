@@ -1062,8 +1062,9 @@ writer keeps no frame facts and answers no frame view.
   differences in its developer text), and the pass fails with a non-zero exit. A frame
   index that does not cover the ledger, or the deadline, fails it too
   (`ledger_index_mismatch` with `frame_refs_incomplete`, `ledger_read_budget_exceeded`).
-  Without the flag `verify` runs none of this and answers as its complete read alone
-  ([ledger-maintenance.md](ledger-maintenance.md)).
+  Without the flag `verify` runs none of this and answers as its complete read alone; on a
+  root that is not formal the flag is refused (`maintenance_arguments_invalid`), never
+  ignored ([ledger-maintenance.md](ledger-maintenance.md)).
 - **Done set.** The process remembers the live frames it removed, moved or found absent,
   and the frames whose removal or move failed, and never visits them again; a pass start
   forgets those that left their listing. A listing holds no frame removed or moved before

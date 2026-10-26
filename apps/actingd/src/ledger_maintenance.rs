@@ -29,7 +29,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     let mut target = None;
     let mut artifact_root = None;
     // #422 LN-7c V: `--frame-query`, a flag without a value, at most once; the host refuses it
-    // for an operation other than `verify`.
+    // for an operation other than `verify` and on a root that is not formal.
     let mut frame_query = false;
     let mut options = arguments[2..].iter();
     while let Some(option) = options.next() {

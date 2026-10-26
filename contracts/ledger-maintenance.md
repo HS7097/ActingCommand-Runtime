@@ -36,10 +36,11 @@ actingd ledger-maintenance verify --config runtime.json [--frame-query]
 actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target restored-root
 ```
 
-`--frame-query` (#422 LN-7c V, a flag without a value, `verify` only; any other operation
-refuses it with `maintenance_arguments_invalid`) adds the frame query check described under
-the limits below. Without it `verify` is exactly the complete read it was before the check
-existed.
+`--frame-query` (#422 LN-7c V, a flag without a value) adds the frame query check described
+under the limits below. It is never ignored: any operation other than `verify` refuses it
+with `maintenance_arguments_invalid` before the root is touched, and `verify` refuses it the
+same way on a root that is not formal (a Segment or candidate root), where the check cannot
+run. Without it `verify` is exactly the complete read it was before the check existed.
 
 Relative destinations resolve against the process working directory before
 validation, creation and sync. Backup paths must be disjoint from the source and
@@ -164,8 +165,10 @@ Without the flag `verify` builds no retention index, runs no statement, lists no
 frame store, resolves none of the check's keys and prints no extra line: its read, its
 findings and its answer are those of the complete read alone. The Runtime never runs
 this check. A Missing (Segment) or candidate root keeps the full status read under
-the limits, with or without the flag; the check runs on a formal root only, so such a
-root prints no count line. `backup` (with its binding read), dry-run, import and restore still
+the limits without the flag. With the flag such a root is refused with
+`maintenance_arguments_invalid` (Fail Loud, fix round 1b) right after `verify` classifies
+it by its keyed meta row: before the State digest and the status read, with nothing
+written but the owner journal's records that every maintenance pass appends. `backup` (with its binding read), dry-run, import and restore still
 return `ledger_read_budget_exceeded` for a root beyond the default limits; such a
 root needs `RuntimeHost::maintain_ledger` with explicit limits (at most 1,000,000
 events, 4 GiB, 600 seconds). The CLI takes no limit options.
