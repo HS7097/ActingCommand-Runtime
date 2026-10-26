@@ -21,6 +21,10 @@ use actingcommand_policy::{
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
+/// SCH-M ED-2 (§3.4 "Visible"): for a (task id, instance alias), the duration its dispatch would
+/// reserve and where it comes from (`declared` or `runs:<n>`).
+pub(crate) type ExpectedRuntimeOf<'a> = dyn Fn(&str, &str) -> Option<(u64, String)> + 'a;
+
 /// The latest evaluated cycle's explanation; `None` until the first one after a start.
 #[derive(Debug, Default)]
 pub(crate) struct ScheduleExplanationTable {
@@ -64,7 +68,7 @@ impl ScheduleExplanationTable {
         evaluation: &PolicyEvaluation,
         catalog_hash: &str,
         evaluated_at_unix_ms: u64,
-        expected: &dyn Fn(&str, &str) -> Option<(u64, String)>,
+        expected: &ExpectedRuntimeOf<'_>,
     ) {
         let previous = self.latest.take();
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();

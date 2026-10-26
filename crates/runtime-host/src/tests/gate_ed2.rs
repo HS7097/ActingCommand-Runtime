@@ -154,10 +154,14 @@ struct Bench {
     state: Arc<FakeState>,
     instance: InstanceId,
     package: PathBuf,
+    /// Whether the instance is a device fake rather than the fixture simulation, which refuses
+    /// a client's run (`fixture_execution_scope_forbidden`).
+    physical: bool,
 }
 
 impl Bench {
-    /// A root holding the neutral package (`package` its bytes), at the fixture's time.
+    /// A root holding the neutral package (`package` its bytes), at the fixture's time, on the
+    /// fixture simulation.
     fn new(package: &[u8]) -> Self {
         let root = TempDir::new().expect("tempdir");
         let path = root.path().join("ed2-task.zip");
@@ -171,7 +175,25 @@ impl Bench {
             state: Arc::new(FakeState::default()),
             instance: instance_id(),
             package: path,
+            physical: false,
         }
+    }
+
+    /// The same on a device fake whose display is observed, as a direct run needs (Workflow
+    /// #392 DA-A), holding the neutral package with the device's task geometry; its frame
+    /// turns to the terminal page after the input.
+    fn physical() -> Self {
+        let mut bench = Self::new(&neutral_region_contained_task_package(true));
+        bench.physical = true;
+        bench
+            .state
+            .physical_task_geometry
+            .store(true, Ordering::Release);
+        bench
+            .state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        bench
     }
 
     fn path(&self) -> String {
@@ -189,18 +211,17 @@ impl Bench {
         if let Some(configuration) = configuration {
             host_config = host_config.with_config_manifest(configuration);
         }
-        let host = RuntimeHost::start(
-            host_config,
-            Arc::new(
-                FakeProvider::one(
-                    POLICY_INSTANCE_ALIAS,
-                    self.instance,
-                    Arc::clone(&self.state),
-                )
-                .fixture_simulation(),
-            ),
-        )
-        .expect("runtime host");
+        let provider = FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            self.instance,
+            Arc::clone(&self.state),
+        );
+        let provider = if self.physical {
+            provider
+        } else {
+            provider.fixture_simulation()
+        };
+        let host = RuntimeHost::start(host_config, Arc::new(provider)).expect("runtime host");
         host.activate_policy_catalog(&catalog())
             .expect("activate the fixture catalog");
         host
@@ -499,18 +520,21 @@ fn ed2_t2_a_failure_a_condition_end_and_a_direct_run_add_none() {
         });
     assert!(ended, "the second run was settled by its condition");
     assert!(samples(&host).is_empty());
+    assert_eq!(published(&host), 0, "the record was never published");
+    host.close().expect("close the host");
 
-    // A direct run that succeeds.
-    bench.state.input_count.store(0, Ordering::Release);
-    bench
-        .state
-        .transition_capture_after_input
-        .store(true, Ordering::Release);
+    // A direct run of the same package that succeeds. The fixture simulation refuses a client's
+    // run, so it runs on a device fake with the same catalog, the switch on and the package's id
+    // at its location known: a scheduled success there would add a sample.
+    let bench = Bench::physical();
+    let host = bench.start(None);
+    host.learn_package_for_test(&bench.path(), PACKAGE_ID)
+        .expect("the package's id at its location");
     let mut client = TestClient::connect(&host);
     let direct = client.request(RuntimeOperation::run_contained_task(
         POLICY_INSTANCE_ALIAS,
         client.ids.mint_holder_id().expect("holder"),
-        request.clone(),
+        ContainedTaskRequest::new(bench.path()).expect("contained task request"),
     ));
     let receipt = client.send(&direct);
     assert_eq!(
