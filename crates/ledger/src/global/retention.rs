@@ -21,10 +21,13 @@ use actingcommand_contract::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod material;
+mod open;
 mod prior_epoch;
+mod resident;
 mod view;
 pub use material::LedgerOpenTiming;
 pub(super) use material::{PendingMaterial, elapsed_ms};
+pub use resident::live_frame_ids;
 pub use view::{
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
     FrameRetentionView, KeptFrameFolder,
@@ -65,6 +68,10 @@ pub(super) struct RetentionIndex {
     frame_facts: view::FrameFacts,
     /// Workflow #375 R5d: the frame classes at the latest head they were asked for.
     frame_cache: std::sync::Mutex<Option<view::FrameCache>>,
+    /// LN-7 (#422, LEAN-L §3.5): resident objects whose frame is no longer in the live frame
+    /// store, kept only for the frames that are (their run's span, a marker neighbour) or loaded
+    /// again for a record that names them; the frame view does not list them.
+    ghosts: BTreeSet<ArtifactId>,
     through_sequence: u64,
 }
 
@@ -422,6 +429,8 @@ impl RetentionIndex {
         self.closures.get(scope)?.close.as_ref()
     }
 
+    /// The full build over `events`; LN-7: only the test media and tests build from every record.
+    #[cfg(test)]
     pub(super) fn from_events<E: LedgerEventRead>(events: &[E]) -> GlobalLedgerResult<Self> {
         Self::from_events_checked(events, &mut |_| Ok(()))
     }
@@ -1410,6 +1419,12 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             .ok_or_else(|| denied(LedgerCode::LabPinReleaseRequestMissing.code()))?;
         if !lab_release_request_matches(&request_event, &target) {
             return Err(denied(LedgerCode::LabPinReleaseRequestConflict.code()));
+        }
+        // LN-7 (#422, LEAN-L §3.5): a frame that left the live store (a kept Lab frame) is loaded
+        // again from the store before its pins are read.
+        if !self.retention.objects.contains_key(&target.artifact_id) {
+            let head = self.backend.head();
+            self.load_objects(&BTreeMap::from([(target.artifact_id, None)]), head)?;
         }
         let object = self
             .retention

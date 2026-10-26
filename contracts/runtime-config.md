@@ -495,6 +495,7 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.open_warn_ratio_milli` (P0-LO) | integer `100..=1000` (thousandths) | `500` | no |
 | `ledger_observer.history_page_rows` (#422 LN-5) | integer `1..=4096` | `256` | no |
 | `ledger_observer.writer_reply_timeout_ms` (#422 LN-TUNE) | milliseconds `1000..=600000`, above `read_budget_ms` | `10000` | no |
+| `ledger_observer.open_verify_tail_records` (#422 LN-8) | integer `1..=1000000` | `4096` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -522,7 +523,7 @@ time (the sum of the phases `ledger_opened` reports) exceeds `open_timeout_ms` �
 are read when the ledger opens (not settable); a value outside its range is `config_value_invalid`
 (`out_of_range`).
 
-#422 LN-5 (`actingd-config` revision 11): `history_page_rows` is the rows of one page of a
+#422 LN-5 (v0.12.13, `actingd-config` revision 12): `history_page_rows` is the rows of one page of a
 history read; the ledger reads its history from SQLite a page at a time, and the Runtime's paged
 history reads take as many events per page, at most a query page's 1 024
 ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). It is read
@@ -537,6 +538,14 @@ boundaries that confirm them wait it; one that runs out is `writer_response_time
 when the ledger opens (not settable); a value outside `1000..=600000` is `config_value_invalid`
 (`out_of_range`), and a `read_budget_ms` not below it is `config_value_invalid`
 (`section_check`) for `read_budget_ms`.
+
+#422 LN-8 (`actingd-config` revision 13): `open_verify_tail_records` is how many of the newest
+records the start's ledger open reads and authenticates; the open reads no older record, which a
+reader authenticates when it reads it and `ledger-maintenance verify` and the background re-check
+read in full ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer);
+[ledger-store.md](ledger-store.md#open-ownership-and-append-durability)). It is read when the
+ledger opens (not settable); a value outside `1..=1000000` is `config_value_invalid`
+(`out_of_range`).
 
 ## The `device_link` section (Workflow #398 RD-2)
 

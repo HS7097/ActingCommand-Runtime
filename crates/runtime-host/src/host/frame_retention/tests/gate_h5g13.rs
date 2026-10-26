@@ -34,17 +34,17 @@ use std::sync::Arc;
 const DAY_MS: u64 = 86_400_000;
 const MINUTE_MS: u64 = 60_000;
 /// The capture times of the three run-less frames.
-const CAPTURED: [u64; 3] = [1_791_753_302_117, 1_791_753_303_117, 1_791_753_304_117];
+pub(super) const CAPTURED: [u64; 3] = [1_791_753_302_117, 1_791_753_303_117, 1_791_753_304_117];
 /// The owner epoch is recorded before the first frame.
 const OWNER_RECORDED: u64 = CAPTURED[0] - 1_000;
 /// The unlinked Warning follows the last frame.
 const WARNED: u64 = CAPTURED[2] + 1_000;
 /// The cleaner's manual clock: past the 1-day boundary of every frame (the latest capture,
 /// plus 1 day and 1 minute), so every frame's due time lies before it.
-const NOW: u64 = CAPTURED[2] + DAY_MS + MINUTE_MS;
+pub(super) const NOW: u64 = CAPTURED[2] + DAY_MS + MINUTE_MS;
 
 /// A formal writer ledger in `root`, as acsetup leaves it.
-fn formal_writer(root: &Path) -> GlobalLedger {
+pub(super) fn formal_writer(root: &Path) -> GlobalLedger {
     let database = Arc::new(
         RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
             root,
@@ -94,7 +94,11 @@ impl ArtifactCapacityAdmission for Capacity {
 }
 
 /// The artifact store of the state root `root`, with its capacity owner.
-fn artifact_store(root: &Path, ids: &IdentifierIssuer, owner: OwnerEpoch) -> ArtifactStore {
+pub(super) fn artifact_store(
+    root: &Path,
+    ids: &IdentifierIssuer,
+    owner: OwnerEpoch,
+) -> ArtifactStore {
     let artifacts = ArtifactStore::open(root).expect("artifact store");
     artifacts
         .install_capacity_admission(Arc::new(Capacity {
@@ -128,19 +132,19 @@ impl ArtifactEventSink for Sink<'_> {
 }
 
 /// One fixture frame: its reference, the file at its object key and its capture time.
-struct Frame {
-    reference: ProjectedArtifactReference,
-    material: PathBuf,
-    captured: u64,
+pub(super) struct Frame {
+    pub(super) reference: ProjectedArtifactReference,
+    pub(super) material: PathBuf,
+    pub(super) captured: u64,
 }
 
 /// The writer, the fingerprinter and the identities every fixture event uses.
-struct Fixture<'a> {
-    ledger: &'a GlobalLedger,
-    fingerprinter: &'a Sha256SecretFingerprinter,
-    ids: &'a IdentifierIssuer,
-    owner: OwnerEpoch,
-    instance: IssuedInstanceId,
+pub(super) struct Fixture<'a> {
+    pub(super) ledger: &'a GlobalLedger,
+    pub(super) fingerprinter: &'a Sha256SecretFingerprinter,
+    pub(super) ids: &'a IdentifierIssuer,
+    pub(super) owner: OwnerEpoch,
+    pub(super) instance: IssuedInstanceId,
 }
 
 impl Fixture<'_> {
@@ -154,7 +158,7 @@ impl Fixture<'_> {
     }
 
     /// Records the owner epoch: a confirmed resource quiescence of the instance.
-    fn record_owner(&self) {
+    pub(super) fn record_owner(&self) {
         self.append(EventDraft::new(
             self.event_id(),
             OWNER_RECORDED,
@@ -185,7 +189,7 @@ impl Fixture<'_> {
 
     /// One run-less observe frame captured at `captured`: published through the store, pinned
     /// with its `Explicit` identity, and closed by its `capture.completed`.
-    fn observe(&self, artifacts: &ArtifactStore, captured: u64, bytes: &[u8]) -> Frame {
+    pub(super) fn observe(&self, artifacts: &ArtifactStore, captured: u64, bytes: &[u8]) -> Frame {
         let request = self.ids.mint_request_id().expect("request");
         let correlation = self.ids.mint_correlation_id().expect("correlation");
         let frame = self.ids.mint_frame_id().expect("frame");
