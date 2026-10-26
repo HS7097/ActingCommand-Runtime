@@ -676,6 +676,15 @@ tests = [
 ]
 incident = ["#422 LN-8d"]
 
+# LN-7c F6 (#422; rd-1026/ln7c/final-query.md §1.1, §1.3, §7 F6; ruling 70): capture frames by ingestion time, the plain partial index `ledger_artifacts_created` (never a `ledger_view_*` object, so an older build opens, writes and scrubs a root that has it): a new root has it from `schema.sql`, a root without it gets it at its first writer open, over every capture frame, and a second open leaves it as it is; the plan check for ledger tests holds a statement's plan on an empty database to the §1.3 rule and rejects a statement doctored to read the whole history (a scan of a ledger table, its alias or index, an automatic index on one, the type index without a sequence bound, a history-wide index)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_a_root_without_the_frame_time_index_gets_it_at_its_first_writer_open",
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_the_plan_check_rejects_a_doctored_statement_that_reads_the_whole_history",
+]
+incident = ["#422 LN-7c F6"]
+
 # LN-7c R (#422; rd-1026/ln7c/final-query.md §7 row R, §3; Alice's ruling 70): the frame index `ledger_frame_refs` of the pointers a record carries only in its payload. Each pointer kind (summary frame, summary pin, resource reading, published frame, published artifact, before-frame, preserved frame, frame and run read confirmations from a confirmer's origin) gives its row in the record's batch transaction and a confirmation from another origin none; a summary with N frames gives N rows; a backfilled synthetic root holds the rows the synthetic appender writes incrementally; records appended by a writer that skips the rows are filled at the next open and the extent moves to the head; a root without the extent is fully backfilled, a stray row gone; a doctored row is a scrub finding `ledger_index_mismatch` of `verify_ledger_frame_refs`, as `ledger-maintenance verify` refuses it; the table never fails an open or an append: an extent past the head is rebuilt with one warning on `ledger_opened`, a batch the extent does not end before commits without its rows and the next open fills the gap with one warning, a fill that meets a damaged record stops short of it with one warning while the open succeeds, and the next open tries again
 [[gate]]
 coverage = "Y"

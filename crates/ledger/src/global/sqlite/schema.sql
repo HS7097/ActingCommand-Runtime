@@ -47,6 +47,10 @@ CREATE TABLE ledger_artifacts (
 -- #422 LN-5 (LEAN-L §3.3): artifact identities by their index; an older database gets it at
 -- its first writer open (`CREATE INDEX IF NOT EXISTS`).
 CREATE INDEX ledger_artifacts_artifact ON ledger_artifacts(artifact_id, sequence);
+-- #422 LN-7c F6 (final-query §1.1): capture frames by ingestion time, a plain partial index (no
+-- `ledger_view_*` name, so an older build opens, writes and scrubs a database that has it); an
+-- older database gets it at its first writer open (`CREATE INDEX IF NOT EXISTS`).
+CREATE INDEX ledger_artifacts_created ON ledger_artifacts(created_at_unix_ms, sequence) WHERE kind = 'capture.frame';
 CREATE TABLE ledger_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version TEXT NOT NULL,

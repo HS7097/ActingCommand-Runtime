@@ -417,7 +417,13 @@ try {
         Assert-True -Condition $workflowText.Contains("$field =") -Message "workflow manifest is missing field '$field'"
     }
     $uses = @([regex]::Matches($workflowText, '(?m)^\s*uses:\s*([^\s#]+)') | ForEach-Object { $_.Groups[1].Value })
-    Assert-True -Condition ($uses.Count -eq 3) -Message 'workflow must contain exactly three pinned action uses'
+    # #390 (10-26): checkout, the two acceptance uploads and the release-files upload (same upload-artifact pin).
+    Assert-True -Condition ($uses.Count -eq 4) -Message 'workflow must contain exactly four pinned action uses'
+    $uploads = @($uses | Where-Object { $_ -like 'actions/upload-artifact@*' } | Sort-Object -Unique)
+    Assert-True -Condition ($uploads.Count -eq 1) -Message 'every upload-artifact use must carry the same pin'
+    Assert-True -Condition $workflowText.Contains('- name: Keep the release files') -Message 'workflow does not keep the release files'
+    Assert-True -Condition $workflowText.Contains("if: `${{ inputs.release_tag && !cancelled() && steps.publish.outcome != 'skipped' }}") -Message 'the release-files step must run whenever the publish step ran'
+    Assert-True -Condition $workflowText.Contains('${{ runner.temp }}/actingcommand-release') -Message 'the release-files step must keep the staged release folder'
     foreach ($use in $uses) {
         Assert-True -Condition ($use -cmatch '@[0-9a-f]{40}$') -Message "workflow action is not full-SHA pinned: $use"
     }

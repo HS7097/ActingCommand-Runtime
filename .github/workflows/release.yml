@@ -79,6 +79,23 @@ jobs:
             *) fail "source $source_sha is not main or an ancestor of main (compare status: $status)" ;;
           esac
 
+          # #390 (10-26): a new tag on a commit whose workflow files differ from main's needs the
+          # `workflows` permission, which the Actions token never has, and the Release API refuses it
+          # (HTTP 403 "Resource not accessible by integration") only after the whole build. So the
+          # source's .github/workflows tree must be main's, compared by tree id.
+          workflows_tree() {
+            local root dot
+            root=$(gh api "repos/$repo/commits/$1" --jq .commit.tree.sha) || return 1
+            dot=$(gh api "repos/$repo/git/trees/$root" --jq '.tree[] | select(.path == ".github" and .type == "tree") | .sha') || return 1
+            [ -n "$dot" ] || return 1
+            gh api "repos/$repo/git/trees/$dot" --jq '.tree[] | select(.path == "workflows" and .type == "tree") | .sha'
+          }
+          source_workflows=$(workflows_tree "$source_sha") || fail "reading the .github/workflows tree of $source_sha failed"
+          main_workflows=$(workflows_tree main) || fail "reading the .github/workflows tree of main failed"
+          [ -n "$source_workflows" ] && [ "$source_workflows" = "$main_workflows" ] \
+            || fail "source $source_sha: its .github/workflows (tree ${source_workflows:-none}) is not main's (tree ${main_workflows:-none}); a new tag there needs the workflows permission, which the Actions token does not have. Release from a commit whose workflow files equal main's"
+          echo "source $source_sha: .github/workflows equals main's (tree $source_workflows)"
+
           # Releases (tag, draft); the previous release is the highest strict vX.Y.Z among published ones.
           releases=$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | "\(.tag_name)\t\(.draft)"') \
             || fail "listing the releases of $repo failed"
