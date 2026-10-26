@@ -665,3 +665,13 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln9::ln9_c_the_writer_does_not_wait_for_the_scrub",
 ]
 incident = ["#422 LN-9"]
+
+# LN-8d (#422; brief rd-1026/brief-open-stall.md; the v0.12.14 start on the production ledger, 10-26): a history page of a link set with no other row condition picks its sequences in each dimension's own index, ordered and limited there, so its plan sorts nothing at its top and its SQLite work does not follow the linked records after the page (v0.12.14 sorted every linked record after the page, n²/(2·rows) visits); the writer open reads a link set's dimensions in one read, so its SQLite work per record read does not grow with a history whose live frames span it; the open's deadline (`ledger_observer.open_timeout_ms`) stops its retention read with `ledger_read_budget_exceeded`
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_ln8d::ln8d_a_link_set_page_reads_its_page_whatever_follows_it",
+    "actingcommand-ledger::lib::global::tests::gate_ln8d::ln8d_the_opens_work_per_record_read_does_not_grow_with_the_history_of_its_live_frames",
+    "actingcommand-ledger::lib::global::tests::gate_ln8d::ln8d_the_opens_deadline_stops_its_retention_read",
+]
+incident = ["#422 LN-8d"]

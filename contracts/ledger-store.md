@@ -102,6 +102,17 @@ pass (LEAN-L model §6; Alice's ruling 57). Its deadline bounds both reads; pass
 no longer grow with the committed history (model §7.1 A1, A2). The start reports the
 open's phases as `ledger_opened`'s `meta_ms`, `tail_ms`, `index_ms` and `import_ms`, and
 the tail records it authenticated as `event_count`.
+#422 LN-8d (the v0.12.14 start on the production ledger, 10-26): the deadline bounds the
+retention reads too, checked before each page they read (`ledger_read_budget_exceeded`,
+operation `open_runtime_ledger`), and they read pages of `ledger_observer.history_page_rows`
+rows. A read of the records linked to a set of runs, leases, frames, requests,
+correlations or artifacts reads all its dimensions at once: each page picks the first rows
+of each dimension in that dimension's own index (`ledger_links_<dimension>`,
+`ledger_artifacts_artifact`), ordered and limited there, and reads the first rows of their
+union by the sequence key, so a page's work does not grow with the linked records after
+it. Before, each page joined the link table and sorted every linked record after the page
+to return one page of them; on the production ledger the start's read of the records of
+the live frames' runs (402 782 records in pages of 256) did not end.
 #422 LN-5: the open keeps only the retention state it derives from the records and
 drops the records; the writer keeps no list or index of them. Its reads of the
 history read SQLite a page of `ledger_observer.history_page_rows` rows at a time,

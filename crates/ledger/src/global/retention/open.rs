@@ -5,9 +5,10 @@
 
 use super::view::ERROR_WINDOW_MS;
 use super::*;
-use crate::global::history::{HistorySelection, LinkSet};
+use crate::global::history::{HistorySelection, LinkSet, check_deadline};
 use crate::global::storage::{DurableStorage, EventStore};
 use actingcommand_contract::{EventQuery, parse_resource_reading_snapshot_id};
+use std::time::Instant;
 
 /// The record types whose payload can name an owner epoch (`recorded_owner`): lifecycle
 /// observations (with the prior-epoch imports and closes and the quiescences), capacity samples
@@ -89,14 +90,16 @@ impl<B: DurableStorage> EventStore<B> {
     /// closes a start may still write; and what the classes of the live and the proven frames
     /// read (`frame_records`). The records are applied in ledger order without `validate` (each
     /// was checked when it was written and is authenticated when it is read); then only the facts
-    /// of `live` and what their classes read stay.
+    /// of `live` and what their classes read stay. LN-8d (#422): every read stops at `deadline`
+    /// (the open's, `ledger_observer.open_timeout_ms`) with `ledger_read_budget_exceeded`.
     pub(in crate::global) fn open_retention(
         &mut self,
         live: &BTreeSet<ArtifactId>,
+        deadline: Option<Instant>,
     ) -> GlobalLedgerResult<()> {
         let head = self.backend.head();
         let owner_records = self
-            .history()
+            .history_until(deadline)
             .select_where(&HistorySelection::of(&typed(&OWNER_TYPES)), |event| {
                 recorded_owner(event).is_some()
             })?;
@@ -104,7 +107,7 @@ impl<B: DurableStorage> EventStore<B> {
         let mut selected = Selected::new();
         keep(&mut selected, owner_records);
         let rare = self
-            .history()
+            .history_until(deadline)
             .select(&HistorySelection::of(&typed(&RARE_TYPES)))?;
         let mut frames = live.clone();
         frames.extend(rare.iter().filter_map(|event| {
@@ -121,6 +124,7 @@ impl<B: DurableStorage> EventStore<B> {
         let mut extents = Vec::new();
         for owner in owners.retained_owners() {
             for range in owners.owner_ranges(owner, head) {
+                check_deadline(deadline)?;
                 extents.extend(
                     self.backend
                         .scope_extents(range)?
@@ -135,11 +139,12 @@ impl<B: DurableStorage> EventStore<B> {
                 };
                 keep(
                     &mut selected,
-                    self.history().select(&HistorySelection::of(&releases))?,
+                    self.history_until(deadline)
+                        .select(&HistorySelection::of(&releases))?,
                 );
             }
         }
-        let framed = self.frame_records(&frames, live)?;
+        let framed = self.frame_records(&frames, live, deadline)?;
         selected.extend(framed);
         let mut retention =
             RetentionIndex::scratch(&RetentionIndex::default(), selected.into_values().collect());
@@ -177,6 +182,7 @@ impl<B: DurableStorage> EventStore<B> {
         &self,
         frames: &BTreeSet<ArtifactId>,
         live: &BTreeSet<ArtifactId>,
+        deadline: Option<Instant>,
     ) -> GlobalLedgerResult<Selected> {
         let mut selected = Selected::new();
         if frames.is_empty() {
@@ -184,10 +190,13 @@ impl<B: DurableStorage> EventStore<B> {
         }
         keep(
             &mut selected,
-            self.read_linked(LinkSet {
-                artifacts: frames.clone(),
-                ..LinkSet::default()
-            })?,
+            self.read_linked(
+                LinkSet {
+                    artifacts: frames.clone(),
+                    ..LinkSet::default()
+                },
+                deadline,
+            )?,
         );
         let mut frame_ids = BTreeSet::new();
         let mut live_frames = BTreeSet::new();
@@ -208,10 +217,13 @@ impl<B: DurableStorage> EventStore<B> {
         let first = selected.keys().next().copied().unwrap_or(0);
         keep(
             &mut selected,
-            self.read_linked(LinkSet {
-                frames: frame_ids.clone(),
-                ..LinkSet::default()
-            })?,
+            self.read_linked(
+                LinkSet {
+                    frames: frame_ids.clone(),
+                    ..LinkSet::default()
+                },
+                deadline,
+            )?,
         );
         // The first record of the oldest live frame: no record before it can name a live frame.
         let first_live = selected
@@ -235,7 +247,7 @@ impl<B: DurableStorage> EventStore<B> {
             scoped.correlations.extend(links.correlation_id().copied());
         }
         let read = scoped.clone();
-        keep(&mut selected, self.read_linked(scoped)?);
+        keep(&mut selected, self.read_linked(scoped, deadline)?);
         if let Some(from) = first_live {
             let published = EventQuery {
                 event_type: Some(EventType::FactPublished),
@@ -244,7 +256,7 @@ impl<B: DurableStorage> EventStore<B> {
             };
             keep(
                 &mut selected,
-                self.history()
+                self.history_until(deadline)
                     .select_where(&HistorySelection::of(&published), |event| {
                         publishes_on(event, &live_frames, live)
                     })?,
@@ -259,7 +271,8 @@ impl<B: DurableStorage> EventStore<B> {
             };
             keep(
                 &mut selected,
-                self.history().select(&HistorySelection::of(&markers))?,
+                self.history_until(deadline)
+                    .select(&HistorySelection::of(&markers))?,
             );
         }
         if let (Some(oldest), Some(newest)) = (captured.iter().min(), captured.iter().max()) {
@@ -280,7 +293,8 @@ impl<B: DurableStorage> EventStore<B> {
             ] {
                 keep(
                     &mut selected,
-                    self.history().select(&HistorySelection::of(&points))?,
+                    self.history_until(deadline)
+                        .select(&HistorySelection::of(&points))?,
                 );
             }
         }
@@ -321,7 +335,7 @@ impl<B: DurableStorage> EventStore<B> {
         // get an epoch-end point the full view does not have.
         let mut runs_read = read.runs;
         runs_read.extend(more.runs.iter().copied());
-        let neighboured = self.read_linked(more)?;
+        let neighboured = self.read_linked(more, deadline)?;
         let further = LinkSet {
             runs: neighboured
                 .iter()
@@ -332,56 +346,24 @@ impl<B: DurableStorage> EventStore<B> {
             ..LinkSet::default()
         };
         keep(&mut selected, neighboured);
-        keep(&mut selected, self.read_linked(further)?);
+        keep(&mut selected, self.read_linked(further, deadline)?);
         Ok(selected)
     }
 
-    /// The committed records linked to one of `links`' identifiers, one statement per
-    /// dimension, so that each reads through its own index.
-    fn read_linked(&self, links: LinkSet) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        let all = EventQuery::default();
-        let LinkSet {
-            runs,
-            leases,
-            frames,
-            requests,
-            correlations,
-            artifacts,
-        } = links;
-        let mut records = Vec::new();
-        for part in [
-            LinkSet {
-                runs,
-                ..LinkSet::default()
-            },
-            LinkSet {
-                leases,
-                ..LinkSet::default()
-            },
-            LinkSet {
-                frames,
-                ..LinkSet::default()
-            },
-            LinkSet {
-                requests,
-                ..LinkSet::default()
-            },
-            LinkSet {
-                correlations,
-                ..LinkSet::default()
-            },
-            LinkSet {
-                artifacts,
-                ..LinkSet::default()
-            },
-        ] {
-            if !part.is_empty() {
-                records.extend(
-                    self.history()
-                        .select(&HistorySelection::linked(&all, &part))?,
-                );
-            }
+    /// The committed records linked to one of `links`' identifiers, each dimension read through
+    /// its own index. LN-8d (#422): one read of the whole set, each page the first rows of the
+    /// union of its dimensions (`linked_page_sequences` in `global/sqlite.rs`), so a record linked
+    /// in several dimensions (a run's records carry its run, lease, request and correlation) is
+    /// read and authenticated once; before `deadline`.
+    fn read_linked(
+        &self,
+        links: LinkSet,
+        deadline: Option<Instant>,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        if links.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(records)
+        self.history_until(deadline)
+            .select(&HistorySelection::linked(&EventQuery::default(), &links))
     }
 }
