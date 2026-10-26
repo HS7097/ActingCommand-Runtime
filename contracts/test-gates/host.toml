@@ -2043,3 +2043,83 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_tune::ln_tune_a_second_start_reads_no_planning_history_before_the_checkpoint",
 ]
 incident = ["#422 LN-TUNE"]
+
+# Workflow #386 SR-4a2 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a2; SCHED T14; contracts/scheduling-blackout.md, "Order of the deferrals" position 4 and "Admission"; register §1.186): a catalog maintenance event in effect defers the candidates of its server with blackout_active (blackout_id, blackout_source catalog, the wake at its end), another server's event defers nothing there; an intent evaluated at the last admissible instant and admitted inside the event is refused blackout_active at Info, its rejection carrying the opaque instance_id and the end as next_eligible_unix_ms, no admitted record; at the end the candidate runs
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t14_a_catalog_maintenance_event_defers_its_scope_and_admission_refuses_a_crossing_intent",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-4; SCHED T16; contracts/scheduling-blackout.md, "Gradual quiet" rules 1 and 2): under the default horizon (the 30 min response deadline) a candidate is admitted until its deadline plus quiet_margin_ms reaches the next host blackout start and is deferred blackout_approaching (blackout_id, blackout_source host, blackout_start_unix_ms, required_ms the deadline, the wake at the blackout's end) one millisecond later; admission refuses an intent that no longer fits with the same code; ScheduleExplanation shows it as the instance's not-running reason with the wake; a changed quiet_margin_ms changes the point at once
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t16_the_quiet_defers_a_deadline_that_reaches_the_start_and_follows_the_margin",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-4; SCHED T16, §5.3 item 2 「越接近开始，只有越短的任务能进」): under quiet_horizon expected each candidate's horizon is its expected duration, so near a blackout start the long candidate waits blackout_approaching (required_ms its E) while the short one still runs, until its own quiet point
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t16_shorter_candidates_still_run_up_to_their_own_quiet_point",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCHED T18, §5.4; contracts/scheduling-blackout.md, "Owed occurrences and the bookkeeping day"): a daily clock that falls due inside a host blackout is deferred blackout_active and dispatched once at the first evaluation after the blackout, its admission counted in the same local day (task_daily_used 1), and not again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t18_a_clock_due_inside_a_blackout_runs_once_after_it_in_the_same_bookkeeping_day",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCHED T15, §5.1 c): with a bookkeeping-day activity profile (04:00 to 03:59 UTC) and no blackout a short task is admitted at any time inside it (01:00, 03:58, 04:00, 12:00, 23:59), no decision names a blackout, and the admission's local day turns at 04:00
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t15_without_blackouts_a_bookkeeping_day_admits_at_any_time_and_turns_at_the_reset",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-1, row SR-4a2): an entry of one instance's own list (instance.<id>.scheduling.blackout) defers only that instance's candidates (blackout_source instance); the other instance's task is dispatched and names no blackout
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_an_instance_entry_defers_only_its_instance",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-1, row SR-4a2): a once host entry [from, until) defers blackout_active from its from to its last millisecond with the wake at until, ScheduleExplanation (ac_schedule) shows blackout_active with blackout_id and next_eligible_unix_ms as the not-running reason and the wake as the instance's next wake, and at until the candidate runs again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_a_once_entry_starts_and_expires",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-6, Alice's ruling 50; contracts/scheduling-blackout.md, "Day-boundary fit"): on a bookkeeping day a run whose expected duration would cross the window's end is deferred policy_day_boundary_approaching (window_end_unix_ms, required_ms its E, the wake at the next window start) while a short one runs; admission refuses an intent evaluated earlier that no longer fits with the same code at Info; ScheduleExplanation shows it; the instance's own day_boundary.quiet set false admits the long run
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_the_day_boundary_defers_a_long_run_and_admits_a_short_one",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (contracts/scheduling-blackout.md, "Order of the deferrals" position 9): a random delay drawn 30 s before the quiet point (the next blackout start minus the deadline and quiet_margin_ms) is cut to it whatever the draw, and the pair is dispatched there without a blackout reason
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_the_random_delay_never_passes_the_quiet_point",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (row SR-4a2 「empty lists → behavior unchanged」): with no blackout entry in either list and no catalog maintenance event the instants another configuration would black out or quiet dispatch as before, no decision names a blackout code, and a fixed random delay is drawn whole
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_empty_lists_leave_the_evaluation_unchanged",
+]
+incident = ["#386 SR-4a2"]

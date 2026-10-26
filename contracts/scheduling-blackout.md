@@ -12,17 +12,21 @@ implements the blackout and quiet checks of the policy, the recovery ladder, the
 package, the instance monitor and the emulator autostart; slice SR-4b implements the safety
 net that stops runs at a blackout start. SR-1 parses every `scheduling.blackout.*` key from
 v0.12.0 on ([v0.12.0 register](v012-register.md) §5), so check-config lists them before
-anything reads them; they take effect only from SR-4a. Until SR-4a lands, timeline
-`maintenance` events and host blackouts have no Runtime consumer: a catalog generator must not
-rely on blackouts before check-config reports the `scheduling_blackout` subsystem that only
-SR-4a adds ("Configuration").
+anything reads them; they take effect only from SR-4a. Before SR-4a2, timeline `maintenance`
+events and blackout entries had no Runtime consumer: a catalog generator must not rely on
+blackouts before check-config reports the `scheduling_blackout` subsystem that SR-4a2 adds
+("Configuration"). Until SR-4a3 the ladder, the startup package, the emulator autostart and
+the monitor probe do not yet keep the silence of "Complete silence".
 
 **SR-4a in three parts** (SCH-M frozen model v1.0 §3.2 and §6, Workflow #386, 10-24). SR-4a1
 (built) adds the per-instance list, the `once` entries, the pure judgements of "Pure judgement"
-and "Day-boundary fit", and their configuration keys; nothing reads them yet, so behaviour is
-unchanged. SR-4a2 closes the policy (positions 4 and 7, the day boundary, the admission
-re-check, the random-delay cut and the `scheduling_blackout` subsystem); SR-4a3 brings complete
-silence to the ladder, the startup package, the emulator autostart and the monitor probe.
+and "Day-boundary fit", and their configuration keys. SR-4a2 (built) closes the policy over
+them: positions 4 and 7 of "Order of the deferrals", the day boundary, the admission re-check,
+the random-delay cut and the `scheduling_blackout` subsystem; with no entry in either list and
+no catalog `maintenance` event no blackout defers, cuts or refuses anything (the day boundary
+is its own per-instance switch, "Day-boundary fit"). SR-4a3 brings
+complete silence to the ladder, the startup package, the emulator autostart and the monitor
+probe.
 
 ## Blackouts
 
@@ -126,9 +130,13 @@ Runtime-started policy run only if `now + required_ms` is at or before the end o
 window it is admitted in. Otherwise it returns `{window_end_unix_ms, required_ms,
 next_eligible_unix_ms}`, the wake being the start of the profile's next window; outside every
 window it returns nothing (the activity window's own gate decides). `required_ms` is the run's
-expected duration E (SCH-M §3.4). SR-4a2 wires it as `policy_day_boundary_approaching` at
-position 7, after `blackout_approaching`, on instances whose `scheduling.day_boundary.quiet` is
-true in effect.
+expected duration E (SCH-M §3.4), the intent's `expected_duration_ms`. SR-4a2 wires it as
+`policy_day_boundary_approaching` (info) at position 7, after `blackout_approaching`, on
+instances whose `scheduling.day_boundary.quiet` is true in effect, for every policy dispatch
+(fact refresh reads included), and admission refuses an intent that no longer fits with the
+same code. Shorter work still runs up to the window's end (Alice's ruling 50, 10-24: the
+day-boundary rule as recommended, per-instance switch, default on). The rule needs no blackout
+entry: it holds on every instance whose switch is on, also with empty lists.
 
 ## Complete silence
 
@@ -172,16 +180,26 @@ suppression reason `blackout` and releases the key. It is not continued after th
    performance pacing factor, because pacing never lengthens the wall-clock limit (Workflow
    #385). The next start is searched only up to `now + horizon + quiet_margin_ms`. The key
    `scheduling.blackout.quiet_horizon` (Workflow #386 SR-4a1) chooses the horizon: `deadline`
-   (the default, the response deadline) or `expected` (the run's expected duration E); slice
-   SR-4b changes its default to `expected` with the safety net.
+   (the default, the response deadline) or `expected` (the run's expected duration E, the
+   intent's `expected_duration_ms`); slice SR-4b changes its default to `expected` with the
+   safety net. The response deadline (SR-4a2) is that of the request the dispatch runs under:
+   admission reads the request it is admitted with; the evaluation, before any request exists,
+   reads the one it will be: a fact refresh read runs its instance's recognition maintenance
+   package under the request's default deadline (60 s), and every other scheduled run, of a
+   configured procedure or of a composed standard pack, under the bound every such request
+   carries (30 min, `ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS`). Under `deadline` a policy
+   run therefore starts no later than 31 min before a blackout with the default margin.
 2. A candidate that fails it is deferred with `blackout_approaching` and wakes at the end of
-   that blackout. Shorter candidates still run, so the closer the start, the shorter the work
-   that is admitted: there is no fixed quiet start.
+   that blackout; `required_ms` is its horizon. Shorter candidates still run, so the closer the
+   start, the shorter the work that is admitted: there is no fixed quiet start. Admission
+   refuses an intent that no longer fits with the same code, at Info (no lease, no run).
 3. A startup package is taken out of its queue, and a ladder starts each rung, only under the
    same condition with its own time limit; otherwise it waits (startup package) or ends
    (ladder) as above.
 4. From `start − hard_quiet_ms` (default 0, off) no new policy dispatch, ladder rung or startup
-   package starts.
+   package starts. For a policy dispatch (SR-4a2) this is part of rule 1: a candidate is
+   deferred `blackout_approaching` when `now + horizon + quiet_margin_ms` passes the start or
+   `now + hard_quiet_ms` reaches it.
 5. A policy run admitted under rule 1 ends before the start, because its deadline is hard
    (the lease deadline is the earlier of the request deadline and the lease expiry).
 
@@ -214,14 +232,17 @@ code is the decision's reason:
 2. the instance is held or in takeover cooldown (`dispatch_instance_held`,
    `dispatch_instance_cooldown`);
 3. the task package is suspended (`pack_admission_suspended`, `policy-suspension.md`);
-4. a blackout is active (`blackout_active`);
+4. a blackout is active (`blackout_active`; SR-4a2: judged once per instance as the cycle
+   starts, wake at the blackout's end);
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts");
 6. performance pacing pauses the instance or its run interval has not passed
    (`perf_scheduling_paused`, `perf_pacing_gap`, Workflow #385), an owed rerun waits for the
    pacing stage (`policy_rerun_waiting`), or an entry-cost task waits for it
    (`policy_cost_commit_waiting`, `cost-commit.md`);
-7. a blackout is approaching (`blackout_approaching`);
+7. a blackout is approaching (`blackout_approaching`, "Gradual quiet"), then, on an instance
+   whose `scheduling.day_boundary.quiet` is true in effect, the run does not fit its activity
+   window by its expected duration (`policy_day_boundary_approaching`, "Day-boundary fit");
 
 **8a.** a remedy round holds the task (`policy_remedy_waiting`) or stopped it for a person
 (`policy_remedy_unchosen`, `policy_remedy_unavailable`, `policy_remedy_exhausted`; Workflow #411
@@ -234,7 +255,10 @@ B15, [remedies.md](remedies.md); written ahead of slice R4);
    passed positions 1 to 8 and has no draw draws one: `due_at` is the evaluation time, the delay
    is `min_ms` plus a value uniform in `0..=max_ms - min_ms` from a SHA-256 seed over the cycle's
    seed, the task, the instance alias and `due_at`, cut to the earliest of the intent's
-   `facts_fresh_until_unix_ms` and the last millisecond of its activity window (0 when nothing is
+   `facts_fresh_until_unix_ms`, the last millisecond of its activity window and (SR-4a2) the
+   quiet point, the latest start that still passes position 7: the next blackout start minus the
+   horizon and `quiet_margin_ms` (or `hard_quiet_ms` + 1 ms, the longer) and, where the
+   day-boundary fit applies, the window's end minus the expected duration E (0 when nothing is
    left), and the planned start is `due_at` plus the delay. The pair is deferred with a wake at
    its planned start until then, and is dispatched at the first evaluation at or after it that
    lets it through; its `policy.dispatch_intent` carries `random_delay` (register X14). Every
@@ -248,13 +272,26 @@ B15, [remedies.md](remedies.md); written ahead of slice R4);
    pair draws again. Every policy dispatch waits, dependency follow-ups, remedy requests and
    their retries, immediate failure retries and fact refresh reads included; direct runs, Lab
    operations, ladders, startup packages and emulator autostart do not pass through this
-   evaluation. When SR-4a lands, the next blackout start minus the horizon and
-   `quiet_margin_ms` joins the cut.
+   evaluation.
+
+**Admission** (SR-4a2) judges positions 4 and 7 again, at its own time, under the admission
+lock and after the intent's own checks: an intent that crossed into a blackout, into the quiet
+before one or past its day boundary since its evaluation is refused with the code the
+evaluation would have deferred it with (`blackout_active`, `blackout_approaching`,
+`policy_day_boundary_approaching`). The refusal is at Info: the `policy.dispatch_rejected`
+record carries the code's outcome (its `instance_id` the instance's opaque identifier) and the
+wake as `next_eligible_unix_ms`; no lease is taken and nothing runs.
 
 Ladders and startup packages do not pass through this evaluation; their own entry points apply
 the table of "Complete silence". Recognition-reading demands (Workflow #384) are collected only
-from candidates that passed positions 1 to 7. For the clock-slot planning records of Workflow
-#372 K2, `blackout_active`, `blackout_approaching`, `pack_schedule_closed`,
+from candidates that passed positions 1 to 7: an instance a blackout covers as the cycle starts
+is held for the fact refresh as positions 1-2 hold one (SR-4a2), so its candidates carry
+`blackout_active` and raise no reading demand. `actingctl schedule` and MCP `ac_schedule`
+(ScheduleExplanation) show `blackout_active`, `blackout_approaching` and
+`policy_day_boundary_approaching` as a candidate's `why`, with their values, and the wake as its
+`next_wake_unix_ms`. For the clock-slot planning records of Workflow
+#372 K2, `blackout_active`, `blackout_approaching`, `policy_day_boundary_approaching`,
+`pack_schedule_closed`,
 `perf_scheduling_paused`, `perf_pacing_gap`, `policy_rerun_waiting`,
 `policy_cost_commit_waiting`, `policy_remedy_waiting` and `dispatch_random_delay_waiting` are
 waiting gates (a slot is recorded as `clock_slot_deferred` only once its window has passed); `pack_admission_suspended`,
@@ -286,9 +323,10 @@ The defaults live in the defaults file `distribution/windows/actingd.defaults.js
 configuration mechanism (Workflow #387) and arrive with the code that parses the keys (slice
 SR-1 parses every `scheduling.blackout.*` key in v0.12.0). check-config lists each key with its
 effective value and source in `config_manifest.parameters` from SR-1 on, but the keys take effect
-only from SR-4a, so their presence says nothing about blackout support. SR-4a adds the subsystem
-`scheduling_blackout` to `config_manifest.subsystems` (`enabled` true; the reason carries the
-number of host blackout entries) in the same PR as the checks. A catalog generator detects
+only from SR-4a, so their presence says nothing about blackout support. SR-4a2 adds the
+subsystem `scheduling_blackout` to `config_manifest.subsystems` (`enabled` true; the reason
+`config_subsystem_always_on` carries as `count` the number of host blackout entries) in the same
+PR as the policy's checks. A catalog generator detects
 blackout support by that subsystem entry and refuses to emit maintenance blackouts without it,
 because an older Runtime would ignore them silently. A key the key table marks settable can
 also be changed while the Runtime runs (Workflow #387,
@@ -311,6 +349,7 @@ keeps its failure terminal with `blackout_run_stopped`.
 |---|---|---|---|
 | `blackout_active` | info | `instance_id`, `blackout_id`, `blackout_source`, `next_eligible_unix_ms` | SR-4a2 |
 | `blackout_approaching` | info | `instance_id`, `blackout_id`, `blackout_source`, `blackout_start_unix_ms`, `required_ms` | SR-4a2 |
+| `policy_day_boundary_approaching` | info | `instance_id`, `window_end_unix_ms`, `required_ms`, `next_eligible_unix_ms` | SR-4a2 (new; SCH-M D-6) |
 | `blackout_run_stopped` | error | `blackout_id`, `blackout_start_unix_ms` | SR-4b |
 | `blackout_config_invalid` | error | `field`, `blackout_source`; `blackout_id` when known | SR-1, SR-4a1 |
 

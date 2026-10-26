@@ -230,6 +230,9 @@ mod gate_386_sr2a;
 // Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
 // admission refuses with a suspend code.
 mod gate_386_sr3;
+// Workflow #386 SR-4a2 (SCH-M §3.2, §6 row SR-4a2): the policy's blackout positions 4 and 7, the
+// day boundary, the admission re-check and the random delay's cut.
+mod gate_386_sr4a2;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).

@@ -341,6 +341,14 @@ The members of `report`:
       `catalog` ([standard-pack-schedule.md](standard-pack-schedule.md), "The
       scheduler workbench (RL-1b)"); a `schedule.json` that requires it is
       composed only by a Runtime that names this row.
+    - `scheduling_blackout` (Workflow #386 SR-4a2): always on
+      (`config_subsystem_always_on`), with `count` the number of entries of
+      `scheduling.blackout.host`. The policy reads blackouts of all three
+      sources (the host list, each instance's own list and catalog
+      `maintenance` events) and the day-boundary fit
+      ([scheduling-blackout.md](scheduling-blackout.md), "Order of the
+      deferrals"); a catalog generator emits `maintenance` events only for a
+      Runtime that names this row.
     - `env_overrides`: on only when `allow_env_overrides` is `true`
       (`config_subsystem_configured`, `config_subsystem_configured_off` or
       `config_subsystem_flag_absent`). When the flag is off, the outcome

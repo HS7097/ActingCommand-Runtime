@@ -608,6 +608,68 @@ impl HostShared {
         Ok(delays)
     }
 
+    /// Workflow #386 SR-4a2 (SCH-M §3.2 D-1, D-4, D-6): the blackout keys in effect for the
+    /// instances `aliases` name, read at every authoritative policy cycle and at every policy
+    /// admission: the host list, each instance's own list (`EffectiveConfig::instance_blackouts`
+    /// by its registry id; an alias the registry does not hold has none), the quiet keys and
+    /// each instance's day-boundary switch in effect. The keys are checked whenever the
+    /// configuration is loaded or changed, so one that cannot be read here is a halt.
+    pub(super) fn blackout_context(
+        &self,
+        aliases: &[&str],
+        operation: HostLocation,
+    ) -> RuntimeHostResult<crate::policy_host::BlackoutContext> {
+        let ids = lock(&self.registered_instances, operation)?
+            .values()
+            .map(|instance| {
+                (
+                    instance.instance_alias.clone(),
+                    crate::failure_identity::identifier_text(&instance.instance_id),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let scheduling = config.scheduling().map_err(remedy_config_failure)?;
+        let blackout = scheduling.blackout;
+        let mut instances = BTreeMap::new();
+        let mut day_boundary_quiet = BTreeMap::new();
+        for alias in aliases {
+            // The per-instance keys name registry ids; an alias the registry does not hold names
+            // no key of its own, so the section's switch and no list of its own are in effect.
+            let id = ids.get(*alias).map_or(*alias, String::as_str);
+            day_boundary_quiet.insert(
+                (*alias).to_owned(),
+                config
+                    .day_boundary_quiet(id)
+                    .map_err(remedy_config_failure)?,
+            );
+            let own = config
+                .instance_blackouts(id)
+                .map_err(remedy_config_failure)?;
+            if !own.is_empty() {
+                instances.insert(
+                    (*alias).to_owned(),
+                    own.iter()
+                        .map(crate::policy_host::policy_blackout_entry)
+                        .collect(),
+                );
+            }
+        }
+        Ok(crate::policy_host::BlackoutContext {
+            host: blackout
+                .host
+                .iter()
+                .map(crate::policy_host::policy_blackout_entry)
+                .collect(),
+            instances,
+            day_boundary_quiet,
+            day_boundary_section: scheduling.day_boundary_quiet,
+            quiet_margin_ms: blackout.quiet_margin_ms,
+            hard_quiet_ms: blackout.hard_quiet_ms,
+            quiet_horizon: blackout.quiet_horizon,
+        })
+    }
+
     /// Workflow #398 RD-2: the `device_link` section in effect (model-398 §4.6), read at every
     /// link change, restore and watch restart.
     pub(super) fn device_link_config(

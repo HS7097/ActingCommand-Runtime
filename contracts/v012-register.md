@@ -3354,6 +3354,23 @@ is provisional for the parallel slices.
 | RL1B-6 | `config.subsystems` row `standard_pack_schedule` (always on) | new row value of an existing fact | RL-1b | RL-1b | a `schedule.json` that requires it is composed only by a Runtime that names it |
 | RL1B-7 | check-config `report.standard_pack_schedule` (`composer_mode`, `games`, `rules`, `pools`, `profiles`, `events`, `unclassified`, `problems`, `left_out`) | check-config report member | RL-1b | — | the composition the workbench would make for the configured instances, in either mode; each problem is a note |
 
+### 1.186 Slice SR-4a2 (0.12.x): the policy closes over blackouts: positions 4 and 7, the day boundary, the admission re-check, the random delay's cut (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, D-4, D-6, §6 row SR-4a2; Alice's ruling 50, #386 6380164487: the day-boundary rule as recommended, per-instance switch, default on)
+
+The gate of catalog v35 on the Runtime side, over SR-4a1's pure judgements (§1.179).
+[scheduling-blackout.md](scheduling-blackout.md) ("Day-boundary fit", "Gradual quiet", "Order of
+the deferrals", "Configuration", "Codes") and [actingd-check-config.md](actingd-check-config.md)
+are the contract. **No persisted ledger shape and no configuration key**: every key it reads is
+SR-4a1's (revision 11); the refusals are existing `policy.dispatch_rejected` records with the
+code's outcome. One code is added. Gates: the `gate_386_sr4a2` tests, ten rows of host.toml. The
+number 1.186 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR4A2-1 | `blackout_active` and `blackout_approaching` with `blackout_source` (registered by SR-0, the value by SR-4a1) | outcome codes, first emitted | SR-4a2 | SR-4a2 | evaluation reasons (the alias as `instance_id`) and admission refusals at Info (the opaque `instance_id`, the wake as the rejection's `next_eligible_unix_ms`); waiting gates of the #372 K2 clock-slot records |
+| SR4A2-2 | `policy_day_boundary_approaching` (info, `instance_id`, `window_end_unix_ms`, `required_ms`, `next_eligible_unix_ms`) | outcome code (new) | SR-4a2 | SR-4a2 | SCH-M D-6: E does not fit the activity window it would be admitted in; wake at the next window start; a waiting gate of the clock-slot records |
+| SR4A2-3 | `config.subsystems` row `scheduling_blackout` (always on, `count` the host entries) | new row value of an existing fact | SR-4a2 | SR-4a2 | a catalog generator emits `maintenance` events only for a Runtime that names it (GEN-35) |
+| SR4A2-4 | the random delay's cut gains the quiet point (the next blackout start minus the lead; where the day boundary applies, the window's end minus E) | behaviour (memory only) | SR-4a2 | — | the draw's `allowed_until` is the earliest of the four; `PolicyRandomDelay` unchanged |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -284,6 +284,18 @@ fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
             GateClass::Persistent,
         ));
     }
+    // Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals"): a blackout, the
+    // quiet before one and the day boundary are waiting gates, each with a wake.
+    if let Some(code) = [
+        SchedulingRuleHostCode::BlackoutActive,
+        SchedulingRuleHostCode::BlackoutApproaching,
+        SchedulingRuleHostCode::PolicyDayBoundaryApproaching,
+    ]
+    .into_iter()
+    .find(|code| reason.is(*code))
+    {
+        return Some((code.code(), GateClass::QueueWait));
+    }
     let code = HostCode::ALL
         .iter()
         .copied()

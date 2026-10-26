@@ -5,6 +5,7 @@ use super::scheduling_pause::{PauseOrigin, pause_row};
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
+use crate::codes::SchedulingRuleHostCode;
 use crate::policy_host::InstanceOccupancy;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
@@ -24,8 +25,12 @@ const DISPATCH_CONTENDED_RETRY_AFTER_MS: u64 = 1_000;
 /// Workflow #369 W-1: a dispatch refused because its instance is held, or because its admission
 /// guard stayed contended, is an Info record; every other refusal stays an Error.
 fn policy_rejection_severity(code: &str) -> EventSeverity {
+    // Workflow #386 SR-4a2: the blackout and day-boundary refusals are waits, of category info.
     if code == HostCode::DispatchInstanceHeld.as_str()
         || code == HostCode::DispatchInstanceContended.as_str()
+        || code == SchedulingRuleHostCode::BlackoutActive.as_str()
+        || code == SchedulingRuleHostCode::BlackoutApproaching.as_str()
+        || code == SchedulingRuleHostCode::PolicyDayBoundaryApproaching.as_str()
     {
         EventSeverity::Info
     } else {
@@ -925,9 +930,16 @@ impl HostShared {
             self.random_delay_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
         // Workflow #411 B41: the page each instance rests on as this cycle starts.
         let chain_handover = self.chain_handover_inputs(&facts.instances)?;
-        let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays) = {
+        // Workflow #386 SR-4a2: the blackout keys in effect as this cycle starts.
+        let blackout_context =
+            self.blackout_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays, blackout_holds) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
+            // Workflow #386 SR-4a2 (position 4): the instances a blackout covers as this cycle
+            // starts, judged once for the evaluation and the fact refresh's recorder.
+            let blackout_holds =
+                policy.blackout_holds(&blackout_context, &facts.instances, time)?;
             let cycle = policy.evaluate(
                 &facts,
                 &controlled_resources,
@@ -951,6 +963,8 @@ impl HostShared {
                     remedy: &remedy_context,
                     random_delay: &random_delay_context,
                     chain_handover: &chain_handover,
+                    blackout: &blackout_context,
+                    blackout_holds: &blackout_holds,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -960,7 +974,13 @@ impl HostShared {
             };
             // Workflow #405 D1: the random delay each pending intent was dispatched under.
             let random_delays = policy.dispatch_random_delays(&cycle.pending_dispatch_intents);
-            (cycle, unknown, catalog_pool_scopes(&policy), random_delays)
+            (
+                cycle,
+                unknown,
+                catalog_pool_scopes(&policy),
+                random_delays,
+                blackout_holds,
+            )
         };
         attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(
@@ -995,7 +1015,8 @@ impl HostShared {
         // its waiting candidates to the fact refresh's transition recorder, which only produces
         // transitions: they stay in memory (the cycle's report), no decision reads them and
         // nothing is written to the ledger. An instance the closure's positions 1-2 held as the
-        // cycle started raised no demand, so its keys are not observed.
+        // cycle started raised no demand, so its keys are not observed; Workflow #386 SR-4a2:
+        // nor did one a blackout covered (position 4).
         if let Some(evaluation) = &cycle.evaluation {
             let overdue_ms = self.fact_refresh_overdue_ms()?;
             let held = |instance_alias: &str| {
@@ -1005,6 +1026,7 @@ impl HostShared {
                     occupancy.get(instance_alias).copied(),
                 )
                 .is_some()
+                    || blackout_holds.contains_key(instance_alias)
             };
             let transitions = lock(
                 &self.fact_refresh_recorder,
@@ -1647,6 +1669,17 @@ impl HostShared {
             } else {
                 None
             };
+            // Workflow #386 SR-4a2: the blackout keys in effect for the intent's instance, and the
+            // response deadline of the request it is admitted with (the evaluation's own rule
+            // when it is admitted without one).
+            let blackout_context = self.blackout_context(
+                &[intent.instance_id.as_str()],
+                HostLocation::AdmitPolicyDispatch,
+            )?;
+            let response_deadline_ms = task_request.map_or_else(
+                || crate::policy_host::evaluation_deadline_ms(intent),
+                ContainedTaskRequest::response_deadline_ms,
+            );
             if context.fact_ledger_position != trusted.intent.input_ledger_position
                 || context.fact_snapshot_id != trusted.intent.fact_snapshot_id
                 || context.fencing_owner_epoch != self.owner_epoch
@@ -1806,6 +1839,8 @@ impl HostShared {
             let resolved = self
                 .resolve_instance(&intent.instance_id)
                 .map_err(|failure| *failure.error)?;
+            let blackout_instance_id =
+                crate::failure_identity::identifier_text(&resolved.instance_id());
             let request_id = self
                 .events
                 .issuer()
@@ -2038,6 +2073,33 @@ impl HostShared {
                             context.now_unix_ms,
                         )
                     {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                    // Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals",
+                    // positions 4 and 7): a blackout, the quiet before one or the day boundary,
+                    // judged again at this admission's own time, refuses at Info with the code
+                    // the evaluation would have deferred with (no lease, no run).
+                    if let Err(error) = self.monotonic_ms().and_then(|monotonic_ms| {
+                        policy.blackout_admission(
+                            &blackout_context,
+                            intent,
+                            &current_facts.instances,
+                            EvaluationTime {
+                                unix_ms: context.now_unix_ms,
+                                monotonic_ms,
+                            },
+                            response_deadline_ms,
+                            &blackout_instance_id,
+                        )
+                    }) {
                         let failure = if error.is_fatal() {
                             RequestFailure::poison_without_terminal(error)
                         } else {
