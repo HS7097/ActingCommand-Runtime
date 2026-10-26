@@ -79,7 +79,7 @@ impl Catalog {
     fn build(files: &[(PathBuf, Vec<u8>)]) -> Result<Self, SafeAreaRefusal> {
         let mut models: BTreeMap<String, (PathBuf, Vec<Form>)> = BTreeMap::new();
         for (path, bytes) in files {
-            let declaration = parse_declaration(bytes).map_err(|json_pointer| {
+            let declaration = parse_declaration(bytes).map_err(|MisfitAt(json_pointer)| {
                 SafeAreaRefusal::DeclarationInvalid {
                     path: path.clone(),
                     json_pointer,
@@ -259,14 +259,18 @@ fn files_digest(files: &[(PathBuf, Vec<u8>)]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
+/// The JSON pointer of the first member of a declaration file that breaks the schema (empty for the
+/// whole document); `Catalog::build` turns it into `SafeAreaRefusal::DeclarationInvalid`.
+struct MisfitAt(String);
+
 /// One declaration file's bytes, decoded and checked (`contracts/display-adapter.md` section
 /// 9.1); otherwise the JSON pointer of the first member that breaks the schema (an unknown,
 /// missing or misfit member, in document order; empty for the whole document).
-fn parse_declaration(bytes: &[u8]) -> Result<Declaration, String> {
-    let document: Value = serde_json::from_slice(bytes).map_err(|_| String::new())?;
+fn parse_declaration(bytes: &[u8]) -> Result<Declaration, MisfitAt> {
+    let document: Value = serde_json::from_slice(bytes).map_err(|_| MisfitAt(String::new()))?;
     let object = members(&document, "", &["schema_version", "models", "forms"])?;
     if field(object, "schema_version").as_str() != Some(DISPLAY_SAFE_AREA_SCHEMA) {
-        return Err("/schema_version".to_owned());
+        return Err(MisfitAt("/schema_version".to_owned()));
     }
     let mut models: Vec<String> = Vec::new();
     for (index, model) in non_empty_array(object, "models")?.iter().enumerate() {
@@ -274,7 +278,7 @@ fn parse_declaration(bytes: &[u8]) -> Result<Declaration, String> {
             Some(name) if !name.is_empty() && !models.iter().any(|seen| seen == name) => {
                 models.push(name.to_owned());
             }
-            _ => return Err(format!("/models/{index}")),
+            _ => return Err(MisfitAt(format!("/models/{index}"))),
         }
     }
     let mut forms: Vec<Form> = Vec::new();
@@ -285,7 +289,7 @@ fn parse_declaration(bytes: &[u8]) -> Result<Declaration, String> {
             .iter()
             .any(|seen| seen.display == form.display && seen.rotation == form.rotation)
         {
-            return Err(at);
+            return Err(MisfitAt(at));
         }
         forms.push(form);
     }
@@ -295,23 +299,23 @@ fn parse_declaration(bytes: &[u8]) -> Result<Declaration, String> {
 /// One form at `pointer`: `display {width, height}` (each at least 1), `rotation` (`r0`, `r90`,
 /// `r180` or `r270`) and `insets {left, top, right, bottom}`, which leave the safe area a width
 /// and a height.
-fn parse_form(value: &Value, pointer: &str) -> Result<Form, String> {
+fn parse_form(value: &Value, pointer: &str) -> Result<Form, MisfitAt> {
     let object = members(value, pointer, &["display", "rotation", "insets"])?;
     let display_at = format!("{pointer}/display");
     let display = members(field(object, "display"), &display_at, &["width", "height"])?;
     let side = |name: &str| {
         pixels(display, name)
             .filter(|value| *value > 0)
-            .ok_or_else(|| format!("{display_at}/{name}"))
+            .ok_or_else(|| MisfitAt(format!("{display_at}/{name}")))
     };
     let (width, height) = (side("width")?, side("height")?);
-    let extent = CaptureExtent::new(width, height).ok_or_else(|| display_at.clone())?;
+    let extent = CaptureExtent::new(width, height).ok_or_else(|| MisfitAt(display_at.clone()))?;
     let rotation = match field(object, "rotation").as_str() {
         Some("r0") => CaptureRotation::R0,
         Some("r90") => CaptureRotation::R90,
         Some("r180") => CaptureRotation::R180,
         Some("r270") => CaptureRotation::R270,
-        _ => return Err(format!("{pointer}/rotation")),
+        _ => return Err(MisfitAt(format!("{pointer}/rotation"))),
     };
     let insets_at = format!("{pointer}/insets");
     let sides = members(
@@ -319,7 +323,8 @@ fn parse_form(value: &Value, pointer: &str) -> Result<Form, String> {
         &insets_at,
         &["left", "top", "right", "bottom"],
     )?;
-    let inset = |name: &str| pixels(sides, name).ok_or_else(|| format!("{insets_at}/{name}"));
+    let inset =
+        |name: &str| pixels(sides, name).ok_or_else(|| MisfitAt(format!("{insets_at}/{name}")));
     let insets = CaptureInsets {
         left: inset("left")?,
         top: inset("top")?,
@@ -329,10 +334,10 @@ fn parse_form(value: &Value, pointer: &str) -> Result<Form, String> {
     // The safe area keeps a width and a height inside the display, as a recorded geometry's
     // insets must (`CaptureGeometry::safe_insets_fit_display`).
     if u64::from(insets.left) + u64::from(insets.right) >= u64::from(width) {
-        return Err(format!("{insets_at}/right"));
+        return Err(MisfitAt(format!("{insets_at}/right")));
     }
     if u64::from(insets.top) + u64::from(insets.bottom) >= u64::from(height) {
-        return Err(format!("{insets_at}/bottom"));
+        return Err(MisfitAt(format!("{insets_at}/bottom")));
     }
     Ok(Form {
         display: extent,
@@ -346,13 +351,15 @@ fn members<'a>(
     value: &'a Value,
     pointer: &str,
     names: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value.as_object().ok_or_else(|| pointer.to_owned())?;
+) -> Result<&'a Map<String, Value>, MisfitAt> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| MisfitAt(pointer.to_owned()))?;
     if let Some(unknown) = object.keys().find(|key| !names.contains(&key.as_str())) {
-        return Err(format!("{pointer}/{}", segment(unknown)));
+        return Err(MisfitAt(format!("{pointer}/{}", segment(unknown))));
     }
     if let Some(missing) = names.iter().find(|name| !object.contains_key(**name)) {
-        return Err(format!("{pointer}/{missing}"));
+        return Err(MisfitAt(format!("{pointer}/{missing}")));
     }
     Ok(object)
 }
@@ -366,11 +373,11 @@ fn field<'a>(object: &'a Map<String, Value>, name: &str) -> &'a Value {
 fn non_empty_array<'a>(
     object: &'a Map<String, Value>,
     name: &str,
-) -> Result<&'a Vec<Value>, String> {
+) -> Result<&'a Vec<Value>, MisfitAt> {
     field(object, name)
         .as_array()
         .filter(|items| !items.is_empty())
-        .ok_or_else(|| format!("/{name}"))
+        .ok_or_else(|| MisfitAt(format!("/{name}")))
 }
 
 /// The pixel count `name` of `object`.

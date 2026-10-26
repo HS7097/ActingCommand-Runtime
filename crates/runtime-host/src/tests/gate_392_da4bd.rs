@@ -32,6 +32,8 @@ use actingcommand_runtime_config::{
 use serde_json::{Value, json};
 
 /// The handset's neutral fake serial, distinct from the other test modules'.
+/// How long a test waits for a step of the run it drives (test plan v2.2 §2.1 guard 3).
+const GATE_WAIT: Duration = Duration::from_secs(60);
 const SERIAL: &str = "TESTSERIAL0392";
 const MODEL_A: &str = "neutral-model-a";
 const MODEL_B: &str = "neutral-model-b";
@@ -398,14 +400,14 @@ fn da4bd_t2_changing_the_model_setting_changes_the_map_at_the_next_frame() {
             proceed_rx
                 .lock()
                 .expect("the setting's signal")
-                .recv_timeout(Duration::from_secs(60))
+                .recv_timeout(GATE_WAIT)
                 .expect("the test set the model");
         }),
     );
     let switched = thread::scope(|scope| {
         let running = scope.spawn(|| run(&host, &temp, "switched", &package_at(WIDTH, HEIGHT)));
         reached_rx
-            .recv_timeout(Duration::from_secs(60))
+            .recv_timeout(GATE_WAIT)
             .expect("the first capture after the input");
         configure(&host, model_key(instance), json!(MODEL_B));
         proceed.send(()).expect("the capture waits for the setting");
