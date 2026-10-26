@@ -12,7 +12,8 @@
 //! 1. **Games in use**: the games of the bound instances that hold `schedule.json`, by name; the
 //!    instances of each by alias. A game without a bound instance is left out.
 //! 2. **Read**: each game's file is read by the contract crate's reader, its `requires` checked
-//!    against the subsystems given (when given), its packages checked against the registry, and
+//!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and against the
+//!    subsystems given (when given), its packages checked against the registry, and
 //!    the registry's packages classified. A refused game is reported with its game id.
 //! 3. **Instantiate**: per bound instance `i` of game `g` on server `s`, every rule whose package
 //!    belongs to `s` and is not held, and every pool, profile and event for every server or for
@@ -52,9 +53,9 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
 use crate::{
-    ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog, PoolSpec,
-    SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
-    compile_composed_catalog,
+    ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
+    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, PoolSpec, SCHEDULING_SCHEMA_VERSION_V2,
+    SchedulingDocumentKind, TaskSpec, TimelineEvent, compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -445,6 +446,19 @@ fn read_game(
     };
     let schedule = parse_standard_pack_schedule(files.schedule)
         .map_err(|issue| refused(issue, "schedule.json breaks its own rules".to_owned()))?;
+    // #386 CF-4: rules that write a fact reference name its subsystem in `requires`, so that a
+    // Runtime that cannot read one refuses the file instead of misreading it.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == FACT_REFERENCE_SUBSYSTEM)
+        && let Some(pointer) = first_fact_reference(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!("a fact reference needs requires to name {FACT_REFERENCE_SUBSYSTEM}"),
+        ));
+    }
     if let Some(subsystems) = subsystems
         && let Some((index, name)) = schedule
             .requires
@@ -472,6 +486,47 @@ fn read_game(
     let classification =
         classify_standard_pack_packages(&files.root.registry, &maintenance, &schedule);
     Ok((schedule, classification))
+}
+
+/// #386 CF-4: the pointer of the first fact reference a rule's `trigger` or `feedback_stop`
+/// writes, in file order: the `value` of a `fact` node whose `type` is `fact`. `None` when no
+/// rule writes one.
+fn first_fact_reference(schedule: &StandardPackSchedule) -> Option<String> {
+    schedule.rules.iter().enumerate().find_map(|(index, rule)| {
+        ["trigger", "feedback_stop"].into_iter().find_map(|member| {
+            rule.body
+                .get(member)
+                .and_then(|node| fact_reference_in(node, &format!("/rules/{index}/{member}")))
+        })
+    })
+}
+
+/// The pointer of the first fact reference at or below the predicate node `node` at `pointer`,
+/// through the children of `all`, `any` (`predicates`) and `not` (`predicate`).
+fn fact_reference_in(node: &Value, pointer: &str) -> Option<String> {
+    let Value::Object(members) = node else {
+        return None;
+    };
+    let reference = members.get("kind").and_then(Value::as_str) == Some("fact")
+        && members
+            .get("value")
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str)
+            == Some(FACT_REFERENCE_TYPE);
+    if reference {
+        return Some(format!("{pointer}/value"));
+    }
+    let in_children = match members.get("predicates") {
+        Some(Value::Array(children)) => children.iter().enumerate().find_map(|(index, child)| {
+            fact_reference_in(child, &format!("{pointer}/predicates/{index}"))
+        }),
+        _ => None,
+    };
+    in_children.or_else(|| {
+        members
+            .get("predicate")
+            .and_then(|child| fact_reference_in(child, &format!("{pointer}/predicate")))
+    })
 }
 
 /// Instantiates one game per bound instance (steps 3 and 4), adding each composed rule's

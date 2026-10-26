@@ -2694,6 +2694,8 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         close_timeout: None,
         clock: super::write_failure::process_clock(),
         writer_work: Arc::new(super::WriterWork::default()),
+        // LN-9 (#422): a writer without a failure plan has no scrub.
+        scrub: None,
     };
     let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();
@@ -2940,3 +2942,7 @@ mod gate_ln7;
 // by its read and by `ledger-maintenance verify`.
 #[path = "tests/gate_ln8.rs"]
 mod gate_ln8;
+// #422 LN-9: the paced background scrub finds old damage within one pass, keeps its rate and
+// never holds the writer.
+#[path = "tests/gate_ln9.rs"]
+mod gate_ln9;

@@ -46,6 +46,8 @@ mod release_source;
 // LN-1 (Workflow #422): the scale harness's synthetic ledger commits its batches here.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(super) mod synthetic;
+// LN-9 (#422, LEAN-L §6): the paced background scrub of the whole chain.
+pub(super) mod scrub;
 mod tagged;
 mod views;
 pub use release_source::*;

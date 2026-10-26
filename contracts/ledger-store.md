@@ -74,6 +74,11 @@ on the opening thread so the existing artifact verifier may borrow its owner.
 The recovered store then moves to the writer. Failed construction joins the
 waiting thread; failed transfer closes the opened store and joins the thread.
 The caller never receives a ledger backed by an unfinished open operation.
+#422 LN-9: once the store has moved to the writer, a formal writer whose failure plan names a
+scrub (the Runtime's) starts its paced background scrub, a thread of its own that reads the
+database on a read-only connection of its own and never takes the writer's shared connection;
+a scrub that cannot start ends the writer and fails the open, and the close stops it first,
+within one chunk ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)).
 
 The formal SQLite constructor (#422 LN-8, LEAN-L §3.2 step 2) reads, in one read
 transaction, the format and marker, the keyed metadata row (its head sequence and

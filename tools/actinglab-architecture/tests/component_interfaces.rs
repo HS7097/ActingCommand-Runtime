@@ -40,7 +40,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   same release) `ledger_observer.history_page_rows` and LN-TUNE (#422, same release)
 ///   `ledger_observer.writer_reply_timeout_ms`; revisions 5 to 11 are still read, so [5, 12].
 ///   LN-8 (#422, the release after v0.12.13): revision 13 adds
-///   `ledger_observer.open_verify_tail_records`; revisions 5 to 12 are still read, so [5, 13].
+///   `ledger_observer.open_verify_tail_records`, and LN-9 (#422, same release) the scrub's
+///   `ledger_observer` keys `scrub_rows_per_second`, `scrub_chunk_rows` and
+///   `scrub_pass_interval_ms`; revisions 5 to 12 are still read, so [5, 13].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
