@@ -1036,6 +1036,35 @@ writer keeps no frame facts and answers no frame view.
   time and its move count (16 bytes). A failed rename takes the map entry out again. A
   rename that finds no folder (a leaf deleted by hand right after its creation) while
   the frame is still there creates the folder again and renames once more.
+- **The offline check** (#422 LN-7c V, `final-query.md` §7 row V; opt-in).
+  `ledger-maintenance verify --frame-query`, after its complete read, runs W once and L
+  and K per chunk over the root's live and kept listings, every statement at one clock,
+  with the configuration's dedup switches
+  and the keys in effect (`frame_retention_evidence_max_age_days`,
+  `ledger_observer.frame_query_chunk_frames`, `.read_check_vm_steps`; the defaults file's
+  without actingd's manifest), and compares each answer with the full view of the same
+  records (`classify`, the reference) under the ruled rules: E1's due times from
+  `created_at_unix_ms`, and E11's evidence rule, whose confirmations it reads from the
+  records themselves. For a live frame it compares the class, the ingestion time, the
+  action and, for a move, the kept folder; for a kept frame the ingestion time, the run
+  and the action. A frame only one side answers is a difference too, except a live frame
+  not yet settled (L gives no row, the view says running) and a kept file this ledger
+  does not know (neither side touches it). It does not report, and counts, a safe
+  difference whose cause the records show: the query classes Lab a frame whose Lab pin
+  was released (E3); classes error a resource, duplicate or default frame that a
+  Warning-or-higher or `task.failed` record names by link, artifact or index row (E4);
+  or does not class duplicate a frame the view does, where a second marker touches the
+  frame or its neighbour's side (E5). E12 cannot arise: the check has no schedule. Any
+  other difference is `ledger_index_mismatch` of `verify_frame_query` (values
+  `artifact_id` and `field`, the answer's member as a JSON pointer: `/class`, `/action`,
+  `/created_at_unix_ms`, `/run_id`, `/folder`, or empty for a frame one side does not
+  answer; `phase=verify_frame_query`, the statement, both answers and the number of
+  differences in its developer text), and the pass fails with a non-zero exit. A frame
+  index that does not cover the ledger, or the deadline, fails it too
+  (`ledger_index_mismatch` with `frame_refs_incomplete`, `ledger_read_budget_exceeded`).
+  Without the flag `verify` runs none of this and answers as its complete read alone; on a
+  root that is not formal the flag is refused (`maintenance_arguments_invalid`), never
+  ignored ([ledger-maintenance.md](ledger-maintenance.md)).
 - **Done set.** The process remembers the live frames it removed, moved or found absent,
   and the frames whose removal or move failed, and never visits them again; a pass start
   forgets those that left their listing. A listing holds no frame removed or moved before

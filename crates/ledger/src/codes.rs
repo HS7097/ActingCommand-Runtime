@@ -577,6 +577,9 @@ actingcommand_contract::outcome_locations! {
         VerifyCutoverPrefix => "verify_cutover_prefix",
         VerifyDatabaseFormat => "verify_database_format",
         VerifyEmptyLedgerFormat => "verify_empty_ledger_format",
+        /// #422 LN-7c V: `ledger-maintenance verify`'s check of the frame cleaner's statements
+        /// against the full view.
+        VerifyFrameQuery => "verify_frame_query",
         VerifyImportQuarantine => "verify_import_quarantine",
         VerifyImportTransaction => "verify_import_transaction",
         /// #422 LN-7c R: the scrub's and `ledger-maintenance verify`'s check of the frame index.

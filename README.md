@@ -345,7 +345,7 @@ actingctl resume --state-root <state-root> --instance <alias>
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance import  --config runtime.json --backup frozen-backup
-actingcommand-actingd ledger-maintenance verify  --config runtime.json
+actingcommand-actingd ledger-maintenance verify  --config runtime.json [--frame-query]     # --frame-query (opt-in): also checks the frame cleaner's queries against the full frame view; it rebuilds the whole retention index inside verify's deadline, so it can run out of time on a large ledger. Never ignored: refused (maintenance_arguments_invalid) on a root that is not formal (Segment, candidate) and with any other operation
 actingcommand-actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target <restore-dir> [--artifact-root <dir>]
 
 # Side-effect-free configuration check (same load/assemble/validate as startup; touches nothing under state_root)

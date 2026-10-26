@@ -1286,11 +1286,20 @@ impl RuntimeHost {
         config: RuntimeHostConfig,
         request: crate::LedgerMaintenanceRequest,
     ) -> Result<crate::LedgerMaintenanceReceipt, crate::LedgerMaintenanceFailure> {
+        // #422 LN-7c V: `verify --frame-query` (opt-in) checks the frame cleaner's statements as
+        // this host would run them; without it `verify` reads no key and no extra clock sample.
+        let frame_query = match request.operation {
+            crate::LedgerMaintenanceOperation::Verify if request.frame_query => {
+                Some(frame_query_check(&config)?)
+            }
+            _ => None,
+        };
         crate::ledger_maintenance::run(
             &config.state_root,
             &config.secret_fingerprint_salt,
             config.clock,
             request,
+            frame_query,
         )
     }
 
@@ -6315,6 +6324,42 @@ fn ledger_observer_section(
         None => actingcommand_runtime_config::EffectiveConfig::default(),
     };
     effective.ledger_observer().map_err(refused)
+}
+
+/// #422 LN-7c V (`rd-1026/ln7c/final-query.md` §7 row V): what `ledger-maintenance verify
+/// --frame-query` runs the frame cleaner's statements with, as this host would: its dedup switches,
+/// `frame_retention_evidence_max_age_days`, `ledger_observer.frame_query_chunk_frames` and
+/// `ledger_observer.read_check_vm_steps` in effect (the defaults file's values without actingd's
+/// manifest), at its clock's time.
+fn frame_query_check(
+    config: &RuntimeHostConfig,
+) -> RuntimeHostResult<actingcommand_ledger::FrameQueryCheckSettings> {
+    let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+        RuntimeHostError::fatal(
+            failure.failure_code(),
+            crate::codes::ConfigHostLocation::ReadRuntimeConfig,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+        .with_outcome_values(|outcome| failure.with_values(outcome))
+    };
+    let effective = match &config.config_manifest {
+        Some(manifest) => actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)
+            .map_err(refused)?,
+        None => actingcommand_runtime_config::EffectiveConfig::default(),
+    };
+    let section = effective.ledger_observer().map_err(refused)?;
+    Ok(actingcommand_ledger::FrameQueryCheckSettings {
+        now_unix_ms: config.clock.sample()?.unix_ms,
+        switches: actingcommand_ledger::FrameRetentionSwitches {
+            dedup_error: config.frame_retention_dedup_error,
+            dedup_lab: config.frame_retention_dedup_lab,
+        },
+        evidence_max_age_days: effective
+            .frame_retention_evidence_max_age_days()
+            .map_err(refused)?,
+        chunk_frames: usize::try_from(section.frame_query_chunk_frames).unwrap_or(usize::MAX),
+        check_vm_steps: u32::try_from(section.read_check_vm_steps).unwrap_or(u32::MAX),
+    })
 }
 
 /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure

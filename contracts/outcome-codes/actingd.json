@@ -1287,7 +1287,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance was given an option other than --config, --backup, --target or --artifact-root, an option twice, an empty value, or a dangling argument. The report carries this outcome; exit 1.",
+      "description": "actingd ledger-maintenance was given an option other than --config, --backup, --target, --artifact-root or the flag --frame-query, an option twice, an empty value, or a dangling argument. The report carries this outcome; exit 1.",
       "common_causes": "A misspelt option or a missing value.",
       "handling": "Correct the options of the maintenance command."
     },

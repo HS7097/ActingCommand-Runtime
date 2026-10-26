@@ -2974,3 +2974,7 @@ mod gate_ln7c_o;
 // evidence-frame rule (T-evidence), the open that reads no frame (T-open) and the stop (T-pace).
 #[path = "tests/gate_ln7c_q.rs"]
 mod gate_ln7c_q;
+// #422 LN-7c V: `ledger-maintenance verify` checks the frame cleaner's statements against the full
+// view: a matching root reports nothing, a consistently wrong frame index row is reported.
+#[path = "tests/gate_ln7c_v.rs"]
+mod gate_ln7c_v;

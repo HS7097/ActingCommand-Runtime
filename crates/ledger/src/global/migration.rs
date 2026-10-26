@@ -266,6 +266,28 @@ impl LedgerMaintenance {
         sqlite::SqliteLedgerReadOnly::read_formal_verified(database, self.deadline, timing)
     }
 
+    /// #422 LN-7c V (`rd-1026/ln7c/final-query.md` §7 row V, §6): after [`Self::verify_formal`],
+    /// the frame cleaner's statements W, L and K on `database`, as the cleaner runs them, against
+    /// the full view of `events` (the verified records), over the root's `artifacts\` and `kept\`
+    /// listings and `check`'s clock, within the held deadline. A difference §6 neither rules nor
+    /// calls safe is `ledger_index_mismatch` of `verify_frame_query` with the frame's
+    /// `artifact_id` and the answer's differing `field`. It reads no artifact material: the
+    /// listings are names only. Offline only: the Runtime never runs it.
+    pub fn verify_frame_queries(
+        &self,
+        database: &Arc<RuntimeDatabase>,
+        events: &[PersistedEvent],
+        check: FrameQueryCheckSettings,
+    ) -> GlobalLedgerResult<FrameQueryCheck> {
+        self.validate_database(database)?;
+        sqlite::frame_query::check_frame_queries(
+            Arc::clone(database),
+            events,
+            &check,
+            self.deadline,
+        )
+    }
+
     /// The storage status from one complete authenticated read. Workflow #375 R5a: it reads
     /// no artifact material.
     pub fn status(&self, database: &RuntimeDatabase) -> GlobalLedgerResult<LedgerStorageStatus> {

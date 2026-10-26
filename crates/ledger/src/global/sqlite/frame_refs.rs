@@ -74,9 +74,9 @@ const POINTER_TYPES: [EventType; 5] = [
 ];
 
 // Target kinds.
-const FRAME: &str = "frame";
-const ARTIFACT: &str = "artifact";
-const RUN: &str = "run";
+pub(super) const FRAME: &str = "frame";
+pub(super) const ARTIFACT: &str = "artifact";
+pub(super) const RUN: &str = "run";
 // Pointers.
 const SUMMARY_FRAME: &str = "summary_frame";
 const SUMMARY_PIN: &str = "summary_pin";
@@ -85,7 +85,7 @@ const PUBLISHED_FRAME: &str = "published_frame";
 const READING: &str = "reading";
 const BEFORE_FRAME: &str = "before_frame";
 const PRESERVED_FRAME: &str = "preserved_frame";
-const READ_CONFIRMED: &str = "read_confirmed";
+pub(super) const READ_CONFIRMED: &str = "read_confirmed";
 
 /// The controls of an evidence read confirmation (`final-query.md` §4), the same on every
 /// surface: the value names an artifact or a run.
@@ -219,6 +219,8 @@ pub(crate) fn frame_refs<E: LedgerEventRead>(event: &E) -> GlobalLedgerResult<Ve
         }
         _ => {}
     }
+    #[cfg(test)]
+    refs.retain(|frame_ref| !omitted(&frame_ref.target_id));
     refs.sort();
     refs.dedup_by(|later, earlier| {
         (later.target_kind, &later.target_id, later.pointer)
@@ -1018,6 +1020,51 @@ impl Drop for LedgerFrameRefsSkipGate {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(position) = roots.iter().position(|root| *root == self.root) {
             roots.remove(position);
+        }
+    }
+}
+
+/// Tests (#422 LN-7c V): the target ids whose rows [`frame_refs`] leaves out.
+#[cfg(test)]
+static OMITTED_TARGETS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn omitted(target_id: &str) -> bool {
+    OMITTED_TARGETS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|omitted| omitted == target_id)
+}
+
+/// Tests (#422 LN-7c V): while armed for a target id (a frame's or an artifact's, unique to its
+/// test), [`frame_refs`] gives no row naming it, as a pointer reader that misses it would: a root
+/// whose index lacks such a row is then consistent with every check of the index, the writer's
+/// rows, the scrub's and `ledger-maintenance verify`'s, and wrong.
+#[cfg(test)]
+pub(crate) struct LedgerFrameRefsOmitGate {
+    target_id: String,
+}
+
+#[cfg(test)]
+impl LedgerFrameRefsOmitGate {
+    pub(crate) fn arm(target_id: String) -> Self {
+        OMITTED_TARGETS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(target_id.clone());
+        Self { target_id }
+    }
+}
+
+#[cfg(test)]
+impl Drop for LedgerFrameRefsOmitGate {
+    fn drop(&mut self) {
+        let mut targets = OMITTED_TARGETS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(position) = targets.iter().position(|target| *target == self.target_id) {
+            targets.remove(position);
         }
     }
 }

@@ -60,8 +60,9 @@ pub use sqlite::scrub::{LedgerScrubClock, LedgerScrubPolicy, LedgerScrubStop};
 // #422 LN-7c Q (final-query §1): the frame cleaner's ledger query.
 pub use sqlite::frame_query::{
     EvidenceCovers, EvidenceTarget, FrameConfirmation, FrameQuery, FrameQueryAction,
-    FrameQueryFrame, FrameQueryOutcome, FrameQuerySettings, FrameQueryStop, FrameWaits,
-    KeptFrameAnswer, LiveFrameAnswer, evidence_covers,
+    FrameQueryCheck, FrameQueryCheckSettings, FrameQueryFrame, FrameQueryOutcome,
+    FrameQuerySettings, FrameQueryStop, FrameWaits, KeptFrameAnswer, LiveFrameAnswer,
+    evidence_covers,
 };
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
@@ -784,6 +785,16 @@ impl GlobalLedgerError {
     /// Keeps an inner cause beside the static code and operation.
     pub(crate) fn with_detail(mut self, detail: String) -> Self {
         self.detail = Some(detail);
+        self
+    }
+
+    /// #422 LN-7c V: this failure's outcome with the values its code declares (`outcome`, of
+    /// this failure's code and operation).
+    pub(crate) fn with_outcome(
+        mut self,
+        outcome: actingcommand_contract::outcome::Outcome,
+    ) -> Self {
+        self.values = Some(Box::new(outcome));
         self
     }
 

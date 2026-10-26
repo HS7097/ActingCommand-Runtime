@@ -1105,6 +1105,25 @@ impl super::super::GlobalLedgerEvidence {
     }
 }
 
+/// #422 LN-7c V: the full view of `events` (every verified record) at `now_unix_ms`, built once
+/// without the evidence opening's cache: the reference `ledger-maintenance verify` checks the
+/// frame cleaner's statements against. `check` is asked at each record, as the full build asks.
+pub(in crate::global) fn full_frame_view(
+    events: &[crate::PersistedEvent],
+    now_unix_ms: u64,
+    switches: FrameRetentionSwitches,
+    check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
+) -> GlobalLedgerResult<FrameRetentionView> {
+    let (retention, indexes) = RetentionIndex::from_events_with_indexes_checked(events, check)?;
+    let through = retention.through_sequence;
+    retention.frame_view(
+        &mut |keys| Ok(indexes.lab_related(keys, through)),
+        now_unix_ms,
+        switches,
+        &crate::global::read_work::ReadWork::unbounded(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

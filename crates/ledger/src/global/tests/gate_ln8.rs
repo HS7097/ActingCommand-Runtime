@@ -127,6 +127,7 @@ fn verify(root: &Root) -> Result<(), (String, Option<String>)> {
             target: None,
             artifact_root: None,
             limits: MaintenanceLimits::default(),
+            frame_query: false,
         },
     )
     .map(|_| ())

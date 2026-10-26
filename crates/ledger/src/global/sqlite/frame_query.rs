@@ -54,6 +54,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
+// #422 LN-7c V: `ledger-maintenance verify`'s check of these statements against the full view.
+mod check;
+pub(in crate::global) use check::check_frame_queries;
+pub use check::{FrameQueryCheck, FrameQueryCheckSettings};
+
 /// Statement W: the open runs of the current owner epoch.
 pub(in crate::global) const WAITS: &str = include_str!("frame_query/waits.sql");
 /// Statement L: the live frames' classes and actions, per chunk.

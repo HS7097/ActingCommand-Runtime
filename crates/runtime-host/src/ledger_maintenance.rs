@@ -44,6 +44,12 @@ pub struct LedgerMaintenanceRequest {
     pub artifact_root: Option<PathBuf>,
     #[serde(default)]
     pub limits: MaintenanceLimits,
+    /// #422 LN-7c V (`--frame-query`): after the complete read of a formal root, also check the
+    /// frame cleaner's statements against the full view. Another operation, or a root that is
+    /// not formal, refuses it (`maintenance_arguments_invalid`). Off, `verify` is the complete
+    /// read alone: no retention index, no statement, no count.
+    #[serde(default)]
+    pub frame_query: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +64,11 @@ pub struct LedgerMaintenanceReceipt {
     /// never serialized, so the receipt schema is unchanged; actingd prints it on stderr.
     #[serde(skip)]
     pub restored_material: Option<LedgerMaintenanceRestoredMaterial>,
+    /// #422 LN-7c V: what `verify --frame-query` of a formal root compared of the frame cleaner's
+    /// statements and the full view; `None` without the flag. Never serialized; actingd prints it
+    /// on stderr.
+    #[serde(skip)]
+    pub frame_query: Option<actingcommand_ledger::FrameQueryCheck>,
 }
 
 /// Workflow #375 R5a: the distinct referenced artifacts of a `restore`: copied as verified
@@ -117,12 +128,15 @@ impl From<RuntimeHostError> for LedgerMaintenanceFailure {
 impl From<GlobalLedgerError> for LedgerMaintenanceFailure {
     fn from(error: GlobalLedgerError) -> Self {
         // The ledger relays its code and operation as spellings (the A2b/A2c follow-up); its
-        // detail is developer text.
-        let relayed = RuntimeHostError::relayed_request(
+        // detail is developer text. #422 LN-7c V: the values it attached are the outcome's.
+        let mut relayed = RuntimeHostError::relayed_request(
             error.code(),
             error.operation(),
             actingcommand_contract::RuntimeErrorCode::InvalidRequest,
         );
+        if let Some(outcome) = error.outcome_values() {
+            relayed = relayed.with_outcome_values(|_| outcome.clone());
+        }
         Self::new(
             relayed.daemon_outcome(),
             format!(
@@ -167,11 +181,14 @@ struct BackupBinding {
     artifact_material_included: bool,
 }
 
+/// `frame_query`: #422 LN-7c V, what `verify` of a formal root runs the frame cleaner's statements
+/// with (`RuntimeHost::maintain_ledger` gives it for `verify` with `frame_query` only).
 pub(crate) fn run(
     root: &Path,
     salt: &[u8],
     clock: Arc<dyn RuntimeClock>,
     mut request: LedgerMaintenanceRequest,
+    frame_query: Option<actingcommand_ledger::FrameQueryCheckSettings>,
 ) -> Result<LedgerMaintenanceReceipt> {
     validate_request(&request)?;
     for path in [&mut request.backup, &mut request.target]
@@ -187,7 +204,7 @@ pub(crate) fn run(
     } = OwnerGuard::acquire(root, events.issuer(), clock.sample()?.unix_ms)?;
     let result = (|| {
         let maintenance = LedgerMaintenance::acquire(root, false, request.limits, deadline)?;
-        let result = run_locked(root, &events, &maintenance, &request, deadline);
+        let result = run_locked(root, &events, &maintenance, &request, deadline, frame_query);
         finish(result, maintenance.close().map_err(Into::into))
     })();
     let closed = clock
@@ -203,6 +220,7 @@ fn validate_request(request: &LedgerMaintenanceRequest) -> Result<()> {
         || (request.operation == LedgerMaintenanceOperation::Restore) != request.target.is_some()
         || request.artifact_root.is_some()
             && request.operation != LedgerMaintenanceOperation::Restore
+        || request.frame_query && request.operation != LedgerMaintenanceOperation::Verify
     {
         return Err(failure(
             HostCode::MaintenanceArgumentsInvalid,
@@ -218,6 +236,7 @@ fn run_locked(
     maintenance: &LedgerMaintenance,
     request: &LedgerMaintenanceRequest,
     deadline: Instant,
+    frame_query: Option<actingcommand_ledger::FrameQueryCheckSettings>,
 ) -> Result<LedgerMaintenanceReceipt> {
     // Existing-only: maintenance cannot bootstrap a missing State database or key.
     let database = Arc::new(RuntimeDatabase::open_existing(
@@ -226,6 +245,18 @@ fn run_locked(
             || request.operation == LedgerMaintenanceOperation::Backup
             || request.operation == LedgerMaintenanceOperation::Restore,
     )?);
+    // #422 LN-7c V fix round 1b (Fail Loud): `--frame-query` checks a formal root only; on any
+    // other root (Segment, candidate) it is refused as an argument, never ignored. The refusal
+    // follows the root's classification by its keyed meta row and precedes the State digest
+    // and the status read.
+    if request.frame_query && !maintenance.formal_ready(&database)? {
+        let mut refused = failure(
+            HostCode::MaintenanceArgumentsInvalid,
+            HostLocation::ValidateLedgerMaintenance,
+        );
+        refused.cause.push_str("; frame_query_requires_formal_root");
+        return Err(refused);
+    }
     let state = RuntimeStateStore::from_database(Arc::clone(&database))?;
     let state_sha256 = state.maintenance_digest(request.limits, deadline)?;
     // Workflow #375 H2: a formal root is classified by its keyed meta row, as startup does,
@@ -234,7 +265,7 @@ fn run_locked(
     if request.operation == LedgerMaintenanceOperation::Verify
         && maintenance.formal_ready(&database)?
     {
-        return verify_formal_root(maintenance, &database, request.limits);
+        return verify_formal_root(maintenance, &database, request.limits, frame_query);
     }
     // Marker lookup precedes source import and any backup decision.
     let ledger = maintenance.status(&database)?;
@@ -371,11 +402,14 @@ fn run_locked(
 /// read's phase timings (`ledger_open …`, as the startup line prints them). Workflow #375
 /// R5a: the pass reads no artifact material, so its material fields are 0. #422 LN-8: the
 /// start's open authenticates only the newest records; this pass stays the complete read of
-/// every row, with the migrated prefix, after the whole-file check of `open_existing`.
+/// every row, with the migrated prefix, after the whole-file check of `open_existing`. #422
+/// LN-7c V: then, with `frame_query`, the frame cleaner's statements against the full view of
+/// the same records (`LedgerMaintenance::verify_frame_queries`); a difference fails the pass.
 fn verify_formal_root(
     maintenance: &LedgerMaintenance,
-    database: &RuntimeDatabase,
+    database: &Arc<RuntimeDatabase>,
     limits: MaintenanceLimits,
+    frame_query: Option<actingcommand_ledger::FrameQueryCheckSettings>,
 ) -> Result<LedgerMaintenanceReceipt> {
     let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
     let verified = maintenance
@@ -383,10 +417,18 @@ fn verify_formal_root(
         .map_err(LedgerMaintenanceFailure::from)
         .and_then(|(events, ledger)| {
             require_settled_retention(&events)?;
-            Ok(ledger)
+            let checked = match frame_query {
+                Some(check) => Some(maintenance.verify_frame_queries(database, &events, check)?),
+                None => None,
+            };
+            Ok((ledger, checked))
         });
     match verified {
-        Ok(ledger) => Ok(receipt("verified-sqlite", ledger, None)),
+        Ok((ledger, checked)) => {
+            let mut passed = receipt("verified-sqlite", ledger, None);
+            passed.frame_query = checked;
+            Ok(passed)
+        }
         // Workflow #378 A6a (model section 7.4, N1): the read's phases are the failure's
         // `ledger_open_measured` note link; the developer text names them as before.
         Err(mut error) => {
@@ -694,6 +736,7 @@ fn receipt(
         warnings: backup.map_or_else(Vec::new, |backup| backup.warnings.clone()),
         activated: false,
         restored_material: None,
+        frame_query: None,
     }
 }
 fn required(path: &Option<PathBuf>) -> Result<&Path> {

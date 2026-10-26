@@ -843,7 +843,7 @@
     },
     "field": {
       "type": "pointer",
-      "description": "A JSON pointer to a configuration member, with array indexes."
+      "description": "A JSON pointer to a configuration member, with array indexes; or, for ledger-maintenance verify's frame query check, to the member of a frame's answer that differs from the full view (empty: the whole answer)."
     },
     "planned": {
       "type": "boolean",

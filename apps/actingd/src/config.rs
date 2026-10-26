@@ -266,6 +266,13 @@ pub(super) struct ActingdConfigFile {
     install_root: Option<PathBuf>,
 }
 
+/// Workflow #375 R5c: the frame classes' dedup switches the file names, else their defaults
+/// (error windows on, Lab output off); a start and `ledger-maintenance` (#422 LN-7c V) read them
+/// alike.
+fn frame_retention_dedup(error: Option<bool>, lab: Option<bool>) -> (bool, bool) {
+    (error.unwrap_or(true), lab.unwrap_or(false))
+}
+
 /// Workflow #387 D1c: one instance's stuck-recovery settings from the rows the configuration
 /// mechanism resolved: its `stuck_recovery` and `stuck_recovery_cooldown_secs`, which take the
 /// `recovery_ladder` section's values when the file names neither.
@@ -1179,10 +1186,15 @@ impl ActingdConfigFile {
         {
             return Err(ActingdCode::MaintenanceConfigInvalid.code());
         }
-        Ok(RuntimeHostConfig::new(
-            self.state_root,
-            self.secret_fingerprint_salt.as_bytes(),
-        ))
+        // #422 LN-7c V: `verify` checks the frame cleaner's statements with the file's switches.
+        let (dedup_error, dedup_lab) = frame_retention_dedup(
+            self.frame_retention_dedup_error,
+            self.frame_retention_dedup_lab,
+        );
+        Ok(
+            RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
+                .with_frame_retention_dedup(dedup_error, dedup_lab),
+        )
     }
 
     /// Workflow #378 A6a: [`Self::assemble`] with its refusal as an outcome: the code, with the
@@ -1446,6 +1458,10 @@ impl ActingdConfigFile {
             policy.validate_instance_identities(&configured_aliases)?;
         }
         let policy_cadence = PolicyCadence::default();
+        let (dedup_error, dedup_lab) = frame_retention_dedup(
+            self.frame_retention_dedup_error,
+            self.frame_retention_dedup_lab,
+        );
         let agent_dispatcher_budget = self.agent_dispatcher.as_ref().map(|dispatcher| {
             (
                 dispatcher.max_attempts,
@@ -1458,10 +1474,7 @@ impl ActingdConfigFile {
                 .with_device_diagnostic_mode(self.device_diagnostic_mode.unwrap_or_default())
                 .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
                 .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or(true))
-                .with_frame_retention_dedup(
-                    self.frame_retention_dedup_error.unwrap_or(true),
-                    self.frame_retention_dedup_lab.unwrap_or(false),
-                )
+                .with_frame_retention_dedup(dedup_error, dedup_lab)
                 .with_bind_address(SocketAddr::new(
                     bind_host,
                     self.bind_port.unwrap_or_default(),

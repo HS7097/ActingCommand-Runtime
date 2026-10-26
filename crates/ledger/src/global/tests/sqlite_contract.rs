@@ -571,6 +571,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
                     target,
                     artifact_root: None,
                     limits: Default::default(),
+                    frame_query: false,
                 },
             )
         };

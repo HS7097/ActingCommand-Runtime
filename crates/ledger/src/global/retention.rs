@@ -43,6 +43,8 @@ pub(in crate::global) use view::{
     DAY_MS, ERROR_WINDOW_MS, LocalOffsetMs, READING_DAYS, SETTLE_AGE_MS, first_string, id_text,
     kept_file_name, leaf_name, leaf_part, local_date, type_leaf_name,
 };
+// #422 LN-7c V: the reference of `ledger-maintenance verify`'s frame query check.
+pub(in crate::global) use view::full_frame_view;
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
 #[derive(Default)]
