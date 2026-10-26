@@ -845,7 +845,10 @@ instance that has a decision in that evaluation, by alias:
   `rejected` or `completed`, as the dispatch projection holds it; a rejected one did not run
   either);
 - every other decision as a candidate row `{task_id, state, eligibility, why, reasons,
-  reasons_omitted?, next_wake_unix_ms?, since_unix_ms}`: `state` is `blocked` for a blocked
+  reasons_omitted?, next_wake_unix_ms?, since_unix_ms, expected_runtime_ms,
+  expected_runtime_source}` (the last two SCH-M ED-2: the duration the pair's dispatch would
+  reserve in that evaluation, its expected duration E or its declared duration, and `runs:<n>` or
+  `declared`; "Settlement Feedback And Eligibility Age"): `state` is `blocked` for a blocked
   decision and `deferred` for every other (an eligible one that another task outranked waited
   this round); `why` is the full outcome of its last reason, the code `why=` names in a dispatch
   decision record; `reasons` are the codes of its reasons in order, the last 32 when there are
@@ -928,8 +931,31 @@ projects carries what earlier runs of that task on that instance settled:
   (at most `max_runtime_ms`) replaces the declared `expected_duration_ms` as the candidate's cost,
   as the dispatch intent's `expected_duration_ms` (hence the budget reservations, forward
   planning and the random-delay cut) and in the strategy's production estimate. Hard deadlines,
-  lease TTLs and `loop_budget.max_runtime_ms` never use E. The host fills the members from the
-  instance's `health.run_duration` record from slice ED-2 on; until then they are absent.
+  lease TTLs and `loop_budget.max_runtime_ms` never use E. SCH-M slice ED-2: the host fills the
+  members in every authoritative projection from the instance's `health.run_duration` record
+  ([instance-fact-store.md](../instance-fact-store.md), "Run duration facts"): the samples are the
+  durations of the instance's successful scheduled runs of the task's package, written at their
+  settlement; tasks that share a package share them. A fact refresh read's declared duration is
+  `scheduling.fact_refresh.expected_duration_ms`, and its E reads the samples of the instance's
+  recognition maintenance package.
+  - **Admission** compares the intent's `expected_duration_ms` with the duration the admission's
+    own projection gives the pair: with E there, a different value is `policy_facts_stale` (a
+    sample landed after the evaluation, and the next cycle evaluates again); without, the declared
+    duration must match as before (`policy_intent_catalog_mismatch`).
+  - **The dispatch intent record** (`policy.dispatch_intent`) carries `expected_duration_ms` when
+    the duration it reserved is not its task spec's declared one (E, or a configured fact refresh
+    duration); only an intent carries it (`invalid_policy_payload`, field
+    `expected_duration_ms`), never 0. Recovery and replay reserve that value (the coordinator's
+    ruling of 10-24 14:1x), so a receipt reserved with E replays without
+    `policy_budget_receipt_mismatch`; an intent without it reserved its spec's declared duration.
+    An immediate retry round keeps the declared duration it opened under, which a later catalog's
+    task must still declare.
+  - **Not-run explanation**: every candidate row of `ScheduleExplanation` (`ac_schedule`,
+    `actingctl schedule`) carries `expected_runtime_ms`, the duration the pair's dispatch would
+    reserve in that evaluation, and `expected_runtime_source`, `declared` or `runs:<n>`.
+  - With `scheduling.expected_runtime.enabled` false for an instance nothing is written for it and
+    nothing is projected: its evaluations, intents and records are those without samples. This is
+    the rollback without a restart (`ConfigureSettings`).
 - `failure_streak` is the number of consecutive failed runs ending at that
   latest completed run, 0 after a success. The evaluator validates and carries
   it; the score stage does not consume it yet.

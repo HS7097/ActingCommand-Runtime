@@ -4386,8 +4386,8 @@ impl RuntimeHost {
             .run_durations_for_test(alias)
     }
 
-    /// SCH-M ED-2, test only: the package admission read `package_id` at `path`, as the admission
-    /// after start or a scheduled run's preparation reads it.
+    /// SCH-M ED-2, test only: a scheduled run's preparation admitted `package_id` at `path`, as
+    /// the first preparation of a package since the start records it.
     #[cfg(test)]
     pub(crate) fn learn_package_for_test(
         &self,
@@ -4396,7 +4396,7 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::RunDurationLocation::Project)?
             .pack_admission
-            .learn(path, package_id)
+            .learn_prepared(path, package_id)
     }
 
     /// Workflow #422 LN-4, test only: the monitor registry's state, and the same rebuilt by

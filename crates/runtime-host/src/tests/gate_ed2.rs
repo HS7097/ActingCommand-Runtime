@@ -13,8 +13,9 @@
 // A neutral fixture: the fixture instance; two tasks, `fixture.observe` and its twin, bound to one
 // procedure whose binding names the neutral package's location (so they share its samples);
 // a runtime ceiling of ten hours, so E is never capped here; a manual Runtime clock; the package
-// admission after start held, so a package's id is read only where a test says so (a run's
-// preparation, or the admission's own record). Every expected value is the model's requirement.
+// admission after start held. The Runtime maps a task to its package's samples once a scheduled
+// run's preparation admitted the package since the start: a real run, or the test's stand-in
+// for one (`learn_package_for_test`). Every expected value is the model's requirement.
 
 use super::*;
 use crate::pack_admission::PackAdmissionHold;

@@ -163,9 +163,9 @@ impl HostShared {
     /// from its instance's `health.run_duration` record in `fact_projection` (the store at the
     /// projected position). A pair gets E when its instance's switch is on and its task's
     /// package has samples there; its snapshot is created when the pair has none yet. Tasks
-    /// that share a package share its samples. A pair whose package the Runtime has not read
-    /// yet (no admission of its location since the start), or whose row cannot be read, keeps
-    /// its declared value. The caller holds `policy` and then `fact_write_gate`.
+    /// that share a package share its samples. A pair whose package no scheduled run prepared
+    /// since the start (its id at its binding's location unknown), or whose row cannot be read,
+    /// keeps its declared value. The caller holds `policy` and then `fact_write_gate`.
     pub(super) fn project_expected_runtimes(
         &self,
         policy: &PolicyHost,
@@ -275,11 +275,10 @@ impl HostShared {
         Ok(())
     }
 
-    /// The `package_id` of each procedure whose binding names a location the Runtime has
-    /// admitted a package at (the admission after start, or a run's preparation), by procedure
-    /// alias.
+    /// The `package_id` of each procedure whose binding names a location a scheduled run's
+    /// preparation admitted a package at in this process, by procedure alias.
     fn procedure_packages(&self) -> RuntimeHostResult<BTreeMap<String, String>> {
-        let admitted = self.pack_admission.package_ids()?;
+        let admitted = self.pack_admission.prepared_package_ids()?;
         let manifest = lock(&self.procedure_manifest, RunDurationLocation::Project)?;
         Ok(manifest
             .as_ref()

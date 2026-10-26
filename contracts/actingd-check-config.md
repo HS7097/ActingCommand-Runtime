@@ -341,6 +341,12 @@ The members of `report`:
       `catalog` ([standard-pack-schedule.md](standard-pack-schedule.md), "The
       scheduler workbench (RL-1b)"); a `schedule.json` that requires it is
       composed only by a Runtime that names this row.
+    - `expected_runtime` (SCH-M ED-2): always on
+      (`config_subsystem_always_on`). The Runtime keeps the run-duration
+      samples (`health.run_duration`) and dispatches by the expected duration
+      E ([scheduling/README.md](scheduling/README.md), "Settlement Feedback And
+      Eligibility Age"); the catalog generator emits catalog v35 only for a
+      Runtime that names this row.
     - `env_overrides`: on only when `allow_env_overrides` is `true`
       (`config_subsystem_configured`, `config_subsystem_configured_off` or
       `config_subsystem_flag_absent`). When the flag is off, the outcome

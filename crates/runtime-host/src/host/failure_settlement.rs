@@ -146,8 +146,9 @@ impl HostShared {
                 return Err(failure);
             }
         };
+        // SCH-M ED-2: the package the expected duration of the tasks bound here reads.
         self.pack_admission
-            .learn(task_request.package_path(), prepared.package_label())?;
+            .learn_prepared(task_request.package_path(), prepared.package_label())?;
         // A broken game root refuses the run as before, after its main package is recorded.
         let interrupts = self.prepare_run_interrupts(&prepared);
         let navigated = interrupts

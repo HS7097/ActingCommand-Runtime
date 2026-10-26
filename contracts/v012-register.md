@@ -3210,7 +3210,7 @@ t6 (policy) and `ed1_tests` (runtime-config, host).
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | ED1-1 | `expected_runtime(samples_newest_first, ExpectedRuntimeSettings {enabled, runs, margin_ms}, declared_ms, max_runtime_ms) -> ExpectedRuntime {expected_ms, source: Declared \| Runs(n)}`; `ExpectedRuntime::snapshot_members` | policy interface (memory only) (tests t1 to t4) | ED-1 | ED-1 | D-12: E = min(⌈mean of the latest min(runs, k)⌉ + margin, M); k = 0 or the switch off: D, no snapshot member |
-| ED1-2 | `TaskRuntimeSnapshot.expected_runtime_ms`, `.expected_runtime_runs` | new optional members of the evaluation input (memory and the input identity; absent: today's bytes) (tests t5, t6) | ED-1 | ED-2 | the evaluator uses E (at most `max_runtime_ms`) for the cost, the intent's `expected_duration_ms`, forward planning and the production estimate; absent, the declared value (and the cost's `last_duration_ms` fallback) as before |
+| ED1-2 | `TaskRuntimeSnapshot.expected_runtime_ms`, `.expected_runtime_runs` | new optional members of the evaluation input (memory and the input identity; absent: today's bytes) (tests t5, t6) | ED-1 | ED-2 (built, §1.188 ED2-4) | the evaluator uses E (at most `max_runtime_ms`) for the cost, the intent's `expected_duration_ms`, forward planning and the production estimate; absent, the declared value (and the cost's `last_duration_ms` fallback) as before |
 | ED1-3 | `scheduling.expected_runtime.{enabled, runs, margin_ms}` (`true`, 5 in `1..=16`, 300 000 in `0..=3600000`) and per instance `instance.<id>.scheduling.expected_runtime.*` (default the section's); `scheduling.fact_refresh.expected_duration_ms` (60 000 in `1..=1800000`) | configuration keys (`actingd-config` revision 11) (test c1) | ED-1 | person | all settable; accessor `EffectiveConfig::expected_runtime(instance_id)`; `FactRefreshConfig.expected_duration_ms`; read by ED-2 |
 
 ### 1.179 Slice SR-4a1 (0.12.x): the pure blackout and day-boundary judgements, per-instance and `once` blackout entries (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-1, D-4, D-6, §6 row SR-4a1; Alice 10-24 12:1x, #386 comment 6379206178)
@@ -3392,6 +3392,29 @@ The number 1.187 is provisional for the parallel slices.
 | LN8-3 | the formal writer open's verification | Runtime-internal behaviour | LN-8 | — | one read transaction: format and marker, keyed meta row, `MAX(sequence)` = head, then the newest rows in chunks, each authenticated on its own with its link and artifact rows, contiguous through the head, the oldest chained to its predecessor's stored hash and the newest's hash the meta row's; no other row and no migrated-prefix digest; the views a database lacks are created against the meta row and `MAX(sequence)`, without a second read |
 | LN8-4 | `RuntimeDatabase::open_existing_for_start(root)` | database interface | LN-8 | — | the Runtime start's open of existing storage: read-write with every check of `open_existing(root, false)` except the whole-file `quick_check(1)` |
 
+### 1.188 Slice ED-2 (0.12.x): the run-duration samples and the expected duration E in force (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.4 D-13, D-14, D-15, §6 row ED-2, and the coordinator's ruling of 10-24 14:1x after the freeze; Alice 10-22 16:4x, #405 comment 6335497930: 「每个任务执行所需的时间可以动态的从账本读，近5次该任务包的平均时间加5分钟」; ruling 39 R6.2, R6.3)
+
+E takes effect when this slice deploys; `scheduling.expected_runtime.enabled` false (section or per
+instance) rolls it back without a restart. [instance-fact-store.md](instance-fact-store.md) ("Run
+duration facts", the capacity ledger), [scheduling/README.md](scheduling/README.md) ("Settlement
+Feedback And Eligibility Age"), [runtime-config.md](runtime-config.md) ("Expected duration") and
+[actingd-check-config.md](actingd-check-config.md) are the contract. The ruling after the freeze
+overrides the model's "dispatch intent shape unchanged" (§5): the intent records the duration it
+reserved (ED2-3). **No configuration key** (ED-1's keys are read now). Codes: the model's two,
+`run_duration_key_reserved` and `run_duration_row_dropped` (#420 S4: one domain warning with
+values covers the row bound, an unreadable row and a refused publication). Gates: the `gate_ed2`
+tests t1 to t9 (host). The number 1.188 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ED2-1 | `health.run_duration` (one per instance): `record_list` rows `{package_id, n, d1 … dn, at}` | instance fact key (tagged, as every instance key) (tests t1 to t5, t7) | ED-2 | ED-2 (the settlement of a successful scheduled run) | newest duration `d1`, at most `runs` (≤ 16) per row, ≤ 256 rows (the oldest `at` dropped with `run_duration_row_dropped`); source `runtime.run-duration`, no expiry; loaded by LN-2's tagged start; +1 active fact per instance in the capacity ledger; kept by package updates and upgrades (R6.2) |
+| ED2-2 | `run_duration_key_reserved` (error; `fact_key`), `run_duration_row_dropped` (warning; `instance_id`, `package_id`, the refusal as `caused_by`); locations `record_run_duration_sample`, `project_expected_runtime` | outcome codes and locations (tests t6, t7) | ED-2 | ED-2 | a client's publication of the key, or any other path but the settlement, is refused before the fact write gate with nothing appended; the warning is one `runtime.failed` with system links |
+| ED2-3 | `policy.dispatch_intent`: `expected_duration_ms` (milliseconds, not 0) | new optional member of a persisted record (tests t4, t9) | ED-2 | ED-2 | written only when the intent's duration is not its task spec's declared `expected_duration_ms` (E, or a configured fact refresh duration); only an intent carries it (`invalid_policy_payload`, field `expected_duration_ms`); recovery and replay reserve it (`control_intent`), absent the spec's declared one; `PolicyPayloadDraft::dispatch_intent_with(data, random_delay, expected_duration_ms, audit)`, `PolicyDispatchPayload::expected_duration_ms()` |
+| ED2-4 | the projection of E into `TaskRuntimeSnapshot.expected_runtime_ms`, `.expected_runtime_runs` (ED1-2) | Runtime-internal behaviour (memory and the input identity) (tests t1, t3, t4, t8, t9) | ED-2 | — | every authoritative projection; a pair's package is the `package_id` a scheduled run's preparation admitted at its procedure binding's location in this process (`PackAdmission::learn_prepared`; never the admission after start, so E never turns on between an evaluation and its admission), the fact refresh's the reader binding's; the record is never an ordinary fact; admission compares the intent's duration with its own projection's (`policy_facts_stale` with E there) |
+| ED2-5 | `ScheduleExplanationCandidate.expected_runtime_ms`, `.expected_runtime_source` (`declared` \| `runs:<n>`) | new optional members of a wire shape (runtime-client; `ac_schedule`, `actingctl schedule`) (tests t1, t9) | ED-2 | ED-2 | every candidate row the Runtime answers carries both; the MCP result schema names them |
+| ED2-6 | `config.subsystems` row `expected_runtime` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | ED-2 | ED-2 | the catalog generator emits v35 only for a Runtime that names it (model §3.8) |
+| ED2-7 | `FactRefreshSettings.expected_duration_ms` (policy) | policy interface (memory only) | ED-2 | ED-2 | the fact refresh's declared duration D is `scheduling.fact_refresh.expected_duration_ms`; the spec's `FACT_REFRESH_EXPECTED_DURATION_MS` (60 000) stays as its nominal value, the key's default |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -3443,6 +3466,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | Key | Store | Tagged | Writer slice |
 |---|---|---|---|
 | `health.perf_baseline.<signal>.<backend>` (per instance, one per backend in use) | instance | yes (every instance key) | P-m |
+| `health.run_duration` (per instance, one record of at most 256 package rows; [instance-fact-store.md](instance-fact-store.md), "Run duration facts"; §1.188 ED2-1) | instance | yes (every instance key) | SCH-M ED-2 |
 | `session.pack.schedule` (one per scope) | instance | yes | SR-11 |
 | `session.feature.<feature_key>` | instance | yes | SR-5a |
 | `session.instructions` (reserved, one per scope) | instance | yes | GOAL-1 |

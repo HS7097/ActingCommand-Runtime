@@ -431,9 +431,12 @@ Feedback And Eligibility Age"). Each is also per instance,
 `scheduling.expected_runtime` member, settable, default `section:scheduling.expected_runtime.<member>`;
 `EffectiveConfig::expected_runtime(instance_id)` returns each member's value in effect, the
 instance's own or the section's. `scheduling.fact_refresh.expected_duration_ms` is the declared
-duration D of a fact refresh read. ED-1 parses and checks the keys; slice ED-2 reads them (the
-sample store, the projection into the evaluation, and the fact refresh's declared duration at
-admission and replay, which today still read the fact refresh spec's own value).
+duration D of a fact refresh read. ED-1 parses and checks the keys; slice ED-2 reads them: each
+instance's `enabled`, `runs` and `margin_ms` at every write of a run-duration sample and every
+projection of the evaluation inputs ([instance-fact-store.md](instance-fact-store.md), "Run duration
+facts"), and `scheduling.fact_refresh.expected_duration_ms` at every evaluation and admission of a
+fact refresh read, whose intent record carries a value other than the spec's nominal 60 000, so
+recovery reserves it again. ED-2 adds no key.
 
 **Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
 v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
@@ -857,7 +860,7 @@ that is the Runtime's as a whole latches it.
 
 | Fact (scope `runtime`) | Rows | Recorded |
 |---|---|---|
-| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without; SCH-M CF-1 adds the always-on row `condition_edges` (the catalog edge members, [actingd-check-config.md](actingd-check-config.md)); SCH-M CF-2 adds the always-on row `resource_reading_time` (completion-time readings, [actingd-check-config.md](actingd-check-config.md)) | at start |
+| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without; SCH-M CF-1 adds the always-on row `condition_edges` (the catalog edge members, [actingd-check-config.md](actingd-check-config.md)); SCH-M CF-2 adds the always-on row `resource_reading_time` (completion-time readings, [actingd-check-config.md](actingd-check-config.md)); SCH-M ED-2 adds the always-on row `expected_runtime` (the run-duration samples and E, [actingd-check-config.md](actingd-check-config.md)) | at start |
 | `config.selection` | one: `config_sha256`, `defaults_sha256` (`sha256:<hex>`), `config_generation` (decimal text, installed Runtime only) | at start |
 | `config.catalog` (Workflow #389 MCP-9a, register A5) | one, the active policy catalog generation: `catalog_id`, `catalog_version` (decimal text), `catalog_hash`, `activated_event_id` (the event id of the `catalog.activated` or `catalog.rolled_back` record that made it active), and when known `approval_id` and `approval_disposition` (the latest approval decision whose target is that generation), `previous_catalog_id` and `previous_catalog_version` (decimal text; the generation that record replaced); no fact while no generation is active | at start, after each committed catalog transition and after each approval decision, each time only when it changed |
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |

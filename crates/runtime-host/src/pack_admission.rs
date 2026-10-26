@@ -173,6 +173,9 @@ struct Suspension {
 struct State {
     /// The `package_id` admission read at each package location.
     ids: BTreeMap<String, String>,
+    /// SCH-M ED-2: the `package_id` a scheduled run's preparation admitted at each package
+    /// location in this process, which the expected duration E maps a task's samples by.
+    prepared: BTreeMap<String, String>,
     /// The suspended task packages by `package_id`.
     suspended: BTreeMap<String, Suspension>,
     /// The planning signals the evaluation produced and the recorder has not taken yet.
@@ -215,10 +218,24 @@ impl PackAdmission {
         Ok(())
     }
 
-    /// SCH-M ED-2: the `package_id` admission read at each package location so far (the
-    /// admission after start and each scheduled run's preparation), by location.
-    pub(crate) fn package_ids(&self) -> RuntimeHostResult<BTreeMap<String, String>> {
-        Ok(self.state()?.ids.clone())
+    /// SCH-M ED-2: remembers the `package_id` a scheduled run's preparation admitted at `path`,
+    /// as [`Self::learn`] does, and as the package the expected duration E reads the samples of
+    /// for the tasks bound there.
+    pub(crate) fn learn_prepared(&self, path: &str, package_id: &str) -> RuntimeHostResult<()> {
+        let mut state = self.state()?;
+        state.ids.insert(path.to_owned(), package_id.to_owned());
+        state
+            .prepared
+            .insert(path.to_owned(), package_id.to_owned());
+        Ok(())
+    }
+
+    /// SCH-M ED-2: the `package_id` a scheduled run's preparation admitted at each package
+    /// location in this process, by location. Only a preparation, never the admission after
+    /// start, adds one, so a package's E applies from the evaluation after its first preparation
+    /// since the start, and never changes between an evaluation and its admission.
+    pub(crate) fn prepared_package_ids(&self) -> RuntimeHostResult<BTreeMap<String, String>> {
+        Ok(self.state()?.prepared.clone())
     }
 
     /// Suspends the task package `package_id`, which admission at `path` refused with `code`:
