@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! P0-LO: a test-only slow writer open. While a gate is armed for a state root, every formal
-//! writer open of that root takes the gate's delay longer in its SQL read, without waiting: the
-//! read starts as if that much of the open's time had already passed, so its deadline comes that
-//! much sooner and its measured `sql_read_ms` is that much longer. Removed by dropping the gate.
+//! writer open of that root takes the gate's delay longer in its first phase, without waiting:
+//! the open starts as if that much of its time had already passed, so its deadline comes that
+//! much sooner and its measured first phase (LN-8: `meta_ms`) is that much longer. Removed by
+//! dropping the gate.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -48,7 +49,7 @@ impl Drop for LedgerOpenDelayGate {
     }
 }
 
-/// Called by the writer open of `root` before its SQL read: the read's start and the open's
+/// Called by the writer open of `root` before its first read: the open's start and its
 /// deadline, each moved back by the delay armed for that root; unchanged when none is armed.
 pub(crate) fn slowed(root: &Path, started: Instant, deadline: Instant) -> (Instant, Instant) {
     let delays = armed()

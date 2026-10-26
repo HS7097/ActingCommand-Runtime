@@ -34,7 +34,10 @@ pub use evidence_archive::*;
 pub use exporter::*;
 #[cfg(feature = "capture")]
 pub use frame_store::*;
-pub use kept::{KEPT_DIRECTORY, KeptFileListing, KeptLeafListing, KeptMoves, list_kept_folders};
+pub use kept::{
+    KEPT_DIRECTORY, KeptFileListing, KeptLeafListing, KeptMoves, list_kept_folders,
+    list_live_frames,
+};
 #[cfg(feature = "capture")]
 pub use naming::*;
 #[cfg(feature = "capture")]

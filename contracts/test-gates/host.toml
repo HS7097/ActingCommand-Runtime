@@ -2044,7 +2044,7 @@ tests = [
 ]
 incident = ["#422 LN-TUNE"]
 
-# Workflow #386 SR-4a2 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a2; SCHED T14; contracts/scheduling-blackout.md, "Order of the deferrals" position 4 and "Admission"; register §1.186): a catalog maintenance event in effect defers the candidates of its server with blackout_active (blackout_id, blackout_source catalog, the wake at its end), another server's event defers nothing there; an intent evaluated at the last admissible instant and admitted inside the event is refused blackout_active at Info, its rejection carrying the opaque instance_id and the end as next_eligible_unix_ms, no admitted record; at the end the candidate runs
+# Workflow #386 SR-4a2 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a2; SCHED T14; contracts/scheduling-blackout.md, "Order of the deferrals" position 4 and "Admission"; register §1.188): a catalog maintenance event in effect defers the candidates of its server with blackout_active (blackout_id, blackout_source catalog, the wake at its end), another server's event defers nothing there; an intent evaluated at the last admissible instant and admitted inside the event is refused blackout_active at Info, its rejection carrying the opaque instance_id and the end as next_eligible_unix_ms, no admitted record; at the end the candidate runs
 [[gate]]
 coverage = "Y"
 tests = [

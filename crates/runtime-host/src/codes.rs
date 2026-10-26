@@ -826,7 +826,8 @@ actingcommand_contract::outcome_codes! {
         // lines.
         /// Info. The start opened its ledger (keys `event_count`, `artifact_count`,
         /// `artifact_bytes`, `worker_count`, `sql_read_ms`, `verify_ms`, `material_ms`,
-        /// `restore_ms`, `timeout_ms`; N1).
+        /// `restore_ms`, `timeout_ms`; N1; #422 LN-8: the phases `meta_ms`, `tail_ms`,
+        /// `index_ms` and `import_ms`).
         LedgerOpened => "ledger_opened": info / none,
         /// Info. What a ledger open or a maintenance read measured before it failed: the same
         /// keys as `ledger_opened`, as a `note` link of the failure (N1).

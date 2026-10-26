@@ -89,6 +89,11 @@ outcome_keys! {
     verify_ms: duration_ms,
     material_ms: duration_ms,
     restore_ms: duration_ms,
+    // #422 LN-8: the phases of the start's bounded ledger open.
+    meta_ms: duration_ms,
+    tail_ms: duration_ms,
+    index_ms: duration_ms,
+    import_ms: duration_ms,
     pending_evictions: integer,
     runtime_code: code,
     client_code: code,

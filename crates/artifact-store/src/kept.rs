@@ -304,6 +304,41 @@ pub struct KeptFileListing {
     pub byte_count: u64,
 }
 
+/// The folder of the live objects, directly below the state root (`artifacts\<shard>\<file>`).
+const OBJECT_DIRECTORY: &str = "artifacts";
+
+/// Workflow #422 LN-7 (LEAN-L §3.5): the capture frames present in the live frame store under
+/// `root`, by the canonical artifact id of their object file `artifacts\<shard>\artifact_<hex>.png`.
+/// Frames in `kept\` are not live. It reads no file contents. A root without `artifacts\`, and a
+/// shard folder that vanishes meanwhile, hold no frame; a name that is not an object file name is
+/// skipped; any other listing error is returned.
+pub fn list_live_frames(root: &Path) -> std::io::Result<std::collections::BTreeSet<String>> {
+    let mut ids = std::collections::BTreeSet::new();
+    let shards = match fs::read_dir(root.join(OBJECT_DIRECTORY)) {
+        Ok(shards) => shards,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(ids),
+        Err(error) => return Err(error),
+    };
+    for shard in shards {
+        let shard = shard?;
+        if !shard.file_type()?.is_dir() {
+            continue;
+        }
+        let files = match fs::read_dir(shard.path()) {
+            Ok(files) => files,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for file in files {
+            let file = file?;
+            if let Some(id) = file.file_name().to_str().and_then(object_id) {
+                ids.insert(id.to_owned());
+            }
+        }
+    }
+    Ok(ids)
+}
+
 /// Workflow #375 R5e: every leaf below `kept\<date>\` with its kept frame files and their sizes,
 /// by the rules of the readers' walk: `kept\` itself absent is no leaf; `kept\` that is a reparse
 /// point, or any other listing error, fails (`artifact_kept_walk_failed`); a reparse point is never

@@ -48,10 +48,13 @@ pub(super) trait LedgerStore: Send + 'static {
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates>;
+    /// LN-7 (#422): with `live`, the writer first drops the facts of the frames that left the
+    /// live frame store.
     fn frame_retention_view(
-        &self,
+        &mut self,
         now_unix_ms: u64,
         switches: super::FrameRetentionSwitches,
+        live: Option<&std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
         work: &ReadWork,
     ) -> GlobalLedgerResult<super::FrameRetentionView>;
     fn admit_artifact_eviction(
@@ -179,11 +182,15 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         Self::retention_candidates(self, after)
     }
     fn frame_retention_view(
-        &self,
+        &mut self,
         now_unix_ms: u64,
         switches: super::FrameRetentionSwitches,
+        live: Option<&std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
         work: &ReadWork,
     ) -> GlobalLedgerResult<super::FrameRetentionView> {
+        if let Some(live) = live {
+            self.retention.retain_frames(live);
+        }
         Self::frame_retention_view(self, now_unix_ms, switches, work)
     }
     fn admit_artifact_eviction(
