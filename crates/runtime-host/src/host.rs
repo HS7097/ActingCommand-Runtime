@@ -6264,7 +6264,12 @@ fn ledger_failure_plan(
         // LN-8 (#422, LEAN-L §3.2 step 2): the newest records the open authenticates.
         .with_open_verify_tail_records(
             usize::try_from(section.open_verify_tail_records).unwrap_or(usize::MAX),
-        );
+        )
+        // #422 LN-WS (R1, R2): how often a request's read looks at its budget inside a statement,
+        // and the span of a view page's history statement; a value the ledger does not take is
+        // refused when it opens (`invalid_ledger_config`).
+        .with_read_check_vm_steps(u32::try_from(section.read_check_vm_steps).unwrap_or(u32::MAX))
+        .with_history_scan_rows(usize::try_from(section.history_scan_rows).unwrap_or(usize::MAX));
     #[cfg(test)]
     if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
         plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));

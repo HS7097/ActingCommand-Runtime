@@ -5,15 +5,16 @@
 //! for every read command it handles, the statements the SQLite medium read rows with (each
 //! statement's SQL text, its first bound value read as a stored sequence and its
 //! virtual-machine steps, `SQLITE_STMTSTATUS_VM_STEP`), the command's processing time and the
-//! progress callbacks of the command's in-statement read bound. The recording runs on the
-//! writer's thread, where the reads run; recording changes nothing the writer reads or returns.
-//! Dropping the recorder stops recording.
+//! progress callbacks of the command's in-statement read bound. A command is recorded on the
+//! writer's thread, where its reads run, once it has replied: a caller reads the record after a
+//! later command of the same writer has answered. Recording changes nothing the writer reads or
+//! returns. Dropping the recorder stops recording.
 
 use crate::global::LedgerWriterCommandKind;
 use rusqlite::types::Value;
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 /// One statement the SQLite medium read rows with.
@@ -44,17 +45,14 @@ pub struct LedgerWriterCommandStatements {
 
 struct Recorder {
     root: PathBuf,
+    /// The command being recorded: the writer thread it runs on and its statements so far.
+    current: Mutex<Option<(ThreadId, Vec<LedgerStatementRun>)>>,
     commands: Mutex<Vec<LedgerWriterCommandStatements>>,
 }
 
 fn armed() -> &'static Mutex<Vec<Arc<Recorder>>> {
     static ARMED: OnceLock<Mutex<Vec<Arc<Recorder>>>> = OnceLock::new();
     ARMED.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-thread_local! {
-    /// The statements of the command in progress on this thread, while one is recorded.
-    static STATEMENTS: RefCell<Option<Vec<LedgerStatementRun>>> = const { RefCell::new(None) };
 }
 
 /// Records the read commands of one state root's writer until it is dropped.
@@ -67,6 +65,7 @@ impl WriterStatementRecorder {
     pub fn arm(state_root: &Path) -> std::io::Result<Self> {
         let recorder = Arc::new(Recorder {
             root: state_root.canonicalize()?,
+            current: Mutex::new(None),
             commands: Mutex::new(Vec::new()),
         });
         armed()
@@ -76,7 +75,9 @@ impl WriterStatementRecorder {
         Ok(Self { recorder })
     }
 
-    /// The read commands recorded since the last call, oldest first.
+    /// The read commands recorded since the last call, oldest first. A command is recorded once
+    /// it has replied; one whose caller has the answer of a later command of the same writer is
+    /// here.
     pub fn take(&self) -> Vec<LedgerWriterCommandStatements> {
         std::mem::take(
             &mut *self
@@ -111,7 +112,10 @@ pub(crate) fn start(root: &Path) -> Option<Recording> {
         .iter()
         .find(|recorder| recorder.root == root)
         .cloned()?;
-    let _ = STATEMENTS.try_with(|statements| *statements.borrow_mut() = Some(Vec::new()));
+    *recorder
+        .current
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some((thread::current().id(), Vec::new()));
     Some(Recording { recorder })
 }
 
@@ -126,10 +130,13 @@ pub(crate) fn finish(
     let Some(recording) = recording else {
         return;
     };
-    let statements = STATEMENTS
-        .try_with(|statements| statements.borrow_mut().take())
-        .ok()
-        .flatten()
+    let statements = recording
+        .recorder
+        .current
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .map(|(_, statements)| statements)
         .unwrap_or_default();
     recording
         .recorder
@@ -146,10 +153,24 @@ pub(crate) fn finish(
 }
 
 /// Called by the SQLite medium when a statement it read rows with is done, with its SQL text,
-/// its bound values and its virtual-machine steps.
+/// its bound values and its virtual-machine steps: recorded when a command of this thread is.
 pub(crate) fn statement_done(sql: &str, parameters: &[Value], steps: i32) {
-    let _ = STATEMENTS.try_with(|statements| {
-        if let Some(statements) = statements.borrow_mut().as_mut() {
+    let recorders = armed()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if recorders.is_empty() {
+        return;
+    }
+    let thread = thread::current().id();
+    for recorder in recorders {
+        let mut current = recorder
+            .current
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((owner, statements)) = current.as_mut()
+            && *owner == thread
+        {
             statements.push(LedgerStatementRun {
                 sql: sql.to_owned(),
                 after: match parameters.first() {
@@ -160,5 +181,5 @@ pub(crate) fn statement_done(sql: &str, parameters: &[Value], steps: i32) {
                 vm_steps: u64::try_from(steps).unwrap_or(0),
             });
         }
-    });
+    }
 }

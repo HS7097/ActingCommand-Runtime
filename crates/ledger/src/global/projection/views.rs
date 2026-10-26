@@ -121,17 +121,19 @@ impl EventIndexes {
             scan.events
         };
         let lab_related = |keys: &LabKeys| self.lab_related(keys, snapshot);
-        let mut run_context = |run: &RunId| -> Result<Vec<E>, GlobalLedgerError> {
-            Ok(self
-                .run_ids
-                .get(run)
-                .into_iter()
-                .flatten()
-                .map(|position| &events[*position])
-                .take_while(|event| event.sequence() <= snapshot)
-                .take(MAX_RECOVERY_CONTEXT_EVENTS + 1)
-                .cloned()
-                .collect())
+        let mut run_context = |run: &RunId| -> Result<(Vec<E>, bool), GlobalLedgerError> {
+            Ok((
+                self.run_ids
+                    .get(run)
+                    .into_iter()
+                    .flatten()
+                    .map(|position| &events[*position])
+                    .take_while(|event| event.sequence() <= snapshot)
+                    .take(MAX_RECOVERY_CONTEXT_EVENTS + 1)
+                    .cloned()
+                    .collect(),
+                false,
+            ))
         };
         project_selected(
             selected,
@@ -153,10 +155,11 @@ impl EventIndexes {
 /// LN-6 (#422, LEAN-L §3.3): what a page reads besides its selected records: whether a record
 /// with given links relates to a Lab anchor at the page's snapshot, the records of one run at or
 /// before the snapshot (at most `MAX_RECOVERY_CONTEXT_EVENTS + 1` of them, in ledger order) and
-/// the eviction proofs of the records' artifacts.
+/// the eviction proofs of the records' artifacts. #422 LN-WS: a run's records come with whether
+/// the read's budget cut them short; the run's context is then limited.
 pub(in crate::global) struct PageContext<'a, E> {
     pub lab_related: &'a dyn Fn(&LabKeys) -> bool,
-    pub run_context: &'a mut dyn FnMut(&RunId) -> Result<Vec<E>, GlobalLedgerError>,
+    pub run_context: &'a mut dyn FnMut(&RunId) -> Result<(Vec<E>, bool), GlobalLedgerError>,
     pub retention: Option<&'a crate::global::retention::RetentionIndex>,
 }
 
@@ -272,7 +275,7 @@ fn run_recovery<E: LedgerEventRead>(
     rows: &[ProjectedEvent],
     snapshot: u64,
     complete: bool,
-    run_context: &mut dyn FnMut(&RunId) -> Result<Vec<E>, GlobalLedgerError>,
+    run_context: &mut dyn FnMut(&RunId) -> Result<(Vec<E>, bool), GlobalLedgerError>,
 ) -> Result<Vec<LedgerRunRecovery>, GlobalLedgerError> {
     let runs: BTreeSet<_> = rows
         .iter()
@@ -280,12 +283,14 @@ fn run_recovery<E: LedgerEventRead>(
         .collect();
     let mut groups = Vec::new();
     for run in runs {
-        let context: Vec<_> = run_context(&run)?
+        let (context, cut_short) = run_context(&run)?;
+        let context: Vec<_> = context
             .into_iter()
             .take_while(|event| event.sequence() <= snapshot)
             .take(MAX_RECOVERY_CONTEXT_EVENTS + 1)
             .collect();
-        let context_limited = context.len() > MAX_RECOVERY_CONTEXT_EVENTS;
+        // #422 LN-WS: a context the read's budget cut short is limited as one the bound cut.
+        let context_limited = cut_short || context.len() > MAX_RECOVERY_CONTEXT_EVENTS;
         let context = &context[..context.len().min(MAX_RECOVERY_CONTEXT_EVENTS)];
         let failures: Vec<_> = context
             .iter()

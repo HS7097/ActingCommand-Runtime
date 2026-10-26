@@ -1148,6 +1148,16 @@ impl GlobalLedgerConfig {
                 LedgerLocation::ConfigureLedgerWritePolicy.location(),
             ));
         }
+        // #422 LN-WS: a request's read looks at its clock at least every million SQLite steps,
+        // and a history statement spans one sequence at least.
+        if !(1..=read_work::MAX_READ_CHECK_VM_STEPS).contains(&self.read_check_vm_steps)
+            || !(1..=history::MAX_HISTORY_SCAN_ROWS).contains(&self.history_scan_rows)
+        {
+            return Err(GlobalLedgerError::fatal(
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ConfigureLedgerWritePolicy.location(),
+            ));
+        }
         // #411 A51: a read stops before a caller stops waiting for it, and the close waits
         // longer than one read.
         if self
@@ -1506,6 +1516,9 @@ impl WriterWork {
 struct WriterContext {
     clock: LedgerMonotonicClock,
     read_budget: Option<Duration>,
+    /// #422 LN-WS (R1): how often a request's read looks at the clock inside its statements
+    /// (`ledger_observer.read_check_vm_steps`).
+    read_check_vm_steps: u32,
     work: Arc<WriterWork>,
 }
 
@@ -2157,6 +2170,7 @@ impl GlobalLedger {
         let context = WriterContext {
             clock: Arc::clone(&config.clock),
             read_budget: config.read_budget,
+            read_check_vm_steps: config.read_check_vm_steps,
             work: Arc::clone(&writer_work),
         };
         let (sender, receiver) = mpsc::sync_channel(capacity);
@@ -3323,6 +3337,18 @@ fn writer_commands<S: LedgerStore>(
         let started_ms = (context.clock)();
         context.work.enter(command_operation(&command), started_ms);
         let work = read_work::ReadWork::started(&context.clock, started_ms, context.read_budget);
+        // #422 LN-WS (R1): a read that serves a Runtime request (a view page, a subscription's
+        // replay page) is bounded inside its SQLite statements too. The Runtime's own reads keep
+        // their bound between rows: the policy driver ends on any cycle error, and their reads
+        // are index-bounded.
+        let work = if matches!(
+            command,
+            WriterCommand::ProjectViewPage { .. } | WriterCommand::ReplayPage { .. }
+        ) {
+            work.within_statements(context.read_check_vm_steps)
+        } else {
+            work
+        };
         #[cfg(any(test, feature = "test-hooks"))]
         if is_read_command(&command) {
             crate::read_hold::hold_reads_of(&hook_root);

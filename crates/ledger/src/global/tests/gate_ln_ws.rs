@@ -93,12 +93,12 @@ const TIME_START_STATEMENT: &str = "SELECT MIN(sequence)";
 const T1_SCAN_ROWS: usize = 64;
 // T2 and T3: the clock is looked at every 100 VM steps, and a history statement spans at most
 // 1 024 sequences. T2's budget runs out after 30 looks at a clock that moves 1 ms a look, T3's
-// after 100 looks at one that moves 50 ms a look.
+// after 20 looks at one that moves 250 ms a look.
 const BOUND_CHECK_VM_STEPS: u32 = 100;
 const BOUND_SCAN_ROWS: usize = 1_024;
 const T2_BUDGET: Duration = Duration::from_millis(30);
 const T3_BUDGET: Duration = Duration::from_millis(5_000);
-const T3_STEP_MS: u64 = 50;
+const T3_STEP_MS: u64 = 250;
 // T4: a budget of 20 looks at a clock that moves 1 ms a look, a statement spanning at most 256
 // sequences, and pages of 10 and 30 records; a broken run ends after this many pages.
 const T4_BUDGET: Duration = Duration::from_millis(20);
@@ -322,8 +322,8 @@ fn form_d(run: RunId) -> EventQuery {
     }
 }
 
-/// The run of `instance`'s last requested task.
-fn last_run(ledger: &GlobalLedger, instance: InstanceId) -> RunId {
+/// The run of `instance`'s first requested task: a whole run, early in the history.
+fn first_run(ledger: &GlobalLedger, instance: InstanceId) -> RunId {
     let requested = ledger
         .query(EventQuery {
             event_type: Some(EventType::TaskRequested),
@@ -332,7 +332,7 @@ fn last_run(ledger: &GlobalLedger, instance: InstanceId) -> RunId {
         })
         .expect("the instance's requested tasks");
     *requested
-        .last()
+        .first()
         .and_then(|event| event.links().run_id())
         .expect("a requested task with its run")
 }
@@ -341,10 +341,23 @@ fn first_page(limit: u16) -> RuntimeEventQueryPageRequest {
     RuntimeEventQueryPageRequest::new(limit, None).expect("a first page")
 }
 
+/// The read commands `recorder` recorded since it was last read, through the last one that
+/// answered before now: the writer records a command after its reply, and it has answered a later
+/// command (its head) once every earlier one is recorded.
+fn recorded(
+    ledger: &GlobalLedger,
+    recorder: &WriterStatementRecorder,
+) -> Vec<LedgerWriterCommandStatements> {
+    ledger.latest_sequence().expect("the head");
+    recorder.take()
+}
+
 /// The one view page among the read commands `recorder` recorded since it was last read.
-fn page_read(recorder: &WriterStatementRecorder) -> LedgerWriterCommandStatements {
-    let mut pages = recorder
-        .take()
+fn page_read(
+    ledger: &GlobalLedger,
+    recorder: &WriterStatementRecorder,
+) -> LedgerWriterCommandStatements {
+    let mut pages = recorded(ledger, recorder)
         .into_iter()
         .filter(|command| command.command == LedgerWriterCommandKind::ProjectViewPage)
         .collect::<Vec<_>>();
@@ -449,7 +462,7 @@ fn runtime_fact(ids: &IdentifierIssuer) -> SanitizedEventDraft {
 fn costliest_statements(root: &Root) -> Vec<(&'static str, u64, String, Option<u64>)> {
     let ledger = root.open(Reads::unbounded(T1_SCAN_ROWS));
     let instance = root.window_instance(&ledger);
-    let run = last_run(&ledger, instance);
+    let run = first_run(&ledger, instance);
     let forms = [
         (
             "A changes",
@@ -479,7 +492,7 @@ fn costliest_statements(root: &Root) -> Vec<(&'static str, u64, String, Option<u
         ledger
             .project_view_page(query, PROFILE, first_page(limit))
             .expect("the first page");
-        let read = page_read(&recorder);
+        let read = page_read(&ledger, &recorder);
         let history = read
             .statements
             .iter()
@@ -534,7 +547,7 @@ fn ln_ws_t2_a_window_read_stops_inside_a_statement_at_its_budget_past_its_start(
             first_page(PAGE_LIMIT),
         )
         .expect("the page");
-    let read = page_read(&recorder);
+    let read = page_read(&ledger, &recorder);
     let scope = page.read_scope().expect("a Runtime page has its scope");
     assert!(
         !scope.read_complete && scope.limits.contains(&LedgerPageLimit::ReadBudget),
@@ -689,7 +702,7 @@ fn ln_ws_t5_a_window_page_starts_at_the_windows_first_record_and_reads_the_unbou
         ledger
             .project_view_page(query.clone(), PROFILE, first_page(PAGE_LIMIT))
             .expect("the first page");
-        let read = page_read(&recorder);
+        let read = page_read(&ledger, &recorder);
         let lower = read
             .statements
             .iter()
@@ -707,7 +720,7 @@ fn ln_ws_t5_a_window_page_starts_at_the_windows_first_record_and_reads_the_unbou
             unbounded_ids(&events, &indexes, &query, PAGE_LIMIT),
             "{form}: the rows of an unbounded read"
         );
-        let _ = recorder.take();
+        recorded(&ledger, &recorder);
     }
     assert!(
         every_page(&ledger, &root.form_a(None), PAGE_LIMIT)

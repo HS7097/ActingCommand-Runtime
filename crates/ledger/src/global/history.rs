@@ -27,6 +27,8 @@ pub(super) const MAX_HISTORY_PAGE_ROWS: usize = 4096;
 /// #422 LN-WS (R2): the default of `ledger_observer.history_scan_rows`, the sequences one history
 /// statement of a view page scans at most.
 pub(super) const DEFAULT_HISTORY_SCAN_ROWS: usize = 65_536;
+/// #422 LN-WS: the largest `ledger_observer.history_scan_rows`.
+pub(super) const MAX_HISTORY_SCAN_ROWS: usize = 1_048_576;
 
 /// What a history read selects: the records `query` names and, when `decision_id` is set, only
 /// the policy dispatch and execution records of that decision. The store selects by its indexes
@@ -494,12 +496,17 @@ impl<B: DurableStorage> EventStore<B> {
                     .saturating_sub(events.len())
                     .min(self.history_page_rows)
             });
-            let page = self.backend.history_page(
+            // #422 LN-WS (R1): a request's page stops where its statement bound interrupted it.
+            let Some(page) = self.backend.history_page_within(
                 &selection,
                 (cursor, through),
                 page_rows,
                 &self.retention,
-            )?;
+                work,
+            )?
+            else {
+                return Ok(None);
+            };
             #[cfg(test)]
             if let Some(counter) = &self.history_rows_read {
                 counter.fetch_add(
