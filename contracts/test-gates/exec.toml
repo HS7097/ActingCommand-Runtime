@@ -2289,3 +2289,59 @@ tests = [
     "actingcommand-display-adapter::lib::gate_392_da1::da1_t16_every_display_problem_is_display_map_unresolved",
 ]
 incident = ["#392 DA-1"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §12.2, C16, §13 row DA2-T1; Alice 10-26, merge is deploy): a 1280x720 package on a 1280x720 frame passes the display adapter's frame gate as the identity, with or without a declaration, its scale frame the frame's own buffer; at each of the six capture entries it is recognised byte for byte as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_identity_a_1280x720_package_on_a_1280x720_frame_passes_unchanged_at_all_six_entries",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T2; brief rd-1026/brief-da2a, the pure-scale test): a 1920x1080 frame of a 1280x720 package is a pure scale of 3/2 whose scale frame is the base scene; the page and the template are recognised at their base positions and the recognition reports the device frame's size and each region as the device box that covers it
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t2_a_1920x1080_frame_of_a_1280x720_package_reports_the_same_regions_scaled",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T3, as this slice requires it): a 2340x1080 frame of a 1280x720 package is layout_undeclared without a declaration and, under one, a translation refused translation_unsupported until DA-2b; a run on it ends with that refusal and no input
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t3_a_translation_waits_for_da_2b_and_sends_nothing",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T6): on a 1920x1080 frame of a 1280x720 package a colour probe, the stability crop, a still-frames region and a plain text area read their base boxes of the scale frame, never widened
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t6_positional_regions_are_mapped_and_never_widened",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §0.2 C1 and C10, §13 row DA2-T12): every one of the six capture entries passes a 1920x1080 frame of a 1280x720 package as a pure scale and gives what the 1280x720 frame gives, its sizes the device frame's and its regions scaled; contained_task_frame_resolution_mismatch is retired
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t12_every_capture_entry_passes_a_1920x1080_frame_of_a_1280x720_package",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §5.1, C11, §13 row DA2-T14): the frames of one observation keep one map: a sample and its page frame under two maps end recognition_sample_geometry_changed, a candidate sample under another map candidate_sample_page_or_geometry_changed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t14_frames_of_one_observation_keep_one_map",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §4.7, §13 row DA2-T15, as this slice requires it): a 1080x2336 frame cropped at y = 2 from the 1080x2340 display of a 1080x2340 package waits for DA-2b (translation_unsupported) and a run on it sends nothing; without its crop record it is layout_undeclared
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t15_a_cropped_frame_waits_for_da_2b_and_sends_nothing",
+]
+incident = ["#392 DA-2a"]

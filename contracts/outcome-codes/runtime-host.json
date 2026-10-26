@@ -3922,7 +3922,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry input prerequisite missing.",
+      "description": "The Runtime host reports contained task geometry input prerequisite missing: the frame an input follows has no passed task geometry of its own. Workflow #392 DA-2a (model 392 v1.2 §0.2 C2): a frame whose size changed during the run is no longer this code; the host reads its geometry again, records the change and rebuilds the display map.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -3977,12 +3977,13 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "display_problem": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry unavailable.",
+      "description": "The Runtime host reports contained task geometry unavailable. Workflow #392 DA-2a: with display_problem safe_area_unavailable, the game's display declaration measures on the safe area and the frame's geometry read no insets (no capture backend reads them before DA-4b); the run ends before any input.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

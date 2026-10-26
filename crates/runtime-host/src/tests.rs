@@ -284,6 +284,9 @@ mod gate_392_daa;
 mod gate_392_da4;
 // Workflow #392 DA-5a: the identity test of the ordered task schema check.
 mod gate_392_da5a;
+// Workflow #392 DA-2a: the run's display map, its rebuild on a changed frame and the input
+// prerequisite under a pure scale.
+mod gate_392_da2a;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.

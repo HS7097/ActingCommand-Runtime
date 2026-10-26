@@ -645,7 +645,7 @@ impl PreparedContainedTask {
     /// to recognition. None without an agreement. A runtime that does not sample refuses as for
     /// target consensus (`recognition_sampling_runtime_unsupported`); a cancellation or a capture
     /// failure ends the run, as during a sample.
-    fn capture_agreement_frames<R: ContainedTaskRuntime>(
+    pub(super) fn capture_agreement_frames<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         declarations: &[ResourceReadingDeclaration],
@@ -676,7 +676,10 @@ impl PreparedContainedTask {
             let frame = runtime
                 .capture()
                 .map_err(ContainedTaskRunError::operation::<R>)?;
-            self.control.resolution.validate_frame(&frame)?;
+            let scale = self
+                .control
+                .resolution
+                .validate_frame(&frame, runtime.display_layout())?;
             runtime
                 .record(ContainedTaskTrace::CaptureCompleted {
                     width: frame.width,
@@ -688,7 +691,7 @@ impl PreparedContainedTask {
                     captured_at: frame.captured_at,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            captured.push((frame.captured_at, scene_from_frame(&frame)?));
+            captured.push((frame.captured_at, scale.scene()?));
         }
         Ok(captured)
     }

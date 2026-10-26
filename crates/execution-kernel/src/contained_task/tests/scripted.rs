@@ -22,6 +22,10 @@
 // PERF-B1: every answer may also carry a capture cadence
 // (`with_capture_cadence`; without one the kernel's unconfigured cadence), and it counts the
 // frames it showed after each number of inputs.
+//
+// Workflow #392 DA-2a: a frame may carry the geometry its producer recorded (`with_geometry`;
+// without one a fixture's), and the runtime may answer a game's display declaration
+// (`with_display_layout`; without one none).
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -52,6 +56,7 @@ pub(crate) struct ScriptedFrame {
     height: u32,
     pixels: Vec<u8>,
     latency: Duration,
+    geometry: Option<actingcommand_contract::CaptureGeometryObservation>,
 }
 
 impl ScriptedFrame {
@@ -67,6 +72,18 @@ impl ScriptedFrame {
             height,
             pixels: pixels.concat(),
             latency: Duration::ZERO,
+            geometry: None,
+        }
+    }
+
+    // The same frame, its producer having recorded `geometry` with it (Workflow #392 DA-2a).
+    pub(crate) fn with_geometry(
+        self,
+        geometry: actingcommand_contract::CaptureGeometryObservation,
+    ) -> Self {
+        Self {
+            geometry: Some(geometry),
+            ..self
         }
     }
 
@@ -76,14 +93,18 @@ impl ScriptedFrame {
     }
 
     fn frame(&self) -> Frame {
-        Frame::from_pixels(
+        let mut frame = Frame::from_pixels(
             self.width,
             self.height,
             self.pixels.clone(),
             PixelFormat::Rgb8,
             CaptureBackendName::FixtureSimulation,
         )
-        .expect("scripted frame")
+        .expect("scripted frame");
+        if let Some(geometry) = &self.geometry {
+            frame.geometry = geometry.clone();
+        }
+        frame
     }
 }
 
@@ -105,6 +126,7 @@ pub(crate) struct ScriptedRuntime {
     captures: usize,
     inputs: Vec<InputAction>,
     traces: Vec<ContainedTaskTrace>,
+    display_layout: Option<StandardPackDisplayLayout>,
 }
 
 impl ScriptedRuntime {
@@ -131,6 +153,16 @@ impl ScriptedRuntime {
             captures: 0,
             inputs: Vec::new(),
             traces: Vec::new(),
+            display_layout: None,
+        }
+    }
+
+    // The same device, its run under the game's display declaration `layout` (Workflow #392
+    // DA-2a).
+    pub(crate) fn with_display_layout(self, layout: StandardPackDisplayLayout) -> Self {
+        Self {
+            display_layout: Some(layout),
+            ..self
         }
     }
 
@@ -220,6 +252,10 @@ impl ContainedTaskRuntime for ScriptedRuntime {
         self.captures += 1;
         self.offset += scripted.latency;
         Ok(scripted.frame().into())
+    }
+
+    fn display_layout(&self) -> Option<&StandardPackDisplayLayout> {
+        self.display_layout.as_ref()
     }
 
     fn input(

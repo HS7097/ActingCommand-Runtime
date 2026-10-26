@@ -8,13 +8,13 @@ onto whatever frame the device delivers. This document grows slice by slice:
 |---|---|---|
 | DA-1 | the pure mapping crate `crates/display-adapter` (sections 1 to 7) | this document |
 | DA-4 | the game's declaration file `display-layout.json` (`actingcommand.display-layout.v1`), parsed by the contract crate | its own section, later |
-| DA-2a | the capture side: the frame gate, the scale frame, region mapping in recognition, evidence out of the adapter, rebuilds and the `display.*` facts | later |
-| DA-2b | the nearest correction window, the `anchor` member, the refusal of crossing positional boxes | later |
+| DA-2a | the capture side for the identity and a pure scale: the frame gate, the scale frame, evidence out of the adapter, the run's declaration, rebuilds and the geometry records | section 8 |
+| DA-2b | translations and cropped frames (region mapping in recognition), the nearest correction window, the `anchor` member, the refusal of crossing positional boxes | later |
 | DA-3 | the input side: every click and drag kind, `display_map_stale`, the crop offset and the turn undone for input | later |
 | DA-5 | task schema `0.10` and box references; the Lab | later |
 
-Until DA-2a nothing in the Runtime calls the crate: a 1280×720 package on a 1280×720 frame
-behaves exactly as before, byte for byte.
+From DA-2a every frame a run recognises passes the crate's map (section 8); a 1280×720 package
+on a 1280×720 frame behaves exactly as before, byte for byte.
 
 ## 1 Spaces
 
@@ -150,8 +150,9 @@ The crate's registry is `crates/display-adapter/src/codes.rs`, its fragment
 | `display_map_stale` | warning | `stability_warning` | registered by DA-1, first emitted by DA-3 |
 
 - Vocabulary `display_problem`: `layout_undeclared`, `scale_below_base`, `collapsed`,
-  `outside_frame`, `straddles_zones`, `orientation_mismatch` (only ever a cause under the run's
-  own end).
+  `outside_frame`, `straddles_zones`, `orientation_mismatch` (only a cause under the run's own
+  end from DA-2b on); DA-2a adds `translation_unsupported`, `input_scale_unsupported` and
+  `safe_area_unavailable` (section 8).
 - Locations (the value of `stage`): `display_map_build`, `display_region_map`,
   `display_input_map`.
 - Refusals the host reports under its own codes: an unknown rotation
@@ -159,3 +160,55 @@ The crate's registry is `crates/display-adapter/src/codes.rs`, its fragment
   (`contained_task_geometry_frame_display_mismatch`), and a safe area without read insets
   (`contained_task_geometry_unavailable`).
 - Every refusal ends only the run it belongs to, never the Runtime (#419).
+
+## 8 The capture side (DA-2a: the identity and a pure scale)
+
+Workflow #392 DA-2a, model 392 v1.2 §0.2 C1 to C3 and C10, §3.2, §5.1, §6.6, §8.3; the
+coordinator's work order narrows the slice to the maps a 16:9 or 9:16 emulator gives: the
+identity and a pure scale. Translations and cropped frames come with DA-2b, the input side with
+DA-3.
+
+- **The run's declaration.** The preparation of a run reads its game root's
+  `display-layout.json` (when the root holds one, as DA-4 reads it) and keeps the parsed
+  declaration for the whole run; every layer of the run (its prerequisite, entry recovery,
+  interrupt and navigation packages) maps its frames under it. The mapping rule is built from it
+  (`DisplayRule::from(&StandardPackDisplayLayout)`); the declaration's shape is the contract
+  crate's only. A run without a standard-pack root, and the Lab's dry runs, map without one.
+- **The frame gate.** Every frame the kernel recognises passes one gate, at each of its six
+  capture entries: the entry page, a navigation locate, a sample, a page frame, a reading's
+  agreement frame and the Lab's dry-run select. The gate builds the frame's map from the frame's
+  size and the geometry its producer recorded with it (`DisplayObservation::of_frame`: a producer
+  that recorded none shows the frame as its own display, with no rotation, crop or insets), the
+  package's base and the declaration:
+
+  | Map | The scale frame | Otherwise |
+  |---|---|---|
+  | the identity, no crop | the frame itself, its own buffer | — |
+  | a pure scale, no crop | the frame resampled once to the base's size (REC-5, area average) | — |
+  | a translation, or any map of a cropped frame | — | `display_map_unresolved` (`translation_unsupported`), until DA-2b |
+  | a frame turned upright | — | `display_map_unresolved` (`orientation_mismatch`), until DA-2b |
+  | a refusal of the map | — | `display_map_unresolved` with the map's problem; a frame whose geometry does not show its display is `contained_task_frame_invalid` |
+
+  Every refusal is at stage `display_map_build`, with the frame's and the base's sizes, and ends
+  the run with no input. It replaces `contained_task_frame_resolution_mismatch`, retired (§0.2
+  C10). Recognition, its regions and its lengths stay in base pixels on the scale frame; the frames
+  of one observation keep one map (`recognition_sample_geometry_changed`, and for a candidate
+  sample `candidate_sample_page_or_geometry_changed`).
+- **Evidence.** A recognition record's frame size is the device frame's; each recognised target's
+  region is the device box that covers it (outward, section 5). The task diagnostic stream's rows
+  keep scale-frame pixels in this slice.
+- **Geometry records and rebuilds.** The host builds the same map from the same frame for the
+  run's task geometry. A passed observation names `display_map` (register §1.25 X7) when the map
+  is not the plain identity; the identity leaves the record as it was. A frame whose size, or
+  whose producer's rotation, crop or insets, differ from those the run's map was built on reads
+  the display's geometry again and is recorded `changed`, with the first change as its trigger
+  (`extent_changed`, `rotation_changed`, `insets_changed`; register §1.25 X8); its map is rebuilt
+  and the instance's display facts are published again when they changed. A frame of another size
+  no longer fails the input prerequisite.
+- **Input.** The input side maps nothing before DA-3, so the host makes an input only on a frame
+  whose map is the plain identity; under a pure scale the step sends nothing and the run ends
+  `display_map_unresolved` (`input_scale_unsupported`, stage `display_input_map`).
+- **The safe area.** No capture backend reads insets before DA-4b, so a declaration that
+  measures on the safe area ends a run at its first frame with
+  `contained_task_geometry_unavailable` (`display_problem` `safe_area_unavailable`) before any
+  input.
