@@ -3458,11 +3458,21 @@ fn read_range_rows(
 /// open of a build that requires it.
 const HISTORY_INDEX: &str = "CREATE INDEX IF NOT EXISTS ledger_artifacts_artifact ON ledger_artifacts(artifact_id, sequence)";
 
+/// #422 LN-7c F6 (final-query §1.1): capture frames by ingestion time, for the frame cleaner's
+/// queries; nothing reads it yet. A plain partial index, never a `ledger_view_*` object, so an
+/// older build opens, writes and scrubs a database that has it. A database without it gets it
+/// once, at the first writer open of a build that has it; the text after its name is
+/// `schema.sql`'s, so both keep the same definition.
+const FRAME_TIME_INDEX: &str = "CREATE INDEX IF NOT EXISTS ledger_artifacts_created ON ledger_artifacts(created_at_unix_ms, sequence) WHERE kind = 'capture.frame'";
+
 fn ensure_history_index(database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
     let connection = database.connection(LedgerLocation::UpgradeLedgerViews.location())?;
-    connection
-        .execute_batch(HISTORY_INDEX)
-        .map_err(|error| sql_error(error, LedgerLocation::CreateLedgerViews.location()))
+    for index in [HISTORY_INDEX, FRAME_TIME_INDEX] {
+        connection
+            .execute_batch(index)
+            .map_err(|error| sql_error(error, LedgerLocation::CreateLedgerViews.location()))?;
+    }
+    Ok(())
 }
 
 /// The JSON path of a policy dispatch or execution record's decision in its stored record.
@@ -4822,3 +4832,13 @@ mod tests;
 #[cfg(test)]
 #[path = "sqlite/gate_ln8d.rs"]
 mod gate_ln8d;
+
+// #422 LN-7c F6 (final-query §1.3): the plan check of a ledger statement, for ledger tests.
+#[cfg(test)]
+#[path = "sqlite/plan_check.rs"]
+pub(super) mod plan_check;
+
+// #422 LN-7c F6: the frame time index at the writer open, and the plan check's rule.
+#[cfg(test)]
+#[path = "sqlite/gate_ln7c_f6.rs"]
+mod gate_ln7c_f6;
