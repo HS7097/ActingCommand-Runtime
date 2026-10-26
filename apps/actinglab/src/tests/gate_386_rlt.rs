@@ -93,20 +93,21 @@ fn schedule() -> Value {
 
 /// The game root's registry: three packages on `server-a`, the return-home one in maintenance.
 fn bundle() -> Value {
+    // Built before `json!`, which reads a `[` as a JSON array and takes no method call after it.
+    let packs = [PACKAGE, RETURN_PACKAGE, HELD_PACKAGE].map(|package_id| {
+        json!({
+            "package_id": package_id,
+            "server": SERVER,
+            "entry_task_id": "task",
+            "path": format!("packs/{package_id}"),
+            "file_count": 1,
+            "byte_count": 64
+        })
+    });
     json!({
         "schema_version": "actingcommand.bundle.v4",
         "game": GAME,
-        "packs": [PACKAGE, RETURN_PACKAGE, HELD_PACKAGE]
-            .iter()
-            .map(|package_id| json!({
-                "package_id": package_id,
-                "server": SERVER,
-                "entry_task_id": "task",
-                "path": format!("packs/{package_id}"),
-                "file_count": 1,
-                "byte_count": 64
-            }))
-            .collect::<Vec<_>>(),
+        "packs": packs,
         "maintenance": [{"package_id": RETURN_PACKAGE, "server": SERVER, "uses": ["return_home"]}]
     })
 }
