@@ -36,7 +36,9 @@ fn fact(index: u64) -> FactRecord {
         ttl_policy: None,
         confidence_milli: 1_000,
         source_detector: "detector.fixture".to_owned(),
-        source_snapshot_id: "snapshot:ln9".to_owned(),
+        // One observation per fact: a second record under a snapshot id that names an active
+        // record is refused (`fact_observation_version_conflict`).
+        source_snapshot_id: format!("snapshot:ln9-{index}"),
         schema_version: "fact.v1".to_owned(),
         resource_bundle_hash: "a".repeat(64),
         invalidate_on: Vec::new(),
@@ -77,8 +79,7 @@ fn full_verification(root: &TempDir) -> (&'static str, &'static str) {
     .expect("maintenance owner");
     let refused = maintenance
         .verify_formal(&database, &mut LedgerOpenTiming::default())
-        .err()
-        .expect("the full verification refuses the damage");
+        .expect_err("the full verification refuses the damage");
     maintenance.close().expect("close the maintenance owner");
     (refused.code(), refused.operation())
 }

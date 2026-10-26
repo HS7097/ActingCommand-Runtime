@@ -46,7 +46,6 @@ use crate::global::{GlobalLedgerError, GlobalLedgerResult};
 use actingcommand_runtime_database::RuntimeDatabase;
 use rusqlite::{Connection, InterruptHandle, TransactionBehavior, types::Value as SqlValue};
 use std::fmt;
-use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -267,23 +266,35 @@ pub(in crate::global) fn invalid_config() -> GlobalLedgerError {
 /// The thread: passes until the stop or a finding. A failure met after the stop was raised is
 /// the stop's (its statement was interrupted) and is not a finding.
 fn run(shared: &ScrubShared, database: &RuntimeDatabase, chunk_rows: usize, interval_ms: u64) {
-    let walked = panic::catch_unwind(AssertUnwindSafe(|| {
-        passes(shared, database, chunk_rows, interval_ms)
-    }));
-    let failure = match walked {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(error),
-        Err(_) => Some(GlobalLedgerError::fatal(
-            LedgerCode::WriterPanicked.code(),
-            LedgerLocation::LedgerScrub.location(),
-        )),
-    };
-    if let Some(failure) = failure
-        && !shared.stop.is_raised()
-    {
-        *lock(&shared.finding) = Some(failure);
+    let end = ScrubEnd(shared);
+    if let Err(failure) = passes(shared, database, chunk_rows, interval_ms) {
+        end.found(failure);
     }
-    shared.clock.ended();
+}
+
+/// The end of the scrub's thread, also when the thread unwinds from a panic: the panic is the
+/// finding `writer_panicked` (of `ledger_scrub`), and the clock learns that the thread ended.
+struct ScrubEnd<'a>(&'a ScrubShared);
+
+impl ScrubEnd<'_> {
+    /// `failure` is the finding unless the stop was raised before it.
+    fn found(&self, failure: GlobalLedgerError) {
+        if !self.0.stop.is_raised() {
+            *lock(&self.0.finding) = Some(failure);
+        }
+    }
+}
+
+impl Drop for ScrubEnd<'_> {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            self.found(GlobalLedgerError::fatal(
+                LedgerCode::WriterPanicked.code(),
+                LedgerLocation::LedgerScrub.location(),
+            ));
+        }
+        self.0.clock.ended();
+    }
 }
 
 fn passes(

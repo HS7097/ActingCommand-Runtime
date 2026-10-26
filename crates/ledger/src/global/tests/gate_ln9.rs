@@ -207,8 +207,7 @@ impl Root {
         .expect("maintenance owner");
         let refused = maintenance
             .verify_formal(&self.database, &mut LedgerOpenTiming::default())
-            .err()
-            .expect("the full verification refuses the damage");
+            .expect_err("the full verification refuses the damage");
         maintenance.close().expect("close the maintenance owner");
         refused
     }
