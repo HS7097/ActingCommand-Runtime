@@ -2351,3 +2351,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_ws::ln_ws_t7_an_append_not_answered_in_time_fails_naming_writer_response_timeout",
 ]
 incident = ["#422 LN-WS"]
+
+# DIAG-RUN (#419; brief rd-1026/brief-diag-run.md; root cause rd-1026/stop2/root-cause.md §5 R2; the production stop of 2026-10-26 23:23:04): a task diagnostic's ledger read maps its failure through `ledger_read_failure` at `task_diagnostic_failed`. On direct runs on a fake Runtime clock, a diagnostic page read the writer does not answer within its reply limit (the writer held in that read by the read hold) fails only its run: `failed`, not fatal, with `writer_response_timeout` at `task_diagnostic_failed` in the receipt and the one terminal, nothing of the diagnostic stream published and its staging file gone, nothing latched, no stop requested, and the instance's next run admitted and completed; a diagnostic read that meets a damaged record still latches a fatal failure and stops the Runtime
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_diag_run::diag_run_t4_a_diagnostic_read_not_answered_in_time_fails_only_its_run",
+    "actingcommand-runtime-host::lib::tests::gate_diag_run::diag_run_t5_a_fatal_ledger_failure_of_the_diagnostic_read_still_stops_the_runtime",
+]
+incident = ["#419 DIAG-RUN"]

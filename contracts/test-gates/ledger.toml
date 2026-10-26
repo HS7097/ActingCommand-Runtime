@@ -722,3 +722,13 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o3_the_bounded_open_keeps_the_frame_view_and_the_startup_closes_of_the_full_read",
 ]
 incident = ["#422 LN-7c O"]
+
+# DIAG-RUN (#419; brief rd-1026/brief-diag-run.md; root cause rd-1026/stop2/root-cause.md §5 R1; the production stop of 2026-10-26 23:23:04): a history read with an equality on a per-run link (every link but the instance) is driven by that run's link index, its other indexable terms written with a unary `+`. On the synthetic ledger in production's shape (three instances, runs of 24 frames with every second frame stored), the statement of each per-run read form (the task diagnostic's `artifact.verified` + request + task + run; the error frame's `capture.completed` + run; one frame's artifact; the lease grant of `linked_policy_run_events`; event types with a request; an artifact of one instance's run) has a per-run link index as its outer loop, never the event type, time, severity, origin or instance index, and passes the plan check, while forms A and C of stop 1 keep today's statement; each form's first page for a short run at the head takes at most 1.5 times the SQLite work on 12 000 records that it takes on 3 000; paging each form from 0 to the end in pages of 256 and of 2 returns the selected records in ledger order for a short run at the head, a run with more than 256 `artifact.verified` records interleaved with two other runs, and a run with a record stamped before the whole history
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index",
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t2_a_run_reads_work_does_not_grow_with_the_history",
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t3_paging_a_per_run_read_returns_the_selected_records_in_ledger_order",
+]
+incident = ["#419 DIAG-RUN"]

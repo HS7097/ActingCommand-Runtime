@@ -3987,19 +3987,47 @@ fn history_statement(
         SqlValue::Integer(encode(after)),
         SqlValue::Integer(encode(through)),
     ];
+    // #419 DIAG-RUN (rd-1026/stop2/root-cause.md §5 R1; the production stop of 2026-10-26
+    // 23:23:04): a query with an equality on a per-run link (every link but the instance) selects
+    // at most that run's records, and that link's index must drive its statement. Without
+    // statistics SQLite rates an equality on the event type index as it rates one on a link
+    // index, and takes the type index because it also gives the ledger order: a task diagnostic's
+    // read of its run's `artifact.verified` records walked every such record of the history from
+    // sequence 0, inside its first step. So every other indexable term (event type, origin, time,
+    // severity, instance) is written with a unary `+`, which no index serves; the rows and their
+    // order are the same.
+    let per_run = [
+        query.request_id.is_some(),
+        query.correlation_id.is_some(),
+        query.causation_id.is_some(),
+        query.task_id.is_some(),
+        query.run_id.is_some(),
+        query.lease_id.is_some(),
+        query.frame_id.is_some(),
+        query.action_id.is_some(),
+        query.recognition_id.is_some(),
+    ]
+    .contains(&true);
+    let unindexed = if per_run { "+" } else { "" };
     for (clause, value) in [
-        ("e.sequence>=?", query.from_sequence),
-        ("e.sequence<=?", query.to_sequence),
-        ("e.timestamp_unix_ms>=?", query.from_timestamp_unix_ms),
-        ("e.timestamp_unix_ms<?", query.to_timestamp_unix_ms),
+        ("e.sequence>=?".to_owned(), query.from_sequence),
+        ("e.sequence<=?".to_owned(), query.to_sequence),
+        (
+            format!("{unindexed}e.timestamp_unix_ms>=?"),
+            query.from_timestamp_unix_ms,
+        ),
+        (
+            format!("{unindexed}e.timestamp_unix_ms<?"),
+            query.to_timestamp_unix_ms,
+        ),
     ] {
         if let Some(value) = value {
-            clauses.push(clause.to_owned());
+            clauses.push(clause);
             values.push(SqlValue::Integer(encode(value)));
         }
     }
     if let Some(event_type) = query.event_type {
-        clauses.push("e.event_type=?".to_owned());
+        clauses.push(format!("{unindexed}e.event_type=?"));
         values.push(SqlValue::Text(views::key(event_type)?));
     }
     for (event_types, operator) in [
@@ -4010,7 +4038,7 @@ fn history_statement(
             continue;
         }
         clauses.push(format!(
-            "e.event_type {operator} ({})",
+            "{unindexed}e.event_type {operator} ({})",
             vec!["?"; event_types.len()].join(",")
         ));
         for event_type in event_types {
@@ -4018,17 +4046,17 @@ fn history_statement(
         }
     }
     if let Some(source) = query.source {
-        clauses.push("e.origin_source=?".to_owned());
+        clauses.push(format!("{unindexed}e.origin_source=?"));
         values.push(SqlValue::Text(views::key(source)?));
     }
     if let Some(module) = query.origin_module {
-        clauses.push("e.origin_module=?".to_owned());
+        clauses.push(format!("{unindexed}e.origin_module=?"));
         values.push(SqlValue::Text(views::key(module)?));
     }
     if query.minimum_severity.is_some() || query.maximum_severity.is_some() {
         let allowed = views::severities(query.minimum_severity, query.maximum_severity)?;
         clauses.push(format!(
-            "e.severity IN ({})",
+            "{unindexed}e.severity IN ({})",
             vec!["?"; allowed.len()].join(",")
         ));
         values.extend(allowed);
@@ -4057,14 +4085,19 @@ fn history_statement(
     ] {
         if let Some(value) = value.transpose()? {
             links = true;
-            clauses.push(format!("{column}=?"));
+            let unindexed = if column == "l.instance_id" {
+                unindexed
+            } else {
+                ""
+            };
+            clauses.push(format!("{unindexed}{column}=?"));
             values.push(SqlValue::Text(value));
         }
     }
     if !query.instance_ids.is_empty() {
         links = true;
         clauses.push(format!(
-            "l.instance_id IN ({})",
+            "{unindexed}l.instance_id IN ({})",
             vec!["?"; query.instance_ids.len()].join(",")
         ));
         for instance_id in &query.instance_ids {
@@ -5136,3 +5169,8 @@ pub(super) mod plan_check;
 #[cfg(test)]
 #[path = "sqlite/gate_ln7c_f6.rs"]
 mod gate_ln7c_f6;
+
+// #419 DIAG-RUN: a per-run read is driven by its run's link index.
+#[cfg(test)]
+#[path = "sqlite/gate_diag_run.rs"]
+mod gate_diag_run;

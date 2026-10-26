@@ -909,7 +909,13 @@ impl RuntimeContainedTask<'_> {
             false,
         )?;
         // Read a fixed ledger cut. Each existing verified artifact remains its original source.
-        let through = self.host.ledger.latest_sequence().map_err(failure)?;
+        // #419 DIAG-RUN (R2; the production stop of 2026-10-26 23:23:04): a read the writer did
+        // not answer in time, or stopped at its budget, fails only this run, with the ledger's
+        // code; any other ledger failure still stops the Runtime (`ledger_read_failure`).
+        let read_failure = |error: actingcommand_ledger::GlobalLedgerError| {
+            ledger_read_failure(&error, HostLocation::TaskDiagnosticFailed)
+        };
+        let through = self.host.ledger.latest_sequence().map_err(read_failure)?;
         let query = EventQuery {
             event_type: Some(EventType::ArtifactVerified),
             request_id: Some(self.control.request_id),
@@ -923,7 +929,7 @@ impl RuntimeContainedTask<'_> {
                 .host
                 .ledger
                 .query_page(query.clone(), after, through, 256)
-                .map_err(failure)?;
+                .map_err(read_failure)?;
             if events.is_empty() {
                 break;
             }

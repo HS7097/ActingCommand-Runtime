@@ -152,6 +152,9 @@ pub(crate) enum ContainedTaskCheckpointPoint {
     /// #411 A64 (ruling C-43): a run's end work, after its execution ended and before the
     /// diagnostic seal, the capture summary and the terminal.
     EndWork,
+    /// #419 DIAG-RUN: a run's end work, after its diagnostic was sealed, failed or aborted, and
+    /// before the capture summary and the terminal.
+    DiagnosticEnded,
 }
 
 #[cfg(test)]
@@ -7635,6 +7638,16 @@ impl HostShared {
         } else {
             runtime.finish_diagnostic(&execution)
         };
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::DiagnosticEnded,
+            ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         if let Err(mut failure) = diagnostic_result {
             failure.error = Box::new(match &execution {
                 Err(ContainedTaskRunError::Task(error)) => {
