@@ -94,7 +94,7 @@ fn ln7_a_sweep_start_lists_only_the_frames_present_in_the_store() {
         assert_eq!((second.frames, second.deleted, second.busy), (1, 1, 0));
     }
     #[cfg(not(windows))]
-    assert_eq!(second, None, "nothing is left to sweep");
+    assert!(second.is_none(), "nothing is left to sweep");
     assert!(
         !held.material.exists(),
         "the held frame is removed by a later sweep"
