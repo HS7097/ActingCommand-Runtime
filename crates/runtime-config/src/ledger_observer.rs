@@ -545,7 +545,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
         default: DefaultSource::File,
         settable: AT_OPEN,
         reader: "LN-WS",
-        since: "0.12.16",
+        since: "0.12.15",
     },
     KeyRow {
         name: KeyName::Exact(HISTORY_SCAN_ROWS),
@@ -555,7 +555,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
         default: DefaultSource::File,
         settable: AT_OPEN,
         reader: "LN-WS",
-        since: "0.12.16",
+        since: "0.12.15",
     },
 ];
 

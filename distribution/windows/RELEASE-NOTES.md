@@ -14,32 +14,45 @@ and artifact names bind the complete source SHA.
 v0.12.14 没有上线：10 月 26 日部署时，启动停在打开账本这一步、一直没有就绪，已退回 v0.12.13。原因是
 LN-7b 的帧保留读取按页读链接集，每读一页都要把该页之后的全部链接记录排序一次，读取量随记录数的平方
 增长；生产账本的现有帧分布在整段历史里（1 323 次运行、约 40 万条记录），这次读取读不完，打开账本的
-时限也没有在它里面检查。CI 的规模测量没有发现，因为合成账本里没有存帧。所以 v0.12.15 是 v0.12.13
-之后第一个上线的版本：它包含 v0.12.14 的全部内容（见下面 v0.12.14 一节），另加 v0.12.14 之后合并的
-4 个 PR（修复，以及为修复服务的功能）。没有新键，`actingd-config` 仍是 [5, 13]。
+时限也没有在它里面检查。CI 的规模测量没有发现，因为合成账本里没有存帧。
 
-运行上的变化：启动时打开账本不再因现有帧分布在整段历史里而停住。打开仍要读出每个有现有帧的运行的
-全部记录（生产账本上约 40 万条），现在每条只读一次，读取量随它们线性增长；每读一页都检查
-`ledger_observer.open_timeout_ms`（默认 600 秒），超时以 `ledger_read_budget_exceeded` 失败，不会一直读下去。
-按生产账本快照上的回放估计，生产账本上打开账本约需 40–90 秒；这是估计，Rust 实现还没有在生产账本上
-实测，“只读头部和尾部”的目标随 LN-7c 实现。黑名单时段（主机列表、实例自己的列表、目录的 `maintenance`
-事件）内该实例完全静默：调度不派任务，恢复阶梯不启动，启动包和模拟器自动启动（包括 EMU-W 监视和
-IDLE-1 唤醒排上的）等到黑名单结束后才做，监视探针不截图也不记录；黑名单开始前，预计会跨进去的任务以
-`blackout_approaching` 推迟，实例逐渐静下来。直接运行、Lab 操作和操作员的控制不受影响；两个列表都为空、
-目录也没有 `maintenance` 事件时一切照旧。任务的预计时长 E 取该任务包在该实例上最近
-`scheduling.expected_runtime.runs` 次（默认 5）成功调度运行的平均时长加 `margin_ms`（默认 5 分钟），
-评估、准入和记录都按 E；`ac_schedule` 的候选行显示 `expected_runtime_ms` 和 `expected_runtime_source`
-（`declared` 或 `runs:<n>`）。还没有样本的包，以及重启后在本进程内第一次被调度运行之前，用声明的时长；
-`scheduling.expected_runtime.enabled = false` 关闭 E。日界默认开启（`scheduling.day_boundary.quiet` 为
-`true`）：按 E 在当前活动时段结束前跑不完的任务等到下一个时段开始（目录 v33 的活动时段是
-06:00–23:30），较短的任务照常跑到时段结束；操作员在 `ac_schedule` 里看到它的 `why` 是
-`policy_day_boundary_approaching`，带 `window_end_unix_ms`、`required_ms` 和 `next_eligible_unix_ms`。
-不要这个行为就把该键（或实例自己的键）设为 `false`。
+所以 v0.12.15 是 v0.12.13 之后第一个上线的版本：它包含 v0.12.14 的全部内容（见下面 v0.12.14 一节），
+另加 v0.12.14 之后合并的 13 个 PR（修复，以及为修复服务的功能）。本版第一次准备的发版快照（#1355）没有
+发布出去：它合并之后 #1356 改了主线上的工作流文件，在工作流文件与主线不同的提交上打新标签需要 Actions
+令牌没有的 `workflows` 权限，三次发版运行都在构建完成后被拒绝（HTTP 403），#1359 让发版在构建之前就拒绝
+这样的源提交并保留发版文件，所以本版从当前主线重新准备。
+
+配置：`actingd-config` 升到 [5, 14]。LN-WS 新增两个键，`ledger_observer.read_check_vm_steps`（默认
+10 000，范围 100 到 1 000 000）和 `ledger_observer.history_scan_rows`（默认 65 536，范围 1 024 到
+1 048 576），都在打开账本时读取，运行中不能改。现有的配置都不需要修改：没有写这两个键的配置文件照常
+读取，Runtime 仍读 revision 5 到 13 的文件。
+
+运行上的变化：
+
+- 启动：打开账本不再因现有帧分布在整段历史里而停住。打开仍要读出每个有现有帧的运行的全部记录（生产账本上约 40 万条），现在每条只读一次，读取量随它们线性增长；每读一页都检查 `ledger_observer.open_timeout_ms`（默认 600 秒），超时以 `ledger_read_budget_exceeded` 失败，不会一直读下去。按生产账本快照上的回放估计，生产账本上打开账本约需 40–90 秒；这是估计，Rust 实现还没有在生产账本上实测，“只读头部和尾部”的目标随 LN-7c 实现。
+- 读取不再能让 Runtime 停下（LN-WS）：10 月 26 日 19:12 生产上那次停机，是一个不带实例、时间窗 8 分钟的 `ac_events` 读取在账本写入线程上作为一条 SQLite 语句从头扫了约 158 万行（15 到 18 秒），排在它后面的一次调度追加等满 `writer_reply_timeout_ms`（10 秒）后成了致命的 `ledger_failure`。现在为请求服务的读取（视图分页、订阅的回放页）在一条语句内部也按 `read_budget_ms` 看时钟，用完就中断：分页返回不完整（`read_budget`），回放页返回 `ledger_read_budget_exceeded`；视图分页的每条历史语句只跨有限的序号范围，带时间窗的第一页从窗口里的第一条记录开始读。排在读取后面的写入只等大约一个读取预算（默认 1 秒），不再超时；`ledger_failure` 现在带上账本给出的原因。
+- 空闲关掉的游戏会在下一个任务之前被拉起（IDLE-2）：v0.12.13 在生产上，空闲中的实例只要某次检查碰到它暂时被占用，就回到活动状态、忘掉唤醒，下一个任务遇到的是已关闭的游戏（`contained_task_page_unknown`、恢复阶梯、冷启动）。现在空闲实例在任何占用中都保留唤醒，唤醒是它唯一的出口；`close_app` 发出关闭请求后失败的，也照样唤醒。
+- 截图闸门（DA-2a）：每一帧先经过显示适配器的帧闸门。帧和任务包的坐标空间一样大时是恒等映射，记录和输入逐字节和以前一样；宽高比相同、比包大的帧缩放一次到包的大小再识别；其他大小（平移、裁剪、旋转、比包小的帧）以 `display_map_unresolved` 拒绝。不是恒等映射的帧上不发送任何输入（`display_map_unresolved`，`input_scale_unsupported`），直到 DA-3。按安全区量的声明找不到 insets，以 `contained_task_geometry_unavailable` 拒绝，直到 DA-4b。以前尺寸不符的帧以 `contained_task_frame_resolution_mismatch` 拒绝，这个码本版退役。本版没有资源仓带 `display-layout.json`，没有这个文件的游戏根目录照旧。
+- 帧时间索引（F6）：第一次打开账本时建立 `ledger_artifacts_created`，按设计估计不到 1 秒（约 10 MB），以后的打开不再重建；现在还没有读取方。旧版本照常打开带这个索引的账本。
+- 黑名单：黑名单时段（主机列表、实例自己的列表、目录的 `maintenance` 事件）内该实例完全静默：调度不派任务，恢复阶梯不启动，启动包和模拟器自动启动（包括 EMU-W 监视和 IDLE-1 唤醒排上的）等到黑名单结束后才做，监视探针不截图也不记录；黑名单开始前，预计会跨进去的任务以 `blackout_approaching` 推迟，实例逐渐静下来。直接运行、Lab 操作和操作员的控制不受影响；两个列表都为空、目录也没有 `maintenance` 事件时一切照旧。
+- 预计时长 E：任务的预计时长 E 取该任务包在该实例上最近 `scheduling.expected_runtime.runs` 次（默认 5）成功调度运行的平均时长加 `margin_ms`（默认 5 分钟），评估、准入和记录都按 E；`ac_schedule` 的候选行显示 `expected_runtime_ms` 和 `expected_runtime_source`（`declared` 或 `runs:<n>`）。还没有样本的包，以及重启后在本进程内第一次被调度运行之前，用声明的时长；`scheduling.expected_runtime.enabled = false` 关闭 E。
+- 日界：默认开启（`scheduling.day_boundary.quiet` 为 `true`）：按 E 在当前活动时段结束前跑不完的任务等到下一个时段开始（目录 v33 的活动时段是 06:00–23:30），较短的任务照常跑到时段结束；操作员在 `ac_schedule` 里看到它的 `why` 是 `policy_day_boundary_approaching`，带 `window_end_unix_ms`、`required_ms` 和 `next_eligible_unix_ms`。不要这个行为就把该键（或实例自己的键）设为 `false`。
+
+本版合并的 PR：
 
 - #1345 SR-4a3：黑名单时段内 Runtime 自己发起的动作完全静默：恢复阶梯直接丢弃（`recovery_ladder_suppressed`，原因 `blackout`），正在爬的阶梯不再启动时限加 `scheduling.blackout.quiet_margin_ms` 会碰到下一个黑名单的那一级，人工演练被拒（`recovery_admission_denied`）；启动包在黑名单内、或其时限加 `quiet_margin_ms` 会碰到下一个黑名单时排队等待；模拟器自动启动（包括 EMU-W 监视发现模拟器停了时的那一次，以及 IDLE-1 唤醒排上的启动包和启动）在黑名单内不取钥匙、不启动，结束后执行，IDLE-1 的闲置动作本身也暂停；监视探针不截图、不记录，结束后第一轮补做；直接运行、Lab 操作、操作员控制和人工自检不受影响。没有新键、新结果码。
 - #1347 SR-4a2：调度策略按黑名单收口：三个来源的黑名单在周期开始时按实例判一次，覆盖中的实例的候选以 `blackout_active` 推迟到结束（位置 4）；候选的时间范围（默认是响应时限，`scheduling.blackout.quiet_horizon` 为 `expected` 时是 E）加 `quiet_margin_ms` 会越过下一个黑名单的开始、或已进入 `hard_quiet_ms` 时，以 `blackout_approaching` 推迟（位置 7）；随后是日界：`scheduling.day_boundary.quiet` 为真（默认）的实例上，按 E 在活动时段结束前跑不完的运行以新结果码 `policy_day_boundary_approaching` 等到下一个时段；准入时在准入锁下按准入时刻再判一次位置 4 和 7（拒绝记为 Info，不取租约）；新抽的随机延迟截在静默点之前，日界适用时也截在时段结束减 E 之前；`config.subsystems` 新增常开的 `scheduling_blackout`（`count` 为主机列表的条数）；`ac_schedule` 把这三个码作为 `why` 显示。没有新键。
 - #1350 ED-2：运行时长样本 `health.run_duration`：每个实例一条记录、按任务包分行，成功的调度运行在结算时把 `runtime_ms` 记为该包最新的样本（失败、条件结束、直接运行、Lab 操作和重放不记），每行保留最近 `scheduling.expected_runtime.runs` 个；预计时长 E（近几次平均加 5 分钟）在评估、准入和记录中生效：准入时 E 与评估时不同则 `policy_facts_stale`，预留时长不是声明值时 `policy.dispatch_intent` 写可选成员 `expected_duration_ms`，恢复与重放按它预留；事实刷新的声明时长改读 `scheduling.fact_refresh.expected_duration_ms`；该键只由 Runtime 写，其他发布被拒（`run_duration_key_reserved`），一个实例超过 256 个包等情况丢掉一行时写警告 `run_duration_row_dropped`；`ac_schedule` 候选行新增 `expected_runtime_ms` 与 `expected_runtime_source`；`config.subsystems` 新增常开的 `expected_runtime`。没有新键。
 - #1352 LN-8d：修 v0.12.14 启动停住：链接集的历史分页每页先在各维度自己的索引上选出该页的序号（在索引里排序和截取），再按主键读记录，每页的工作量不再随该页之后的链接记录增长；帧保留读取的 `read_linked` 把一个链接集的各维度一次读完，一个运行的记录只读一次、只验一次；打开账本在每页和每条范围语句之前检查时限，超时以 `ledger_read_budget_exceeded`（操作 `open_runtime_ledger`）失败；分页大小取 `ledger_observer.history_page_rows`（以前用固定的默认值）。新增三个回归测试，规模测量的合成账本改成生产的帧存储形态（每 16 帧存一帧并保持在用，分布在整段历史里）。没有新键，账本结构不变。
+- #1353 DA-5a：任务包 schema 版本的约 69 处字符串比较（和 `"0.9"` 比）换成一个有序的版本类型，以后加 0.10 时编译器会停在每一处要定规则的地方。纯重构，行为不变，没有新键、新结果码。
+- #1354 DA-4：标准包的游戏根目录可以放显示声明 `display-layout.json`（`actingcommand.display-layout.v1`：按高还是按宽缩放、在全屏还是安全区上量、锚点区域、修正半径），启动记录、运行准备、调度工作台、`actingctl packs`、`package bundle --display-layout`、`actinglab standard-pack check` 和 `compose`、`resource verify` 都用同一个检查；坏文件在启动时只记录，运行准备时在取租约之前拒绝该运行（`standard_pack_root_invalid`，修正半径超过 64 是新问题 `display_layout_invalid`）。没有新键。
+- #1355：v0.12.15 第一次的发版快照（结果码发布文件和本说明），没有发布出去（见上）。
+- #1356 DA-1：新 crate `display-adapter`：一帧的显示映射（恒等、纯缩放、平移）、九宫格锚点、取整规则和安全区算术的纯函数，不做 I/O，本身不改变运行行为；新结果码 `display_map_unresolved`（错误）和 `display_map_stale`（警告，只登记，DA-3 才发出）。没有新键。
+- #1357 DA-2a：显示适配器的截图侧：六个截图入口（入口页、导航定位、采样、页面帧、读数一致帧、Lab 试运行选择）都经过同一个帧闸门（见上）；识别证据仍按设备帧的大小和设备上的框记录；运行准备时读到的 `display-layout.json` 在整个运行中不变；帧的大小、旋转或 insets 变了时重读几何，记为 `changed`，运行继续；退役 `contained_task_frame_resolution_mismatch`（由 `display_map_unresolved` 取代）。没有新键。
+- #1358 IDLE-2：空闲中的实例在任何占用中都保留唤醒，唤醒是它唯一的出口（见上）；`close_app` 在发出关闭请求之后失败、结果不确定时也欠一次唤醒；`stop_emulator` 的失败照旧不唤醒，因为模拟器监视会重启停掉的模拟器。没有新键、新结果码。
+- #1359：发版运行保留它要发布的文件（两个 zip、`SHA256SUMS` 和发布说明，作为 Actions 产物 `release-files-<标签>`），发布被拒时可以用同样的字节手工补发；发版的准备步骤在构建之前拒绝 `.github/workflows` 与主线不同的源提交。只改发版工作流，Runtime 不变。
+- #1360 LN-WS：任何读取都不能让写入失败（见上）：为请求服务的读取在语句内部每 `read_check_vm_steps` 个 SQLite 步骤看一次时钟；视图分页的每条历史语句最多跨 `history_scan_rows` 个序号，跨度从 1 起逐次加倍，每页总能向前推进；带时间窗的第一页从窗口里的第一条记录开始；追加失败时 `ledger_failure` 把账本的结果码记为原因（`caused_by`）。两个新键，`actingd-config` [5, 14]；没有新结果码。
+- #1361 LN-7c F6：账本新增帧时间索引 `ledger_artifacts_created`（只含 `capture.frame` 的产物），以写入方式第一次打开时建立，以后的打开不重建；现在还没有读取方，留给 LN-7c 后面的切片；旧版本照常打开、写入和复查带这个索引的账本。另加账本测试用的查询计划检查。没有新键、新结果码。
 
 ## v0.12.14
 
