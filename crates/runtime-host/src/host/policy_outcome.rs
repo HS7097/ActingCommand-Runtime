@@ -33,11 +33,15 @@ impl HostShared {
             if pending.is_empty() {
                 return Ok(());
             }
-            let eligible = self.inactive_policy_settlements(&pending, &missing_outcomes)?;
+            let eligible =
+                self.inactive_policy_settlements(&policy, &pending, &missing_outcomes)?;
             if eligible.is_empty() {
                 return Ok(());
             }
-            reconcile_scheduled_policy_outcomes_for(
+            // #419 LN-WS-F (R1): a settlement whose read the writer did not answer in time, or
+            // stopped at its budget, did nothing; it stays pending and is read again at the next
+            // tick. Each is said in the daemon's log.
+            let skipped = reconcile_scheduled_policy_outcomes_for(
                 &mut policy,
                 &self.ledger,
                 eligible
@@ -47,6 +51,9 @@ impl HostShared {
                     .collect(),
                 None,
             )?;
+            for error in &skipped {
+                self.fatal.report_skipped(&error.outcome());
+            }
             let pending_completions = policy
                 .pending_dispatch_completions()
                 .into_iter()
@@ -141,7 +148,8 @@ impl HostShared {
             .latest_sequence()
             .map_err(|_| ledger_error(OPERATION))?;
         for decision_id in pending {
-            let intent = policy_dispatch_intent(&self.ledger, &decision_id, through, OPERATION)?;
+            let intent =
+                policy_dispatch_intent(&self.ledger, &decision_id, None, through, OPERATION)?;
             let links = intent.links();
             let (
                 Some(instance_id),
@@ -445,7 +453,7 @@ impl HostShared {
     ) -> RuntimeHostResult<InstanceId> {
         let operation: Location = operation.into();
         const OPERATION: HostLocation = HostLocation::RecordScheduledDispatchDiagnostic;
-        let intent = policy_dispatch_intent(&self.ledger, decision_id, through, operation)?;
+        let intent = policy_dispatch_intent(&self.ledger, decision_id, None, through, operation)?;
         let links = intent.links();
         let (
             Some(instance_id),
@@ -554,170 +562,133 @@ impl HostShared {
     // exact ledger links are checked against the existing execution owners.
     fn inactive_policy_settlements(
         &self,
+        policy: &PolicyHost,
         pending: &[String],
         missing_outcomes: &BTreeSet<String>,
     ) -> RuntimeHostResult<Vec<String>> {
-        // Every read below is pinned to one position. Past the dispatch intents, each pending
-        // decision is read through its own run links (Workflow #317 item B), never the whole
-        // ledger; every original predicate still selects the events it counts.
-        let through = self
-            .ledger
-            .latest_sequence()
-            .map_err(|_| ledger_error(HostLocation::SelectPolicySettlements))?;
-        // LN-5 (#422, LEAN-L §3.3): the type's history is read from the store page by page.
-        let dispatch_intents = crate::recovery_read::read_pages(
-            &self.ledger,
-            &EventQuery {
-                to_sequence: Some(through),
-                event_type: Some(EventType::PolicyDispatchIntent),
-                ..EventQuery::default()
-            },
-            through,
-            self.ledger.history_page_events(),
-        )
-        .map_err(|_| ledger_error(HostLocation::SelectPolicySettlements))?;
+        // Every read below is pinned to one position. Each pending decision is read through its
+        // own links (Workflow #317 item B; #419 LN-WS-F R2: its dispatch intent too, from the
+        // sequence the dispatch journal holds for it), never the whole ledger; every original
+        // predicate still selects the events it counts.
+        // #419 LN-WS-F (R1): nothing is written before these reads end. A read the writer does
+        // not answer in time, or stops at its budget, fails only this tick's step: the head
+        // read's, every settlement's; a settlement's own read, that settlement's, which is not
+        // eligible this tick and is read again at the next. Each is said in the daemon's log.
+        let through = match self.ledger.latest_sequence() {
+            Ok(through) => through,
+            Err(error) => {
+                self.skip_unanswered_settlement_read(settlement_read_error(
+                    &error,
+                    HostLocation::SelectPolicySettlements,
+                ))?;
+                return Ok(Vec::new());
+            }
+        };
         let leases = lock(&self.scheduler, HostLocation::SelectPolicySettlements)?.active_tokens();
         let runs = lock(&self.contained_runs, HostLocation::SelectPolicySettlements)?;
         let mut eligible = Vec::new();
         for decision_id in pending {
-            let intents = dispatch_intents
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event.payload(),
-                        EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
-                            if payload.decision_id() == decision_id.as_str()
-                    )
-                })
-                .collect::<Vec<_>>();
-            let [intent] = intents.as_slice() else {
-                return Err(policy_admission_fatal(
-                    HostCode::PolicyDispatchIntentNotUnique,
+            let inactive = (|| -> RuntimeHostResult<bool> {
+                #[cfg(test)]
+                let around = super::around_read_for_test(&AROUND_SETTLEMENT_READ);
+                let intents = policy_dispatch_intents(
+                    &self.ledger,
+                    decision_id,
+                    policy.dispatch_intent_sequence(decision_id),
+                    through,
                     HostLocation::SelectPolicySettlements,
-                ));
-            };
-            let links = intent.links();
-            if links.task_id().is_none() || links.run_id().is_none() {
-                continue;
-            }
-            if links.instance_id().is_none()
-                || links.request_id().is_none()
-                || links.correlation_id().is_none()
-            {
-                return Err(policy_admission_fatal(
-                    HostCode::PolicyRunIdentityMissing,
-                    HostLocation::SelectPolicySettlements,
-                ));
-            }
-            // The contained request is minted after admission. Its existing owner
-            // retains the instance even before its first task event is appended.
-            if runs
-                .values()
-                .any(|run| Some(run.instance_id) == links.instance_id().copied())
-            {
-                continue;
-            }
-            let run_links = EventQuery {
-                to_sequence: Some(through),
-                instance_id: links.instance_id().copied(),
-                correlation_id: links.correlation_id().copied(),
-                task_id: links.task_id().copied(),
-                run_id: links.run_id().copied(),
-                ..EventQuery::default()
-            };
-            let grants = linked_policy_run_events(
-                &self.ledger,
-                EventQuery {
-                    event_type: Some(EventType::LeaseGranted),
-                    request_id: links.request_id().copied(),
-                    ..run_links.clone()
-                },
-                through,
-                2,
-                HostLocation::SelectPolicySettlements,
-                |event| {
-                    event.event_type() == EventType::LeaseGranted
-                        && event.links().instance_id() == links.instance_id()
-                        && event.links().request_id() == links.request_id()
-                        && event.links().correlation_id() == links.correlation_id()
-                        && event.links().task_id() == links.task_id()
-                        && event.links().run_id() == links.run_id()
-                },
-            )?;
-            let grant = match grants.as_slice() {
-                [] => continue,
-                [grant] => grant,
-                _ => {
+                )?;
+                #[cfg(test)]
+                drop(around);
+                let [intent] = intents.as_slice() else {
                     return Err(policy_admission_fatal(
-                        HostCode::PolicyRunLeaseFactNotUnique,
+                        HostCode::PolicyDispatchIntentNotUnique,
+                        HostLocation::SelectPolicySettlements,
+                    ));
+                };
+                let links = intent.links();
+                if links.task_id().is_none() || links.run_id().is_none() {
+                    return Ok(false);
+                }
+                if links.instance_id().is_none()
+                    || links.request_id().is_none()
+                    || links.correlation_id().is_none()
+                {
+                    return Err(policy_admission_fatal(
+                        HostCode::PolicyRunIdentityMissing,
                         HostLocation::SelectPolicySettlements,
                     ));
                 }
-            };
-            let Some(lease_id) = grant.links().lease_id() else {
-                return Err(policy_admission_fatal(
-                    HostCode::PolicyRunIdentityMissing,
-                    HostLocation::SelectPolicySettlements,
-                ));
-            };
-            if leases.iter().any(|token| token.lease_id() == *lease_id) {
-                continue;
-            }
-            let lease_links = EventQuery {
-                lease_id: Some(*lease_id),
-                ..run_links.clone()
-            };
-            let releases = linked_policy_run_events(
-                &self.ledger,
-                EventQuery {
-                    event_type: Some(EventType::LeaseReleased),
-                    ..lease_links.clone()
-                },
-                through,
-                2,
-                HostLocation::SelectPolicySettlements,
-                |event| {
-                    event.event_type() == EventType::LeaseReleased
-                        && event.links().instance_id() == links.instance_id()
-                        && event.links().request_id().is_some()
-                        && event.links().correlation_id() == links.correlation_id()
-                        && event.links().task_id() == links.task_id()
-                        && event.links().run_id() == links.run_id()
-                        && event.links().lease_id() == Some(lease_id)
-                },
-            )?
-            .len();
-            if releases > 1 {
-                return Err(policy_admission_fatal(
-                    HostCode::PolicyRunReleaseFactNotUnique,
-                    HostLocation::SelectPolicySettlements,
-                ));
-            }
-            let mut terminals = 0;
-            for terminal_type in [
-                EventType::TaskCompleted,
-                EventType::TaskFailed,
-                EventType::TaskCancelled,
-            ] {
-                if terminals > 1 {
-                    break;
+                // The contained request is minted after admission. Its existing owner
+                // retains the instance even before its first task event is appended.
+                if runs
+                    .values()
+                    .any(|run| Some(run.instance_id) == links.instance_id().copied())
+                {
+                    return Ok(false);
                 }
-                terminals += linked_policy_run_events(
+                let run_links = EventQuery {
+                    to_sequence: Some(through),
+                    instance_id: links.instance_id().copied(),
+                    correlation_id: links.correlation_id().copied(),
+                    task_id: links.task_id().copied(),
+                    run_id: links.run_id().copied(),
+                    ..EventQuery::default()
+                };
+                let grants = linked_policy_run_events(
                     &self.ledger,
                     EventQuery {
-                        event_type: Some(terminal_type),
+                        event_type: Some(EventType::LeaseGranted),
+                        request_id: links.request_id().copied(),
+                        ..run_links.clone()
+                    },
+                    through,
+                    2,
+                    HostLocation::SelectPolicySettlements,
+                    |event| {
+                        event.event_type() == EventType::LeaseGranted
+                            && event.links().instance_id() == links.instance_id()
+                            && event.links().request_id() == links.request_id()
+                            && event.links().correlation_id() == links.correlation_id()
+                            && event.links().task_id() == links.task_id()
+                            && event.links().run_id() == links.run_id()
+                    },
+                )?;
+                let grant = match grants.as_slice() {
+                    [] => return Ok(false),
+                    [grant] => grant,
+                    _ => {
+                        return Err(policy_admission_fatal(
+                            HostCode::PolicyRunLeaseFactNotUnique,
+                            HostLocation::SelectPolicySettlements,
+                        ));
+                    }
+                };
+                let Some(lease_id) = grant.links().lease_id() else {
+                    return Err(policy_admission_fatal(
+                        HostCode::PolicyRunIdentityMissing,
+                        HostLocation::SelectPolicySettlements,
+                    ));
+                };
+                if leases.iter().any(|token| token.lease_id() == *lease_id) {
+                    return Ok(false);
+                }
+                let lease_links = EventQuery {
+                    lease_id: Some(*lease_id),
+                    ..run_links.clone()
+                };
+                let releases = linked_policy_run_events(
+                    &self.ledger,
+                    EventQuery {
+                        event_type: Some(EventType::LeaseReleased),
                         ..lease_links.clone()
                     },
                     through,
-                    2 - terminals,
+                    2,
                     HostLocation::SelectPolicySettlements,
                     |event| {
-                        matches!(
-                            event.event_type(),
-                            EventType::TaskCompleted
-                                | EventType::TaskFailed
-                                | EventType::TaskCancelled
-                        ) && event.links().instance_id() == links.instance_id()
+                        event.event_type() == EventType::LeaseReleased
+                            && event.links().instance_id() == links.instance_id()
                             && event.links().request_id().is_some()
                             && event.links().correlation_id() == links.correlation_id()
                             && event.links().task_id() == links.task_id()
@@ -726,40 +697,95 @@ impl HostShared {
                     },
                 )?
                 .len();
-            }
-            if terminals > 1 {
-                return Err(policy_admission_fatal(
-                    HostCode::PolicyRunTerminalNotUnique,
-                    HostLocation::SelectPolicySettlements,
-                ));
-            }
-            if terminals == 0 {
-                // The accepted recovery consumer can settle a released admission
-                // without a task terminal only when no effect was started.
-                if !missing_outcomes.contains(decision_id)
-                    || linked_policy_run_events(
+                if releases > 1 {
+                    return Err(policy_admission_fatal(
+                        HostCode::PolicyRunReleaseFactNotUnique,
+                        HostLocation::SelectPolicySettlements,
+                    ));
+                }
+                let mut terminals = 0;
+                for terminal_type in [
+                    EventType::TaskCompleted,
+                    EventType::TaskFailed,
+                    EventType::TaskCancelled,
+                ] {
+                    if terminals > 1 {
+                        break;
+                    }
+                    terminals += linked_policy_run_events(
                         &self.ledger,
                         EventQuery {
-                            event_type: Some(EventType::LeaseReleased),
-                            request_id: links.request_id().copied(),
+                            event_type: Some(terminal_type),
                             ..lease_links.clone()
                         },
                         through,
-                        1,
+                        2 - terminals,
                         HostLocation::SelectPolicySettlements,
-                        |event| scheduled_admission_release_matches(event, intent, lease_id),
+                        |event| {
+                            matches!(
+                                event.event_type(),
+                                EventType::TaskCompleted
+                                    | EventType::TaskFailed
+                                    | EventType::TaskCancelled
+                            ) && event.links().instance_id() == links.instance_id()
+                                && event.links().request_id().is_some()
+                                && event.links().correlation_id() == links.correlation_id()
+                                && event.links().task_id() == links.task_id()
+                                && event.links().run_id() == links.run_id()
+                                && event.links().lease_id() == Some(lease_id)
+                        },
                     )?
-                    .is_empty()
-                    || policy_run_effect_started(&self.ledger, links, through)?
-                {
-                    continue;
+                    .len();
                 }
-            }
-            if releases == 1 {
-                eligible.push(decision_id.clone());
+                if terminals > 1 {
+                    return Err(policy_admission_fatal(
+                        HostCode::PolicyRunTerminalNotUnique,
+                        HostLocation::SelectPolicySettlements,
+                    ));
+                }
+                if terminals == 0 {
+                    // The accepted recovery consumer can settle a released admission
+                    // without a task terminal only when no effect was started.
+                    if !missing_outcomes.contains(decision_id)
+                        || linked_policy_run_events(
+                            &self.ledger,
+                            EventQuery {
+                                event_type: Some(EventType::LeaseReleased),
+                                request_id: links.request_id().copied(),
+                                ..lease_links.clone()
+                            },
+                            through,
+                            1,
+                            HostLocation::SelectPolicySettlements,
+                            |event| scheduled_admission_release_matches(event, intent, lease_id),
+                        )?
+                        .is_empty()
+                        || policy_run_effect_started(&self.ledger, links, through)?
+                    {
+                        return Ok(false);
+                    }
+                }
+                Ok(releases == 1)
+            })();
+            match inactive {
+                Ok(true) => eligible.push(decision_id.clone()),
+                Ok(false) => {}
+                Err(error) => self.skip_unanswered_settlement_read(error)?,
             }
         }
         Ok(eligible)
+    }
+
+    /// #419 LN-WS-F (R1): a settlement step whose read the writer did not answer in time, or
+    /// stopped at its budget, did nothing: it is said in the daemon's log, nothing latches, and
+    /// the step runs again at the next tick. Any other failure is returned.
+    fn skip_unanswered_settlement_read(&self, error: RuntimeHostError) -> RuntimeHostResult<()> {
+        if unanswered_ledger_read(&error) {
+            self.fatal.report_skipped(&error.outcome());
+            Ok(())
+        } else {
+            Err(error)
+        }
     }
 
     pub(super) fn complete_scheduled_policy_run(
@@ -1937,6 +1963,7 @@ pub(super) fn reconcile_policy_dispatches(
         let intent = policy_dispatch_intent(
             ledger,
             &dispatch.data.decision_id,
+            None,
             through,
             HostLocation::ReconcilePolicyDispatches,
         )?;
@@ -1996,29 +2023,45 @@ fn reconcile_scheduled_policy_outcomes(
     start: &mut StartSettlement,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
-    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, Some(start))
+    // At start nothing is skipped: any failure but a per-run refusal fails the start.
+    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, Some(start)).map(|_| ())
 }
 
-/// `start`: the start's settlement context (`None` online).
+/// `start`: the start's settlement context (`None` online). #419 LN-WS-F (R1): online, a
+/// settlement whose read the writer did not answer in time, or stopped at its budget, did nothing
+/// (all its reads come before its one write, and the policy is changed only after that write);
+/// it stays pending, is read again at the next tick, and its failure is returned among the
+/// skipped ones. At start every such failure fails the start, as before.
 fn reconcile_scheduled_policy_outcomes_for(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     pending: Vec<String>,
     mut start: Option<&mut StartSettlement>,
-) -> RuntimeHostResult<()> {
+) -> RuntimeHostResult<Vec<RuntimeHostError>> {
+    let mut skipped = Vec::new();
     if pending.is_empty() {
-        return Ok(());
+        return Ok(skipped);
     }
     // Every read below is pinned to one position and goes through an index (Workflow #317
     // rf2), never the whole ledger; the original predicates still select the events.
-    let through = ledger
-        .latest_sequence()
-        .map_err(|_| ledger_error(HostLocation::ReconcilePolicyOutcomes))?;
+    let through = match ledger.latest_sequence() {
+        Ok(through) => through,
+        Err(error) => {
+            let error = settlement_read_error(&error, HostLocation::ReconcilePolicyOutcomes);
+            if start.is_none() && unanswered_ledger_read(&error) {
+                skipped.push(error);
+                return Ok(skipped);
+            }
+            return Err(error);
+        }
+    };
     for decision_id in pending {
         let settled = (|| -> RuntimeHostResult<()> {
+            // #419 LN-WS-F (R2): the intent from the sequence the dispatch journal holds.
             let intent = &policy_dispatch_intent(
                 ledger,
                 &decision_id,
+                policy.dispatch_intent_sequence(&decision_id),
                 through,
                 HostLocation::ReconcilePolicyOutcomes,
             )?;
@@ -2287,8 +2330,10 @@ fn reconcile_scheduled_policy_outcomes_for(
         // Workflow #369 E3 (coordinator ruling on #670, safety net): at start, a run whose
         // settlement the host's recovery or the ledger refuses does not fail the start; its
         // dispatch stays open, out of the pending settlements and the active workloads, and the
-        // start records it and pauses its instance (`hold_unsettled_dispatches`). Any other
-        // failure, and every failure online, is returned.
+        // start records it and pauses its instance (`hold_unsettled_dispatches`). #419 LN-WS-F
+        // (R1): online, a read the writer did not answer in time, or stopped at its budget,
+        // skips its settlement for this tick. Any other failure, at start and online, is
+        // returned.
         if let Err(error) = settled {
             match start.as_deref_mut() {
                 Some(start) if per_run_settlement_refusal(&error) => {
@@ -2298,11 +2343,12 @@ fn reconcile_scheduled_policy_outcomes_for(
                         cause: error.code(),
                     });
                 }
+                None if unanswered_ledger_read(&error) => skipped.push(error),
                 _ => return Err(error),
             }
         }
     }
-    Ok(())
+    Ok(skipped)
 }
 
 fn scheduled_admission_release_matches(
@@ -2335,11 +2381,12 @@ fn linked_policy_run_events(
     let mut selected = Vec::new();
     let mut after = 0;
     loop {
-        // #422 LN-WS (R4, R5): the failure keeps the ledger's code as its cause; the read stays
-        // fatal (making the Runtime's own reads tolerant is a later slice).
+        // #422 LN-WS (R4, R5): a fatal failure keeps the ledger's code as its cause. #419
+        // LN-WS-F (R1): a read the writer did not answer in time, or stopped at its budget, is a
+        // request error with the ledger's code (`settlement_read_error`).
         let page = ledger
             .query_page(query.clone(), after, through, LINKED_PAGE_EVENTS)
-            .map_err(|error| ledger_error_caused_by(operation, &error))?;
+            .map_err(|error| settlement_read_error(&error, operation))?;
         let exhausted = page.len() < LINKED_PAGE_EVENTS;
         if let Some(last) = page.last() {
             after = last.sequence();
@@ -2358,35 +2405,18 @@ fn linked_policy_run_events(
     }
 }
 
-/// The one `PolicyDispatchIntent` of `decision_id` through `through`, read with two-event
-/// pages of the intent type index (Workflow #317 rf2). No link names a decision, so the page
-/// query is the event type and the decision is the filter; none or more than one is
-/// `policy_dispatch_intent_missing`.
-pub(super) fn policy_dispatch_intent(
+/// The one `PolicyDispatchIntent` of `decision_id` through `through`
+/// ([`policy_dispatch_intents`]); none or more than one is `policy_dispatch_intent_missing`.
+pub(crate) fn policy_dispatch_intent(
     ledger: &GlobalLedger,
     decision_id: &str,
+    intent_sequence: Option<u64>,
     through: u64,
     operation: impl Into<Location>,
 ) -> RuntimeHostResult<PersistedEvent> {
     let operation: Location = operation.into();
-    let mut intents = linked_policy_run_events(
-        ledger,
-        EventQuery {
-            to_sequence: Some(through),
-            event_type: Some(EventType::PolicyDispatchIntent),
-            ..EventQuery::default()
-        },
-        through,
-        2,
-        operation,
-        |event| {
-            matches!(
-                event.payload(),
-                EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
-                    if payload.decision_id() == decision_id
-            )
-        },
-    )?;
+    let mut intents =
+        policy_dispatch_intents(ledger, decision_id, intent_sequence, through, operation)?;
     match (intents.pop(), intents.is_empty()) {
         (Some(intent), true) => Ok(intent),
         _ => Err(policy_admission_fatal(
@@ -2394,6 +2424,112 @@ pub(super) fn policy_dispatch_intent(
             operation,
         )),
     }
+}
+
+/// The `PolicyDispatchIntent` records of `decision_id` through `through`, in ledger order, at
+/// most two. No link names a decision.
+///
+/// #419 LN-WS-F (R2): with `intent_sequence`, the sequence the dispatch journal recorded the
+/// decision's intent at, the record there is read by its sequence, then every intent under that
+/// record's own links (its instance, request, correlation, task and run; #419 DIAG-RUN R1 drives
+/// the read by a link index), so the read follows the decision's run, never the intent type's
+/// history. A second intent of the decision is one appended again under the same links (a
+/// repeated append); one under other links the journal already refuses when it loads it
+/// (`policy_decision_identity_conflict`). A record at `intent_sequence` that is not an intent of
+/// the decision is none. Without it (a start's read, or a decision the journal no longer holds),
+/// the type's history is paged two records at a time (Workflow #317 rf2), as before.
+pub(crate) fn policy_dispatch_intents(
+    ledger: &GlobalLedger,
+    decision_id: &str,
+    intent_sequence: Option<u64>,
+    through: u64,
+    operation: impl Into<Location>,
+) -> RuntimeHostResult<Vec<PersistedEvent>> {
+    let operation: Location = operation.into();
+    let Some(at) = intent_sequence else {
+        return linked_policy_run_events(
+            ledger,
+            EventQuery {
+                to_sequence: Some(through),
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            },
+            through,
+            2,
+            operation,
+            |event| intent_of_decision(event, decision_id),
+        );
+    };
+    if at == 0 || at > through {
+        return Ok(Vec::new());
+    }
+    let recorded = ledger
+        .query_page(
+            EventQuery {
+                from_sequence: Some(at),
+                to_sequence: Some(at),
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            },
+            at - 1,
+            at,
+            1,
+        )
+        .map_err(|error| settlement_read_error(&error, operation))?;
+    let Some(intent) = recorded
+        .into_iter()
+        .find(|event| event.sequence() == at && intent_of_decision(event, decision_id))
+    else {
+        return Ok(Vec::new());
+    };
+    let links = intent.links();
+    linked_policy_run_events(
+        ledger,
+        EventQuery {
+            to_sequence: Some(through),
+            event_type: Some(EventType::PolicyDispatchIntent),
+            instance_id: links.instance_id().copied(),
+            request_id: links.request_id().copied(),
+            correlation_id: links.correlation_id().copied(),
+            task_id: links.task_id().copied(),
+            run_id: links.run_id().copied(),
+            ..EventQuery::default()
+        },
+        through,
+        2,
+        operation,
+        |event| intent_of_decision(event, decision_id),
+    )
+}
+
+/// Whether `event` is a `PolicyDispatchIntent` of `decision_id`.
+fn intent_of_decision(event: &PersistedEvent, decision_id: &str) -> bool {
+    matches!(
+        event.payload(),
+        EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+            if payload.decision_id() == decision_id
+    )
+}
+
+/// #419 LN-WS-F (R1): a settlement read's ledger failure at `operation`: a read the writer did
+/// not answer in time, or stopped at its budget, relayed as a request error with the ledger's
+/// code (`ledger_read_error`), which online fails only its settlement's step and at start still
+/// fails the start; any other read failure the fatal `ledger_failure` of `operation` with the
+/// ledger's own failure as its cause (#422 LN-WS R4).
+fn settlement_read_error(
+    error: &actingcommand_ledger::GlobalLedgerError,
+    operation: impl Into<Location>,
+) -> RuntimeHostError {
+    let operation: Location = operation.into();
+    tolerant_ledger_read_error(error, operation, || ledger_error(operation))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #419 LN-WS-F, tests: the hook around the first read of the next pending settlement the
+    /// reconciliation tick reads on this thread (its dispatch intent).
+    pub(crate) static AROUND_SETTLEMENT_READ: super::AroundReadForTest =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Whether any effect of this run was started, read through its task and run links.

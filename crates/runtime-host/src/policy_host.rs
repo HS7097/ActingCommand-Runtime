@@ -2081,10 +2081,18 @@ impl PolicyHost {
         ledger: &GlobalLedger,
         ledger_position: u64,
     ) -> RuntimeHostResult<Option<LoadedCatalog>> {
-        let latest = ledger.latest_sequence().map_err(|_| {
-            fatal(
-                HostCode::CatalogProjectionQueryFailed,
+        // #419 LN-WS-F (R1): a read the writer did not answer in time, or stopped at its budget,
+        // fails only the request; any other failure stays fatal.
+        let latest = ledger.latest_sequence().map_err(|error| {
+            crate::host::tolerant_ledger_read_error(
+                &error,
                 HostLocation::ProjectPolicyCatalog,
+                || {
+                    fatal(
+                        HostCode::CatalogProjectionQueryFailed,
+                        HostLocation::ProjectPolicyCatalog,
+                    )
+                },
             )
         })?;
         if ledger_position == 0 || ledger_position > latest {
@@ -2185,8 +2193,15 @@ impl PolicyHost {
         through: u64,
         location: HostLocation,
     ) -> RuntimeHostResult<DispatchJournal> {
+        // #419 LN-WS-F (R1): a read the writer did not answer in time, or stopped at its budget,
+        // fails only the request that reads the history (a decision page, a strategic report at
+        // an earlier position), with the ledger's code; any other failure stays fatal.
         let events = read_event_types(ledger, &DISPATCH_EVENT_TYPES, through, RECOVERY_PAGE_EVENTS)
-            .map_err(|_| fatal(HostCode::PolicyRecoveryFailed, location))?;
+            .map_err(|error| {
+                crate::host::tolerant_ledger_read_error(&error, location, || {
+                    fatal(HostCode::PolicyRecoveryFailed, location)
+                })
+            })?;
         let mut journal = DispatchJournal::default();
         let mut control = PolicyControlState::default();
         for event in &events {
@@ -2541,6 +2556,14 @@ impl PolicyHost {
                     HostLocation::ReadDispatchProcedureRef,
                 )
             })
+    }
+
+    /// #419 LN-WS-F (R2): the sequence of the intent record of the dispatch `decision_id`, while
+    /// the dispatch journal holds it (every open dispatch, and a pair's latest ones).
+    pub(crate) fn dispatch_intent_sequence(&self, decision_id: &str) -> Option<u64> {
+        self.seen_dispatches
+            .get(decision_id)
+            .map(|dispatch| dispatch.intent_sequence)
     }
 
     pub(crate) fn pending_dispatch_outcomes(&self) -> Vec<String> {

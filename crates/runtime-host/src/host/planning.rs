@@ -8,9 +8,23 @@ use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, Share
 use actingcommand_contract::outcome::{Location, Outcome};
 
 impl HostShared {
+    /// #419 LN-WS-F (R2): for each of `references`, the sequence of the first `artifact.verified`
+    /// record that carries it ([`verified_reference_sequences`]), through the ledger's latest
+    /// position at the call.
+    fn verified_sequences(
+        &self,
+        operation: impl Into<Location>,
+        references: &[ProjectedArtifactReference],
+    ) -> RuntimeHostResult<Vec<Option<u64>>> {
+        #[cfg(test)]
+        let _around = super::around_read_for_test(&AROUND_VERIFIED_READ);
+        verified_reference_sequences(&self.ledger, references, operation)
+    }
+
     /// Hands `read` every verified artifact reference with its event sequence, in ledger order.
     /// Workflow #422 LN-2: read on demand, by the `artifact.verified` type index in pages through
-    /// the ledger's latest position at the call; nothing stays resident.
+    /// the ledger's latest position at the call; nothing stays resident. #419 LN-WS-F: only the
+    /// strategic report lookup by its content (`find_strategic_report`, rare) reads this way.
     fn read_verified_artifacts<T>(
         &self,
         operation: impl Into<Location>,
@@ -434,8 +448,10 @@ impl HostShared {
                 HostLocation::RecoverProposalApprovals,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+            // #419 LN-WS-F (R1): an approval read the writer did not answer fails only this
+            // request.
             ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
-                .map_err(RequestFailure::poison_without_terminal)?
+                .map_err(unanswered_or_poison)?
         };
         let mut approval_fact_ids = approvals.active_for_plan(
             preview.proposal_id(),
@@ -506,17 +522,11 @@ impl HostShared {
 
     fn verify_proposal_reports(&self, proposal: &CatalogProposal) -> Result<(), RequestFailure> {
         let verified = self
-            .read_verified_artifacts(HostLocation::VerifyProposalReports, |verified| {
-                proposal
-                    .report_refs()
-                    .iter()
-                    .map(|reference| proposal_report_is_verified(verified, reference))
-                    .collect::<Vec<_>>()
-            })
+            .verified_sequences(HostLocation::VerifyProposalReports, proposal.report_refs())
             // #411 A51 (R3): only a fatal failure poisons the Runtime.
             .map_err(request_failure)?;
         for (reference, verified) in proposal.report_refs().iter().zip(verified) {
-            if !verified {
+            if verified.is_none() {
                 return Err(proposal_request_failure(RuntimeHostError::request(
                     HostCode::ProposalReportUnverified,
                     HostLocation::VerifyProposalReports,
@@ -724,12 +734,7 @@ impl HostShared {
         evidence: &[ProjectedArtifactReference],
     ) -> RuntimeHostResult<()> {
         let verified_sequences =
-            self.read_verified_artifacts(HostLocation::VerifyStrategicEvidence, |verified| {
-                evidence
-                    .iter()
-                    .map(|reference| proposal_report_verified_sequence(verified, reference))
-                    .collect::<Vec<_>>()
-            })?;
+            self.verified_sequences(HostLocation::VerifyStrategicEvidence, evidence)?;
         let mut pointers = Vec::with_capacity(evidence.len());
         for (reference, verified_sequence) in evidence.iter().zip(verified_sequences) {
             reference.validate().map_err(|_| {
@@ -965,11 +970,61 @@ fn proposal_request_failure(error: RuntimeHostError) -> RequestFailure {
     }
 }
 
-fn proposal_report_is_verified(
-    verified: &[(u64, ProjectedArtifactReference)],
-    reference: &ProjectedArtifactReference,
-) -> bool {
-    proposal_report_verified_sequence(verified, reference).is_some()
+/// #419 LN-WS-F (R2): for each of `references`, in order, the sequence of the first
+/// `artifact.verified` record, in ledger order through the ledger's latest position, that carries
+/// an artifact equal to it, or `None`. Only the records that carry one of the references'
+/// artifacts are read, by the `artifact_id` index (`GlobalLedger::artifact_records`), never the
+/// type's history: an equal artifact has the reference's own identifier, so the answer is the one
+/// every `artifact.verified` record of the history gives. #411 A51 (R3): a read the writer did not
+/// answer in time, or stopped at its budget, fails only the request with the ledger's code; any
+/// other read failure is the fatal `ledger_failure` of `operation` with the ledger's own failure
+/// as its cause.
+pub(crate) fn verified_reference_sequences(
+    ledger: &GlobalLedger,
+    references: &[ProjectedArtifactReference],
+    operation: impl Into<Location>,
+) -> RuntimeHostResult<Vec<Option<u64>>> {
+    let operation: Location = operation.into();
+    if references.is_empty() {
+        return Ok(Vec::new());
+    }
+    let read_error = |error: &actingcommand_ledger::GlobalLedgerError| {
+        tolerant_ledger_read_error(error, operation, || ledger_error(operation))
+    };
+    let through = ledger
+        .latest_sequence()
+        .map_err(|error| read_error(&error))?;
+    let artifacts = references
+        .iter()
+        .map(|reference| reference.artifact_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let records = ledger
+        .artifact_records(artifacts, through)
+        .map_err(|error| read_error(&error))?;
+    let mut verified = Vec::new();
+    for event in records
+        .iter()
+        .filter(|event| event.event_type() == EventType::ArtifactVerified)
+    {
+        verified.extend(
+            event
+                .artifacts()
+                .iter()
+                .map(|artifact| (event.sequence(), artifact.project(true))),
+        );
+    }
+    Ok(references
+        .iter()
+        .map(|reference| proposal_report_verified_sequence(&verified, reference))
+        .collect())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #419 LN-WS-F, tests: the hook around the next bounded verified read of a proposal's
+    /// reports or a strategic report's evidence on this thread.
+    pub(crate) static AROUND_VERIFIED_READ: super::AroundReadForTest =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn proposal_report_verified_sequence(

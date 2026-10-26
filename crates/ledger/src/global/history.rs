@@ -599,6 +599,61 @@ impl<B: DurableStorage> EventStore<B> {
         }
         Ok(Some(false))
     }
+
+    /// #419 LN-WS-F (R2): the committed records after `range.0` through `range.1` that carry one
+    /// of `artifacts`, in ledger order, each with its eviction proofs. They are selected by the
+    /// `artifact_id` index of `ledger_artifacts` (a link set of artifacts, LN-8d's page form), a
+    /// page of `history_page_rows` records at a time, so the read follows those artifacts'
+    /// records, never the history of their event types. Every record the store returns counts on
+    /// `work`; `None` when its budget stopped the read before the read ended. No artifact selects
+    /// no record.
+    pub(super) fn read_artifact_records(
+        &self,
+        artifacts: &BTreeSet<ArtifactId>,
+        (after, through): (u64, u64),
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<Vec<PersistedEvent>>> {
+        let mut events = Vec::new();
+        if artifacts.is_empty() {
+            return Ok(Some(events));
+        }
+        let links = LinkSet {
+            artifacts: artifacts.clone(),
+            ..LinkSet::default()
+        };
+        let query = EventQuery::default();
+        let selection = HistorySelection::linked(&query, &links);
+        let through = through.min(self.backend.head());
+        let mut cursor = after;
+        while cursor < through {
+            let Some(page) = self.backend.history_page_within(
+                &selection,
+                (cursor, through),
+                self.history_page_rows,
+                &self.retention,
+                work,
+            )?
+            else {
+                return Ok(None);
+            };
+            let full = page.len() >= self.history_page_rows;
+            for mut event in page {
+                cursor = event.sequence();
+                let going_on = work.visit();
+                if selection.selects(&event) {
+                    self.retention.annotate_event(&mut event);
+                    events.push(event);
+                }
+                if !going_on {
+                    return Ok(None);
+                }
+            }
+            if !full {
+                break;
+            }
+        }
+        Ok(Some(events))
+    }
 }
 
 /// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): what an evidence read confirmation names: one

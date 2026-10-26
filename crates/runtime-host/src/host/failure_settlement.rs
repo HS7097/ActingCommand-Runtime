@@ -476,12 +476,26 @@ impl HostShared {
             .ledger
             .latest_sequence()
             .map_err(|_| ledger_error(HostLocation::CompareFailureFrames))?;
+        // #419 LN-WS-F (R2): the previous dispatch's intent from the sequence the dispatch
+        // journal holds, while it holds that dispatch.
+        let intent_sequence = lock(self.policy()?, HostLocation::CompareFailureFrames)?
+            .dispatch_intent_sequence(previous_decision);
+        // A read the writer does not answer stays fatal here, as before: the failure settlement is
+        // not among the reads #419 LN-WS-F makes tolerant.
         let previous_run = policy_dispatch_intent(
             &self.ledger,
             previous_decision,
+            intent_sequence,
             through,
             HostLocation::CompareFailureFrames,
-        )?
+        )
+        .map_err(|error| {
+            if unanswered_ledger_read(&error) {
+                ledger_error(HostLocation::CompareFailureFrames).with_caused_by(error.outcome())
+            } else {
+                error
+            }
+        })?
         .links()
         .run_id()
         .copied();
