@@ -2,7 +2,8 @@
 
 //! Test plan v2.2 L-2, G1 (inventory-ledger key 14): the error points of the frame retention
 //! view, from real events appended to an I6 formal root (I7 drafts) and read through the
-//! writer's `frame_retention_view`. `contracts/ledger-store.md`, "Error points": a
+//! full view (`GlobalLedgerEvidence::frame_retention_view`; #422 LN-7c Q removed the writer's
+//! view, so the reference of the cleaner's queries is read beside the running writer). `contracts/ledger-store.md`, "Error points": a
 //! non-retention, non-`perf.*` event on a known instance (its own link, or its run's instance)
 //! that is a `TerminalCommitted` with outcome `Failure` at any severity, a run-linked event at
 //! Warning or higher, or an instance-linked event without a run at Error or higher (frozen
@@ -12,7 +13,10 @@
 
 use super::fixture::FormalRoot;
 use super::retention_events::{RetentionEvents, code_of};
-use crate::global::{FrameErrorPoint, FrameRetentionSwitches, FrameRetentionView};
+use crate::global::{
+    FrameErrorPoint, FrameRetentionSwitches, FrameRetentionView, GlobalLedger,
+    GlobalLedgerEvidenceConfig,
+};
 use actingcommand_contract::{EventLinksDraft, EventSeverity, TaskOutcome};
 
 /// 2026-01-01 00:00:00 UTC.
@@ -30,9 +34,13 @@ const FAILURE_FIRST: &str = "capture_failed";
 const FAILURE_RENAMED: &str = "recognition_failed";
 
 fn view(root: &FormalRoot) -> FrameRetentionView {
-    root.ledger()
-        .frame_retention_view(NOW, SWITCHES)
-        .expect("frame retention view")
+    GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(root.path()).sqlite_material_not_read(),
+        |_| None,
+    )
+    .expect("the whole opening beside the writer")
+    .frame_retention_view(NOW, SWITCHES)
+    .expect("frame retention view")
 }
 
 /// The view's error points at `sequence`.

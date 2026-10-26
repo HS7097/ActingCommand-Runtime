@@ -1012,7 +1012,10 @@ CREATE TABLE ledger_frame_refs_extent (
 - **Compatibility** (`final-query.md` §8): no name starts with `ledger_view_`, and `table_count`
   counts only the four ledger tables, so an older build opens, writes and scrubs the database
   unchanged; it writes no rows and leaves `through_sequence` behind, and the next open of this
-  release fills the gap. Nothing decides on the rows yet (slice Q will); no configuration key.
+  release fills the gap. #422 LN-7c Q: the frame cleaner's statements L and K decide on the
+  rows, and run only while the extent covers `1..=` their snapshot's head; otherwise the pass
+  decides nothing (`actingd frame_retention pass skipped=frame_refs_incomplete`;
+  [ledger-store.md](ledger-store.md), "Frame cleaner"). No configuration key of the index.
 
 ## 12 Start and shutdown order (AO-6; G16 from AO-3)
 
@@ -1182,6 +1185,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `scrub_pass_interval_ms` | 2 400 000 | ms | the least time from the start of one scrub pass to the start of the next; the first starts when the writer opens; `60000..=86400000` (#422 LN-9) | LN-9, 0.12.14 |
 | `read_check_vm_steps` | 10 000 | integer | SQLite virtual-machine steps between two looks at the clock of a read that serves a Runtime request (a view page, a subscription's replay page): its `read_budget_ms` holds inside a statement too; `100..=1000000` (#422 LN-WS) | LN-WS, 0.12.15 |
 | `history_scan_rows` | 65 536 | integer | sequences one history statement of a view page (its selection and its runs' recovery context) spans at most, so a page its budget stops has always gone on; `1024..=1048576` (#422 LN-WS) | LN-WS, 0.12.15 |
+| `frame_query_steps_per_second` | 500 000 | integer | SQLite virtual-machine steps a second the frame cleaner's statements take: a statement starts no earlier than the one before plus its steps at this rate; `1000..=100000000`, settable, read after each statement (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
+| `frame_query_chunk_frames` | 256 | integer | frames of one statement L or K of the frame cleaner; `1..=4096`, read at start (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
@@ -1339,6 +1344,15 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     When the handler interrupts that lookup, the page starts where it would have. Offline
     readers keep their path.
   - Both keys are read when the ledger opens (`false`). No code is added.
+- #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §1.5, §5; v0.12.17, `actingd-config` revision
+  16): the frame cleaner decides by ledger query on a read-only connection of its own
+  ([ledger-store.md](ledger-store.md), "Frame cleaner"). `frame_query_steps_per_second` paces
+  its statements by the SQLite steps each took, not by rows; it is settable and read after each
+  statement. `frame_query_chunk_frames` is the frames of one statement, read at start (not
+  settable). The query's stop is watched every `read_check_vm_steps` steps. The open reads no
+  frame and the writer keeps no frame facts (ledger-store.md, the LN-7c Q paragraph), so LN-7's
+  resident frame facts above are gone. The top-level key `frame_retention_evidence_max_age_days`
+  of the same revision is the evidence-frame rule's age ([runtime-config.md](runtime-config.md)).
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
   [runtime-fact-store.md](runtime-fact-store.md));

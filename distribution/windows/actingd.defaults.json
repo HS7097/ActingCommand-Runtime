@@ -394,6 +394,8 @@
     "scrub_pass_interval_ms": 2400000,
     "read_check_vm_steps": 10000,
     "history_scan_rows": 65536,
+    "frame_query_steps_per_second": 500000,
+    "frame_query_chunk_frames": 256,
     "tag": {
       "workbench_patterns": [
         "task.*.last_duration_ms",
@@ -422,6 +424,7 @@
       ]
     }
   },
+  "frame_retention_evidence_max_age_days": 15,
   "lab_module_authoring": false,
   "lab_module_debugging": false,
   "device_link": {

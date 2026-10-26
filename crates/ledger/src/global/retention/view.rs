@@ -21,16 +21,15 @@ use actingcommand_contract::{
     TaskSemanticFact, parse_resource_reading_snapshot_id,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::PoisonError;
 
 /// A frame is in an error window when its capture time lies in `[t - 30 s, t]`.
-pub(super) const ERROR_WINDOW_MS: u64 = 30_000;
+pub(in crate::global) const ERROR_WINDOW_MS: u64 = 30_000;
 /// A frame settles no earlier than 60 s after its capture.
-const SETTLE_AGE_MS: u64 = 60_000;
-const DAY_MS: u64 = 86_400_000;
+pub(in crate::global) const SETTLE_AGE_MS: u64 = 60_000;
+pub(in crate::global) const DAY_MS: u64 = 86_400_000;
 const DAY_MS_I64: i64 = 86_400_000;
 /// A resource reading frame is deleted 7 days after its entry time.
-const READING_DAYS: u64 = 7;
+pub(in crate::global) const READING_DAYS: u64 = 7;
 /// The `<code>` of an error leaf is at most 64 characters.
 const LEAF_NAME_CHARS: usize = 64;
 
@@ -57,7 +56,7 @@ impl Default for FrameRetentionSwitches {
 
 /// A UTC instant's local offset in milliseconds east of UTC, `None` when unknown. The view
 /// uses [`crate::local_time::machine_local_offset_ms`]; the tests pass a fixed zone.
-type LocalOffsetMs = fn(u64) -> Option<i64>;
+pub(in crate::global) type LocalOffsetMs = fn(u64) -> Option<i64>;
 
 /// A frame's class, in order of precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -463,118 +462,6 @@ impl FrameFacts {
         }
     }
 
-    /// LN-7 (#422, LEAN-L §3.5): whether a record of `run` was taken in.
-    pub(super) fn knows_run(&self, run: &RunId) -> bool {
-        self.runs.contains_key(run)
-    }
-
-    /// LN-7: the runs that hold back the frames of their instance (`holds_neighbours`).
-    pub(super) fn open_runs(&self) -> BTreeSet<RunId> {
-        self.runs
-            .keys()
-            .filter(|run| self.holds_neighbours(run))
-            .copied()
-            .collect()
-    }
-
-    /// LN-7: the marker neighbours (one hop) of `frames`: each one's representative and the
-    /// frame it is the representative of.
-    pub(super) fn neighbours(&self, frames: &BTreeSet<FrameId>) -> BTreeSet<FrameId> {
-        frames
-            .iter()
-            .flat_map(|frame| {
-                self.predecessors
-                    .get(frame)
-                    .into_iter()
-                    .chain(self.successors.get(frame))
-            })
-            .copied()
-            .collect()
-    }
-
-    /// LN-7: keeps the error points whose window can hold a live frame (`live_at`, the capture
-    /// times of the live frames of each instance, sorted): a point naming a live artifact or
-    /// frame, a point whose own window `[t - 30 s, t]` holds one, and a point of one of `runs`
-    /// (a late point is dated at its run's last frame). Returns the runs of the points kept. A
-    /// point dropped here can hold no frame captured later: its window ends before them.
-    pub(super) fn retain_points(
-        &mut self,
-        live_at: &BTreeMap<InstanceId, Vec<u64>>,
-        artifacts: &BTreeSet<ArtifactId>,
-        frames: &BTreeSet<FrameId>,
-        runs: &BTreeSet<RunId>,
-    ) -> BTreeSet<RunId> {
-        self.points.retain(|point| {
-            point
-                .named_artifacts
-                .iter()
-                .any(|artifact| artifacts.contains(artifact))
-                || point
-                    .named_frames
-                    .iter()
-                    .any(|frame| frames.contains(frame))
-                || point.run.as_ref().is_some_and(|run| runs.contains(run))
-                || live_at.get(&point.instance).is_some_and(|times| {
-                    let start =
-                        times.partition_point(|at| *at < point.at.saturating_sub(ERROR_WINDOW_MS));
-                    times.get(start).is_some_and(|at| *at <= point.at)
-                })
-        });
-        self.points.iter().filter_map(|point| point.run).collect()
-    }
-
-    /// LN-7: keeps only the facts of the frames, artifacts, runs and leases given; the starts and
-    /// the aliases (one per start and binding) stay.
-    pub(super) fn retain(
-        &mut self,
-        frames: &BTreeSet<FrameId>,
-        artifacts: &BTreeSet<ArtifactId>,
-        runs: &BTreeSet<RunId>,
-        leases: &BTreeSet<LeaseId>,
-    ) {
-        self.runs.retain(|run, _| runs.contains(run));
-        self.releases.retain(|lease, _| leases.contains(lease));
-        self.completed.retain(|frame| frames.contains(frame));
-        self.predecessors.retain(|frame, _| frames.contains(frame));
-        self.successors.retain(|frame, _| frames.contains(frame));
-        self.before_frames.retain(|frame| frames.contains(frame));
-        self.published_frames.retain(|frame| frames.contains(frame));
-        self.readings.retain(|frame, _| frames.contains(frame));
-        self.published_artifacts
-            .retain(|artifact| artifacts.contains(artifact));
-        self.summary_pins
-            .retain(|artifact| artifacts.contains(artifact));
-    }
-
-    /// LN-7: takes in `run`'s facts from `loaded`, which applied the run's records alone (in
-    /// ledger order), with the `Performed` releases of `leases` there. A run already known stays
-    /// as it is.
-    pub(super) fn adopt_run(
-        &mut self,
-        loaded: &mut FrameFacts,
-        run: &RunId,
-        leases: &BTreeSet<LeaseId>,
-    ) {
-        if self.runs.contains_key(run) {
-            return;
-        }
-        if let Some(facts) = loaded.runs.remove(run) {
-            self.runs.insert(*run, facts);
-        }
-        for lease in leases {
-            let Some(released) = loaded.releases.remove(lease) else {
-                continue;
-            };
-            let known = self.releases.entry(*lease).or_default();
-            for release in released {
-                if !known.contains(&release) {
-                    known.push(release);
-                }
-            }
-            known.sort_unstable_by_key(|(sequence, _)| *sequence);
-        }
-    }
-
     /// The alias bound to `instance` at `sequence`, made safe for a folder name; the
     /// instance id when no binding precedes it.
     fn alias(&self, instance: &InstanceId, sequence: u64) -> String {
@@ -626,14 +513,6 @@ struct RunSpan {
     last_at: u64,
     last_sequence: u64,
     instance: InstanceId,
-}
-
-/// Workflow #375 R5d: the classes at one head and one setting. Only the clock turns them into
-/// a view, so a cleaner round at an unchanged head classes nothing again.
-pub(super) struct FrameCache {
-    through_sequence: u64,
-    switches: FrameRetentionSwitches,
-    classified: Classified,
 }
 
 /// Every frame classed at one head, independent of the clock.
@@ -691,9 +570,11 @@ impl Classified {
 }
 
 impl RetentionIndex {
-    /// Workflow #375 R5c/R5d: the frame view at this index's head and at `now`, named in the
-    /// machine's local time. The classes are cached by head and setting. LN-5: `related` answers
-    /// whether a Lab anchor at this head relates to a frame's verified record (by its Lab keys).
+    /// Workflow #375 R5c: the frame view at this index's head and at `now`, named in the
+    /// machine's local time. LN-5: `related` answers whether a Lab anchor at this head relates to a
+    /// frame's verified record (by its Lab keys). #422 LN-7c Q: only a full build of the index
+    /// (`GlobalLedgerEvidence`, the reference of the frame cleaner's queries) has a view; the
+    /// writer keeps no frame facts.
     pub(in crate::global) fn frame_view(
         &self,
         related: &mut dyn FnMut(&LabKeys) -> GlobalLedgerResult<bool>,
@@ -701,16 +582,6 @@ impl RetentionIndex {
         switches: FrameRetentionSwitches,
         work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<FrameRetentionView> {
-        // A poisoned cache only loses its cached value, which is built again below.
-        let mut cache = self
-            .frame_cache
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(cached) = cache.as_ref().filter(|cached| {
-            cached.through_sequence == self.through_sequence && cached.switches == switches
-        }) {
-            return Ok(self.without_ghosts(cached.classified.at(self.through_sequence, now)));
-        }
         let frames = self.view_frames(related, work)?;
         let classified = classify(
             &self.frame_facts,
@@ -719,30 +590,14 @@ impl RetentionIndex {
             switches,
             crate::local_time::machine_local_offset_ms,
         )
-        // A local time the system cannot convert refuses this view; the writer goes on.
+        // A local time the system cannot convert refuses this view.
         .ok_or_else(|| {
             super::super::GlobalLedgerError::request(
                 LedgerCode::ArtifactRetentionClockFailed.code(),
                 LedgerLocation::FrameRetentionView.location(),
             )
         })?;
-        let view = classified.at(self.through_sequence, now);
-        *cache = Some(FrameCache {
-            through_sequence: self.through_sequence,
-            switches,
-            classified,
-        });
-        Ok(self.without_ghosts(view))
-    }
-
-    /// LN-7 (#422, LEAN-L §3.5): the view without the frames that left the live frame store; they
-    /// were classed only for the live frames they stand beside.
-    fn without_ghosts(&self, mut view: FrameRetentionView) -> FrameRetentionView {
-        if !self.ghosts.is_empty() {
-            view.frames
-                .retain(|frame| !self.ghosts.contains(&frame.reference.artifact_id));
-        }
-        view
+        Ok(classified.at(self.through_sequence, now))
     }
 
     fn view_frames(
@@ -1096,13 +951,20 @@ fn received_code(leaf_name: &str) -> Option<CodeStr> {
 
 /// `<HHmmss-fff>_<object file name>`, in local time.
 fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> Option<String> {
-    let object = frame
-        .reference
-        .object_key
-        .as_deref()
+    kept_file_name(frame.reference.object_key.as_deref(), frame.at, local)
+}
+
+/// `<HHmmss-fff>_<object file name>` of a frame captured at `at` whose object key is
+/// `object_key`, in local time; #422 LN-7c Q names a moved frame's file with it too.
+pub(in crate::global) fn kept_file_name(
+    object_key: Option<&str>,
+    at: u64,
+    local: LocalOffsetMs,
+) -> Option<String> {
+    let object = object_key
         .and_then(|key| key.rsplit('/').next())
         .unwrap_or_default();
-    let time = local_time(frame.at, local)?;
+    let time = local_time(at, local)?;
     Some(format!(
         "{:02}{:02}{:02}-{:03}_{object}",
         time.hour, time.minute, time.second, time.milli
@@ -1113,7 +975,7 @@ fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> Option<String> {
 /// its rejection's outcome), else its own `code` member, else the failure code of its run's
 /// failure terminal when that terminal precedes it, else its event type with `.` as `_`; at
 /// most 64 characters, outside `[A-Za-z0-9_-]` as `_`.
-fn leaf_name(
+pub(in crate::global) fn leaf_name(
     own_failure: Option<String>,
     own_value: Option<String>,
     preceding_failure: Option<String>,
@@ -1127,7 +989,7 @@ fn leaf_name(
 }
 
 /// The first string under `key` in the JSON, depth first in field order.
-fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
+pub(in crate::global) fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
     match value {
         serde_json::Value::Object(map) => map.iter().find_map(|(name, item)| match item {
             serde_json::Value::String(text) if name == key => Some(text.clone()),
@@ -1139,14 +1001,14 @@ fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 /// The event type's wire name with `.` as `_` (`runtime.takeover` is `runtime_takeover`).
-fn type_leaf_name(event_type: EventType) -> String {
+pub(in crate::global) fn type_leaf_name(event_type: EventType) -> String {
     match serde_json::to_value(event_type) {
         Ok(serde_json::Value::String(name)) => name.replace('.', "_"),
         _ => String::new(),
     }
 }
 
-fn id_text(instance: &InstanceId) -> String {
+pub(in crate::global) fn id_text(instance: &InstanceId) -> String {
     match serde_json::to_value(instance) {
         Ok(serde_json::Value::String(text)) => text,
         _ => String::new(),
@@ -1154,7 +1016,7 @@ fn id_text(instance: &InstanceId) -> String {
 }
 
 /// At most `limit` characters, each outside `[A-Za-z0-9_-]` replaced by `_`.
-fn leaf_part(text: &str, limit: usize) -> String {
+pub(in crate::global) fn leaf_part(text: &str, limit: usize) -> String {
     text.chars()
         .take(limit)
         .map(|character| {
@@ -1206,102 +1068,12 @@ fn local_time(unix_ms: u64, local: LocalOffsetMs) -> Option<LocalTime> {
     })
 }
 
-fn local_date(unix_ms: u64, local: LocalOffsetMs) -> Option<String> {
+pub(in crate::global) fn local_date(unix_ms: u64, local: LocalOffsetMs) -> Option<String> {
     let time = local_time(unix_ms, local)?;
     Some(format!(
         "{:04}-{:02}-{:02}",
         time.year, time.month, time.day
     ))
-}
-
-impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore<B> {
-    /// Workflow #375 R5d: the frame view at the writer's head.
-    /// #411 A51 (R2): a rebuild of the view stops where `work`'s budget runs out, with
-    /// `ledger_read_budget_exceeded`; the cleaner reads it again at its next round.
-    pub(in crate::global) fn frame_retention_view(
-        &self,
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-        work: &crate::global::read_work::ReadWork,
-    ) -> GlobalLedgerResult<FrameRetentionView> {
-        // LN-5 (#422, LEAN-L §3.3): the Lab relations at the writer's head are read from the
-        // store once per rebuild of the view, when a frame first asks.
-        let through = self.retention.through_sequence;
-        let mut relations: Option<crate::global::history::LabRelations> = None;
-        self.retention.frame_view(
-            &mut |keys| {
-                if relations.is_none() {
-                    relations = Some(self.backend.lab_relations(through, &Default::default())?);
-                }
-                Ok(relations
-                    .as_ref()
-                    .is_some_and(|relations| relations.related(keys)))
-            },
-            now_unix_ms,
-            switches,
-            work,
-        )
-    }
-}
-
-impl super::super::GlobalLedger {
-    /// Workflow #375 R5d: the frame view at the writer's head and at `now_unix_ms`, which the
-    /// frame cleaner reads once per sweep. Read-only; the classes are cached by head.
-    pub fn frame_retention_view(
-        &self,
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-    ) -> GlobalLedgerResult<FrameRetentionView> {
-        self.frame_retention_view_of(now_unix_ms, switches, None)
-    }
-
-    /// LN-7 (#422, LEAN-L §3.5): the frame view after the writer dropped the facts of every frame
-    /// that left the live frame store under `root`, which is listed here, on the caller's thread.
-    /// The frame cleaner reads it once per sweep start. A listing failure is this read's error
-    /// (`ledger_io`, not fatal); the cleaner reads again at its next round.
-    pub fn frame_retention_view_live(
-        &self,
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-        root: &std::path::Path,
-    ) -> GlobalLedgerResult<FrameRetentionView> {
-        let live = super::live_frame_ids(root).map_err(|error| {
-            super::super::GlobalLedgerError::request(
-                LedgerCode::LedgerIo.code(),
-                LedgerLocation::FrameRetentionView.location(),
-            )
-            .with_detail(error.to_string())
-        })?;
-        self.frame_retention_view_of(now_unix_ms, switches, Some(live))
-    }
-
-    fn frame_retention_view_of(
-        &self,
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-        live: Option<BTreeSet<ArtifactId>>,
-    ) -> GlobalLedgerResult<FrameRetentionView> {
-        let (response, receiver) = std::sync::mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| super::invalid(LedgerCode::WriterUnavailable.code()))?;
-        super::super::send_command(
-            sender,
-            super::super::WriterCommand::FrameRetentionView {
-                now_unix_ms,
-                switches,
-                live,
-                response,
-            },
-            LedgerLocation::FrameRetentionView.location(),
-        )?;
-        super::super::receive_response(
-            receiver,
-            LedgerLocation::FrameRetentionView.location(),
-            self.reply_timeout,
-        )?
-    }
 }
 
 impl super::super::GlobalLedgerEvidence {

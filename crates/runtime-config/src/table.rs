@@ -7,8 +7,8 @@
 
 use crate::{
     device_link, device_state, display_safe_area, emulator_control, execution, existing,
-    host_claims, idle, instance, lab_module, ledger_observer, performance, recovery_ladder,
-    scheduling, standard_packs, startup_discovery, touch, watchdog,
+    frame_retention, host_claims, idle, instance, lab_module, ledger_observer, performance,
+    recovery_ladder, scheduling, standard_packs, startup_discovery, touch, watchdog,
 };
 
 /// The type of a key's value (§5.5 `type`). A decimal, a list and an object are reported in
@@ -182,6 +182,7 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
         execution::ROWS,
         idle::ROWS,
         display_safe_area::ROWS,
+        frame_retention::ROWS,
         instance::ROWS,
     ]
 }
@@ -194,7 +195,8 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
 /// the `startup_discovery` section (Workflow #390 DISC-1), the `touch` section (Workflow #406
 /// T12), the `emulator_control` section (#411 A50), the `watchdog` section (#411 A66), the
 /// `execution` section (PERF-B1), the `idle` section (IDLE-1), the `display_safe_area` section
-/// (Workflow #392 DA-4b-D), then the per-instance section (D1b).
+/// (Workflow #392 DA-4b-D), the evidence-frame key (#422 LN-7c Q), then the per-instance section
+/// (D1b).
 pub fn mechanism_rows() -> Vec<KeyRow> {
     mechanism_sections()
         .into_iter()

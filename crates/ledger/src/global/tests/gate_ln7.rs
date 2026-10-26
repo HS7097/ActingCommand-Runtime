@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! LN-7 (#422, LEAN-L §3.5, model row LN-7). The writer keeps resident only the facts of the
-//! frames present in the live frame store (and what their classes read), and drops the rest:
-//! - A6: its frame view decides every live frame as the offline full view
-//!   (`GlobalLedgerEvidence::frame_retention_view`) does (class, entry, due time, kept folder and
-//!   windows), whether it dropped the other frames at a sweep start or opened anew, including a
-//!   resource reading frame and a confirmation frame whose facts are published with system links
-//!   (no run, instance, lease or frame link), and a marker neighbour in another run;
+//! LN-7 (#422, LEAN-L §3.5, model row LN-7), and #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §6,
+//! §7 row Q, test T-eq with LN-7b's A6 case fixture):
+//! - T-eq (adapted from A6, whose writer's frame view Q removes): the frame cleaner's query
+//!   (statements W and L, then a moved frame's kept folder) decides every live frame of the case
+//!   fixture as the offline full view (`GlobalLedgerEvidence::frame_retention_view`, the reference)
+//!   classes it, with E1's due times (from the frame's ingestion time): its action and, for a frame
+//!   it moves, its kept folder. The fixture holds A6's cases (marker chains within and across runs,
+//!   Lab anchors, a run cut short by a start whose last frame is gone, a resource reading frame and
+//!   a confirmation frame published with system links, a stuck running run), and Q's: F5 (a frame
+//!   named only by a publication whose correlation has a Lab use), F6 (a run cut short with no frame
+//!   left in the store, whose epoch-end point keeps a frame of another run) and E4, the one
+//!   difference the design accounts that the fixture has (a run-less Warning that names a frame:
+//!   the query keeps it as an error frame, the full view does not). E3 and E5 do not arise here;
 //! - a record that references an artifact the writer no longer holds with another reference is
 //!   refused `artifact_identity_conflict`: its identity is read through the `artifact_id` index.
 //!
@@ -16,8 +22,9 @@
 use super::missing_material::{formal_root, material_store};
 use crate::PersistedEvent;
 use crate::global::{
-    FrameRetentionClass, FrameRetentionSwitches, FrameRetentionView, KeptFrameFolder,
-    LedgerMaintenance, LedgerOpenTiming, Sha256SecretFingerprinter,
+    FrameQueryAction, FrameQueryOutcome, FrameQuerySettings, FrameRetentionClass,
+    FrameRetentionFrame, FrameRetentionSwitches, FrameRetentionView, KeptFrameFolder,
+    LedgerMaintenance, LedgerOpenTiming, LiveFrameAnswer, Sha256SecretFingerprinter,
 };
 use crate::{GlobalLedger, GlobalLedgerEvidenceConfig};
 use actingcommand_artifact_store::{
@@ -45,21 +52,89 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// 2026-01-01 00:00:00 UTC.
-const T0: u64 = 1_767_225_600_000;
+pub(super) const T0: u64 = 1_767_225_600_000;
 const SECOND: u64 = 1_000;
-const DAY_MS: u64 = 86_400_000;
+pub(super) const DAY_MS: u64 = 86_400_000;
 /// The views are read two days after `T0`, past every frame's settle age.
 const NOW: u64 = T0 + 2 * DAY_MS;
-const SWITCHES: FrameRetentionSwitches = FrameRetentionSwitches {
+pub(super) const SWITCHES: FrameRetentionSwitches = FrameRetentionSwitches {
     dedup_error: true,
     dedup_lab: false,
 };
+/// `frame_retention_evidence_max_age_days`'s default.
+pub(super) const EVIDENCE_MAX_AGE_MS: u64 = 15 * DAY_MS;
+/// `ledger_observer.frame_query_chunk_frames`'s default.
+pub(super) const CHUNK_FRAMES: usize = 256;
 
-fn at(seconds: u64) -> u64 {
+pub(super) fn at(seconds: u64) -> u64 {
     T0 + seconds * SECOND
 }
 
-fn terminal(event: &PersistedEvent) -> TerminalEvent {
+/// What a pass at `now` decides with: the switches' defaults and the evidence age's.
+pub(super) fn settings(now: u64) -> FrameQuerySettings {
+    FrameQuerySettings {
+        now_unix_ms: now,
+        switches: SWITCHES,
+        evidence_max_age_ms: EVIDENCE_MAX_AGE_MS,
+    }
+}
+
+/// #422 LN-7c Q: the query's answer for each frame of `live` at `now` (W, then L in chunks), and
+/// for each frame it moves the kept folder it names, read on the writer's own frame query.
+pub(super) fn query_decisions(
+    ledger: &GlobalLedger,
+    live: &BTreeSet<ArtifactId>,
+    now: u64,
+) -> BTreeMap<ArtifactId, (LiveFrameAnswer, Option<KeptFrameFolder>)> {
+    let mut query = ledger
+        .frame_query(Arc::new(|| false))
+        .expect("the writer's frame query");
+    let FrameQueryOutcome::Answered { value: waits, .. } = query.waits().expect("statement W")
+    else {
+        panic!("statement W answered nothing: the frame index does not cover the ledger");
+    };
+    let ids = live.iter().copied().collect::<Vec<_>>();
+    let mut decisions = BTreeMap::new();
+    for chunk in ids.chunks(CHUNK_FRAMES) {
+        let FrameQueryOutcome::Answered { value, .. } = query
+            .live(chunk, &waits, &settings(now))
+            .expect("statement L")
+        else {
+            panic!("statement L answered nothing");
+        };
+        for answer in value {
+            let folder = answer.action.moves().then(|| {
+                let frame = query
+                    .frame(answer.artifact_id)
+                    .expect("the frame's verified record")
+                    .expect("a moved frame has its verified record");
+                query
+                    .folder(&frame, answer.action == FrameQueryAction::MoveLab)
+                    .expect("the moved frame's kept folder")
+            });
+            decisions.insert(answer.artifact_id, (answer, folder));
+        }
+    }
+    decisions
+}
+
+/// The reference's action for a frame of the full view at `now`, with E1's due times: a default
+/// frame at 1 day and a resource frame at 7 days after its ingestion time.
+pub(super) fn expected_action(frame: &FrameRetentionFrame, now: u64) -> FrameQueryAction {
+    let at = frame.reference.created_at_unix_ms;
+    match frame.class {
+        FrameRetentionClass::Running => FrameQueryAction::Running,
+        FrameRetentionClass::Lab => FrameQueryAction::MoveLab,
+        FrameRetentionClass::Error => FrameQueryAction::MoveError,
+        FrameRetentionClass::Resource if at + 7 * DAY_MS <= now => FrameQueryAction::Remove,
+        FrameRetentionClass::Resource => FrameQueryAction::KeepResource,
+        FrameRetentionClass::Duplicate => FrameQueryAction::RemoveDuplicate,
+        FrameRetentionClass::Default if at + DAY_MS <= now => FrameQueryAction::Remove,
+        FrameRetentionClass::Default => FrameQueryAction::Keep,
+    }
+}
+
+pub(super) fn terminal(event: &PersistedEvent) -> TerminalEvent {
     TerminalEvent {
         sequence: event.sequence(),
         event_id: *event.event_id(),
@@ -83,7 +158,7 @@ fn runtime_origin() -> EventOrigin {
 }
 
 /// The writer of the existing formal root, opened anew as a start opens it.
-fn reopen(database: &Arc<RuntimeDatabase>) -> GlobalLedger {
+pub(super) fn reopen(database: &Arc<RuntimeDatabase>) -> GlobalLedger {
     let limits = MaintenanceLimits::default();
     LedgerMaintenance::acquire(
         database.root(),
@@ -102,14 +177,14 @@ fn reopen(database: &Arc<RuntimeDatabase>) -> GlobalLedger {
 }
 
 /// One frame: its reference, its file and the links of its records.
-struct Frame {
-    reference: ProjectedArtifactReference,
-    material: PathBuf,
-    links: EventLinksDraft,
+pub(super) struct Frame {
+    pub(super) reference: ProjectedArtifactReference,
+    pub(super) material: PathBuf,
+    pub(super) links: EventLinksDraft,
 }
 
 impl Frame {
-    fn id(&self) -> ArtifactId {
+    pub(super) fn id(&self) -> ArtifactId {
         self.reference.artifact_id
     }
 
@@ -124,26 +199,26 @@ impl Frame {
     }
 
     /// The frame leaves the live frame store.
-    fn delete(&self) {
+    pub(super) fn delete(&self) {
         std::fs::remove_file(&self.material).expect("remove the frame file");
     }
 }
 
 /// A run: its id, the links of its task records and their correlation.
-struct RunLinks {
-    id: IssuedRunId,
-    links: EventLinksDraft,
-    correlation: IssuedCorrelationId,
+pub(super) struct RunLinks {
+    pub(super) id: IssuedRunId,
+    pub(super) links: EventLinksDraft,
+    pub(super) correlation: IssuedCorrelationId,
 }
 
 /// The records of one instance in one owner epoch, appended to the root's writer.
-struct Corpus<'a> {
-    ledger: &'a GlobalLedger,
+pub(super) struct Corpus<'a> {
+    pub(super) ledger: &'a GlobalLedger,
     artifacts: &'a ArtifactStore,
-    ids: IdentifierIssuer,
+    pub(super) ids: IdentifierIssuer,
     owner: OwnerEpoch,
-    instance: IssuedInstanceId,
-    fingerprinter: Sha256SecretFingerprinter,
+    pub(super) instance: IssuedInstanceId,
+    pub(super) fingerprinter: Sha256SecretFingerprinter,
 }
 
 /// Appends the ArtifactStore's events and keeps the frame's `artifact.verified`.
@@ -170,7 +245,7 @@ impl ArtifactEventSink for Sink<'_, '_> {
 }
 
 impl<'a> Corpus<'a> {
-    fn new(ledger: &'a GlobalLedger, artifacts: &'a ArtifactStore) -> Self {
+    pub(super) fn new(ledger: &'a GlobalLedger, artifacts: &'a ArtifactStore) -> Self {
         let ids = IdentifierIssuer::new().expect("identifier issuer");
         let owner = *ids.mint_owner_epoch().expect("owner epoch").transport();
         let instance = ids.mint_instance_id().expect("instance");
@@ -185,7 +260,7 @@ impl<'a> Corpus<'a> {
         }
     }
 
-    fn append(
+    pub(super) fn append(
         &self,
         at: u64,
         severity: EventSeverity,
@@ -206,20 +281,20 @@ impl<'a> Corpus<'a> {
         self.ledger.append(draft).expect("fixture append")
     }
 
-    fn request(&self) -> IssuedRequestId {
+    pub(super) fn request(&self) -> IssuedRequestId {
         self.ids.mint_request_id().expect("request")
     }
 
-    fn correlation(&self) -> IssuedCorrelationId {
+    pub(super) fn correlation(&self) -> IssuedCorrelationId {
         self.ids.mint_correlation_id().expect("correlation")
     }
 
     /// Links of the instance in their own request and correlation.
-    fn scoped(&self) -> EventLinksDraft {
+    pub(super) fn scoped(&self) -> EventLinksDraft {
         self.scoped_in(self.request(), self.correlation())
     }
 
-    fn scoped_in(
+    pub(super) fn scoped_in(
         &self,
         request: IssuedRequestId,
         correlation: IssuedCorrelationId,
@@ -231,7 +306,7 @@ impl<'a> Corpus<'a> {
     }
 
     /// A `runtime.started`: the owner epoch of every run first seen before it has ended.
-    fn start(&self, at: u64) -> PersistedEvent {
+    pub(super) fn start(&self, at: u64) -> PersistedEvent {
         self.append(
             at,
             EventSeverity::Info,
@@ -244,7 +319,7 @@ impl<'a> Corpus<'a> {
     }
 
     /// The owner epoch, recorded before any frame by a confirmed quiescence of the instance.
-    fn owner_recorded(&self, at: u64) {
+    pub(super) fn owner_recorded(&self, at: u64) {
         self.append(
             at,
             EventSeverity::Info,
@@ -267,7 +342,7 @@ impl<'a> Corpus<'a> {
 
     /// A capture frame captured at `at` in the scope of `links` (whose correlation is
     /// `correlation`), published through the store, with its Explicit pin.
-    fn frame(
+    pub(super) fn frame(
         &self,
         links: EventLinksDraft,
         correlation: IssuedCorrelationId,
@@ -357,11 +432,11 @@ impl<'a> Corpus<'a> {
 
     /// A run-less observe frame of the instance at `at` in its own request and correlation, and
     /// its `capture.completed`.
-    fn observe(&self, at: u64) -> Frame {
+    pub(super) fn observe(&self, at: u64) -> Frame {
         self.observe_in(self.request(), self.correlation(), at)
     }
 
-    fn observe_in(
+    pub(super) fn observe_in(
         &self,
         request: IssuedRequestId,
         correlation: IssuedCorrelationId,
@@ -391,7 +466,7 @@ impl<'a> Corpus<'a> {
 
     /// A `capture.dedup_window` linked to `representative` that preserves `preserved`, as the
     /// capture pipeline records its markers.
-    fn marker(&self, representative: &Frame, preserved: &Frame, at: u64) {
+    pub(super) fn marker(&self, representative: &Frame, preserved: &Frame, at: u64) {
         self.append(
             at,
             EventSeverity::Info,
@@ -411,7 +486,7 @@ impl<'a> Corpus<'a> {
     }
 
     /// A run of the instance and its `task.started` at `at`.
-    fn run(&self, at: u64) -> RunLinks {
+    pub(super) fn run(&self, at: u64) -> RunLinks {
         let run = self.ids.mint_run_id().expect("run");
         let correlation = self.correlation();
         let links = self
@@ -433,12 +508,12 @@ impl<'a> Corpus<'a> {
     }
 
     /// A frame of `run` captured at `at`.
-    fn run_frame(&self, run: &RunLinks, at: u64) -> Frame {
+    pub(super) fn run_frame(&self, run: &RunLinks, at: u64) -> Frame {
         self.frame(run.links.clone(), run.correlation, Some(run.id), at)
     }
 
     /// The run's capture summary naming `frames`, then its successful terminal.
-    fn close(&self, links: &EventLinksDraft, frames: &[&Frame], at: u64) {
+    pub(super) fn close(&self, links: &EventLinksDraft, frames: &[&Frame], at: u64) {
         let evidence = frames
             .iter()
             .enumerate()
@@ -487,7 +562,7 @@ impl<'a> Corpus<'a> {
     }
 
     /// An Error `runtime.failed` of the instance without a run: an error point at `at`.
-    fn error_point(&self, at: u64) -> PersistedEvent {
+    pub(super) fn error_point(&self, at: u64) -> PersistedEvent {
         self.append(
             at,
             EventSeverity::Error,
@@ -512,7 +587,7 @@ impl<'a> Corpus<'a> {
     /// A `fact.published` of one instance fact with `detector` and `snapshot`, published as the
     /// Runtime publishes a resource reading or an adjustment: with system links (a new request
     /// and correlation and an action; no run, instance, lease or frame link) and inline content.
-    fn publish(&self, detector: String, snapshot: String, at: u64) -> PersistedEvent {
+    pub(super) fn publish(&self, detector: String, snapshot: String, at: u64) -> PersistedEvent {
         let record = FactRecord {
             scope: FactScope::Instance {
                 instance_id: "fixture-instance-a".to_owned(),
@@ -548,7 +623,7 @@ impl<'a> Corpus<'a> {
     }
 
     /// A resource reading taken on `frame` of `run`.
-    fn reading(&self, run: &RunLinks, frame: &Frame, at: u64) -> PersistedEvent {
+    pub(super) fn reading(&self, run: &RunLinks, frame: &Frame, at: u64) -> PersistedEvent {
         self.publish(
             format!("{RESOURCE_READING_DETECTOR_PREFIX}ln7_task/ln7_reading"),
             resource_reading_snapshot_id(
@@ -561,7 +636,7 @@ impl<'a> Corpus<'a> {
     }
 
     /// An adjustment of `base` whose operation was confirmed on `frame` of `run`.
-    fn adjustment(&self, run: &RunLinks, frame: &Frame, base: &PersistedEvent, at: u64) {
+    pub(super) fn adjustment(&self, run: &RunLinks, frame: &Frame, base: &PersistedEvent, at: u64) {
         self.publish(
             format!("{RESOURCE_ADJUSTMENT_DETECTOR_PREFIX}ln7_task/ln7_adjustment"),
             resource_adjustment_snapshot_id(
@@ -575,7 +650,7 @@ impl<'a> Corpus<'a> {
     }
 
     /// A Lab anchor (a record of the Lab) with `links`.
-    fn lab_anchor(&self, links: EventLinksDraft, at: u64) {
+    pub(super) fn lab_anchor(&self, links: EventLinksDraft, at: u64) {
         self.append(
             at,
             EventSeverity::Info,
@@ -584,59 +659,72 @@ impl<'a> Corpus<'a> {
             CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into(),
         );
     }
-}
 
-/// What a view decides for one frame: its class, entry, due time and kept folder, and its
-/// windows named by their points (sequence, epoch end, t and leaf), so views with other point
-/// lists compare.
-type Decision = (
-    FrameRetentionClass,
-    Option<u64>,
-    Option<u64>,
-    Option<KeptFrameFolder>,
-    Vec<(u64, bool, u64, String)>,
-);
+    /// #422 LN-7c Q (F5): a `fact.published` that holds `frame`'s artifact as its content, with
+    /// system links in the correlation `correlation` (no run, instance, lease or frame link).
+    pub(super) fn publish_artifact(
+        &self,
+        frame: &Frame,
+        correlation: IssuedCorrelationId,
+        at: u64,
+    ) -> PersistedEvent {
+        let record = FactRecord {
+            scope: FactScope::Instance {
+                instance_id: "fixture-instance-a".to_owned(),
+            },
+            key: "resource.ln7_fixture_artifact".to_owned(),
+            content: FactContent::Artifact {
+                artifact: frame.reference.clone(),
+            },
+            observed_at_unix_ms: at,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli: 1_000,
+            source_detector: "ln7_fixture_detector".to_owned(),
+            source_snapshot_id: "snapshot:ln7_fixture".to_owned(),
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: "5".repeat(64),
+            invalidate_on: Vec::new(),
+        };
+        self.append(
+            at,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::FactStore,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default()
+                .with_request_id(self.request())
+                .with_correlation_id(correlation)
+                .with_action_id(self.ids.mint_action_id().expect("action")),
+            FactPayloadDraft::published(record, AuditInput::new()).into(),
+        )
+    }
 
-fn decisions(
-    view: &FrameRetentionView,
-    live: &BTreeSet<ArtifactId>,
-) -> BTreeMap<ArtifactId, Decision> {
-    view.frames
-        .iter()
-        .filter(|frame| live.contains(&frame.reference.artifact_id))
-        .map(|frame| {
-            let windows = frame
-                .windows
-                .iter()
-                .map(|index| {
-                    let point = &view.error_points[*index];
-                    (
-                        point.sequence,
-                        point.epoch_end,
-                        point.at_unix_ms,
-                        point.leaf.clone(),
-                    )
-                })
-                .collect();
-            (
-                frame.reference.artifact_id,
-                (
-                    frame.class,
-                    frame.entry_unix_ms,
-                    frame.due_unix_ms,
-                    frame.folder.clone(),
-                    windows,
+    /// #422 LN-7c Q (E4): a run-less Warning `runtime.failed` that names `frame` by its frame link
+    /// (its severity is its outcome's category, ledger revision 3).
+    pub(super) fn warning_naming(&self, frame: &Frame, at: u64) -> PersistedEvent {
+        self.append(
+            at,
+            EventSeverity::Warning,
+            runtime_origin(),
+            frame.links.clone(),
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                Outcome::relayed("step_budget_exhausted"),
+                DiagnosticDetailDraft::new(
+                    "ln7_fixture",
+                    crate::LedgerLocation::AppendEvent.location(),
+                    "ln7_backend",
+                    "ln7_operation",
                 ),
+                AuditInput::new(),
             )
-        })
-        .collect()
-}
-
-fn listed(view: &FrameRetentionView) -> BTreeSet<ArtifactId> {
-    view.frames
-        .iter()
-        .map(|frame| frame.reference.artifact_id)
-        .collect()
+            .into(),
+        )
+    }
 }
 
 /// The live frames of the corpus, by role.
@@ -659,6 +747,10 @@ struct Live {
     d1: ArtifactId,
     n: ArtifactId,
     m: ArtifactId,
+    /// #422 LN-7c Q: F5, F6 and E4.
+    f5: ArtifactId,
+    k1: ArtifactId,
+    w1: ArtifactId,
     all: BTreeSet<ArtifactId>,
 }
 
@@ -668,6 +760,29 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     let corpus = Corpus::new(ledger, artifacts);
     corpus.start(at(0));
     corpus.owner_recorded(at(1));
+    // #422 LN-7c Q, F6: run E, cut short by the start at 400 s, has no frame left in the store;
+    // its epoch-end point at its last frame (45 s) keeps K1, a frame of the closed run K.
+    let run_k = corpus.run(at(28));
+    let k1 = corpus.run_frame(&run_k, at(30));
+    corpus.close(&run_k.links, &[&k1], at(31));
+    let run_e = corpus.run(at(40));
+    let e1 = corpus.run_frame(&run_e, at(45));
+    // E4: W1, a run-less frame named by a run-less Warning.
+    let w1 = corpus.observe(at(60));
+    corpus.warning_naming(&w1, at(61));
+    // F5: F5's frame is named only by a publication with system links whose correlation has a
+    // Lab use.
+    let run_f = corpus.run(at(70));
+    let f5 = corpus.run_frame(&run_f, at(72));
+    corpus.close(&run_f.links, &[&f5], at(73));
+    let published = corpus.correlation();
+    corpus.publish_artifact(&f5, published, at(74));
+    corpus.lab_anchor(
+        EventLinksDraft::default()
+            .with_request_id(corpus.request())
+            .with_correlation_id(published),
+        at(75),
+    );
     // Markers and neighbours: F1 -> F2 -> F3, an Error point after them, and F1 deleted.
     let f1 = corpus.observe(at(10));
     let f2 = corpus.observe(at(11));
@@ -743,8 +858,10 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     f1.delete();
     c3.delete();
     q1.delete();
+    e1.delete();
     let all = [
-        &f2, &f3, &g1, &g2, &g3, &l1, &l2, &c1, &c2, &p1, &r1, &h1, &h2, &h3, &d1, &n, &m,
+        &f2, &f3, &g1, &g2, &g3, &l1, &l2, &c1, &c2, &p1, &r1, &h1, &h2, &h3, &d1, &n, &m, &f5,
+        &k1, &w1,
     ]
     .iter()
     .map(|frame| frame.id())
@@ -768,6 +885,9 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
         d1: d1.id(),
         n: n.id(),
         m: m.id(),
+        f5: f5.id(),
+        k1: k1.id(),
+        w1: w1.id(),
         all,
     }
 }
@@ -778,7 +898,9 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
 /// dates its epoch-end point at its deleted last frame, which keeps C1 and C2; P1, whose deleted
 /// neighbour's run Q ended before the start, gets no epoch-end point of Q; R1 is a reading frame,
 /// due 7 days after its entry; the published confirmation exempts the interior H2 from being a
-/// duplicate; the stuck run D holds itself and N; M settles.
+/// duplicate; the stuck run D holds itself and N; M settles. #422 LN-7c Q: F5's publication's Lab
+/// use makes it Lab; run E's epoch-end point keeps K1; the run-less Warning naming W1 is no error
+/// point of the full view, so W1 is a default frame there.
 fn assert_required_classes(view: &FrameRetentionView, live: &Live) {
     let frame_of = |id: &ArtifactId| {
         view.frames
@@ -806,6 +928,9 @@ fn assert_required_classes(view: &FrameRetentionView, live: &Live) {
         (live.d1, C::Running),
         (live.n, C::Running),
         (live.m, C::Default),
+        (live.f5, C::Lab),
+        (live.k1, C::Error),
+        (live.w1, C::Default),
     ] {
         assert_eq!(class(&id), expected);
     }
@@ -818,24 +943,23 @@ fn assert_required_classes(view: &FrameRetentionView, live: &Live) {
     let epoch_end = view
         .error_points
         .iter()
-        .find(|point| point.epoch_end)
-        .expect("the epoch-end point of run C");
-    assert_eq!(epoch_end.at_unix_ms, live.c3_at);
+        .find(|point| point.epoch_end && point.at_unix_ms == live.c3_at);
+    assert!(
+        epoch_end.is_some(),
+        "the epoch-end point of run C, at its deleted last frame"
+    );
 }
 
-/// A6 (LN-7 row): the writer's view, after it dropped the frames that left the live store at a
-/// sweep start and after it opened anew, decides every live frame as the full view does, and
-/// lists only the live frames.
+/// #422 LN-7c Q, T-eq on the case fixture (adapted from A6, whose writer's views are gone): the
+/// query's action for each live frame is the full view's class with E1's due time, and the kept
+/// folder it names for a frame it moves is the full view's; the one accounted difference is E4's.
 #[test]
-fn ln7_a6_bounded_frame_decisions_equal_the_full_views() {
+fn ln7c_q_teq_the_query_decides_each_live_frame_of_the_case_fixture_as_the_full_view() {
     let root = tempfile::tempdir().expect("root");
-    let (database, ledger) = formal_root(root.path());
+    let (_database, ledger) = formal_root(root.path());
     let artifacts = material_store(root.path());
     let live = corpus(&ledger, &artifacts);
-
-    let swept = ledger
-        .frame_retention_view_live(NOW, SWITCHES, artifacts.root())
-        .expect("the view at a sweep start");
+    let decided = query_decisions(&ledger, &live.all, NOW);
     ledger.close().expect("close the writer");
     let full = GlobalLedger::open_evidence(
         GlobalLedgerEvidenceConfig::new(root.path()).sqlite_material_not_read(),
@@ -844,26 +968,51 @@ fn ln7_a6_bounded_frame_decisions_equal_the_full_views() {
     .expect("the whole opening")
     .frame_retention_view(NOW, SWITCHES)
     .expect("the full view");
-    let reopened = reopen(&database);
-    let opened = reopened
-        .frame_retention_view(NOW, SWITCHES)
-        .expect("the view of the writer opened anew");
-    reopened.close().expect("close the reopened writer");
 
     assert_required_classes(&full, &live);
-    let expected = decisions(&full, &live.all);
+    let reference = full
+        .frames
+        .iter()
+        .filter(|frame| live.all.contains(&frame.reference.artifact_id))
+        .collect::<Vec<_>>();
     assert_eq!(
-        expected.len(),
+        reference.len(),
         live.all.len(),
         "the full view lists every live frame"
     );
-    for (view, when) in [(&swept, "at a sweep start"), (&opened, "opened anew")] {
+    assert_eq!(
+        decided.keys().copied().collect::<BTreeSet<_>>(),
+        live.all,
+        "the query answers every live frame (all are settled)"
+    );
+    for frame in reference {
+        let id = frame.reference.artifact_id;
+        let (answer, folder) = &decided[&id];
         assert_eq!(
-            listed(view),
-            live.all,
-            "the view lists the live frames only ({when})"
+            answer.created_at_unix_ms, frame.reference.created_at_unix_ms,
+            "the ingestion time of {id:?}"
         );
-        assert_eq!(decisions(view, &live.all), expected, "the decisions {when}");
+        if id == live.w1 {
+            // E4: any Warning or higher record naming a frame keeps it as an error frame.
+            assert_eq!(
+                (frame.class, answer.class, answer.action),
+                (
+                    FrameRetentionClass::Default,
+                    FrameRetentionClass::Error,
+                    FrameQueryAction::MoveError
+                ),
+                "E4: the run-less Warning naming W1"
+            );
+            continue;
+        }
+        assert_eq!(answer.class, frame.class, "the class of {id:?}");
+        assert_eq!(
+            answer.action,
+            expected_action(frame, NOW),
+            "the action of {id:?} ({:?})",
+            frame.class
+        );
+        assert_eq!(folder, &frame.folder, "the kept folder of {id:?}");
     }
 }
 

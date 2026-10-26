@@ -15,11 +15,13 @@
 //   with the history.
 // - O3 (fix round 1, from the independent review `rd-1026/ln7c/review-o.md` §5): on a
 //   production-shaped root (live frames in four epochs, lease releases and run terminals, a
-//   takeover, a dump import of the previous owner), the bounded open's frame view (LN-7b's view
-//   and its kept moves) and the records a real startup reconcile then writes are those of the read
-//   of every owner record; a dump present at the open, the previous owner in no start's epoch and
-//   an epoch with no owner record after its start make the open read every owner record and say
-//   why.
+//   takeover, a dump import of the previous owner), the frame cleaner's decisions after the
+//   bounded open and the records a real startup reconcile then writes are those of the read of
+//   every owner record; a dump present at the open, the previous owner in no start's epoch and an
+//   epoch with no owner record after its start make the open read every owner record and say why.
+//   #422 LN-7c Q removed LN-7b's frame view, which O3 compared at the open and at a sweep start:
+//   O3 compares the query's answers for the live frames at the open instead (the cleaner decides
+//   by them, and they read no owner state).
 //
 // An owner epoch here is laid out as a start writes it: its first owner record (as the start's
 // capacity sample), its prior-epoch imports and closes, its start record, its records, and its last
@@ -33,9 +35,9 @@ use crate::global::retention::{
     OwnerState, read_every_owner_record_for_test, take_opened_owner_state_for_test,
 };
 use crate::global::{
-    FrameRetentionSwitches, FrameRetentionView, GlobalLedger, KeptFrameFolder, LedgerFailurePlan,
-    LedgerMaintenance, LedgerOpenTiming, LedgerWritePolicy, OwnerReadFull,
-    Sha256SecretFingerprinter, SyntheticAppender,
+    FrameQueryAction, FrameQueryOutcome, FrameQuerySettings, FrameRetentionSwitches, GlobalLedger,
+    LedgerFailurePlan, LedgerMaintenance, LedgerOpenTiming, LedgerWritePolicy, LiveFrameAnswer,
+    OwnerReadFull, Sha256SecretFingerprinter, SyntheticAppender,
 };
 use crate::owner_journal::RuntimeOwnerJournal;
 use crate::{LedgerReadCounter, PersistedEvent};
@@ -1656,10 +1658,8 @@ impl NewStart {
 struct Started {
     // The owner state the open kept, and whether it read every owner record.
     state: (OwnerState, bool),
-    // The frame view at the open, and at the frame cleaner's first sweep start after the start's
-    // own records (LN-7b).
-    opened: FrameRetentionView,
-    swept: FrameRetentionView,
+    // #422 LN-7c Q: the frame cleaner's answers for the live frames at the open.
+    decided: BTreeMap<ArtifactId, LiveFrameAnswer>,
     // The records the startup reconcile wrote (`decided`).
     reconciled: Vec<String>,
 }
@@ -1727,11 +1727,40 @@ fn decided(records: &[PersistedEvent]) -> Vec<String> {
         .collect()
 }
 
+// #422 LN-7c Q: the frame cleaner's answers for `live` at `NOW` (statements W and L).
+fn frame_answers(
+    ledger: &GlobalLedger,
+    live: &BTreeSet<ArtifactId>,
+) -> BTreeMap<ArtifactId, LiveFrameAnswer> {
+    let mut query = ledger
+        .frame_query(Arc::new(|| false))
+        .expect("the writer's frame query");
+    let FrameQueryOutcome::Answered { value: waits, .. } = query.waits().expect("statement W")
+    else {
+        panic!("statement W answered nothing");
+    };
+    let settings = FrameQuerySettings {
+        now_unix_ms: NOW,
+        switches: SWITCHES,
+        evidence_max_age_ms: 15 * DAY_MS,
+    };
+    let ids = live.iter().copied().collect::<Vec<_>>();
+    let FrameQueryOutcome::Answered { value, .. } =
+        query.live(&ids, &waits, &settings).expect("statement L")
+    else {
+        panic!("statement L answered nothing");
+    };
+    value
+        .into_iter()
+        .map(|answer| (answer.artifact_id, answer))
+        .collect()
+}
+
 // A start on an O3 root: the writer open (with `every`, the reference's read of every owner
-// record), its owner state and frame view; then its first owner record, its real startup
-// reconcile (`reconcile_prior_epoch_closes` with the empty native journal) and its start record;
-// then the frame cleaner's sweep start.
-fn started(root: &Root, every: bool, new: &NewStart) -> Started {
+// record), its owner state and the frame cleaner's answers for `live`; then its first owner
+// record, its real startup reconcile (`reconcile_prior_epoch_closes` with the empty native
+// journal) and its start record.
+fn started(root: &Root, every: bool, new: &NewStart, live: &BTreeSet<ArtifactId>) -> Started {
     read_every_owner_record_for_test(every);
     let limits = MaintenanceLimits::default();
     let opened = LedgerMaintenance::acquire(
@@ -1745,9 +1774,7 @@ fn started(root: &Root, every: bool, new: &NewStart) -> Started {
     read_every_owner_record_for_test(false);
     let ledger = opened.expect("the writer opens");
     let state = take_opened_owner_state_for_test().expect("the open kept its owner state");
-    let opened = ledger
-        .frame_retention_view(NOW, SWITCHES)
-        .expect("the frame view at the open");
+    let answers = frame_answers(&ledger, live);
     let first = ledger
         .append(new.first.clone())
         .expect("the start's first owner record");
@@ -1765,24 +1792,12 @@ fn started(root: &Root, every: bool, new: &NewStart) -> Started {
         .expect("the startup reconcile");
     let reconciled = decided(&after(&ledger, first.sequence()));
     ledger.append(new.start.clone()).expect("the start record");
-    let swept = ledger
-        .frame_retention_view_live(NOW, SWITCHES, root.dir.path())
-        .expect("the frame view at a sweep start");
     ledger.close().expect("close the writer");
     Started {
         state,
-        opened,
-        swept,
+        decided: answers,
         reconciled,
     }
-}
-
-// The kept moves of a view: the folder of each settled Lab and error frame.
-fn kept_moves(view: &FrameRetentionView) -> BTreeMap<ArtifactId, KeptFrameFolder> {
-    view.frames
-        .iter()
-        .filter_map(|frame| Some((frame.reference.artifact_id, frame.folder.clone()?)))
-        .collect()
 }
 
 // Why a start's writer open of `root` (with a failure plan, so that it imports a dump) read every
@@ -1841,8 +1856,9 @@ fn ln7c_o3_the_bounded_open_keeps_the_frame_view_and_the_startup_closes_of_the_f
         "live frames in each of the four epochs"
     );
     let new = NewStart::new(&shaped);
-    let reference = started(&reference_root, true, &new);
-    let bounded = started(&bounded_root, false, &new);
+    let live = shaped.live.keys().copied().collect::<BTreeSet<_>>();
+    let reference = started(&reference_root, true, &new, &live);
+    let bounded = started(&bounded_root, false, &new, &live);
 
     // The owner state.
     assert!(
@@ -1860,32 +1876,30 @@ fn ln7c_o3_the_bounded_open_keeps_the_frame_view_and_the_startup_closes_of_the_f
         "the two latest owners are retained, not {old1:?} or {old2:?}"
     );
 
-    // LN-7b's frame view and its kept moves, at the open and at a sweep start.
-    let live = shaped.live.keys().copied().collect::<BTreeSet<_>>();
-    for view in [&reference.opened, &reference.swept] {
-        assert_eq!(
-            view.frames
-                .iter()
-                .map(|frame| frame.reference.artifact_id)
-                .collect::<BTreeSet<_>>(),
-            live,
-            "the view lists every live frame"
-        );
-    }
+    // #422 LN-7c Q: the frame cleaner's answers for the live frames at the open (the query reads
+    // no owner state; LN-7b's frame view is gone).
     assert_eq!(
-        bounded.opened, reference.opened,
-        "the frame view at the open is the full read's"
+        reference.decided.keys().copied().collect::<BTreeSet<_>>(),
+        live,
+        "the query answers every live frame"
     );
     assert_eq!(
-        bounded.swept, reference.swept,
-        "the frame view at a sweep start is the full read's"
+        bounded.decided, reference.decided,
+        "the frame cleaner decides as after the full read"
     );
-    let moves = kept_moves(&reference.opened);
-    assert!(!moves.is_empty(), "the root has frames to move into kept");
-    assert_eq!(
-        kept_moves(&bounded.opened),
-        moves,
-        "the kept moves are the full read's"
+    assert!(
+        reference
+            .decided
+            .values()
+            .any(|answer| answer.action.moves()),
+        "the root has frames to move into kept"
+    );
+    assert!(
+        reference
+            .decided
+            .values()
+            .all(|answer| answer.action != FrameQueryAction::RemoveExpired),
+        "a live frame never expires"
     );
 
     // The records the start's real reconcile writes: the import of the latest owner and the

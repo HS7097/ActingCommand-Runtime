@@ -506,6 +506,8 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.scrub_pass_interval_ms` (#422 LN-9) | milliseconds `60000..=86400000` | `2400000` | no |
 | `ledger_observer.read_check_vm_steps` (#422 LN-WS) | integer `100..=1000000` | `10000` | no |
 | `ledger_observer.history_scan_rows` (#422 LN-WS) | integer `1024..=1048576` | `65536` | no |
+| `ledger_observer.frame_query_steps_per_second` (#422 LN-7c Q) | integer `1000..=100000000` | `500000` | yes |
+| `ledger_observer.frame_query_chunk_frames` (#422 LN-7c Q) | integer `1..=4096` | `256` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -575,6 +577,21 @@ sequences one history statement of a view page spans at most
 ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). Both are
 read when the ledger opens (not settable); a value outside its range is `config_value_invalid`
 (`out_of_range`).
+
+#422 LN-7c Q (`actingd-config` revision 16; `rd-1026/ln7c/final-query.md` §1.5, §5):
+`frame_query_steps_per_second` is the SQLite virtual-machine steps a second the frame
+cleaner's statements take; it is settable, and the cleaner reads the value in effect after
+each statement. `frame_query_chunk_frames` is the frames of one statement L or K, read at
+start (not settable). A value outside its range is `config_value_invalid` (`out_of_range`).
+The top-level key `frame_retention_evidence_max_age_days` (integer `1..=3650`, default `15`,
+settable; beside the three frame retention switches of revision 4) is the age, by a frame's
+ingestion time, at which the cleaner removes an evidence frame in `kept\` that no agent or
+person confirmed reading; a confirmed one goes at its next pass, whatever its age. The
+cleaner takes it at each pass start, so an instruction takes effect at the next pass; a value
+outside its range or of another type is `config_value_invalid`. actingd reports it in
+`config.parameters.top_level`, which `actingledger frames` reads
+([ledger-store.md](ledger-store.md), "Frame cleaner" and "Frame listing"). There is no 14-day
+key (the 14-day question answered A).
 
 ## The `device_link` section (Workflow #398 RD-2)
 

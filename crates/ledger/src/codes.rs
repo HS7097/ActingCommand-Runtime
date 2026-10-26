@@ -405,6 +405,9 @@ actingcommand_contract::outcome_locations! {
         /// #422 LN-7c R: the writer open's fill of the frame index (its gap and backfill).
         BuildLedgerFrameRefs => "build_ledger_frame_refs",
         FinishArtifactEviction => "finish_artifact_eviction",
+        /// #422 LN-7c Q: the writer keeps the objects of the live frames only, at a cleaner pass
+        /// start.
+        FrameRetentionLiveObjects => "frame_retention_live_objects",
         FrameRetentionView => "frame_retention_view",
         FreezeSegmentImportSource => "freeze_segment_import_source",
         /// Workflow #383 AO-1: importing a dump at the start, before any new record.
@@ -469,6 +472,9 @@ actingcommand_contract::outcome_locations! {
         ProjectSqliteRecord => "project_sqlite_record",
         QueryEventPage => "query_event_page",
         QueryEvents => "query_events",
+        /// #422 LN-7c Q: the frame cleaner's ledger query (statements W, L and K, a moved frame's
+        /// owner point, a frame's verified row) on its own read-only connection.
+        QueryFrameRetention => "query_frame_retention",
         QueryLedgerView => "query_ledger_view",
         QueryReadOnlyEventPage => "query_read_only_event_page",
         QuerySqliteRows => "query_sqlite_rows",

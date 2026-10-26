@@ -7,10 +7,13 @@
 //! the target's id as its value). That record is the call's only one: no provenance record of the
 //! tool is written beside it, and (Agent, Adapter) declares no identity card. A target the Runtime
 //! does not hold is its refusal, passed on unchanged (`client_action_invalid`). The answer is the
-//! CLI's, without its outcome.
+//! CLI's, without its outcome. #422 LN-7c Q: it carries `covers`, counted on the state root this
+//! server locates; a count that cannot be made leaves it out and is the answer's warning.
 
 use super::runtime::client_error;
-use super::tools::{Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument};
+use super::tools::{
+    self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
+};
 use crate::codes::ArgumentProblem;
 use crate::evidence_read::{self, Failure, Target};
 use actingcommand_contract::codes::SharedCode;
@@ -20,7 +23,7 @@ use serde_json::{Map, Value, json};
 /// The `surface_id` of the confirmations MCP records.
 const MCP_SURFACE: &str = "mcp";
 
-pub(super) const DESCRIPTION: &str = "Confirms that you read one evidence frame (artifact_id) or one run (run_id), as actingctl evidence confirm-read does; give exactly one. The Runtime records the confirmation as one client.action (control evidence_read_frame or evidence_read_run, surface mcp) with the agent's origin, and the time; a run's confirmation counts for the frames captured in it before the confirmation. A confirmed evidence frame may be removed by the frame cleaner at any age, an unconfirmed one after its maximum age. Opening or reading a frame (ac_run_evidence, ac_observe, ac_material) is no confirmation, so confirm only what you actually read. An artifact_id that names no capture frame of the ledger, or a run_id that names no run with a capture frame, is refused with client_action_invalid and nothing is recorded. Answers {target: {artifact_id} or {run_id}, event_id, sequence}: the recorded client.action.";
+pub(super) const DESCRIPTION: &str = "Confirms that you read one evidence frame (artifact_id) or one run (run_id), as actingctl evidence confirm-read does; give exactly one. The Runtime records the confirmation as one client.action (control evidence_read_frame or evidence_read_run, surface mcp) with the agent's origin, and the time; a run's confirmation counts for the frames captured in it before the confirmation. A confirmed evidence frame may be removed by the frame cleaner at any age, an unconfirmed one after its maximum age. Opening or reading a frame (ac_run_evidence, ac_observe, ac_material) is no confirmation, so confirm only what you actually read. An artifact_id that names no capture frame of the ledger, or a run_id that names no run with a capture frame, is refused with client_action_invalid and nothing is recorded. Answers {target: {artifact_id} or {run_id}, event_id, sequence, covers: {evidence_frames, in_kept}}: the recorded client.action, and the evidence frames it covers as the frame cleaner classes them (the frame, or the run's frames captured at or before the confirmation): in_kept those in the kept folders, evidence_frames those plus the ones still live and classed Lab or error. When covers cannot be counted it is absent and a warning says why; the confirmation is recorded all the same, so do not send it again.";
 
 /// `ac_evidence_confirm_read {artifact_id}` or `{run_id}`.
 pub(super) fn confirm(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
@@ -43,12 +46,21 @@ pub(super) fn confirm(context: &ToolContext<'_>, arguments: &Map<String, Value>)
         .connect_fresh(EventActor::Agent, EventSource::Adapter)?
         .begin_interaction()
         .map_err(|error| client_error(&error))?;
-    let answer =
-        evidence_read::confirm(&client, MCP_SURFACE, target).map_err(|failure| match failure {
-            Failure::Runtime(error) => client_error(&error),
-            Failure::Record(_) => ToolError::usage(SharedCode::ClientActionInvalid),
-        })?;
-    Ok(ToolSuccess::new(answer))
+    let state_root = context.runtime.locate().state_root;
+    let (answer, warning) = evidence_read::confirm(
+        &client,
+        MCP_SURFACE,
+        target,
+        state_root.as_deref().map_err(Clone::clone),
+    )
+    .map_err(|failure| match failure {
+        Failure::Runtime(error) => client_error(&error),
+        Failure::Record(_) => ToolError::usage(SharedCode::ClientActionInvalid),
+    })?;
+    Ok(ToolSuccess {
+        result: answer,
+        warnings: warning.iter().map(tools::warning).collect(),
+    })
 }
 
 pub(super) fn input() -> Value {
@@ -82,6 +94,14 @@ pub(super) fn result() -> Value {
             },
             "event_id": {"type": "string"},
             "sequence": {"type": "integer"},
+            "covers": {
+                "type": "object",
+                "properties": {
+                    "evidence_frames": {"type": "integer"},
+                    "in_kept": {"type": "integer"},
+                },
+                "required": ["evidence_frames", "in_kept"],
+            },
         },
         "required": ["target", "event_id", "sequence"],
     })

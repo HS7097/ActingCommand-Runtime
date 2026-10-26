@@ -5,9 +5,12 @@
 //! cancelled the 10-02 latch (Workflow #375 R5d): once the cleaner's clock passes 1 day after
 //! the frames' entry time, the due frame files are removed and the ledger holds no eviction
 //! record (`contracts/ledger-store.md`, "Frame cleaner"). A formal writer ledger and its
-//! artifact store share one temporary state root; every timestamp is a constant.
+//! artifact store share one temporary state root; every timestamp is a constant. #422 LN-7c Q:
+//! the cleaner decides by ledger query (statements W and L on its own connection); the frames'
+//! classes before the Warning are read from the same query (adapted: they were read from the
+//! writer's frame view, which Q removed).
 
-use super::super::{FrameRetention, FrameRetentionWarning};
+use super::super::{CleanerClock, CleanerSettings, FrameRetention, FrameRetentionWarning};
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactEventSink, ArtifactStore, ArtifactStoreError,
     ArtifactStoreResult, ArtifactWriteContext, ArtifactWriteRequest, KEPT_DIRECTORY,
@@ -24,8 +27,9 @@ use actingcommand_contract::{
     ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft, TerminalEvent,
 };
 use actingcommand_ledger::{
-    FrameRetentionClass, FrameRetentionSwitches, GlobalLedger, GlobalLedgerError,
-    LedgerMaintenance, PersistedEvent, Sha256SecretFingerprinter,
+    FrameQueryAction, FrameQueryOutcome, FrameQuerySettings, FrameRetentionClass,
+    FrameRetentionSwitches, GlobalLedger, GlobalLedgerError, LedgerMaintenance, PersistedEvent,
+    Sha256SecretFingerprinter,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use std::path::{Path, PathBuf};
@@ -42,6 +46,21 @@ const WARNED: u64 = CAPTURED[2] + 1_000;
 /// The cleaner's manual clock: past the 1-day boundary of every frame (the latest capture,
 /// plus 1 day and 1 minute), so every frame's due time lies before it.
 pub(super) const NOW: u64 = CAPTURED[2] + DAY_MS + MINUTE_MS;
+/// #422 LN-7c Q: the cleaner's keys at their defaults.
+pub(super) const SETTINGS: CleanerSettings = CleanerSettings {
+    evidence_max_age_days: 15,
+    steps_per_second: 500_000,
+    chunk_frames: 256,
+};
+
+/// #422 LN-7c Q: the cleaner's clock at its `round`th call, a minute apart on the monotonic
+/// clock, so every paced statement may start.
+pub(super) fn round_clock(round: u64) -> CleanerClock {
+    CleanerClock {
+        unix_ms: NOW,
+        monotonic_ms: round * MINUTE_MS,
+    }
+}
 
 /// A formal writer ledger in `root`, as acsetup leaves it.
 pub(super) fn formal_writer(root: &Path) -> GlobalLedger {
@@ -358,24 +377,47 @@ fn gate_an_unlinked_warning_does_not_stop_the_cleaner_removing_due_frames() {
     ];
     let switches = FrameRetentionSwitches::default();
 
-    // Before the Warning: every frame is a settled Default frame, due 1 day after its entry.
-    let view = ledger
-        .frame_retention_view(NOW, switches)
-        .expect("the frame view before the Warning");
+    // Before the Warning: every frame is a settled Default frame, due 1 day after its ingestion
+    // time, as the cleaner's query answers.
+    let mut query = ledger
+        .frame_query(std::sync::Arc::new(|| false))
+        .expect("the frame query");
+    let FrameQueryOutcome::Answered { value: waits, .. } = query.waits().expect("statement W")
+    else {
+        panic!("statement W answered nothing");
+    };
+    let asked = frames
+        .iter()
+        .map(|frame| frame.reference.artifact_id)
+        .collect::<Vec<_>>();
+    let FrameQueryOutcome::Answered { value: answers, .. } = query
+        .live(
+            &asked,
+            &waits,
+            &FrameQuerySettings {
+                now_unix_ms: NOW,
+                switches,
+                evidence_max_age_ms: 15 * DAY_MS,
+            },
+        )
+        .expect("statement L")
+    else {
+        panic!("statement L answered nothing");
+    };
+    drop(query);
     for frame in &frames {
-        let listed = view
-            .frames
+        let answer = answers
             .iter()
-            .find(|listed| listed.reference.artifact_id == frame.reference.artifact_id)
-            .expect("every fixture frame is in the cleaner's view");
+            .find(|answer| answer.artifact_id == frame.reference.artifact_id)
+            .expect("the query answers every fixture frame");
         assert_eq!(
-            (listed.class, listed.entry_unix_ms, listed.due_unix_ms),
+            (answer.class, answer.created_at_unix_ms, answer.action),
             (
                 FrameRetentionClass::Default,
-                Some(frame.captured),
-                Some(frame.captured + DAY_MS)
+                frame.captured,
+                FrameQueryAction::Remove
             ),
-            "a run-less frame is Default, enters at its capture time and is due 1 day later \
+            "a run-less frame is Default and is due 1 day after its ingestion time \
              (ledger-store.md, Frame cleaner)"
         );
         assert!(
@@ -417,12 +459,20 @@ fn gate_an_unlinked_warning_does_not_stop_the_cleaner_removing_due_frames() {
             "the cleaner's sweep did not complete within {bound} calls"
         );
         retention
-            .maintain(&ledger, artifacts.root(), NOW, &|| false, &mut |warning| {
-                warnings.push(warning.clone());
-                Ok(())
-            })
+            .maintain(
+                &ledger,
+                artifacts.root(),
+                round_clock(calls as u64),
+                SETTINGS,
+                std::sync::Arc::new(|| false),
+                &|| false,
+                &mut |warning| {
+                    warnings.push(warning.clone());
+                    Ok(())
+                },
+            )
             .expect("one unlinked Warning must not stop the cleaner: every call returns Ok");
-        if retention.sweep.is_none() {
+        if retention.pass.is_none() {
             break;
         }
     }

@@ -722,3 +722,17 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o3_the_bounded_open_keeps_the_frame_view_and_the_startup_closes_of_the_full_read",
 ]
 incident = ["#422 LN-7c O"]
+
+# LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1, §2, §4; Alice's ruling 70; brief rd-1026/brief-ln7c-q.md): the frame cleaner's statements W, L and K on an empty database pass the §1.3 plan rule and equal their golden plans (T-plan); on the case fixture (A6 with F5, F6 and duplicates) and on a production-shaped history each live frame's action equals the full view's class with E1's due time (T-eq; the 1M-record run is on demand); a kept frame goes once confirmed (by its frame or its run, at or after its capture) or at frame_retention_evidence_max_age_days, never earlier and never on a read through ac_run_evidence (T-evidence); the writer open reads no frame row and does not list the frame store (T-open); a raised stop interrupts the statement in progress (T-pace)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::frame_query::tests::ln7c_q_t_plan_w_l_and_k_pass_the_rule_and_equal_their_golden_plans",
+    "actingcommand-ledger::lib::global::sqlite::frame_query::tests::ln7c_q_t_plan_the_owner_point_statement_passes_the_rule",
+    "actingcommand-ledger::lib::global::tests::gate_ln7::ln7c_q_teq_the_query_decides_each_live_frame_of_the_case_fixture_as_the_full_view",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_teq_the_query_decides_the_live_frames_of_a_production_shaped_history_as_the_full_view",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_t_evidence_a_kept_frame_goes_once_confirmed_or_at_its_maximum_age_only",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_t_open_the_writer_open_reads_no_frame_and_does_not_list_the_frame_store",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_t_pace_a_raised_stop_interrupts_the_statement_in_progress",
+]
+incident = ["#422 LN-7c Q"]

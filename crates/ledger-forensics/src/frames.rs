@@ -8,10 +8,18 @@
 //! as the running actingd does. Then it stats the frames it prints, and only after that walks
 //! `kept\` for the folder sizes: a frame moved between the two is found by the walk, and a
 //! frame found in both places counts `in_folder`. It writes nothing and reads no file contents.
+//!
+//! #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §1, §4): the classes and due times of the frames
+//! in the live frame store are the frame cleaner's own, statement L's answers on a read-only
+//! connection of the listing's own; the kept frames are answered by statement K (`evidence`):
+//! which ones the next pass removes as confirmed or at `frame_retention_evidence_max_age_days`,
+//! which kept files this ledger does not know (`kept_unknown`), and who confirmed each confirmed
+//! evidence frame (`confirmed_by`). A frame index that does not cover the ledger fails the listing
+//! (`ledger_index_mismatch`): the cleaner would decide nothing either.
 
 use super::{ForensicError, ForensicOutput, ForensicReport, ForensicResult, map_ledger_error};
 use crate::codes::{ForensicsCode, ForensicsLocation};
-use actingcommand_artifact_store::{KEPT_DIRECTORY, list_kept_folders};
+use actingcommand_artifact_store::{KEPT_DIRECTORY, KeptLeafListing, list_kept_folders};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
@@ -20,8 +28,10 @@ use actingcommand_contract::{
     config_parameters_fact_key,
 };
 use actingcommand_ledger::{
-    FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, GlobalLedger, GlobalLedgerEvidenceConfig, LedgerCode, PersistedEvent,
+    FrameConfirmation, FrameErrorPoint, FrameQuery, FrameQueryAction, FrameQueryOutcome,
+    FrameQuerySettings, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
+    FrameRetentionView, GlobalLedger, GlobalLedgerEvidenceConfig, LedgerCode, LiveFrameAnswer,
+    PersistedEvent, live_frame_ids,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,7 +45,16 @@ pub const KEPT_FOLDER_CLEARED_FACT_KEY: &str = "host.kept_folder_cleared";
 const RETENTION_ENABLED_KEY: &str = "frame_retention_enabled";
 const DEDUP_ERROR_KEY: &str = "frame_retention_dedup_error";
 const DEDUP_LAB_KEY: &str = "frame_retention_dedup_lab";
+/// #422 LN-7c Q: the evidence-frame rule's age (actingd-config revision 16), and its default for a
+/// fact written before the key.
+const EVIDENCE_MAX_AGE_KEY: &str = "frame_retention_evidence_max_age_days";
+const EVIDENCE_MAX_AGE_DEFAULT_DAYS: u64 = 15;
+/// The frames of one statement L or K: `ledger_observer.frame_query_chunk_frames`'s default.
+const QUERY_CHUNK_FRAMES: usize = 256;
 const DAY_MS: i64 = 86_400_000;
+const DAY: u64 = 86_400_000;
+/// A resource reading frame stays 7 days.
+const RESOURCE_DAYS: u64 = 7;
 /// `ERROR_DELETE_PENDING`: a file that is being deleted is no longer there.
 const DELETE_PENDING: i32 = 303;
 
@@ -282,11 +301,49 @@ pub struct FramesReport {
     pub non_frame: NonFrameTotals,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paths: Option<Vec<FramePathReport>>,
+    /// #422 LN-7c Q: the evidence-frame rule as the frame cleaner's statements answer it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EvidenceFramesReport>,
+}
+
+/// #422 LN-7c Q (final-query §4): the evidence frames, as statements K and L answer them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EvidenceFramesReport {
+    /// `frame_retention_evidence_max_age_days` the answers use: the latest
+    /// `config.parameters.top_level` fact's, else the key's default.
+    pub max_age_days: u64,
+    /// Kept frames that stay: unconfirmed and younger than `max_age_days`.
+    pub kept_staying: FrameCount,
+    /// Kept frames the next pass removes because a read confirmation covers them.
+    pub kept_remove_confirmed: FrameCount,
+    /// Kept frames the next pass removes at `max_age_days`.
+    pub kept_remove_expired: FrameCount,
+    /// Kept frame files whose artifact id has no `artifact.verified` row in this ledger: the
+    /// cleaner leaves them.
+    pub kept_unknown: FrameCount,
+    /// Live Lab and error frames the next pass removes, instead of moving them, because a read
+    /// confirmation covers them.
+    pub live_remove_confirmed: FrameCount,
+    /// Every confirmed evidence frame, kept or live, with who confirmed it.
+    pub confirmed: Vec<ConfirmedFrameReport>,
+}
+
+/// One confirmed evidence frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfirmedFrameReport {
+    /// `kept/<date>/<leaf>/<file>`, or its object key while it is live.
+    pub path: String,
+    pub artifact_id: ArtifactId,
+    /// Its ingestion time, the time its ages count from.
+    pub captured_at_unix_ms: u64,
+    pub confirmed_by: FrameConfirmation,
 }
 
 /// What the listing reads from the ledger besides the frame view.
 pub(crate) struct FrameLedgerFacts {
     switches: FrameSwitchesReport,
+    /// #422 LN-7c Q: `frame_retention_evidence_max_age_days` of the same fact, when it names it.
+    evidence_max_age_days: Option<u64>,
     cleared: Vec<ClearedFolderReport>,
     /// The package and task labels of each run.
     labels: BTreeMap<RunId, (String, String)>,
@@ -345,8 +402,10 @@ impl FrameFactsBuilder {
                     ),
                 )
             })?;
+        let evidence_max_age_days = self.parameters.as_ref().and_then(evidence_max_age_days);
         Ok(FrameLedgerFacts {
             switches,
+            evidence_max_age_days,
             cleared: self.cleared,
             labels: self.labels,
             non_frame: NonFrameTotals {
@@ -390,15 +449,43 @@ pub fn list_frames(request: ForensicFramesRequest) -> ForensicResult<ForensicOut
         .ok()
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
         .ok_or_else(clock_failed)?;
-    let view = snapshot
-        .frame_retention_view(
-            now_unix_ms,
-            FrameRetentionSwitches {
-                dedup_error: facts.switches.dedup_error,
-                dedup_lab: facts.switches.dedup_lab,
-            },
-        )
+    let switches = FrameRetentionSwitches {
+        dedup_error: facts.switches.dedup_error,
+        dedup_lab: facts.switches.dedup_lab,
+    };
+    let mut view = snapshot
+        .frame_retention_view(now_unix_ms, switches)
         .map_err(map_ledger_error)?;
+    drop(snapshot);
+    // #422 LN-7c Q: the cleaner's own answers, on a read-only connection of the listing's own.
+    let settings = FrameQuerySettings {
+        now_unix_ms,
+        switches,
+        evidence_max_age_ms: facts
+            .evidence_max_age_days
+            .unwrap_or(EVIDENCE_MAX_AGE_DEFAULT_DAYS)
+            .saturating_mul(DAY),
+    };
+    let mut query = FrameQuery::open_state_root(&request.state_root).map_err(map_ledger_error)?;
+    let confirmed_live = class_live_frames(&request.state_root, &mut query, &mut view, &settings)?;
+    let kept_leaves = list_kept_folders(&request.state_root).map_err(|error| {
+        ForensicError::relayed(
+            error.code(),
+            ForensicsLocation::ListFrames.as_str(),
+            error.to_string(),
+        )
+    })?;
+    let evidence = evidence_report(
+        &mut query,
+        &view,
+        &kept_leaves,
+        &confirmed_live,
+        &settings,
+        facts
+            .evidence_max_age_days
+            .unwrap_or(EVIDENCE_MAX_AGE_DEFAULT_DAYS),
+    )?;
+    drop(query);
     let before_unix_ms = match request.before {
         Some(date) => Some(
             date.midnight_unix_ms(actingcommand_ledger::local_time::machine_local_offset_ms)
@@ -414,10 +501,243 @@ pub fn list_frames(request: ForensicFramesRequest) -> ForensicResult<ForensicOut
         error_sequence: request.error_sequence,
         paths: request.paths,
     };
-    let report = frames_report(&request.state_root, &view, facts, &selection)?;
+    let mut report = frames_report(&request.state_root, &view, facts, &selection)?;
+    report.evidence = Some(evidence);
     Ok(ForensicOutput::Machine(ForensicReport::Frames(Box::new(
         report,
     ))))
+}
+
+/// The frame index does not cover the ledger: the cleaner decides nothing, nor does the listing.
+fn frame_refs_incomplete() -> ForensicError {
+    ForensicError::new(
+        LedgerCode::LedgerIndexMismatch.code(),
+        ForensicsLocation::ListFrames.location(),
+        "table=ledger_frame_refs frame_refs_incomplete",
+    )
+}
+
+/// The answer of one statement, or the listing's error.
+fn answered<T>(outcome: FrameQueryOutcome<T>) -> ForensicResult<T> {
+    match outcome {
+        FrameQueryOutcome::Answered { value, .. } => Ok(value),
+        // The listing's query has no stop: a stopped statement is an incomplete answer too.
+        FrameQueryOutcome::Incomplete | FrameQueryOutcome::Stopped => Err(frame_refs_incomplete()),
+    }
+}
+
+/// #422 LN-7c Q: classes the frames in the live frame store by statement L, as the cleaner does
+/// (W once, L per chunk), and sets each one's due time from its action. Returns the live frames L
+/// removes as confirmed evidence.
+fn class_live_frames(
+    root: &Path,
+    query: &mut FrameQuery,
+    view: &mut FrameRetentionView,
+    settings: &FrameQuerySettings,
+) -> ForensicResult<Vec<LiveFrameAnswer>> {
+    let live = live_frame_ids(root)
+        .map_err(|error| {
+            ForensicError::new(
+                ForensicsCode::FrameStatFailed.code(),
+                ForensicsLocation::ListFrames.location(),
+                format!(
+                    "path=artifacts io_kind={:?} os_error={:?}",
+                    error.kind(),
+                    error.raw_os_error()
+                ),
+            )
+        })?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if live.is_empty() {
+        return Ok(Vec::new());
+    }
+    let waits = answered(query.waits().map_err(map_ledger_error)?)?;
+    let positions = view
+        .frames
+        .iter()
+        .enumerate()
+        .map(|(position, frame)| (frame.reference.artifact_id, position))
+        .collect::<BTreeMap<_, _>>();
+    let mut confirmed = Vec::new();
+    for chunk in live.chunks(QUERY_CHUNK_FRAMES) {
+        for answer in answered(
+            query
+                .live(chunk, &waits, settings)
+                .map_err(map_ledger_error)?,
+        )? {
+            if let Some(frame) = positions
+                .get(&answer.artifact_id)
+                .and_then(|position| view.frames.get_mut(*position))
+            {
+                frame.class = answer.class;
+                frame.due_unix_ms = due_of(&answer, settings.now_unix_ms);
+            }
+            if answer.action == FrameQueryAction::RemoveConfirmed {
+                confirmed.push(answer);
+            }
+        }
+    }
+    Ok(confirmed)
+}
+
+/// A live frame's due time by its action: the 1-day or 7-day mark of a frame kept or removed by
+/// age, the listing's clock for one removed as a duplicate or as confirmed evidence, none for a
+/// frame that is moved or not settled.
+fn due_of(answer: &LiveFrameAnswer, now: u64) -> Option<u64> {
+    let resource = answer.class == FrameRetentionClass::Resource;
+    let by_age =
+        answer
+            .created_at_unix_ms
+            .saturating_add(if resource { RESOURCE_DAYS * DAY } else { DAY });
+    match answer.action {
+        FrameQueryAction::Keep | FrameQueryAction::KeepResource | FrameQueryAction::Remove => {
+            Some(by_age)
+        }
+        FrameQueryAction::RemoveDuplicate
+        | FrameQueryAction::RemoveConfirmed
+        | FrameQueryAction::RemoveExpired => Some(now),
+        FrameQueryAction::Running | FrameQueryAction::MoveLab | FrameQueryAction::MoveError => None,
+    }
+}
+
+/// #422 LN-7c Q: statement K over the kept listing, and who confirmed each confirmed evidence
+/// frame (the kept ones K removes as confirmed, and `confirmed_live`).
+fn evidence_report(
+    query: &mut FrameQuery,
+    view: &FrameRetentionView,
+    leaves: &[KeptLeafListing],
+    confirmed_live: &[LiveFrameAnswer],
+    settings: &FrameQuerySettings,
+    max_age_days: u64,
+) -> ForensicResult<EvidenceFramesReport> {
+    let mut report = EvidenceFramesReport {
+        max_age_days,
+        kept_staying: FrameCount::default(),
+        kept_remove_confirmed: FrameCount::default(),
+        kept_remove_expired: FrameCount::default(),
+        kept_unknown: FrameCount::default(),
+        live_remove_confirmed: FrameCount::default(),
+        confirmed: Vec::new(),
+    };
+    // The first file of each artifact id, as the cleaner takes it.
+    let mut kept = BTreeMap::<ArtifactId, (String, u64)>::new();
+    for leaf in leaves {
+        for file in &leaf.files {
+            let path = format!(
+                "{KEPT_DIRECTORY}/{}/{}/{}",
+                leaf.date, leaf.leaf, file.file_name
+            );
+            match kept_artifact(&file.object_file) {
+                Some(id) => {
+                    kept.entry(id).or_insert((path, file.byte_count));
+                }
+                None => report.kept_unknown.count(file.byte_count),
+            }
+        }
+    }
+    let ids = kept.keys().copied().collect::<Vec<_>>();
+    let mut answered_ids = BTreeSet::new();
+    for chunk in ids.chunks(QUERY_CHUNK_FRAMES) {
+        for answer in answered(query.kept(chunk, settings).map_err(map_ledger_error)?)? {
+            let Some((path, bytes)) = kept.get(&answer.artifact_id) else {
+                continue;
+            };
+            answered_ids.insert(answer.artifact_id);
+            match answer.action {
+                FrameQueryAction::RemoveConfirmed => {
+                    report.kept_remove_confirmed.count(*bytes);
+                    let confirmed_by = confirmed_by(
+                        query,
+                        answer.artifact_id,
+                        answer.run_id,
+                        answer.created_at_unix_ms,
+                    )?;
+                    report.confirmed.push(ConfirmedFrameReport {
+                        path: path.clone(),
+                        artifact_id: answer.artifact_id,
+                        captured_at_unix_ms: answer.created_at_unix_ms,
+                        confirmed_by,
+                    });
+                }
+                FrameQueryAction::RemoveExpired => report.kept_remove_expired.count(*bytes),
+                _ => report.kept_staying.count(*bytes),
+            }
+        }
+    }
+    for (id, (_, bytes)) in &kept {
+        if !answered_ids.contains(id) {
+            report.kept_unknown.count(*bytes);
+        }
+    }
+    for answer in confirmed_live {
+        let frame = view
+            .frames
+            .iter()
+            .find(|frame| frame.reference.artifact_id == answer.artifact_id);
+        report.live_remove_confirmed.count(
+            frame
+                .map(|frame| frame.reference.byte_count)
+                .unwrap_or_default(),
+        );
+        let confirmed_by = confirmed_by(
+            query,
+            answer.artifact_id,
+            frame.and_then(|frame| frame.run_id),
+            answer.created_at_unix_ms,
+        )?;
+        report.confirmed.push(ConfirmedFrameReport {
+            path: frame
+                .and_then(|frame| frame.reference.object_key.clone())
+                .unwrap_or_default(),
+            artifact_id: answer.artifact_id,
+            captured_at_unix_ms: answer.created_at_unix_ms,
+            confirmed_by,
+        });
+    }
+    Ok(report)
+}
+
+/// Who confirmed reading a frame the statements remove as confirmed: its first confirmation at or
+/// after its capture. The statement found one, so none here is the index's mismatch.
+fn confirmed_by(
+    query: &mut FrameQuery,
+    artifact: ArtifactId,
+    run: Option<RunId>,
+    at: u64,
+) -> ForensicResult<FrameConfirmation> {
+    query
+        .confirmation(artifact, run, at)
+        .map_err(map_ledger_error)?
+        .ok_or_else(|| {
+            ForensicError::new(
+                LedgerCode::LedgerIndexMismatch.code(),
+                ForensicsLocation::ListFrames.location(),
+                "table=ledger_frame_refs confirmation not found",
+            )
+        })
+}
+
+/// The artifact id of a kept file's object file `artifact_<hex>.png`.
+fn kept_artifact(object_file: &str) -> Option<ArtifactId> {
+    let id = object_file.strip_suffix(".png")?;
+    serde_json::from_value(serde_json::Value::String(id.to_owned())).ok()
+}
+
+/// `frame_retention_evidence_max_age_days` of a `config.parameters.top_level` value.
+fn evidence_max_age_days(value: &FactValue) -> Option<u64> {
+    let FactValue::RecordList(rows) = value else {
+        return None;
+    };
+    rows.iter()
+        .find_map(|row| match (row.get("key"), row.get("value")) {
+            (Some(FactScalar::String(name)), Some(FactScalar::Integer(days)))
+                if name == EVIDENCE_MAX_AGE_KEY =>
+            {
+                u64::try_from(*days).ok()
+            }
+            _ => None,
+        })
 }
 
 fn ledger_facts(events: &[PersistedEvent]) -> ForensicResult<FrameLedgerFacts> {
@@ -721,6 +1041,7 @@ pub(crate) fn frames_report(
         cleared: facts.cleared,
         non_frame: facts.non_frame,
         paths: selection.paths.then_some(paths),
+        evidence: None,
     })
 }
 

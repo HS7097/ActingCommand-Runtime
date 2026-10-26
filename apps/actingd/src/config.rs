@@ -106,6 +106,13 @@ pub(super) struct ActingdConfigFile {
     /// `false`); Lab operation evidence is never deduplicated.
     #[serde(default)]
     frame_retention_dedup_lab: Option<bool>,
+    /// #422 LN-7c Q (`crates/runtime-config`, `frame_retention`): the evidence-frame rule's age in
+    /// days (default 15, `1..=3650`, settable); the configuration mechanism checks and reports it
+    /// in `config.parameters.top_level`.
+    // Interface anchor `actingd-config` revision 16 (contracts/component-interfaces.md): a Runtime
+    // before LN-7c Q refuses a file that names it; a file that does not keeps its revision.
+    #[serde(default)]
+    frame_retention_evidence_max_age_days: Option<serde_json::Value>,
     /// Workflow #389 U-2 (model §4.1): the Lab's two options, option one (authoring) and option
     /// two (debugging); absent means not installed. Read and reported only until U-6
     /// (`crates/runtime-config`, `lab_module`); only the installer's Lab transaction writes them.
@@ -1478,6 +1485,7 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "ledger_observer": serde_json::to_value(&self.ledger_observer)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "frame_retention_evidence_max_age_days": self.frame_retention_evidence_max_age_days,
             "lab_module_authoring": self.lab_module_authoring,
             "lab_module_debugging": self.lab_module_debugging,
             "device_link": serde_json::to_value(&self.device_link)

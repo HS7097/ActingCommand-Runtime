@@ -17,7 +17,9 @@
 //! rows of one chunk and the least time between two passes (both read when the ledger opens).
 //! LN-WS (#422, `actingd-config` revision 14) adds how often a read that serves a Runtime request
 //! looks at its budget inside a SQLite statement and how many sequences one history statement of
-//! a view page spans (both read when the ledger opens).
+//! a view page spans (both read when the ledger opens). LN-7c Q (#422, `actingd-config` revision
+//! 16) adds the pace and the chunk of the frame cleaner's ledger queries: their SQLite steps per
+//! second (settable, read after each chunk) and the live frames of one statement (read at start).
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -115,6 +117,23 @@ pub const READ_CHECK_VM_STEPS: &str = "ledger_observer.read_check_vm_steps";
 /// #422 LN-WS (R2): the sequences one history statement of a view page spans at most, so a page
 /// that its budget stops has always gone on.
 pub const HISTORY_SCAN_ROWS: &str = "ledger_observer.history_scan_rows";
+/// #422 LN-7c Q (final-query §1.5): the SQLite virtual-machine steps per second of the frame
+/// cleaner's ledger queries (500 000 by default, about 5% of one core while a pass runs). A chunk
+/// starts no earlier than the one before plus its steps at this rate. Settable: the cleaner reads
+/// the rate after each chunk.
+pub const FRAME_QUERY_STEPS_PER_SECOND: &str = "ledger_observer.frame_query_steps_per_second";
+/// #422 LN-7c Q (final-query §1.2): the live frames of one statement L of the frame cleaner, read
+/// when the Runtime starts.
+pub const FRAME_QUERY_CHUNK_FRAMES: &str = "ledger_observer.frame_query_chunk_frames";
+
+/// #422 LN-7c Q: the frame queries' pace lies within 1 000 and 100 000 000 steps a second.
+const FRAME_QUERY_STEPS_PER_SECOND_RANGE: KeyRange = KeyRange::Integer {
+    min: 1_000,
+    max: 100_000_000,
+};
+
+/// #422 LN-7c Q: a statement L asks about one frame at least and 4 096 at most.
+const FRAME_QUERY_CHUNK_FRAMES_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 4_096 };
 
 /// #422 LN-WS: a read looks at its clock every 100 steps at the most often, every million at the
 /// least.
@@ -262,6 +281,13 @@ pub struct LedgerObserverFile {
     read_check_vm_steps: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     history_scan_rows: Option<Value>,
+    // Interface anchor `actingd-config` revision 16 (contracts/component-interfaces.md): a Runtime
+    // before LN-7c Q refuses a file that names one, because the section denies unknown members; a
+    // file that names none keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_query_steps_per_second: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_query_chunk_frames: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -557,6 +583,28 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "LN-WS",
         since: "0.12.15",
     },
+    // #422 LN-7c Q: the frame cleaner reads its pace after each chunk (settable) and its chunk
+    // when the Runtime starts.
+    KeyRow {
+        name: KeyName::Exact(FRAME_QUERY_STEPS_PER_SECOND),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: FRAME_QUERY_STEPS_PER_SECOND_RANGE,
+        default: DefaultSource::File,
+        settable: WHEN_USED,
+        reader: "LN-7c Q",
+        since: "0.12.17",
+    },
+    KeyRow {
+        name: KeyName::Exact(FRAME_QUERY_CHUNK_FRAMES),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: FRAME_QUERY_CHUNK_FRAMES_RANGE,
+        default: DefaultSource::File,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "LN-7c Q",
+        since: "0.12.17",
+    },
 ];
 
 /// A milliseconds key read when the ledger opens, with the release that added its row.
@@ -633,6 +681,10 @@ pub struct LedgerObserverConfig {
     pub read_check_vm_steps: u64,
     /// #422 LN-WS: the sequences one history statement of a view page spans at most.
     pub history_scan_rows: u64,
+    /// #422 LN-7c Q: the SQLite steps per second of the frame cleaner's ledger queries.
+    pub frame_query_steps_per_second: u64,
+    /// #422 LN-7c Q: the live frames of one statement L of the frame cleaner.
+    pub frame_query_chunk_frames: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -802,6 +854,8 @@ impl LedgerObserverConfig {
             scrub_pass_interval_ms: reader.duration(SCRUB_PASS_INTERVAL_MS)?,
             read_check_vm_steps: reader.count(READ_CHECK_VM_STEPS)?,
             history_scan_rows: reader.count(HISTORY_SCAN_ROWS)?,
+            frame_query_steps_per_second: reader.count(FRAME_QUERY_STEPS_PER_SECOND)?,
+            frame_query_chunk_frames: reader.count(FRAME_QUERY_CHUNK_FRAMES)?,
         })
     }
 }

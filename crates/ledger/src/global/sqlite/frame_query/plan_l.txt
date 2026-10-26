@@ -1,0 +1,219 @@
+MATERIALIZE dx
+  MATERIALIZE fe
+    MATERIALIZE f
+      SCAN json_each VIRTUAL TABLE INDEX 1:
+      SEARCH a USING INDEX ledger_artifacts_artifact (artifact_id=?)
+      CORRELATED SCALAR SUBQUERY 3
+        SEARCH pl USING COVERING INDEX ledger_links_frame (frame_id=?)
+        SEARCH pe USING INTEGER PRIMARY KEY (rowid=?)
+      CORRELATED SCALAR SUBQUERY 4
+        SEARCH xl USING COVERING INDEX ledger_links_frame (frame_id=?)
+        SEARCH xe USING INTEGER PRIMARY KEY (rowid=?)
+      SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+      SEARCH l USING INTEGER PRIMARY KEY (rowid=?)
+    MATERIALIZE ry
+      MATERIALIZE rx
+        MATERIALIZE rw
+          MATERIALIZE wr
+            COMPOUND QUERY
+              LEFT-MOST SUBQUERY
+                SCAN f
+                SEARCH wa USING INDEX ledger_artifacts_created (created_at_unix_ms>? AND created_at_unix_ms<?)
+                SEARCH wl USING INTEGER PRIMARY KEY (rowid=?)
+              UNION USING TEMP B-TREE
+                SCAN f
+          SCAN r
+          SEARCH rl USING INDEX ledger_links_run (run_id=?)
+          SEARCH re USING INTEGER PRIMARY KEY (rowid=?)
+          SEARCH ra USING INDEX sqlite_autoindex_ledger_artifacts_1 (sequence=?) LEFT-JOIN
+          USE TEMP B-TREE FOR GROUP BY
+        SCAN w
+        CORRELATED SCALAR SUBQUERY 9
+          SEARCH se USING COVERING INDEX ledger_view_index_type_v1 (event_type=? AND sequence>?)
+        CORRELATED SCALAR SUBQUERY 10
+          SEARCH il USING INTEGER PRIMARY KEY (rowid=?)
+      SCAN r
+      CORRELATED SCALAR SUBQUERY 12
+        SEARCH ledger_events USING INTEGER PRIMARY KEY (rowid=?)
+      CORRELATED SCALAR SUBQUERY 13
+        SEARCH ledger_events USING INTEGER PRIMARY KEY (rowid=?)
+    MATERIALIZE lab_runs
+      CO-ROUTINE x
+        SCAN f
+        USE TEMP B-TREE FOR DISTINCT
+      SCAN x
+      CORRELATED SCALAR SUBQUERY 17
+        SEARCH al USING COVERING INDEX ledger_links_request (request_id=?)
+        CORRELATED LIST SUBQUERY 16
+          SEARCH rl USING INDEX ledger_links_run (run_id=?)
+        SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+      CORRELATED SCALAR SUBQUERY 19
+        SEARCH al USING COVERING INDEX ledger_links_correlation (correlation_id=?)
+        CORRELATED LIST SUBQUERY 18
+          SEARCH rl USING INDEX ledger_links_run (run_id=?)
+        SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+    SCAN f
+    SEARCH r USING AUTOMATIC COVERING INDEX (run_id=?) LEFT-JOIN
+    SEARCH lr USING AUTOMATIC COVERING INDEX (run_id=?) LEFT-JOIN
+    CORRELATED SCALAR SUBQUERY 21
+      SEARCH cl USING INDEX ledger_links_frame (frame_id=?)
+      SEARCH ce USING INTEGER PRIMARY KEY (rowid=?)
+    CORRELATED SCALAR SUBQUERY 24
+      CO-ROUTINE c
+        SCAN CONSTANT ROW
+        CORRELATED SCALAR SUBQUERY 22
+          SEARCH ll USING INDEX ledger_links_lease (lease_id=? AND sequence>?)
+          SEARCH le USING INTEGER PRIMARY KEY (rowid=?)
+      SCAN c
+  MATERIALIZE nb3
+    MATERIALIZE nb2
+      MATERIALIZE nb
+        SCAN fe
+        CORRELATED SCALAR SUBQUERY 26
+          SEARCH pm USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+        CORRELATED SCALAR SUBQUERY 27
+          SEARCH sl USING COVERING INDEX ledger_links_frame (frame_id=?)
+          SEARCH se USING INTEGER PRIMARY KEY (rowid=?)
+      SCAN n
+      CORRELATED SCALAR SUBQUERY 29
+        SEARCH ml USING INTEGER PRIMARY KEY (rowid=?)
+      CORRELATED SCALAR SUBQUERY 30
+        SEARCH sr USING COVERING INDEX ledger_frame_refs_sequence (sequence=?)
+    SCAN n
+    CORRELATED SCALAR SUBQUERY 32
+      SEARCH xl USING COVERING INDEX ledger_links_frame (frame_id=?)
+      SEARCH xe USING INTEGER PRIMARY KEY (rowid=?)
+    CORRELATED SCALAR SUBQUERY 33
+      SEARCH xr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+    CORRELATED SCALAR SUBQUERY 34
+      SEARCH nl USING COVERING INDEX ledger_links_frame (frame_id=?)
+      SEARCH na USING INDEX sqlite_autoindex_ledger_artifacts_1 (sequence=?)
+    CORRELATED SCALAR SUBQUERY 35
+      SEARCH nl USING COVERING INDEX ledger_links_frame (frame_id=?)
+      SEARCH na USING INDEX sqlite_autoindex_ledger_artifacts_1 (sequence=?)
+  MATERIALIZE named
+    SCAN fe
+    CORRELATED SCALAR SUBQUERY 37
+      SEARCH l USING COVERING INDEX ledger_links_frame (frame_id=?)
+      SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+    CORRELATED SCALAR SUBQUERY 38
+      SEARCH na USING COVERING INDEX ledger_artifacts_artifact (artifact_id=?)
+      SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+    CORRELATED SCALAR SUBQUERY 39
+      SEARCH nr USING PRIMARY KEY (target_kind=? AND target_id=?)
+      SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+    CORRELATED SCALAR SUBQUERY 40
+      SEARCH nr USING PRIMARY KEY (target_kind=? AND target_id=?)
+      SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+  SCAN fe
+  SEARCH n USING AUTOMATIC COVERING INDEX (artifact_id=?)
+  SEARCH nm USING AUTOMATIC COVERING INDEX (artifact_id=?) LEFT-JOIN
+  CORRELATED SCALAR SUBQUERY 42
+    SEARCH xr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+  CORRELATED SCALAR SUBQUERY 43
+    SEARCH xr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+  CORRELATED SCALAR SUBQUERY 44
+    SEARCH sr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+SCAN d
+CORRELATED SCALAR SUBQUERY 46
+  SCAN json_each VIRTUAL TABLE INDEX 1:
+CORRELATED SCALAR SUBQUERY 47
+  SEARCH pl USING COVERING INDEX ledger_links_frame (frame_id=?)
+  SEARCH pe USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 48
+  SEARCH al USING COVERING INDEX ledger_links_request (request_id=?)
+  SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 49
+  SEARCH al USING COVERING INDEX ledger_links_correlation (correlation_id=?)
+  SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 52
+  MULTI-INDEX OR
+    INDEX 1
+      SEARCH fr USING PRIMARY KEY (target_kind=? AND target_id=?)
+    INDEX 2
+      SEARCH fr USING PRIMARY KEY (target_kind=? AND target_id=?)
+  SEARCH frl USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 50
+    SEARCH al USING COVERING INDEX ledger_links_request (request_id=?)
+    SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 51
+    SEARCH al USING COVERING INDEX ledger_links_correlation (correlation_id=?)
+    SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 54
+  SEARCH e USING INDEX ledger_view_index_time_v1 (timestamp_unix_ms>? AND timestamp_unix_ms<?)
+  SEARCH l USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 53
+    SEARCH il USING INDEX ledger_links_run (run_id=?)
+CORRELATED SCALAR SUBQUERY 55
+  SEARCH r USING AUTOMATIC PARTIAL COVERING INDEX (instance_id=?)
+CORRELATED SCALAR SUBQUERY 56
+  SEARCH rr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+CORRELATED SCALAR SUBQUERY 46
+  SCAN json_each VIRTUAL TABLE INDEX 1:
+CORRELATED SCALAR SUBQUERY 47
+  SEARCH pl USING COVERING INDEX ledger_links_frame (frame_id=?)
+  SEARCH pe USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 48
+  SEARCH al USING COVERING INDEX ledger_links_request (request_id=?)
+  SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 49
+  SEARCH al USING COVERING INDEX ledger_links_correlation (correlation_id=?)
+  SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 52
+  MULTI-INDEX OR
+    INDEX 1
+      SEARCH fr USING PRIMARY KEY (target_kind=? AND target_id=?)
+    INDEX 2
+      SEARCH fr USING PRIMARY KEY (target_kind=? AND target_id=?)
+  SEARCH frl USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 50
+    SEARCH al USING COVERING INDEX ledger_links_request (request_id=?)
+    SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 51
+    SEARCH al USING COVERING INDEX ledger_links_correlation (correlation_id=?)
+    SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 54
+  SEARCH e USING INDEX ledger_view_index_time_v1 (timestamp_unix_ms>? AND timestamp_unix_ms<?)
+  SEARCH l USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 53
+    SEARCH il USING INDEX ledger_links_run (run_id=?)
+CORRELATED SCALAR SUBQUERY 55
+  SEARCH r USING AUTOMATIC PARTIAL COVERING INDEX (instance_id=?)
+CORRELATED SCALAR SUBQUERY 57
+  SEARCH cr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+  SEARCH ce USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 58
+  SEARCH cr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+  SEARCH ce USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 47
+  SEARCH pl USING COVERING INDEX ledger_links_frame (frame_id=?)
+  SEARCH pe USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 48
+  SEARCH al USING COVERING INDEX ledger_links_request (request_id=?)
+  SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 49
+  SEARCH al USING COVERING INDEX ledger_links_correlation (correlation_id=?)
+  SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 52
+  MULTI-INDEX OR
+    INDEX 1
+      SEARCH fr USING PRIMARY KEY (target_kind=? AND target_id=?)
+    INDEX 2
+      SEARCH fr USING PRIMARY KEY (target_kind=? AND target_id=?)
+  SEARCH frl USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 50
+    SEARCH al USING COVERING INDEX ledger_links_request (request_id=?)
+    SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 51
+    SEARCH al USING COVERING INDEX ledger_links_correlation (correlation_id=?)
+    SEARCH ae USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 54
+  SEARCH e USING INDEX ledger_view_index_time_v1 (timestamp_unix_ms>? AND timestamp_unix_ms<?)
+  SEARCH l USING INTEGER PRIMARY KEY (rowid=?)
+  CORRELATED SCALAR SUBQUERY 53
+    SEARCH il USING INDEX ledger_links_run (run_id=?)
+CORRELATED SCALAR SUBQUERY 55
+  SEARCH r USING AUTOMATIC PARTIAL COVERING INDEX (instance_id=?)
+CORRELATED SCALAR SUBQUERY 56
+  SEARCH rr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+USE TEMP B-TREE FOR ORDER BY

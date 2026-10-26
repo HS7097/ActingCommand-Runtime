@@ -13,18 +13,30 @@
 //! target the ledger does not hold (`client_action_invalid`) and records nothing then. The
 //! ledger's frame index links the record to its target (`read_confirmed`); nothing is removed in
 //! this slice. Opening or reading a frame (`ac_run_evidence`, `ac_observe`) is no confirmation.
-//! Both sides answer `{target, event_id, sequence}`, `target` being `{artifact_id}` or `{run_id}`;
-//! the CLI line's outcome is the completed receipt's code, `request_record_client_action_completed`.
+//! Both sides answer `{target, event_id, sequence, covers}`, `target` being `{artifact_id}` or
+//! `{run_id}`; the CLI line's outcome is the completed receipt's code,
+//! `request_record_client_action_completed`.
+//!
+//! #422 LN-7c Q: `covers` is `{evidence_frames, in_kept}`, the evidence frames the confirmation
+//! covers (the frame, or the run's frames captured at or before it), counted by the frame
+//! cleaner's classification and the kept listing (`actingcommand_ledger::evidence_covers`, its
+//! statements on a read-only connection of this process's own to the state root, with the switches
+//! of the Runtime's `config.parameters.top_level` and at the Runtime's clock): those in `kept\`
+//! (`in_kept`), and those still live and classed Lab or error. A count that cannot be made leaves
+//! `covers` out and is the answer's warning; the confirmation is recorded all the same, so it is
+//! never sent again for it.
 
 use crate::cli_line;
 use crate::codes::ArgumentProblem;
 use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
-    ArtifactId, ClientActionKind, ClientActionRecord, ClientActionValue,
-    EVIDENCE_READ_FRAME_CONTROL, EVIDENCE_READ_RUN_CONTROL, EventActor, EventSource,
-    GovernanceIdentityCard, RunId, SanitizationError,
+    ArtifactId, CONFIG_TOP_LEVEL_SECTION, ClientActionKind, ClientActionRecord, ClientActionValue,
+    EVIDENCE_READ_FRAME_CONTROL, EVIDENCE_READ_RUN_CONTROL, EventActor, EventSource, FactScalar,
+    FactValue, GovernanceIdentityCard, RunId, RuntimeFactRecord, SanitizationError,
+    config_parameters_fact_key,
 };
+use actingcommand_ledger::{EvidenceTarget, FrameRetentionSwitches, evidence_covers};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -73,7 +85,19 @@ impl Target {
             Self::Run(run) => json!({"run_id": run}),
         }
     }
+
+    /// The target as the frame queries name it.
+    const fn evidence(self) -> EvidenceTarget {
+        match self {
+            Self::Frame(artifact) => EvidenceTarget::Frame(artifact),
+            Self::Run(run) => EvidenceTarget::Run(run),
+        }
+    }
 }
+
+/// The switches the frame classes read (actingd-config revision 4).
+const DEDUP_ERROR_KEY: &str = "frame_retention_dedup_error";
+const DEDUP_LAB_KEY: &str = "frame_retention_dedup_lab";
 
 /// Why a confirmation was not recorded.
 pub(crate) enum Failure {
@@ -95,12 +119,15 @@ impl Failure {
 
 /// Records the confirmation of `target` on `client`, an interaction begun on the caller's
 /// connection: one `client.action` of `surface` with the connection's origin. Answers `{target,
-/// event_id, sequence}` of the recorded `client.action`.
+/// event_id, sequence, covers}` of the recorded `client.action`, `covers` counted on
+/// `state_root`; when it cannot be counted, the answer has no `covers` and the outcome beside it
+/// says why (a warning: the confirmation is recorded).
 pub(crate) fn confirm(
     client: &RuntimeClient,
     surface: &str,
     target: Target,
-) -> Result<Value, Failure> {
+    state_root: Result<&Path, Outcome>,
+) -> Result<(Value, Option<Outcome>), Failure> {
     let (control, value) = target.control();
     let action = ClientActionRecord::new(
         surface,
@@ -113,11 +140,76 @@ pub(crate) fn confirm(
     let recorded = client
         .record_client_action(action)
         .map_err(Failure::Runtime)?;
-    Ok(json!({
+    let mut answer = json!({
         "target": target.answer(),
         "event_id": recorded.event_id,
         "sequence": recorded.sequence,
+    });
+    let warning = match state_root.and_then(|root| covers(client, root, target, recorded.sequence))
+    {
+        Ok(covers) => {
+            answer["covers"] = covers;
+            None
+        }
+        Err(outcome) => Some(outcome),
+    };
+    Ok((answer, warning))
+}
+
+/// #422 LN-7c Q (final-query §4): `{evidence_frames, in_kept}` of the confirmation at `sequence`,
+/// with the switches of the Runtime's latest `config.parameters.top_level` at the Runtime's
+/// clock (one fact snapshot read, which records nothing).
+fn covers(
+    client: &RuntimeClient,
+    state_root: &Path,
+    target: Target,
+    sequence: u64,
+) -> Result<Value, Outcome> {
+    let snapshot = client
+        .runtime_fact_snapshot()
+        .map_err(|error| error.outcome())?;
+    let covers = evidence_covers(
+        state_root,
+        target.evidence(),
+        sequence,
+        switches(&snapshot.records),
+        snapshot.taken_at_unix_ms,
+    )
+    .map_err(|error| Outcome::relayed(error.code()))?;
+    Ok(json!({
+        "evidence_frames": covers.evidence_frames,
+        "in_kept": covers.in_kept,
     }))
+}
+
+/// The two switches of `config.parameters.top_level` among `records`, each at its default when
+/// the fact does not name it.
+fn switches(records: &[RuntimeFactRecord]) -> FrameRetentionSwitches {
+    let key = config_parameters_fact_key(CONFIG_TOP_LEVEL_SECTION);
+    let rows = records
+        .iter()
+        .find(|record| record.key == key)
+        .and_then(|record| match &record.value {
+            FactValue::RecordList(rows) => Some(rows.as_slice()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let flag = |name: &str| {
+        rows.iter()
+            .find_map(|row| match (row.get("key"), row.get("value")) {
+                (Some(FactScalar::String(key)), Some(FactScalar::Boolean(value)))
+                    if key == name =>
+                {
+                    Some(*value)
+                }
+                _ => None,
+            })
+    };
+    let defaults = FrameRetentionSwitches::default();
+    FrameRetentionSwitches {
+        dedup_error: flag(DEDUP_ERROR_KEY).unwrap_or(defaults.dedup_error),
+        dedup_lab: flag(DEDUP_LAB_KEY).unwrap_or(defaults.dedup_lab),
+    }
 }
 
 /// An identifier from its canonical text; `None` for any other text.
@@ -145,10 +237,19 @@ pub(crate) fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCod
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
     Some(match run(&state_root, target, detail) {
-        Ok(answer) => cli_line::success(
-            cli_line::members(answer, COMMAND),
-            &Outcome::new(ReceiptCode::RecordClientActionCompleted),
-        ),
+        Ok((answer, warning)) => {
+            let mut members = cli_line::members(answer, COMMAND);
+            if let Some(warning) = warning {
+                members.insert(
+                    "warnings".to_owned(),
+                    Value::Array(vec![cli_line::warning(&warning)]),
+                );
+            }
+            cli_line::success(
+                members,
+                &Outcome::new(ReceiptCode::RecordClientActionCompleted),
+            )
+        }
         // A refused request prints the Runtime's receipt beside its outcome and exits non-zero.
         Err(Failure::Runtime(error)) => match error.received_receipt() {
             Some(receipt) => match serde_json::to_value(receipt) {
@@ -237,8 +338,12 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Target), Outcome> {
 
 /// Connects with the CLI's (Cli, Cli) origin, begins an interaction, declares the identity card
 /// `actingctl` in it (a refused card fails the command, with the Runtime's receipt) and records
-/// the confirmation.
-fn run(state_root: &Path, target: Target, detail: Detail) -> Result<Value, Failure> {
+/// the confirmation, its `covers` counted on `state_root`.
+fn run(
+    state_root: &Path,
+    target: Target,
+    detail: Detail,
+) -> Result<(Value, Option<Outcome>), Failure> {
     let config = RuntimeClientConfig::new(
         state_root,
         actingcommand_runtime_client::RuntimeChannel::Cli,
@@ -259,5 +364,5 @@ fn run(state_root: &Path, target: Target, detail: Detail) -> Result<Value, Failu
             instance: None,
         })
         .map_err(Failure::Runtime)?;
-    confirm(&client, CLI_SURFACE, target)
+    confirm(&client, CLI_SURFACE, target, Ok(state_root))
 }

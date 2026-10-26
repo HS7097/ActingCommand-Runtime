@@ -13,7 +13,9 @@
 // artifact store (`frame_artifact_every_frames`), so they are live in its frame store from the
 // start of the history to its end, as production's are:
 // - the open's SQLite work per record it reads does not grow with the history (it grew with the
-//   linked records after each page);
+//   linked records after each page). #422 LN-7c Q removed the open's read of the live frames, so
+//   the rows the open reads no longer grow with the history either (adapted: this test required
+//   them to grow about fourfold, as LN-7's frame read made them);
 // - the open's deadline stops its retention read with `ledger_read_budget_exceeded`.
 
 use crate::global::{
@@ -172,10 +174,10 @@ fn ln8d_the_opens_work_per_record_read_does_not_grow_with_the_history_of_its_liv
     let large = root(LARGE_RECORDS);
     let (small_steps, small_rows) = counted_open(&small);
     let (large_steps, large_rows) = counted_open(&large);
-    // The live frames' runs span each history, so the open reads about four times the records
-    // on the history four times as long.
+    // #422 LN-7c Q: the open reads no frame, so the history four times as long, with four times
+    // the live frames, adds nothing to what it reads.
     assert!(
-        large_rows >= 3 * small_rows,
+        large_rows * 2 <= small_rows * 3,
         "the open read {small_rows} rows of {SMALL_RECORDS} records ({} live frames) and \
          {large_rows} of {LARGE_RECORDS} ({} live frames)",
         small.live,

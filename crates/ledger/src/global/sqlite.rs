@@ -50,6 +50,8 @@ pub(super) mod synthetic;
 pub(super) mod scrub;
 // #422 LN-7c R (final-query.md §3): the frame index links of payload-only pointers.
 pub(super) mod frame_refs;
+// #422 LN-7c Q (final-query.md §1): the frame cleaner's ledger query.
+pub(super) mod frame_query;
 mod tagged;
 mod views;
 pub use release_source::*;
