@@ -3392,7 +3392,24 @@ The number 1.187 is provisional for the parallel slices.
 | LN8-3 | the formal writer open's verification | Runtime-internal behaviour | LN-8 | — | one read transaction: format and marker, keyed meta row, `MAX(sequence)` = head, then the newest rows in chunks, each authenticated on its own with its link and artifact rows, contiguous through the head, the oldest chained to its predecessor's stored hash and the newest's hash the meta row's; no other row and no migrated-prefix digest; the views a database lacks are created against the meta row and `MAX(sequence)`, without a second read |
 | LN8-4 | `RuntimeDatabase::open_existing_for_start(root)` | database interface | LN-8 | — | the Runtime start's open of existing storage: read-write with every check of `open_existing(root, false)` except the whole-file `quick_check(1)` |
 
-### 1.188 Slice SR-4a2 (0.12.x): the policy closes over blackouts: positions 4 and 7, the day boundary, the admission re-check, the random delay's cut (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, D-4, D-6, §6 row SR-4a2; Alice's ruling 50, #386 6380164487: the day-boundary rule as recommended, per-instance switch, default on)
+### 1.188 Slice CF-4 (0.12.x): a `fact` predicate compares with another fact of its scope plus an offset (#386, condition-first; Alice 10-26: 「上限-1000才可能当做红线，并且这个红线绝对不是固定的」)
+
+[scheduling/README.md](scheduling/README.md) ("Fact references", "Why A Candidate Does Not
+Run"), [scheduling/v2/README.md](scheduling/v2/README.md) and
+[standard-pack-schedule.md](standard-pack-schedule.md) (`requires`) are the contract. **No
+persisted ledger shape**: the reference is a catalog format addition (the ledger holds only the
+catalog's `catalog_hash`, unchanged for a catalog without one); the reason is a catalog code
+carried by the evaluation's decisions and the existing dispatch decision records; the subsystem
+row is a value of the existing `config.subsystems` fact. No wire, configuration key or interface
+revision changes. The number 1.188 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF4-1 | `fact.value` may be `{"type": "fact", "fact_key", "offset"}` (`FactComparand::Fact`, `FactReference`; schema `factReference` in `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | CF-4 | the standard packs' `schedule.json` | V2 only (V1: `unknown_field` at `value/type`); the referenced fact is read in the predicate's scope with its `max_age_ms`; both facts integers, compared as `a C b + offset`; `contains` refused; a typed value serializes and hashes as before |
+| CF4-2 | code `fact_reference_unavailable` (info; `fact_key`, `unknown_reason`) | new catalog entry (no shape) | CF-4 | CF-4 | owner policy (registry `PolicyCode`, block `#386 CF-4`), `ladder_class` `none` (row 7: a scheduling decision reason), layer `policy`, review `pending`, since 0.12.14; the existing vocabulary `unknown_reason` (`fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired`, `type_mismatch`); no new key |
+| CF4-3 | `config.subsystems` row `fact_reference` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-4 | CF-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose rule writes a reference must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the reference) |
+
+### 1.189 Slice SR-4a2 (0.12.x): the policy closes over blackouts: positions 4 and 7, the day boundary, the admission re-check, the random delay's cut (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, D-4, D-6, §6 row SR-4a2; Alice's ruling 50, #386 6380164487: the day-boundary rule as recommended, per-instance switch, default on)
 
 The gate of catalog v35 on the Runtime side, over SR-4a1's pure judgements (§1.179).
 [scheduling-blackout.md](scheduling-blackout.md) ("Day-boundary fit", "Gradual quiet", "Order of
@@ -3400,7 +3417,7 @@ the deferrals", "Configuration", "Codes") and [actingd-check-config.md](actingd-
 are the contract. **No persisted ledger shape and no configuration key**: every key it reads is
 SR-4a1's (revision 11); the refusals are existing `policy.dispatch_rejected` records with the
 code's outcome. One code is added. Gates: the `gate_386_sr4a2` tests, ten rows of host.toml. The
-number 1.188 is provisional for the parallel slices.
+number 1.189 is provisional for the parallel slices.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -3494,7 +3511,7 @@ when it takes effect.
 
 | Section | Keys | Defaults and meaning | Parsed by | Read by (takes effect) |
 |---|---|---|---|---|
-| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer); #411 A51 (**`actingd-config` revision 8**): `read_budget_ms`, `close_timeout_ms`; P0-LO (**`actingd-config` revision 10**): `open_timeout_ms`, `open_warn_ratio_milli`; #422 LN-5 (**`actingd-config` revision 12**): `history_page_rows`; #422 LN-TUNE (**`actingd-config` revision 12**): `writer_reply_timeout_ms`; #422 LN-8 (**`actingd-config` revision 13**): `open_verify_tail_records` | there; A51: 1 000 (`1..=9999`, below `writer_reply_timeout_ms`), 60 000 (above `read_budget_ms`), not settable (§1.151 A51-3); P0-LO: 600 000 (`10000..=600000`), 500 (`100..=1000`), not settable; LN-5: 256 (`1..=4096`), not settable; LN-TUNE: 10 000 (`1000..=600000`), not settable; LN-8: 4 096 (`1..=1000000`), not settable | AO-1 (built, §1.26); A51 (§1.151); P0-LO; LN-5; LN-TUNE; LN-8 | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x); A51 (0.12.9); P0-LO (0.12.11); LN-5 (0.12.13); LN-TUNE (0.12.13); LN-8 (0.12.14) |
+| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer); #411 A51 (**`actingd-config` revision 8**): `read_budget_ms`, `close_timeout_ms`; P0-LO (**`actingd-config` revision 10**): `open_timeout_ms`, `open_warn_ratio_milli`; #422 LN-5 (**`actingd-config` revision 12**): `history_page_rows`; #422 LN-TUNE (**`actingd-config` revision 12**): `writer_reply_timeout_ms`; #422 LN-8 (**`actingd-config` revision 13**): `open_verify_tail_records`; #422 LN-9 (**`actingd-config` revision 13**): `scrub_rows_per_second`, `scrub_chunk_rows`, `scrub_pass_interval_ms` | there; A51: 1 000 (`1..=9999`, below `writer_reply_timeout_ms`), 60 000 (above `read_budget_ms`), not settable (§1.151 A51-3); P0-LO: 600 000 (`10000..=600000`), 500 (`100..=1000`), not settable; LN-5: 256 (`1..=4096`), not settable; LN-TUNE: 10 000 (`1000..=600000`), not settable; LN-8: 4 096 (`1..=1000000`), not settable; LN-9: 625 (`1..=100000`, settable), 256 (`1..=4096`), 2 400 000 (`60000..=86400000`), the last two not settable | AO-1 (built, §1.26); A51 (§1.151); P0-LO; LN-5; LN-TUNE; LN-8; LN-9 | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x); A51 (0.12.9); P0-LO (0.12.11); LN-5 (0.12.13); LN-TUNE (0.12.13); LN-8 (0.12.14); LN-9 (0.12.14) |
 | `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms`; Workflow #398 RD-4: `rules.start_beyond_profile`, `profiles`, `kind_profiles`; #411 A38 (**`actingd-config` revision 8**): `fence_recheck.interval_ms`, `fence_recheck.max_attempts`; #411 B37 (A35-S1, revision 8): `busy.poll_ms`, `busy.outcome.recheck_ms`, `.max_wait_ms`, `.on_exhausted`; #411 A35 (A35-S2, **`actingd-config` revision 9**): `busy.screen.classes`, `.probe_frames`, `.probe_interval_ms`, `.change_max_milli`, `.recheck_ms`, `.max_wait_ms`, `.on_exhausted` | M387 §7.1; model-398 §6.3, §6.6 (`exhaust`, the `handset` profile of return home and application restart for the kind `handset`); A38: 300 000 (`10000..=86400000`), 12 (`0..=1000`), settable (§1.148 A38-6); A35-S1: 500, 60 000, 3 600 000, `stop`, settable (§1.152 B37-4); A35-S2: `["pack_logic_mismatch"]`, 5, 1 000, 1 500, 15 000, 900 000, `escalate`, settable (§1.168 A35-4) | D1c; RD-4 (§1.81); A38 (§1.148); A35-S1 (§1.152); A35-S2 (§1.168) | D1c (v0.12.0); RD-4 (v0.12.0); A38 (0.12.9); A35-S1 (0.12.x); A35-S2 (0.12.x) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
@@ -3541,7 +3558,7 @@ when it takes effect.
 | Rows | Count |
 |---|---|
 | today (`apps/actingd/src/config/manifest.rs` at 706ead94) | about 55, plus 2 per instance |
-| `ledger_observer.*` | 28 (21, #411 A51's two, P0-LO's two, and one each of #422 LN-5, LN-TUNE and LN-8) |
+| `ledger_observer.*` | 31 (21, #411 A51's two, P0-LO's two, one each of #422 LN-5, LN-TUNE and LN-8, and #422 LN-9's three) |
 | `recovery_ladder.*`, `host_claims.*` | 16 (and #411 A38's two, #411 B37's four, #411 A35's seven) |
 | `performance.*`, `execution.defaults.*` | about 100 (some replace today's `performance_monitor.*` / `performance_control.*` rows) |
 | `scheduling.*` (recognition, rerun, cost_commit, blackout, feature_lock, not_run, pack_admission, fact_refresh, suspension, random_delay) | 32 |

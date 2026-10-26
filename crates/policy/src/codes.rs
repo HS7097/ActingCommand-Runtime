@@ -219,6 +219,15 @@ actingcommand_contract::outcome_codes! {
         /// reading wakes the scheduler (keys `fact_key`, `served_by_dispatch_unix_ms`).
         FactTimeServed => "fact_time_served": info / none,
         // ---- SCH-M CF-1: end ----
+        // ---- #386 CF-4 (fact references, `contracts/scheduling/README.md`, "Fact
+        // references"): begin ----
+        /// Info. A `fact` predicate that compares its fact with another fact plus an offset is
+        /// false because the referenced fact gives no integer: it is missing, its confidence is
+        /// 0, it is older than the predicate's `max_age_ms`, it is past its own expiry, or it
+        /// holds no integer. No wake and no fact refresh (keys `fact_key` the referenced fact,
+        /// `unknown_reason`).
+        FactReferenceUnavailable => "fact_reference_unavailable": info / none,
+        // ---- #386 CF-4: end ----
     }
 }
 

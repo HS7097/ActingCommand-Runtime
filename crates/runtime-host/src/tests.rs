@@ -393,6 +393,8 @@ mod gate_422_ln3;
 mod gate_422_ln4;
 // #422 LN-TUNE: a second start reads no planning history before the planning checkpoint.
 mod gate_ln_tune;
+// #422 LN-9: a finding of the ledger's scrub stops the Runtime as a Global failure.
+mod gate_ln9;
 
 mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged

@@ -167,6 +167,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #386 CF-4: this build reads a `fact` predicate whose value is another fact plus an
+        // offset; a `schedule.json` that writes one requires it, so an older Runtime refuses the
+        // file instead of misreading it.
+        subsystem(
+            "fact_reference",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #386 SR-4a2 (`contracts/scheduling-blackout.md`, "Configuration"): this
         // build's policy reads blackouts of all three sources (deferral positions 4 and 7, the
         // admission re-check, the random delay's cut) and the day-boundary fit; `count` is the

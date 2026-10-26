@@ -341,6 +341,11 @@ The members of `report`:
       `catalog` ([standard-pack-schedule.md](standard-pack-schedule.md), "The
       scheduler workbench (RL-1b)"); a `schedule.json` that requires it is
       composed only by a Runtime that names this row.
+    - `fact_reference` (#386 CF-4): always on (`config_subsystem_always_on`).
+      The Runtime reads a `fact` predicate whose value is another fact of its
+      scope plus an offset ([scheduling/README.md](scheduling/README.md),
+      "Fact references"); a `schedule.json` whose rule writes one requires it,
+      so it is composed only by a Runtime that names this row.
     - `scheduling_blackout` (Workflow #386 SR-4a2): always on
       (`config_subsystem_always_on`), with `count` the number of entries of
       `scheduling.blackout.host`. The policy reads blackouts of all three

@@ -7,19 +7,19 @@ use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
-    ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
-    MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS,
-    MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES,
-    MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE,
-    MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS,
-    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK,
-    MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES,
-    MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES,
-    MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
-    MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES,
-    MetricRef, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PoolValuation,
-    PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
-    ScopeSelector, TaskSpec, TimelineDocument,
+    ClockSource, Comparison, EffectDirection, FactComparand, FactReference, FactValue, LoadProfile,
+    MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER,
+    MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS,
+    MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS,
+    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS,
+    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE,
+    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
+    MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
+    MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
+    MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS,
+    MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec,
+    PoolValuation, PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION,
+    SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec, TimelineDocument,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -997,7 +997,28 @@ fn validate_predicate_node(
                 descriptor,
                 diagnostics,
             );
-            validate_comparison_value(*comparison, value, path, map, descriptor, diagnostics);
+            match value {
+                FactComparand::Value(value) => {
+                    validate_comparison_value(
+                        *comparison,
+                        value,
+                        path,
+                        map,
+                        descriptor,
+                        diagnostics,
+                    );
+                }
+                FactComparand::Fact(reference) => {
+                    validate_fact_reference(
+                        *comparison,
+                        reference,
+                        path,
+                        map,
+                        descriptor,
+                        diagnostics,
+                    );
+                }
+            }
             if max_age_ms.is_some_and(|value| value == 0 || value > MAX_FACT_MAX_AGE_MS) {
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::LimitExceeded,
@@ -1163,13 +1184,15 @@ fn validate_predicate_node(
     }
 }
 
+/// Two `fact` equalities on one fact with two different typed values (#386 CF-4: a fact
+/// reference's value is known only at evaluation, so it conflicts with nothing here).
 fn has_conflicting_equalities(predicates: &[PredicateSpec]) -> bool {
     for (index, left) in predicates.iter().enumerate() {
         let PredicateSpec::Fact {
             scope: left_scope,
             fact_key: left_key,
             comparison: Comparison::Eq,
-            value: left_value,
+            value: FactComparand::Value(left_value),
             ..
         } = left
         else {
@@ -1180,7 +1203,7 @@ fn has_conflicting_equalities(predicates: &[PredicateSpec]) -> bool {
                 scope: right_scope,
                 fact_key: right_key,
                 comparison: Comparison::Eq,
-                value: right_value,
+                value: FactComparand::Value(right_value),
                 ..
             } = right
                 && left_scope == right_scope
@@ -1258,6 +1281,63 @@ fn validate_comparison_value(
                 descriptor,
             ));
         }
+    }
+}
+
+/// #386 CF-4: a fact reference is V2 only (a V1 document is refused as `unknown_field` at
+/// `value/type`); it names a bounded identifier, an offset within the canonical integers and no
+/// scope (a reference always reads the predicate's own scope, so a `scope` member is refused as
+/// a cross-scope reference at `value/scope`); and it compares integers, so `contains` is
+/// uncomputable.
+fn validate_fact_reference(
+    comparison: Comparison,
+    reference: &FactReference,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{path}/value/type"),
+            "a fact reference requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if reference.scope.is_some() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{path}/value/scope"),
+            "a fact reference reads a fact of the predicate's own scope and names no scope",
+            descriptor,
+        ));
+    }
+    validate_identifier(
+        map,
+        &format!("{path}/value/fact_key"),
+        &reference.fact_key,
+        descriptor,
+        diagnostics,
+    );
+    if !(MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER).contains(&reference.offset) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/value/offset"),
+            format!(
+                "a fact reference offset must be within {MIN_CANONICAL_INTEGER}..={MAX_CANONICAL_INTEGER}"
+            ),
+            descriptor,
+        ));
+    }
+    if comparison == Comparison::Contains {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PredicateUncomputable,
+            format!("{path}/comparison"),
+            "a fact reference compares integers; contains is uncomputable",
+            descriptor,
+        ));
     }
 }
 

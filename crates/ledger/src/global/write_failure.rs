@@ -11,7 +11,8 @@
 
 use super::storage::{DurableStorage, EventStore};
 use super::{
-    GlobalLedgerError, GlobalLedgerResult, LedgerCapturePolicy, Sha256SecretFingerprinter,
+    GlobalLedgerError, GlobalLedgerResult, LedgerCapturePolicy, LedgerScrubPolicy,
+    Sha256SecretFingerprinter,
 };
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
@@ -160,6 +161,9 @@ pub struct LedgerFailurePlan {
     /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the start's ledger open
     /// authenticates (`ledger_observer.open_verify_tail_records`).
     open_verify_tail_records: Option<usize>,
+    /// LN-9 (#422, LEAN-L §6): the paced background scrub of the writer's chain
+    /// (`ledger_observer.scrub_*`); without one the writer has no scrub.
+    scrub: Option<LedgerScrubPolicy>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -176,6 +180,7 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("reply_timeout", &self.reply_timeout)
             .field("history_page_rows", &self.history_page_rows)
             .field("open_verify_tail_records", &self.open_verify_tail_records)
+            .field("scrub", &self.scrub)
             .finish()
     }
 }
@@ -211,6 +216,7 @@ impl LedgerFailurePlan {
             reply_timeout: None,
             history_page_rows: None,
             open_verify_tail_records: None,
+            scrub: None,
         }
     }
 
@@ -247,6 +253,17 @@ impl LedgerFailurePlan {
     pub fn with_open_verify_tail_records(mut self, records: usize) -> Self {
         self.open_verify_tail_records = Some(records);
         self
+    }
+
+    /// LN-9 (#422, LEAN-L §6, Alice's ruling 57): the writer's paced background scrub
+    /// (`ledger_observer.scrub_rows_per_second`, `scrub_chunk_rows`, `scrub_pass_interval_ms`).
+    pub fn with_scrub(mut self, scrub: LedgerScrubPolicy) -> Self {
+        self.scrub = Some(scrub);
+        self
+    }
+
+    pub(super) fn scrub(&self) -> Option<&LedgerScrubPolicy> {
+        self.scrub.as_ref()
     }
 
     pub(super) fn read_budget(&self) -> Option<Duration> {

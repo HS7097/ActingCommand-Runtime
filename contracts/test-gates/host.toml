@@ -2044,7 +2044,16 @@ tests = [
 ]
 incident = ["#422 LN-TUNE"]
 
-# Workflow #386 SR-4a2 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a2; SCHED T14; contracts/scheduling-blackout.md, "Order of the deferrals" position 4 and "Admission"; register §1.188): a catalog maintenance event in effect defers the candidates of its server with blackout_active (blackout_id, blackout_source catalog, the wake at its end), another server's event defers nothing there; an intent evaluated at the last admissible instant and admitted inside the event is refused blackout_active at Info, its rejection carrying the opaque instance_id and the end as next_eligible_unix_ms, no admitted record; at the end the candidate runs
+# LN-9 (#422, LEAN-L row LN-9, §3.7, §6.3; Alice's ruling 57): `ledger_observer.scrub_rows_per_second` (625, 1..=100000, settable), `scrub_chunk_rows` (256, 1..=4096) and `scrub_pass_interval_ms` (2 400 000, 60000..=86400000) are read from the defaults file and from explicit values, the rate is changed by an instruction and the other two refuse one, and a value out of range is refused (`out_of_range`); on a host with the shipped defaults and a stepping scrub clock, damage in an old row that no reader reads stops the Runtime within one pass as a Global failure, latched and closed with the code and operation the full verification gives for the same damage
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ledger_observer_tests::ln9_the_scrub_keys_default_take_explicit_values_and_refuse_out_of_range_values",
+    "actingcommand-runtime-host::lib::tests::gate_ln9::ln9_d_a_scrub_finding_stops_the_runtime_as_a_global_failure_with_the_full_verification_code",
+]
+incident = ["#422 LN-9"]
+
+# Workflow #386 SR-4a2 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a2; SCHED T14; contracts/scheduling-blackout.md, "Order of the deferrals" position 4 and "Admission"; register §1.189): a catalog maintenance event in effect defers the candidates of its server with blackout_active (blackout_id, blackout_source catalog, the wake at its end), another server's event defers nothing there; an intent evaluated at the last admissible instant and admitted inside the event is refused blackout_active at Info, its rejection carrying the opaque instance_id and the end as next_eligible_unix_ms, no admitted record; at the end the candidate runs
 [[gate]]
 coverage = "Y"
 tests = [

@@ -1077,6 +1077,9 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.13 |
 | `writer_reply_timeout_ms` | 10 000 | ms | how long a caller waits for one reply of the ledger writer (was a fixed 10 s); one that runs out is `writer_response_timeout`; `1000..=600000`, above `read_budget_ms` (#422 LN-TUNE) | LN-TUNE, 0.12.13 |
 | `open_verify_tail_records` | 4 096 | integer | how many of the newest records the start's ledger open reads and authenticates; older records are authenticated when they are read, by `ledger-maintenance verify` and by the background re-check; `1..=1000000` (#422 LN-8, LEAN-L §3.7) | LN-8, 0.12.14 |
+| `scrub_rows_per_second` | 625 | integer | rows a second the background scrub reads and authenticates: a chunk starts no earlier than the one before plus its rows at this rate, about 40 minutes a pass at 1.5 million records (Alice's ruling 57); `1..=100000`, settable, read after each chunk (#422 LN-9) | LN-9, 0.12.14 |
+| `scrub_chunk_rows` | 256 | integer | rows of one scrub chunk, each chunk in a read transaction of its own; `1..=4096` (#422 LN-9) | LN-9, 0.12.14 |
+| `scrub_pass_interval_ms` | 2 400 000 | ms | the least time from the start of one scrub pass to the start of the next; the first starts when the writer opens; `60000..=86400000` (#422 LN-9) | LN-9, 0.12.14 |
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
@@ -1166,6 +1169,34 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `ledger-maintenance verify`'s complete read and are 0 for the start, and `ledger_open_slow`'s
   `elapsed_ms` is the sum of all of them. `open_verify_tail_records` is read when the ledger
   opens (`false`).
+- #422 LN-9 (LEAN-L §6, Alice's ruling 57: damage in old rows that nobody reads is found by a
+  background re-check of about 40 minutes a pass; the release after v0.12.13, `actingd-config`
+  revision 13): the Runtime's writer (the one opened with a failure plan) runs a paced background
+  scrub of the whole chain on a thread of its own. It starts when the writer opens and stops first
+  at the close, within one chunk: the close raises its stop and interrupts its statement in
+  progress. Each pass opens a read-only connection of its own and never takes the shared
+  connection the writer commits on, so the writer's flush does not wait for it. In one read
+  transaction it authenticates the keyed meta row and checks `MAX(sequence)` against the head; it
+  then reads the rows `1..=head` in chunks of `scrub_chunk_rows`, each chunk in a read transaction
+  of its own, authenticates every row on its own as a history read does (decode, stored sequence,
+  hash, keyed tag, predecessor link chained across chunks, link and artifact rows; event ids unique
+  within a chunk, across chunks by the `event_id` unique index), checks that the last row's hash is
+  the head hash, and ends with the whole-file `PRAGMA quick_check(1)` on its connection. A chunk
+  starts no earlier than the one before plus its rows at `scrub_rows_per_second`, whose value in
+  effect it reads after each chunk (an instruction changes it); a pass starts at most once every
+  `scrub_pass_interval_ms`, the first when the writer opens. A finding is the failure the full
+  verification (`ledger-maintenance verify`, and the start's open before LN-8) gives for the same
+  damage, with its code and operation (`ledger_record_mismatch`, `ledger_index_mismatch`,
+  `sequence_discontinuity`, `ledger_meta_mismatch`, `corrupt_ledger_record`, ...;
+  `state_database_corrupt` from `quick_check`, of the location `ledger_scrub`) and `phase=scrub` in
+  its detail; every other failure of the scrub (its connection, a statement, a panic) is reported
+  the same way. The scrub stops at its finding, and the host's health check
+  (`GlobalLedger::scrub_finding`) latches it as a Global failure
+  ([runtime-outcomes.md](runtime-outcomes.md), "Failure scope"), so the Runtime stops with the code
+  a start gave for the same damage before LN-8. The scrub keeps nothing that grows with the
+  ledger, and writes no record and no daemon line; the pass-end line `ledger_scrub_pass` of the
+  LEAN-L model §3.8 is not added. At 1.5 million records a pass reads for about 2 400 s at the
+  default rate, then runs `quick_check` once over the file.
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
   [runtime-fact-store.md](runtime-fact-store.md));

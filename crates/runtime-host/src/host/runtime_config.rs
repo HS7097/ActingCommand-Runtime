@@ -254,6 +254,9 @@ impl HostShared {
         // a ladder already admitted keeps its snapshot (§4.7).
         self.refresh_ladder_config()
             .map_err(RequestFailure::poison_without_terminal)?;
+        // LN-9 (#422): the ledger's scrub reads its rate before its next chunk.
+        self.refresh_ledger_scrub_rate()
+            .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
@@ -353,6 +356,31 @@ impl HostShared {
         )?
         .configure(Arc::clone(&config));
         Ok(config)
+    }
+
+    /// LN-9 (#422, LEAN-L §3.7): `ledger_observer.scrub_rows_per_second` in effect (settable),
+    /// handed to the ledger's scrub at start, once the instruction values are restored, and after
+    /// every change of the configuration; the scrub reads it before its next chunk.
+    pub(super) fn refresh_ledger_scrub_rate(&self) -> RuntimeHostResult<()> {
+        let section = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .ledger_observer()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        self.ledger
+            .set_scrub_rows_per_second(section.scrub_rows_per_second)
+            .map_err(|error| {
+                RuntimeHostError::relayed_fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            })
     }
 
     /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, read when a run reaches

@@ -2139,6 +2139,28 @@
       "description": "Scheduling decision reason (SCH-M CF-1, contracts/scheduling/README.md \"Condition edges\"): a `fact_time_reached` predicate with `once_per_reading: true` is false because the time its fact holds was already served: this task's latest run on the instance succeeded and was dispatched (served_by_dispatch_unix_ms) at or after that time plus the predicate's offset_ms and at or after the reading's observation. It stays false, with no wake, until a reading observed after that dispatch gives a time; that reading's publication wakes the scheduler. When the predicate decides the trigger, the decision ends with trigger_false.",
       "common_causes": "The task already ran after the time the latest reading gave; the work it serves shows no new time (for example a slot left empty shows no countdown).",
       "handling": "None. A newer reading of the fact makes the task due again; a catalog that names a free-slot fact in an `any` covers an emptied slot."
+    },
+    "fact_reference_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "Scheduling decision reason (#386 CF-4, contracts/scheduling/README.md \"Fact references\"): a `fact` predicate whose value is a fact reference ({type: fact, fact_key, offset}) is false because the referenced fact (fact_key) gives no integer in the predicate's scope. unknown_reason says why: fact_missing (no such fact), fact_low_confidence (confidence 0), fact_stale (observed longer ago than the predicate's max_age_ms), fact_expired (past its own expiry) or type_mismatch (it holds no integer). The predicate asks for no fact refresh and gives no wake; the referenced fact's next reading wakes the scheduler. When the predicate decides the trigger, the decision ends with trigger_false.",
+      "common_causes": "The package that reads the predicate's fact has not read the referenced fact (for example a capacity) yet, its reading is older than the predicate's max_age_ms, or it publishes the referenced fact with another value kind.",
+      "handling": "None. The task becomes due once a fresh integer reading of the referenced fact compares true; publish the referenced fact with the predicate's fact, or raise max_age_ms in the rules."
     }
   }
 }
