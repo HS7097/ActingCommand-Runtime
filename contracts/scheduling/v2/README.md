@@ -134,3 +134,17 @@ Two edge members (SCH-M CF-1), V2 only, each an optional boolean
 A V1 document that writes `since_own_run`, with either value, is refused as an
 unknown field at the member; `fact_time_reached` is V2 only as a whole. A
 catalog without either member serializes, and hashes, exactly as before.
+
+A `fact` predicate's `value` may be a fact reference (#386 CF-4), V2 only:
+`{"type": "fact", "fact_key": B, "offset": N}` (`../README.md`, "Fact
+references"; schema `factReference`). The predicate then compares the integer
+its fact holds with the integer the fact B of its own scope holds plus N; both
+facts obey its `max_age_ms`, and a B that gives no integer makes it false with
+`fact_reference_unavailable`. All three members are required. N is a signed
+integer within the canonical integers, otherwise `limit_exceeded` at
+`value/offset`; B follows `fact_key`'s rules (`type_mismatch` at
+`value/fact_key`); `contains` is `predicate_uncomputable` at `comparison`; a
+reference that names a `scope` is refused as an unknown field at `value/scope`
+(it always reads the predicate's scope). A V1 document that writes one is
+refused as an unknown field at `value/type`. A catalog whose `fact` predicates
+hold typed values serializes, and hashes, exactly as before.

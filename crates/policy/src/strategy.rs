@@ -1723,7 +1723,7 @@ mod tests {
                 },
                 fact_key: "feature.enabled".to_owned(),
                 comparison: crate::Comparison::Eq,
-                value: crate::FactValue::Boolean(true),
+                value: crate::FactValue::Boolean(true).into(),
                 max_age_ms: Some(60_000),
             },
             match_bands: vec![
