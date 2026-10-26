@@ -351,7 +351,9 @@ impl LedgerMaintenance {
         timing: &mut LedgerOpenTiming,
     ) -> GlobalLedgerResult<GlobalLedger> {
         self.validate_database(&database)?;
-        let config = GlobalLedgerConfig::new(self.root.join("ledger"), owner_id);
+        // LN-9 (#422, LEAN-L §6): a plan's scrub reads this database on its own connection.
+        let config = GlobalLedgerConfig::new(self.root.join("ledger"), owner_id)
+            .with_scrub_database(Arc::clone(&database));
         let config = match plan {
             Some(plan) => config.with_failure_plan(plan),
             None => config,

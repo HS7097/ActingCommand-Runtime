@@ -7871,6 +7871,14 @@
       "since": "0.12.0",
       "description": "Writing one record with its configured attempts and waits (Workflow #383 AO-1, ledger observer §9.1)."
     },
+    "ledger_scrub": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "The paced background scrub of the Runtime's writer: a walk of the whole hash chain on its own read-only connection, in chunked read transactions, ended by the whole-file quick_check of each pass (#422 LN-9, ledger observer §15)."
+    },
     "ledger_attempt_watch": {
       "owner": "ledger",
       "layer": "store",

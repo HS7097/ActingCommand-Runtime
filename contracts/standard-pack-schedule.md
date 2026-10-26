@@ -66,6 +66,15 @@ subsystems, for example `condition_edges`). A Runtime that loads the rules and d
 refuses the file with `schedule_requires_missing` at `/requires/<index>`. The resource tools
 have no Runtime manifest at hand: they report `requires` and leave the check to the Runtime.
 
+A rule whose `trigger` or `feedback_stop` holds a `fact` predicate with a fact reference
+(`"value": {"type": "fact", "fact_key", "offset"}`, #386 CF-4,
+[scheduling/README.md](scheduling/README.md), "Fact references") requires `fact_reference`. The
+composer refuses a file whose rule writes one while `requires` does not name it, Runtime and
+resource tools alike: `schedule_invalid` at the first such `value` in file order (for example
+`/rules/0/trigger/predicates/1/value`). So a Runtime that cannot read a reference refuses the
+file at `requires` instead of misreading the rule. The reference names no scope; the composer
+fills the predicate's own.
+
 ## Classification
 
 Every package of the game root's registry is one or more of (R6, R7):
@@ -98,8 +107,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
 1. **Games in use**: the games of the bound instances, in name order; the instances of each in
    alias order. A game without a bound instance is not read. A bound game whose root holds no
    `schedule.json` has no rules.
-2. **Read** each game's file (above): the reader, `requires`, the references and the
-   classification. A refused game is reported with its game id.
+2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
+   rule writes a fact reference, and the given subsystems name each entry), the references and
+   the classification. A refused game is reported with its game id.
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose
    package belongs to `s` and is not held, and every pool, profile and event for every server or
    for `s`, each with every scope filled with `{kind: instance, instance_id: i}` (the item's own
