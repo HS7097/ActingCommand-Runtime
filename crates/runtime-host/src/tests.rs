@@ -417,6 +417,10 @@ mod gate_ln_ws;
 // #419 DIAG-RUN: a task diagnostic's read the writer does not answer in time fails only its run;
 // a fatal ledger failure of that read still stops the Runtime.
 mod gate_diag_run;
+// #419 LN-WS-F: the reconciliation's and the proposals' recurring ledger reads stay bounded, and
+// one the writer does not answer in time fails only its own settlement step or request; a live
+// settlement's read after its commit stays fatal (fix round 1).
+mod gate_ln_ws_f;
 
 mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged

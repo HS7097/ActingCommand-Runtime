@@ -1340,6 +1340,14 @@ enum WriterCommand {
         target: LedgerEvidenceTarget,
         response: SyncSender<GlobalLedgerResult<bool>>,
     },
+    /// #419 LN-WS-F (R2): the records through `through_sequence` that carry one of `artifacts`,
+    /// by the `artifact_id` index. Its writer command kind is `Query`, so task timing records
+    /// keep their closed set of command kinds.
+    ArtifactRecords {
+        artifacts: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through_sequence: u64,
+        response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
     ProjectViewPage {
         query: EventQuery,
         profile: ProjectionProfile,
@@ -1657,6 +1665,9 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
             let _ = response.send(Err(refused));
         }
         WriterCommand::EvidenceTarget { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ArtifactRecords { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::ProjectViewPage { response, .. } => {
@@ -2703,6 +2714,40 @@ impl GlobalLedger {
         )?
     }
 
+    /// #419 LN-WS-F (R2): the records through `through_sequence` that carry one of `artifacts`, in
+    /// ledger order, selected by the `artifact_id` index of `ledger_artifacts`: the read follows
+    /// those artifacts' records (an artifact's `artifact.created` and `artifact.verified`, say),
+    /// never the history of their event types. Read on the writer's queue, a page at a time
+    /// within the read budget; a read the budget stopped is `ledger_read_budget_exceeded`. No
+    /// artifact reads no record.
+    pub fn artifact_records(
+        &self,
+        artifacts: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through_sequence: u64,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryEvents.location(),
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::ArtifactRecords {
+                artifacts,
+                through_sequence,
+                response,
+            },
+            LedgerLocation::QueryEvents.location(),
+        )?;
+        receive_response(
+            receiver,
+            LedgerLocation::QueryEvents.location(),
+            self.reply_timeout,
+        )?
+    }
+
     pub fn project_view_page(
         &self,
         query: EventQuery,
@@ -3239,7 +3284,9 @@ fn command_operation(command: &WriterCommand) -> Location {
         WriterCommand::QueryPage { .. } => LedgerLocation::QueryEventPage.location(),
         WriterCommand::IndexRecords { .. } => LedgerLocation::LedgerIndexRows.location(),
         WriterCommand::TaggedState { .. } => LedgerLocation::LedgerIndexRows.location(),
-        WriterCommand::EvidenceTarget { .. } => LedgerLocation::QueryEvents.location(),
+        WriterCommand::EvidenceTarget { .. } | WriterCommand::ArtifactRecords { .. } => {
+            LedgerLocation::QueryEvents.location()
+        }
         WriterCommand::ProjectViewPage { .. } => LedgerLocation::ProjectLedgerViewPage.location(),
         WriterCommand::ProjectSchedulingOutcomes { .. } => {
             LedgerLocation::ProjectSchedulingOutcomes.location()
@@ -3269,6 +3316,7 @@ const fn is_read_command(command: &WriterCommand) -> bool {
             | WriterCommand::IndexRecords { .. }
             | WriterCommand::TaggedState { .. }
             | WriterCommand::EvidenceTarget { .. }
+            | WriterCommand::ArtifactRecords { .. }
             | WriterCommand::ProjectViewPage { .. }
             | WriterCommand::ProjectSchedulingOutcomes { .. }
             | WriterCommand::LatestSequence { .. }
@@ -3351,10 +3399,12 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::ReconcileScheduledPolicySettlement { .. } => {
                 LedgerWriterCommandKind::ReconcileScheduledPolicySettlement
             }
-            // #422 LN-7c C: the evidence target read is a read too.
+            // #422 LN-7c C: the evidence target read is a read too; #419 LN-WS-F: so is the read
+            // of an artifact set's records.
             WriterCommand::Query { .. }
             | WriterCommand::TaggedState { .. }
-            | WriterCommand::EvidenceTarget { .. } => LedgerWriterCommandKind::Query,
+            | WriterCommand::EvidenceTarget { .. }
+            | WriterCommand::ArtifactRecords { .. } => LedgerWriterCommandKind::Query,
             WriterCommand::QueryPage { .. } => LedgerWriterCommandKind::QueryPage,
             // Workflow #422 LN-4: the index read is a read; the set of command kinds that task
             // timing records name stays closed.
@@ -3675,6 +3725,21 @@ fn writer_commands<S: LedgerStore>(
                             read_work::ReadWork::exceeded(LedgerLocation::QueryEvents.location())
                         })
                     });
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::ArtifactRecords {
+                artifacts,
+                through_sequence,
+                response,
+            } => {
+                let result = store.artifact_records(
+                    &artifacts,
+                    through_sequence,
+                    &work,
+                    LedgerLocation::QueryEvents.location(),
+                );
+                read_events = result.as_ref().map_or(0, Vec::len);
                 command_succeeded = result.is_ok();
                 command_observation.replied(response.send(result).is_ok());
             }

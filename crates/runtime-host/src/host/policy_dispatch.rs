@@ -1733,8 +1733,14 @@ impl HostShared {
             } else {
                 match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
                     Ok(projection) => projection.active_for_dispatch(intent),
+                    // #419 LN-WS-F (R1): an approval read the writer did not answer in time, or
+                    // stopped at its budget, fails only this admission, before its intent is
+                    // appended; the next evaluation derives the dispatch again. Any other failure
+                    // latches, as before.
                     Err(error) => {
-                        self.fatal.mark(error.clone())?;
+                        if !unanswered_ledger_read(&error) {
+                            self.fatal.mark(error.clone())?;
+                        }
                         return Err(error);
                     }
                 }

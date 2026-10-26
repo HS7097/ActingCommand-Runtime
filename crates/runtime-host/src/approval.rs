@@ -93,7 +93,7 @@ impl ApprovalProjection {
                     RECOVERY_PAGE_EVENTS,
                 )
             })
-            .map_err(|_| approval_fatal(HostCode::ApprovalProjectionQueryFailed))?;
+            .map_err(|error| approval_read_error(&error))?;
         let projection = Self::from_events(&events, state)?;
         if persist {
             projection
@@ -144,7 +144,7 @@ impl ApprovalProjection {
         loop {
             let page = ledger
                 .query_page(query.clone(), after, through, APPROVAL_PAGE_EVENTS)
-                .map_err(|_| approval_fatal(HostCode::ApprovalProjectionQueryFailed))?;
+                .map_err(|error| approval_read_error(&error))?;
             let exhausted = page.len() < APPROVAL_PAGE_EVENTS;
             if let Some(last) = page.last() {
                 after = last.sequence();
@@ -486,4 +486,15 @@ fn approval_fatal(code: impl Into<Code>) -> RuntimeHostError {
         HostLocation::RebuildApprovalProjection,
         RuntimeErrorCode::RuntimeHalted,
     )
+}
+
+/// #419 LN-WS-F (R1): a failed read of the approval decisions. A read the writer did not answer
+/// in time, or stopped at its budget, fails only the request or the admission that rebuilds the
+/// projection, non-fatal with the ledger's code; nothing is kept or persisted from it, so the
+/// next read rebuilds. Any other read failure stays the fatal `approval_projection_query_failed`,
+/// with the ledger's own failure as its cause.
+fn approval_read_error(error: &GlobalLedgerError) -> RuntimeHostError {
+    crate::host::tolerant_ledger_read_error(error, HostLocation::RebuildApprovalProjection, || {
+        approval_fatal(HostCode::ApprovalProjectionQueryFailed)
+    })
 }

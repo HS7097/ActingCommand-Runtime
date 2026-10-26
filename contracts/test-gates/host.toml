@@ -2360,3 +2360,24 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_diag_run::diag_run_t5_a_fatal_ledger_failure_of_the_diagnostic_read_still_stops_the_runtime",
 ]
 incident = ["#419 DIAG-RUN"]
+
+# LN-WS-F (#419 / #422; brief rd-1026/brief-ln-ws-f.md; the "Exposure" audit of #1367): the Runtime's own recurring ledger reads stay bounded and fail only their own work. On a production-shaped synthetic ledger (three instances, runs of 24 frames with every second frame stored) with a dispatch intent every twenty records appended under its own run links and two stored reports, a decision's dispatch intent read from the sequence the dispatch journal holds (the reconciliation tick's) and the verified records of a proposal's reports or a strategic report's evidence (by the `artifact_id` index) take at most 1.5 times the SQLite work on 12 000 records that they take on 3 000, and answer what the history-wide reads answer (one intent, two intents of one decision, none; verified references, one with another digest, one the ledger does not hold, alone and together). With a 3 s writer reply limit, the reconciliation tick's read of a pending settlement held past it skips only that settlement this tick (nothing latched, no stop, nothing written) and the next tick settles it; a proposal request's read held past it is answered `failed`, non-fatal, with `writer_response_timeout` and the same proposal is then evaluated; a damaged dispatch intent on the settlement read still latches and stops the Runtime
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t1_a_bounded_read_does_not_grow_with_the_history",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t2_a_bounded_read_answers_as_the_history_wide_read",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t3_a_settlement_read_not_answered_in_time_skips_only_its_settlement_this_tick",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t4_a_proposal_read_not_answered_in_time_fails_only_that_request",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t5_a_damaged_record_on_a_settlement_read_still_stops_the_runtime",
+]
+incident = ["#419 LN-WS-F"]
+
+# LN-WS-F fix round 1 (brief rd-1026/brief-ln-ws-f-fix1.md; review rd-1026/ln-ws-f/review.md H1, L1): a live settlement's completion read, which comes after its execution record is committed, held past a 3 s writer reply limit stays fatal: the Runtime latches a `ledger_failure` whose cause is the ledger's `writer_response_timeout` and a stop is requested. With two pending settlements and the writer held from the reconciliation tick's first settlement read on, only that read waits out the limit (one skipped step in the daemon's log), nothing latches, neither settlement writes anything, and the next tick settles both
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t6_a_completion_read_not_answered_after_the_execution_commit_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t7_the_first_unanswered_settlement_read_ends_the_ticks_reads",
+]
+incident = ["#419 LN-WS-F"]

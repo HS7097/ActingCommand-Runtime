@@ -42,8 +42,10 @@ impl HostShared {
                 ContractLocation::RecordApprovalDecision,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+            // #419 LN-WS-F (R1): an approval read the writer did not answer fails only this
+            // request; nothing is appended before it.
             let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
-                .map_err(RequestFailure::poison_without_terminal)?;
+                .map_err(unanswered_or_poison)?;
             if let Some(existing) = self.client_fact_replay(request, EventType::ApprovalDecision)? {
                 let EventPayload::Approval(ApprovalPayload::Decision(payload)) = existing.payload()
                 else {
