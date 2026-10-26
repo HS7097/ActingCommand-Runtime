@@ -152,6 +152,10 @@ impl EventIndexes {
     }
 }
 
+/// #422 LN-WS: the records of one run at or before a page's snapshot, and whether the read's budget cut
+/// them short.
+pub(in crate::global) type RunContextRecords<E> = Result<(Vec<E>, bool), GlobalLedgerError>;
+
 /// LN-6 (#422, LEAN-L §3.3): what a page reads besides its selected records: whether a record
 /// with given links relates to a Lab anchor at the page's snapshot, the records of one run at or
 /// before the snapshot (at most `MAX_RECOVERY_CONTEXT_EVENTS + 1` of them, in ledger order) and
@@ -159,7 +163,7 @@ impl EventIndexes {
 /// the read's budget cut them short; the run's context is then limited.
 pub(in crate::global) struct PageContext<'a, E> {
     pub lab_related: &'a dyn Fn(&LabKeys) -> bool,
-    pub run_context: &'a mut dyn FnMut(&RunId) -> Result<(Vec<E>, bool), GlobalLedgerError>,
+    pub run_context: &'a mut dyn FnMut(&RunId) -> RunContextRecords<E>,
     pub retention: Option<&'a crate::global::retention::RetentionIndex>,
 }
 
@@ -275,7 +279,7 @@ fn run_recovery<E: LedgerEventRead>(
     rows: &[ProjectedEvent],
     snapshot: u64,
     complete: bool,
-    run_context: &mut dyn FnMut(&RunId) -> Result<(Vec<E>, bool), GlobalLedgerError>,
+    run_context: &mut dyn FnMut(&RunId) -> RunContextRecords<E>,
 ) -> Result<Vec<LedgerRunRecovery>, GlobalLedgerError> {
     let runs: BTreeSet<_> = rows
         .iter()
