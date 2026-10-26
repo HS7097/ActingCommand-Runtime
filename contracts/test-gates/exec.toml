@@ -2162,6 +2162,14 @@ tests = [
 ]
 incident = ["#386 ROUT-L RL-T"]
 
+# Workflow #392 DA-4 (model 392 v1.2 §4.1, §13 row DA4-T4; register §1.192 DL-3): package bundle --display-layout lays the given file beside bundle.json as display-layout.json byte for byte, whatever it is named; the installed game root made of that bundle passes standard-pack check, whose root_files list bundle.json and display-layout.json
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da4::da4_t4_package_bundle_lays_the_declaration_and_standard_pack_check_lists_it",
+]
+incident = ["#392 DA-4"]
+
 # Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): a 1280x720 package on a 1280x720 frame, with or without a declaration, is the identity: every grid point and box maps to itself into the scale frame, to the device frame and back, under every class and anchor (DA1-T1)
 [[gate]]
 coverage = "Y"

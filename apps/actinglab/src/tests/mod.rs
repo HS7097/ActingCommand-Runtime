@@ -62,6 +62,10 @@ mod gate_412_b3_s2;
 // `resource validate` reads a root `schedule.json` by the schedule reader.
 #[path = "gate_386_rlt.rs"]
 mod gate_386_rlt;
+// Workflow #392 DA-4: `package bundle --display-layout` and `standard-pack check` lay and list a
+// game root's display declaration.
+#[path = "gate_392_da4.rs"]
+mod gate_392_da4;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

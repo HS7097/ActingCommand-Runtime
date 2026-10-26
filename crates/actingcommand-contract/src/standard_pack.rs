@@ -19,9 +19,12 @@
 //! - `navigation.json` (`actingcommand.navigation.v1`, §3.5; Workflow #373 NAV-5): the edges
 //!   between listed pages, each run by a package, and the recovery chain a run steps through
 //!   when its page is not recognised.
+//! - `display-layout.json` (`actingcommand.display-layout.v1`; Workflow #392 DA-4, model 392
+//!   v1.2 §4.1): the game's display declaration, read by [`crate::standard_pack_display`].
 //!
 //! The Runtime names no page and no game here: ids are compared as opaque strings.
 
+use crate::standard_pack_display::{StandardPackDisplayLayout, parse_standard_pack_display_layout};
 use crate::{BundleIndex, MaintenanceUse};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,8 +79,9 @@ crate::outcome_vocabulary! {
         GameMismatch => "game_mismatch",
         /// `bundle.json` breaks the bundle index rules (M-PKG).
         BundleInvalid => "bundle_invalid",
-        /// The game root holds `interrupts.json`, `navigation.json`, `pages.json` or (Workflow
-        /// #357 DB-1) a `tables/` directory but no `bundle.json`.
+        /// The game root holds `interrupts.json`, `navigation.json`, `pages.json`, (Workflow
+        /// #392 DA-4) `display-layout.json` or (Workflow #357 DB-1) a `tables/` directory but no
+        /// `bundle.json`.
         BundleMissing => "bundle_missing",
         /// The game root holds `interrupts.json` or `navigation.json` but no `pages.json`.
         PagesMissing => "pages_missing",
@@ -149,6 +153,9 @@ crate::outcome_vocabulary! {
         /// Workflow #357 DB-1: a table holds more than 8192 rows or 2 MiB, or is a game root's
         /// 65th table or later by file name.
         TableTooLarge => "table_too_large",
+        /// Workflow #392 DA-4: `display-layout.json` breaks one of its rules: its
+        /// `correction.radius_px` is above 64 (model 392 v1.2 §4.1).
+        DisplayLayoutInvalid => "display_layout_invalid",
     }
 }
 
@@ -220,14 +227,19 @@ crate::outcome_vocabulary! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StandardPackRootIssue {
     /// One of [`STANDARD_PACK_BUNDLE_FILE`], [`STANDARD_PACK_PAGES_FILE`],
-    /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`].
+    /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`] or (Workflow #392
+    /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`].
     pub file: &'static str,
     pub problem: StandardPackProblem,
     pub pointer: String,
 }
 
 impl StandardPackRootIssue {
-    fn new(file: &'static str, problem: StandardPackProblem, pointer: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        file: &'static str,
+        problem: StandardPackProblem,
+        pointer: impl Into<String>,
+    ) -> Self {
         Self {
             file,
             problem,
@@ -745,6 +757,8 @@ pub struct StandardPackRootBytes<'a> {
     /// which makes a directory a game root as the root files do. The tables themselves are read
     /// on their own ([`crate::read_standard_pack_tables`]).
     pub tables: bool,
+    /// Workflow #392 DA-4 (model 392 v1.2 §4.1): `display-layout.json`.
+    pub display_layout: Option<&'a [u8]>,
 }
 
 /// One game root as every reader reads it (§3.9): its registry and the root files it holds.
@@ -754,15 +768,19 @@ pub struct StandardPackRoot {
     pub pages: Option<StandardPackPages>,
     pub interrupts: Option<StandardPackInterrupts>,
     pub navigation: Option<StandardPackNavigation>,
+    /// Workflow #392 DA-4: the game's display declaration, when the root holds one.
+    pub display_layout: Option<StandardPackDisplayLayout>,
 }
 
 /// Workflow #373 NAV-T (§3.9, "one check, three readers"): the structure check of one game root
 /// that the Runtime's root reader, check-config, `package bundle` and `actinglab standard-pack
 /// check` all run, for the game directory `game`. `None` when the root holds none of the files;
-/// `pages.json`, `interrupts.json`, `navigation.json` or (Workflow #357 DB-1) a `tables/`
-/// directory without `bundle.json` is `bundle_missing`, and `interrupts.json` or `navigation.json` without `pages.json` is
-/// `pages_missing`. Each file is checked as its own parser checks it, and every package the page
-/// list, the interrupts and the navigation data name is a package of the registry.
+/// `pages.json`, `interrupts.json`, `navigation.json`, (Workflow #392 DA-4)
+/// `display-layout.json` or (Workflow #357 DB-1) a `tables/` directory without `bundle.json` is
+/// `bundle_missing`, and `interrupts.json` or `navigation.json` without `pages.json` is
+/// `pages_missing` (`display-layout.json` needs no `pages.json`). Each file is checked as its own
+/// parser checks it, and every package the page list, the interrupts and the navigation data name
+/// is a package of the registry.
 pub fn read_standard_pack_root(
     files: StandardPackRootBytes<'_>,
     game: &str,
@@ -771,6 +789,7 @@ pub fn read_standard_pack_root(
         if files.pages.is_none()
             && files.interrupts.is_none()
             && files.navigation.is_none()
+            && files.display_layout.is_none()
             && !files.tables
         {
             return Ok(None);
@@ -809,11 +828,17 @@ pub fn read_standard_pack_root(
     if let Some(navigation) = &navigation {
         validate_standard_pack_navigation_references(&registry, navigation)?;
     }
+    // Workflow #392 DA-4: the display declaration names no page and no package.
+    let display_layout = files
+        .display_layout
+        .map(|bytes| parse_standard_pack_display_layout(bytes, Some(game)))
+        .transpose()?;
     Ok(Some(StandardPackRoot {
         registry,
         pages,
         interrupts,
         navigation,
+        display_layout,
     }))
 }
 
@@ -844,7 +869,7 @@ fn check_packages(
     Ok(())
 }
 
-fn check_game(
+pub(crate) fn check_game(
     file: &'static str,
     declared: &str,
     directory: Option<&str>,

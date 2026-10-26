@@ -988,6 +988,7 @@ fn rl1b_a9_the_first_composition_switches_from_a_configured_catalog_with_the_sam
             interrupts: None,
             navigation: None,
             tables: false,
+            display_layout: None,
         },
         GAME_A,
     )

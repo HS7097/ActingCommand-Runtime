@@ -35,6 +35,10 @@
 //! `package_bundle_entry_page_unlisted` warning per package whose entry pages, as the Runtime's
 //! entry gate reads them when its game has navigation data, are not all listed in `pages.json`.
 //!
+//! Workflow #392 DA-4 (model 392 v1.2 §4.1): `display-layout.json` (`package bundle
+//! --display-layout`, or a game root that holds it) is a root file the one structure check reads
+//! like the others; it names no package, so the cross-check has nothing more to check of it.
+//!
 //! ROUT-L RL-1a (contracts/standard-pack-schedule.md): with `schedule.json` (`package bundle
 //! --schedule`, or a game root that holds it), the file is composed by the Runtime's composer with
 //! one bound instance per server ([`crate::standard_pack_schedule`]); a refusal is
@@ -60,9 +64,10 @@ use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
 use actingcommand_contract::{
     BundleIndex, InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem,
     NavigationRole, ProvidedCapability, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
-    StandardPackRootIssue, read_standard_pack_root,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
+    read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
@@ -94,6 +99,9 @@ pub(crate) struct RootFileInputs {
     navigation: Option<RootFile>,
     /// ROUT-L RL-1a: `schedule.json`, checked by the composer and laid beside `bundle.json`.
     schedule: Option<RootFile>,
+    /// Workflow #392 DA-4: `display-layout.json`, checked by the root reader and laid beside
+    /// `bundle.json`.
+    display_layout: Option<RootFile>,
 }
 
 impl RootFileInputs {
@@ -119,6 +127,7 @@ impl RootFileInputs {
             interrupts: read(files.interrupts.as_ref())?,
             navigation: read(files.navigation.as_ref())?,
             schedule: read(files.schedule.as_ref())?,
+            display_layout: read(files.display_layout.as_ref())?,
         })
     }
 
@@ -127,6 +136,7 @@ impl RootFileInputs {
             && self.interrupts.is_none()
             && self.navigation.is_none()
             && self.schedule.is_none()
+            && self.display_layout.is_none()
     }
 
     /// ROUT-L RL-1a: the `schedule.json` given, if any.
@@ -141,6 +151,7 @@ impl RootFileInputs {
             (STANDARD_PACK_INTERRUPTS_FILE, &self.interrupts),
             (STANDARD_PACK_NAVIGATION_FILE, &self.navigation),
             (STANDARD_PACK_SCHEDULE_FILE, &self.schedule),
+            (STANDARD_PACK_DISPLAY_LAYOUT_FILE, &self.display_layout),
         ]
         .into_iter()
         .filter_map(|(name, file)| file.as_ref().map(|file| (name, file)))
@@ -167,6 +178,10 @@ impl RootFileInputs {
                 navigation: self.navigation.as_ref().map(|file| file.bytes.as_slice()),
                 // Workflow #357 DB-1: the bundle is given, so the tables never decide here.
                 tables: false,
+                display_layout: self
+                    .display_layout
+                    .as_ref()
+                    .map(|file| file.bytes.as_slice()),
             },
             game,
         )
@@ -205,6 +220,8 @@ pub fn check_standard_pack_root(
         STANDARD_PACK_NAVIGATION_FILE,
         // ROUT-L RL-1a: read beside the others, and checked by the composer after them.
         STANDARD_PACK_SCHEDULE_FILE,
+        // Workflow #392 DA-4: checked by the one structure check with the others.
+        STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     ] {
         if let Some(bytes) = read_bounded(&root.join(name))? {
             present.push(name);
@@ -220,6 +237,7 @@ pub fn check_standard_pack_root(
             navigation: bytes(STANDARD_PACK_NAVIGATION_FILE),
             // Workflow #357 DB-1: a root without bundle.json is refused below either way.
             tables: false,
+            display_layout: bytes(STANDARD_PACK_DISPLAY_LAYOUT_FILE),
         },
         &game,
     )

@@ -237,8 +237,8 @@ declares.
 
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
 directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]
-[--pages <file>] [--interrupts <file>] [--navigation <file>] [--schedule <file>]` lays out the
-resource section of a standard package:
+[--pages <file>] [--interrupts <file>] [--navigation <file>] [--schedule <file>]
+[--display-layout <file>]` lays out the resource section of a standard package:
 
 ```text
 applications.json              the given applications table, copied byte for byte
@@ -247,6 +247,7 @@ pages.json                     with --pages, copied byte for byte (Workflow #373
 interrupts.json                with --interrupts, copied byte for byte
 navigation.json                with --navigation, copied byte for byte
 schedule.json                  with --schedule, copied byte for byte (ROUT-L RL-1a)
+display-layout.json            with --display-layout, copied byte for byte (Workflow #392 DA-4)
 packs/<package_id>/control.json
 packs/<package_id>/resources/...
 ```
@@ -322,13 +323,20 @@ composer with one bound instance per server of the registry: a refusal is
 `standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem`
 (`schedule_invalid`, `rule_package_unregistered` or `rule_id_conflict`) and `json_pointer`, and each
 package of the registry that is neither maintenance-role, named by a rule nor held is one
-`standard_pack_package_unclassified` warning (with `game` and `package_id`) in `warnings`. The
-root files are copied byte for byte last.
+`standard_pack_package_unclassified` warning (with `game` and `package_id`) in `warnings`.
+Workflow #392 DA-4 (model 392 v1.2 §4.1): `--display-layout` names the game's display
+declaration; every pack is admitted for real as with the other root files, the file is read by
+the one structure check ("Standard package root", `display-layout.json`: a refusal is
+`standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem` and
+`json_pointer`), and it is laid beside `bundle.json` as `display-layout.json` whatever the given
+file is named; it names no package, so the cross-check checks nothing more of it. The root files
+are copied byte for byte last.
 
 `actinglab standard-pack check --root <game root>` runs the same checks on an installed game
 root `<standard_packs.root>/<game>/` (the game is the directory's name; its packages are the
 directories its `bundle.json` lists): the root files it holds, the cross-check and the report,
-and (ROUT-L RL-1a) the root's `schedule.json` as `--schedule` is checked above. It only reads. Every package of the registry is admitted, once, by its directory, with or
+and (ROUT-L RL-1a) the root's `schedule.json` as `--schedule` is checked above, and (Workflow
+#392 DA-4) its `display-layout.json` as `--display-layout` is. It only reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
 game, root_files, pack_count, warnings}`, given only once every package of the registry was
@@ -617,6 +625,7 @@ data files beside its package directories, one directory per game below the conf
   navigation.json    actingcommand.navigation.v1: the edges and the recovery chain (NAV-5)
   tables/            actingcommand.table.v1: the shared tables, <table_id>.json (#357 DB-1)
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
+  display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
   <directory>/       one package directory per bundle pack
 ```
 
@@ -691,8 +700,24 @@ data files beside its package directories, one directory per game below the conf
   --schedule`, `actinglab standard-pack check` and `standard-pack compose` all run; a refused file
   is `standard_pack_root_invalid` (problems `schedule_invalid`, `schedule_requires_missing`,
   `rule_package_unregistered`, `rule_id_conflict`). A run's preparation never reads it.
+- **`display-layout.json`** (Workflow #392 / #401 DA-4, model 392 v1.2 §4.1). `{schema_version,
+  game, scale: {by, area}, anchor_area, correction: {radius_px}}`: how the game's interface
+  follows a display that is not its packages' base size. `scale.by` is `height` or `width` (the
+  scale factor is the layout area's height or width over the base's), `scale.area` and
+  `anchor_area` are `screen` or `safe_area` (the area the factor is measured on and the area the
+  nine anchors sit on), and `correction.radius_px` is the nearest correction's radius in base
+  pixels, 0 to 64 (0: none; 64 is the shape's bound, not a tunable). Every member is required,
+  no other is read, and the Runtime has no default for any. A member that is missing, unknown or
+  not of its type or version is `malformed` at that member's pointer (empty for the whole
+  document: no JSON object, a repeated member); a `game` that is not the directory's is
+  `game_mismatch`; a radius above 64 is `display_layout_invalid` at `/correction/radius_px`. The
+  file is read by `parse_standard_pack_display_layout`; it needs no `pages.json`, and without
+  `bundle.json` it is `bundle_missing`. The display adapter (model 392, DA-2a and later) reads
+  the declaration a run's preparation read; until then nothing uses it, and a run is as it was
+  without the file. No resource repository's standard package carries one yet.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
-  `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`,
+  `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`, (Workflow #392 DA-4)
+  `parse_standard_pack_display_layout`,
   `validate_standard_pack_references`, `validate_standard_pack_navigation_references`,
   `StandardPackRegistry`) are shared by the Runtime's reader, check-config and
   `actinglab resource validate` (`resource-declarations.md`). Workflow #373 NAV-T: a whole game
@@ -711,7 +736,8 @@ data files beside its package directories, one directory per game below the conf
   also read, only to report the refused ones, one more `standard_pack_read` record each
   (`standard_pack_table_invalid` or `standard_pack_table_unreadable`); nothing is kept and a run
   reads no table (DB-2 binds them to runs). In a run's preparation, the root of the run's game when it holds
-  `interrupts.json` or (Workflow #373 NAV-5) `navigation.json`, and (Workflow #373 NAV-3a)
+  `interrupts.json`, (Workflow #373 NAV-5) `navigation.json` or (Workflow #392 DA-4)
+  `display-layout.json`, and (Workflow #373 NAV-3a)
   when the run resolves a prerequisite package
   or the return-home package: a broken root refuses the run before any lease and any task
   record; a registry that differs from the one read last (its packages or its return-home

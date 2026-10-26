@@ -24,9 +24,9 @@ use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, LabError, LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, StandardPackRoot, StandardPackRootBytes, read_standard_pack_root,
-    validate_instance_alias,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
 };
 use actingcommand_policy::{
     ComposedGame, ComposedProcedure, StandardPackBinding, StandardPackComposeFailure,
@@ -267,6 +267,8 @@ fn read_game_root(root: &Path, game: &str) -> LabResult<GameRoot> {
         STANDARD_PACK_PAGES_FILE,
         STANDARD_PACK_INTERRUPTS_FILE,
         STANDARD_PACK_NAVIGATION_FILE,
+        // Workflow #392 DA-4: checked as every reader checks it.
+        STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     ] {
         if let Some(bytes) = read_bounded(&directory.join(name))? {
             files.insert(name, bytes);
@@ -280,6 +282,7 @@ fn read_game_root(root: &Path, game: &str) -> LabResult<GameRoot> {
             interrupts: bytes(STANDARD_PACK_INTERRUPTS_FILE),
             navigation: bytes(STANDARD_PACK_NAVIGATION_FILE),
             tables: false,
+            display_layout: bytes(STANDARD_PACK_DISPLAY_LAYOUT_FILE),
         },
         game,
     )

@@ -40,6 +40,11 @@
 //!   `standard_pack_read` record each); nothing is kept. check-config lists each sound root's
 //!   tables with their row counts, problems and expired columns. The tables of a broken root are
 //!   neither read nor listed. A run reads no table before DB-2.
+//! - **Display declaration** (Workflow #392 DA-4, model 392 v1.2 §4.1). A game root's
+//!   `display-layout.json` is a root file like the others: read and recorded at startup (a
+//!   broken one only recorded), listed by check-config, and read in the preparation of a run of
+//!   its game, which a broken one refuses before any lease. What the preparation read is not
+//!   kept yet: the display adapter (DA-2a), its first reader, keeps it for the run.
 
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
 use super::navigation::{RunNavigation, run_navigation};
@@ -47,11 +52,11 @@ use super::*;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
     MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackInterrupts,
-    StandardPackNavigation, StandardPackPages, StandardPackRegistry, StandardPackRootBytes,
-    StandardPackRootIssue, StandardPackTableReport, TaskEntryRecoveryRole, TaskInterruptThen,
-    read_standard_pack_root, read_standard_pack_tables,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY,
+    StandardPackInterrupts, StandardPackNavigation, StandardPackPages, StandardPackRegistry,
+    StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport, TaskEntryRecoveryRole,
+    TaskInterruptThen, read_standard_pack_root, read_standard_pack_tables,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -248,13 +253,15 @@ pub(super) fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure
 /// refused; every file is checked as the contract crate checks it, and the packages the page
 /// list, the interrupts and the navigation data name must be packages of the registry. Workflow
 /// #373 NAV-T (§3.9): the check is the contract crate's [`read_standard_pack_root`], which the
-/// resource tools run too; the refused file is the issue's own.
+/// resource tools run too; the refused file is the issue's own. Workflow #392 DA-4: it checks
+/// `display-layout.json` too.
 fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, RootFailure> {
     let path_of = |file: &str| directory.join(file);
     let bundle = read_root_file(&path_of(STANDARD_PACK_BUNDLE_FILE))?;
     let pages = read_root_file(&path_of(STANDARD_PACK_PAGES_FILE))?;
     let interrupts = read_root_file(&path_of(STANDARD_PACK_INTERRUPTS_FILE))?;
     let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?;
+    let display_layout = read_root_file(&path_of(STANDARD_PACK_DISPLAY_LAYOUT_FILE))?;
     // Workflow #357 DB-1 (M-357a v1.1 §2.1): `tables/` makes the directory a game root.
     let tables_path = path_of(STANDARD_PACK_TABLES_DIRECTORY);
     let tables = match fs::symlink_metadata(&tables_path) {
@@ -275,6 +282,7 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
             interrupts: interrupts.as_deref(),
             navigation: navigation.as_deref(),
             tables,
+            display_layout: display_layout.as_deref(),
         },
         game,
     )
@@ -336,7 +344,7 @@ pub struct StandardPackGameReport {
     /// The registry's package count; `None` when the root is broken.
     pub pack_count: Option<usize>,
     /// The root files present (`bundle.json`, `pages.json`, `interrupts.json`, Workflow #373
-    /// NAV-5 `navigation.json`).
+    /// NAV-5 `navigation.json`, Workflow #392 DA-4 `display-layout.json`).
     pub root_files: Vec<&'static str>,
     /// `standard_pack_root_invalid` or `standard_pack_root_unreadable` when the root is broken.
     pub problem: Option<Outcome>,
@@ -441,6 +449,7 @@ pub fn inspect_standard_packs(root: Option<&Path>, now_unix_ms: u64) -> Standard
                 STANDARD_PACK_PAGES_FILE,
                 STANDARD_PACK_INTERRUPTS_FILE,
                 STANDARD_PACK_NAVIGATION_FILE,
+                STANDARD_PACK_DISPLAY_LAYOUT_FILE,
             ]
             .into_iter()
             .filter(|file| directory.join(file).is_file())
@@ -685,9 +694,12 @@ impl HostShared {
     /// Workflow #373 NAV-6 (§7): the shared interrupt pages of a run of `prepared`, read in its
     /// preparation. `None` (nothing read, nothing recorded) without a root, without the game's
     /// directory, or when the game root holds no `interrupts.json` (Workflow #373 NAV-5: and no
-    /// `navigation.json`); also when the root names no feature package for the run's server, or
-    /// neither a handler for it nor navigation data the run's package can use. A broken root
-    /// refuses the run.
+    /// `navigation.json`; Workflow #392 DA-4: and no `display-layout.json`); also when the root
+    /// names no feature package for the run's server, or neither a handler for it nor navigation
+    /// data the run's package can use. A broken root refuses the run. Workflow #392 DA-4 (model
+    /// 392 v1.2 §4.1): a root that holds `display-layout.json` is read so, once, and a broken
+    /// declaration refuses the run before any lease; a declaration replaced in place is read by
+    /// the next run.
     pub(super) fn prepare_run_interrupts(
         &self,
         prepared: &PreparedContainedTask,
@@ -698,7 +710,11 @@ impl HostShared {
         let game = prepared.game();
         let directory = root.join(game);
         let mut marked = false;
-        for file in [STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE] {
+        for file in [
+            STANDARD_PACK_INTERRUPTS_FILE,
+            STANDARD_PACK_NAVIGATION_FILE,
+            STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+        ] {
             let marker = directory.join(file);
             match fs::symlink_metadata(&marker) {
                 Ok(_) => marked = true,

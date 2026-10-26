@@ -280,6 +280,8 @@ mod gate_390_drill1;
 // Runtime last read it, with the reading's time.
 mod gate_390_nine1;
 mod gate_392_daa;
+// Workflow #392 DA-4: a game root's display declaration at startup and in a run's preparation.
+mod gate_392_da4;
 // Workflow #392 DA-5a: the identity test of the ordered task schema check.
 mod gate_392_da5a;
 mod gate_398_rd1a;
