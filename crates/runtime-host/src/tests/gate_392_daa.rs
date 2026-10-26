@@ -15,7 +15,11 @@ const ALIAS: &str = "neutral.instance";
 /// A host whose one instance is bound to a device endpoint (the neutral loopback endpoint the
 /// other fakes use) and whose fake device serves `width`x`height` frames and display, rotation
 /// `r0` observed.
-fn device_host(root: &TempDir, width: u32, height: u32) -> (RuntimeHost, Arc<FakeState>) {
+pub(super) fn device_host(
+    root: &TempDir,
+    width: u32,
+    height: u32,
+) -> (RuntimeHost, Arc<FakeState>) {
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     *state
@@ -140,7 +144,7 @@ fn geometry_conclusions(flow: &RuntimeFlowOutput) -> Vec<TaskGeometryConclusion>
         .collect()
 }
 
-fn assert_run_goes_on(flow: &RuntimeFlowOutput, width: u32, height: u32) {
+pub(super) fn assert_run_goes_on(flow: &RuntimeFlowOutput, width: u32, height: u32) {
     assert_eq!(
         flow.receipt().state(),
         RuntimeReceiptState::Completed,

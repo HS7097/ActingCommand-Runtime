@@ -16,7 +16,7 @@ use super::store::{blocked, invalid, with_details};
 use crate::codes::ClickFollowProblem;
 use actingcommand_contract::{
     LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
-    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, TaskSchema,
     package_id_names_one_path_segment,
 };
 use actingcommand_execution_kernel::{linear_main_interface, prerequisite_package_id_valid};
@@ -38,7 +38,8 @@ const ARRIVAL_INTERVAL_MS: u64 = 500;
 const APPLICATION_MARGIN_MS: u64 = 10_000;
 const TIMEOUT_MARGIN_MS: u64 = 10_000;
 const CONTROL_SCHEMA: &str = "Lab-1y.control.v2";
-const TASK_SCHEMA: &str = "0.9";
+/// The task schema the generator writes.
+const TASK_SCHEMA: TaskSchema = TaskSchema::V0_9;
 
 /// The settings of one `record stop`, resolved from its options and the recording.
 #[derive(Debug, Clone)]
@@ -1909,7 +1910,7 @@ pub(crate) fn render(
     }
 
     let mut task = Map::new();
-    task.insert("schema_version".into(), json!(TASK_SCHEMA));
+    task.insert("schema_version".into(), json!(TASK_SCHEMA.as_str()));
     task.insert("task_id".into(), json!(plan.task_id));
     task.insert("game".into(), json!(plan.game));
     task.insert("server_scope".into(), json!([plan.server]));
