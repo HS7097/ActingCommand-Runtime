@@ -30,9 +30,19 @@
 //! instant and advance by a fixed interval; every label is a neutral fixture word. Only the keyed
 //! integrity tags differ between roots, since each root has its own key.
 //!
+//! #422 LN-8d: with `frame_artifact_every_frames` set, every that many frames of a run the
+//! capture's frame is stored through the artifact store of the root
+//! (`ArtifactStore::put`, `artifacts/<shard>/artifact_<hex>.png`), as the capture store stores a
+//! frame: its `artifact.created` and `artifact.verified` records carry the frame's `capture.frame`
+//! reference, linked to its run, frame and correlation, and the frame stays in the root's live
+//! frame store, as production's frame store holds frames from the whole history. The store issues
+//! the references, so their artifact identifiers (and the object keys that name them) are the
+//! store's and differ between roots; the records' own identifiers come from the generator.
+//!
 //! Not in the mix: policy dispatch records (the start's dispatch recovery needs their catalog
 //! generation in the state store), the decision memory's value records (LN-3 writes them),
-//! artifact references, workbench snapshot sets and lifecycle records (each start writes its own).
+//! other artifact references, workbench snapshot sets and lifecycle records (each start writes
+//! its own).
 
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
@@ -41,16 +51,23 @@ use crate::global::{
     AppendedBatch, GlobalLedgerError, GlobalLedgerResult, LedgerMaintenance,
     Sha256SecretFingerprinter, SyntheticAppender,
 };
+use actingcommand_artifact_store::{
+    ArtifactCapacityAdmission, ArtifactEventSink, ArtifactStore, ArtifactStoreError,
+    ArtifactStoreResult, ArtifactWriteContext, ArtifactWriteRequest,
+};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::page_projection::Rect;
 use actingcommand_contract::{
-    AuditInput, CapturePayloadDraft, CommandPayloadDraft, EffectDisposition, EventAction,
-    EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity,
-    EventSource, FactContent, FactPayloadDraft, FactRecord, FactScope, FactValue, IdentifierIssuer,
-    InputAction, InputPayloadDraft, InstanceId, IssuedInstanceId, OriginModule,
+    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+    ArtifactRedactionState, AuditInput, CapacityAdmissionOutcome, CapacityAdmissionReason,
+    CapacityDecision, CapturePayloadDraft, CommandPayloadDraft, EffectDisposition, EventAction,
+    EventActor, EventDraft, EventId, EventLinksDraft, EventOrigin, EventPayloadDraft,
+    EventSeverity, EventSource, FactContent, FactPayloadDraft, FactRecord, FactScope, FactValue,
+    IdentifierIssuer, InputAction, InputPayloadDraft, InstanceId, IssuedCorrelationId,
+    IssuedFrameId, IssuedInstanceId, IssuedRunId, OriginModule, OwnerEpoch,
     RecognitionCandidateScore, RecognitionCandidateScores, RecognitionPayloadDraft,
-    RecognitionVerdict, RecognizedTarget, RecognizedTargetRole, RuntimeFactRecord,
+    RecognitionVerdict, RecognizedTarget, RecognizedTargetRole, RetentionClass, RuntimeFactRecord,
     RuntimeFactScope, RuntimePayloadDraft, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
     TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
 };
@@ -58,6 +75,8 @@ use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// The issuer namespace every synthetic identifier carries: `SYNTHETI` in hex.
@@ -73,6 +92,8 @@ const RUN_OPEN_RECORDS: u64 = 4;
 const RUN_CLOSE_RECORDS: u64 = 3;
 /// The most records one frame writes: its cycle, a step, an instance fact and a workbench record.
 const FRAME_MAX_RECORDS: u64 = 7 + 6 + 1 + 1;
+/// LN-8d: the records a stored frame adds (`artifact.created`, `artifact.verified`).
+const FRAME_ARTIFACT_RECORDS: u64 = 2;
 
 /// One instance of the synthetic history: the alias its instance facts name and its identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +122,9 @@ pub struct SyntheticMix {
     pub workbench_every_frames: u64,
     /// Distinct instance fact keys of each instance.
     pub fact_keys: u64,
+    /// #422 LN-8d: a capture frame stored in the root's frame store every this many frames of a
+    /// run; 0 stores none.
+    pub frame_artifact_every_frames: u64,
 }
 
 impl Default for SyntheticMix {
@@ -115,6 +139,7 @@ impl Default for SyntheticMix {
             fact_every_frames: 8,
             workbench_every_frames: 16,
             fact_keys: 24,
+            frame_artifact_every_frames: 0,
         }
     }
 }
@@ -195,7 +220,7 @@ pub struct SyntheticLedgerReport {
     /// The bytes of the canonical records.
     pub canonical_bytes: u64,
     /// SHA-256 over the records' `record_sha256` values in sequence order: equal specs written
-    /// from the same head give equal values.
+    /// from the same head give equal values (LN-8d: when the mix stores no frame).
     pub content_sha256: String,
     /// Records per event type.
     pub record_types: BTreeMap<String, u64>,
@@ -204,6 +229,8 @@ pub struct SyntheticLedgerReport {
     pub steps: u64,
     pub instance_facts: u64,
     pub workbench_records: u64,
+    /// #422 LN-8d: the capture frames stored in the root's frame store.
+    pub stored_frames: u64,
     pub first_timestamp_unix_ms: u64,
     pub last_timestamp_unix_ms: u64,
     /// The generator's own time (not deterministic).
@@ -230,7 +257,16 @@ pub fn write_synthetic_ledger(
                 LedgerLocation::OpenRuntimeLedger.location(),
             ));
         }
-        let mut generator = Generator::new(spec, SyntheticAppender::open(database)?)?;
+        // LN-8d: the root's artifact store, when the mix stores frames.
+        let frame_store = if spec.mix.frame_artifact_every_frames == 0 {
+            None
+        } else {
+            Some(open_frame_store(
+                database.root(),
+                spec.first_timestamp_unix_ms,
+            )?)
+        };
+        let mut generator = Generator::new(spec, SyntheticAppender::open(database)?, frame_store)?;
         generator.write()?;
         generator.report(started)
     })();
@@ -261,6 +297,9 @@ struct Run {
     links: EventLinksDraft,
     /// The command's links: instance, request and correlation.
     request_links: EventLinksDraft,
+    /// LN-8d: the run and correlation a stored frame's reference names.
+    run_id: IssuedRunId,
+    correlation: IssuedCorrelationId,
     steps: u32,
     page: usize,
 }
@@ -270,6 +309,8 @@ struct Generator<'a> {
     issuer: IdentifierIssuer,
     /// `_` and the issuer's namespace, as it appears in every identifier the issuer mints.
     issuer_namespace: String,
+    /// LN-8d: the root's artifact store, which stores the frames the mix stores.
+    frame_store: Option<ArtifactStore>,
     fingerprinter: Sha256SecretFingerprinter,
     appender: SyntheticAppender<'a>,
     first_sequence: u64,
@@ -285,6 +326,7 @@ struct Generator<'a> {
     steps: u64,
     instance_facts: u64,
     workbench_records: u64,
+    stored_frames: u64,
     last_timestamp_unix_ms: u64,
 }
 
@@ -292,6 +334,7 @@ impl<'a> Generator<'a> {
     fn new(
         spec: &'a SyntheticLedgerSpec,
         appender: SyntheticAppender<'a>,
+        frame_store: Option<ArtifactStore>,
     ) -> GlobalLedgerResult<Self> {
         let issuer = IdentifierIssuer::new().map_err(|error| issue_failure(error.code()))?;
         // The first identifier names the issuer's namespace: the 16 hex digits after `evt_`.
@@ -321,6 +364,7 @@ impl<'a> Generator<'a> {
             spec,
             issuer_namespace: format!("_{namespace}"),
             issuer,
+            frame_store,
             fingerprinter: Sha256SecretFingerprinter::new(FINGERPRINT_SALT)?,
             appender,
             first_sequence,
@@ -336,6 +380,7 @@ impl<'a> Generator<'a> {
             steps: 0,
             instance_facts: 0,
             workbench_records: 0,
+            stored_frames: 0,
             last_timestamp_unix_ms: 0,
         })
     }
@@ -344,11 +389,20 @@ impl<'a> Generator<'a> {
         self.spec.records - self.written
     }
 
+    /// The most records one frame writes (LN-8d: with its stored frame when the mix stores some).
+    fn frame_max_records(&self) -> u64 {
+        if self.spec.mix.frame_artifact_every_frames == 0 {
+            FRAME_MAX_RECORDS
+        } else {
+            FRAME_MAX_RECORDS + FRAME_ARTIFACT_RECORDS
+        }
+    }
+
     /// Runs while a whole run with one frame fits; the last few records are workbench records.
     fn write(&mut self) -> GlobalLedgerResult<()> {
         let mut run = 0;
         while self.remaining() > 0 {
-            if self.remaining() >= RUN_OPEN_RECORDS + FRAME_MAX_RECORDS + RUN_CLOSE_RECORDS {
+            if self.remaining() >= RUN_OPEN_RECORDS + self.frame_max_records() + RUN_CLOSE_RECORDS {
                 self.run(run)?;
                 run += 1;
             } else {
@@ -374,6 +428,7 @@ impl<'a> Generator<'a> {
             steps: self.steps,
             instance_facts: self.instance_facts,
             workbench_records: self.workbench_records,
+            stored_frames: self.stored_frames,
             first_timestamp_unix_ms: self.spec.first_timestamp_unix_ms,
             last_timestamp_unix_ms: self.last_timestamp_unix_ms,
             elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -444,6 +499,8 @@ impl<'a> Generator<'a> {
             pages,
             links,
             request_links,
+            run_id,
+            correlation,
             steps: 0,
             page: 0,
         };
@@ -485,7 +542,7 @@ impl<'a> Generator<'a> {
         let frames = mix.frames_per_run_min
             + (index * 7) % (mix.frames_per_run_max - mix.frames_per_run_min + 1);
         for frame in 0..frames {
-            if self.remaining() < FRAME_MAX_RECORDS + RUN_CLOSE_RECORDS {
+            if self.remaining() < self.frame_max_records() + RUN_CLOSE_RECORDS {
                 break;
             }
             self.frame(&mut run, frame)?;
@@ -528,6 +585,9 @@ impl<'a> Generator<'a> {
             )
             .into(),
         )?;
+        if stores_frame(self.spec, frame) {
+            self.stored_frame(run, frame_id, &frame_links)?;
+        }
         self.push(
             runtime,
             frame_links.clone(),
@@ -719,6 +779,73 @@ impl<'a> Generator<'a> {
         Ok(())
     }
 
+    /// LN-8d: the frame stored as the capture store stores one: the root's artifact store writes
+    /// its material (a few fixture bytes) at its object key and gives its `capture.frame`
+    /// reference (run, frame and correlation links) in `artifact.created` and `artifact.verified`
+    /// with the frame's links. Each record gets the generator's next event id, as every record
+    /// does.
+    fn stored_frame(
+        &mut self,
+        run: &Run,
+        frame_id: IssuedFrameId,
+        frame_links: &EventLinksDraft,
+    ) -> GlobalLedgerResult<()> {
+        let timestamp = self.timestamp()?;
+        let frame = self.frames;
+        let material = format!("synthetic-frame-{frame}");
+        let Some(store) = self.frame_store.as_ref() else {
+            return Err(record_failure(
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ValidateRoot.location(),
+                format!("synthetic frame {frame}: the mix stores frames without a frame store"),
+            ));
+        };
+        let mut drafts = FrameDrafts::default();
+        store
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::CaptureFrame,
+                    material.as_bytes(),
+                    ArtifactWriteContext::new(
+                        ArtifactLinksDraft::default()
+                            .with_run_id(run.run_id)
+                            .with_frame_id(frame_id)
+                            .with_correlation_id(run.correlation),
+                        frame_links.clone(),
+                        timestamp,
+                    ),
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::CaptureStore,
+                        RetentionClass::DebugFull,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut drafts,
+            )
+            .map_err(|error| store_failure(&format!("synthetic frame {frame}"), &error))?;
+        // The records the mix reserved for a stored frame (`frame_max_records`).
+        if drafts.0.len() as u64 != FRAME_ARTIFACT_RECORDS {
+            return Err(record_failure(
+                SharedCode::ArtifactWriteFailed.code(),
+                LedgerLocation::ValidateRoot.location(),
+                format!(
+                    "synthetic frame {frame}: {} artifact records, not {FRAME_ARTIFACT_RECORDS}",
+                    drafts.0.len()
+                ),
+            ));
+        }
+        for draft in drafts.0 {
+            let event_id = *self
+                .issuer
+                .mint_event_id()
+                .map_err(|error| issue_failure(error.code()))?
+                .transport();
+            self.push_draft(draft, Some(event_id))?;
+        }
+        self.stored_frames += 1;
+        Ok(())
+    }
+
     /// One instance fact: a key of the instance's fixed set, observed at the record's time.
     fn instance_fact(&mut self, run: &Run, frame: u64) -> GlobalLedgerResult<()> {
         let key = (run.index * 5 + frame) % self.spec.mix.fact_keys;
@@ -848,22 +975,39 @@ impl<'a> Generator<'a> {
             EventOrigin::new(source, module, EventActor::Runtime),
             links,
             payload,
-        )
-        .sanitize(&self.fingerprinter)
-        .map_err(|error| {
+        );
+        self.push_draft(draft, None)
+    }
+
+    /// The record of `draft` (LN-8d: with `event_id` as its event id when given, for a draft the
+    /// artifact store built), sanitized and persisted at the next sequence, its identifiers in
+    /// the fixed namespace.
+    fn push_draft(
+        &mut self,
+        draft: EventDraft,
+        event_id: Option<EventId>,
+    ) -> GlobalLedgerResult<()> {
+        let draft = draft.sanitize(&self.fingerprinter).map_err(|error| {
             record_failure(
                 error.code(),
                 LedgerLocation::ValidateSanitizedEvent.location(),
                 format!("synthetic record {}: {}", self.next_sequence, error.field()),
             )
         })?;
-        let event = PersistedEvent::from_sanitized(self.next_sequence, draft).map_err(|error| {
+        let event = match event_id {
+            Some(event_id) => {
+                PersistedEvent::from_sanitized_with_event_id(self.next_sequence, draft, event_id)
+            }
+            None => PersistedEvent::from_sanitized(self.next_sequence, draft),
+        }
+        .map_err(|error| {
             record_failure(
                 error.code(),
                 LedgerLocation::ValidatePersistedEvent.location(),
                 format!("synthetic record {}", self.next_sequence),
             )
         })?;
+        let timestamp = event.timestamp_unix_ms();
         let event = self.with_fixed_namespace(&event)?;
         let event_type = serde_json::to_value(event.event_type())
             .ok()
@@ -910,13 +1054,17 @@ impl<'a> Generator<'a> {
                 &error,
             )
         })?;
-        stored.into_event().map_err(|error| {
-            record_failure(
-                error.code(),
-                LedgerLocation::ValidatePersistedEvent.location(),
-                format!("synthetic record {}", event.sequence()),
-            )
-        })
+        // LN-8d: a stored frame's record carries its reference as a persisted record does, its
+        // material not read (`Unrecorded`).
+        stored
+            .into_event_with_artifact_availability(&mut |_| Ok(None))
+            .map_err(|error| {
+                record_failure(
+                    error.code(),
+                    LedgerLocation::ValidatePersistedEvent.location(),
+                    format!("synthetic record {}", event.sequence()),
+                )
+            })
     }
 
     fn flush(&mut self) -> GlobalLedgerResult<()> {
@@ -933,6 +1081,79 @@ impl<'a> Generator<'a> {
         self.batch.clear();
         Ok(())
     }
+}
+
+/// LN-8d: whether `spec`'s mix stores the capture frame of a run's frame `frame`.
+fn stores_frame(spec: &SyntheticLedgerSpec, frame: u64) -> bool {
+    let every = spec.mix.frame_artifact_every_frames;
+    every != 0 && frame % every == every - 1
+}
+
+/// LN-8d: the artifact store of the state root `root`, with a capacity owner that admits every
+/// write, so the generator stores its frames as the capture store does.
+fn open_frame_store(root: &Path, at_ms: u64) -> GlobalLedgerResult<ArtifactStore> {
+    let store = ArtifactStore::open(root)
+        .map_err(|error| store_failure("synthetic frame store", &error))?;
+    let owner_epoch = *IdentifierIssuer::new()
+        .map_err(|error| issue_failure(error.code()))?
+        .mint_owner_epoch()
+        .map_err(|error| issue_failure(error.code()))?
+        .transport();
+    store
+        .install_capacity_admission(Arc::new(SyntheticCapacity {
+            owner_epoch,
+            decided_at_unix_ms: at_ms,
+        }))
+        .map_err(|error| store_failure("synthetic frame store", &error))?;
+    Ok(store)
+}
+
+/// LN-8d: the capacity owner of the synthetic frame store: every write is admitted, as a fresh
+/// sample with room admits it.
+struct SyntheticCapacity {
+    owner_epoch: OwnerEpoch,
+    decided_at_unix_ms: u64,
+}
+
+impl ArtifactCapacityAdmission for SyntheticCapacity {
+    fn decide(&self, _path: &Path, bytes: u64) -> ArtifactStoreResult<CapacityDecision> {
+        Ok(CapacityDecision {
+            owner_epoch: self.owner_epoch,
+            decided_at_unix_ms: self.decided_at_unix_ms,
+            decided_at_monotonic_ms: 0,
+            requested_bytes: bytes,
+            target_volume: None,
+            admission_result: CapacityAdmissionOutcome::Allowed,
+            reason: CapacityAdmissionReason::FreshSample,
+            fact: None,
+        })
+    }
+}
+
+/// LN-8d: the records the artifact store gives while it stores one synthetic frame, in order.
+#[derive(Default)]
+struct FrameDrafts(Vec<EventDraft>);
+
+impl ArtifactEventSink for FrameDrafts {
+    fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+        self.0.push(draft);
+        Ok(())
+    }
+}
+
+/// LN-8d: the artifact store's failure while the generator stores `what`, with the store's code,
+/// operation and detail.
+fn store_failure(what: &str, error: &ArtifactStoreError) -> GlobalLedgerError {
+    record_failure(
+        SharedCode::ArtifactWriteFailed.code(),
+        LedgerLocation::ValidateRoot.location(),
+        format!(
+            "{what}: {} during {}: {}",
+            error.code(),
+            error.operation(),
+            error.detail()
+        ),
+    )
 }
 
 /// The matched page's targets: required, any-of, optional and forbidden ones, each with its

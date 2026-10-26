@@ -2942,6 +2942,10 @@ mod gate_ln7;
 // by its read and by `ledger-maintenance verify`.
 #[path = "tests/gate_ln8.rs"]
 mod gate_ln8;
+// #422 LN-8d: on a history whose live frames span it, the open's SQLite work per record it reads
+// does not grow with the history, and the open's deadline stops its retention read.
+#[path = "tests/gate_ln8d.rs"]
+mod gate_ln8d;
 // #422 LN-9: the paced background scrub finds old damage within one pass, keeps its rate and
 // never holds the writer.
 #[path = "tests/gate_ln9.rs"]

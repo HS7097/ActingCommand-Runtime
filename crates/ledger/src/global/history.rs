@@ -18,6 +18,7 @@ use actingcommand_contract::{
     LedgerView, PolicyPayload, RequestId, RunId, TerminalEvent,
 };
 use std::collections::BTreeSet;
+use std::time::Instant;
 
 /// The default of `ledger_observer.history_page_rows`: the rows of one page of a history read.
 pub(super) const DEFAULT_HISTORY_PAGE_ROWS: usize = 256;
@@ -250,6 +251,18 @@ impl LabRelations {
     }
 }
 
+/// LN-8d (#422): fails `ledger_read_budget_exceeded` when `deadline` is reached.
+pub(super) fn check_deadline(deadline: Option<Instant>) -> GlobalLedgerResult<()> {
+    match deadline {
+        Some(deadline) if Instant::now() >= deadline => Err(super::GlobalLedgerError::request(
+            crate::codes::LedgerCode::LedgerReadBudgetExceeded.code(),
+            crate::codes::LedgerLocation::OpenRuntimeLedger.location(),
+        )
+        .with_detail("deadline reached at the open's retention read".to_owned())),
+        _ => Ok(()),
+    }
+}
+
 /// LN-5 (LEAN-L §3.4): what retention reads of the history before the record it decides: a
 /// record by its position, and whether a Lab anchor relates to a record. A full build answers
 /// from its own records (`PriorRecords`); the writer from the store and its staged batch
@@ -298,6 +311,8 @@ pub(super) struct WriterHistory<'a, B> {
     staged: &'a [PersistedEvent],
     retention: &'a RetentionIndex,
     page_rows: usize,
+    /// LN-8d (#422): the open's deadline, checked before each page a read of the open reads.
+    deadline: Option<Instant>,
 }
 
 impl<B: DurableStorage> WriterHistory<'_, B> {
@@ -324,6 +339,7 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
             .map_or(0, |from| from.saturating_sub(1));
         let mut events = Vec::new();
         while after < through {
+            check_deadline(self.deadline)?;
             let page = self.backend.history_page(
                 selection,
                 (after, through),
@@ -415,11 +431,19 @@ impl<B: DurableStorage> RetentionHistory for WriterHistory<'_, B> {
 impl<B: DurableStorage> EventStore<B> {
     /// LN-5: the writer's history: its store and the batch the flush has staged.
     pub(super) fn history(&self) -> WriterHistory<'_, B> {
+        self.history_until(None)
+    }
+
+    /// LN-8d (#422): the writer's history read before `deadline`: a read that has a page left to
+    /// read when the deadline is reached fails `ledger_read_budget_exceeded`, as the open's other
+    /// phases do (`ledger_observer.open_timeout_ms`).
+    pub(super) fn history_until(&self, deadline: Option<Instant>) -> WriterHistory<'_, B> {
         WriterHistory {
             backend: &self.backend,
             staged: &self.staged,
             retention: &self.retention,
             page_rows: self.history_page_rows,
+            deadline,
         }
     }
 
