@@ -88,6 +88,28 @@ each row authenticated on its own, and the checks an append makes (event id, a t
 fact's run, the scheduled continuation's chain, retention's sources) are indexed
 lookups of the store and of the records the batch has staged. A refused batch drops
 its staged records; the writer ends ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)).
+#422 LN-7 (LEAN-L §3.5): the retention state is not derived from the records the open
+reads. The open reads it by type and by index: the owner records (lifecycle
+observations, capacity samples and runtime-state facts: owner changes and ends,
+prior-epoch imports and closes, quiescences); the starts, the instance bindings and the
+eviction proof set; the scopes of the epochs whose closes a start may still write,
+grouped through the link index, with their `Performed` releases; and what the classes of
+the frames present in the live frame store (`artifacts\<shard>\artifact_<hex>.png`) read:
+the records that reference them (by the `artifact_id` index) or carry their frame link,
+the records of the runs, leases, requests and correlations these name, the markers of
+their instances, the error points of their time span, then the runs, marker neighbours
+and run scopes these name. They are applied in ledger order without the replay's checks,
+which each record met when it was written; a listing failure of the frame store fails the
+open (`ledger_io`). Resident stay the eviction proof set, the owner changes, ends,
+imports and closes, the scopes a start may still close, and the facts of the live frames
+with what their classes read (their runs with every frame, the open runs, the runs with a
+frame at most 30 s after a live frame, the marker neighbours, the error points whose
+window can hold a live frame, the Lab scopes); the rest is dropped again at each sweep
+start of the frame cleaner. A record that names a run or a capture frame the writer no
+longer holds loads it again from the store, by its link and the `artifact_id` index,
+before it is checked, so an old artifact's identity is still its first reference (a
+differing reference is refused `artifact_identity_conflict`) and a Lab pin release finds
+a kept frame's pins.
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit
@@ -298,7 +320,10 @@ ended right before its own, and of each owner whose import or scope close that
 epoch wrote (a start that stopped before it closed every scope is resumed by the
 next start); an older epoch was closed by the start that followed it. A sealed
 import is checked against the native read once per owner and command, not once
-per scope.
+per scope. The scopes of those owners, with their first record and last sequence,
+are grouped from the link index over their epochs' sequence ranges when the ledger
+opens; their records are not read, and each scope close still reads its scope
+source on its own.
 
 These facts close only Runtime-owned sessions and cached Unconfirmed resources
 covered by the native positive evidence. They add no task terminal, LeaseReleased,
@@ -827,6 +852,11 @@ without its outcome, stay.
   1 day and resource frames 7 days after their entry time are removed; error and Lab
   frames are moved into their kept folder. The sweep visits them in entry-time order over
   as many rounds as it needs. Running frames and frames not yet due are untouched.
+- **Live frames** (#422 LN-7). At a sweep start the cleaner's thread lists the live frame
+  store (`artifacts\<shard>\artifact_<hex>.png`; never `kept\`) and the writer keeps only
+  the facts of the frames present there and what their classes read; the sweep's view
+  lists those frames only, decided as the full view decides them. A listing failure is
+  that round's error (`ledger_io`, not fatal): the next round reads again.
 - **Never a stale class.** While a sweep still has queued frames, each round reads the
   view again (cached by head, so at an unchanged head this only applies the clock) and
   derives every queued action again before acting: a frame whose class changed during
@@ -851,8 +881,10 @@ without its outcome, stay.
   rename that finds no folder (a leaf deleted by hand right after its creation) while
   the frame is still there creates the folder again and renames once more.
 - **Done set.** The process remembers the frames it removed, moved or found absent, and
-  never visits them again. After a restart, the first sweep finds the frames removed or
-  moved before it absent, and counts them `rescanned_absent`.
+  never visits them again; a sweep start forgets those that left the live store, which its
+  view no longer lists (#422 LN-7). A view lists no frame removed or moved before the sweep
+  started, so `absent` and, in the first sweep after a start, `rescanned_absent` count only
+  the frames that left the store after the sweep's listing.
 - **Lock.** A round takes the cleaner's lock try-only and skips while `clear-kept` holds
   it.
 - **Fail Loud.** One stdout line per completed sweep that visited frames, and always for

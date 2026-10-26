@@ -941,6 +941,10 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   `host.rs:1475`) move to step 9 (AO-6), so a new lineage's first change follows its base record.
 - Every G16 record goes through `capture`, so facts with `invalidate_on: [runtime.takeover]` are
   invalidated at once.
+- #422 LN-7: step 1's open reads the retention state by type and by index, not from the records
+  it verifies ([ledger-store.md](ledger-store.md#open-ownership-and-append-durability), the LN-7
+  paragraph); the prior-epoch closes the start writes take the previous epochs' scopes grouped
+  from the link index.
 - Reads that leave the start path (AO-6): full instance-store replay; workbench recovery; monitor
   registration scan (→ `monitor.journal`); `PolicyHost` folds by type; dispatch reconciliation and
   settlement projection; approval projection (→ the state document's projection); agent recovery;
@@ -1130,6 +1134,13 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   recovery context by the run's link, and stops within `read_budget_ms` with an incomplete page;
   an artifact's record is one authenticated point read and its eviction proof comes from the
   writer's proof set. No key is added.
+- #422 LN-7 (LEAN-L): retention keeps nothing that grows with the history. Resident are the
+  eviction proof set, the owner changes, ends, imports and closes, the scopes a start may still
+  close, and the facts of the frames present in the live frame store with what their classes read;
+  the open reads them by type and by index, each sweep start of the frame cleaner drops the rest,
+  and a record naming a run or a frame the writer no longer holds loads it again by index before
+  it is checked (ledger-store.md, "Open, ownership and append durability" and "Frame cleaner").
+  No key is added.
 - #422 LN-TUNE (the release after v0.12.12, `actingd-config` revision 12):
   `writer_reply_timeout_ms` is the wait of every caller of the writer, its replay pages and the
   confirmations of deferred appends included; it was the ledger's fixed 10 s. It is read when the
