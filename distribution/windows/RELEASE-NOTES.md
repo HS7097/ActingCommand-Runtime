@@ -9,6 +9,38 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.15
+
+v0.12.14 没有上线：10 月 26 日部署时，启动停在打开账本这一步、一直没有就绪，已退回 v0.12.13。原因是
+LN-7b 的帧保留读取按页读链接集，每读一页都要把该页之后的全部链接记录排序一次，读取量随记录数的平方
+增长；生产账本的现有帧分布在整段历史里（1 323 次运行、约 40 万条记录），这次读取读不完，打开账本的
+时限也没有在它里面检查。CI 的规模测量没有发现，因为合成账本里没有存帧。所以 v0.12.15 是 v0.12.13
+之后第一个上线的版本：它包含 v0.12.14 的全部内容（见下面 v0.12.14 一节），另加 v0.12.14 之后合并的
+4 个 PR（修复，以及为修复服务的功能）。没有新键，`actingd-config` 仍是 [5, 13]。
+
+运行上的变化：启动时打开账本不再因现有帧分布在整段历史里而停住。打开仍要读出每个有现有帧的运行的
+全部记录（生产账本上约 40 万条），现在每条只读一次，读取量随它们线性增长；每读一页都检查
+`ledger_observer.open_timeout_ms`（默认 600 秒），超时以 `ledger_read_budget_exceeded` 失败，不会一直读下去。
+按生产账本快照上的回放估计，生产账本上打开账本约需 40–90 秒；这是估计，Rust 实现还没有在生产账本上
+实测，“只读头部和尾部”的目标随 LN-7c 实现。黑名单时段（主机列表、实例自己的列表、目录的 `maintenance`
+事件）内该实例完全静默：调度不派任务，恢复阶梯不启动，启动包和模拟器自动启动（包括 EMU-W 监视和
+IDLE-1 唤醒排上的）等到黑名单结束后才做，监视探针不截图也不记录；黑名单开始前，预计会跨进去的任务以
+`blackout_approaching` 推迟，实例逐渐静下来。直接运行、Lab 操作和操作员的控制不受影响；两个列表都为空、
+目录也没有 `maintenance` 事件时一切照旧。任务的预计时长 E 取该任务包在该实例上最近
+`scheduling.expected_runtime.runs` 次（默认 5）成功调度运行的平均时长加 `margin_ms`（默认 5 分钟），
+评估、准入和记录都按 E；`ac_schedule` 的候选行显示 `expected_runtime_ms` 和 `expected_runtime_source`
+（`declared` 或 `runs:<n>`）。还没有样本的包，以及重启后在本进程内第一次被调度运行之前，用声明的时长；
+`scheduling.expected_runtime.enabled = false` 关闭 E。日界默认开启（`scheduling.day_boundary.quiet` 为
+`true`）：按 E 在当前活动时段结束前跑不完的任务等到下一个时段开始（目录 v33 的活动时段是
+06:00–23:30），较短的任务照常跑到时段结束；操作员在 `ac_schedule` 里看到它的 `why` 是
+`policy_day_boundary_approaching`，带 `window_end_unix_ms`、`required_ms` 和 `next_eligible_unix_ms`。
+不要这个行为就把该键（或实例自己的键）设为 `false`。
+
+- #1345 SR-4a3：黑名单时段内 Runtime 自己发起的动作完全静默：恢复阶梯直接丢弃（`recovery_ladder_suppressed`，原因 `blackout`），正在爬的阶梯不再启动时限加 `scheduling.blackout.quiet_margin_ms` 会碰到下一个黑名单的那一级，人工演练被拒（`recovery_admission_denied`）；启动包在黑名单内、或其时限加 `quiet_margin_ms` 会碰到下一个黑名单时排队等待；模拟器自动启动（包括 EMU-W 监视发现模拟器停了时的那一次，以及 IDLE-1 唤醒排上的启动包和启动）在黑名单内不取钥匙、不启动，结束后执行，IDLE-1 的闲置动作本身也暂停；监视探针不截图、不记录，结束后第一轮补做；直接运行、Lab 操作、操作员控制和人工自检不受影响。没有新键、新结果码。
+- #1347 SR-4a2：调度策略按黑名单收口：三个来源的黑名单在周期开始时按实例判一次，覆盖中的实例的候选以 `blackout_active` 推迟到结束（位置 4）；候选的时间范围（默认是响应时限，`scheduling.blackout.quiet_horizon` 为 `expected` 时是 E）加 `quiet_margin_ms` 会越过下一个黑名单的开始、或已进入 `hard_quiet_ms` 时，以 `blackout_approaching` 推迟（位置 7）；随后是日界：`scheduling.day_boundary.quiet` 为真（默认）的实例上，按 E 在活动时段结束前跑不完的运行以新结果码 `policy_day_boundary_approaching` 等到下一个时段；准入时在准入锁下按准入时刻再判一次位置 4 和 7（拒绝记为 Info，不取租约）；新抽的随机延迟截在静默点之前，日界适用时也截在时段结束减 E 之前；`config.subsystems` 新增常开的 `scheduling_blackout`（`count` 为主机列表的条数）；`ac_schedule` 把这三个码作为 `why` 显示。没有新键。
+- #1350 ED-2：运行时长样本 `health.run_duration`：每个实例一条记录、按任务包分行，成功的调度运行在结算时把 `runtime_ms` 记为该包最新的样本（失败、条件结束、直接运行、Lab 操作和重放不记），每行保留最近 `scheduling.expected_runtime.runs` 个；预计时长 E（近几次平均加 5 分钟）在评估、准入和记录中生效：准入时 E 与评估时不同则 `policy_facts_stale`，预留时长不是声明值时 `policy.dispatch_intent` 写可选成员 `expected_duration_ms`，恢复与重放按它预留；事实刷新的声明时长改读 `scheduling.fact_refresh.expected_duration_ms`；该键只由 Runtime 写，其他发布被拒（`run_duration_key_reserved`），一个实例超过 256 个包等情况丢掉一行时写警告 `run_duration_row_dropped`；`ac_schedule` 候选行新增 `expected_runtime_ms` 与 `expected_runtime_source`；`config.subsystems` 新增常开的 `expected_runtime`。没有新键。
+- #1352 LN-8d：修 v0.12.14 启动停住：链接集的历史分页每页先在各维度自己的索引上选出该页的序号（在索引里排序和截取），再按主键读记录，每页的工作量不再随该页之后的链接记录增长；帧保留读取的 `read_linked` 把一个链接集的各维度一次读完，一个运行的记录只读一次、只验一次；打开账本在每页和每条范围语句之前检查时限，超时以 `ledger_read_budget_exceeded`（操作 `open_runtime_ledger`）失败；分页大小取 `ledger_observer.history_page_rows`（以前用固定的默认值）。新增三个回归测试，规模测量的合成账本改成生产的帧存储形态（每 16 帧存一帧并保持在用，分布在整段历史里）。没有新键，账本结构不变。
+
 ## v0.12.14
 
 本版是 v0.12.13 之后合并的 6 个 PR（修复，以及为修复服务的功能），主要是 #422 账本精简的收尾：
