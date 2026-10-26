@@ -541,7 +541,14 @@ impl<B: DurableStorage> EventStore<B> {
     /// type and by index (`open_retention`), not from the open's read of every record: of the
     /// frames, only the facts of those present in the live frame store stay resident, with what
     /// their classes read.
-    pub(super) fn recovered(mut backend: B, next_sequence: u64) -> GlobalLedgerResult<Self> {
+    /// LN-8d (#422): its reads stop at `deadline`, the open's, and read pages of `page_rows`
+    /// rows (`ledger_observer.history_page_rows`, as every later history read does).
+    pub(super) fn recovered(
+        mut backend: B,
+        next_sequence: u64,
+        deadline: Option<std::time::Instant>,
+        page_rows: usize,
+    ) -> GlobalLedgerResult<Self> {
         let commit_statistics = match CommitStatistics::new(backend.head()) {
             Ok(statistics) => Arc::new(statistics),
             Err(error) => {
@@ -565,7 +572,7 @@ impl<B: DurableStorage> EventStore<B> {
             backend,
             next_sequence,
             staged: Vec::new(),
-            history_page_rows: super::history::DEFAULT_HISTORY_PAGE_ROWS,
+            history_page_rows: page_rows,
             #[cfg(test)]
             history_rows_read: None,
             retention: RetentionIndex::default(),
@@ -574,7 +581,7 @@ impl<B: DurableStorage> EventStore<B> {
             index_policy: IndexPolicy::default(),
             revisions: BTreeMap::new(),
         };
-        if let Err(error) = store.open_retention(&live) {
+        if let Err(error) = store.open_retention(&live, deadline) {
             return Err(error.with_close_result(store.backend.close()));
         }
         Ok(store)

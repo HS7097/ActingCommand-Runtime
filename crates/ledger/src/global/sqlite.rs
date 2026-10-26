@@ -2,7 +2,7 @@
 
 //! Candidate durable medium. Typed semantics remain in EventStore/GlobalLedger.
 
-use super::history::{HistorySelection, LabRelations, ScopeExtent};
+use super::history::{HistorySelection, LabRelations, LinkSet, ScopeExtent};
 use super::index::{IndexChange, IndexRows};
 use super::projection::{EventIndexes, LAB_ANCHOR_SOURCE, LAB_ANCHOR_TYPE, LabKeys};
 use super::read_only::check_read_budget;
@@ -651,6 +651,9 @@ pub(super) fn open_formal(
         timing,
     )?;
     let indexing = Instant::now();
+    // LN-8d: a test gate may make the `index` phase start late by a delay it does not wait out.
+    #[cfg(any(test, feature = "test-hooks"))]
+    let deadline = crate::open_delay::slowed_index(database.root(), deadline);
     let indexed = (|| -> GlobalLedgerResult<(SqliteLedgerStore, Option<String>)> {
         upgrade_views(&database, head, head_hash.as_deref())?;
         ensure_history_index(&database)?;
@@ -670,8 +673,12 @@ pub(super) fn open_formal(
             marker,
             meta_has_marker,
         };
-        // LN-7 (#422): the retention state is read by type and by index.
-        Ok((EventStore::recovered(backend, next)?, stale))
+        // LN-7 (#422): the retention state is read by type and by index; LN-8d: within the
+        // open's deadline, in pages of `ledger_observer.history_page_rows` rows.
+        Ok((
+            EventStore::recovered(backend, next, Some(deadline), config.history_page_rows)?,
+            stale,
+        ))
     })();
     timing.index_ms = elapsed_ms(indexing);
     let (mut store, stale) = indexed?;
@@ -1009,7 +1016,7 @@ impl SqliteLedgerStore {
         // LN-5 (#422): the records are dropped; LN-7: the retention state is read by type and by
         // index, not from them.
         drop(events);
-        let mut store = Self::recovered(backend, next)?;
+        let mut store = Self::recovered(backend, next, None, config.history_page_rows)?;
         // Workflow #383 AO-1: a candidate opened with a failure plan writes and imports as the
         // running Runtime's writer does (`contracts/ledger-observer.md` §9); AO-2: and records
         // the previous epoch's unconfirmed tail (§10).
@@ -3596,6 +3603,71 @@ fn key_list<T: serde::Serialize>(ids: &BTreeSet<T>) -> GlobalLedgerResult<Option
         })
 }
 
+/// LN-8d (#422): the condition of one history page of a link set that is the selection's only row
+/// condition, with its bound values in placeholder order: the row is among the first `rows`
+/// sequences after `after` through `through` of one of the set's dimensions, each dimension's
+/// sequences picked in its own index (`ledger_links_<dimension>`, `ledger_artifacts_artifact`)
+/// by a statement on that table alone, ordered by the index's sequence column and limited there.
+/// SQLite stops each such statement after `rows` sequences; the earlier form (one join ordered
+/// by the event row, as with every other condition) sorted every linked row after `after` in a
+/// temporary B-tree on each page, so a read of `n` linked rows in pages of `rows` read about
+/// `n² / (2·rows)` rows (the v0.12.14 start on the production ledger). The page's rows are the
+/// same: the first `rows` of a union are among the first `rows` of each of its parts. An empty
+/// set selects no row.
+fn linked_page_sequences(
+    set: &LinkSet,
+    (after, through): (u64, u64),
+    rows: usize,
+) -> GlobalLedgerResult<(String, Vec<SqlValue>)> {
+    let limit = SqlValue::Integer(i64::try_from(rows).map_err(|_| {
+        failure(
+            LedgerCode::InvalidPageLimit.code(),
+            LedgerLocation::EncodeLedgerQuery.location(),
+        )
+    })?);
+    let mut arms = Vec::new();
+    let mut values = Vec::new();
+    for (column, keys) in [
+        ("run_id", key_list(&set.runs)?),
+        ("lease_id", key_list(&set.leases)?),
+        ("frame_id", key_list(&set.frames)?),
+        ("request_id", key_list(&set.requests)?),
+        ("correlation_id", key_list(&set.correlations)?),
+    ] {
+        if let Some(keys) = keys {
+            arms.push(format!(
+                "SELECT sequence FROM (SELECT l.sequence FROM ledger_links l WHERE l.sequence>? AND l.sequence<=? AND l.{column} IN (SELECT value FROM json_each(?)) ORDER BY l.sequence LIMIT ?)"
+            ));
+            values.extend([
+                SqlValue::Integer(encode(after)),
+                SqlValue::Integer(encode(through)),
+                keys,
+                limit.clone(),
+            ]);
+        }
+    }
+    // A record may carry several of the set's artifacts: its sequence counts once.
+    if let Some(keys) = key_list(&set.artifacts)? {
+        arms.push(
+            "SELECT sequence FROM (SELECT DISTINCT a.sequence FROM ledger_artifacts a WHERE a.sequence>? AND a.sequence<=? AND a.artifact_id IN (SELECT value FROM json_each(?)) ORDER BY a.sequence LIMIT ?)"
+                .to_owned(),
+        );
+        values.extend([
+            SqlValue::Integer(encode(after)),
+            SqlValue::Integer(encode(through)),
+            keys,
+            limit,
+        ]);
+    }
+    if arms.is_empty() {
+        return Ok(("0".to_owned(), values));
+    }
+    Ok((
+        format!("e.sequence IN ({})", arms.join(" UNION ALL ")),
+        values,
+    ))
+}
+
 /// The statement of one history page and its bound values: the query's conditions that have a
 /// column or an index, and `view`'s, every value bound, in placeholder order.
 fn history_statement(
@@ -3708,7 +3780,23 @@ fn history_statement(
     // LN-7 (#422, LEAN-L §3.5): a link set selects the rows linked to one of its identifiers,
     // each dimension through its link index, and the rows carrying one of its artifacts through
     // the `artifact_id` index of `ledger_artifacts`. An empty set selects no row.
-    if let Some(set) = selection.links {
+    // LN-8d (#422): a link set with no other row condition picks the page's sequences in each
+    // dimension's own index, ordered and limited there (`linked_page_sequences`), so a page reads
+    // at most `rows` rows of each dimension, whatever the set selects after it.
+    if let Some(set) = selection.links
+        && view.is_none()
+        && clauses
+            .iter()
+            .all(|clause| clause.starts_with("e.sequence"))
+    {
+        let lower = query
+            .from_sequence
+            .map_or(after, |from| after.max(from.saturating_sub(1)));
+        let upper = query.to_sequence.map_or(through, |to| through.min(to));
+        let (clause, arm_values) = linked_page_sequences(set, (lower, upper), rows)?;
+        clauses.push(clause);
+        values.extend(arm_values);
+    } else if let Some(set) = selection.links {
         let mut alternatives = Vec::new();
         for (column, keys) in [
             ("l.run_id", key_list(&set.runs)?),
@@ -4121,6 +4209,12 @@ fn read_rows_bound(
         #[cfg(test)]
         crate::read_count::row_read(sql, &values);
         result.push(values);
+    }
+    // #422 LN-8d: the statement's SQLite work, on this thread while a counter runs.
+    #[cfg(test)]
+    {
+        drop(rows);
+        crate::read_count::statement_steps(statement.get_status(rusqlite::StatementStatus::VmStep));
     }
     Ok(result)
 }
@@ -4723,3 +4817,8 @@ fn write_failure_kind(code: rusqlite::ErrorCode) -> Option<IoKind> {
 #[cfg(test)]
 #[path = "sqlite/tests.rs"]
 mod tests;
+
+// #422 LN-8d: a link set's history page reads its page, whatever follows it.
+#[cfg(test)]
+#[path = "sqlite/gate_ln8d.rs"]
+mod gate_ln8d;
