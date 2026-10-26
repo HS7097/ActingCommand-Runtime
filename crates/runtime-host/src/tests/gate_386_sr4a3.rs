@@ -242,7 +242,8 @@ fn uncategorised_capture_open_failure() -> DeviceError {
         .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1)
 }
 
-/// A host whose one physical instance `SILENT` has stuck recovery on and opens that report a
+/// A host whose one physical instance `SILENT` has stuck recovery on, a bound device endpoint (so
+/// the daemon start prepares and self-checks it, as a configured instance) and opens that report a
 /// passed native open, configured with `manifest`; `capture_open` is set before the start.
 fn preparation_host(
     root: &TempDir,
@@ -262,7 +263,9 @@ fn preparation_host(
                 },
             )]))
             .with_config_manifest(manifest),
-        Arc::new(FakeProvider::one(SILENT, instance_id(), Arc::clone(state))),
+        Arc::new(
+            FakeProvider::one(SILENT, instance_id(), Arc::clone(state)).with_device_endpoints(),
+        ),
     )
     .expect("runtime host")
 }
