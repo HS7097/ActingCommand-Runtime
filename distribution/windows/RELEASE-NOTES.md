@@ -9,6 +9,38 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.16
+
+本版是 v0.12.15 之后合并的 5 个 PR（修复，以及为修复服务的功能）：修 10 月 26 日 23:23:04 生产上的停机
+（DIAG-RUN），启动时打开账本不再读出全部所有者记录（LN-7c O），为按账本查询保留帧（裁定 70）建帧索引和
+读取确认（LN-7c R、C），以及声明式安全区接口（DA-4b-D，裁定 69）。v0.12.15 已经发布，但还没有在生产上
+运行过，生产上运行的仍是 v0.12.13。
+
+配置：`actingd-config` 升到 [5, 15]。DA-4b-D 新增 `display_safe_area` 节，三个键都可以在运行中修改，
+从下一帧起生效：`display_safe_area.directory`（声明文件所在的目录，默认 `display-safe-area`，相对路径
+按 Runtime 的状态根目录解析，不能为空）、`display_safe_area.check_interval_ms`（两次读取该目录之间的
+最短间隔，默认 1 000 毫秒，范围 0 到 3 600 000，0 表示每个需要它的帧都读一次）和
+`display_safe_area.model`（各实例默认声明的设备机型，默认空，即不声明）；`instances[]` 条目新增
+`display_safe_area` 成员（`model`：该实例声明的机型，默认取节里的 `display_safe_area.model`，同样可以
+在运行中修改）。现有的配置都不需要修改：没有写这一节和这个成员的配置文件保持原来的 revision，Runtime
+仍读 revision 5 到 14 的文件。DA-4b-D 之前的 Runtime（包括 v0.12.15）拒绝写了这一节或这个成员的配置
+文件，因为配置文件和实例条目都不接受未知成员；退回旧版本之前要先去掉它们。
+
+运行上的变化：
+
+- 启动：打开账本不再读出整段历史的全部所有者记录（LN-7c O；生产账本上约 7–9 秒、约 300 MB，均为估计），只读最近两个所有者纪元的所有者记录，以及启动可能还要收尾的更早所有者的记录，保留的所有者的状态与读全部时相同。上一轮留下了账本转储文件、或有所有者落不进任何一次启动的纪元时，照旧读全部，并打印一行 `actingd ledger_open owner_read=full reason=…`（`dump_present` 或 `owner_in_no_start_epoch`）。本版第一次以写入方式打开账本时，还要把帧索引 `ledger_frame_refs` 补建一次（LN-7c R；生产账本上约 8.5 万条记录、约 5–10 秒，均为估计）：按页进行（每页最多 `ledger_observer.history_page_rows` 条），每页之前检查打开账本的时限，每页提交一次；没有补完不会让打开失败，只写一条警告，下次打开时接着补。以后每条记录的索引行与记录在同一个事务里写入。旧版本照常打开、写入和复查带这张表的账本，只是不写它；再用本版打开时补上缺的部分。
+- 不再因一次运行的诊断停下 Runtime（DIAG-RUN）：每次运行结束时，任务诊断要读出该运行的 `artifact.verified` 记录。这个读取走的是事件类型索引，从序号 0 起走过整段历史里所有这类记录（生产上约 10 万到 17 万条）；10 月 26 日 23:23:04 它没能在写入线程的应答时限（`writer_reply_timeout_ms`，10 秒）内答复，这个失败又被当成致命故障，于是一个实例的一次运行停下了整个 Runtime。v0.12.15 中这个读取与 v0.12.13 相同（LN-WS 只限制视图分页和回放页）。现在这个读取走该运行的链接索引，工作量只随该运行的记录增长；写入线程没有按时答复、或读取用完预算时，只让该运行失败，带上账本的结果码（`writer_response_timeout` 或 `ledger_read_budget_exceeded`，操作 `task_diagnostic_failed`）；账本的其他故障仍然停下 Runtime。错误帧定位、策略运行的关联事件等按运行读取的其他读取也改走运行的链接索引。
+- 读取确认（LN-7c C）：新增 MCP 工具 `ac_evidence_confirm_read`（operator 档，该档从 8 个工具变为 9 个）和命令 `actingctl evidence confirm-read`（`--artifact <id>` 或 `--run <id>`），确认某个证据帧或某次运行的帧已被代理或人读过：记一条 `client.action`，帧索引里记一行 `read_confirmed`。不存在的帧或运行以 `client_action_invalid` 拒绝，什么都不记；只打开或查看帧（`ac_run_evidence`、`ac_observe`）不算确认。本版不删除任何东西，按确认删除帧随 LN-7c Q 实现。
+- 声明式安全区（DA-4b-D）：声明文件（`actingcommand.display-safe-area.v1`）写一个或多个设备机型，以及它们每种显示大小和旋转的四边 insets；实例用上面的设置声明自己的机型。Runtime 在运行中读取：修改声明文件（按 `check_interval_ms` 重读目录）或实例的机型设置，从下一帧起生效（记为 `changed`，`insets_changed`，映射重建），不用重启。只影响显示声明按安全区量的游戏的运行，全屏（`screen`）布局不受影响。没有声明机型时不读声明文件：模拟器的 insets 取 0、运行照常（v0.12.15 中以 `contained_task_geometry_unavailable` 拒绝），真机照旧以 `contained_task_geometry_unavailable` 拒绝。声明文件坏了、一个机型出现在两个文件里、声明的机型没有文件、文件里没有该帧的显示大小和旋转时，该运行在第一帧、发送任何输入之前以 `display_map_unresolved` 结束（`display_problem` 分别是 `safe_area_declaration_invalid`、`safe_area_model_repeated`、`safe_area_model_undeclared`、`safe_area_form_undeclared`）。Runtime 不解析屏幕的刘海和挖孔，也不识别设备机型。
+
+本版合并的 PR：
+
+- #1362 LN-7c R：账本新增帧索引 `ledger_frame_refs`：记录只在载荷里提到的帧、产物和运行（摘要帧、摘要固定、资源读数、发布的帧和产物、输入前的帧、去重保留的帧、读取确认），按键可查，留给 LN-7c Q 按查询保留帧；与记录在同一个事务里写入，第一次以写入方式打开时补建一次（见上）；后台复查和 `ledger-maintenance verify` 也核对这张表，复查发现不符时只在 actingd 日志写一行、Runtime 照常运行，下次打开时重建。没有新键、新结果码。
+- #1363 DA-4b-D：声明式安全区（见上）：声明文件按机型给出 insets，实例用设置声明机型，修改后从下一帧起生效；`actingd-config` [5, 15]；四种拒绝沿用 `display_map_unresolved`，`display_problem` 新增四个值。没有新结果码。
+- #1364 LN-7c O：打开账本只读最近两个所有者纪元的所有者记录（见上），保留的所有者的状态与读全部时相同；有转储文件或所有者落不进启动纪元时读全部并打印一行原因。只读不写，旧版本照常打开同一个账本。没有新键、新结果码。
+- #1366 LN-7c C：确认证据帧或运行已读：MCP `ac_evidence_confirm_read` 和 `actingctl evidence confirm-read`（见上）。本版只记录确认，不删除任何东西。没有新键、新结果码。
+- #1367 DIAG-RUN：修 10 月 26 日 23:23:04 的停机（见上）：按运行读取的查询走该运行的链接索引；任务诊断的读取没有按时答复或用完预算时只让该运行失败，带上账本的结果码。没有新键、新结果码。
+
 ## v0.12.15
 
 v0.12.14 没有上线：10 月 26 日部署时，启动停在打开账本这一步、一直没有就绪，已退回 v0.12.13。原因是

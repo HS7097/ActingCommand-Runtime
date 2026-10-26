@@ -723,6 +723,16 @@ tests = [
 ]
 incident = ["#422 LN-7c O"]
 
+# DIAG-RUN (#419; brief rd-1026/brief-diag-run.md; root cause rd-1026/stop2/root-cause.md §5 R1; the production stop of 2026-10-26 23:23:04): a history read with an equality on a per-run link (every link but the instance) is driven by that run's link index, its other indexable terms written with a unary `+`. On the synthetic ledger in production's shape (three instances, runs of 24 frames with every second frame stored), the statement of each per-run read form (the task diagnostic's `artifact.verified` + request + task + run; the error frame's `capture.completed` + run; one frame's artifact; the lease grant of `linked_policy_run_events`; event types with a request; an artifact of one instance's run) has a per-run link index as its outer loop, never the event type, time, severity, origin or instance index, and passes the plan check, while forms A and C of stop 1 keep today's statement; each form's first page for a short run at the head takes at most 1.5 times the SQLite work on 12 000 records that it takes on 3 000; paging each form from 0 to the end in pages of 256 and of 2 returns the selected records in ledger order for a short run at the head, a run with more than 256 `artifact.verified` records interleaved with two other runs, and a run with a record stamped before the whole history
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index",
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t2_a_run_reads_work_does_not_grow_with_the_history",
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t3_paging_a_per_run_read_returns_the_selected_records_in_ledger_order",
+]
+incident = ["#419 DIAG-RUN"]
+
 # LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1, §2, §4; Alice's ruling 70; brief rd-1026/brief-ln7c-q.md): the frame cleaner's statements W, L and K on an empty database pass the §1.3 plan rule and equal their golden plans (T-plan); on the case fixture (A6 with F5, F6 and duplicates) and on a production-shaped history each live frame's action equals the full view's class with E1's due time (T-eq; the 1M-record run is on demand); a kept frame goes once confirmed (by its frame or its run, at or after its capture) or at frame_retention_evidence_max_age_days, never earlier and never on a read through ac_run_evidence (T-evidence); the writer open reads no frame row and does not list the frame store (T-open); a raised stop interrupts the statement in progress (T-pace)
 [[gate]]
 coverage = "Y"

@@ -3267,6 +3267,28 @@ impl RuntimeHost {
         )
     }
 
+    /// #419 DIAG-RUN: runs `action` at `point` of the run of `request_id`, on whatever lease it
+    /// takes.
+    #[cfg(test)]
+    pub(crate) fn run_at_request_checkpoint_for_test<F>(
+        &self,
+        point: ContainedTaskCheckpointPoint,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        action: F,
+    ) -> RuntimeHostResult<ContainedTaskCheckpointTestControl>
+    where
+        F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
+    {
+        self.install_contained_task_checkpoint_for_test(
+            point,
+            Some(request_id),
+            instance_id,
+            None,
+            action,
+        )
+    }
+
     /// Workflow #369 E3 (#670 final review): runs `action` at `point` of the run on `lease_id`,
     /// whatever its request (a scheduled run mints its own task request).
     #[cfg(test)]

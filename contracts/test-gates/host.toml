@@ -2352,6 +2352,15 @@ tests = [
 ]
 incident = ["#422 LN-WS"]
 
+# DIAG-RUN (#419; brief rd-1026/brief-diag-run.md; root cause rd-1026/stop2/root-cause.md §5 R2; the production stop of 2026-10-26 23:23:04): a task diagnostic's ledger read maps its failure through `ledger_read_failure` at `task_diagnostic_failed`. On direct runs on a fake Runtime clock, a diagnostic page read the writer does not answer within its reply limit (the writer held in that read by the read hold) fails only its run: `failed`, not fatal, with `writer_response_timeout` at `task_diagnostic_failed` in the receipt and the one terminal, nothing of the diagnostic stream published and its staging file gone, nothing latched, no stop requested, and the instance's next run admitted and completed; a diagnostic read that meets a damaged record still latches a fatal failure and stops the Runtime
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_diag_run::diag_run_t4_a_diagnostic_read_not_answered_in_time_fails_only_its_run",
+    "actingcommand-runtime-host::lib::tests::gate_diag_run::diag_run_t5_a_fatal_ledger_failure_of_the_diagnostic_read_still_stops_the_runtime",
+]
+incident = ["#419 DIAG-RUN"]
+
 # LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1.4, §1.5, §4, §5; brief rd-1026/brief-ln7c-q.md): the frame cleaner by query, on a fake clock and step counter: a statement starts no earlier than the one before plus its steps at frame_query_steps_per_second, so the steps never exceed the rate by more than one statement, and a raised stop interrupts the pass (T-pace); a live frame is examined at settle, at 1 day and at 7 days by its answers, a running one at every pass, a late window point after settle moves the frame at 1 day, and a class change between queueing and the round is acted on by the round's answer (T-schedule); kept frames go when confirmed or at the age the pass starts with, and a changed age takes effect at the next pass (T-evidence); frame_retention_evidence_max_age_days is 15 by default, settable within 1..=3650 and refused outside it, frame_query_steps_per_second settable and frame_query_chunk_frames read at start
 [[gate]]
 coverage = "Y"
