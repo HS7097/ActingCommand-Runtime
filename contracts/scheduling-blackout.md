@@ -24,9 +24,10 @@ and "Day-boundary fit", and their configuration keys. SR-4a2 (built) closes the 
 them: positions 4 and 7 of "Order of the deferrals", the day boundary, the admission re-check,
 the random-delay cut and the `scheduling_blackout` subsystem; with no entry in either list and
 no catalog `maintenance` event no blackout defers, cuts or refuses anything (the day boundary
-is its own per-instance switch, "Day-boundary fit"). SR-4a3 brings
+is its own per-instance switch, "Day-boundary fit"). SR-4a3 (built) brings
 complete silence to the ladder, the startup package, the emulator autostart and the monitor
-probe.
+probe ("Complete silence", "Gradual quiet" rule 3). With both lists empty and no catalog
+`maintenance` event, none of SR-4a3's entries reads a blackout and nothing behaves differently.
 
 ## Blackouts
 
@@ -150,7 +151,9 @@ The rule is decided by the requester kind of the instance's one queue (`ClaimKin
 | Recovery ladder, for each trigger stage (task, startup preparation, connection preparation, recovery preparation) | Dropped, never queued: one ladder suppression with reason `blackout` and `until_unix_ms` the blackout's end. The stability-warning count of Workflow #387 counts no record made inside a blackout | Not raised again; a fault that persists triggers anew |
 | A ladder claim that waits for the key when a blackout starts (including one raised by performance pacing, Workflow #385) | Dropped the same way; the condition rerun of the run it followed stays owed | As above |
 | Startup package | Stays queued; it is taken out only after the blackout (a bounded wait, wake at the end) | Runs first |
-| Emulator autostart (`autostart` claim, also after a watchdog start) | Held: no key, no emulator start; it stays queued with a bounded wait | Starts the emulator; the startup package follows |
+| Emulator autostart (`autostart` claim: the daemon start's, also after a watchdog start; the emulator watch's restart of a configured emulator it found stopped; IDLE-1's wake after `stop_emulator`) | Held: no key, no emulator start; it stays queued with a bounded wait. The watch's polls go on (a status read starts nothing) and it requests no second claim while one waits, so its restart counts once | Starts the emulator; the startup package follows |
+| IDLE-1's idle action and wake | No action starts (as under a scheduling pause); a wake due inside the blackout queues its claims, which wait as above | The wake's claims are granted; the action is planned again |
+| A #403 fence's periodic recheck (a self-check the Runtime queues) | Not queued | Due again at once |
 | Instance monitor probe | Takes no frame; a failed take is not recorded | Probes again when due |
 
 A lost connection is not handled: a failed startup or connection preparation inside a blackout
@@ -171,6 +174,32 @@ operation) is carried out; a ladder its failure would raise is dropped.
 A ladder that is climbing when a blackout approaches does not start its next rung when that
 rung's time limit plus `quiet_margin_ms` reaches the blackout's start: the ladder ends with the
 suppression reason `blackout` and releases the key. It is not continued after the blackout.
+
+**How the Runtime holds them (SR-4a3).** The host reads an instance's blackout from the three
+sources with the pure judgement of "Pure judgement" on the Runtime clock: the two lists in effect
+now, and a copy of the active catalog's `maintenance` events that the start and every lease sweep
+tick take (a `maintenance` event with a duration and no V2 validity cannot be judged: it is left
+out and recorded once per catalog generation as `blackout_config_invalid` with `field` its
+`validity`, its `blackout_id` and `blackout_source` `catalog`).
+
+- The instance's routine gate (`crates/scheduler`, `ClaimGate::Silenced`) holds the startup claim
+  while a blackout covers the instance or the next one starts within the package's response
+  deadline plus `quiet_margin_ms` (rule 3), and the `autostart` claim while a blackout covers it.
+  A held claim is never granted at once, a hand-off to it finds no candidate, it refuses no
+  dedicated lease and counts as no waiting work for a shutdown (as a paused routine entry). The
+  lease sweep's pump grants it at the first tick after the gate opens. An `autostart` claim
+  granted before the blackout holds its key without its Start until the end.
+- A ladder's admission, and a granted ladder claim's climb, drop it with
+  `recovery_ladder_suppressed` `blackout` (Info, `until_unix_ms` the blackout's end). Every lease
+  sweep tick drops the ladder claims queued on a covered instance the same way. A rung's time
+  limit is what its configuration bounds: the return-home package's deadline
+  (`configured_package_deadline_ms` for the configured package, the default response deadline
+  for a bound one); `entry_hold_ms` plus the startup package's deadline; `stop_bound_ms`,
+  `start_bound_ms`, `readiness_window_ms` plus the startup package's deadline. A busy or screen
+  hold's rerun of the return-home rung is checked the same way. A person's drill is a ladder's
+  claim and is refused `recovery_admission_denied` inside a blackout.
+- Direction ① (Workflow #387) counts no record whose time lies in a blackout the lease sweep found
+  covering its instance.
 
 ## Gradual quiet
 
@@ -357,7 +386,7 @@ keeps its failure terminal with `blackout_run_stopped`.
 | `blackout_approaching` | info | `instance_id`, `blackout_id`, `blackout_source`, `blackout_start_unix_ms`, `required_ms` | SR-4a2 |
 | `policy_day_boundary_approaching` | info | `instance_id`, `window_end_unix_ms`, `required_ms`, `next_eligible_unix_ms` | SR-4a2 (new; SCH-M D-6) |
 | `blackout_run_stopped` | error | `blackout_id`, `blackout_start_unix_ms` | SR-4b |
-| `blackout_config_invalid` | error | `field`, `blackout_source`; `blackout_id` when known | SR-1, SR-4a1 |
+| `blackout_config_invalid` | error | `field`, `blackout_source`; `blackout_id` when known | SR-1, SR-4a1; SR-4a3 (a catalog `maintenance` event without V2 validity, `blackout_source` `catalog`) |
 
 `blackout_source` (vocabulary `blackout_source`: `host`, `instance`, `catalog`; SR-4a1) names
 the list a refused entry is in, or the source of the entry a judgement reports.

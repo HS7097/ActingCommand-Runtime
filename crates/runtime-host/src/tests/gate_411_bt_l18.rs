@@ -28,8 +28,9 @@ const FIRST_ARRIVAL_CAPTURE: usize = 2;
 const ARRIVAL_SHOWN_ON: usize = 5;
 
 // An observation package (the Lab resource layout) whose pages `home` and `next` are told apart
-// by pixel 0, written into `root`.
-fn write_package(root: &TempDir) -> PathBuf {
+// by pixel 0, written into `root` (Workflow #386 SR-4a3 reuses it for a Lab operation in a
+// blackout).
+pub(super) fn write_package(root: &TempDir) -> PathBuf {
     let color_target = |page: &str, expected: [u8; 3]| {
         json!({"type": "color", "id": format!("page/{page}"),
                "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": expected})

@@ -41,6 +41,16 @@
 //! does not withhold it as an operator's start does, `startup_package_withheld`). Every outcome
 //! is one report line, which actingd writes as a daemon line; a failed write never stops the
 //! daemon.
+//!
+//! Workflow #386 SR-4a3 (frozen scheduling model v1.4.2 C-3, T46; `scheduling-blackout.md`,
+//! "Complete silence"): inside a blackout of its instance the claim gets no key and starts no
+//! emulator. The routine gate holds it (`ClaimGate::Silenced`) as a queued entry, whether the
+//! daemon start, a watchdog start's daemon start, the emulator watch or IDLE-1's wake asked for
+//! it, so an emulator the watch found stopped stays stopped and its restart is counted once
+//! (the watch requests no second claim while one waits). Its wait is bounded: the lease sweep's
+//! pump grants it at the first tick after the blackout's end, and the startup package follows
+//! as after every configured start. A claim granted before a blackout that then covers its
+//! instance holds without its Start until the end.
 
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
@@ -463,7 +473,13 @@ impl HostShared {
                     };
                 }
             }
+            // Workflow #386 SR-4a3: a claim granted before a blackout that now covers its
+            // instance does not start the emulator inside it, and leaves the turn to the others:
+            // it holds on, renewing its key, until the blackout's end.
             if matches!(network, NetworkWait::Ready)
+                && self
+                    .blackout_covering(pending.instance_id, &pending.instance_alias)?
+                    .is_none()
                 && self.autostart_turn(|turn| turn.take(pending.position))?
             {
                 // The final checks just before the Start; emu-watch: the watch's claim reads the

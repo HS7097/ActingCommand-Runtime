@@ -233,6 +233,9 @@ mod gate_386_sr3;
 // Workflow #386 SR-4a2 (SCH-M §3.2, §6 row SR-4a2): the policy's blackout positions 4 and 7, the
 // day boundary, the admission re-check and the random delay's cut.
 mod gate_386_sr4a2;
+// Workflow #386 SR-4a3, test rows T17, T17b, T17c and T46: complete silence at the ladder, the
+// startup package, the emulator autostart and the monitor probe; client runs pass.
+mod gate_386_sr4a3;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).
@@ -391,6 +394,9 @@ mod gate_422_ln3;
 // LN-4 (Workflow #422, LEAN-L model §3.2, §3.6): the decision memory, the agent dispatcher and the
 // monitor registry load from their tagged records; a start without the marker seeds them once.
 mod gate_422_ln4;
+// LN-8c (Workflow #422, LEAN-L model §7.1 A3): the start's runtime-fact recovery reads its record
+// events in bounded pages and rebuilds the store one read of them rebuilds.
+mod gate_422_ln8c;
 // #422 LN-TUNE: a second start reads no planning history before the planning checkpoint.
 mod gate_ln_tune;
 // #422 LN-9: a finding of the ledger's scrub stops the Runtime as a Global failure.
@@ -408,6 +414,9 @@ mod gate_411_a67r;
 mod gate_411_harness_diag;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
+// SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2): the run-duration samples of the instance store
+// record `health.run_duration` and the expected duration E in the evaluation and its admission.
+mod gate_ed2;
 // Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's
 // not-run explanation in the policy host's memory and its read.
 mod gate_mcp19a;

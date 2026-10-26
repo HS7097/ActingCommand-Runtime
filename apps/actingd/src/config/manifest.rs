@@ -175,6 +175,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCH-M ED-2 (frozen model v1.0 §3.4, §3.8): this build keeps the run-duration samples
+        // (`health.run_duration`) and dispatches by the expected duration E; the catalog
+        // generator emits catalog v35 only for a Runtime that names it.
+        subsystem(
+            "expected_runtime",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #386 SR-4a2 (`contracts/scheduling-blackout.md`, "Configuration"): this
         // build's policy reads blackouts of all three sources (deferral positions 4 and 7, the
         // admission re-check, the random delay's cut) and the day-boundary fit; `count` is the

@@ -1265,6 +1265,9 @@ impl HostShared {
                 .iter()
                 .any(|instance| instance.instance_id == state.instance_id)
         });
+        // SCH-M ED-2 (frozen model v1.0 §3.4 D-15): each pair's expected duration E from its
+        // instance's `health.run_duration` record at the projected position.
+        self.project_expected_runtimes(policy, fact_projection, &mut base_facts)?;
         let authoritative_outcomes = lock(
             &self.authoritative_policy_outcomes,
             HostLocation::ProjectPolicySchedulingOutcomes,
@@ -1644,12 +1647,17 @@ impl HostShared {
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
         let mut rejection = None;
         let result = (|| {
-            {
+            // SCH-M ED-2 (coordinator ruling 10-24 14:1x): the declared duration of the intent's
+            // task spec, which an intent record names its own duration against.
+            let declared_duration_ms = {
                 let policy = lock(self.policy()?, HostLocation::ValidatePolicyDispatch)?;
                 if let Some(replay) = policy.replay_admission(&self.ledger, intent, reason_chain)? {
                     return Ok(replay);
                 }
-            }
+                policy.declared_duration_ms(&intent.task_id)
+            };
+            // SCH-M ED-2: the configured declared duration of a fact refresh read.
+            let refresh_declared_ms = self.fact_refresh_settings()?.expected_duration_ms;
             let trusted = lock(
                 &self.trusted_policy_dispatches,
                 HostLocation::AuthorizeTrustedPolicyDispatch,
@@ -1893,15 +1901,19 @@ impl HostShared {
             ));
             let data = policy_event_data(intent, reason_chain)?;
             // Workflow #405 D1 (register X14): the intent of a pair dispatched under a random
-            // delay records it; the admitted, rejected and completed records never do.
-            let intent_draft = match trusted.random_delay {
-                Some(random_delay) => PolicyPayloadDraft::dispatch_intent_with_random_delay(
-                    data.clone(),
-                    random_delay,
-                    AuditInput::new(),
-                ),
-                None => PolicyPayloadDraft::dispatch_intent(data.clone(), AuditInput::new()),
-            };
+            // delay records it; the admitted, rejected and completed records never do. SCH-M
+            // ED-2 (coordinator ruling 10-24 14:1x): an intent whose duration is not its task
+            // spec's declared one (its expected duration E, or a fact refresh's configured
+            // duration) records it, so recovery reserves it again.
+            let recorded_duration_ms = declared_duration_ms
+                .filter(|declared| *declared != intent.expected_duration_ms)
+                .map(|_| intent.expected_duration_ms);
+            let intent_draft = PolicyPayloadDraft::dispatch_intent_with(
+                data.clone(),
+                trusted.random_delay,
+                recorded_duration_ms,
+                AuditInput::new(),
+            );
             let event = self.events.draft(
                 EventSeverity::Info,
                 EventSource::Scheduler,
@@ -1967,6 +1979,18 @@ impl HostShared {
                     HostLocation::AdmitPolicyDispatch,
                 ));
             }
+            // SCH-M ED-2 (§3.4 D-15): the duration the admission's own projection gives the
+            // intent's pair, which the intent's must equal.
+            let admission_duration = crate::policy_host::AdmissionDuration {
+                expected_runtime_ms: current_facts
+                    .tasks
+                    .iter()
+                    .find(|state| {
+                        state.task_id == intent.task_id && state.instance_id == intent.instance_id
+                    })
+                    .and_then(|state| state.expected_runtime_ms),
+                refresh_declared_ms,
+            };
             let procedure_manifest = lock(
                 &self.procedure_manifest,
                 HostLocation::ValidateProcedureManifest,
@@ -2047,6 +2071,7 @@ impl HostShared {
                         context,
                         self.owner_epoch,
                         ledger_high_watermark,
+                        admission_duration,
                     ) {
                         Ok(catalog) => catalog,
                         Err(error) => {

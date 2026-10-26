@@ -1648,10 +1648,12 @@ impl InstanceFactStore {
             .collect::<BTreeSet<_>>();
         let mut selected = BTreeMap::<FactIdentity, &StoredFact>::new();
         for stored in self.active.values() {
-            // The instance projection consumes the policy instance keys and the priority
-            // offset projection consumes the offset keys; neither is an ordinary fact.
+            // The instance projection consumes the policy instance keys, the priority
+            // offset projection the offset keys and the expected-duration projection (SCH-M
+            // ED-2) the run-duration samples; none of them is an ordinary fact.
             if is_policy_instance_fact_key(&stored.record.key)
                 || priority_offset_task_id(&stored.record.key).is_some()
+                || stored.record.key == crate::run_duration::RUN_DURATION_FACT_KEY
             {
                 continue;
             }

@@ -8,9 +8,10 @@ use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     BundleMaintenance, LabErrorClass, MAX_STANDARD_PACK_TABLES, ResourceAdjustmentDeclaration,
     ResourceDeclarationIssue, ResourceReadingDeclaration, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY,
-    StandardPackProblem, StandardPackTableIssue, page_projection::ProjectionMetadata,
-    parse_standard_pack_interrupts, parse_standard_pack_navigation, parse_standard_pack_pages,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackProblem, StandardPackTableIssue,
+    page_projection::ProjectionMetadata, parse_standard_pack_interrupts,
+    parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
     parse_standard_pack_table, resource_declaration::ProcedureBindingConfigFile,
     validate_bundle_maintenance_declarations,
 };
@@ -528,6 +529,19 @@ impl DeclarationReader {
             parse_standard_pack_navigation(&bytes, Some(&pages.game), &pages)
                 .map_err(|issue| invalid(path, &issue.to_string()))?;
             "standard_pack_navigation"
+        } else if path == Path::new(STANDARD_PACK_SCHEDULE_FILE) {
+            // ROUT-L RL-T: the schedule rules (`actingcommand.schedule.v1`, RL-1a) by the reader
+            // every composer runs, a refusal naming its problem and JSON pointer; `package bundle
+            // --schedule` checks the packages they name against the registry and composes them
+            // (contracts/standard-pack-schedule.md).
+            parse_standard_pack_schedule(&bytes).map_err(|issue| {
+                invalid(path, &issue.to_string()).with_details(json!({
+                    "declaration_file": path_text(path),
+                    "standard_pack_problem": issue.problem.as_str(),
+                    "json_pointer": issue.pointer,
+                }))
+            })?;
+            "standard_pack_schedule"
         } else if (name == "maa-semantic-mapping.json"
             && parent.file_name().is_some_and(|p| p == "tasks"))
             || (name == "maa.tasks.json"

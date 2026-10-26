@@ -101,6 +101,11 @@ struct RetryRound {
     admission: PolicyAdmissionRecord,
     until_unix_ms: u64,
     expected_duration_ms: u64,
+    /// SCH-M ED-2: the task spec's declared duration when the round opened, which a later
+    /// catalog's must keep for the round to go on; the round's own duration may be the pair's
+    /// expected duration E. Memory only: a round loaded from a value record has none and its
+    /// own duration is compared, as before ED-2.
+    declared_duration_ms: Option<u64>,
     /// Workflow #372 K5: the order in which the round was opened among all rounds, so a task
     /// reads the latest round of its accounting group. Memory only; replay rebuilds it.
     opened: u64,
@@ -401,6 +406,7 @@ impl PolicyControlState {
                                 admission: round.admission.clone(),
                                 until_unix_ms: round.until_unix_ms,
                                 expected_duration_ms: round.expected_duration_ms,
+                                declared_duration_ms: None,
                                 opened,
                             },
                         );
@@ -790,7 +796,7 @@ impl PolicyControlState {
             ));
         }
         if !immediate_retry {
-            let (_, profile) = task_and_profile(catalog, intent)?;
+            let (task, profile) = task_and_profile(catalog, intent)?;
             let window = activity_window_at(profile, admission.activity.admitted_at_unix_ms)
                 .map_err(|_| {
                     fatal(
@@ -816,6 +822,7 @@ impl PolicyControlState {
                     admission: admission.clone(),
                     until_unix_ms: window.until_unix_ms,
                     expected_duration_ms: intent.expected_duration_ms,
+                    declared_duration_ms: Some(task.expected_duration_ms),
                     opened: self.rounds_opened,
                 },
             );
@@ -1431,8 +1438,13 @@ impl PolicyControlState {
             if now_unix_ms < origin.admitted_at_unix_ms || now_unix_ms >= round.until_unix_ms {
                 continue;
             }
+            // SCH-M ED-2: the task keeps the declared duration the round opened under.
             if !catalog.catalog().tasks.tasks.iter().any(|task| {
-                task.id == task_id && task.expected_duration_ms == round.expected_duration_ms
+                task.id == task_id
+                    && task.expected_duration_ms
+                        == round
+                            .declared_duration_ms
+                            .unwrap_or(round.expected_duration_ms)
             }) {
                 continue;
             }

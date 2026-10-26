@@ -346,6 +346,12 @@ The members of `report`:
       scope plus an offset ([scheduling/README.md](scheduling/README.md),
       "Fact references"); a `schedule.json` whose rule writes one requires it,
       so it is composed only by a Runtime that names this row.
+    - `expected_runtime` (SCH-M ED-2): always on
+      (`config_subsystem_always_on`). The Runtime keeps the run-duration
+      samples (`health.run_duration`) and dispatches by the expected duration
+      E ([scheduling/README.md](scheduling/README.md), "Settlement Feedback And
+      Eligibility Age"); the catalog generator emits catalog v35 only for a
+      Runtime that names this row.
     - `scheduling_blackout` (Workflow #386 SR-4a2): always on
       (`config_subsystem_always_on`), with `count` the number of entries of
       `scheduling.blackout.host`. The policy reads blackouts of all three
