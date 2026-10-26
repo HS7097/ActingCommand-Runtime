@@ -21,6 +21,8 @@ struct HoldState {
     released: bool,
     /// Reads that reached the hold since it was armed.
     held: usize,
+    /// #419 DIAG-RUN: the reads that still pass the hold before it holds one.
+    passing: usize,
 }
 
 fn armed() -> &'static Mutex<Vec<Arc<Hold>>> {
@@ -37,9 +39,18 @@ pub struct WriterReadHoldGate {
 impl WriterReadHoldGate {
     /// Arms the gate for `state_root`, an existing directory (the ledger's root).
     pub fn arm(state_root: &Path) -> std::io::Result<Self> {
+        Self::arm_after(state_root, 0)
+    }
+
+    /// #419 DIAG-RUN: arms the gate for `state_root`; the next `passing` reads pass it, and it
+    /// holds the reads after them.
+    pub fn arm_after(state_root: &Path, passing: usize) -> std::io::Result<Self> {
         let hold = Arc::new(Hold {
             root: state_root.canonicalize()?,
-            state: Mutex::new(HoldState::default()),
+            state: Mutex::new(HoldState {
+                passing,
+                ..HoldState::default()
+            }),
             changed: Condvar::new(),
         });
         armed()
@@ -98,6 +109,10 @@ pub(crate) fn hold_reads_of(root: &Path) {
         return;
     };
     let mut state = hold.state.lock().unwrap_or_else(PoisonError::into_inner);
+    if state.passing > 0 {
+        state.passing -= 1;
+        return;
+    }
     state.held += 1;
     hold.changed.notify_all();
     while !state.released {

@@ -5115,3 +5115,8 @@ pub(super) mod plan_check;
 #[cfg(test)]
 #[path = "sqlite/gate_ln7c_f6.rs"]
 mod gate_ln7c_f6;
+
+// #419 DIAG-RUN: a per-run read is driven by its run's link index.
+#[cfg(test)]
+#[path = "sqlite/gate_diag_run.rs"]
+mod gate_diag_run;
