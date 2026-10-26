@@ -15,6 +15,9 @@
 //! when the ledger opens. LN-9 (#422, `actingd-config` revision 13) adds the pace and the limits
 //! of the ledger's background scrub: its rows per second (settable, read after each chunk), the
 //! rows of one chunk and the least time between two passes (both read when the ledger opens).
+//! LN-WS (#422, `actingd-config` revision 14) adds how often a read that serves a Runtime request
+//! looks at its budget inside a SQLite statement and how many sequences one history statement of
+//! a view page spans (both read when the ledger opens).
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -105,6 +108,26 @@ pub const SCRUB_CHUNK_ROWS: &str = "ledger_observer.scrub_chunk_rows";
 /// #422 LN-9: the least time from the start of one scrub pass to the start of the next, in
 /// milliseconds; the first pass starts when the ledger opens.
 pub const SCRUB_PASS_INTERVAL_MS: &str = "ledger_observer.scrub_pass_interval_ms";
+/// #422 LN-WS (R1; the stop of 2026-10-26 19:12:43): the SQLite virtual-machine steps between
+/// two looks at the clock of a read that serves a Runtime request (a view page, a subscription's
+/// replay); its budget then holds inside a statement too.
+pub const READ_CHECK_VM_STEPS: &str = "ledger_observer.read_check_vm_steps";
+/// #422 LN-WS (R2): the sequences one history statement of a view page spans at most, so a page
+/// that its budget stops has always gone on.
+pub const HISTORY_SCAN_ROWS: &str = "ledger_observer.history_scan_rows";
+
+/// #422 LN-WS: a read looks at its clock every 100 steps at the most often, every million at the
+/// least.
+const READ_CHECK_VM_STEPS_RANGE: KeyRange = KeyRange::Integer {
+    min: 100,
+    max: 1_000_000,
+};
+
+/// #422 LN-WS: a history statement spans 1 024 sequences at least and 1 048 576 at most.
+const HISTORY_SCAN_ROWS_RANGE: KeyRange = KeyRange::Integer {
+    min: 1_024,
+    max: 1_048_576,
+};
 
 /// #422 LN-9 (LEAN-L §3.7): the scrub's rate lies within 1 and 100 000 rows a second.
 const SCRUB_ROWS_PER_SECOND_RANGE: KeyRange = KeyRange::Integer {
@@ -232,6 +255,13 @@ pub struct LedgerObserverFile {
     scrub_chunk_rows: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scrub_pass_interval_ms: Option<Value>,
+    // Interface anchor `actingd-config` revision 14 (contracts/component-interfaces.md): a Runtime
+    // before LN-WS refuses a file that names one, because the section denies unknown members; a
+    // file that names none keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read_check_vm_steps: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_scan_rows: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -506,6 +536,27 @@ pub(crate) static ROWS: &[KeyRow] = &[
         "LN-9",
         "0.12.14",
     ),
+    // #422 LN-WS: read when the ledger opens, as the writer's other limits are.
+    KeyRow {
+        name: KeyName::Exact(READ_CHECK_VM_STEPS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: READ_CHECK_VM_STEPS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-WS",
+        since: "0.12.15",
+    },
+    KeyRow {
+        name: KeyName::Exact(HISTORY_SCAN_ROWS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: HISTORY_SCAN_ROWS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-WS",
+        since: "0.12.15",
+    },
 ];
 
 /// A milliseconds key read when the ledger opens, with the release that added its row.
@@ -577,6 +628,11 @@ pub struct LedgerObserverConfig {
     pub scrub_chunk_rows: u64,
     /// #422 LN-9: the least time from the start of one scrub pass to the start of the next.
     pub scrub_pass_interval_ms: u64,
+    /// #422 LN-WS: the SQLite virtual-machine steps between two looks at the clock of a read that
+    /// serves a Runtime request.
+    pub read_check_vm_steps: u64,
+    /// #422 LN-WS: the sequences one history statement of a view page spans at most.
+    pub history_scan_rows: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -744,6 +800,8 @@ impl LedgerObserverConfig {
             scrub_rows_per_second: reader.count(SCRUB_ROWS_PER_SECOND)?,
             scrub_chunk_rows: reader.count(SCRUB_CHUNK_ROWS)?,
             scrub_pass_interval_ms: reader.duration(SCRUB_PASS_INTERVAL_MS)?,
+            read_check_vm_steps: reader.count(READ_CHECK_VM_STEPS)?,
+            history_scan_rows: reader.count(HISTORY_SCAN_ROWS)?,
         })
     }
 }

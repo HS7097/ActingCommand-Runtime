@@ -157,6 +157,18 @@ pub struct SyntheticLedgerSpec {
     pub first_timestamp_unix_ms: u64,
     pub record_interval_ms: u64,
     pub mix: SyntheticMix,
+    /// #422 LN-WS: one record whose time is out of the history's order, as production's clock
+    /// steps make some; none unless set.
+    pub inversion: Option<SyntheticInversion>,
+}
+
+/// #422 LN-WS: the record at position `record` of the history (the first is 0) carries
+/// `timestamp_unix_ms` in place of its own time (with the other record of its stored frame, when
+/// it is one of a frame's two artifact records); the records after it keep theirs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntheticInversion {
+    pub record: u64,
+    pub timestamp_unix_ms: u64,
 }
 
 impl SyntheticLedgerSpec {
@@ -171,6 +183,7 @@ impl SyntheticLedgerSpec {
             first_timestamp_unix_ms: 1_749_945_600_000,
             record_interval_ms: 500,
             mix: SyntheticMix::default(),
+            inversion: None,
         }
     }
 
@@ -437,6 +450,17 @@ impl<'a> Generator<'a> {
 
     /// The next record's time.
     fn timestamp(&self) -> GlobalLedgerResult<u64> {
+        self.timestamp_of(1)
+    }
+
+    /// The time of the next `records` records, which share one (LN-WS: the inverted record's
+    /// time when it is among them).
+    fn timestamp_of(&self, records: u64) -> GlobalLedgerResult<u64> {
+        if let Some(inversion) = self.spec.inversion
+            && (self.written..self.written.saturating_add(records)).contains(&inversion.record)
+        {
+            return Ok(inversion.timestamp_unix_ms);
+        }
         self.spec
             .record_interval_ms
             .checked_mul(self.written)
@@ -790,7 +814,7 @@ impl<'a> Generator<'a> {
         frame_id: IssuedFrameId,
         frame_links: &EventLinksDraft,
     ) -> GlobalLedgerResult<()> {
-        let timestamp = self.timestamp()?;
+        let timestamp = self.timestamp_of(FRAME_ARTIFACT_RECORDS)?;
         let frame = self.frames;
         let material = format!("synthetic-frame-{frame}");
         let Some(store) = self.frame_store.as_ref() else {

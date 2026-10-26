@@ -26,7 +26,7 @@ mod owner_read;
 mod prior_epoch;
 mod resident;
 mod view;
-pub use material::LedgerOpenTiming;
+pub use material::{LedgerFrameRefsNote, LedgerOpenTiming};
 pub(super) use material::{PendingMaterial, elapsed_ms};
 #[cfg(test)]
 pub(super) use owner_read::{

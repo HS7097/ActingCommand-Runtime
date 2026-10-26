@@ -2950,6 +2950,15 @@ mod gate_ln8d;
 // never holds the writer.
 #[path = "tests/gate_ln9.rs"]
 mod gate_ln9;
+// #422 LN-7c R: the frame index of payload-only pointers, written with each batch, filled at the
+// open (gap and backfill) and checked by the scrub.
+#[path = "tests/gate_ln7c_r.rs"]
+mod gate_ln7c_r;
+// #422 LN-WS: no read can make a write fail: a request's read stops inside a statement at its
+// budget, its history statements are bounded spans from the window's first record, and an append
+// behind it commits.
+#[path = "tests/gate_ln_ws.rs"]
+mod gate_ln_ws;
 // #422 LN-7c O: the open reads the owner records of the two latest owner epochs (and of the older
 // owners a start may still close) and keeps the owner state of the read of every owner record.
 #[path = "tests/gate_ln7c_o.rs"]

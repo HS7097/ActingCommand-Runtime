@@ -18,7 +18,8 @@ test-hooks = []
 actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
 actingcommand-contract = { workspace = true }
 actingcommand-runtime-database = { workspace = true }
-rusqlite = { workspace = true }
+# #422 LN-WS (R1): the progress handler bounds a request's read inside a SQLite statement.
+rusqlite = { workspace = true, features = ["hooks"] }
 serde = { workspace = true }
 # Workflow #383 AO-1: the dump file's record lines keep their record member's exact bytes.
 serde_json = { workspace = true, features = ["raw_value"] }

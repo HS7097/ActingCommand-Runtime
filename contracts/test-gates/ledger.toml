@@ -676,6 +676,18 @@ tests = [
 ]
 incident = ["#422 LN-8d"]
 
+# LN-WS (#422; brief rd-1026/brief-ln-ws.md; root cause rd-1026/writer-stall/root-cause.md §5; the production stop of 2026-10-26 19:12:43): no read can make a write fail. On a production-shaped synthetic ledger (LN-8d's frame shape, four instances with one in seven runs of twenty, hours of times with one inverted record, the window at 90 to 95 % of the history) the costliest history statement of each incident read form (no instance with `changes`, `events`, none and `errors`; one instance; the run listing; one run) on 12 000 records is at most 1.5 times that on 3 000 (`ledger_observer.history_scan_rows`); a no-instance window read whose budget runs out inside a statement answers incomplete with a cursor past its start, and at most one look at the clock runs after the budget point (`ledger_observer.read_check_vm_steps`); an append captured behind an over-budget read commits once the read answers at its budget, `Ok`, its observation naming the read; paging the window reads on a small budget returns the unbounded read's rows in order, each cursor past the one before; a first window page starts its first history statement at the window's first record (by the time index, exact with the inversion) and reads the unbounded rows; every bounded read on a fake writer clock, a 600 s reply limit and no sleep
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t1_no_history_statement_of_an_incident_read_grows_with_the_history",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t2_a_window_read_stops_inside_a_statement_at_its_budget_past_its_start",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append_captured_behind_an_over_budget_read_commits_once_it_answers",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t4_paging_window_reads_on_a_small_budget_returns_the_unbounded_rows_in_order",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t5_a_window_page_starts_at_the_windows_first_record_and_reads_the_unbounded_rows",
+]
+incident = ["#422 LN-WS"]
+
 # LN-7c F6 (#422; rd-1026/ln7c/final-query.md §1.1, §1.3, §7 F6; ruling 70): capture frames by ingestion time, the plain partial index `ledger_artifacts_created` (never a `ledger_view_*` object, so an older build opens, writes and scrubs a root that has it): a new root has it from `schema.sql`, a root without it gets it at its first writer open, over every capture frame, and a second open leaves it as it is; the plan check for ledger tests holds a statement's plan on an empty database to the §1.3 rule and rejects a statement doctored to read the whole history (a scan of a ledger table, its alias or index, an automatic index on one, the type index without a sequence bound, a history-wide index)
 [[gate]]
 coverage = "Y"
@@ -684,6 +696,22 @@ tests = [
     "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_the_plan_check_rejects_a_doctored_statement_that_reads_the_whole_history",
 ]
 incident = ["#422 LN-7c F6"]
+
+# LN-7c R (#422; rd-1026/ln7c/final-query.md §7 row R, §3; Alice's ruling 70): the frame index `ledger_frame_refs` of the pointers a record carries only in its payload. Each pointer kind (summary frame, summary pin, resource reading, published frame, published artifact, before-frame, preserved frame, frame and run read confirmations from a confirmer's origin) gives its row in the record's batch transaction and a confirmation from another origin none; a summary with N frames gives N rows; a backfilled synthetic root holds the rows the synthetic appender writes incrementally; records appended by a writer that skips the rows are filled at the next open and the extent moves to the head; a root without the extent is fully backfilled, a stray row gone; a doctored row is a non-fatal scrub finding `ledger_index_mismatch` of `verify_ledger_frame_refs`: the Runtime keeps running, the extent is marked untrusted and the next open rebuilds the index with matching rows, while `ledger-maintenance verify` still refuses it and marks the extent; the table never fails an open or an append: an extent past the head is rebuilt with one warning on `ledger_opened`, a batch the extent does not end before commits without its rows and the next open fills the gap with one warning, a fill that meets a damaged record stops short of it with one warning while the open succeeds, and the next open tries again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r1_each_pointer_kind_gives_its_rows_in_the_records_transaction",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r2_a_summary_with_n_frames_gives_n_rows",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r3_a_backfilled_synthetic_root_holds_the_rows_written_incrementally",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r4_records_appended_without_rows_are_filled_at_reopen_and_the_extent_moves",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r5_a_root_without_the_extent_is_fully_backfilled",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r6_a_doctored_row_is_a_non_fatal_scrub_finding_and_the_next_open_rebuilds_the_index",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r7_an_extent_past_the_head_is_rebuilt_with_its_warning",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r8_a_batch_the_extent_does_not_end_before_commits_and_is_filled_at_reopen",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r9_a_fill_that_meets_a_damaged_record_stops_short_of_it_and_the_open_succeeds",
+]
+incident = ["#422 LN-7c R"]
 
 # LN-7c O (#422; rd-1026/ln7c/final-query.md §7 row O, §2): the writer open reads the owner records of the two latest owner epochs: those after the start before the latest one by the type index, read back in forward chunks to the first record of that owner, and of each older owner a start may still close, read back the same way; the owner state it keeps (the retained owners, the owners a next start closes, and of each retained owner its epochs, end, reopening, import, closes, their writer, quiescences, scope sources and releases) equals the read of every owner record on roots with many starts, a takeover, a dump import of the previous owner, a reopened owner and a prior-epoch close; a retained owner in no start's epoch makes the open read every owner record and say why (`owner_in_no_start_epoch`); the owner rows read stay in the two latest epochs and are the same on histories of 3 000, 12 000 and 30 000 records (`LedgerReadCounts`)
 [[gate]]

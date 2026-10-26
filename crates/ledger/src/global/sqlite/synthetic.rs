@@ -5,8 +5,9 @@
 //! than memory can be written for the scale harness. Each batch is one transaction, as the
 //! writer's own batch commit (`SqliteStorage::commit_batch`) is: the records' projections
 //! chained from the authenticated head (record hash, keyed tag, predecessor), their link rows,
-//! their `ledger_index` rows under the default index policy and the keyed meta row. The formal
-//! open and every authenticated read therefore accept the result. Test hooks only.
+//! their `ledger_index` rows under the default index policy, their frame index rows with the
+//! extent (#422 LN-7c R) and the keyed meta row. The formal open and every authenticated read
+//! therefore accept the result. Test hooks only.
 
 use super::{
     ARTIFACT_COLUMNS, BatchRows, EVENT_COLUMNS, IndexRows, LINK_COLUMNS, SqliteMarker,
@@ -174,7 +175,9 @@ impl<'a> SyntheticAppender<'a> {
                     rows: &rows,
                     meta: &meta,
                 },
-            )
+            )?;
+            // #422 LN-7c R: the batch's frame index rows and extent, as the writer's batch.
+            super::frame_refs::write_batch(self.database, &transaction, events)
         })();
         if let Err(error) = written {
             let rolled_back = transaction

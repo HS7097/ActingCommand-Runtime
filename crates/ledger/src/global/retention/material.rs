@@ -8,8 +8,10 @@
 //! material at all; only their timing is kept here.
 
 use super::RetentionIndex;
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::StoredEventRecord;
 use crate::global::GlobalLedgerResult;
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{ProjectedArtifactReference, VerifiedArtifactReference};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -51,6 +53,51 @@ pub struct LedgerOpenTiming {
     /// of those of the two latest owner epochs, because it could not place a retained owner in
     /// a start's epoch (an owner in no start's epoch). Not part of the line above.
     pub owner_read_full: bool,
+    /// #422 LN-7c R: what the open found of the frame index `ledger_frame_refs` when it had to
+    /// rebuild it, fill a gap of records appended without rows, or stop its fill; `None` when the
+    /// index was complete or was built for the first time. It never fails the open.
+    pub frame_refs: Option<LedgerFrameRefsNote>,
+}
+
+/// #422 LN-7c R (`contracts/ledger-observer.md` §11.7): one warning of the writer open about the
+/// derived frame index, which the start reports as a `note` link of `ledger_opened`
+/// ([`Self::outcome`]: `ledger_index_mismatch` of `build_ledger_frame_refs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LedgerFrameRefsNote {
+    /// What was found: `verify_ledger_frame_refs`, the extent was untrusted (missing on an
+    /// existing table, past the head or malformed), so the rows and the extent were removed and
+    /// the index rebuilt; `write_ledger_frame_refs`, records were appended without their rows
+    /// (an older build, or a batch the extent did not end before), so the gap was filled;
+    /// `build_ledger_frame_refs`, the fill stopped and the extent does not cover the history.
+    pub stage: LedgerLocation,
+    /// The untrusted extent's end, the end of the extent before the gap, or the record the fill
+    /// stopped at.
+    pub sequence: Option<u64>,
+    /// The failure that stopped the fill: its code and operation.
+    pub cause: Option<(&'static str, &'static str)>,
+}
+
+impl LedgerFrameRefsNote {
+    /// The note's outcome: `ledger_index_mismatch` with `operation`, `stage` and
+    /// `ledger_sequence`, caused by the failure that stopped the fill.
+    pub fn outcome(&self) -> Outcome {
+        let mut outcome = Outcome::new(LedgerCode::LedgerIndexMismatch)
+            .operation(LedgerLocation::BuildLedgerFrameRefs)
+            .stage(self.stage);
+        if let Some(sequence) = self.sequence {
+            outcome = outcome.ledger_sequence(sequence);
+        }
+        if let Some((code, operation)) = self.cause
+            && let Some(code) = Code::relayed(code)
+        {
+            let mut cause = Outcome::new(code);
+            if let Some(operation) = Location::relayed(operation) {
+                cause = cause.operation(operation);
+            }
+            outcome = outcome.caused_by(cause);
+        }
+        outcome
+    }
 }
 
 impl std::fmt::Display for LedgerOpenTiming {
