@@ -21,11 +21,11 @@ use crate::codes::{
 use crate::remedy::ProviderView;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
-    ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
-    FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ManualOffset,
-    MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PredicateSpec, PrioritySelection,
-    RemedyPlan, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec, TaskTerminalState,
-    TimelineEvent,
+    ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactComparand,
+    FactReference, FactScalar, FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES,
+    ManualOffset, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PredicateSpec,
+    PrioritySelection, RemedyPlan, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec,
+    TaskTerminalState, TimelineEvent,
 };
 
 // Workflow #386 SR-4a1 (SCH-M §3.2 D-1, D-6): the pure blackout and day-boundary judgements.
@@ -4293,16 +4293,58 @@ fn evaluate_predicate(
                 }));
             }
             // Workflow #355 D12: an observed kind the predicate does not compare makes this
-            // predicate Unknown; it no longer fails the whole evaluation.
-            if fact_kind(&observation.value) != fact_kind(value) {
+            // predicate Unknown; it no longer fails the whole evaluation. #386 CF-4: a fact
+            // reference compares integers, so the fact must hold one.
+            let kind_matches = match value {
+                FactComparand::Value(value) => fact_kind(&observation.value) == fact_kind(value),
+                FactComparand::Fact(_) => matches!(observation.value, FactValue::Integer(_)),
+            };
+            if !kind_matches {
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: scope.clone(),
                     fact_key: fact_key.clone(),
                     reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             }
+            let (truth, fresh_until) = match value {
+                FactComparand::Value(value) => (
+                    compare_fact_values(&observation.value, *comparison, value)?,
+                    fresh_until,
+                ),
+                // #386 CF-4: the referenced fact obeys the predicate's `max_age_ms` and its own
+                // expiry; one that gives no integer makes the predicate false, with its reason
+                // and no wake: its next reading wakes the scheduler, and no refresh is asked for.
+                FactComparand::Fact(reference) => {
+                    match referenced_integer(facts, scope, reference, *max_age_ms, time)? {
+                        Ok(referenced) => (
+                            compare_with_reference(
+                                &observation.value,
+                                *comparison,
+                                referenced.value,
+                                reference.offset,
+                            )?,
+                            min_wake(fresh_until, referenced.fresh_until),
+                        ),
+                        Err(problem) => {
+                            reasons.push(reason_with(
+                                Outcome::new(PolicyCode::FactReferenceUnavailable)
+                                    .fact_key(reference.fact_key.as_str())
+                                    .unknown_reason(UnknownReasonToken(problem)),
+                                format!(
+                                    "fact '{}:{fact_key}' compares with '{}' plus {}, which gives no integer: {}",
+                                    scope_key(scope),
+                                    reference.fact_key,
+                                    reference.offset,
+                                    unknown_token(problem)
+                                ),
+                            ));
+                            return Ok(PredicateEvaluation::known(false, None));
+                        }
+                    }
+                }
+            };
             Ok(PredicateEvaluation {
-                truth: if compare_fact_values(&observation.value, *comparison, value)? {
+                truth: if truth {
                     PredicateTruth::True
                 } else {
                     PredicateTruth::False
@@ -4902,6 +4944,94 @@ fn fact_time(
         fresh_until,
         observed_at: observation.observed_at_unix_ms,
     }))
+}
+
+/// #386 CF-4: the integer the fact a reference names holds, and the end of its freshness.
+struct ReferencedInteger {
+    value: i64,
+    fresh_until: Option<u64>,
+}
+
+/// #386 CF-4: the fact `reference` names, in the predicate's `scope`, read with `fact`'s rules
+/// (missing, confidence 0, the predicate's `max_age_ms`, its own expiry) and holding an integer;
+/// or why it gives none, as an `unknown_reason` token.
+fn referenced_integer(
+    facts: &EvaluationFacts,
+    scope: &ScopeSelector,
+    reference: &FactReference,
+    max_age_ms: Option<u64>,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<Result<ReferencedInteger, UnknownReason>> {
+    let Some(observation) = facts
+        .facts
+        .iter()
+        .find(|fact| fact.scope == *scope && fact.fact_key == reference.fact_key)
+    else {
+        return Ok(Err(UnknownReason::FactMissing));
+    };
+    if observation.confidence_milli == 0 {
+        return Ok(Err(UnknownReason::FactLowConfidence));
+    }
+    let max_age_expiration = max_age_ms
+        .map(|max_age| {
+            observation
+                .observed_at_unix_ms
+                .checked_add(max_age)
+                .ok_or_else(|| {
+                    PolicyEvaluationError::overflow(format!(
+                        "fact '{}:{}' expiration overflowed",
+                        scope_key(scope),
+                        reference.fact_key
+                    ))
+                })
+        })
+        .transpose()?;
+    let fresh_until = min_wake(max_age_expiration, observation.expires_at_unix_ms);
+    if fresh_until.is_some_and(|expiration| time.unix_ms > expiration) {
+        return Ok(Err(
+            if observation
+                .expires_at_unix_ms
+                .is_some_and(|expiration| time.unix_ms > expiration)
+            {
+                UnknownReason::FactExpired
+            } else {
+                UnknownReason::FactStale
+            },
+        ));
+    }
+    let FactValue::Integer(value) = observation.value else {
+        return Ok(Err(UnknownReason::TypeMismatch));
+    };
+    Ok(Ok(ReferencedInteger { value, fresh_until }))
+}
+
+/// #386 CF-4: the integer `actual` compared with `referenced + offset`; the sum is taken in
+/// `i128`, so it never overflows.
+fn compare_with_reference(
+    actual: &FactValue,
+    comparison: Comparison,
+    referenced: i64,
+    offset: i64,
+) -> PolicyEvaluationResult<bool> {
+    let FactValue::Integer(actual) = actual else {
+        return Err(PolicyEvaluationError::type_mismatch(format!(
+            "a fact reference compares integers, got {}",
+            fact_kind(actual)
+        )));
+    };
+    let actual = i128::from(*actual);
+    let expected = i128::from(referenced) + i128::from(offset);
+    match comparison {
+        Comparison::Eq => Ok(actual == expected),
+        Comparison::NotEq => Ok(actual != expected),
+        Comparison::LessThan
+        | Comparison::LessThanOrEqual
+        | Comparison::GreaterThan
+        | Comparison::GreaterThanOrEqual => compare_ordered(actual, comparison, expected),
+        Comparison::Contains => Err(PolicyEvaluationError::type_mismatch(
+            "contains is invalid for a fact reference",
+        )),
+    }
 }
 
 fn fact_kind(value: &FactValue) -> &'static str {

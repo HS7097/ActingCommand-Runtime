@@ -2044,7 +2044,16 @@ tests = [
 ]
 incident = ["#422 LN-TUNE"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a successful scheduled run adds its runtime_ms as the newest sample of its package's row of health.run_duration (at its terminal time, one Runtime publication); the next evaluation dispatches with E and the task that shares the package shows E and runs:1, after declared before the run
+# LN-9 (#422, LEAN-L row LN-9, §3.7, §6.3; Alice's ruling 57): `ledger_observer.scrub_rows_per_second` (625, 1..=100000, settable), `scrub_chunk_rows` (256, 1..=4096) and `scrub_pass_interval_ms` (2 400 000, 60000..=86400000) are read from the defaults file and from explicit values, the rate is changed by an instruction and the other two refuse one, and a value out of range is refused (`out_of_range`); on a host with the shipped defaults and a stepping scrub clock, damage in an old row that no reader reads stops the Runtime within one pass as a Global failure, latched and closed with the code and operation the full verification gives for the same damage
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ledger_observer_tests::ln9_the_scrub_keys_default_take_explicit_values_and_refuse_out_of_range_values",
+    "actingcommand-runtime-host::lib::tests::gate_ln9::ln9_d_a_scrub_finding_stops_the_runtime_as_a_global_failure_with_the_full_verification_code",
+]
+incident = ["#422 LN-9"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a successful scheduled run adds its runtime_ms as the newest sample of its package's row of health.run_duration (at its terminal time, one Runtime publication); the next evaluation dispatches with E and the task that shares the package shows E and runs:1, after declared before the run
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2052,7 +2061,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a failed scheduled run, one a condition ended and a direct run add no sample and the record is never published
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a failed scheduled run, one a condition ended and a direct run add no sample and the record is never published
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2060,7 +2069,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a row keeps the newest five samples (runs 5) and E is the mean of exactly those, rounded up, plus 300 000 ms
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a row keeps the newest five samples (runs 5) and E is the mean of exactly those, rounded up, plus 300 000 ms
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2068,7 +2077,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a restart loads the samples from the ledger; a dispatch admitted with E records E on its intent and its recovery reserves it again without policy_budget_receipt_mismatch; after the restart the evaluation's E is admitted
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a restart loads the samples from the ledger; a dispatch admitted with E records E on its intent and its recovery reserves it again without policy_budget_receipt_mismatch; after the restart the evaluation's E is admitted
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2076,7 +2085,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a package changed in place (same package_id) keeps its row and its next run adds to it
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a package changed in place (same package_id) keeps its row and its next run adds to it
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2084,7 +2093,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a client's PublishFact of health.run_duration and the Runtime's ordinary publication path are refused run_duration_key_reserved with the key, non-fatal, nothing appended
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a client's PublishFact of health.run_duration and the Runtime's ordinary publication path are refused run_duration_key_reserved with the key, non-fatal, nothing appended
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2092,7 +2101,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a 257th package row drops the row with the oldest at and records one run_duration_row_dropped warning naming that package and the instance; 256 rows remain
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a 257th package row drops the row with the oldest at and records one run_duration_row_dropped warning naming that package and the instance; 256 rows remain
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2100,7 +2109,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): a sample that lands between the evaluation and the admission refuses the intent policy_facts_stale; the next evaluation's intent with the new E is admitted
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a sample that lands between the evaluation and the admission refuses the intent policy_facts_stale; the next evaluation's intent with the new E is admitted
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2108,7 +2117,7 @@ tests = [
 ]
 incident = ["#386 ED-2"]
 
-# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.188): with scheduling.expected_runtime.enabled false no sample is written, the kept record is not read, the dispatch reserves the declared duration, its intent records none and ac_schedule shows declared
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): with scheduling.expected_runtime.enabled false no sample is written, the kept record is not read, the dispatch reserves the declared duration, its intent records none and ac_schedule shows declared
 [[gate]]
 coverage = "Y"
 tests = [

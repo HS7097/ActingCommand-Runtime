@@ -389,6 +389,9 @@
     "history_page_rows": 256,
     "writer_reply_timeout_ms": 10000,
     "open_verify_tail_records": 4096,
+    "scrub_rows_per_second": 625,
+    "scrub_chunk_rows": 256,
+    "scrub_pass_interval_ms": 2400000,
     "tag": {
       "workbench_patterns": [
         "task.*.last_duration_ms",

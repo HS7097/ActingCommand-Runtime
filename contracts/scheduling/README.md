@@ -908,6 +908,10 @@ An edge member that makes its predicate false adds its own reason the same way (
 for `dependency_completed` with `since_own_run`, and `fact_time_served` (info; `fact_key`,
 `served_by_dispatch_unix_ms`) for `fact_time_reached` with `once_per_reading`.
 
+A `fact` predicate whose value is a fact reference adds `fact_reference_unavailable` (info;
+`fact_key` the referenced fact, `unknown_reason`) the same way when the referenced fact gives no
+integer (#386 CF-4, "Fact references" below).
+
 ## Settlement Feedback And Eligibility Age
 
 In the Runtime (Workflow #308 slice 5b) every `TaskRuntimeSnapshot` the host
@@ -1191,6 +1195,26 @@ A chain step runs once per new result of its predecessor, and a completion time 
 - When a member decides the trigger, the decision ends with `trigger_false` after its reason.
 - **Version.** A V1 document that writes `since_own_run`, with either value, is refused as `unknown_field` at the member; `fact_time_reached` is V2 only as a whole.
 - **Capability.** A Runtime that reads both members reports the always-on subsystem `condition_edges` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). The catalog generator emits neither member for a Runtime whose check-config does not name it; an older Runtime refuses a catalog that writes them (`unknown_field`).
+
+## Fact references (#386 CF-4)
+
+A red line is the current cap less a margin, never a fixed number (Alice 10-26): a package publishes the cap as a fact beside the amount, and a rule compares the two. A `fact` predicate's `value` may be a **fact reference** instead of a typed value ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only):
+
+```text
+{"kind": "fact", "scope": S, "fact_key": A, "comparison": C,
+ "value": {"type": "fact", "fact_key": B, "offset": N}, "max_age_ms": M}
+```
+
+It reads: the integer the fact at (S, A) holds compares by C with the integer the fact at (S, B) holds plus N. All three members of the reference are required; N is a signed integer. A predicate with a typed value evaluates, serializes and hashes exactly as before.
+
+- **Same scope.** The reference names no scope: B is read in the predicate's own scope S. In a `schedule.json` the composer fills S for the predicate as for every `fact` node, and the reference needs none.
+- **One freshness.** Both facts obey the predicate's `max_age_ms` and each its own `expires_at_unix_ms`, and each needs a confidence above 0; the reference has no `max_age_ms` of its own. While the predicate is true or false, its freshness ends at the earlier end of the two facts' freshness, and it wakes the evaluation one millisecond after that, as `fact` does.
+- **The fact itself** (S, A) is read as for every `fact` predicate: missing, at confidence 0, older than M or past its expiry, it is Unknown with its detection suggestion ("Fact Refresh"); a value that is not an `integer` is Unknown with `type_mismatch` ("Runtime Enforcement").
+- **The referenced fact** (S, B) that gives no integer makes the predicate **false**, not Unknown: the info reason `fact_reference_unavailable` {`fact_key` B, `unknown_reason`: `fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired` or `type_mismatch`}, no wake and no detection suggestion. The next reading of B wakes the scheduler, as every fact publication does. When the predicate decides the trigger, the decision ends with `trigger_false` after its reason. Under `not` a false predicate becomes true, as any other.
+- **Comparison.** `eq`, `not_eq`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, over the integers A and B + N; the sum never overflows. `contains` is refused.
+- **Refusals**, each at its pointer: in a V1 document, `unknown_field` at `value/type`; `contains`, `predicate_uncomputable` at `comparison`; a reference `fact_key` that is no identifier, `type_mismatch` at `value/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `value/offset`; a reference that names a `scope` (a cross-scope reference), `unknown_field` at `value/scope`. A `value` whose `type` is neither a value kind nor `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
+- **Capability.** A Runtime that reads fact references reports the always-on subsystem `fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` whose rule writes one must list `fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with a reference refuses it at its reader.
+- For example, a task due while the amount is at least the capacity less 1000: `"fact_key": "resource.neutral.amount", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -1000}`.
 
 ## Runtime Boundary
 

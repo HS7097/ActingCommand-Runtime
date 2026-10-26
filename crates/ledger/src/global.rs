@@ -51,6 +51,10 @@ pub use sqlite::after_release_baseline_head_for_test;
 // LN-1 (Workflow #422): the synthetic ledger's batch commit, for `crate::synthetic`.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(crate) use sqlite::synthetic::{AppendedBatch, SyntheticAppender};
+// LN-9 (#422, LEAN-L §6): the paced background scrub of the Runtime's writer.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use sqlite::scrub::SteppingScrubClock;
+pub use sqlite::scrub::{LedgerScrubClock, LedgerScrubPolicy, LedgerScrubStop};
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
@@ -902,6 +906,10 @@ pub struct GlobalLedgerConfig {
     /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
     #[cfg(test)]
     history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// LN-9 (#422, LEAN-L §6): the paced background scrub (the failure plan's) and the database it
+    /// reads on its own connection (the formal writer's); the writer has a scrub with both.
+    scrub: Option<LedgerScrubPolicy>,
+    scrub_database: Option<Arc<actingcommand_runtime_database::RuntimeDatabase>>,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -925,6 +933,7 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("close_timeout", &self.close_timeout)
             .field("history_page_rows", &self.history_page_rows)
             .field("open_verify_tail_records", &self.open_verify_tail_records)
+            .field("scrub", &self.scrub)
             .finish()
     }
 }
@@ -948,6 +957,8 @@ impl GlobalLedgerConfig {
             open_verify_tail_records: sqlite::DEFAULT_OPEN_VERIFY_TAIL_RECORDS,
             #[cfg(test)]
             history_rows_read: None,
+            scrub: None,
+            scrub_database: None,
         }
     }
 
@@ -967,6 +978,8 @@ impl GlobalLedgerConfig {
         self.open_verify_tail_records = plan
             .open_verify_tail_records()
             .unwrap_or(self.open_verify_tail_records);
+        // LN-9 (#422): and the writer's scrub.
+        self.scrub = plan.scrub().cloned();
         self.clock = plan.clock();
         if let Some(timeout) = plan.reply_timeout() {
             self.reply_timeout = timeout;
@@ -1007,6 +1020,16 @@ impl GlobalLedgerConfig {
     /// set).
     pub fn with_open_verify_tail_records(mut self, records: usize) -> Self {
         self.open_verify_tail_records = records;
+        self
+    }
+
+    /// LN-9 (#422, LEAN-L §6): the database the writer's scrub reads on its own connection (the
+    /// formal writer's, `LedgerMaintenance::open_writer_timed`).
+    pub(super) fn with_scrub_database(
+        mut self,
+        database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
+    ) -> Self {
+        self.scrub_database = Some(database);
         self
     }
 
@@ -1419,6 +1442,8 @@ pub struct GlobalLedger {
     clock: LedgerMonotonicClock,
     /// #411 A51 (R4): what the writer is doing now, for a close that waits too long.
     writer_work: Arc<WriterWork>,
+    /// LN-9 (#422, LEAN-L §6): the paced background scrub; only the Runtime's writer has one.
+    scrub: Option<sqlite::scrub::ScrubThread>,
 }
 
 /// #411 A51 (R4): the operation of the writer's command in progress (or of its flush) and when
@@ -1981,6 +2006,30 @@ impl GlobalLedger {
         self.history_page_rows.min(MAX_QUERY_PAGE_EVENTS)
     }
 
+    /// LN-9 (#422, LEAN-L §6.3): what the background scrub found, once it found it: the failure
+    /// a full verification gives for the same damage, with its code and operation (or the failure
+    /// that stopped the scrub), fatal. The Runtime's host latches it as a Global failure. `None`
+    /// while the scrub finds nothing, and for a ledger without a scrub. Does not enqueue a writer
+    /// command.
+    pub fn scrub_finding(&self) -> Option<GlobalLedgerError> {
+        self.scrub
+            .as_ref()
+            .and_then(sqlite::scrub::ScrubThread::finding)
+    }
+
+    /// LN-9: the scrub's rate from its next chunk on (`ledger_observer.scrub_rows_per_second`,
+    /// settable), `1..=100000`; any other value is `invalid_ledger_config`. A ledger without a
+    /// scrub has no rate to change.
+    pub fn set_scrub_rows_per_second(&self, rows_per_second: u64) -> GlobalLedgerResult<()> {
+        if !sqlite::scrub::valid_rate(rows_per_second) {
+            return Err(sqlite::scrub::invalid_config());
+        }
+        if let Some(scrub) = &self.scrub {
+            scrub.set_rows_per_second(rows_per_second);
+        }
+        Ok(())
+    }
+
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
         match self.writer.as_ref() {
             Some(writer) if !writer.is_finished() => Ok(()),
@@ -2067,6 +2116,8 @@ impl GlobalLedger {
         let subscription_capacity = config.subscription_capacity;
         let reply_timeout = config.reply_timeout;
         let history_page_rows = config.history_page_rows;
+        // LN-9 (#422): the writer's scrub, with the database it reads.
+        let scrub = config.scrub.clone().zip(config.scrub_database.clone());
         let failure = config.write_failure.clone();
         // #411 A51: the read budget and the close bound, on the writer's clock.
         let close_timeout = config.close_timeout;
@@ -2167,6 +2218,27 @@ impl GlobalLedger {
                         });
                     }
                 };
+                // LN-9 (#422, LEAN-L §6): the scrub starts once the writer runs; it reads on its
+                // own connection and stops first at the close.
+                let scrub = match scrub
+                    .map(|(policy, database)| sqlite::scrub::ScrubThread::start(database, policy))
+                    .transpose()
+                {
+                    Ok(scrub) => scrub,
+                    Err(error) => {
+                        let probe = probe.map_or(Ok(()), WriteProbe::finish);
+                        drop(sender);
+                        queue.disconnect();
+                        let closed = writer.join().unwrap_or_else(|_| {
+                            Err(GlobalLedgerError::fatal(
+                                LedgerCode::WriterPanicked.code(),
+                                LedgerLocation::JoinWriter.location(),
+                            ))
+                        });
+                        let spill = spill.map_or(Ok(()), capture::SpillThread::finish);
+                        return Err(error.with_close_result(probe.and(closed).and(spill)));
+                    }
+                };
                 Ok(Self {
                     history_page_rows,
                     sender: Some(sender),
@@ -2180,6 +2252,7 @@ impl GlobalLedger {
                     close_timeout,
                     clock,
                     writer_work,
+                    scrub,
                 })
             }
             Err(mpsc::SendError(store)) => {
@@ -2763,6 +2836,11 @@ impl GlobalLedger {
     }
 
     fn shutdown(&mut self) -> GlobalLedgerResult<()> {
+        // LN-9 (#422): the scrub stops first, within one chunk, so it never holds the close.
+        let scrub = self
+            .scrub
+            .take()
+            .map_or(Ok(()), sqlite::scrub::ScrubThread::finish);
         // Workflow #383 AO-2 (§8.2): from here the close record is the epoch's last record; the
         // segment edges the close drain crosses are not reported after it.
         self.queue.begin_close();
@@ -2776,7 +2854,7 @@ impl GlobalLedger {
             .map_or(Ok(()), capture::SpillThread::finish);
         self.queue.disconnect();
         self.queue.close();
-        writer.and(probe).and(spill)
+        writer.and(probe).and(spill).and(scrub)
     }
 
     fn shutdown_writer(&mut self) -> GlobalLedgerResult<()> {

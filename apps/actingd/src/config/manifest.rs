@@ -167,6 +167,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #386 CF-4: this build reads a `fact` predicate whose value is another fact plus an
+        // offset; a `schedule.json` that writes one requires it, so an older Runtime refuses the
+        // file instead of misreading it.
+        subsystem(
+            "fact_reference",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCH-M ED-2 (frozen model v1.0 §3.4, §3.8): this build keeps the run-duration samples
         // (`health.run_duration`) and dispatches by the expected duration E; the catalog
         // generator emits catalog v35 only for a Runtime that names it.

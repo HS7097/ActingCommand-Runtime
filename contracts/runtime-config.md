@@ -499,6 +499,9 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.history_page_rows` (#422 LN-5) | integer `1..=4096` | `256` | no |
 | `ledger_observer.writer_reply_timeout_ms` (#422 LN-TUNE) | milliseconds `1000..=600000`, above `read_budget_ms` | `10000` | no |
 | `ledger_observer.open_verify_tail_records` (#422 LN-8) | integer `1..=1000000` | `4096` | no |
+| `ledger_observer.scrub_rows_per_second` (#422 LN-9) | integer `1..=100000` | `625` | yes |
+| `ledger_observer.scrub_chunk_rows` (#422 LN-9) | integer `1..=4096` | `256` | no |
+| `ledger_observer.scrub_pass_interval_ms` (#422 LN-9) | milliseconds `60000..=86400000` | `2400000` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -549,6 +552,17 @@ read in full ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys
 [ledger-store.md](ledger-store.md#open-ownership-and-append-durability)). It is read when the
 ledger opens (not settable); a value outside `1..=1000000` is `config_value_invalid`
 (`out_of_range`).
+
+#422 LN-9 (`actingd-config` revision 13; LEAN-L §6, Alice's ruling 57): the pace and the limits
+of the ledger's background scrub of the whole chain
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)).
+`scrub_rows_per_second` is the rows a second it reads and authenticates; it is settable, and the
+scrub reads the value in effect after each chunk (at start, once the instruction values are
+restored, and after every instruction). `scrub_chunk_rows` is the rows of one chunk, each in a
+read transaction of its own, and `scrub_pass_interval_ms` the least time from the start of one
+pass to the start of the next; both are read when the ledger opens (not settable). The defaults
+read 1.5 million records in about 40 minutes. A value outside its range is
+`config_value_invalid` (`out_of_range`).
 
 ## The `device_link` section (Workflow #398 RD-2)
 
@@ -860,7 +874,7 @@ that is the Runtime's as a whole latches it.
 
 | Fact (scope `runtime`) | Rows | Recorded |
 |---|---|---|
-| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without; SCH-M CF-1 adds the always-on row `condition_edges` (the catalog edge members, [actingd-check-config.md](actingd-check-config.md)); SCH-M CF-2 adds the always-on row `resource_reading_time` (completion-time readings, [actingd-check-config.md](actingd-check-config.md)); SCH-M ED-2 adds the always-on row `expected_runtime` (the run-duration samples and E, [actingd-check-config.md](actingd-check-config.md)) | at start |
+| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without; SCH-M CF-1 adds the always-on row `condition_edges` (the catalog edge members, [actingd-check-config.md](actingd-check-config.md)); SCH-M CF-2 adds the always-on row `resource_reading_time` (completion-time readings, [actingd-check-config.md](actingd-check-config.md)); #386 CF-4 adds the always-on row `fact_reference` (a `fact` predicate that compares with another fact plus an offset, [actingd-check-config.md](actingd-check-config.md)); SCH-M ED-2 adds the always-on row `expected_runtime` (the run-duration samples and E, [actingd-check-config.md](actingd-check-config.md)) | at start |
 | `config.selection` | one: `config_sha256`, `defaults_sha256` (`sha256:<hex>`), `config_generation` (decimal text, installed Runtime only) | at start |
 | `config.catalog` (Workflow #389 MCP-9a, register A5) | one, the active policy catalog generation: `catalog_id`, `catalog_version` (decimal text), `catalog_hash`, `activated_event_id` (the event id of the `catalog.activated` or `catalog.rolled_back` record that made it active), and when known `approval_id` and `approval_disposition` (the latest approval decision whose target is that generation), `previous_catalog_id` and `previous_catalog_version` (decimal text; the generation that record replaced); no fact while no generation is active | at start, after each committed catalog transition and after each approval decision, each time only when it changed |
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |

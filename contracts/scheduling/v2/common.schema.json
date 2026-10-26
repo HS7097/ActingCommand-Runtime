@@ -206,6 +206,17 @@
         }
       ]
     },
+    "factReference": {
+      "description": "#386 CF-4: the value of another fact of the fact predicate's own scope plus a signed integer offset; the predicate compares two integers (not contains). It names no scope. Both facts obey the predicate's max_age_ms; a referenced fact that gives no integer makes the predicate false with fact_reference_unavailable. A schedule.json that writes one names fact_reference in requires.",
+      "type": "object",
+      "required": ["type", "fact_key", "offset"],
+      "properties": {
+        "type": { "const": "fact" },
+        "fact_key": { "$ref": "#/$defs/identifier" },
+        "offset": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
     "clockSource": {
       "oneOf": [
         {
@@ -395,7 +406,12 @@
             "scope": { "$ref": "#/$defs/scope" },
             "fact_key": { "$ref": "#/$defs/identifier" },
             "comparison": { "$ref": "#/$defs/comparison" },
-            "value": { "$ref": "#/$defs/factValue" },
+            "value": {
+              "oneOf": [
+                { "$ref": "#/$defs/factValue" },
+                { "$ref": "#/$defs/factReference" }
+              ]
+            },
             "max_age_ms": { "type": ["integer", "null"], "minimum": 1, "maximum": 31536000000 }
           },
           "additionalProperties": false

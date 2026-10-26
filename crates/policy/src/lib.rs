@@ -70,4 +70,7 @@ mod tests {
 
     // ROUT-L RL-1a (frozen model v1.0 §6.1): `schedule.json` v1 and the pure composer.
     mod gate_rl1a;
+
+    // #386 CF-4: a `fact` predicate compares with another fact of its scope plus an offset.
+    mod gate_386_cf4;
 }

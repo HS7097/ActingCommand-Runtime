@@ -592,6 +592,10 @@ pub struct RuntimeHostConfig {
     /// writer's clock it is measured on in place of the process's monotonic clock.
     #[cfg(test)]
     ledger_read_budget_for_test: Option<(Duration, actingcommand_ledger::LedgerMonotonicClock)>,
+    /// LN-9 (#422), test only: the clock the ledger's scrub is paced on in place of the process's
+    /// monotonic clock.
+    #[cfg(test)]
+    ledger_scrub_clock_for_test: Option<Arc<dyn actingcommand_ledger::LedgerScrubClock>>,
     /// #411 A65, test only: the start fails right after it appended its start event and the
     /// `runtime.instance_bound` events.
     #[cfg(test)]
@@ -663,6 +667,8 @@ impl RuntimeHostConfig {
             #[cfg(test)]
             ledger_read_budget_for_test: None,
             #[cfg(test)]
+            ledger_scrub_clock_for_test: None,
+            #[cfg(test)]
             fail_after_start_event_for_test: false,
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: false,
@@ -692,6 +698,16 @@ impl RuntimeHostConfig {
         clock: actingcommand_ledger::LedgerMonotonicClock,
     ) -> Self {
         self.ledger_read_budget_for_test = Some((budget, clock));
+        self
+    }
+
+    /// LN-9 (#422), test only: the ledger's scrub is paced on `clock`.
+    #[cfg(test)]
+    pub(crate) fn with_ledger_scrub_clock_for_test(
+        mut self,
+        clock: Arc<dyn actingcommand_ledger::LedgerScrubClock>,
+    ) -> Self {
+        self.ledger_scrub_clock_for_test = Some(clock);
         self
     }
 
@@ -2227,6 +2243,8 @@ impl RuntimeHost {
             // for a host started without a manifest), read and checked before any instance is
             // prepared.
             shared.refresh_ladder_config()?;
+            // LN-9 (#422): the scrub's rate in effect, an instruction value included.
+            shared.refresh_ledger_scrub_rate()?;
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
             // a broken one never stops the start.
             shared.register_standard_packs_on_start()?;
@@ -2571,6 +2589,19 @@ impl RuntimeHost {
 
     pub fn fatal_error(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
         let shared = self.shared_ref(HostLocation::ReadRuntimeHealth)?;
+        // LN-9 (#422, LEAN-L §6.3): what the ledger's background scrub found is the failure a
+        // full verification gives for the same damage, with its code and operation; it stops the
+        // Runtime as a Global failure (ISO-M), as the same damage stopped a start before LN-8.
+        if let Some(finding) = shared.ledger.scrub_finding() {
+            shared.fatal.mark(
+                RuntimeHostError::relayed_fatal(
+                    finding.code(),
+                    finding.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{finding:?}")),
+            )?;
+        }
         if let Err(error) = shared.ledger.check_writer_health() {
             shared.fatal.mark(RuntimeHostError::relayed_fatal(
                 error.code(),
@@ -6194,6 +6225,26 @@ fn ledger_failure_plan(
     if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
         plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
     }
+    // LN-9 (#422, LEAN-L §6, Alice's ruling 57): the paced background scrub of the whole chain;
+    // a value the ledger does not take is refused when it opens (`invalid_ledger_config`).
+    let scrub = actingcommand_ledger::LedgerScrubPolicy::new(
+        section.scrub_rows_per_second,
+        usize::try_from(section.scrub_chunk_rows).unwrap_or(usize::MAX),
+        section.scrub_pass_interval_ms,
+    )
+    .map_err(|error| {
+        RuntimeHostError::relayed_fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::LedgerFailure,
+        )
+    })?;
+    #[cfg(test)]
+    let scrub = match &config.ledger_scrub_clock_for_test {
+        Some(clock) => scrub.with_clock(Arc::clone(clock)),
+        None => scrub,
+    };
+    plan = plan.with_scrub(scrub);
     // #422 LN-TUNE: how long a caller waits for one writer reply
     // (`ledger_observer.writer_reply_timeout_ms`); a test may wait less.
     plan = plan.with_reply_timeout(Duration::from_millis(section.writer_reply_timeout_ms));
