@@ -1883,9 +1883,10 @@ pub(super) fn record_policy_values(
             events.system_links()?,
             payload,
         )?;
+        // #422 LN-WS (R4): the failure keeps the ledger's code as its cause.
         let appended = ledger
             .append(events.sanitize(draft)?)
-            .map_err(|_| ledger_error(operation))?;
+            .map_err(|error| ledger_error_caused_by(operation, &error))?;
         policy.note_value_recorded(key, record, appended.sequence());
     }
     Ok(())
@@ -2334,9 +2335,11 @@ fn linked_policy_run_events(
     let mut selected = Vec::new();
     let mut after = 0;
     loop {
+        // #422 LN-WS (R4, R5): the failure keeps the ledger's code as its cause; the read stays
+        // fatal (making the Runtime's own reads tolerant is a later slice).
         let page = ledger
             .query_page(query.clone(), after, through, LINKED_PAGE_EVENTS)
-            .map_err(|_| ledger_error(operation))?;
+            .map_err(|error| ledger_error_caused_by(operation, &error))?;
         let exhausted = page.len() < LINKED_PAGE_EVENTS;
         if let Some(last) = page.last() {
             after = last.sequence();

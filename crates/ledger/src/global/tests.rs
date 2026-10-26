@@ -2950,3 +2950,8 @@ mod gate_ln8d;
 // never holds the writer.
 #[path = "tests/gate_ln9.rs"]
 mod gate_ln9;
+// #422 LN-WS: no read can make a write fail: a request's read stops inside a statement at its
+// budget, its history statements are bounded spans from the window's first record, and an append
+// behind it commits.
+#[path = "tests/gate_ln_ws.rs"]
+mod gate_ln_ws;

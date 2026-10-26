@@ -158,6 +158,11 @@ pub struct LedgerFailurePlan {
     /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read
     /// (`ledger_observer.history_page_rows`).
     history_page_rows: Option<usize>,
+    /// #422 LN-WS (R1, R2): the in-statement bound of a read that serves a Runtime request
+    /// (`ledger_observer.read_check_vm_steps`) and the span of one history statement
+    /// (`ledger_observer.history_scan_rows`).
+    read_check_vm_steps: Option<u32>,
+    history_scan_rows: Option<usize>,
     /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the start's ledger open
     /// authenticates (`ledger_observer.open_verify_tail_records`).
     open_verify_tail_records: Option<usize>,
@@ -179,6 +184,8 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("close_timeout", &self.close_timeout)
             .field("reply_timeout", &self.reply_timeout)
             .field("history_page_rows", &self.history_page_rows)
+            .field("read_check_vm_steps", &self.read_check_vm_steps)
+            .field("history_scan_rows", &self.history_scan_rows)
             .field("open_verify_tail_records", &self.open_verify_tail_records)
             .field("scrub", &self.scrub)
             .finish()
@@ -215,6 +222,8 @@ impl LedgerFailurePlan {
             close_timeout: None,
             reply_timeout: None,
             history_page_rows: None,
+            read_check_vm_steps: None,
+            history_scan_rows: None,
             open_verify_tail_records: None,
             scrub: None,
         }
@@ -248,6 +257,20 @@ impl LedgerFailurePlan {
         self
     }
 
+    /// #422 LN-WS (R1): the SQLite virtual-machine steps between two looks at the clock of a
+    /// read that serves a Runtime request (`ledger_observer.read_check_vm_steps`).
+    pub fn with_read_check_vm_steps(mut self, steps: u32) -> Self {
+        self.read_check_vm_steps = Some(steps);
+        self
+    }
+
+    /// #422 LN-WS (R2): the sequences one history statement of a view page scans at most
+    /// (`ledger_observer.history_scan_rows`).
+    pub fn with_history_scan_rows(mut self, rows: usize) -> Self {
+        self.history_scan_rows = Some(rows);
+        self
+    }
+
     /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the start's ledger open
     /// authenticates (`ledger_observer.open_verify_tail_records`).
     pub fn with_open_verify_tail_records(mut self, records: usize) -> Self {
@@ -272,6 +295,14 @@ impl LedgerFailurePlan {
 
     pub(super) fn history_page_rows(&self) -> Option<usize> {
         self.history_page_rows
+    }
+
+    pub(super) fn read_check_vm_steps(&self) -> Option<u32> {
+        self.read_check_vm_steps
+    }
+
+    pub(super) fn history_scan_rows(&self) -> Option<usize> {
+        self.history_scan_rows
     }
 
     pub(super) fn open_verify_tail_records(&self) -> Option<usize> {

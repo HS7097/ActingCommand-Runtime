@@ -1646,7 +1646,7 @@ impl DurableStorage for SqliteStorage {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
-        read: (&ReadWork, usize),
+        read: (&ReadWork, usize, usize),
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         self.view_page_on_disk(query, profile, request, observation, read, retention)
@@ -1662,55 +1662,24 @@ impl DurableStorage for SqliteStorage {
     fn history_page(
         &self,
         selection: &HistorySelection<'_>,
-        (after, through): (u64, u64),
+        range: (u64, u64),
         rows: usize,
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        let through = through.min(self.head);
-        if after >= through || rows == 0 {
-            return Ok(Vec::new());
-        }
-        let mut connection = self
-            .database
-            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
-        let metadata = match read_history_rows(
-            &self.database,
-            &transaction,
-            (selection, None),
-            (after, through),
-            rows,
-        ) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                return Err(
-                    error.with_close_result(transaction.rollback().map_err(|error| {
-                        sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
-                    })),
-                );
-            }
-        };
-        transaction
-            .commit()
-            .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
-        drop(connection);
-        metadata
-            .into_iter()
-            .map(|event| {
-                event
-                    .into_event_with_artifact_availability(&mut |reference| {
-                        retention.proven_availability(reference)
-                    })
-                    .map_err(|error| {
-                        failure(
-                            error.code(),
-                            LedgerLocation::ValidatePersistedEvent.location(),
-                        )
-                    })
-            })
-            .collect()
+        // A read without a statement bound is never stopped inside its statement.
+        self.history_page_bounded(selection, range, rows, retention, &ReadWork::unbounded())?
+            .ok_or_else(|| ReadWork::exceeded(LedgerLocation::ReadSqliteSnapshot.location()))
+    }
+
+    fn history_page_within(
+        &self,
+        selection: &HistorySelection<'_>,
+        range: (u64, u64),
+        rows: usize,
+        retention: &RetentionIndex,
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<Vec<PersistedEvent>>> {
+        self.history_page_bounded(selection, range, rows, retention, work)
     }
 
     fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>> {
@@ -2185,14 +2154,18 @@ impl SqliteStorage {
 
     /// One view page in one read transaction. #411 A51 (R2): every row the selection reads counts
     /// on `read.0`; a page its budget stops answers incomplete. `read.1` is
-    /// `ledger_observer.history_page_rows`, the rows of one statement.
+    /// `ledger_observer.history_page_rows`, the rows of one statement, and `read.2`
+    /// `ledger_observer.history_scan_rows`, the sequences one history statement spans (#422
+    /// LN-WS). LN-WS (R1): while the read holds the connection its statements run under
+    /// `read.0`'s statement bound, removed before the transaction ends; a statement it interrupts
+    /// outside the page's selection ends the read with `ledger_read_budget_exceeded`.
     fn view_page_on_disk(
         &self,
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
-        read: (&ReadWork, usize),
+        read: (&ReadWork, usize, usize),
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         if let Some(value) = observation {
@@ -2244,14 +2217,26 @@ impl SqliteStorage {
                     .finish(Instant::now(), begun.is_ok());
             }
             let transaction = begun?;
-            match self.read_view_page(
-                &transaction,
-                (query, profile, request),
-                bounds,
-                observation,
-                read,
-                retention,
-            ) {
+            let operation = LedgerLocation::QueryLedgerView.location();
+            let page = StatementGuard::install(&transaction, read.0, operation).and_then(|guard| {
+                let page = self.read_view_page(
+                    &transaction,
+                    (query, profile, request),
+                    bounds,
+                    observation,
+                    read,
+                    retention,
+                );
+                guard.remove(operation).and(page)
+            });
+            let page = page.map_err(|error| {
+                if read.0.interrupted(&error) {
+                    ReadWork::exceeded(LedgerLocation::ProjectLedgerViewPage.location())
+                } else {
+                    error
+                }
+            });
+            match page {
                 Ok(page) => {
                     if let Some(value) = observation {
                         value.commit.begin(Instant::now());
@@ -2303,7 +2288,7 @@ impl SqliteStorage {
         ),
         (snapshot, after): (u64, u64),
         observation: &mut Option<LedgerProjectViewObservation>,
-        read: (&ReadWork, usize),
+        read: (&ReadWork, usize, usize),
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         self.verify_extent(connection)?;
@@ -2319,11 +2304,12 @@ impl SqliteStorage {
             value.selection_limit = LedgerProjectViewCount::from_len(selection_limit);
             value.select_sequences.begin(Instant::now());
         }
+        // #422 LN-WS (R3): a first page with a window starts at the window's first record.
         let selected = self.select_view_rows(
             connection,
             (&selection, view.as_ref()),
             (after, snapshot),
-            selection_limit,
+            (selection_limit, request.cursor().is_none()),
             &lab,
             read,
         );
@@ -2339,7 +2325,7 @@ impl SqliteStorage {
             value.project_page.begin(Instant::now());
         }
         let lab_related = |keys: &LabKeys| lab.related(keys);
-        let mut run_context = |run: &RunId| self.run_rows(connection, run, snapshot, read.1);
+        let mut run_context = |run: &RunId| self.run_rows(connection, run, snapshot, read);
         let page = super::projection::project_selected(
             selected,
             budget_stop,
@@ -2367,17 +2353,31 @@ impl SqliteStorage {
     }
 
     /// The rows of one view page: the committed rows the query and the view select after
-    /// `range.0` through `range.1`, in ledger order, at most `limit`, each read and authenticated
-    /// on its own, at most `read.1` rows per statement. Every row read counts on `read.0`; when
-    /// its budget runs out, the selection ends after that row and names it (#411 A51).
+    /// `range.0` through `range.1`, in ledger order, at most `limit.0`, each read and
+    /// authenticated on its own, at most `read.1` rows per statement. Every row read counts on
+    /// `read.0`; when its budget runs out, the selection ends after that row and names it (#411
+    /// A51).
+    ///
+    /// #422 LN-WS:
+    /// - R2: each statement spans at most `read.2` sequences (`e.sequence>c AND
+    ///   e.sequence<=min(c+span, through)`, which bounds an index range through the link join
+    ///   too). The page's first statement spans one sequence and each later span twice the one
+    ///   before, up to `read.2`; the first runs whatever the budget (`ReadWork::exempt`), so a
+    ///   page that its budget stops answers a cursor past its start. A page looks at its budget
+    ///   before each later span and stops at the end of the last whole statement when it is
+    ///   spent, and a statement its bound interrupts (R1) ends the selection there too. The rows
+    ///   and their order are those of one unbounded statement.
+    /// - R3: a first page (`limit.1`) with `from_timestamp_unix_ms` starts at the window's first
+    ///   record (`time_start`) minus one; when the bound interrupts that lookup, the page starts
+    ///   where it would have.
     fn select_view_rows(
         &self,
         connection: &Connection,
         (selection, view): (&HistorySelection<'_>, Option<&ViewCondition>),
         (after, snapshot): (u64, u64),
-        limit: usize,
+        (limit, first_page): (usize, bool),
         lab: &LabRelations,
-        (work, page_rows): (&ReadWork, usize),
+        (work, page_rows, scan_rows): (&ReadWork, usize, usize),
     ) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, Option<u64>)> {
         // LN-7 (#422): a page of no rows selects none; asking a statement for no rows would read
         // nothing and never advance (as `read_history` answers a limit of 0).
@@ -2387,19 +2387,78 @@ impl SqliteStorage {
         let query = selection.query;
         let mut cursor = after.max(query.from_sequence.map_or(0, |from| from.saturating_sub(1)));
         let through = snapshot.min(query.to_sequence.unwrap_or(u64::MAX));
+        if first_page
+            && cursor < through
+            && let Some(since) = query.from_timestamp_unix_ms
+        {
+            match time_start(connection, since) {
+                Ok(Some(first)) => cursor = cursor.max(first.saturating_sub(1)),
+                // No record is that late: the window holds none.
+                Ok(None) => cursor = through,
+                Err(error) if work.interrupted(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let scan_rows = u64::try_from(scan_rows).unwrap_or(u64::MAX).max(1);
+        let mut span = 1_u64;
+        let mut first_span = true;
         let mut selected = Vec::new();
         while cursor < through {
+            if !first_span && work.spent_now() {
+                return Ok((selected, Some(cursor)));
+            }
+            let end = cursor.saturating_add(span).min(through);
+            work.exempt(first_span);
+            let examined = self.select_span(
+                connection,
+                (selection, view),
+                (cursor, end),
+                (limit, &mut selected),
+                lab,
+                (work, page_rows),
+            );
+            work.exempt(false);
+            match examined? {
+                SpanRead::Whole => cursor = end,
+                SpanRead::Full => return Ok((selected, None)),
+                SpanRead::Stopped(at) => return Ok((selected, Some(at))),
+            }
+            first_span = false;
+            span = span.saturating_mul(2).min(scan_rows);
+        }
+        Ok((selected, None))
+    }
+
+    /// #422 LN-WS (R2): the rows of one span of a view page, after `range.0` through `range.1`,
+    /// added to `page.1` until it holds `page.0`; at most `read.1` rows per statement.
+    fn select_span(
+        &self,
+        connection: &Connection,
+        (selection, view): (&HistorySelection<'_>, Option<&ViewCondition>),
+        (after, end): (u64, u64),
+        (limit, selected): (usize, &mut Vec<LedgerEventMetadata>),
+        lab: &LabRelations,
+        (work, page_rows): (&ReadWork, usize),
+    ) -> GlobalLedgerResult<SpanRead> {
+        let query = selection.query;
+        let mut cursor = after;
+        loop {
             // #422 LN-TUNE: a statement asks for no more rows than the page can still select,
             // so no statement holds a row past the one the limit is reached at; the next page
             // starts after that row, and each row is read and authenticated once.
             let rows = page_rows.min(limit.saturating_sub(selected.len()));
-            let page = read_history_rows(
+            let page = match read_history_rows(
                 &self.database,
                 connection,
                 (selection, view),
-                (cursor, through),
+                (cursor, end),
                 rows,
-            )?;
+            ) {
+                Ok(page) => page,
+                // R1: every sequence through the last whole statement was examined.
+                Err(error) if work.interrupted(&error) => return Ok(SpanRead::Stopped(cursor)),
+                Err(error) => return Err(error),
+            };
             let full = page.len() >= rows;
             for event in page {
                 cursor = event.sequence();
@@ -2407,56 +2466,225 @@ impl SqliteStorage {
                 if selection.selects(&event) && in_view(query.view, &event, lab) {
                     selected.push(event);
                     if selected.len() == limit {
-                        return Ok((selected, None));
+                        return Ok(SpanRead::Full);
                     }
                 }
                 if !going_on {
-                    return Ok((selected, Some(cursor)));
+                    return Ok(SpanRead::Stopped(cursor));
                 }
             }
             if !full {
-                break;
+                return Ok(SpanRead::Whole);
             }
         }
-        Ok((selected, None))
     }
 
     /// The records of `run` at or before `snapshot` in ledger order, at most one more than a
     /// page's recovery context holds (`MAX_QUERY_PAGE_EVENTS`), through the run's link index.
+    /// #422 LN-WS: each statement spans at most `read.2` sequences (R2) and holds at most
+    /// `read.1` rows; once `read.0`'s budget is spent the read reads no further statement, and a
+    /// statement its bound interrupts (R1) ends it: the records read so far come back with
+    /// `true`, and the run's recovery context is limited (`context_limit`).
     fn run_rows(
         &self,
         connection: &Connection,
         run: &RunId,
         snapshot: u64,
-        page_rows: usize,
-    ) -> GlobalLedgerResult<Vec<LedgerEventMetadata>> {
+        (work, page_rows, scan_rows): (&ReadWork, usize, usize),
+    ) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, bool)> {
         let query = EventQuery {
             run_id: Some(*run),
             ..EventQuery::default()
         };
         let selection = HistorySelection::of(&query);
         let wanted = MAX_QUERY_PAGE_EVENTS + 1;
+        let span = u64::try_from(scan_rows).unwrap_or(u64::MAX).max(1);
         let mut cursor = 0;
         let mut events = Vec::new();
         while cursor < snapshot && events.len() < wanted {
+            if work.spent_now() {
+                return Ok((events, true));
+            }
+            let end = cursor.saturating_add(span).min(snapshot);
             let rows = page_rows.min(wanted - events.len());
-            let page = read_history_rows(
+            let page = match read_history_rows(
                 &self.database,
                 connection,
                 (&selection, None),
-                (cursor, snapshot),
+                (cursor, end),
                 rows,
-            )?;
+            ) {
+                Ok(page) => page,
+                Err(error) if work.interrupted(&error) => return Ok((events, true)),
+                Err(error) => return Err(error),
+            };
             let full = page.len() >= rows;
-            if let Some(last) = page.last() {
-                cursor = last.sequence();
-            }
+            cursor = match page.last() {
+                Some(last) if full => last.sequence(),
+                _ => end,
+            };
             events.extend(page.into_iter().filter(|event| selection.selects(event)));
-            if !full {
-                break;
-            }
         }
-        Ok(events)
+        Ok((events, false))
+    }
+
+    /// #422 LN-WS (R1): one history page of a read that `work` bounds, in its own read
+    /// transaction: its statements run under the read's statement bound while it holds the
+    /// connection, removed before the transaction ends; `None` when the bound interrupted it.
+    fn history_page_bounded(
+        &self,
+        selection: &HistorySelection<'_>,
+        (after, through): (u64, u64),
+        rows: usize,
+        retention: &RetentionIndex,
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<Vec<PersistedEvent>>> {
+        let through = through.min(self.head);
+        if after >= through || rows == 0 {
+            return Ok(Some(Vec::new()));
+        }
+        let mut connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
+        let operation = LedgerLocation::ReadSqliteSnapshot.location();
+        let read = StatementGuard::install(&transaction, work, operation).and_then(|guard| {
+            let read = read_history_rows(
+                &self.database,
+                &transaction,
+                (selection, None),
+                (after, through),
+                rows,
+            );
+            guard.remove(operation).and(read)
+        });
+        let metadata = match read {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let closed = transaction.rollback().map_err(|error| {
+                    sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
+                });
+                if work.interrupted(&error) {
+                    closed?;
+                    return Ok(None);
+                }
+                return Err(error.with_close_result(closed));
+            }
+        };
+        transaction
+            .commit()
+            .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
+        drop(connection);
+        metadata
+            .into_iter()
+            .map(|event| {
+                event
+                    .into_event_with_artifact_availability(&mut |reference| {
+                        retention.proven_availability(reference)
+                    })
+                    .map_err(|error| {
+                        failure(
+                            error.code(),
+                            LedgerLocation::ValidatePersistedEvent.location(),
+                        )
+                    })
+            })
+            .collect::<GlobalLedgerResult<Vec<_>>>()
+            .map(Some)
+    }
+}
+
+/// #422 LN-WS (R2): how far one span of a view page's selection got.
+enum SpanRead {
+    /// Every sequence of the span was examined.
+    Whole,
+    /// The page holds its rows (its count and one of lookahead).
+    Full,
+    /// The read stopped at its budget; every sequence through this one was examined.
+    Stopped(u64),
+}
+
+/// #422 LN-WS (R3): the statement of a window's first record: the least sequence among every
+/// record at or after a time, through the time index alone (`ledger_view_index_time_v1`, index
+/// `(timestamp_unix_ms, sequence)`); its work follows the records at or after that time, and it
+/// is exact whatever the records' order of times.
+const TIME_START: &str = "SELECT MIN(sequence) FROM ledger_events INDEXED BY ledger_view_index_time_v1 WHERE timestamp_unix_ms>=?";
+
+/// #422 LN-WS (R3): the sequence of the first record at or after `since`; `None` when there is
+/// none.
+fn time_start(connection: &Connection, since: u64) -> GlobalLedgerResult<Option<u64>> {
+    let rows = read_rows_bound(
+        connection,
+        TIME_START,
+        &[SqlValue::Integer(encode(since))],
+        None,
+        &mut 0,
+        false,
+    )?;
+    match rows.as_slice() {
+        [row] => match row.as_slice() {
+            [SqlValue::Null] => Ok(None),
+            [SqlValue::Integer(sequence)] => Ok(Some(decode(*sequence))),
+            _ => Err(failure(
+                LedgerCode::InvalidEventInteger.code(),
+                LedgerLocation::ReadSqliteRow.location(),
+            )),
+        },
+        _ => Err(failure(
+            LedgerCode::InvalidEventInteger.code(),
+            LedgerLocation::ReadSqliteRow.location(),
+        )),
+    }
+}
+
+/// #422 LN-WS (R1): the statement bound of a read on the shared connection, installed while the
+/// read holds the connection (`sqlite3_progress_handler`) and removed before it lets the
+/// connection go, so no write ever runs under it; another thread never interrupts the connection
+/// (an interrupt from elsewhere could hit the writer's next commit).
+struct StatementGuard<'c> {
+    connection: Option<&'c Connection>,
+}
+
+impl<'c> StatementGuard<'c> {
+    /// Installs `work`'s statement bound on `connection`; a read without one installs nothing.
+    fn install(
+        connection: &'c Connection,
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Self> {
+        let Some(bound) = work.statement_bound() else {
+            return Ok(Self { connection: None });
+        };
+        let bound = Arc::clone(bound);
+        connection
+            .progress_handler(bound.check_vm_steps(), Some(move || bound.progress()))
+            .map_err(|error| sql_error(error, operation))?;
+        Ok(Self {
+            connection: Some(connection),
+        })
+    }
+
+    /// Removes the bound; a removal that fails is the read's failure.
+    fn remove(mut self, operation: Location) -> GlobalLedgerResult<()> {
+        match self.connection.take() {
+            Some(connection) => connection
+                .progress_handler(0, None::<fn() -> bool>)
+                .map_err(|error| sql_error(error, operation)),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for StatementGuard<'_> {
+    /// Only a read that unwinds leaves its bound installed until here. The removal cannot fail
+    /// for a connection that owns its handle (rusqlite checks only that), and no caller is left
+    /// to answer.
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            let _ = connection.progress_handler(0, None::<fn() -> bool>);
+        }
     }
 }
 
@@ -4220,11 +4448,15 @@ fn read_rows_bound(
         crate::read_count::row_read(sql, &values);
         result.push(values);
     }
-    // #422 LN-8d: the statement's SQLite work, on this thread while a counter runs.
-    #[cfg(test)]
+    // #422 LN-8d: the statement's SQLite work, on this thread while a counter runs; #422 LN-WS:
+    // and while a writer's statements are recorded.
+    #[cfg(any(test, feature = "test-hooks"))]
     {
         drop(rows);
-        crate::read_count::statement_steps(statement.get_status(rusqlite::StatementStatus::VmStep));
+        let steps = statement.get_status(rusqlite::StatementStatus::VmStep);
+        #[cfg(test)]
+        crate::read_count::statement_steps(steps);
+        crate::writer_statements::statement_done(sql, parameters, steps);
     }
     Ok(result)
 }
