@@ -1844,6 +1844,43 @@ fn geometry_read_failure(error: RuntimeHostError, instance_id: InstanceId) -> Ru
     task_geometry_error(HostCode::ContainedTaskGeometryUnavailable).with_caused_by(error.outcome())
 }
 
+/// Workflow #392 DA-4b-D: a declared safe area the frame cannot have, as `display_map_unresolved`
+/// at stage `display_map_build` with the frame's size and its `display_problem`: the file and the
+/// JSON pointer of a broken declaration, the two files of a repeated model, the setting whose model
+/// no file declares (and the directory), or the file of the model that has no form for the frame.
+fn safe_area_refusal(
+    refusal: crate::display_safe_area::SafeAreaRefusal,
+    model_key: &str,
+    width: u32,
+    height: u32,
+) -> RuntimeHostError {
+    use crate::display_safe_area::SafeAreaRefusal;
+    use actingcommand_display_adapter::{DisplayCode, DisplayLocation, DisplayProblem};
+    task_geometry_error(DisplayCode::MapUnresolved).with_outcome_values(|outcome| {
+        let outcome = outcome
+            .stage(DisplayLocation::MapBuild)
+            .frame_width(width)
+            .frame_height(height);
+        match refusal {
+            SafeAreaRefusal::DeclarationInvalid { path, json_pointer } => outcome
+                .display_problem(DisplayProblem::SafeAreaDeclarationInvalid)
+                .path(path)
+                .json_pointer(json_pointer),
+            SafeAreaRefusal::ModelRepeated { path, other_path } => outcome
+                .display_problem(DisplayProblem::SafeAreaModelRepeated)
+                .path(path)
+                .other_path(other_path),
+            SafeAreaRefusal::ModelUndeclared { directory } => outcome
+                .display_problem(DisplayProblem::SafeAreaModelUndeclared)
+                .config_key(model_key)
+                .path(directory),
+            SafeAreaRefusal::FormUndeclared { path } => outcome
+                .display_problem(DisplayProblem::SafeAreaFormUndeclared)
+                .path(path),
+        }
+    })
+}
+
 fn task_geometry_request_failure(
     error: RuntimeHostError,
     event: Option<&PersistedEvent>,
@@ -2093,6 +2130,92 @@ impl RuntimeContainedTask<'_> {
                 })?;
         }
         Ok((conclusion, event))
+    }
+
+    /// Workflow #392 DA-4b-D (Alice's ruling 69 of 2026-10-26; `contracts/display-adapter.md`
+    /// section 9): the declared safe area of a frame. Only a run whose game's display declaration
+    /// measures the scale or the anchors on the safe area asks; a `screen` declaration, a run
+    /// without one and a frame without its producer's geometry are never touched. The insets are
+    /// stamped on the frame's own geometry (`safe_insets`), where the run's display map and the
+    /// kernel's frame gate read them, so a change of them is the map's `insets_changed` rebuild
+    /// (DA-2a's C2 path) from the next frame:
+    ///
+    /// - an instance that declares a device model (`instance.<id>.display_safe_area.model`, read
+    ///   at every frame) takes the insets its declaration file gives the frame's display size and
+    ///   rotation, from the directory as last read (`display_safe_area.check_interval_ms`); a
+    ///   broken directory, a model in two files or in none, or no form for the frame ends the run
+    ///   before any input, `display_map_unresolved` with its `display_problem`;
+    /// - an emulator that declares none needs no file: its insets are 0;
+    /// - a handset that declares none keeps no insets, and DA-2a's check ends the run
+    ///   `contained_task_geometry_unavailable` (`safe_area_unavailable`).
+    ///
+    /// The Runtime never reads the device's cutout and never guesses its model.
+    fn declare_safe_area(&self, frame: &mut Frame) -> Result<(), RequestFailure> {
+        let safe_area = actingcommand_contract::DisplayArea::SafeArea;
+        if !self
+            .display_layout
+            .as_ref()
+            .is_some_and(|layout| layout.scale.area == safe_area || layout.anchor_area == safe_area)
+        {
+            return Ok(());
+        }
+        let (width, height) = (frame.width, frame.height);
+        let CaptureGeometryObservation::Observed(geometry) = &mut frame.geometry else {
+            return Ok(());
+        };
+        let failure = |error: RuntimeHostError| task_geometry_request_failure(error, None);
+        let instance_id = self.token.instance_id();
+        let settings = self
+            .host
+            .display_safe_area_settings(instance_id)
+            .map_err(failure)?;
+        let Some(model) = settings.model.as_deref() else {
+            let handset = lock(
+                &self.host.registered_instances,
+                HostLocation::ReadPreparationInstance,
+            )
+            .map_err(failure)?
+            .get(&instance_id)
+            .and_then(RegisteredInstance::bound_adb_endpoint)
+            .and_then(ResolvedAdbEndpoint::handset)
+            .is_some();
+            if !handset {
+                geometry.safe_insets = Some(crate::display_safe_area::EMULATOR_INSETS);
+            }
+            return Ok(());
+        };
+        let rotation = match geometry.rotation {
+            actingcommand_contract::CaptureRotationObservation::Observed { rotation, .. } => {
+                Some(rotation)
+            }
+            actingcommand_contract::CaptureRotationObservation::NotProvidedBySource => None,
+        };
+        let now_ms = self.host.monotonic_ms().map_err(failure)?;
+        let insets = lock(
+            &self.host.display_safe_area,
+            HostLocation::ObserveTaskGeometry,
+        )
+        .map_err(failure)?
+        .insets(
+            &settings.directory,
+            now_ms,
+            settings.check_interval_ms,
+            model,
+            geometry.logical_display_extent,
+            rotation,
+        );
+        match insets {
+            Ok(insets) => {
+                geometry.safe_insets = Some(insets);
+                Ok(())
+            }
+            Err(refusal) => Err(failure(safe_area_refusal(
+                refusal,
+                &settings.model_key,
+                width,
+                height,
+            ))),
+        }
     }
 
     fn retain_task_geometry(
@@ -4264,7 +4387,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     })();
                     self.task_timing
                         .finish_boundary(material_started, material.is_ok());
-                    let frame = material?;
+                    let mut frame = material?;
+                    self.declare_safe_area(&mut frame.frame)?;
                     self.retain_task_geometry(&frame, frame_id, geometry_session)?;
                     Ok(frame)
                 }

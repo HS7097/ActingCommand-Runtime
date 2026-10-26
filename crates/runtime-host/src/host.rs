@@ -1811,6 +1811,9 @@ impl RuntimeHost {
             debug_runs: Mutex::new(BTreeMap::new()),
             observe_marks: Mutex::new(observation::ObserveMarks::default()),
             touch_history: Mutex::new(crate::touch_history::TouchHistory::default()),
+            display_safe_area: Mutex::new(crate::display_safe_area::SafeAreaDeclarations::new(
+                config.state_root.clone(),
+            )),
             contained_runs: Mutex::new(BTreeMap::new()),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
@@ -5110,6 +5113,9 @@ struct HostShared {
     /// landed and when (memory only; empty after a restart). A leaf lock: nothing else is taken
     /// while it is held.
     touch_history: Mutex<crate::touch_history::TouchHistory>,
+    /// Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe areas as last read from
+    /// their directory (memory only). A leaf lock: nothing else is taken while it is held.
+    display_safe_area: Mutex<crate::display_safe_area::SafeAreaDeclarations>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
     // Workflow #191 ps1: the operator's scheduling pauses (no expiry; since Workflow #361 B1
     // persisted as `host.scheduling_pause`).

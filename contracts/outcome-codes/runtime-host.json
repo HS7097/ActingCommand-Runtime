@@ -3983,7 +3983,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry unavailable. Workflow #392 DA-2a: with display_problem safe_area_unavailable, the game's display declaration measures on the safe area and the frame's geometry read no insets (no capture backend reads them before DA-4b); the run ends before any input.",
+      "description": "The Runtime host reports contained task geometry unavailable. Workflow #392 DA-2a: with display_problem safe_area_unavailable, the game's display declaration measures on the safe area and the frame's geometry has no insets; Workflow #392 DA-4b-D (Alice's ruling 69): no backend reads a cutout, an emulator's insets are 0 and a device model's come from its declaration file, so this is a handset that declares no device model; the run ends before any input.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

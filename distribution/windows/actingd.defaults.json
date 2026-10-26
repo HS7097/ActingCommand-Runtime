@@ -485,5 +485,10 @@
     "min_gap_ms": 1800000,
     "close_app_wake_lead_ms": 60000,
     "stop_emulator_wake_lead_ms": 300000
+  },
+  "display_safe_area": {
+    "directory": "display-safe-area",
+    "check_interval_ms": 1000,
+    "model": ""
   }
 }

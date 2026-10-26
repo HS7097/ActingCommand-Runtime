@@ -93,9 +93,11 @@ pub struct CaptureGeometry {
     pub sampled_at: SystemTime,
     /// None for a display-only read that did not transform a captured frame.
     pub frame_transform: Option<CaptureFrameTransform>,
-    /// Workflow #383 register X6 (model 392 §8.2; first writer DA-4): the display cutout's
-    /// insets at this rotation, in device-frame pixels. Absent when they were not read or the
-    /// display reports no cutout section.
+    /// Workflow #383 register X6 (model 392 §8.2): the safe area's insets at this rotation, in
+    /// device-frame pixels. Workflow #392 DA-4b-D (Alice's ruling 69) is the first writer: the
+    /// host stamps a frame's declared insets here (an emulator's 0, or those its instance's device
+    /// model declares) when the run's display declaration measures on the safe area; no backend
+    /// reads a cutout. Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub safe_insets: Option<CaptureInsets>,
 }

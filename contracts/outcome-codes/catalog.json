@@ -6761,7 +6761,19 @@
           "description": "The frame's map is not the plain identity (a pure scale) and the input side does not map input boxes to the device frame yet (Workflow #392 DA-3): the host's input prerequisite sends nothing and the run ends."
         },
         "safe_area_unavailable": {
-          "description": "The game's display declaration measures on the safe area and the frame's geometry read no insets (no capture backend reads them before Workflow #392 DA-4b): the value of contained_task_geometry_unavailable, and of display_map_unresolved where a frame reaches the kernel's gate without the host's check."
+          "description": "The game's display declaration measures on the safe area and the frame's geometry has no insets: a handset that declares no device model (Workflow #392 DA-4b-D: no capture backend reads a cutout; an emulator's insets are 0): the value of contained_task_geometry_unavailable, and of display_map_unresolved where a frame reaches the kernel's gate without the host's check."
+        },
+        "safe_area_declaration_invalid": {
+          "description": "Workflow #392 DA-4b-D: the safe-area declaration directory (display_safe_area.directory) or one of its files cannot be read, or a file breaks actingcommand.display-safe-area.v1; path names it, json_pointer the first member that breaks the schema (empty for the whole document)."
+        },
+        "safe_area_model_repeated": {
+          "description": "Workflow #392 DA-4b-D: two safe-area declaration files declare one device model; path and other_path name them."
+        },
+        "safe_area_model_undeclared": {
+          "description": "Workflow #392 DA-4b-D: no safe-area declaration file declares the device model the instance declares; config_key names the setting the model was read from, path the directory."
+        },
+        "safe_area_form_undeclared": {
+          "description": "Workflow #392 DA-4b-D: the declaration file of the instance's device model (path) covers no display size and rotation the frame shows."
         }
       }
     }

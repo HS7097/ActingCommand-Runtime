@@ -11,6 +11,8 @@ mod agent_dispatcher;
 mod approval;
 mod catalog_plan;
 pub mod codes;
+// Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe areas, read from their directory.
+mod display_safe_area;
 mod emulator_control;
 mod error;
 mod events;
