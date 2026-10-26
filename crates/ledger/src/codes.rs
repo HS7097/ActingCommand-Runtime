@@ -431,6 +431,8 @@ actingcommand_contract::outcome_locations! {
         LedgerAttemptWatch => "ledger_attempt_watch",
         /// Workflow #383 AO-1: writing one record with its retries.
         LedgerWriteRetry => "ledger_write_retry",
+        /// #422 LN-9: the paced background scrub of the whole chain on its own connection.
+        LedgerScrub => "ledger_scrub",
         ListSegments => "list_segments",
         LocateReadOnlyCorruptTail => "locate_read_only_corrupt_tail",
         LockWriterWithoutMetadataWrite => "lock_writer_without_metadata_write",
