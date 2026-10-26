@@ -81,6 +81,8 @@ impl VisionProvider for LowConfidenceReadings {
 }
 
 // D2-CHAIN's host, reading with `vision`, with `manifest` as its configuration when given.
+// Workflow #386 SR-4a2: it evaluates at the wall clock on a window open all day, so its
+// configuration also turns its instance's day boundary off (`day_boundary_off`).
 fn chain_host(
     root: &TempDir,
     vision: Arc<dyn VisionProvider>,
@@ -93,17 +95,22 @@ fn chain_host(
     state
         .transition_capture_after_inputs
         .store(1, Ordering::Release);
-    let mut host_config = config(root).with_recognition_packages(BTreeMap::from([(
-        POLICY_INSTANCE_ALIAS.to_owned(),
-        package,
-    )]));
-    if let Some(manifest) = manifest {
-        host_config = host_config.with_config_manifest(manifest);
-    }
+    let instance = instance_id();
+    let mut manifest = manifest.unwrap_or(RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters: Vec::new(),
+    });
+    manifest.parameters.push(day_boundary_off(&instance));
+    let host_config = config(root)
+        .with_recognition_packages(BTreeMap::from([(
+            POLICY_INSTANCE_ALIAS.to_owned(),
+            package,
+        )]))
+        .with_config_manifest(manifest);
     let host = RuntimeHost::start(
         host_config,
         Arc::new(
-            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), state)
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance, state)
                 .fixture_simulation()
                 .with_vision_provider(vision),
         ),

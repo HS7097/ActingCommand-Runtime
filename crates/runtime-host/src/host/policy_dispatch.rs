@@ -2061,32 +2061,15 @@ impl HostShared {
                             };
                         }
                     };
-                    // Workflow #411 B15 R4 (model-b15 §7.9): a remedy request or retry is
-                    // admitted only while its round and layer are still open and unserved; else
-                    // it is refused `policy_remedy_round_closed` (no lease, no run).
-                    if let Some(remedy_context) = &remedy_context
-                        && let Err(error) = policy.validate_remedy_dispatch(
-                            intent,
-                            reason_chain,
-                            &current_facts,
-                            remedy_context,
-                            context.now_unix_ms,
-                        )
-                    {
-                        let failure = if error.is_fatal() {
-                            RequestFailure::poison_without_terminal(error)
-                        } else {
-                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                        };
-                        return CriticalActionReport::Failed {
-                            error: failure,
-                            effect: EffectDisposition::NotPerformed,
-                        };
-                    }
                     // Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals",
-                    // positions 4 and 7): a blackout, the quiet before one or the day boundary,
-                    // judged again at this admission's own time, refuses at Info with the code
-                    // the evaluation would have deferred with (no lease, no run).
+                    // positions 4 and 7, and "Complete silence"): a blackout, the quiet before one
+                    // or the day boundary, judged again at this admission's own time, refuses at
+                    // Info with the code the evaluation would have deferred with (no lease, no
+                    // run). It comes after the intent's own checks and before the ceiling of its
+                    // facts' freshness: a catalog `maintenance` event is a timeline boundary, so
+                    // an intent evaluated before one is past that ceiling once the event starts,
+                    // and its crossing must still be refused `blackout_active`, as for every
+                    // source. Positions 4 and 7 also precede the remedy check (position 8a).
                     if let Err(error) = self.monotonic_ms().and_then(|monotonic_ms| {
                         policy.blackout_admission(
                             &blackout_context,
@@ -2100,6 +2083,41 @@ impl HostShared {
                             &blackout_instance_id,
                         )
                     }) {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                    // The intent's facts are still fresh at this admission's time
+                    // (`policy_facts_stale` otherwise), judged after the blackout re-check above.
+                    if let Err(error) = policy.validate_dispatch_freshness(intent, context) {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                    // Workflow #411 B15 R4 (model-b15 §7.9): a remedy request or retry is
+                    // admitted only while its round and layer are still open and unserved; else
+                    // it is refused `policy_remedy_round_closed` (no lease, no run).
+                    if let Some(remedy_context) = &remedy_context
+                        && let Err(error) = policy.validate_remedy_dispatch(
+                            intent,
+                            reason_chain,
+                            &current_facts,
+                            remedy_context,
+                            context.now_unix_ms,
+                        )
+                    {
                         let failure = if error.is_fatal() {
                             RequestFailure::poison_without_terminal(error)
                         } else {

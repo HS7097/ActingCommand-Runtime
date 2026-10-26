@@ -223,10 +223,14 @@ fn published_countdown(root: &TempDir) -> (RuntimeHost, FactRecord) {
     state
         .transition_capture_after_inputs
         .store(1, Ordering::Release);
+    // Workflow #386 SR-4a2: the published time is the wall clock plus the countdown, and the
+    // policy is evaluated there on a window open all day, so the instance's day boundary is off
+    // (`day_boundary_off`).
+    let instance = instance_id();
     let host = RuntimeHost::start(
-        config(root),
+        config(root).with_config_manifest(day_boundary_off_manifest(&instance)),
         Arc::new(
-            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance, Arc::clone(&state))
                 .with_vision_provider(Arc::new(ShownCountdown)),
         ),
     )

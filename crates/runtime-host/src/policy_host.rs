@@ -3537,17 +3537,6 @@ impl PolicyHost {
                 HostLocation::ValidatePolicyDispatch,
             ));
         }
-        if context.now_unix_ms < intent.prerequisites.evaluated_at_unix_ms
-            || intent
-                .prerequisites
-                .facts_fresh_until_unix_ms
-                .is_some_and(|expires| context.now_unix_ms > expires)
-        {
-            return Err(request(
-                HostCode::PolicyFactsStale,
-                HostLocation::ValidatePolicyDispatch,
-            ));
-        }
         if intent.prerequisites.daily_limit == 0
             || intent.prerequisites.window_iteration_limit == 0
             || intent.prerequisites.max_runtime_ms == 0
@@ -3559,6 +3548,32 @@ impl PolicyHost {
             ));
         }
         Ok(active.generation.clone())
+    }
+
+    /// The ceiling of `intent`'s facts at the admission's time: `policy_facts_stale` when the
+    /// admission precedes the intent's evaluation or passes its `facts_fresh_until_unix_ms`.
+    /// Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Admission"): judged after
+    /// [`Self::validate_dispatch`] and the blackout re-check ([`Self::blackout_admission`]), so
+    /// an intent that crossed into a catalog `maintenance` event, whose start bounds that
+    /// ceiling as every timeline boundary does, is refused `blackout_active` as for the other
+    /// sources.
+    pub(crate) fn validate_dispatch_freshness(
+        &self,
+        intent: &DispatchIntent,
+        context: &PolicyAdmissionContext,
+    ) -> RuntimeHostResult<()> {
+        if context.now_unix_ms < intent.prerequisites.evaluated_at_unix_ms
+            || intent
+                .prerequisites
+                .facts_fresh_until_unix_ms
+                .is_some_and(|expires| context.now_unix_ms > expires)
+        {
+            return Err(request(
+                HostCode::PolicyFactsStale,
+                HostLocation::ValidatePolicyDispatch,
+            ));
+        }
+        Ok(())
     }
 
     /// Workflow #422 LN-4 (coordinator ruling 2, 10-26): a decision the journal no longer holds

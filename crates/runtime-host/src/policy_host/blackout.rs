@@ -16,7 +16,9 @@
 //! - The random delay's cut gains the quiet point, the latest start that still passes position
 //!   7: the next blackout start minus the lead and, where the day-boundary fit applies, the
 //!   window's end minus the expected duration E.
-//! - Admission judges positions 4 and 7 again at its own time and refuses with the same codes.
+//! - Admission judges positions 4 and 7 again at its own time and refuses with the same codes,
+//!   after the intent's own checks and before the ceiling of its facts' freshness (a catalog
+//!   `maintenance` event's start is a timeline boundary that bounds it).
 //!
 //! The three sources are the configuration's host list, each instance's own list and the active
 //! catalog's `maintenance` events. With no entry and no such event nothing here defers, cuts or

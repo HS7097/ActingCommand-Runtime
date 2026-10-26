@@ -275,12 +275,18 @@ B15, [remedies.md](remedies.md); written ahead of slice R4);
    evaluation.
 
 **Admission** (SR-4a2) judges positions 4 and 7 again, at its own time, under the admission
-lock and after the intent's own checks: an intent that crossed into a blackout, into the quiet
-before one or past its day boundary since its evaluation is refused with the code the
-evaluation would have deferred it with (`blackout_active`, `blackout_approaching`,
-`policy_day_boundary_approaching`). The refusal is at Info: the `policy.dispatch_rejected`
-record carries the code's outcome (its `instance_id` the instance's opaque identifier) and the
-wake as `next_eligible_unix_ms`; no lease is taken and nothing runs.
+lock, after the intent's own checks (catalog, shape, ledger position, reason chain, approvals,
+fencing, budget) and before the ceiling of its facts' freshness (`policy_facts_stale`) and the
+remedy check of position 8a: an intent that crossed into a blackout, into the quiet before one
+or past its day boundary since its evaluation is refused with the code the evaluation would
+have deferred it with (`blackout_active`, `blackout_approaching`,
+`policy_day_boundary_approaching`). The freshness ceiling comes after it because a catalog
+`maintenance` event is a timeline boundary: in a V2 catalog it bounds the
+`facts_fresh_until_unix_ms` of every intent evaluated before it, so an intent that crossed into
+the event would otherwise always read `policy_facts_stale`, and the table of "Complete silence"
+(the same code for every source) would not hold for catalog blackouts. The refusal is at Info: the
+`policy.dispatch_rejected` record carries the code's outcome (its `instance_id` the instance's
+opaque identifier) and the wake as `next_eligible_unix_ms`; no lease is taken and nothing runs.
 
 Ladders and startup packages do not pass through this evaluation; their own entry points apply
 the table of "Complete silence". Recognition-reading demands (Workflow #384) are collected only
