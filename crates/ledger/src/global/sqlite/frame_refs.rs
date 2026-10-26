@@ -485,7 +485,7 @@ pub(super) fn complete(
     ) {
         Ok(()) => found,
         Err(error) => Some(LedgerFrameRefsNote {
-            stage: LedgerLocation::FillLedgerFrameRefs,
+            stage: LedgerLocation::BuildLedgerFrameRefs,
             sequence: at,
             cause: Some((error.code(), error.operation())),
         }),
@@ -502,7 +502,7 @@ fn fill_index(
     found: &mut Option<LedgerFrameRefsNote>,
     at: &mut Option<u64>,
 ) -> GlobalLedgerResult<()> {
-    let operation = LedgerLocation::FillLedgerFrameRefs.location();
+    let operation = LedgerLocation::BuildLedgerFrameRefs.location();
     let mut connection = database.connection(operation)?;
     let existed: i64 = connection
         .query_row(
@@ -625,7 +625,7 @@ fn select_page(
             let [SqlValue::Integer(sequence)] = row.as_slice() else {
                 return Err(failure(
                     LedgerCode::InvalidEventInteger.code(),
-                    LedgerLocation::FillLedgerFrameRefs.location(),
+                    LedgerLocation::BuildLedgerFrameRefs.location(),
                 ));
             };
             selected.push(decode(*sequence));
@@ -679,7 +679,7 @@ fn fill(
     if rows.len() != sequences.len() {
         return Err(failure(
             LedgerCode::LedgerRecordMissing.code(),
-            LedgerLocation::FillLedgerFrameRefs.location(),
+            LedgerLocation::BuildLedgerFrameRefs.location(),
         ));
     }
     let mut events: Vec<LedgerEventMetadata> = Vec::with_capacity(rows.len());
@@ -734,7 +734,7 @@ fn move_extent(
     old: u64,
     new: u64,
 ) -> GlobalLedgerResult<()> {
-    let operation = LedgerLocation::FillLedgerFrameRefs.location();
+    let operation = LedgerLocation::BuildLedgerFrameRefs.location();
     let changed = connection
         .execute(
             &format!(

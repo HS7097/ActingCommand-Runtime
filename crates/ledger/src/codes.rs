@@ -403,7 +403,7 @@ actingcommand_contract::outcome_locations! {
         EncodeMigrationIdentity => "encode_migration_identity",
         EncodeSourceMaterial => "encode_source_material",
         /// #422 LN-7c R: the writer open's fill of the frame index (its gap and backfill).
-        FillLedgerFrameRefs => "fill_ledger_frame_refs",
+        BuildLedgerFrameRefs => "build_ledger_frame_refs",
         FinishArtifactEviction => "finish_artifact_eviction",
         FrameRetentionView => "frame_retention_view",
         FreezeSegmentImportSource => "freeze_segment_import_source",

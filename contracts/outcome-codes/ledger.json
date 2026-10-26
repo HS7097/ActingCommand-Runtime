@@ -7881,7 +7881,7 @@
       "since": "0.12.14",
       "description": "The paced background scrub of the Runtime's writer: a walk of the whole hash chain on its own read-only connection, in chunked read transactions, ended by the whole-file quick_check of each pass (#422 LN-9, ledger observer §15)."
     },
-    "fill_ledger_frame_refs": {
+    "build_ledger_frame_refs": {
       "owner": "ledger",
       "layer": "store",
       "review": "pending",

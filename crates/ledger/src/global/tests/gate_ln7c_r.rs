@@ -1143,7 +1143,7 @@ fn ln7c_r9_a_fill_that_meets_a_damaged_record_stops_short_of_it_and_the_open_suc
     assert_eq!(
         warning(&timing),
         Some((
-            LedgerLocation::FillLedgerFrameRefs.as_str(),
+            LedgerLocation::BuildLedgerFrameRefs.as_str(),
             Some(damaged),
             Some(LedgerCode::LedgerRecordMismatch.as_str())
         )),

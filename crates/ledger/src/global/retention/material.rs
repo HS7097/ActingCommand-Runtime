@@ -57,14 +57,14 @@ pub struct LedgerOpenTiming {
 
 /// #422 LN-7c R (`contracts/ledger-observer.md` §11.7): one warning of the writer open about the
 /// derived frame index, which the start reports as a `note` link of `ledger_opened`
-/// ([`Self::outcome`]: `ledger_index_mismatch` of `fill_ledger_frame_refs`).
+/// ([`Self::outcome`]: `ledger_index_mismatch` of `build_ledger_frame_refs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedgerFrameRefsNote {
     /// What was found: `verify_ledger_frame_refs`, the extent was untrusted (missing on an
     /// existing table, past the head or malformed), so the rows and the extent were removed and
     /// the index rebuilt; `write_ledger_frame_refs`, records were appended without their rows
     /// (an older build, or a batch the extent did not end before), so the gap was filled;
-    /// `fill_ledger_frame_refs`, the fill stopped and the extent does not cover the history.
+    /// `build_ledger_frame_refs`, the fill stopped and the extent does not cover the history.
     pub stage: LedgerLocation,
     /// The untrusted extent's end, the end of the extent before the gap, or the record the fill
     /// stopped at.
@@ -78,7 +78,7 @@ impl LedgerFrameRefsNote {
     /// `ledger_sequence`, caused by the failure that stopped the fill.
     pub fn outcome(&self) -> Outcome {
         let mut outcome = Outcome::new(LedgerCode::LedgerIndexMismatch)
-            .operation(LedgerLocation::FillLedgerFrameRefs)
+            .operation(LedgerLocation::BuildLedgerFrameRefs)
             .stage(self.stage);
         if let Some(sequence) = self.sequence {
             outcome = outcome.ledger_sequence(sequence);

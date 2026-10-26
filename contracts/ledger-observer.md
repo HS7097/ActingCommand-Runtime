@@ -951,7 +951,7 @@ CREATE TABLE ledger_frame_refs_extent (
 - **The rule: the derived table never fails an open or an append.** It is derived from the
   records and can be rebuilt, and nothing reads it yet, so no state of it fails the writer open or
   an append, or stops the Runtime (the scrub's findings about it included, below). Each case below ends in one warning: the open's is a
-  `note` link of `ledger_opened` (`ledger_index_mismatch` of `fill_ledger_frame_refs`, its `stage`
+  `note` link of `ledger_opened` (`ledger_index_mismatch` of `build_ledger_frame_refs`, its `stage`
   naming what was found and `ledger_sequence` where; the catalog fixes that code's category, and no
   new code is added). The open itself fails only where it failed before this table existed.
 - **Written** by the writer in the record's own batch transaction (every append, the segment
@@ -968,7 +968,7 @@ CREATE TABLE ledger_frame_refs_extent (
 - **Trusted only inside the extent** `from_sequence..=through_sequence`, the records whose rows are
   all written. A row outside it is removed at the next writer open.
 - **Filled at the writer open**, after the views and indexes exist and before any record is
-  appended (`fill_ledger_frame_refs`). The open creates the tables a root lacks; a table it creates
+  appended (`build_ledger_frame_refs`). The open creates the tables a root lacks; a table it creates
   starts empty without a warning (the first open of this release backfills once). An **untrusted
   extent** (past the head, malformed, or missing on a table that exists: a copy, a restore) is
   removed with every row and the index is rebuilt from the extent `head + 1..=head`, with one
@@ -982,7 +982,7 @@ CREATE TABLE ledger_frame_refs_extent (
   that fails its authentication, the open's deadline (checked before each page), or any failure of
   the index stops the fill where it is. The page in progress rolls back, so the extent stops short
   of that record (below it for the gap, above it for the backfill) and does not cover the history,
-  and the next open tries again. The open warns once (`stage` `fill_ledger_frame_refs`,
+  and the next open tries again. The open warns once (`stage` `build_ledger_frame_refs`,
   `ledger_sequence` the record it stopped at, the failure as its cause). The damaged record itself
   is found by the scrub, as before. On production the one-time backfill reads about 85 000 records
   (estimate: 5–10 s); a gap after a day's rollback, about 11 000 (about 1 s).
