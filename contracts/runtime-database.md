@@ -26,6 +26,14 @@ row they read is authenticated on its own. Startup, `ledger-maintenance` and
 the other forensic readers open through `open_existing` and keep the whole-file
 check.
 
+`RuntimeDatabase::quick_check(connection, operation)` (#422 LN-9) runs the whole-file
+`PRAGMA quick_check(1)` on a caller's own connection to the file, outside any transaction: the
+Ledger's background scrub runs it on its read-only snapshot connection
+(`read_snapshot_connection`) at the end of each pass
+([ledger-observer.md](ledger-observer.md) §15). A file that does not check is
+`state_database_corrupt`, a failed statement `database_maintenance_sql_failed`, both of the
+caller's operation.
+
 State database construction preserves this order:
 
 1. Validate the bootstrap seed length (16–1024 bytes), create and validate the root.

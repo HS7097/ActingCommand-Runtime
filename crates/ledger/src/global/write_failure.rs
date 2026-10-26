@@ -11,7 +11,8 @@
 
 use super::storage::{DurableStorage, EventStore};
 use super::{
-    GlobalLedgerError, GlobalLedgerResult, LedgerCapturePolicy, Sha256SecretFingerprinter,
+    GlobalLedgerError, GlobalLedgerResult, LedgerCapturePolicy, LedgerScrubPolicy,
+    Sha256SecretFingerprinter,
 };
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
@@ -157,6 +158,9 @@ pub struct LedgerFailurePlan {
     /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read
     /// (`ledger_observer.history_page_rows`).
     history_page_rows: Option<usize>,
+    /// LN-9 (#422, LEAN-L §6): the paced background scrub of the writer's chain
+    /// (`ledger_observer.scrub_*`); without one the writer has no scrub.
+    scrub: Option<LedgerScrubPolicy>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -172,6 +176,7 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("close_timeout", &self.close_timeout)
             .field("reply_timeout", &self.reply_timeout)
             .field("history_page_rows", &self.history_page_rows)
+            .field("scrub", &self.scrub)
             .finish()
     }
 }
@@ -206,6 +211,7 @@ impl LedgerFailurePlan {
             close_timeout: None,
             reply_timeout: None,
             history_page_rows: None,
+            scrub: None,
         }
     }
 
@@ -235,6 +241,17 @@ impl LedgerFailurePlan {
     pub fn with_history_page_rows(mut self, rows: usize) -> Self {
         self.history_page_rows = Some(rows);
         self
+    }
+
+    /// LN-9 (#422, LEAN-L §6, Alice's ruling 57): the writer's paced background scrub
+    /// (`ledger_observer.scrub_rows_per_second`, `scrub_chunk_rows`, `scrub_pass_interval_ms`).
+    pub fn with_scrub(mut self, scrub: LedgerScrubPolicy) -> Self {
+        self.scrub = Some(scrub);
+        self
+    }
+
+    pub(super) fn scrub(&self) -> Option<&LedgerScrubPolicy> {
+        self.scrub.as_ref()
     }
 
     pub(super) fn read_budget(&self) -> Option<Duration> {

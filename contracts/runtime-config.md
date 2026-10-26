@@ -495,6 +495,9 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.open_warn_ratio_milli` (P0-LO) | integer `100..=1000` (thousandths) | `500` | no |
 | `ledger_observer.history_page_rows` (#422 LN-5) | integer `1..=4096` | `256` | no |
 | `ledger_observer.writer_reply_timeout_ms` (#422 LN-TUNE) | milliseconds `1000..=600000`, above `read_budget_ms` | `10000` | no |
+| `ledger_observer.scrub_rows_per_second` (#422 LN-9) | integer `1..=100000` | `625` | yes |
+| `ledger_observer.scrub_chunk_rows` (#422 LN-9) | integer `1..=4096` | `256` | no |
+| `ledger_observer.scrub_pass_interval_ms` (#422 LN-9) | milliseconds `60000..=86400000` | `2400000` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -537,6 +540,17 @@ boundaries that confirm them wait it; one that runs out is `writer_response_time
 when the ledger opens (not settable); a value outside `1000..=600000` is `config_value_invalid`
 (`out_of_range`), and a `read_budget_ms` not below it is `config_value_invalid`
 (`section_check`) for `read_budget_ms`.
+
+#422 LN-9 (`actingd-config` revision 13; LEAN-L §6, Alice's ruling 57): the pace and the limits
+of the ledger's background scrub of the whole chain
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)).
+`scrub_rows_per_second` is the rows a second it reads and authenticates; it is settable, and the
+scrub reads the value in effect after each chunk (at start, once the instruction values are
+restored, and after every instruction). `scrub_chunk_rows` is the rows of one chunk, each in a
+read transaction of its own, and `scrub_pass_interval_ms` the least time from the start of one
+pass to the start of the next; both are read when the ledger opens (not settable). The defaults
+read 1.5 million records in about 40 minutes. A value outside its range is
+`config_value_invalid` (`out_of_range`).
 
 ## The `device_link` section (Workflow #398 RD-2)
 

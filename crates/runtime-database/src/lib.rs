@@ -422,6 +422,23 @@ impl RuntimeDatabase {
         Ok(connection)
     }
 
+    /// #422 LN-9 (LEAN-L §6): the whole-file `PRAGMA quick_check(1)` on a caller's connection to
+    /// this file (the Ledger scrub's own, at the end of each pass), outside any transaction. A
+    /// file that does not check is `state_database_corrupt`, as the check of `open_existing`
+    /// reports it; a failed statement is `database_maintenance_sql_failed`; both of `operation`.
+    pub fn quick_check(connection: &Connection, operation: Location) -> RuntimeDatabaseResult<()> {
+        let integrity: String = connection
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+            .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        if integrity != "ok" {
+            return Err(failure(
+                DatabaseCode::StateDatabaseCorrupt.code(),
+                operation,
+            ));
+        }
+        Ok(())
+    }
+
     /// Error readback must not wait behind another owner of the connection.
     pub fn try_connection(
         &self,

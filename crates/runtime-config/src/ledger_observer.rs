@@ -10,7 +10,10 @@
 //! warning `ledger_open_slow`; both are read when the ledger opens. LN-5 (#422, LEAN-L,
 //! `actingd-config` revision 11) adds the rows of one page of a history read, read when the
 //! ledger opens. LN-TUNE (#422, `actingd-config` revision 12) adds how long a caller waits for
-//! one reply of the ledger writer, read when the ledger opens.
+//! one reply of the ledger writer, read when the ledger opens. LN-9 (#422, `actingd-config`
+//! revision 13) adds the pace and the limits of the ledger's background scrub: its rows per
+//! second (settable, read before each chunk), the rows of one chunk and the least time between
+//! two passes (both read when the ledger opens).
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -88,6 +91,30 @@ pub const HISTORY_PAGE_ROWS: &str = "ledger_observer.history_page_rows";
 /// (10 000 by default; until LN-TUNE the ledger's constant). A read's budget stays below it, so
 /// a read stops before its caller stops waiting for it.
 pub const WRITER_REPLY_TIMEOUT_MS: &str = "ledger_observer.writer_reply_timeout_ms";
+/// #422 LN-9 (LEAN-L §3.7, §6; Alice's ruling 57): the rows per second the ledger's background
+/// scrub reads and authenticates (625 by default: about 40 minutes a pass at 1.5 million records).
+/// Settable: the scrub reads the rate in effect before each chunk.
+pub const SCRUB_ROWS_PER_SECOND: &str = "ledger_observer.scrub_rows_per_second";
+/// #422 LN-9: the rows of one scrub chunk, each chunk in a read transaction of its own.
+pub const SCRUB_CHUNK_ROWS: &str = "ledger_observer.scrub_chunk_rows";
+/// #422 LN-9: the least time from the start of one scrub pass to the start of the next, in
+/// milliseconds; the first pass starts when the ledger opens.
+pub const SCRUB_PASS_INTERVAL_MS: &str = "ledger_observer.scrub_pass_interval_ms";
+
+/// #422 LN-9 (LEAN-L §3.7): the scrub's rate lies within 1 and 100 000 rows a second.
+const SCRUB_ROWS_PER_SECOND_RANGE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: 100_000,
+};
+
+/// #422 LN-9: a scrub chunk holds one row at least and 4 096 at most, as a history page does.
+const SCRUB_CHUNK_ROWS_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 4_096 };
+
+/// #422 LN-9: a pass starts at most once a minute and at least once a day.
+const SCRUB_PASS_INTERVAL_RANGE: KeyRange = KeyRange::Integer {
+    min: 60_000,
+    max: 86_400_000,
+};
 
 /// #422 LN-TUNE: the writer's reply limit lies within 1 s and the 600 s the maintenance limits
 /// accept.
@@ -181,6 +208,15 @@ pub struct LedgerObserverFile {
     // file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     writer_reply_timeout_ms: Option<Value>,
+    // Interface anchor `actingd-config` revision 13 (contracts/component-interfaces.md): a Runtime
+    // before LN-9 refuses a file that names one, because the section denies unknown members; a
+    // file that names none keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scrub_rows_per_second: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scrub_chunk_rows: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scrub_pass_interval_ms: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -416,6 +452,34 @@ pub(crate) static ROWS: &[KeyRow] = &[
         "LN-TUNE",
         "0.12.13",
     ),
+    // #422 LN-9: the rate is read before each chunk (settable); the chunk's rows and the pass
+    // interval when the ledger opens, as the writer's other limits are.
+    KeyRow {
+        name: KeyName::Exact(SCRUB_ROWS_PER_SECOND),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: SCRUB_ROWS_PER_SECOND_RANGE,
+        default: DefaultSource::File,
+        settable: WHEN_USED,
+        reader: "LN-9",
+        since: "0.12.14",
+    },
+    KeyRow {
+        name: KeyName::Exact(SCRUB_CHUNK_ROWS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: SCRUB_CHUNK_ROWS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-9",
+        since: "0.12.14",
+    },
+    row_since(
+        SCRUB_PASS_INTERVAL_MS,
+        SCRUB_PASS_INTERVAL_RANGE,
+        "LN-9",
+        "0.12.14",
+    ),
 ];
 
 /// A milliseconds key read when the ledger opens, with the release that added its row.
@@ -479,6 +543,12 @@ pub struct LedgerObserverConfig {
     pub history_page_rows: u64,
     /// #422 LN-TUNE: how long a caller waits for one reply of the ledger writer.
     pub writer_reply_timeout_ms: u64,
+    /// #422 LN-9: the rows per second of the ledger's background scrub.
+    pub scrub_rows_per_second: u64,
+    /// #422 LN-9: the rows of one scrub chunk.
+    pub scrub_chunk_rows: u64,
+    /// #422 LN-9: the least time from the start of one scrub pass to the start of the next.
+    pub scrub_pass_interval_ms: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -642,6 +712,9 @@ impl LedgerObserverConfig {
             open_warn_ratio_milli: reader.count(OPEN_WARN_RATIO_MILLI)?,
             history_page_rows: reader.count(HISTORY_PAGE_ROWS)?,
             writer_reply_timeout_ms,
+            scrub_rows_per_second: reader.count(SCRUB_ROWS_PER_SECOND)?,
+            scrub_chunk_rows: reader.count(SCRUB_CHUNK_ROWS)?,
+            scrub_pass_interval_ms: reader.duration(SCRUB_PASS_INTERVAL_MS)?,
         })
     }
 }

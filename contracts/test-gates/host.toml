@@ -2043,3 +2043,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_tune::ln_tune_a_second_start_reads_no_planning_history_before_the_checkpoint",
 ]
 incident = ["#422 LN-TUNE"]
+
+# LN-9 (#422, LEAN-L row LN-9, §3.7, §6.3; Alice's ruling 57): `ledger_observer.scrub_rows_per_second` (625, 1..=100000, settable), `scrub_chunk_rows` (256, 1..=4096) and `scrub_pass_interval_ms` (2 400 000, 60000..=86400000) are read from the defaults file and from explicit values, the rate is changed by an instruction and the other two refuse one, and a value out of range is refused (`out_of_range`); on a host with the shipped defaults and a stepping scrub clock, damage in an old row that no reader reads stops the Runtime within one pass as a Global failure, latched and closed with the code and operation the full verification gives for the same damage
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ledger_observer_tests::ln9_the_scrub_keys_default_take_explicit_values_and_refuse_out_of_range_values",
+    "actingcommand-runtime-host::lib::tests::gate_ln9::ln9_d_a_scrub_finding_stops_the_runtime_as_a_global_failure_with_the_full_verification_code",
+]
+incident = ["#422 LN-9"]
