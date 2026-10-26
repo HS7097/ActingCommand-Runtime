@@ -1143,6 +1143,12 @@ pub trait RuntimeDaemonReporter: Send + Sync {
     /// records it: `frame_store_budget_floor_applied` when the capture frame stores' budget
     /// enters the floor, at the start or at a refresh.
     fn warning_recorded(&self, outcome: &Outcome);
+
+    /// #422 LN-7c R (`contracts/ledger-observer.md` §11.7): the ledger scrub's non-fatal finding
+    /// about the derived frame index (`ledger_index_mismatch` of `verify_ledger_frame_refs`),
+    /// once, when the host first sees it, with its developer text: what, where and
+    /// `extent=untrusted`. Nothing is latched and the Runtime keeps running.
+    fn ledger_index_finding(&self, _outcome: &Outcome, _developer: &str) {}
 }
 
 /// #411 A50: a capture open failure's cause as a token of the catalog vocabulary
@@ -1190,6 +1196,8 @@ pub(crate) struct FatalState {
     shutdown: Arc<AtomicBool>,
     /// #411 A51: the daemon's log, which the first latched condition is handed to at once.
     reporter: Option<Arc<dyn RuntimeDaemonReporter>>,
+    /// #422 LN-7c R: the scrub's finding about the derived frame index was reported.
+    ledger_index_reported: Arc<AtomicBool>,
 }
 
 impl FatalState {
@@ -1242,6 +1250,32 @@ impl FatalState {
         if let Some(reporter) = self.reporter.as_ref() {
             reporter.warning_recorded(outcome);
         }
+    }
+
+    /// #422 LN-7c R: hands the ledger scrub's non-fatal finding about its derived frame index to
+    /// the daemon's log, once: its code and operation, and the developer text `operation=<operation>
+    /// <detail>` (what, where and `extent=untrusted`). Nothing is latched.
+    pub(crate) fn report_ledger_index_finding(
+        &self,
+        finding: &actingcommand_ledger::GlobalLedgerError,
+    ) {
+        if self.ledger_index_reported.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (Some(reporter), Some(code)) = (self.reporter.as_ref(), Code::relayed(finding.code()))
+        else {
+            return;
+        };
+        let mut outcome = Outcome::new(code);
+        if let Some(operation) = Location::relayed(finding.operation()) {
+            outcome = outcome.operation(operation);
+        }
+        let developer = format!(
+            "operation={} {}",
+            finding.operation(),
+            finding.detail().unwrap_or_default()
+        );
+        reporter.ledger_index_finding(&outcome, &developer);
     }
 
     /// The latched condition as the host answers a later request with it (Workflow #378 A6a,

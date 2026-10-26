@@ -402,6 +402,8 @@ actingcommand_contract::outcome_locations! {
         EncodeLedgerQuery => "encode_ledger_query",
         EncodeMigrationIdentity => "encode_migration_identity",
         EncodeSourceMaterial => "encode_source_material",
+        /// #422 LN-7c R: the writer open's fill of the frame index (its gap and backfill).
+        BuildLedgerFrameRefs => "build_ledger_frame_refs",
         FinishArtifactEviction => "finish_artifact_eviction",
         FrameRetentionView => "frame_retention_view",
         FreezeSegmentImportSource => "freeze_segment_import_source",
@@ -571,6 +573,8 @@ actingcommand_contract::outcome_locations! {
         VerifyEmptyLedgerFormat => "verify_empty_ledger_format",
         VerifyImportQuarantine => "verify_import_quarantine",
         VerifyImportTransaction => "verify_import_transaction",
+        /// #422 LN-7c R: the scrub's and `ledger-maintenance verify`'s check of the frame index.
+        VerifyLedgerFrameRefs => "verify_ledger_frame_refs",
         VerifyLedgerPrefix => "verify_ledger_prefix",
         VerifyLedgerViews => "verify_ledger_views",
         VerifyRecoveryEvent => "verify_recovery_event",
@@ -583,6 +587,8 @@ actingcommand_contract::outcome_locations! {
         VerifyTransactionEvent => "verify_transaction_event",
         /// Workflow #383 AO-1: writing the dump file and stopping fatally.
         WriteLedgerDump => "write_ledger_dump",
+        /// #422 LN-7c R: writing a batch's frame index rows and extent in its transaction.
+        WriteLedgerFrameRefs => "write_ledger_frame_refs",
         WriteWriterMetadata => "write_writer_metadata",
     }
 }

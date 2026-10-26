@@ -25,7 +25,7 @@ mod open;
 mod prior_epoch;
 mod resident;
 mod view;
-pub use material::LedgerOpenTiming;
+pub use material::{LedgerFrameRefsNote, LedgerOpenTiming};
 pub(super) use material::{PendingMaterial, elapsed_ms};
 pub use resident::live_frame_ids;
 pub use view::{

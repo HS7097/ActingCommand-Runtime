@@ -13,8 +13,10 @@
 
 use super::*;
 use crate::FailureScope;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_ledger::{LedgerCode, LedgerLocation, LedgerMaintenance, LedgerOpenTiming};
 use actingcommand_runtime_database::{DatabaseLocation, MaintenanceLimits, RuntimeDatabase};
+use std::sync::Mutex;
 
 const GATE_WAIT: Duration = Duration::from_secs(30);
 /// `ledger_observer.scrub_pass_interval_ms` of the defaults file.
@@ -144,4 +146,109 @@ fn ln9_d_a_scrub_finding_stops_the_runtime_as_a_global_failure_with_the_full_ver
         expected,
         "the code and operation of the full verification"
     );
+}
+
+/// #422 LN-7c R: the daemon's log, as actingd's reporter writes it: the scrub's findings about the
+/// derived frame index, each with its developer text.
+#[derive(Default)]
+struct DaemonLog {
+    ledger_index_findings: Mutex<Vec<(Outcome, String)>>,
+}
+
+impl RuntimeDaemonReporter for DaemonLog {
+    fn fatal_latched(&self, _outcome: &Outcome) {}
+
+    fn step_skipped(&self, _outcome: &Outcome) {}
+
+    fn warning_recorded(&self, _outcome: &Outcome) {}
+
+    fn ledger_index_finding(&self, outcome: &Outcome, developer: &str) {
+        self.ledger_index_findings
+            .lock()
+            .expect("daemon log")
+            .push((outcome.clone(), developer.to_owned()));
+    }
+}
+
+/// A stray row of the derived frame index at the newest record: a target the record does not name.
+fn stray_frame_ref(root: &TempDir) -> u64 {
+    let database = RuntimeDatabase::open_existing(root.path(), false).expect("state database");
+    let connection = database
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
+        .expect("state database connection");
+    let stored: i64 = connection
+        .query_row("SELECT MAX(sequence) FROM ledger_events", [], |row| {
+            row.get(0)
+        })
+        .expect("the newest record");
+    connection
+        .execute_batch(&format!(
+            "INSERT INTO ledger_frame_refs (target_kind,target_id,sequence,pointer,run_id) VALUES ('frame','frame_000000000000000000000000000000f3',{stored},'before_frame',NULL)"
+        ))
+        .expect("a stray frame index row");
+    (stored as u64) ^ (1_u64 << 63)
+}
+
+#[test]
+fn ln7c_r_a_frame_index_finding_is_one_daemon_line_and_the_runtime_keeps_running() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = actingcommand_ledger::SteppingScrubClock::new();
+    let log = Arc::new(DaemonLog::default());
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_daemon_reporter(log.clone())
+            .with_ledger_scrub_clock_for_test(
+                Arc::clone(&clock) as Arc<dyn actingcommand_ledger::LedgerScrubClock>
+            ),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    assert!(
+        clock.wait_idle(GATE_WAIT),
+        "the scrub waits for its first pass"
+    );
+    for index in 0..FACTS {
+        host.publish_fact(fact(index)).expect("publish a fact");
+    }
+    let stray = stray_frame_ref(&root);
+
+    // One pass: the next one is due at the pass interval.
+    clock.run_until(PASS_INTERVAL_MS - 1);
+    assert!(clock.wait_idle(GATE_WAIT), "the pass ends");
+    assert!(!clock.has_ended(), "the scrub goes on");
+    for _ in 0..2 {
+        assert!(
+            host.fatal_error().expect("health").is_none(),
+            "nothing is latched"
+        );
+    }
+    assert!(
+        !host.is_shutdown_requested().expect("shutdown state"),
+        "the Runtime keeps running"
+    );
+    let findings = log
+        .ledger_index_findings
+        .lock()
+        .expect("daemon log")
+        .clone();
+    let [(outcome, developer)] = findings.as_slice() else {
+        panic!("the daemon's log has the finding exactly once: {findings:?}");
+    };
+    assert_eq!(
+        outcome.code().as_str(),
+        LedgerCode::LedgerIndexMismatch.as_str()
+    );
+    assert_eq!(
+        developer,
+        &format!(
+            "operation=verify_ledger_frame_refs table=ledger_frame_refs sequence={stray}; after_sequence={}; phase=scrub; extent=untrusted",
+            (stray - 1) / 256 * 256
+        ),
+        "the code, what, where and the untrusted extent"
+    );
+    host.close().expect("the Runtime closes as usual");
 }

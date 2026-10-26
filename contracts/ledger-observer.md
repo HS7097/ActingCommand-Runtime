@@ -914,6 +914,106 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   An intent that never committed is not found by X1; it lies in the tail gap (rule 9's accepted
   cost). The same holds for the last request ids and X3.
 
+### 11.7 The frame index `ledger_frame_refs` (#422 LN-7c R)
+
+Alice's ruling 70 (board #422 6412761773, frame retention by ledger query) needs the frames a record
+names only in its payload to be found by key. Design: `rd-1026/ln7c/final-query.md` §3 (F5).
+
+```sql
+CREATE TABLE ledger_frame_refs (
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('frame', 'artifact', 'run')),
+    target_id   TEXT NOT NULL,       -- the identifier's canonical text
+    sequence    INTEGER NOT NULL,    -- the naming record's sequence
+    pointer     TEXT NOT NULL CHECK (pointer IN ('summary_frame', 'summary_pin',
+                    'published_artifact', 'published_frame', 'reading', 'before_frame',
+                    'preserved_frame', 'read_confirmed')),
+    run_id      TEXT,                -- the run a resource reading's snapshot id names
+    PRIMARY KEY (target_kind, target_id, pointer, sequence)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX ledger_frame_refs_sequence ON ledger_frame_refs(sequence);
+CREATE TABLE ledger_frame_refs_extent (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    from_sequence INTEGER NOT NULL, through_sequence INTEGER NOT NULL
+) STRICT;
+```
+
+| Record | Pointer in its payload | Row |
+|---|---|---|
+| `capture.summary_committed` | each summary frame's artifact | `('artifact', id, 'summary_frame')` |
+| same | each pinned artifact whose reason is not `recognition_evidence` | `('artifact', id, 'summary_pin')` |
+| `fact.published` | a record's `source_snapshot_id` `run:<run>/frame:<frame>/…` with a `resource_reading:` detector | `('frame', frame, 'reading')`, `run_id` = the run |
+| same | the same snapshot form with any other detector | `('frame', frame, 'published_frame')` |
+| same | a record whose content is an artifact | `('artifact', id, 'published_artifact')` |
+| `input.intent` | `provenance.before_frame_id` | `('frame', frame, 'before_frame')` |
+| `capture.dedup_window` | `preserved_frame_id` | `('frame', frame, 'preserved_frame')` |
+| `client.action` from (agent, adapter), (cli, cli) or (user, ui) | control `evidence_read_frame` / `evidence_read_run`, a path-safe value | `('artifact', id, 'read_confirmed')` / `('run', id, 'read_confirmed')` |
+
+- **The rule: the derived table never fails an open or an append.** It is derived from the
+  records and can be rebuilt, and nothing reads it yet, so no state of it fails the writer open or
+  an append, or stops the Runtime (the scrub's findings about it included, below). Each case below ends in one warning: the open's is a
+  `note` link of `ledger_opened` (`ledger_index_mismatch` of `build_ledger_frame_refs`, its `stage`
+  naming what was found and `ledger_sequence` where; the catalog fixes that code's category, and no
+  new code is added). The open itself fails only where it failed before this table existed.
+- **Written** by the writer in the record's own batch transaction (every append, the segment
+  import), from the record alone, so no producer writes them and a new producer is covered.
+  Two pointers of one record to one target and pointer are one row. The extent moves only when it
+  is contiguous with the batch: when it ends right before the batch, its rows are written and
+  `through_sequence` moves to the batch's last sequence in the same transaction. Otherwise, or when
+  a statement of the index fails, the batch's rows are **not written** (a savepoint takes back what
+  was written), the extent stays, and the batch commits as always. The next open fills the gap and
+  warns (`stage` `write_ledger_frame_refs`, `ledger_sequence` the extent's end). Only a savepoint
+  that cannot be taken back, which means the batch's own transaction is gone (a full disk), returns
+  its error, as the batch's commit would. A new root starts with the extent `1..=0`; the segment
+  import writes `1..=cutover`.
+- **Trusted only inside the extent** `from_sequence..=through_sequence`, the records whose rows are
+  all written. A row outside it is removed at the next writer open.
+- **Filled at the writer open**, after the views and indexes exist and before any record is
+  appended (`build_ledger_frame_refs`). The open creates the tables a root lacks; a table it creates
+  starts empty without a warning (the first open of this release backfills once). An **untrusted
+  extent** (past the head, malformed, or missing on a table that exists: a copy, a restore) is
+  removed with every row and the index is rebuilt from the extent `head + 1..=head`, with one
+  warning (`stage` `verify_ledger_frame_refs`, `ledger_sequence` the extent's end when there was
+  one). Then the gap `(through_sequence, head]` is filled upwards (records an older build or a
+  batch above appended without rows; one warning), and the backfill goes from the head down to 1
+  (ageing out is not safe: `final-query.md` §3.3). Each page holds at most `history_page_rows`
+  pointer records, selected by type in `ledger_view_index_type_v1` with a sequence bound and
+  authenticated one by one as a history page reads them; it commits with the extent moved. After
+  a complete fill the extent is `1..=head`. **A fill that stops** never fails the open: a record
+  that fails its authentication, the open's deadline (checked before each page), or any failure of
+  the index stops the fill where it is. The page in progress rolls back, so the extent stops short
+  of that record (below it for the gap, above it for the backfill) and does not cover the history,
+  and the next open tries again. The open warns once (`stage` `build_ledger_frame_refs`,
+  `ledger_sequence` the record it stopped at, the failure as its cause). The damaged record itself
+  is found by the scrub, as before. On production the one-time backfill reads about 85 000 records
+  (estimate: 5–10 s); a gap after a day's rollback, about 11 000 (about 1 s).
+- **Checked** by the scrub (§15, LN-9): for every row a chunk authenticates inside the extent read
+  with the pass's head, the chunk's frame index rows must be those the record gives, read in the
+  chunk's transaction through `ledger_frame_refs_sequence`. `ledger-maintenance verify` does the
+  same over the whole root, within the extent its snapshot holds; a root without the extent is not
+  checked. A difference, or an extent that is not `1 <= from <= through + 1 <= head + 1`, is
+  `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs` and the sequence
+  in its detail; the scrub adds `phase=scrub`). No new code (#420 S4).
+  - **The scrub's finding about the derived table is non-fatal.** This covers a difference and an
+    extent table the scrub cannot read. It is recorded (`GlobalLedger::scrub_frame_refs_finding`,
+    with what and where in its detail), the host does not latch it, and the Runtime keeps running.
+    The host hands it once to the daemon's log through #411 A51's reporter
+    (`RuntimeDaemonReporter::ledger_index_finding`). actingd writes it as one line:
+    `ERROR actingd: ledger_index_mismatch operation=verify_ledger_frame_refs table=ledger_frame_refs
+    sequence=<n>; after_sequence=<chunk start>; phase=scrub; extent=untrusted`. The next open's
+    rebuild needs no further line.
+    The scrub stops checking the index for the rest of the pass and goes on with the chain.
+    Findings in the primary ledger tables stay fatal, as before.
+  - **The extent is marked untrusted**: it becomes `through + 1..=through`, which covers no record
+    (one statement on the shared connection, the scrub's only write; `extent=untrusted` in the
+    finding's detail). Later batches extend it from there. The next writer open removes every row
+    below it and rebuilds them by its backfill, and a later query never trusts a row outside it.
+  - **`ledger-maintenance verify`**, a tool run, still fails on the same difference with a non-zero
+    exit. It marks the extent untrusted in the same way before it returns.
+- **Compatibility** (`final-query.md` §8): no name starts with `ledger_view_`, and `table_count`
+  counts only the four ledger tables, so an older build opens, writes and scrubs the database
+  unchanged; it writes no rows and leaves `through_sequence` behind, and the next open of this
+  release fills the gap. Nothing decides on the rows yet (slice Q will); no configuration key.
+
 ## 12 Start and shutdown order (AO-6; G16 from AO-3)
 
 1. take the owner; open the ledger; verify it (#422 LN-8: the meta row, `MAX(sequence)` and the
@@ -1201,7 +1301,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `sequence_discontinuity`, `ledger_meta_mismatch`, `corrupt_ledger_record`, ...;
   `state_database_corrupt` from `quick_check`, of the location `ledger_scrub`) and `phase=scrub` in
   its detail; every other failure of the scrub (its connection, a statement, a panic) is reported
-  the same way. The scrub stops at its finding, and the host's health check
+  the same way (#422 LN-7c R: except a finding about the derived frame index, which is non-fatal,
+  §11.7). The scrub stops at its finding, and the host's health check
   (`GlobalLedger::scrub_finding`) latches it as a Global failure
   ([runtime-outcomes.md](runtime-outcomes.md), "Failure scope"), so the Runtime stops with the code
   a start gave for the same damage before LN-8. The scrub keeps nothing that grows with the
