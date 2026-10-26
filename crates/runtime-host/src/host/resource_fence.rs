@@ -785,6 +785,30 @@ impl HostShared {
         }
         let config = self.fence_recheck_config()?;
         let now = self.runtime_clock_sample()?;
+        // Workflow #386 SR-4a3 (`scheduling-blackout.md`, "Complete silence"): a recheck is a
+        // reconnect the Runtime starts on its own, so none is queued inside a blackout of its
+        // instance; it is due again at the first tick after the end. Read before the leaf lock.
+        let fenced = lock(
+            &self.resource_fences,
+            HostLocation::QueueResourceFenceRechecks,
+        )?
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+        let mut silent = BTreeSet::new();
+        for instance_id in fenced {
+            let alias = lock(
+                &self.registered_instances,
+                HostLocation::QueueResourceFenceRechecks,
+            )?
+            .get(&instance_id)
+            .map(|instance| instance.instance_alias.clone());
+            if let Some(alias) = alias
+                && self.blackout_covering(instance_id, &alias)?.is_some()
+            {
+                silent.insert(instance_id);
+            }
+        }
         let due = {
             let mut fences = lock(
                 &self.resource_fences,
@@ -792,6 +816,7 @@ impl HostShared {
             )?;
             fences
                 .iter_mut()
+                .filter(|(instance_id, _)| !silent.contains(*instance_id))
                 .filter_map(|(instance_id, fence)| {
                     let wait = fence.person_wait.as_mut()?;
                     let next = wait.next_due(config)?;

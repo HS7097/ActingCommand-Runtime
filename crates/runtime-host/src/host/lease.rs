@@ -3456,7 +3456,9 @@ impl HostShared {
     }
 
     /// Q-3 (4): the instance's routine gate, read from the scheduling pauses now. It is read
-    /// before the scheduler lock is taken.
+    /// before the scheduler lock is taken. Workflow #386 SR-4a3: with the instance's blackout
+    /// silence laid over it (`silenced_gate`): its startup package and its emulator autostart
+    /// wait out a blackout.
     pub(super) fn routine_gate(&self, instance_id: InstanceId) -> RuntimeHostResult<ClaimGate> {
         let alias = lock(
             &self.registered_instances,
@@ -3467,16 +3469,22 @@ impl HostShared {
         let held = {
             let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
             pauses.holds_global()
-                || alias.is_some_and(|instance_alias| pauses.holds_instance(&instance_alias))
+                || alias
+                    .as_ref()
+                    .is_some_and(|instance_alias| pauses.holds_instance(instance_alias))
         };
         // Workflow #403: a resource fence holds the instance's routine claims until it is
         // handed to a ladder, whose claim it lets through, and again once it waits for a person.
         let held = held || self.resource_fence_holds_routine(instance_id)?;
-        Ok(if held {
+        let gate = if held {
             ClaimGate::RoutineHeld
         } else {
             ClaimGate::Open
-        })
+        };
+        match alias {
+            Some(alias) => self.silenced_gate(instance_id, &alias, gate),
+            None => Ok(gate),
+        }
     }
 
     /// Q-4: grants the first eligible entry of a free instance, with `scheduler.admitted` +

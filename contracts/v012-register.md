@@ -3354,6 +3354,22 @@ is provisional for the parallel slices.
 | RL1B-6 | `config.subsystems` row `standard_pack_schedule` (always on) | new row value of an existing fact | RL-1b | RL-1b | a `schedule.json` that requires it is composed only by a Runtime that names it |
 | RL1B-7 | check-config `report.standard_pack_schedule` (`composer_mode`, `games`, `rules`, `pools`, `profiles`, `events`, `unclassified`, `problems`, `left_out`) | check-config report member | RL-1b | — | the composition the workbench would make for the configured instances, in either mode; each problem is a note |
 
+### 1.186 Slice SR-4a3 (0.12.x): complete silence at the ladder, the startup package, the emulator autostart and the monitor probe (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, §6 row SR-4a3; frozen scheduling model v1.4.2 §5.2a, §5.3 rule 3, C-3; Alice 10-09: 「黑名单就是完全静默，连接断开了也不管」)
+
+[scheduling-blackout.md](scheduling-blackout.md), "Complete silence" ("How the Runtime holds
+them"), is the contract. No code, configuration key, subsystem or persisted shape is added: the
+ladder suppression `blackout` (register S3) is first written here, `blackout_config_invalid` gains
+its first host writer with `blackout_source` `catalog`, and the scheduler's routine gate gains a
+value in memory. With both blackout lists empty and no catalog `maintenance` event nothing
+behaves differently. Gates: the `gate_386_sr4a3` tests, one row of host.toml. The number 1.186
+is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR4A3-1 | `ClaimGate::Silenced {routine_held, autostart}`; `ClaimGate::{routine_held, blackout, holds, silenced}`; `SeedScheduler::waiting_total_gated` | scheduler interface (memory only) | SR-4a3 | SR-4a3 | holds `startup_package` (a blackout covers the instance, or the next starts within the package's deadline plus `quiet_margin_ms`) and `autostart` (a blackout covers it); every client and operator kind passes |
+| SR4A3-2 | `recovery_ladder_suppressed` reason `blackout`, `until_unix_ms` the blackout's end (Info) | persisted enum value (registered by AO-0, S3) | SR-4a3 | SR-4a3 | at admission (every trigger stage), at a granted claim's climb, for a queued ladder claim at the lease sweep, before a rung or a hold's rerun its time limit would carry into a blackout |
+| SR4A3-3 | `blackout_config_invalid` with `blackout_source` `catalog`, `field` `/events/<n>/validity`, `blackout_id` the event's id | outcome values (existing) | SR-4a3 | SR-4a3 | a catalog `maintenance` event with a duration and no V2 validity, once per active generation; the event is left out of the host's blackouts |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -63,6 +63,17 @@
 //! to the instance and the trigger's correlation id, under the ladder's own request and
 //! causation ids; the `return_home` run carries that causation id, the startup package runs the
 //! one of their scheduling event.
+//!
+//! Workflow #386 SR-4a3 (`contracts/scheduling-blackout.md`, "Complete silence"): a blackout is
+//! complete silence for the ladder, whatever its trigger stage. A ladder whose instance a
+//! blackout covers is dropped at its admission, never queued: one `recovery_ladder_suppressed`
+//! `blackout` (Info, `until_unix_ms` the blackout's end; rule A7); so is a claim that waits for
+//! the key when the blackout starts (the lease sweep) or is granted inside it (its climb's
+//! start). A climbing ladder starts no rung, and no busy or screen hold reruns its return-home
+//! rung, whose own time limit plus `scheduling.blackout.quiet_margin_ms` reaches the next
+//! blackout: it ends with the same suppression and releases its key. Nothing is raised again
+//! after the blackout, and direction ① counts no record made inside one. A person's self-check
+//! still runs; a ladder its failure would raise is dropped.
 
 use super::contained_task::{BusyEnd, ConfiguredReturnHome, FailedTaskTerminal, PackageIdentity};
 use super::host_claims::{HostClaimWork, HostKey};
@@ -138,9 +149,10 @@ pub(super) enum LadderInvariant {
     Paused,
     /// A5: business capacity refuses new work (the ledger could not record it).
     CapacityRefused,
-    /// A7: a blackout window keeps the instance silent. The host has no blackout state before
-    /// SR-4a, so nothing sets it yet; a build from SR-2a on reads the `blackout` suppression
-    /// SR-4a records (Workflow #386, register S3).
+    /// A7: a blackout window keeps the instance silent (Workflow #386 SR-4a3): set at every
+    /// admission and at a climb's start when a blackout covers the instance, which records the
+    /// `blackout` suppression (register S3) until its end. A climbing ladder checks each rung
+    /// against the blackouts before it starts (`ladder_rung_quiet`).
     Blackout,
     /// A9: the instance's handset left `device`: there is no device to act on (as A1 and A4),
     /// so the climb is interrupted and ends at warning (model-398 v1.1 §4.5).
@@ -597,6 +609,9 @@ pub(super) struct StabilityCounter {
     bursts: Vec<StabilityBurst>,
     /// Codes met that the catalog does not list, not recorded yet.
     unclassified: Vec<String>,
+    /// Workflow #386 SR-4a3: per instance, the blackout (`[start, end)`) the lease sweep last
+    /// found covering it: a record made inside it counts for nothing (complete silence).
+    silenced: BTreeMap<InstanceId, (u64, u64)>,
 }
 
 /// Workflow #387 D1c-H: the failure a counted record belongs to, from the links the record
@@ -685,6 +700,25 @@ impl StabilityCounter {
         }
     }
 
+    /// Workflow #386 SR-4a3 (`scheduling-blackout.md`, "Complete silence"): the blackout that
+    /// covers `instance_id` now, as the lease sweep reads it (`None`: none). A blackout newly
+    /// learnt forgets the failures counted from its start, so a failure made inside it before the
+    /// sweep saw it raises nothing after its end either.
+    pub(super) fn set_silenced(&mut self, instance_id: InstanceId, blackout: Option<(u64, u64)>) {
+        let Some((start, end)) = blackout else {
+            self.silenced.remove(&instance_id);
+            return;
+        };
+        if self.silenced.insert(instance_id, (start, end)) == Some((start, end)) {
+            return;
+        }
+        if let Some(windows) = self.windows.get_mut(&instance_id) {
+            for window in windows.values_mut() {
+                window.retain(|counted| *counted < start);
+            }
+        }
+    }
+
     /// Workflow #387 D1c-H (B1): the scheduler reports which kind of claim holds
     /// `instance_id`'s key now (`None`: the key is free).
     pub(super) fn set_key_holder(&mut self, instance_id: InstanceId, holder: Option<ClaimKind>) {
@@ -722,6 +756,11 @@ impl StabilityCounter {
             record.severity,
             EventSeverity::Warning | EventSeverity::Error | EventSeverity::Fatal
         ) || self.climbing.contains(&record.instance_id)
+            // Workflow #386 SR-4a3: nothing made inside a blackout counts.
+            || self
+                .silenced
+                .get(&record.instance_id)
+                .is_some_and(|(start, end)| (*start..*end).contains(&record.at_unix_ms))
             || self.key_holders.get(&record.instance_id) == Some(&ClaimKind::Autostart)
             || direct_run_exempt(
                 &config.rules,
@@ -854,6 +893,20 @@ pub(super) fn with_recovery_ladder_staging<T>(
 
 fn ladder_invariant(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, LADDER_OPERATION, RuntimeErrorCode::RuntimeHalted)
+}
+
+/// Workflow #386 SR-4a3: the deadline the return-home rung runs its package with
+/// (`recovery_return_home`): the configured deadline for the configured return-home package,
+/// the default response deadline for a bound one.
+fn return_home_limit_ms(
+    pending: &PendingRecoveryLadder,
+    configured_package_deadline_ms: u64,
+) -> u64 {
+    if pending.recovery_configured.is_some() {
+        configured_package_deadline_ms
+    } else {
+        ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS
+    }
 }
 
 /// How a trigger item matched, as the ladder records it (§6.1).
@@ -1404,9 +1457,15 @@ impl HostShared {
         Ok(())
     }
 
-    /// A ladder's admission (A3 shutdown, A6 the scheduling pause, A5 business capacity); a
-    /// refusal records `recovery_ladder_suppressed` `admission_denied`.
-    fn recovery_admitted(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
+    /// A ladder's admission (A3 shutdown, A6 the scheduling pause, A5 business capacity, A7 a
+    /// blackout); a refusal records `recovery_ladder_suppressed` and is returned with its
+    /// `until_unix_ms`: `admission_denied` (Warning), or for A7 `blackout` (Info) until the end of
+    /// the blackout that covers the instance (Workflow #386 SR-4a3: complete silence, a ladder is
+    /// dropped and never queued; it is not raised again after the blackout).
+    fn recovery_admitted(
+        &self,
+        pending: &PendingRecoveryLadder,
+    ) -> RuntimeHostResult<Option<(RecoveryLadderSuppression, u64)>> {
         let mut facts = LadderFacts {
             shutdown: self.fatal.is_shutdown_requested(),
             paused: lock(&self.scheduling_pause, HostLocation::GateRecoveryPause)?
@@ -1423,19 +1482,143 @@ impl HostShared {
                 Err(_) => false,
             };
         }
+        let mut blackout = None;
         if ladder_invariants(&facts).is_none() {
-            return Ok(true);
+            blackout = self.blackout_covering(pending.instance_id, &pending.instance_alias)?;
+            facts.blackout = blackout.is_some();
         }
+        match (ladder_invariants(&facts), blackout) {
+            (None, _) => Ok(None),
+            (Some(LadderInvariant::Blackout), Some(blackout)) => self
+                .suppress_ladder_for_blackout(pending, &blackout)
+                .map(|()| Some((RecoveryLadderSuppression::Blackout, blackout.end_unix_ms))),
+            _ => {
+                self.append_recovery_ladder_fact(
+                    pending,
+                    EventSeverity::Warning,
+                    RuntimeLifecyclePhase::RecoveryLadderSuppressed {
+                        reason: RecoveryLadderSuppression::AdmissionDenied,
+                        until_unix_ms: 0,
+                        rule: pending.trigger.rule.clone(),
+                    },
+                )?;
+                Ok(Some((RecoveryLadderSuppression::AdmissionDenied, 0)))
+            }
+        }
+    }
+
+    /// Workflow #386 SR-4a3 (A7): `recovery_ladder_suppressed` `blackout` (Info) of `pending`,
+    /// until the end of `blackout`: the ladder is dropped, or ends before a rung its time limit
+    /// would carry into `blackout`, and releases its key.
+    fn suppress_ladder_for_blackout(
+        &self,
+        pending: &PendingRecoveryLadder,
+        blackout: &actingcommand_policy::Blackout,
+    ) -> RuntimeHostResult<()> {
         self.append_recovery_ladder_fact(
             pending,
-            EventSeverity::Warning,
+            EventSeverity::Info,
             RuntimeLifecyclePhase::RecoveryLadderSuppressed {
-                reason: RecoveryLadderSuppression::AdmissionDenied,
-                until_unix_ms: 0,
+                reason: RecoveryLadderSuppression::Blackout,
+                until_unix_ms: blackout.end_unix_ms,
                 rule: pending.trigger.rule.clone(),
             },
-        )?;
-        Ok(false)
+        )
+    }
+
+    /// Workflow #386 SR-4a3 (`scheduling-blackout.md`, "Complete silence": a ladder claim that
+    /// waits for the key when a blackout starts): the lease sweep drops every ladder claim still
+    /// queued on `instance_id` while `blackout` covers it, one that waits for performance release
+    /// included, each with its `recovery_ladder_suppressed` `blackout`. A claim granted meanwhile
+    /// is its climb's to drop. The run it followed keeps what it is owed: its settlement is not
+    /// the ladder's.
+    pub(super) fn drop_waiting_ladder_claims(
+        &self,
+        instance_id: InstanceId,
+        blackout: &actingcommand_policy::Blackout,
+    ) -> RuntimeHostResult<()> {
+        let queued = lock(&self.scheduler, HostLocation::ReadRecoveryLadderHold)?
+            .queued_of_kind(instance_id, ClaimKind::Ladder);
+        if queued.is_empty() {
+            return Ok(());
+        }
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::BuildLadderConnection, &error)
+            })?;
+        for request_id in queued {
+            let pending = match lock(&self.host_claim_work, HostLocation::ForgetHostClaimWork)?
+                .get(&request_id)
+            {
+                Some(HostClaimWork::RecoveryLadder(pending)) => Some(pending.as_ref().clone()),
+                _ => None,
+            };
+            if !self.cancel_host_claim(instance_id, request_id, connection_id)? {
+                continue;
+            }
+            if let Some(pending) = pending {
+                self.suppress_ladder_for_blackout(&pending, blackout)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #386 SR-4a3 (T17b; `scheduling-blackout.md`, "Gradual quiet" rule 3): the
+    /// blackout that the rung `rung` of a climbing ladder would reach: one that covers the
+    /// instance now, or the next one that starts within the rung's own time limit plus
+    /// `quiet_margin_ms`. The limit is what the rung's configuration bounds: the return-home
+    /// package's deadline (`configured_package_deadline_ms` for the configured one, the default
+    /// response deadline for a bound one); the entry hold and the startup package's deadline for
+    /// the application restart; the stop, start and readiness bounds and the startup package's
+    /// deadline for the emulator restart.
+    fn ladder_rung_quiet(
+        &self,
+        pending: &PendingRecoveryLadder,
+        rung: &RungConfig,
+    ) -> RuntimeHostResult<Option<actingcommand_policy::Blackout>> {
+        let startup_ms = self
+            .startup_packages()?
+            .get(&pending.instance_id)
+            .map_or(0, ContainedTaskRequest::response_deadline_ms);
+        let limit_ms = match rung {
+            RungConfig::ReturnHome {
+                configured_package_deadline_ms,
+            } => return_home_limit_ms(pending, *configured_package_deadline_ms),
+            RungConfig::ApplicationRestart { entry_hold_ms, .. } => {
+                entry_hold_ms.saturating_add(startup_ms)
+            }
+            RungConfig::EmulatorRestart {
+                stop_bound_ms,
+                start_bound_ms,
+                readiness_window_ms,
+                ..
+            } => stop_bound_ms
+                .saturating_add(*start_bound_ms)
+                .saturating_add(*readiness_window_ms)
+                .saturating_add(startup_ms),
+        };
+        self.blackout_within(pending.instance_id, &pending.instance_alias, limit_ms)
+    }
+
+    /// Workflow #386 SR-4a3 (T17b): the same check before a busy or screen hold runs the
+    /// return-home rung again with `deadline_ms` (#411 B37, A35): a rerun that would reach a
+    /// blackout ends the ladder with `recovery_ladder_suppressed` `blackout` instead. `true` when
+    /// it ended.
+    fn ladder_rerun_suppressed(
+        &self,
+        pending: &PendingRecoveryLadder,
+        deadline_ms: u64,
+    ) -> RuntimeHostResult<bool> {
+        let Some(blackout) = self.blackout_within(
+            pending.instance_id,
+            &pending.instance_alias,
+            return_home_limit_ms(pending, deadline_ms),
+        )?
+        else {
+            return Ok(false);
+        };
+        self.suppress_ladder_for_blackout(pending, &blackout)?;
+        Ok(true)
     }
 
     /// Workflow #369 H-1: the trigger of the run whose task request is `request_id`, when that
@@ -1788,8 +1971,8 @@ impl HostShared {
         &self,
         mut pending: PendingRecoveryLadder,
     ) -> RuntimeHostResult<LadderAdmission> {
-        if !self.recovery_admitted(&pending)? {
-            return Ok(Err((RecoveryLadderSuppression::AdmissionDenied, 0)));
+        if let Some(suppressed) = self.recovery_admitted(&pending)? {
+            return Ok(Err(suppressed));
         }
         let now_unix_ms = self.clock.sample()?.unix_ms;
         let ladder_active = lock(&self.scheduler, HostLocation::ReadRecoveryLadderHold)?
@@ -1982,7 +2165,9 @@ impl HostShared {
         if fence_ladder && !self.resource_fenced(pending.instance_id)? {
             return Ok(());
         }
-        if !self.recovery_admitted(pending)? {
+        // Workflow #386 SR-4a3: a claim granted inside a blackout (one that waited for the key
+        // when it started) is dropped here, as at its admission.
+        if self.recovery_admitted(pending)?.is_some() {
             return Ok(());
         }
         // B2 (§2.2a): a preparation ladder whose preparation a later one superseded.
@@ -2194,6 +2379,16 @@ impl HostShared {
                     reason,
                     tried.count(),
                 );
+            }
+            // Workflow #386 SR-4a3 (T17b): a rung that would run into a blackout, or that a
+            // blackout covers, does not start: the ladder ends with the suppression `blackout`
+            // and releases its key (the caller), and is not continued after the blackout. A
+            // skipped rung, or a plan drill's, acts on nothing.
+            if skipped.is_none()
+                && !pending.plan_drill()
+                && let Some(blackout) = self.ladder_rung_quiet(pending, rung_config)?
+            {
+                return self.suppress_ladder_for_blackout(pending, &blackout);
             }
             if let Some(reason) = skipped {
                 self.append_recovery_rung_finished(
@@ -2601,6 +2796,9 @@ impl HostShared {
             )?;
             return Ok(BusyStep::Ended);
         }
+        if self.ladder_rerun_suppressed(pending, deadline_ms)? {
+            return Ok(BusyStep::Ended);
+        }
         let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
         Ok(BusyStep::Rerun { failure, attempt })
     }
@@ -2700,6 +2898,9 @@ impl HostShared {
                     return Ok(ScreenStep::AsToday { interruption: None });
                 }
                 (ScreenProbe::Settled, Some(failure)) => {
+                    if self.ladder_rerun_suppressed(pending, deadline_ms)? {
+                        return Ok(ScreenStep::Ended);
+                    }
                     let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
                     return Ok(ScreenStep::Rerun { failure, attempt });
                 }
@@ -3860,8 +4061,9 @@ fn rung_skip_outcome(reason: RecoveryRungSkipReason) -> Outcome {
 /// Workflow #390 DRILL-1: the refusal of a drill whose admission was suppressed, by the reason
 /// its `recovery_ladder_suppressed` records: the open cool-down window (until `until_unix_ms`),
 /// a ladder that holds or waits for the instance, or an admission the rules that stay in code
-/// refused (shutdown, a scheduling pause, business capacity). A drill is never a preparation
-/// and meets no blackout before SR-4a, so those reasons are refused as a closed admission.
+/// refused (shutdown, a scheduling pause, business capacity, and from Workflow #386 SR-4a3 a
+/// blackout: a drill's claim is a ladder's, which a blackout keeps silent). A drill is never a
+/// preparation, so those reasons are refused as a closed admission.
 fn drill_suppressed(reason: RecoveryLadderSuppression, until_unix_ms: u64) -> RuntimeHostError {
     match reason {
         RecoveryLadderSuppression::Cooldown => RuntimeHostError::request(
