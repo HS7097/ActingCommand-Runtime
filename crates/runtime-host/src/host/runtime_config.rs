@@ -383,6 +383,32 @@ impl HostShared {
             })
     }
 
+    /// #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §5): the frame cleaner's keys in effect, read at
+    /// each of its rounds: `frame_retention_evidence_max_age_days` (settable; a pass takes it at
+    /// its start), `ledger_observer.frame_query_steps_per_second` (settable; read after each
+    /// statement) and `ledger_observer.frame_query_chunk_frames` (not settable).
+    pub(super) fn frame_cleaner_settings(
+        &self,
+    ) -> RuntimeHostResult<super::frame_retention::CleanerSettings> {
+        let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+            RuntimeHostError::fatal(
+                failure.failure_code(),
+                ConfigHostLocation::ReadRuntimeConfig,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+            .with_outcome_values(|outcome| failure.with_values(outcome))
+        };
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let section = config.ledger_observer().map_err(refused)?;
+        Ok(super::frame_retention::CleanerSettings {
+            evidence_max_age_days: config
+                .frame_retention_evidence_max_age_days()
+                .map_err(refused)?,
+            steps_per_second: section.frame_query_steps_per_second,
+            chunk_frames: usize::try_from(section.frame_query_chunk_frames).unwrap_or(usize::MAX),
+        })
+    }
+
     /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, read when a run reaches
     /// its deadline.
     pub(super) fn run_end_grace_ms(&self) -> RuntimeHostResult<u64> {

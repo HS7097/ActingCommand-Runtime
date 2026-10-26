@@ -10,7 +10,8 @@
 //! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
 //! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
 //! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
-//! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`).
+//! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`; #422 LN-7c Q adds
+//! `frame_retention_evidence_max_age_days`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
@@ -87,6 +88,9 @@ pub struct DefaultsFile {
     /// Workflow #392 DA-4b-D.
     #[serde(default)]
     pub display_safe_area: Option<DisplaySafeAreaFile>,
+    /// #422 LN-7c Q: the evidence-frame rule's age, 15 days.
+    #[serde(default)]
+    pub frame_retention_evidence_max_age_days: Option<Value>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

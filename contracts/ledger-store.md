@@ -146,6 +146,22 @@ longer holds loads it again from the store, by its link and the `artifact_id` in
 before it is checked, so an old artifact's identity is still its first reference (a
 differing reference is refused `artifact_identity_conflict`) and a Lab pin release finds
 a kept frame's pins.
+#422 LN-7c Q (`rd-1026/ln7c/final-query.md` §2): the open reads no frame. It neither lists
+the live frame store nor reads what the classes of its frames read (above), and the writer
+keeps no frame facts and answers no frame view: the frame cleaner decides by ledger query
+("Frame cleaner"). Resident stay the eviction proof set (a sealed intent whose object's
+records were not read brings its object as the intent records it), the owner changes, ends,
+imports and closes, the scopes a start may still close, and the objects of the capture
+frames that records appended or loaded since the open named; at each pass start the
+cleaner hands the writer its listing of the live frame store, and the writer keeps of those
+objects only the frames in it and the proof set (`frame_retention_live_objects`). With them
+(review F5, as LN-7 dropped the rest at each sweep start) it keeps of the run- and
+scope-keyed facts only those of the kept objects' runs and of the runs it knows that have no
+terminal yet, of their scopes and the sealed scopes, and the closes, scope extents and lease
+releases of the owners a start may still close and of the kept objects; a run whose facts are
+dropped is no longer known. A record that names a capture frame the writer does not hold, or
+a run it does not know (it has applied or loaded no record of it since the open, or dropped
+it since), loads it from the store before it is checked, as above.
 #422 LN-7c R (`rd-1026/ln7c/final-query.md` §3): every batch transaction (append and
 segment import) also writes the frame index rows of its records, the frames, artifacts and runs
 a capture summary, a publication, an input intent, a dedup marker or an evidence read
@@ -177,8 +193,9 @@ scopes, or when it is the owner before the latest) is read back the same way, fr
 last record to its first. Reading an owner back never passes the start before its own.
 Each retained owner then has its epochs, end, reopening, import, the closes of its scopes
 and their writer, its quiescences, scope sources and releases as the read of every owner
-record gives them. An owner change older than that read is resident only where a frame's
-records name it, so `owner_at` may name a wrong owner for an older sequence. Only the
+record gives them. An owner change older than that read is not resident (#422 LN-7c Q:
+the open reads no frame record, which until then could bring an older one), so `owner_at`
+names no owner for an older sequence and never a wrong one. Only the
 eviction admission and candidates outside recovery read the owners the bounded read does
 not reach; today their one caller (`EvictionRecovery::round`) runs only at startup
 recovery, from the eviction proofs. When a retained owner's first block holds no start
@@ -843,13 +860,13 @@ these actions. No S0 file retention or verifier behavior changes.
 
 ### Frame classes (Workflow #375 R5c)
 
-The frame retention view classes every frame for the cleaner and the listing. It is
+The frame retention view classes every frame for the listing. It is
 read-only and writes nothing: it is derived from the committed prefix and evaluated at
-the ledger head and the caller's clock (`GlobalLedgerEvidence::frame_retention_view`
-for a reader, which builds the retention index once per opening;
-`GlobalLedger::frame_retention_view`, the writer's own index, for the cleaner). The
-classes are cached by head and switches (R5d): at an unchanged head a call only applies
-its clock. Kept folders and file names use the machine's local time, through the one
+the ledger head and the caller's clock (`GlobalLedgerEvidence::frame_retention_view`,
+which builds the retention index once per opening). #422 LN-7c Q: the writer has no
+frame view; the cleaner, and the listing for the frames in the live frame store, take a
+frame's class from the frame queries, which decide by these rules with the differences
+named in "Frame cleaner" (E1 to E5). Kept folders and file names use the machine's local time, through the one
 local-offset function of the ledger crate (`local_time::machine_local_offset_ms`); an
 instant the system cannot convert refuses the view as a request error. It never
 consults the unlinked-warning latch, the Warning ring or the K/T policy, and it adds no
@@ -920,42 +937,98 @@ persisted structure.
   `[A-Za-z0-9_-]` become `_`, and the code keeps at most 64 of them. A Lab frame's leaf
   is `lab-<instance alias>`, dated at its capture.
 
-### Frame cleaner (Workflow #375 R5d)
+### Frame cleaner (Workflow #375 R5d; #422 LN-7c Q)
 
 The cleaner runs in actingd while `frame_retention_enabled` is on. It writes nothing to
 the ledger: no eviction intent or outcome, no proof. It no longer calls eviction
 admission, so the K/T policy, the unlinked-warning latch and the seals gate nothing;
 replay of eviction records already in a ledger, and startup recovery of an intent left
-without its outcome, stay.
+without its outcome, stay. #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §1, §4; Alice's
+ruling 70): it decides by ledger query, and no retention state is kept anywhere: the
+writer keeps no frame facts and answers no frame view.
 
-- **Rounds and sweeps** (model v4.3 note). Each round of the performance-monitor loop
-  (every 2 s) acts on at most 16 frames within 1 s. A sweep starts at most every
-  10 minutes (the first at the first round after the start) from the frame view at the
-  Runtime's clock, and lists the settled frames that are due: duplicates, default frames
-  1 day and resource frames 7 days after their entry time are removed; error and Lab
-  frames are moved into their kept folder. The sweep visits them in entry-time order over
-  as many rounds as it needs. Running frames and frames not yet due are untouched.
-- **Live frames** (#422 LN-7). At a sweep start the cleaner's thread lists the live frame
-  store (`artifacts\<shard>\artifact_<hex>.png`; never `kept\`) and the writer keeps only
-  the facts of the frames present there and what their classes read; the sweep's view
-  lists those frames only, decided as the full view decides them. A listing failure is
-  that round's error (`ledger_io`, not fatal): the next round reads again.
-- **Never a stale class.** While a sweep still has queued frames, each round reads the
-  view again (cached by head, so at an unchanged head this only applies the clock) and
-  derives every queued action again before acting: a frame whose class changed during
-  the sweep is acted on by its current class, so a frame that became Lab-protected is
-  moved, never removed, and a frame no longer due stays where it is.
-- **Only the object key.** A removal or a move acts on `<state root>\<object key>` and
-  nowhere else; the cleaner never looks in `kept\`. Nothing there means the frame is
-  absent: deleted by hand, or already removed or moved. So a frame in a kept folder is
-  never removed or moved again, whatever its class becomes after a switch change or a
-  Lab pin release.
+- **Passes and rounds** (model v4.3 note). A pass starts at most every 10 minutes (the
+  first at the first round after the start). At its start the cleaner's thread lists the
+  live frame store (`artifacts\<shard>\artifact_<hex>.png`) and `kept\` (by the walk's
+  rules of "Moved-frame reads"), hands the live listing to the writer, which keeps the
+  objects of those frames and the eviction proof set only (operation
+  `frame_retention_live_objects`), and opens the pass's frame query: a read-only
+  connection of its own to the state database, never the writer's thread or connection.
+  Each round of the performance-monitor loop (every 2 s) then runs the pass's statements
+  as their pace allows and acts on at most 16 frames within 1 s. A listing failure
+  (`ledger_io`) or a failed statement (operation `query_frame_retention`) is that round's
+  error and not fatal: the next pass starts after the interval.
+- **The statements** (§1.2). W, once per pass: the open runs of the current owner epoch
+  (their instance and first frame time). L, per chunk of at most
+  `ledger_observer.frame_query_chunk_frames` (256) live frames due for examination, every
+  chunk at the pass start's time, the time W answered at (review F1: a later chunk's time
+  would settle a frame captured in the 30 s before the pass start while a run that began
+  after W, which W does not hold, still waits for it); a round's re-check of the frames it
+  queued runs at the round's time. L answers each frame's class (`running`, `lab`,
+  `error`, `resource`, `duplicate`, `default`) and action (`running`, `keep`,
+  `keep_resource`, `move_lab`, `move_error`, `remove`, `remove_duplicate`,
+  `remove_confirmed`). K, per chunk of the kept listing: `keep`,
+  `remove_confirmed` or `remove_expired`. Every access is pinned (`INDEXED BY`,
+  `CROSS JOIN`, unary `+`, `MATERIALIZED`), so a missing index fails the statement instead
+  of reading the whole history; their plans on an empty database pass the rule of §1.3
+  (no scan of a ledger table, a type index only with a sequence bound, no history-wide
+  index, no automatic index) and equal their golden texts
+  (`crates/ledger/src/global/sqlite/frame_query/plan_*.txt`). Each statement runs in a
+  read transaction of its own, and only while the frame index covers the snapshot: its
+  extent is `1..=` the snapshot's head
+  ([ledger-observer.md §11.7](ledger-observer.md#117-the-frame-index-ledger_frame_refs-422-ln-7c-r)).
+  Otherwise the pass decides and touches nothing, and actingd prints
+  `actingd frame_retention pass skipped=frame_refs_incomplete`.
+- **The classes** are those of "Frame classes" above, with §6 of the design: a default
+  frame is due 1 day and a resource frame 7 days after its ingestion time
+  (`created_at_unix_ms`), still only once settled (E1, at most a run's length earlier than
+  by the entry time); a Lab frame whose Lab pins were all released after its latest use
+  stays Lab (E3); any Warning-or-higher or `task.failed` record that names the frame, by
+  link, artifact row or index row, makes it error (E4); a marker counts only when it is
+  first on both sides (E5).
+- **The examination schedule** (§1.4) is the process's only memory and never decides a
+  class: a frame answered `keep` is examined again 1 day, one answered `keep_resource` 7
+  days after its ingestion time; a running frame, a busy one and one new to this process
+  are examined at every pass. Every kept frame is examined at every pass.
+- **The pace** (§1.5). Each answer carries its statement's SQLite virtual-machine steps
+  (the unit is steps, not rows). A statement starts no earlier than the one before plus
+  its steps at `ledger_observer.frame_query_steps_per_second` (500 000), read after each
+  statement. The query's stop, the Runtime's shutdown, is watched inside every statement
+  (a progress handler on the query's own connection, every
+  `ledger_observer.read_check_vm_steps` steps) and interrupts the statement in progress.
+- **Never a stale class.** A pass's answers only queue frames. Each round takes at most 16
+  queued frames, runs L or K again for those frames only, on a fresh snapshot with the
+  pass's W, and acts on that answer: a frame whose class changed is acted on by its
+  current class (a frame that became Lab-protected is moved, never removed), a frame no
+  longer due is scheduled by its new answer, and a frame no longer answered is examined
+  at the next pass. Before it acts, it reads and authenticates the frame's own
+  `artifact.verified` record, which names its object key; a moved frame's kept folder is
+  named by the rules above from its owner point (one keyed statement) or, for a Lab frame,
+  its capture.
+- **Live frames: only the object key.** A removal or a move of a live frame acts on
+  `<state root>\<object key>` and nowhere else. Nothing there means the frame is absent:
+  deleted by hand, or already removed or moved.
+- **Kept frames: the evidence-frame rule** (§4; Alice's rule for evidence frames, the
+  14-day question answered A: there is no 14-day key). A Lab or error frame is removed at
+  the next pass once an agent or a person confirmed reading it: a `client.action` of
+  control `evidence_read_frame` (the frame) or `evidence_read_run` (its run) recorded at
+  or after the frame's ingestion time ([runtime-interface.md](runtime-interface.md),
+  `evidence confirm-read`), found by its index row `read_confirmed`. That holds in `kept\`
+  (K's `remove_confirmed`) and for a live frame classed Lab or error (L's
+  `remove_confirmed`, instead of the move). An unconfirmed kept frame is removed once
+  `frame_retention_evidence_max_age_days` (15) have passed since its ingestion time (K's
+  `remove_expired`); the value is taken at each pass start, so a change takes effect at
+  the next pass. Opening or reading a frame is no confirmation. A kept file whose artifact
+  id has no `artifact.verified` record in this ledger is never touched and counts
+  `kept_unknown`. A kept frame's removal takes its use lock try-only, opens the file for
+  deletion only, removes it and its lock, then removes its leaf and its date folder when
+  they are empty, never recursively: a folder that is not empty, or is held, stays.
 - **File handling.** The cleaner first stats the path; an absent frame costs no action
   and takes no lock. It then takes the frame's use lock
   (`artifact-use-locks\<name>.lock`) try-only and opens the file for deletion only,
   shared for deletion only, without reading or hashing it. A held lock, or os error 32
   or 33 on the open, the unlink or the rename, is **busy**: the frame is retried by the
-  next sweep. Any other error is **failed**: one Warning (below), and the frame stays
+  next pass. Any other error is **failed**: one Warning (below), and the frame stays
   until a restart. Once the frame is removed or moved, the cleaner deletes its use lock
   while it still holds it (Workflow #411 A29); a lock already gone is fine.
 - **Moves.** The cleaner creates the kept folder if needed, puts the frame into its own
@@ -963,31 +1036,39 @@ without its outcome, stay.
   time and its move count (16 bytes). A failed rename takes the map entry out again. A
   rename that finds no folder (a leaf deleted by hand right after its creation) while
   the frame is still there creates the folder again and renames once more.
-- **Done set.** The process remembers the frames it removed, moved or found absent, and
-  never visits them again; a sweep start forgets those that left the live store, which its
-  view no longer lists (#422 LN-7). A view lists no frame removed or moved before the sweep
-  started, so `absent` and, in the first sweep after a start, `rescanned_absent` count only
-  the frames that left the store after the sweep's listing.
+- **Done set.** The process remembers the live frames it removed, moved or found absent,
+  and the frames whose removal or move failed, and never visits them again; a pass start
+  forgets those that left their listing. A listing holds no frame removed or moved before
+  the pass started, so `absent` and, in the first pass after a start,
+  `rescanned_absent` count only the frames that left the store after the pass's listing.
 - **Lock.** A round takes the cleaner's lock try-only and skips while `clear-kept` holds
   it.
-- **Fail Loud.** One stdout line per completed sweep that visited frames, and always for
-  the first sweep: `actingd frame_retention pass frames=<n> deleted=<n>
+- **Fail Loud.** One stdout line per completed pass that queued frames, and always for
+  the first pass: `actingd frame_retention pass frames=<n> deleted=<n>
   deleted_bytes=<b> moved=<n> moved_bytes=<b> absent=<n> rescanned_absent=<n> busy=<n>
-  failed=<n> kept_error=<n> kept_lab=<n> running=<n> rounds=<n> pass_ms=<ms>`. `frames`
-  counts the due frames the sweep visited; `kept_error`, `kept_lab` and `running` count
-  the settled error and Lab frames and the unsettled frames of its view. With the
+  failed=<n> kept_error=<n> kept_lab=<n> running=<n> rounds=<n> pass_ms=<ms>
+  kept_examined=<n> removed_confirmed=<n> removed_expired=<n> kept_unknown=<n>
+  query_steps=<n>`. `frames` counts the frames the pass queued, live and kept; `deleted`
+  the removals of both; `kept_error` and `kept_lab` the live error and Lab frames its
+  answers move, `running` the live frames answered running; `kept_examined` the kept
+  frames K examined; `removed_confirmed` the evidence frames removed as confirmed, live
+  and kept; `removed_expired` the kept frames removed at their maximum age;
+  `kept_unknown` as above; `query_steps` the steps of the pass's statements. A pass
+  without a complete frame index prints the `skipped` line above instead. With the
   cleaner off, actingd prints `actingd frame_retention disabled` once at start and runs
-  no sweep. A failed removal or move appends one Warning `runtime.failed` with system
+  no pass. A failed removal or move appends one Warning `runtime.failed` with system
   links, once per object per process, whose detail carries `host_code=`
-  `frame_retention_remove_failed` (`artifact_id`, `io_kind`, `os_error`) or
+  `frame_retention_remove_failed` (`artifact_id`, `io_kind`, `os_error`; for a kept frame,
+  or its folder that could not be removed, `entry` too) or
   `frame_retention_move_failed` (adds `entry`, the kept folder relative to the state
   root). A move whose counter `kept\.moves` could not be written counts as moved and is
   reported once per process by its own code, `frame_retention_counter_failed` (`entry`,
   `io_kind`, `os_error`). A removed or moved frame whose use lock could not be deleted
   counts as removed or moved, and its lock is reported once per object per process by its
   own code, `frame_retention_lock_remove_failed` (`artifact_id`, `io_kind`, `os_error`);
-  the lock stays. Only a ledger error, including a failed append of such a Warning, is
-  fatal; a held file never is.
+  the lock stays. Only a fatal ledger error, including a failed append of such a Warning
+  and a record that fails its authentication, stops the Runtime; a failed statement of the
+  query never does, nor does a held file.
 
 ### Moved-frame reads (Workflow #375 R5d)
 
@@ -1063,13 +1144,33 @@ between the two is found by the walk, and a frame found in both places counts
   `artifacts` and `bytes` of artifacts that are not capture frames. `paths[]` (with
   `--paths`): each selected settled frame's `path` (`kept/…` when the walk found it, else
   its object key) and `class`; running frames have no path.
+- **#422 LN-7c Q: the cleaner's statements.** The classes and due times of the frames in
+  the live frame store are statement L's answers (W, then L per chunk of
+  `ledger_observer.frame_query_chunk_frames`'s default, on a read-only connection of the
+  listing's own that looks at its stop every `ledger_observer.read_check_vm_steps`'s
+  default), so the listing classes as the cleaner does; a frame no longer in the store keeps
+  the view's class. `evidence` holds statement K's answers over the kept listing, with
+  `frame_retention_evidence_max_age_days` from the same `config.parameters.top_level` fact
+  (its default when the fact does not name it). The defaults are read from actingd's
+  defaults file `actingd.defaults.json`, embedded as the key table embeds it (review F4);
+  one it does not name is `frame_switches_unavailable`:
+  `max_age_days`; `kept_staying`, `kept_remove_confirmed`, `kept_remove_expired` and
+  `kept_unknown` (kept files this ledger has no `artifact.verified` record of), each as
+  `frames` and `bytes`; `live_remove_confirmed` (live Lab and error frames the next pass
+  removes instead of moving them); and `confirmed[]`, each confirmed evidence frame, kept or
+  live, with its `path`, `artifact_id`, `captured_at_unix_ms` and `confirmed_by {actor,
+  source, surface, client, at_unix_ms, sequence}`: the first confirmation at or after its
+  ingestion time, `client` being the identity card declared in its correlation (absent
+  when none was).
 - **Refusals.** Usage errors are `invalid_arguments`. A ledger without the three
   switches in its latest `config.parameters.top_level` fact is
   `frame_switches_unavailable`; a frame file that cannot be stat'ed for a reason other
   than its absence is `frame_stat_failed`; a `host.kept_folder_cleared` fact that is not
   one row with `folder` and `cleared_at_unix_ms` is `kept_folder_cleared_record_invalid`;
   an unreadable clock or local offset is `artifact_retention_clock_failed`; a failed walk
-  relays `artifact_kept_walk_failed`. The operation is `list_frames`.
+  relays `artifact_kept_walk_failed`; a frame index that does not cover the ledger is
+  `ledger_index_mismatch` (#422 LN-7c Q: the cleaner would decide nothing either). The
+  operation is `list_frames`.
 
 ## S1–S5 ownership and acceptance map
 

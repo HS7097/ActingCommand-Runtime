@@ -37,6 +37,12 @@ pub use view::{
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
     FrameRetentionView, KeptFrameFolder,
 };
+// #422 LN-7c Q: the rules the frame cleaner's queries name a moved frame's kept folder and decide
+// a frame's due time by, the view's own.
+pub(in crate::global) use view::{
+    DAY_MS, ERROR_WINDOW_MS, LocalOffsetMs, READING_DAYS, SETTLE_AGE_MS, first_string, id_text,
+    kept_file_name, leaf_name, leaf_part, local_date, type_leaf_name,
+};
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
 #[derive(Default)]
@@ -69,14 +75,15 @@ pub(super) struct RetentionIndex {
     quiescent_instances: BTreeMap<(OwnerEpoch, InstanceId), TerminalEvent>,
     pending_objects: BTreeSet<ArtifactId>,
     unlinked_warning: bool,
-    /// Workflow #375 R5c: the facts of the read-only frame retention view.
+    /// Workflow #375 R5c: the facts of the read-only frame retention view. #422 LN-7c Q: only a
+    /// full build keeps them (`frame_view`); the writer's index keeps none, since the frame
+    /// cleaner decides by ledger query.
     frame_facts: view::FrameFacts,
-    /// Workflow #375 R5d: the frame classes at the latest head they were asked for.
-    frame_cache: std::sync::Mutex<Option<view::FrameCache>>,
-    /// LN-7 (#422, LEAN-L §3.5): resident objects whose frame is no longer in the live frame
-    /// store, kept only for the frames that are (their run's span, a marker neighbour) or loaded
-    /// again for a record that names them; the frame view does not list them.
-    ghosts: BTreeSet<ArtifactId>,
+    frame_view: bool,
+    /// #422 LN-7c Q: the runs a record of was applied or loaded, so a record of another run
+    /// loads that run's earlier records once (`load_retention_sources`). A pass start drops a
+    /// run with its facts (`retain_live_objects`, review F5), so it is loaded again then.
+    known_runs: BTreeSet<RunId>,
     through_sequence: u64,
     /// #422 LN-7c O: why the open read every owner record (`retention/owner_read.rs`): its
     /// bounded read did not place a retained owner in a start's epoch, or a dump was present.
@@ -455,7 +462,11 @@ impl RetentionIndex {
         events: &[E],
         check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
     ) -> GlobalLedgerResult<(Self, EventIndexes)> {
-        let mut retained = Self::default();
+        // #422 LN-7c Q: a full build keeps the frame facts of the view.
+        let mut retained = Self {
+            frame_view: true,
+            ..Self::default()
+        };
         let mut indexes = EventIndexes::default();
         for (position, event) in events.iter().enumerate() {
             check(position + 1)?;
@@ -810,7 +821,12 @@ impl RetentionIndex {
         }
         self.apply_prior_epoch(event);
         self.apply_run_terminal(event);
-        self.frame_facts.apply(event);
+        if self.frame_view {
+            self.frame_facts.apply(event);
+        }
+        if let Some(run) = event.links().run_id() {
+            self.known_runs.insert(*run);
+        }
         if let EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload)) = event.payload()
             && let RuntimeLifecyclePhase::ResourceQuiescence {
                 instance_id,
@@ -1734,6 +1750,27 @@ impl super::GlobalLedger {
         super::receive_response(
             receiver,
             LedgerLocation::RetentionCandidates.location(),
+            self.reply_timeout,
+        )?
+    }
+
+    /// #422 LN-7c Q (final-query §2): the frame cleaner, at each pass start, hands the writer its
+    /// listing of the live frame store (`live`); the writer keeps of the capture frame objects
+    /// only those and the eviction proof set. It keeps no frame facts and answers no frame view.
+    pub fn retain_live_frames(&self, live: BTreeSet<ArtifactId>) -> GlobalLedgerResult<()> {
+        let (response, receiver) = std::sync::mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
+        super::send_command(
+            sender,
+            super::WriterCommand::RetainLiveFrames { live, response },
+            LedgerLocation::FrameRetentionLiveObjects.location(),
+        )?;
+        super::receive_response(
+            receiver,
+            LedgerLocation::FrameRetentionLiveObjects.location(),
             self.reply_timeout,
         )?
     }

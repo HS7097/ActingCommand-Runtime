@@ -557,9 +557,8 @@ impl SegmentStore {
 
 impl<B: DurableStorage> EventStore<B> {
     /// LN-7 (#422, LEAN-L §3.5): the writer of a verified store. Its retention state is read by
-    /// type and by index (`open_retention`), not from the open's read of every record: of the
-    /// frames, only the facts of those present in the live frame store stay resident, with what
-    /// their classes read.
+    /// type and by index (`open_retention`), not from the open's read of every record. #422 LN-7c
+    /// Q: no frame is read and the live frame store is not listed.
     /// LN-8d (#422): its reads stop at `deadline`, the open's, and read pages of `page_rows`
     /// rows (`ledger_observer.history_page_rows`, as every later history read does).
     /// #422 LN-7c O: `dump_present`, a dump the open imports after this, makes it read every owner
@@ -578,17 +577,6 @@ impl<B: DurableStorage> EventStore<B> {
                 return Err(error);
             }
         };
-        let live = match super::retention::live_frame_ids(backend.material_root()) {
-            Ok(live) => live,
-            Err(error) => {
-                backend.close()?;
-                return Err(GlobalLedgerError::io(
-                    LedgerCode::LedgerIo.code(),
-                    LedgerLocation::OpenRuntimeLedger.location(),
-                    &error,
-                ));
-            }
-        };
         let mut store = Self {
             commit_statistics,
             backend,
@@ -604,7 +592,7 @@ impl<B: DurableStorage> EventStore<B> {
             index_policy: IndexPolicy::default(),
             revisions: BTreeMap::new(),
         };
-        if let Err(error) = store.open_retention(&live, dump_present, deadline) {
+        if let Err(error) = store.open_retention(dump_present, deadline) {
             return Err(error.with_close_result(store.backend.close()));
         }
         Ok(store)

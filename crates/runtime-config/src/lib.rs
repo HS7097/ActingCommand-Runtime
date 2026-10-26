@@ -39,6 +39,7 @@ mod effective;
 pub mod emulator_control;
 pub mod execution;
 mod existing;
+pub mod frame_retention;
 mod host_claims;
 pub mod idle;
 mod instance;
@@ -165,3 +166,7 @@ mod gate_411_b37;
 // PERF-B1 (Workflow #407 B1): the `execution.capture` keys.
 #[cfg(test)]
 mod gate_407_b1;
+
+// #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
+#[cfg(test)]
+mod gate_ln7c_q;

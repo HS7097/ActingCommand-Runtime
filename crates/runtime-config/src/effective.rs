@@ -424,6 +424,12 @@ impl EffectiveConfig {
         Ok(ladder)
     }
 
+    /// #422 LN-7c Q: `frame_retention_evidence_max_age_days` in effect, in days; the frame cleaner
+    /// reads it at each pass start.
+    pub fn frame_retention_evidence_max_age_days(&self) -> Result<u64, ConfigFailure> {
+        crate::frame_retention::evidence_max_age_days(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, in milliseconds.
     pub fn renewal_slack_ms(&self) -> Result<u64, ConfigFailure> {
         host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))

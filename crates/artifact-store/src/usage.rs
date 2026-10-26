@@ -8,6 +8,7 @@ use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ArtifactEvictionIntentRecord, ArtifactMaterial, ProjectedArtifactReference,
 };
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
@@ -201,6 +202,15 @@ fn open_lock_file(
             "object filename required",
         )
     })?;
+    open_lock_named(root, name, create)
+}
+
+/// The use lock `artifact-use-locks\<name>.lock` of the object file `name`.
+fn open_lock_named(
+    root: &Path,
+    name: &OsStr,
+    create: bool,
+) -> ArtifactStoreResult<Option<(File, PathBuf)>> {
     let directory = root.join("artifact-use-locks");
     if create {
         fs::create_dir_all(&directory)
@@ -354,6 +364,17 @@ pub(crate) fn hold_frame(
         .non_fatal()
     })?;
     let path = crate::store::safe_object_path(root, key).map_err(ArtifactStoreError::non_fatal)?;
+    hold_path(path, || {
+        open_lock_file(root, reference, true).map_err(ArtifactStoreError::non_fatal)
+    })
+}
+
+/// Holds the frame file at `path` with the use lock `lock` opens: a stat first, then the lock
+/// (try-only), then the file opened for deletion only.
+fn hold_path(
+    path: PathBuf,
+    lock: impl FnOnce() -> ArtifactStoreResult<Option<(File, PathBuf)>>,
+) -> ArtifactStoreResult<Held> {
     // A stat first: an absent frame takes no lock.
     match fs::symlink_metadata(&path) {
         Ok(_) => {}
@@ -363,15 +384,13 @@ pub(crate) fn hold_frame(
             return Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal());
         }
     }
-    let (lock, lock_path) = open_lock_file(root, reference, true)
-        .map_err(ArtifactStoreError::non_fatal)?
-        .ok_or_else(|| {
-            failure(
-                StoreCode::ArtifactUseLockMissing.code(),
-                "delete lock was not created",
-            )
-            .non_fatal()
-        })?;
+    let (lock, lock_path) = lock()?.ok_or_else(|| {
+        failure(
+            StoreCode::ArtifactUseLockMissing.code(),
+            "delete lock was not created",
+        )
+        .non_fatal()
+    })?;
     match lock.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => return Ok(Held::Busy),
@@ -551,6 +570,129 @@ pub(crate) fn move_frame_file_with(
     };
     drop(hold);
     outcome
+}
+
+/// #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §1.2): what the frame cleaner did with one frame
+/// file in `kept\`, and the folder it could not remove after it, if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptFrameRemoval {
+    /// `Removed`, `RemovedLockLeft`, `Absent` or `Busy`.
+    pub outcome: FrameFileOutcome,
+    /// The emptied leaf or date folder that could not be removed (`kept/<date>[/<leaf>]`, relative
+    /// to the state root), and why; a folder that is not empty, or gone, is not this.
+    pub folder_left: Option<(String, FrameLockLeft)>,
+}
+
+/// #422 LN-7c Q (final-query §1.2, the evidence-frame rule): the frame cleaner deletes the kept
+/// frame file `<root>\kept\<date>\<leaf>\<file_name>` (a `<HHmmss-fff>_artifact_<hex>.png` the
+/// kept listing found), with its file handling at the object key: a stat first, the frame's use
+/// lock try-only, the file opened for deletion only; absent and busy are outcomes, and any other
+/// failure is a non-fatal error with its I/O kind and os error. After the file is gone, its leaf
+/// and then its date folder are removed when they are empty, never recursively. `kept\.moves` is
+/// not touched: a reader whose cached path vanished misses, as for a frame deleted by hand.
+pub fn remove_kept_frame_file(
+    root: impl AsRef<Path>,
+    date: &str,
+    leaf: &str,
+    file_name: &str,
+) -> ArtifactStoreResult<KeptFrameRemoval> {
+    let root = canonical_root(root.as_ref())?;
+    let object_file = file_name
+        .split_once('_')
+        .map(|(_, object)| object)
+        .filter(|object| kept::object_id(object).is_some())
+        .ok_or_else(|| {
+            failure(
+                StoreCode::ArtifactPathInvalid.code(),
+                "only a kept frame file is removed",
+            )
+            .non_fatal()
+        })?;
+    let relative = Path::new(KEPT_DIRECTORY)
+        .join(date)
+        .join(leaf)
+        .join(file_name);
+    if relative.components().count() != 4 {
+        return Err(failure(
+            StoreCode::ArtifactPathInvalid.code(),
+            "a kept path has four parts",
+        )
+        .non_fatal());
+    }
+    let path = crate::store::safe_object_path(&root, relative.as_path())
+        .map_err(ArtifactStoreError::non_fatal)?;
+    let lock = || {
+        open_lock_named(&root, OsStr::new(object_file), true).map_err(ArtifactStoreError::non_fatal)
+    };
+    let done = |outcome| KeptFrameRemoval {
+        outcome,
+        folder_left: None,
+    };
+    let hold = match hold_path(path, lock)? {
+        Held::Frame(hold) => hold,
+        Held::Absent => return Ok(done(FrameFileOutcome::Absent)),
+        Held::Busy => return Ok(done(FrameFileOutcome::Busy)),
+    };
+    let leaf_folder = hold.path.parent().map(Path::to_path_buf);
+    let outcome = match fs::remove_file(&hold.path) {
+        Ok(()) => match hold.release_done() {
+            None => FrameFileOutcome::Removed,
+            Some(left) => FrameFileOutcome::RemovedLockLeft(left),
+        },
+        Err(error) => {
+            drop(hold);
+            return if error.kind() == ErrorKind::NotFound {
+                Ok(done(FrameFileOutcome::Absent))
+            } else if is_busy_io(&error) {
+                Ok(done(FrameFileOutcome::Busy))
+            } else {
+                Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal())
+            };
+        }
+    };
+    let mut removal = done(outcome);
+    if let Some(leaf_folder) = leaf_folder {
+        let leaf_entry = format!("{KEPT_DIRECTORY}/{date}/{leaf}");
+        match remove_empty_folder(&leaf_folder) {
+            Ok(true) => {
+                if let Some(date_folder) = leaf_folder.parent()
+                    && let Err(left) = remove_empty_folder(date_folder)
+                {
+                    removal.folder_left = Some((format!("{KEPT_DIRECTORY}/{date}"), left));
+                }
+            }
+            Ok(false) => {}
+            Err(left) => removal.folder_left = Some((leaf_entry, left)),
+        }
+    }
+    Ok(removal)
+}
+
+/// os error 145 (`ERROR_DIR_NOT_EMPTY`).
+const DIR_NOT_EMPTY: i32 = 145;
+/// `ERROR_DELETE_PENDING`: an entry that is being deleted.
+const DELETE_PENDING: i32 = 303;
+
+/// Removes `folder` when it is empty, never recursively: `Ok(true)` when it was removed,
+/// `Ok(false)` when it is not empty, gone, being deleted or held open by another program right
+/// now (it stays as it is), and the error otherwise.
+fn remove_empty_folder(folder: &Path) -> Result<bool, FrameLockLeft> {
+    match fs::remove_dir(folder) {
+        Ok(()) => Ok(true),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::NotFound | ErrorKind::DirectoryNotEmpty
+            ) || matches!(error.raw_os_error(), Some(DIR_NOT_EMPTY | DELETE_PENDING))
+                || is_busy_io(&error) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(FrameLockLeft {
+            io_kind: error.kind(),
+            os_error: error.raw_os_error(),
+        }),
+    }
 }
 
 pub(crate) fn is_link(metadata: &fs::Metadata) -> bool {

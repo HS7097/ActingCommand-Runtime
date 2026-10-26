@@ -48,15 +48,12 @@ pub(super) trait LedgerStore: Send + 'static {
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates>;
-    /// LN-7 (#422): with `live`, the writer first drops the facts of the frames that left the
-    /// live frame store.
-    fn frame_retention_view(
+    /// #422 LN-7c Q (final-query §2): at a frame cleaner pass start, the writer keeps of the
+    /// capture frame objects only those in `live` (the live frame store) and the proof set.
+    fn retain_live_objects(
         &mut self,
-        now_unix_ms: u64,
-        switches: super::FrameRetentionSwitches,
-        live: Option<&std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
-        work: &ReadWork,
-    ) -> GlobalLedgerResult<super::FrameRetentionView>;
+        live: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+    );
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
@@ -198,17 +195,11 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates> {
         Self::retention_candidates(self, after)
     }
-    fn frame_retention_view(
+    fn retain_live_objects(
         &mut self,
-        now_unix_ms: u64,
-        switches: super::FrameRetentionSwitches,
-        live: Option<&std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
-        work: &ReadWork,
-    ) -> GlobalLedgerResult<super::FrameRetentionView> {
-        if let Some(live) = live {
-            self.retention.retain_frames(live);
-        }
-        Self::frame_retention_view(self, now_unix_ms, switches, work)
+        live: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+    ) {
+        self.retention.retain_live_objects(live);
     }
     fn admit_artifact_eviction(
         &mut self,

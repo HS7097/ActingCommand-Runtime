@@ -6489,6 +6489,14 @@
       "since": "0.12.0",
       "description": "The ledger's operation or stage: finish artifact eviction."
     },
+    "frame_retention_live_objects": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.17",
+      "description": "At each frame cleaner pass start, the writer keeps of the capture frame objects only those present in the live frame store and the eviction proof set; a dropped object is loaded again when a record names it (#422 LN-7c Q)."
+    },
     "frame_retention_view": {
       "owner": "ledger",
       "layer": "store",
@@ -6936,6 +6944,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger's operation or stage: query events."
+    },
+    "query_frame_retention": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.17",
+      "description": "The frame cleaner's ledger query on its own read-only connection: the open runs (W), the live frames' classes and actions (L), the kept frames' evidence rule (K), a moved frame's owner point and its verified row, each in a read transaction of its own, paced by ledger_observer.frame_query_steps_per_second (#422 LN-7c Q, ledger store, Frame cleaner)."
     },
     "query_ledger_view": {
       "owner": "ledger",

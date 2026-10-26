@@ -17,7 +17,7 @@ mod retention;
 pub use retention::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, OwnerReadFull,
+    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, OwnerReadFull, live_frame_ids,
 };
 mod sqlite;
 mod storage;
@@ -57,6 +57,12 @@ pub(crate) use sqlite::synthetic::{AppendedBatch, SyntheticAppender};
 #[cfg(any(test, feature = "test-hooks"))]
 pub use sqlite::scrub::SteppingScrubClock;
 pub use sqlite::scrub::{LedgerScrubClock, LedgerScrubPolicy, LedgerScrubStop};
+// #422 LN-7c Q (final-query §1): the frame cleaner's ledger query.
+pub use sqlite::frame_query::{
+    EvidenceCovers, EvidenceTarget, FrameConfirmation, FrameQuery, FrameQueryAction,
+    FrameQueryFrame, FrameQueryOutcome, FrameQuerySettings, FrameQueryStop, FrameWaits,
+    KeptFrameAnswer, LiveFrameAnswer, evidence_covers,
+};
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
@@ -1284,15 +1290,13 @@ enum WriterCommand {
         after: Option<actingcommand_contract::ArtifactId>,
         response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
     },
-    /// Workflow #375 R5d: the frame cleaner's read. Its writer command kind stays
-    /// `RetentionCandidates`, the cleaner's retention read, so task timing records keep their
-    /// closed set of command kinds.
-    FrameRetentionView {
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-        /// LN-7 (#422): the frames present in the live frame store, at a sweep start.
-        live: Option<std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
-        response: SyncSender<GlobalLedgerResult<FrameRetentionView>>,
+    /// #422 LN-7c Q (final-query §2): at a frame cleaner pass start, the writer keeps of the
+    /// capture frame objects only those of the frames present in the live frame store. Its writer
+    /// command kind is `RetentionCandidates`, the cleaner's retention command, so task timing
+    /// records keep their closed set of command kinds.
+    RetainLiveFrames {
+        live: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        response: SyncSender<GlobalLedgerResult<()>>,
     },
     AdmitArtifactEviction {
         guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
@@ -1502,6 +1506,11 @@ pub struct GlobalLedger {
     writer_work: Arc<WriterWork>,
     /// LN-9 (#422, LEAN-L §6): the paced background scrub; only the Runtime's writer has one.
     scrub: Option<sqlite::scrub::ScrubThread>,
+    /// #422 LN-7c Q: the database the frame cleaner's queries read on their own connection (a
+    /// formal writer's), and how often a query looks at its stop inside a statement
+    /// (`ledger_observer.read_check_vm_steps`).
+    frame_query_database: Option<Arc<actingcommand_runtime_database::RuntimeDatabase>>,
+    read_check_vm_steps: u32,
 }
 
 /// #411 A51 (R4): the operation of the writer's command in progress (or of its flush) and when
@@ -1643,7 +1652,7 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
         WriterCommand::RetentionCandidates { response, .. } => {
             let _ = response.send(Err(refused));
         }
-        WriterCommand::FrameRetentionView { response, .. } => {
+        WriterCommand::RetainLiveFrames { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::AdmitArtifactEviction { response, .. } => {
@@ -2108,6 +2117,19 @@ impl GlobalLedger {
         Ok(())
     }
 
+    /// #422 LN-7c Q (final-query §1.2): a frame query on its own read-only connection to this
+    /// writer's database, which `stop` interrupts within a statement. Only a formal writer has
+    /// one; any other answers `writer_unavailable` (not fatal). Does not enqueue a writer command.
+    pub fn frame_query(&self, stop: FrameQueryStop) -> GlobalLedgerResult<FrameQuery> {
+        let database = self.frame_query_database.as_ref().ok_or_else(|| {
+            GlobalLedgerError::request(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryFrameRetention.location(),
+            )
+        })?;
+        FrameQuery::open(Arc::clone(database), stop, self.read_check_vm_steps)
+    }
+
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
         match self.writer.as_ref() {
             Some(writer) if !writer.is_finished() => Ok(()),
@@ -2196,6 +2218,9 @@ impl GlobalLedger {
         let history_page_rows = config.history_page_rows;
         // LN-9 (#422): the writer's scrub, with the database it reads.
         let scrub = config.scrub.clone().zip(config.scrub_database.clone());
+        // #422 LN-7c Q: a formal writer's frame queries read the same database.
+        let frame_query_database = config.scrub_database.clone();
+        let read_check_vm_steps = config.read_check_vm_steps;
         let failure = config.write_failure.clone();
         // #411 A51: the read budget and the close bound, on the writer's clock.
         let close_timeout = config.close_timeout;
@@ -2332,6 +2357,8 @@ impl GlobalLedger {
                     clock,
                     writer_work,
                     scrub,
+                    frame_query_database,
+                    read_check_vm_steps,
                 })
             }
             Err(mpsc::SendError(store)) => {
@@ -3266,7 +3293,9 @@ fn command_operation(command: &WriterCommand) -> Location {
         }
         WriterCommand::ResolveArtifact { .. } => LedgerLocation::ResolveLedgerArtifact.location(),
         WriterCommand::RetentionCandidates { .. } => LedgerLocation::RetentionCandidates.location(),
-        WriterCommand::FrameRetentionView { .. } => LedgerLocation::FrameRetentionView.location(),
+        WriterCommand::RetainLiveFrames { .. } => {
+            LedgerLocation::FrameRetentionLiveObjects.location()
+        }
         WriterCommand::AdmitArtifactEviction { .. } => {
             LedgerLocation::AdmitArtifactEviction.location()
         }
@@ -3310,7 +3339,6 @@ const fn is_read_command(command: &WriterCommand) -> bool {
         command,
         WriterCommand::ResolveArtifact { .. }
             | WriterCommand::RetentionCandidates { .. }
-            | WriterCommand::FrameRetentionView { .. }
             | WriterCommand::Query { .. }
             | WriterCommand::QueryPage { .. }
             | WriterCommand::IndexRecords { .. }
@@ -3378,8 +3406,7 @@ fn writer_commands<S: LedgerStore>(
         let mut whole_ledger_query = false;
         let kind = match &command {
             WriterCommand::ResolveArtifact { .. } => LedgerWriterCommandKind::ResolveArtifact,
-            WriterCommand::RetentionCandidates { .. }
-            | WriterCommand::FrameRetentionView { .. } => {
+            WriterCommand::RetentionCandidates { .. } | WriterCommand::RetainLiveFrames { .. } => {
                 LedgerWriterCommandKind::RetentionCandidates
             }
             WriterCommand::ReleaseLabPin { .. } => LedgerWriterCommandKind::ReleaseLabPin,
@@ -3539,24 +3566,10 @@ fn writer_commands<S: LedgerStore>(
                 }
                 command_observation.replied(response.send(result).is_ok());
             }
-            WriterCommand::FrameRetentionView {
-                now_unix_ms,
-                switches,
-                live,
-                response,
-            } => {
-                let result =
-                    store.frame_retention_view(now_unix_ms, switches, live.as_ref(), &work);
-                command_succeeded = result.is_ok();
-                if let Err(error) = &result
-                    && error.terminal()
-                {
-                    let error = error.clone();
-                    command_observation.replied(response.send(result).is_ok());
-                    notify_terminal_failure(&mut subscribers, error.clone());
-                    return Err(error);
-                }
-                command_observation.replied(response.send(result).is_ok());
+            WriterCommand::RetainLiveFrames { live, response } => {
+                store.retain_live_objects(&live);
+                command_succeeded = true;
+                command_observation.replied(response.send(Ok(())).is_ok());
             }
             WriterCommand::AdmitArtifactEviction { guard, response } => {
                 match store.admit_artifact_eviction(*guard) {

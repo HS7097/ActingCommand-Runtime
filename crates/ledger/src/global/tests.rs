@@ -2696,6 +2696,10 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         writer_work: Arc::new(super::WriterWork::default()),
         // LN-9 (#422): a writer without a failure plan has no scrub.
         scrub: None,
+        // LN-7c Q (#422): a hand-built writer has no frame query database; the check interval
+        // is `ledger_observer.read_check_vm_steps`'s default.
+        frame_query_database: None,
+        read_check_vm_steps: super::read_work::DEFAULT_READ_CHECK_VM_STEPS,
     };
     let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();
@@ -2933,8 +2937,9 @@ mod gate_ln6;
 // #422 LN-TUNE: a paged history read reads and authenticates each row once.
 #[path = "tests/gate_ln_tune.rs"]
 mod gate_ln_tune;
-// LN-7 (#422, LEAN-L §3.5): the writer keeps the facts of the live frames only, and decides them
-// as the full view does (A6); an old artifact's identity is read through its index.
+// LN-7 (#422, LEAN-L §3.5): an old artifact's identity is read through its index. #422 LN-7c Q:
+// the frame cleaner's query decides the live frames of A6's case fixture as the full view does
+// (T-eq).
 #[path = "tests/gate_ln7.rs"]
 mod gate_ln7;
 // LN-8 (#422, LEAN-L §3.2 step 2, §6): the writer open authenticates the meta row, the end of the
@@ -2960,7 +2965,12 @@ mod gate_ln7c_r;
 #[path = "tests/gate_ln_ws.rs"]
 mod gate_ln_ws;
 // #422 LN-7c O: the open reads the owner records of the two latest owner epochs (and of the older
-// owners a start may still close) and keeps the owner state, the frame view and the startup closes
-// of the read of every owner record; a dump present at the open makes it read every owner record.
+// owners a start may still close) and keeps the owner state, the frame cleaner's decisions and the
+// startup closes of the read of every owner record; a dump present at the open makes it read every
+// owner record.
 #[path = "tests/gate_ln7c_o.rs"]
 mod gate_ln7c_o;
+// #422 LN-7c Q: the frame cleaner by ledger query: T-eq on a production-shaped history, the
+// evidence-frame rule (T-evidence), the open that reads no frame (T-open) and the stop (T-pace).
+#[path = "tests/gate_ln7c_q.rs"]
+mod gate_ln7c_q;
