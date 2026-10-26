@@ -388,6 +388,7 @@
     "open_warn_ratio_milli": 500,
     "history_page_rows": 256,
     "writer_reply_timeout_ms": 10000,
+    "open_verify_tail_records": 4096,
     "tag": {
       "workbench_patterns": [
         "task.*.last_duration_ms",

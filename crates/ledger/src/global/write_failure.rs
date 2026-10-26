@@ -157,6 +157,9 @@ pub struct LedgerFailurePlan {
     /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read
     /// (`ledger_observer.history_page_rows`).
     history_page_rows: Option<usize>,
+    /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the start's ledger open
+    /// authenticates (`ledger_observer.open_verify_tail_records`).
+    open_verify_tail_records: Option<usize>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -172,6 +175,7 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("close_timeout", &self.close_timeout)
             .field("reply_timeout", &self.reply_timeout)
             .field("history_page_rows", &self.history_page_rows)
+            .field("open_verify_tail_records", &self.open_verify_tail_records)
             .finish()
     }
 }
@@ -206,6 +210,7 @@ impl LedgerFailurePlan {
             close_timeout: None,
             reply_timeout: None,
             history_page_rows: None,
+            open_verify_tail_records: None,
         }
     }
 
@@ -237,12 +242,23 @@ impl LedgerFailurePlan {
         self
     }
 
+    /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the start's ledger open
+    /// authenticates (`ledger_observer.open_verify_tail_records`).
+    pub fn with_open_verify_tail_records(mut self, records: usize) -> Self {
+        self.open_verify_tail_records = Some(records);
+        self
+    }
+
     pub(super) fn read_budget(&self) -> Option<Duration> {
         self.read_budget
     }
 
     pub(super) fn history_page_rows(&self) -> Option<usize> {
         self.history_page_rows
+    }
+
+    pub(super) fn open_verify_tail_records(&self) -> Option<usize> {
+        self.open_verify_tail_records
     }
 
     pub(super) fn close_timeout(&self) -> Option<Duration> {

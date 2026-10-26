@@ -75,12 +75,28 @@ The recovered store then moves to the writer. Failed construction joins the
 waiting thread; failed transfer closes the opened store and joins the thread.
 The caller never receives a ledger backed by an unfinished open operation.
 
-The formal SQLite constructor first authenticates the keyed metadata row, then
-reads and verifies the history in one pass, artifacts included, reading no
-further than the authenticated head sequence and within the caller's deadline.
-Exceeding either returns `ledger_read_budget_exceeded`, which RuntimeHost treats
-as fatal. Open time and memory grow linearly with committed history and retained
-artifact bytes; no persisted verification checkpoint, archive or rotation exists.
+The formal SQLite constructor (#422 LN-8, LEAN-L §3.2 step 2) reads, in one read
+transaction, the format and marker, the keyed metadata row (its head sequence and
+head record hash), `MAX(sequence)` through the primary key (the stored rows end at
+that head; a row past it or a missing head row is `ledger_meta_mismatch`) and the
+newest `ledger_observer.open_verify_tail_records` rows (4 096 by default,
+`1..=1000000`). It reads the tail in chunks, each row authenticated on its own (record
+schema, stored sequence, hash, keyed tag, predecessor, index columns, its link and
+artifact rows), contiguous through the head; the oldest tail row is chained to its
+predecessor's stored hash and the newest row's hash is the metadata's head hash.
+Damage in the tail fails the open with the code and operation a complete read gives
+for it (`ledger_record_mismatch`, `corrupt_ledger_record`, `sequence_discontinuity`,
+`ledger_index_mismatch`, `ledger_meta_mismatch`). Then it creates the stored views and
+indexes a database lacks, checking only that the metadata still names the head it
+verified, and reads its retention state by type and by index (LN-7, below). It reads
+no other history row and does not check the migrated prefix: every reader
+authenticates each row it reads, `ledger-maintenance verify` reads every row with the
+prefix, and the background re-check (LN-9, the same release) reads every row once per
+pass (LEAN-L model §6; Alice's ruling 57). Its deadline bounds both reads; passing it returns
+`ledger_read_budget_exceeded`, which RuntimeHost treats as fatal. Open time and memory
+no longer grow with the committed history (model §7.1 A1, A2). The start reports the
+open's phases as `ledger_opened`'s `meta_ms`, `tail_ms`, `index_ms` and `import_ms`, and
+the tail records it authenticated as `event_count`.
 #422 LN-5: the open keeps only the retention state it derives from the records and
 drops the records; the writer keeps no list or index of them. Its reads of the
 history read SQLite a page of `ledger_observer.history_page_rows` rows at a time,

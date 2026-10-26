@@ -2935,3 +2935,8 @@ mod gate_ln_tune;
 // as the full view does (A6); an old artifact's identity is read through its index.
 #[path = "tests/gate_ln7.rs"]
 mod gate_ln7;
+// LN-8 (#422, LEAN-L §3.2 step 2, §6): the writer open authenticates the meta row, the end of the
+// rows and the newest records only; damage in that tail is refused at open, damage in an older row
+// by its read and by `ledger-maintenance verify`.
+#[path = "tests/gate_ln8.rs"]
+mod gate_ln8;
