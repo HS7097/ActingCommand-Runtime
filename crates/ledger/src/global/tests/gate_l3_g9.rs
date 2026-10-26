@@ -153,20 +153,28 @@ fn counted_open(root: &Root) -> LedgerReadCounts {
     counts
 }
 
-// One pass: each event row and each link row exactly once, no artifact row twice, no material.
+// The distinct rows of a table that a counter saw.
+fn distinct(reads: LedgerTableReads) -> u64 {
+    reads.rows - reads.repeated
+}
+
+// One pass: each event row and each link row is read, none past the head, no artifact row beyond
+// the committed ones, no material. #422 LN-7: the open also reads its retention state by type and
+// by index besides the verification pass (until LN-8 drops the full read), so a row can be read
+// twice; the pass is counted by the distinct rows.
 fn assert_one_pass(root: &Root, counts: LedgerReadCounts) {
-    let once = LedgerTableReads {
-        rows: root.records,
-        repeated: 0,
-    };
-    assert_eq!(counts.events, once, "each event row once: {counts:?}");
-    assert_eq!(counts.links, once, "each link row once: {counts:?}");
     assert_eq!(
-        counts.artifacts.repeated, 0,
-        "no artifact row twice: {counts:?}"
+        distinct(counts.events),
+        root.records,
+        "each event row: {counts:?}"
+    );
+    assert_eq!(
+        distinct(counts.links),
+        root.records,
+        "each link row: {counts:?}"
     );
     assert!(
-        counts.artifacts.rows <= root.artifact_rows,
+        distinct(counts.artifacts) <= root.artifact_rows,
         "at most the {} artifact rows: {counts:?}",
         root.artifact_rows
     );
@@ -217,8 +225,18 @@ fn gate_l3_g9_material_deleted_by_hand_reads_the_same_rows() {
     }
     let without_material = counted_open(&root);
     assert_one_pass(&root, without_material);
+    // #422 LN-7: a frame whose file is gone is no live frame, so the open does not read its records
+    // again for its retention facts; the rows the pass reads and the material it opens stay.
+    let pass = |counts: LedgerReadCounts| {
+        (
+            distinct(counts.events),
+            distinct(counts.links),
+            counts.material_files_opened,
+        )
+    };
     assert_eq!(
-        without_material, with_material,
-        "missing material changes no read"
+        pass(without_material),
+        pass(with_material),
+        "missing material changes no read of the pass"
     );
 }

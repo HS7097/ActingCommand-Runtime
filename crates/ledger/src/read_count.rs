@@ -135,7 +135,8 @@ fn table_of(sql: &str) -> Table {
 /// first; `None` when the row carries no identity.
 fn identity(table: Table, sql: &str, row: &[Value]) -> Option<(i64, i64)> {
     let mut columns = sql.trim_start().strip_prefix("SELECT ")?.split([',', ' ']);
-    if columns.next() != Some("sequence") {
+    // #422 LN-7: a history page selects the same column through its alias (`e.sequence`).
+    if !matches!(columns.next(), Some("sequence" | "e.sequence")) {
         return None;
     }
     let Some(Value::Integer(sequence)) = row.first() else {
