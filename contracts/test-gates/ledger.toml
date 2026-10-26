@@ -687,3 +687,12 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t5_a_window_page_starts_at_the_windows_first_record_and_reads_the_unbounded_rows",
 ]
 incident = ["#422 LN-WS"]
+
+# LN-7c F6 (#422; rd-1026/ln7c/final-query.md §1.1, §1.3, §7 F6; ruling 70): capture frames by ingestion time, the plain partial index `ledger_artifacts_created` (never a `ledger_view_*` object, so an older build opens, writes and scrubs a root that has it): a new root has it from `schema.sql`, a root without it gets it at its first writer open, over every capture frame, and a second open leaves it as it is; the plan check for ledger tests holds a statement's plan on an empty database to the §1.3 rule and rejects a statement doctored to read the whole history (a scan of a ledger table, its alias or index, an automatic index on one, the type index without a sequence bound, a history-wide index)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_a_root_without_the_frame_time_index_gets_it_at_its_first_writer_open",
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_the_plan_check_rejects_a_doctored_statement_that_reads_the_whole_history",
+]
+incident = ["#422 LN-7c F6"]
