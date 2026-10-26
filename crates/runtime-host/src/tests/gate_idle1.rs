@@ -28,8 +28,12 @@
 //!   while the instance is held.
 //! - A reading due on the closed app wakes it at once, and a reading due within the minimum gap
 //!   keeps it from closing again.
+//! - A close whose stop was sent and failed owes the wake; one not performed is left as it is,
+//!   with no wake.
 
-use crate::idle_action::{IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, WakeWork};
+use crate::idle_action::{
+    IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, WakeWork,
+};
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
 
 const MINUTE: u64 = 60_000;
@@ -152,7 +156,7 @@ fn checked(
 ) -> Option<(u64, IdleStep)> {
     let step = planner.check(NODE_A, &production(), view, plan, now);
     if matches!(step, Some(IdleStep::Act { .. })) {
-        planner.finished(NODE_A, true);
+        planner.finished(NODE_A, IdleEnd::Done);
     }
     step.map(|step| (now, step))
 }
@@ -182,7 +186,7 @@ fn idle1_a_the_action_runs_once_at_the_minimum_gap_and_never_below_it() {
         let mut planner = IdlePlanner::default();
         let next_due = T0 + 30 * MINUTE;
         act(&mut planner, NODE_A, action, next_due);
-        planner.finished(NODE_A, true);
+        planner.finished(NODE_A, IdleEnd::Done);
         for now in [T0 + 1, T0 + 10 * MINUTE] {
             assert_eq!(
                 planner.check(
@@ -351,7 +355,7 @@ fn idle1_c_each_action_brings_the_instance_back_at_next_due_minus_its_lead() {
             action == IdleAction::StopEmulator,
             "{action:?}: the emulator watch holds off only a stopped emulator"
         );
-        planner.finished(NODE_A, true);
+        planner.finished(NODE_A, IdleEnd::Done);
         assert_eq!(planner.planned_wake(NODE_A), Some(next_due - lead));
         // Later plans keep the same next due task.
         let before = next_due - lead - 1;
@@ -399,7 +403,7 @@ fn idle1_d_a_due_task_earlier_than_planned_wakes_the_instance_at_once() {
     // close_app: a plan at T0 + 10 min shows a task due.
     let mut planner = IdlePlanner::default();
     act(&mut planner, NODE_A, IdleAction::CloseApp, next_due);
-    planner.finished(NODE_A, true);
+    planner.finished(NODE_A, IdleEnd::Done);
     let now = T0 + 10 * MINUTE;
     assert_eq!(
         planner.check(NODE_A, &config(IdleAction::CloseApp), free(), due(now), now),
@@ -413,7 +417,7 @@ fn idle1_d_a_due_task_earlier_than_planned_wakes_the_instance_at_once() {
     let mut planner = IdlePlanner::default();
     let action = IdleAction::StopEmulator;
     act(&mut planner, NODE_A, action, next_due);
-    planner.finished(NODE_A, true);
+    planner.finished(NODE_A, IdleEnd::Done);
     let earlier = Some(T0 + 40 * MINUTE);
     let now = T0 + 20 * MINUTE;
     assert_eq!(
@@ -432,7 +436,7 @@ fn idle1_d_a_due_task_earlier_than_planned_wakes_the_instance_at_once() {
     // Switching the action off while the instance is idle brings it back at once.
     let mut planner = IdlePlanner::default();
     act(&mut planner, NODE_A, action, next_due);
-    planner.finished(NODE_A, true);
+    planner.finished(NODE_A, IdleEnd::Done);
     let now = T0 + MINUTE;
     assert_eq!(
         planner.check(
@@ -456,8 +460,8 @@ fn idle1_e_a_failed_stop_fails_only_that_instance() {
     let mut planner = IdlePlanner::default();
     act(&mut planner, NODE_A, action, next_due);
     act(&mut planner, NODE_B, action, next_due);
-    planner.finished(NODE_A, false);
-    planner.finished(NODE_B, true);
+    planner.finished(NODE_A, IdleEnd::NotPerformed);
+    planner.finished(NODE_B, IdleEnd::Done);
     // A is left as it is: no wake is queued for it, and the emulator watch is not held off.
     assert!(!planner.emulator_held_stopped(NODE_A));
     assert!(planner.emulator_held_stopped(NODE_B));
@@ -540,7 +544,7 @@ fn idle2_a_momentary_holds_neither_close_the_instance_again_nor_drop_its_wake() 
     let wake = next_due - LEAD;
     let mut planner = IdlePlanner::default();
     close(&mut planner, next_due);
-    planner.finished(NODE_A, true);
+    planner.finished(NODE_A, IdleEnd::Done);
     let mut steps = Vec::new();
     let mut wakes_in_effect = Vec::new();
     // Every 5 min until next due minus the minimum gap: a hold, then a free check with a plan made
@@ -590,7 +594,7 @@ fn idle2_b_a_hold_inside_the_last_minimum_gap_does_not_drop_the_wake() {
     let wake = next_due - LEAD;
     let mut planner = IdlePlanner::default();
     close(&mut planner, next_due);
-    planner.finished(NODE_A, true);
+    planner.finished(NODE_A, IdleEnd::Done);
     // The emulator watch's status read at next due minus 25 min, then free checks every minute
     // with fresh plans up to the next due time.
     let read = next_due - 25 * MINUTE;
@@ -635,7 +639,7 @@ fn idle2_c_a_wake_due_while_the_instance_is_held_is_queued() {
     ] {
         let mut planner = IdlePlanner::default();
         close(&mut planner, next_due);
-        planner.finished(NODE_A, true);
+        planner.finished(NODE_A, IdleEnd::Done);
         assert_eq!(
             planner.check(
                 NODE_A,
@@ -666,7 +670,7 @@ fn idle2_d_a_reading_due_on_the_closed_app_wakes_it_first_and_does_not_cycle() {
     let next_due = T0 + 4 * 60 * MINUTE;
     let mut planner = IdlePlanner::default();
     close(&mut planner, next_due);
-    planner.finished(NODE_A, true);
+    planner.finished(NODE_A, IdleEnd::Done);
     let mut steps = Vec::new();
     // T0 + 10 min: the evaluation selected a fact-refresh reading of the instance.
     let reading = T0 + 10 * MINUTE;
@@ -718,4 +722,52 @@ fn idle2_d_a_reading_due_on_the_closed_app_wakes_it_first_and_does_not_cycle() {
             ),
         ]
     );
+}
+
+#[test]
+fn idle2_e_a_close_whose_stop_was_sent_and_failed_owes_the_wake() {
+    let next_due = T0 + 4 * 60 * MINUTE;
+    let wake = next_due - LEAD;
+    let mut planner = IdlePlanner::default();
+    close(&mut planner, next_due);
+    planner.finished(NODE_A, IdleEnd::Indeterminate);
+    assert_eq!(planner.planned_wake(NODE_A), Some(wake));
+    // Every 10 min until the wake: the holds and a free check, in turn, each with a fresh plan.
+    let mut steps = Vec::new();
+    let views = holds().into_iter().chain([free()]).cycle();
+    let checks = (1..)
+        .map(|round| T0 + round * 10 * MINUTE)
+        .take_while(|now| *now < wake);
+    for (now, view) in checks.zip(views) {
+        steps.extend(checked(&mut planner, view, plan(now, Some(next_due)), now));
+    }
+    steps.extend(checked(
+        &mut planner,
+        free(),
+        plan(wake, Some(next_due)),
+        wake,
+    ));
+    assert_eq!(
+        steps,
+        vec![(wake, CLOSE_APP_WAKE_STEP)],
+        "no close, and the wake at next due minus the lead"
+    );
+    // A close not performed stays failed, with no wake.
+    let mut planner = IdlePlanner::default();
+    close(&mut planner, next_due);
+    planner.finished(NODE_A, IdleEnd::NotPerformed);
+    assert_eq!(planner.planned_wake(NODE_A), None);
+    for now in [T0 + 10 * MINUTE, wake] {
+        assert_eq!(
+            planner.check(
+                NODE_A,
+                &production(),
+                free(),
+                plan(now, Some(next_due)),
+                now
+            ),
+            None,
+            "a close not performed is not tried again, and no wake follows it"
+        );
+    }
 }
