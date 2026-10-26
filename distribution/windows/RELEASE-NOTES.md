@@ -9,6 +9,29 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.14
+
+本版是 v0.12.13 之后合并的 6 个 PR（修复，以及为修复服务的功能），主要是 #422 账本精简的收尾：
+启动打开账本时不再读整个账本。`actingd-config` 升到 [5, 13]：LN-8 和 LN-9 的新键都有默认值，
+没有写这些键的配置文件照常读取。
+
+运行上的变化：在 100 万条记录的合成账本上，稳定启动（规模测量中同一账本的第三次启动）约 0.6 秒
+就绪，其中打开账本约 0.26 秒，启动过程中的私有内存峰值约 43 MiB（规模测量运行 40257524915 与
+40262403978）；v0.12.13 的同一测量中峰值约 4 500 MiB（运行 40242733023）。启动打开账本时只校验
+最新的 `ledger_observer.open_verify_tail_records` 条记录（默认 4096）；整条链由后台复查按节奏从头
+校验，大约每 40 分钟一轮，发现旧记录损坏时以完整校验对同一损坏给出的同一结果码作为全局故障停下
+Runtime。`ledger-maintenance verify` 仍然校验全部记录。调度规则现在可以写“事实 A ≥ 事实 B + 偏移”，
+用到它的 `schedule.json` 要在 `requires` 里写 `fact_reference`。工具修了 RL-T 的两处：
+`actinglab standard-pack compose` 能收到 `--instance`，`actinglab resource validate` 能读资源仓
+根目录的 `schedule.json`。
+
+- #1342 LN-7b：帧保留状态有上限：写入线程只常驻删除证明集、所有者的变化与结束、启动可能还要收尾的范围，以及帧存储中现有帧和它们的分类要读的记录；打开账本时按事件类型和索引读出这些，帧清理每轮开始时丢掉其余部分，记录引用了已不常驻的运行或帧时先按索引读回再检查。没有新键。
+- #1343 LN-8：启动打开账本只读 meta 行、`MAX(sequence)`、最新的 `ledger_observer.open_verify_tail_records` 条记录（新键，默认 4096）和索引；启动不再对状态数据库做整文件的 `quick_check`（`ledger-maintenance verify` 照旧做）；`ledger_opened` 新增各阶段耗时 `meta_ms`、`tail_ms`、`index_ms`、`import_ms`；规模测试的目标从本版起是门禁。
+- #1344 LN-9：后台按节奏复查整条链：用自己的只读连接分块校验每条记录，一轮结束时做一次 `quick_check`；新键 `ledger_observer.scrub_rows_per_second`（默认每秒 625 行，运行中可改）、`ledger_observer.scrub_chunk_rows`（默认 256）和 `ledger_observer.scrub_pass_interval_ms`（默认 40 分钟）；发现损坏时作为全局故障停下 Runtime（裁定 57）。
+- #1346 CF-4：V2 `fact` 条件的 `value` 可以是同一作用域另一个事实加整数偏移（`{"type": "fact", "fact_key": …, "offset": …}`）；被引用的事实给不出整数时条件为假，原因 `fact_reference_unavailable`；写了引用的 `schedule.json` 要在 `requires` 里写 `fact_reference`，Runtime 在 `config.subsystems` 里报告常开的 `fact_reference`。
+- #1348 RL-T：修两个工具缺陷：`actinglab standard-pack compose` 收到写在命令之后的 `--instance <别名>=<游戏>/<服务器>`（以前总被当成全局选项，结果报缺少 `--instance`）；`actinglab resource validate` 用 RL-1a 的读取器读资源仓根目录的 `schedule.json`（以前因没有对应的解析器而失败）。
+- #1349 LN-8c：启动时运行时事实的恢复按页读取（每页 `ledger_observer.history_page_rows` 条，最多 1 024），不再一次读出最新快照集之后的全部记录；100 万条记录时单次最大读取从 8 424 条降到 256 条。没有新键。
+
 ## v0.12.13
 
 本版是 v0.12.12 之后合并的 13 个 PR（修复，以及为修复服务的功能），大部分属于 #422 账本精简：

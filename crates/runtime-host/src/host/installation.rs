@@ -347,17 +347,37 @@ impl HostShared {
             (
                 pauses.holds_global(),
                 registered
-                    .into_iter()
+                    .iter()
                     .filter(|(_, instance_alias)| pauses.holds_instance(instance_alias))
-                    .map(|(instance_id, _)| instance_id)
+                    .map(|(instance_id, _)| *instance_id)
                     .collect::<BTreeSet<_>>(),
             )
         };
+        // Workflow #386 SR-4a3: a startup package or an autostart claim that blackout silence
+        // holds does no work until the blackout ends, as a paused routine entry does.
+        let mut gates = BTreeMap::new();
+        for (instance_id, instance_alias) in &registered {
+            let pause = if global_pause || paused_instances.contains(instance_id) {
+                ClaimGate::RoutineHeld
+            } else {
+                ClaimGate::Open
+            };
+            gates.insert(
+                *instance_id,
+                self.silenced_gate(*instance_id, instance_alias, pause)?,
+            );
+        }
         Ok({
             let scheduler = lock(&self.scheduler, HostLocation::CheckInstallLeases)?;
             scheduler.active_tokens().is_empty()
-                && scheduler.waiting_total(|instance_id| {
-                    global_pause || paused_instances.contains(&instance_id)
+                && scheduler.waiting_total_gated(|instance_id| {
+                    gates.get(&instance_id).copied().unwrap_or(
+                        if global_pause || paused_instances.contains(&instance_id) {
+                            ClaimGate::RoutineHeld
+                        } else {
+                            ClaimGate::Open
+                        },
+                    )
                 }) == 0
         } && !lock(&self.scheduling_pause, HostLocation::CheckInstallCleanup)?
             .install_cleanup_pending())

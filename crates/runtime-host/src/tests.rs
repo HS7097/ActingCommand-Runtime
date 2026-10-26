@@ -230,6 +230,9 @@ mod gate_386_sr2a;
 // Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
 // admission refuses with a suspend code.
 mod gate_386_sr3;
+// Workflow #386 SR-4a3, test rows T17, T17b, T17c and T46: complete silence at the ladder, the
+// startup package, the emulator autostart and the monitor probe; client runs pass.
+mod gate_386_sr4a3;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).
@@ -388,6 +391,9 @@ mod gate_422_ln3;
 // LN-4 (Workflow #422, LEAN-L model §3.2, §3.6): the decision memory, the agent dispatcher and the
 // monitor registry load from their tagged records; a start without the marker seeds them once.
 mod gate_422_ln4;
+// LN-8c (Workflow #422, LEAN-L model §7.1 A3): the start's runtime-fact recovery reads its record
+// events in bounded pages and rebuilds the store one read of them rebuilds.
+mod gate_422_ln8c;
 // #422 LN-TUNE: a second start reads no planning history before the planning checkpoint.
 mod gate_ln_tune;
 // #422 LN-9: a finding of the ledger's scrub stops the Runtime as a Global failure.

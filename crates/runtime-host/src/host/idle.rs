@@ -41,6 +41,11 @@
 //!   whose action in effect cannot bring it back (no startup package, or for `stop_emulator` no
 //!   configured emulator start) never acts and gets one `instance_idle_action_unsupported`
 //!   warning (`member` naming what it lacks) per action in effect, not a silent skip.
+//! - **Blackouts** (Workflow #386 SR-4a3, `scheduling-blackout.md`, "Complete silence"): a
+//!   blackout that covers the instance holds its action as a scheduling pause does, so the
+//!   Runtime closes or stops nothing inside it. A wake due inside it queues its claims as usual;
+//!   the routine gate holds the startup package and the configured emulator start until the
+//!   blackout's end, when the sweep's pump grants them.
 //! - **Fail loud, one instance (#419).** A failed close or stop is recorded (the existing
 //!   failure records, or `runtime.failed` with the failure) and goes through the one decision
 //!   point (`contain_failure`), so it fails only this instance's action: the instance is left as
@@ -269,7 +274,10 @@ impl HostShared {
     /// What the instance shows to the idle check now. Read without waiting: a held admission
     /// guard (a keyless observe, probe or Lab look, or work starting on the instance) is work.
     fn idle_view(&self, instance_id: InstanceId, emulator_on: bool) -> RuntimeHostResult<IdleView> {
-        let paused = self.routine_gate(instance_id)? == ClaimGate::RoutineHeld;
+        // Workflow #386 SR-4a3: a blackout that covers the instance holds its action as a pause
+        // does (complete silence); a wake's claims wait at the gate for its end.
+        let gate = self.routine_gate(instance_id)?;
+        let paused = gate.routine_held() || gate.blackout();
         let (leased, queued) = {
             let scheduler = lock(&self.scheduler, IdleLocation::Check)?;
             (
@@ -464,7 +472,8 @@ impl HostShared {
         key: HostKey,
     ) -> RuntimeHostResult<()> {
         let alias = pending.instance_alias.as_str();
-        let paused = self.routine_gate(pending.instance_id)? == ClaimGate::RoutineHeld;
+        let gate = self.routine_gate(pending.instance_id)?;
+        let paused = gate.routine_held() || gate.blackout();
         let queued =
             lock(&self.scheduler, IdleLocation::Action)?.queued_count(pending.instance_id) > 0;
         if paused

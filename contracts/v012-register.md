@@ -3409,6 +3409,22 @@ revision changes. The number 1.188 is provisional for the parallel slices.
 | CF4-2 | code `fact_reference_unavailable` (info; `fact_key`, `unknown_reason`) | new catalog entry (no shape) | CF-4 | CF-4 | owner policy (registry `PolicyCode`, block `#386 CF-4`), `ladder_class` `none` (row 7: a scheduling decision reason), layer `policy`, review `pending`, since 0.12.14; the existing vocabulary `unknown_reason` (`fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired`, `type_mismatch`); no new key |
 | CF4-3 | `config.subsystems` row `fact_reference` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-4 | CF-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose rule writes a reference must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the reference) |
 
+### 1.189 Slice SR-4a3 (0.12.x): complete silence at the ladder, the startup package, the emulator autostart and the monitor probe (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, §6 row SR-4a3; frozen scheduling model v1.4.2 §5.2a, §5.3 rule 3, C-3; Alice 10-09: 「黑名单就是完全静默，连接断开了也不管」)
+
+[scheduling-blackout.md](scheduling-blackout.md), "Complete silence" ("How the Runtime holds
+them"), is the contract. No code, configuration key, subsystem or persisted shape is added: the
+ladder suppression `blackout` (register S3) is first written here, `blackout_config_invalid` gains
+its first host writer with `blackout_source` `catalog`, and the scheduler's routine gate gains a
+value in memory. With both blackout lists empty and no catalog `maintenance` event nothing
+behaves differently. Gates: the `gate_386_sr4a3` tests, one row of host.toml. The number 1.189
+is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR4A3-1 | `ClaimGate::Silenced {routine_held, autostart}`; `ClaimGate::{routine_held, blackout, holds, silenced}`; `SeedScheduler::waiting_total_gated` | scheduler interface (memory only) | SR-4a3 | SR-4a3 | holds `startup_package` (a blackout covers the instance, or the next starts within the package's deadline plus `quiet_margin_ms`) and `autostart` (a blackout covers it); every client and operator kind passes |
+| SR4A3-2 | `recovery_ladder_suppressed` reason `blackout`, `until_unix_ms` the blackout's end (Info) | persisted enum value (registered by AO-0, S3) | SR-4a3 | SR-4a3 | at admission (every trigger stage), at a granted claim's climb, for a queued ladder claim at the lease sweep, before a rung or a hold's rerun its time limit would carry into a blackout |
+| SR4A3-3 | `blackout_config_invalid` with `blackout_source` `catalog`, `field` `/events/<n>/validity`, `blackout_id` the event's id | outcome values (existing) | SR-4a3 | SR-4a3 | a catalog `maintenance` event with a duration and no V2 validity, once per active generation; the event is left out of the host's blackouts |
+
 ### 1.190 Slice ED-2 (0.12.x): the run-duration samples and the expected duration E in force (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.4 D-13, D-14, D-15, §6 row ED-2, and the coordinator's ruling of 10-24 14:1x after the freeze; Alice 10-22 16:4x, #405 comment 6335497930: 「每个任务执行所需的时间可以动态的从账本读，近5次该任务包的平均时间加5分钟」; ruling 39 R6.2, R6.3)
 
 E takes effect when this slice deploys; `scheduling.expected_runtime.enabled` false (section or per

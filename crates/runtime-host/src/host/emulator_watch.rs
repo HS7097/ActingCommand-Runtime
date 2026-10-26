@@ -29,6 +29,11 @@
 //!   (warning) once, and no restart until the oldest leaves the window or a person's emulator
 //!   control of the instance clears the count. The stuck-recovery ladder adds none: direction ①
 //!   does not count an autostart claim's records (`recovery_ladder`).
+//! - **Blackouts** (Workflow #386 SR-4a3, `scheduling-blackout.md`, "Complete silence"): the
+//!   polls go on (a status read starts nothing). A configured instance found stopped inside a
+//!   blackout gets its one autostart claim as above, which the routine gate holds until the
+//!   blackout's end (no key, no Start; `emulator_autostart`); while it waits, the watch requests
+//!   none again, so the restart counts once.
 //! - **Codes (#420 S4).** The watch's own codes are the state change and the used-up bound; the
 //!   read failure, the restart's enqueue and a failed thread spawn are existing codes
 //!   (`emulator_state_read_failed`, `emulator_autostart_queued`, `runtime_monitor_spawn_failed`).
