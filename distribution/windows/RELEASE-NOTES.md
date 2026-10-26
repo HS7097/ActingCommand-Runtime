@@ -9,6 +9,39 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.17
+
+本版是 v0.12.16 之后合并的 3 个 PR（修复，以及为修复服务的功能）：Runtime 自己定期做的账本读取不再从
+序号 0 起走过整段历史，写入线程没有按时答复的读取只让它自己那一步或那个请求失败（LN-WS-F）；帧清理器
+改为按账本查询决定每一帧，打开账本不再读帧，证据帧在确认读过后或到期时删除（LN-7c Q，裁定 70）；以及
+离线核对清理器查询的 `ledger-maintenance verify --frame-query`（LN-7c V）。v0.12.15 和 v0.12.16 都已
+在本版之前发布。
+
+配置：`actingd-config` 升到 [5, 16]。LN-7c Q 新增三个键：顶层的 `frame_retention_evidence_max_age_days`
+（与 revision 4 的三个帧保留开关并列；`kept\` 里没有确认读过的证据帧按入库时间满多少天删除，默认 15，
+范围 1 到 3 650，可以在运行中修改，清理器在每一轮清理开始时读取，所以从下一轮起生效）、
+`ledger_observer.frame_query_steps_per_second`（清理器的查询每秒最多走的 SQLite 虚拟机步数，默认
+500 000，范围 1 000 到 100 000 000，可以在运行中修改，每条语句之后读取）和
+`ledger_observer.frame_query_chunk_frames`（一条 L 或 K 语句最多处理的帧数，默认 256，范围 1 到
+4 096，启动时读取，运行中不能改）。没有 14 天的键。现有的配置都不需要修改：没有写这三个键的配置文件
+保持原来的 revision，Runtime 仍读 revision 5 到 15 的文件。LN-7c Q 之前的 Runtime（包括 v0.12.16）
+拒绝写了其中任何一个键的配置文件，因为配置文件和 `ledger_observer` 节都不接受未知成员；退回旧版本之前
+要先去掉它们。
+
+运行上的变化：
+
+- 启动：打开账本不再读帧（LN-7c Q）。v0.12.15 和 v0.12.16 打开账本时要列出在库的帧文件，读出这些帧的记录和帧链接，以及它们所属的运行、租约、请求和关联的记录等（生产账本上约 56 万行，估计），这是打开中随在库帧增长的那一部分；写入线程也不再常驻帧的保留状态（约 50–100 MB，估计）。加上 v0.12.16 的 LN-7c O，打开账本只读元数据和链头、尾部的记录、索引的状态，以及最近两个所有者纪元的所有者记录：按设计估计，通常约 1–2 秒，两个各 3 天的所有者纪元之后约 3–5 秒，峰值约 50–100 MB（均为估计）。
+- 帧保留（LN-7c Q）：清理器不再从写入线程取帧视图，写入线程也不保留任何帧的保留状态；清理器在自己的只读连接上用账本查询（W、L、K 三条语句，全部按索引走，不扫整段历史）决定每一帧，查询按 SQLite 虚拟机步数限速（`frame_query_steps_per_second`）。每一轮清理（最多每 10 分钟一轮）只查看到了下一个判断时刻的在库帧：入库满 60 秒还没判断过的帧，判为保留的普通帧满 1 天、资源帧满 7 天时再查，运行中、被占用和本进程还没见过的帧每轮都查；`kept\` 里的帧每轮都查。启动后的第一轮要查看全部在库帧，按设计估计约 3–5 分钟，期间每 2 秒的处理照常；之后每轮约 12–18 秒（均为估计）。普通帧 1 天、资源帧 7 天的保留期不变，但改从帧的入库时间起算（以前从帧所属运行结束时起算），所以最多比以前早约 30 分钟；仍然要等帧定下来之后才处理。帧索引没有覆盖整个账本时（例如它的补建还没有完成），这一轮什么都不判断、什么都不动，打印 `actingd frame_retention pass skipped=frame_refs_incomplete`。查询失败只算这一轮的错误，不会停下 Runtime。每轮清理的输出行新增 `kept_examined`、`removed_confirmed`、`removed_expired`、`kept_unknown` 和 `query_steps`。
+- 证据帧（LN-7c Q，裁定 70）：Lab 帧和错误帧（还在库里的，或已挪进 `kept\` 的）一经确认读过，下一轮清理就删除；还在库里的直接删除，不再挪进 `kept\`。确认可以针对一张帧，也可以针对一次运行（只算确认之前截下的帧）；只有代理经 MCP（`ac_evidence_confirm_read`）、命令行（`actingctl evidence confirm-read`）和 UI 发出的确认才算，只打开或查看帧不算确认。v0.12.16 里已经记下的确认同样算数，升级后第一轮清理就删除它们覆盖的证据帧。`kept\` 里没有确认过的证据帧，按入库时间满 `frame_retention_evidence_max_age_days`（默认 15 天）后删除：在 10 月 18 日 21:37 开始的账本上，最早的未确认证据帧要到 11 月 2 日 21:37 左右才满 15 天。删除后空了的子文件夹和日期文件夹一并删除，不递归。`kept\` 里账本没有记录的文件只计数（`kept_unknown`）、在 `actingledger frames` 里列出，从不删除。确认的答复新增 `covers`（这次确认覆盖的证据帧数 `evidence_frames`，其中在 `kept\` 里的 `in_kept`）；数不出来时不带 `covers`、加一条警告，确认照样记下。
+- 账本读取（LN-WS-F）：Runtime 自己定期做的账本读取不再从序号 0 起走过某一事件类型的整段历史：有待结算的调度时，每次结算检查不再读出历史上全部的 `policy.dispatch_intent`，而是按调度日志记下的序号读该条记录，再按它的链接读同一决定的意图；提案和战略报告的证据核对只按产物索引读它引用的产物的 `artifact.verified` 记录。读出的结果与以前相同。这些读取在写入线程的应答时限（`writer_reply_timeout_ms`）内没有得到答复、或用完读取预算时，只让它自己那一步或那个请求失败：结算检查这一轮不再读后面的结算，被跳过的结算什么都没写，留到下一轮再读，actingd 日志写一行；请求（提案、战略报告、审批、项目接口等）以账本的结果码（`writer_response_timeout` 或 `ledger_read_budget_exceeded`）失败，调度准入这一次不准入、记为非致命的准入失败，下次评估时再来；Runtime 照常运行。仍然停下 Runtime 的：账本的其他故障（例如损坏的记录，原因带上账本的结果码）；提交之后的读取（例如一次运行的执行记录提交之后读它的完成记录），因为跳过它会让已提交的结算只做了一半；以及启动时的读取。
+- 离线核对（LN-7c V）：`actingd ledger-maintenance verify --frame-query` 在 verify 的完整读取通过之后，用清理器的 W、L、K 语句对同一个根目录、同样的帧文件列表和同一个时钟作答，与完整的帧视图逐帧比较；有不一致（裁定的差别和记录能说明原因的安全差别除外）时报 `ledger_index_mismatch`（操作 `verify_frame_query`，带 `artifact_id` 和 `field`），以非零退出码结束，帧索引没有覆盖账本时也失败。它要在 Runtime 停着时运行，Runtime 自己从不运行它。要写 `--frame-query` 才做，不写时 verify 和以前完全一样；写了而根目录不是正式根目录、或用于 verify 以外的操作时，以 `maintenance_arguments_invalid` 拒绝，从不忽略。它要在 verify 的时限（默认 120 秒）内做完完整读取和这次核对，账本很大时可能来不及，那时以 `ledger_read_budget_exceeded` 失败。
+
+本版合并的 PR：
+
+- #1369 LN-WS-F：Runtime 定期的账本读取（调度的结算与对账、提案和战略报告的证据核对）不再从序号 0 起走过整段历史；写入线程没有按时答复或用完预算的读取只让它自己那一步或那个请求失败；提交之后和启动时的读取仍然是致命的（见上）。没有新键、新结果码。
+- #1370 LN-7c Q：帧清理器按账本查询（W、L、K）决定每一帧，打开账本不再读帧，写入线程不保留帧视图；证据帧确认读过后或满 `frame_retention_evidence_max_age_days`（默认 15 天）后删除；`ac_evidence_confirm_read` 和 `actingctl evidence confirm-read` 的答复新增 `covers`；`actingledger frames` 的在库帧分类改由同样的语句给出，并新增 `evidence` 成员；`actingd-config` [5, 16]，三个新键（见上）。没有新结果码。
+- #1371 LN-7c V：`ledger-maintenance verify --frame-query`：离线、需显式开启，用完整帧视图核对清理器的语句（见上）；不能运行的地方拒绝。没有新键、新结果码。
+
 ## v0.12.16
 
 本版是 v0.12.15 之后合并的 5 个 PR（修复，以及为修复服务的功能）：修 10 月 26 日 23:23:04 生产上的停机
