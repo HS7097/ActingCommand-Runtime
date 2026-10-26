@@ -900,6 +900,12 @@ pub struct GlobalLedgerConfig {
     /// LN-5 (#422, LEAN-L §3.3, §3.7): the rows of one page of a history read
     /// (`ledger_observer.history_page_rows`).
     history_page_rows: usize,
+    /// #422 LN-WS (R1): the SQLite virtual-machine steps between two looks at the clock of a
+    /// read that serves a Runtime request (`ledger_observer.read_check_vm_steps`).
+    read_check_vm_steps: u32,
+    /// #422 LN-WS (R2): the sequences one history statement of a view page scans at most
+    /// (`ledger_observer.history_scan_rows`).
+    history_scan_rows: usize,
     /// LN-8 (#422, LEAN-L §3.2 step 2, §3.7): how many of the newest records the formal writer
     /// open authenticates (`ledger_observer.open_verify_tail_records`).
     open_verify_tail_records: usize,
@@ -932,6 +938,8 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("read_budget", &self.read_budget)
             .field("close_timeout", &self.close_timeout)
             .field("history_page_rows", &self.history_page_rows)
+            .field("read_check_vm_steps", &self.read_check_vm_steps)
+            .field("history_scan_rows", &self.history_scan_rows)
             .field("open_verify_tail_records", &self.open_verify_tail_records)
             .field("scrub", &self.scrub)
             .finish()
@@ -954,6 +962,8 @@ impl GlobalLedgerConfig {
             close_timeout: None,
             clock: write_failure::process_clock(),
             history_page_rows: history::DEFAULT_HISTORY_PAGE_ROWS,
+            read_check_vm_steps: read_work::DEFAULT_READ_CHECK_VM_STEPS,
+            history_scan_rows: history::DEFAULT_HISTORY_SCAN_ROWS,
             open_verify_tail_records: sqlite::DEFAULT_OPEN_VERIFY_TAIL_RECORDS,
             #[cfg(test)]
             history_rows_read: None,
@@ -975,6 +985,12 @@ impl GlobalLedgerConfig {
         self.read_budget = plan.read_budget().or(self.read_budget);
         self.close_timeout = plan.close_timeout().or(self.close_timeout);
         self.history_page_rows = plan.history_page_rows().unwrap_or(self.history_page_rows);
+        // #422 LN-WS: the in-statement bound of a request's read and the span of a history
+        // statement.
+        self.read_check_vm_steps = plan
+            .read_check_vm_steps()
+            .unwrap_or(self.read_check_vm_steps);
+        self.history_scan_rows = plan.history_scan_rows().unwrap_or(self.history_scan_rows);
         self.open_verify_tail_records = plan
             .open_verify_tail_records()
             .unwrap_or(self.open_verify_tail_records);
@@ -1012,6 +1028,21 @@ impl GlobalLedgerConfig {
     /// (`ledger_observer.history_page_rows`; 256 unless set).
     pub fn with_history_page_rows(mut self, rows: usize) -> Self {
         self.history_page_rows = rows;
+        self
+    }
+
+    /// #422 LN-WS (R1): the SQLite virtual-machine steps between two looks at the clock of a
+    /// read that serves a Runtime request (`ledger_observer.read_check_vm_steps`; 10 000 unless
+    /// set).
+    pub fn with_read_check_vm_steps(mut self, steps: u32) -> Self {
+        self.read_check_vm_steps = steps;
+        self
+    }
+
+    /// #422 LN-WS (R2): the sequences one history statement of a view page scans at most
+    /// (`ledger_observer.history_scan_rows`; 65 536 unless set).
+    pub fn with_history_scan_rows(mut self, rows: usize) -> Self {
+        self.history_scan_rows = rows;
         self
     }
 
@@ -3296,6 +3327,13 @@ fn writer_commands<S: LedgerStore>(
         if is_read_command(&command) {
             crate::read_hold::hold_reads_of(&hook_root);
         }
+        // #422 LN-WS, tests: the statements this read reads with, while a recorder is armed.
+        #[cfg(any(test, feature = "test-hooks"))]
+        let recording = if is_read_command(&command) {
+            crate::writer_statements::start(&hook_root)
+        } else {
+            None
+        };
         let command_succeeded;
         match command {
             WriterCommand::ResolveArtifact {
@@ -3813,6 +3851,13 @@ fn writer_commands<S: LedgerStore>(
             finished.saturating_duration_since(started),
             read_events,
             whole_ledger_query,
+        );
+        #[cfg(any(test, feature = "test-hooks"))]
+        crate::writer_statements::finish(
+            recording,
+            kind,
+            finished.saturating_duration_since(started),
+            work.bound_callbacks(),
         );
         previous_writer_work = command_observation;
         context.work.leave();

@@ -4210,11 +4210,15 @@ fn read_rows_bound(
         crate::read_count::row_read(sql, &values);
         result.push(values);
     }
-    // #422 LN-8d: the statement's SQLite work, on this thread while a counter runs.
-    #[cfg(test)]
+    // #422 LN-8d: the statement's SQLite work, on this thread while a counter runs; #422 LN-WS:
+    // and while a writer's statements are recorded.
+    #[cfg(any(test, feature = "test-hooks"))]
     {
         drop(rows);
-        crate::read_count::statement_steps(statement.get_status(rusqlite::StatementStatus::VmStep));
+        let steps = statement.get_status(rusqlite::StatementStatus::VmStep);
+        #[cfg(test)]
+        crate::read_count::statement_steps(steps);
+        crate::writer_statements::statement_done(sql, parameters, steps);
     }
     Ok(result)
 }

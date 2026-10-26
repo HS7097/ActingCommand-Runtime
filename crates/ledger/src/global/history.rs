@@ -24,6 +24,9 @@ use std::time::Instant;
 pub(super) const DEFAULT_HISTORY_PAGE_ROWS: usize = 256;
 /// The largest `ledger_observer.history_page_rows`.
 pub(super) const MAX_HISTORY_PAGE_ROWS: usize = 4096;
+/// #422 LN-WS (R2): the default of `ledger_observer.history_scan_rows`, the sequences one history
+/// statement of a view page scans at most.
+pub(super) const DEFAULT_HISTORY_SCAN_ROWS: usize = 65_536;
 
 /// What a history read selects: the records `query` names and, when `decision_id` is set, only
 /// the policy dispatch and execution records of that decision. The store selects by its indexes

@@ -17,6 +17,9 @@ use std::time::Duration;
 
 /// Rows a read visits between two looks at the clock.
 pub(in crate::global) const READ_BUDGET_CHECK_ROWS: usize = 256;
+/// #422 LN-WS (R1): the default of `ledger_observer.read_check_vm_steps`, the SQLite
+/// virtual-machine steps between two looks at the clock of a read that serves a Runtime request.
+pub(in crate::global) const DEFAULT_READ_CHECK_VM_STEPS: u32 = 10_000;
 
 /// One read's budget on the writer's clock (milliseconds) and the rows it visited.
 pub(in crate::global) struct ReadWork {
@@ -82,6 +85,13 @@ impl ReadWork {
     /// The rows visited so far.
     pub(in crate::global) fn visited(&self) -> usize {
         self.visited.get()
+    }
+
+    /// #422 LN-WS, tests: the progress callbacks of the read's in-statement bound, and those at or
+    /// after its budget point.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(in crate::global) fn bound_callbacks(&self) -> (u64, u64) {
+        (0, 0)
     }
 
     /// `ledger_read_budget_exceeded` of `operation`: a read that is no page stopped at its
