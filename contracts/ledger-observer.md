@@ -1080,8 +1080,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `scrub_rows_per_second` | 625 | integer | rows a second the background scrub reads and authenticates: a chunk starts no earlier than the one before plus its rows at this rate, about 40 minutes a pass at 1.5 million records (Alice's ruling 57); `1..=100000`, settable, read after each chunk (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_chunk_rows` | 256 | integer | rows of one scrub chunk, each chunk in a read transaction of its own; `1..=4096` (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_pass_interval_ms` | 2 400 000 | ms | the least time from the start of one scrub pass to the start of the next; the first starts when the writer opens; `60000..=86400000` (#422 LN-9) | LN-9, 0.12.14 |
-| `read_check_vm_steps` | 10 000 | integer | SQLite virtual-machine steps between two looks at the clock of a read that serves a Runtime request (a view page, a subscription's replay page): its `read_budget_ms` holds inside a statement too; `100..=1000000` (#422 LN-WS) | LN-WS, 0.12.16 |
-| `history_scan_rows` | 65 536 | integer | sequences one history statement of a view page (its selection and its runs' recovery context) spans at most, so a page its budget stops has always gone on; `1024..=1048576` (#422 LN-WS) | LN-WS, 0.12.16 |
+| `read_check_vm_steps` | 10 000 | integer | SQLite virtual-machine steps between two looks at the clock of a read that serves a Runtime request (a view page, a subscription's replay page): its `read_budget_ms` holds inside a statement too; `100..=1000000` (#422 LN-WS) | LN-WS, 0.12.15 |
+| `history_scan_rows` | 65 536 | integer | sequences one history statement of a view page (its selection and its runs' recovery context) spans at most, so a page its budget stops has always gone on; `1024..=1048576` (#422 LN-WS) | LN-WS, 0.12.15 |
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
@@ -1208,7 +1208,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   ledger, and writes no record and no daemon line; the pass-end line `ledger_scrub_pass` of the
   LEAN-L model §3.8 is not added. At 1.5 million records a pass reads for about 2 400 s at the
   default rate, then runs `quick_check` once over the file.
-- #422 LN-WS (the production stop of 2026-10-26 19:12:43; the release after v0.12.15,
+- #422 LN-WS (the production stop of 2026-10-26 19:12:43; v0.12.15,
   `actingd-config` revision 14): no read can make a write fail. A view page with a time window and
   no instance ran on the writer's thread as one SQLite step that scanned the history from sequence
   1 (about 1.58 million rows, 15 to 18 s); A51's budget looked at the clock only between returned

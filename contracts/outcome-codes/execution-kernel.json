@@ -1869,11 +1869,11 @@
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
-      "retired_in": "0.12.16",
+      "retired_in": "0.12.15",
       "replaced_by": "display_map_unresolved",
-      "description": "Retired (Workflow #392 DA-2a, model 392 v1.2 §0.2 C10). A captured frame's size differed from the task resolution and the run was refused. Since 0.12.16 every frame passes the display adapter's frame gate: a frame of the package's size is the identity, a larger frame of its ratio a pure scale, and any other frame is display_map_unresolved.",
+      "description": "Retired (Workflow #392 DA-2a, model 392 v1.2 §0.2 C10). A captured frame's size differed from the task resolution and the run was refused. Since 0.12.15 every frame passes the display adapter's frame gate: a frame of the package's size is the identity, a larger frame of its ratio a pure scale, and any other frame is display_map_unresolved.",
       "common_causes": "A device or emulator display of another size than the package's coordinate space.",
-      "handling": "None in 0.12.16 and later: the code is no longer emitted."
+      "handling": "None in 0.12.15 and later: the code is no longer emitted."
     },
     "contained_task_input_out_of_bounds": {
       "category": "error",
