@@ -29,6 +29,7 @@ dependencies = [
  "actingcommand-pack-containment",
  "actingcommand-runtime-client",
  "actingcommand-runtime-config",
+ "actingcommand-runtime-database",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
  "serde",

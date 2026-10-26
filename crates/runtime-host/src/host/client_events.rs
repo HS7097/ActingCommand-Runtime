@@ -3,6 +3,11 @@
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode, SharedCode};
+use actingcommand_contract::{
+    ArtifactId, ClientActionKind, ClientActionValue, EVIDENCE_READ_FRAME_CONTROL,
+    EVIDENCE_READ_RUN_CONTROL,
+};
+use actingcommand_ledger::LedgerEvidenceTarget;
 
 impl HostShared {
     pub(super) fn release_lab_pin(
@@ -253,6 +258,7 @@ impl HostShared {
                 failure_outcome: None,
             });
         }
+        self.check_evidence_read(request, action)?;
         let instance_id = match action.instance_alias() {
             Some(alias) => Some(self.registered_instance_id(alias)?),
             None => None,
@@ -271,6 +277,61 @@ impl HostShared {
             result: RuntimeResult::ClientActionRecorded,
             failure_outcome: None,
         })
+    }
+
+    /// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): the checks of an evidence read
+    /// confirmation, a `client.action` whose control is `evidence_read_frame` or
+    /// `evidence_read_run`; any other action passes unchecked. The confirmation is a `Command`
+    /// whose path-safe value is an artifact id or a run id, it comes from an agent through an
+    /// adapter, the command line or a person through the UI (the origins the ledger's frame index
+    /// takes), and it names a capture frame the ledger holds (its `artifact.verified` record) or
+    /// a run with at least one. Anything else is refused with `client_action_invalid` before
+    /// anything is recorded; a ledger read that fails is the request's failure.
+    fn check_evidence_read(
+        &self,
+        request: &RuntimeRequest,
+        action: &ClientActionRecord,
+    ) -> Result<(), RequestFailure> {
+        let control = action.control_id();
+        if control != EVIDENCE_READ_FRAME_CONTROL && control != EVIDENCE_READ_RUN_CONTROL {
+            return Ok(());
+        }
+        let refused = || {
+            RequestFailure::request(
+                RuntimeHostError::request(
+                    SharedCode::ClientActionInvalid,
+                    ContractLocation::RecordClientAction,
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            )
+        };
+        let confirmer = matches!(
+            (request.actor(), request.source()),
+            (EventActor::Agent, EventSource::Adapter)
+                | (EventActor::Cli, EventSource::Cli)
+                | (EventActor::User, EventSource::Ui)
+        );
+        let (true, ClientActionKind::Command, Some(ClientActionValue::PathSafeString(value))) =
+            (confirmer, action.kind(), action.value())
+        else {
+            return Err(refused());
+        };
+        let target = if control == EVIDENCE_READ_FRAME_CONTROL {
+            identifier::<ArtifactId>(value).map(LedgerEvidenceTarget::Frame)
+        } else {
+            identifier::<RunId>(value).map(LedgerEvidenceTarget::Run)
+        }
+        .ok_or_else(refused)?;
+        match self.ledger.evidence_target_known(target) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(refused()),
+            Err(error) => Err(ledger_read_failure(
+                &error,
+                ContractLocation::RecordClientAction,
+            )),
+        }
     }
 
     pub(super) fn client_fact_replay(
@@ -340,4 +401,9 @@ impl HostShared {
             )
         })
     }
+}
+
+/// #422 LN-7c C: an identifier from its canonical text; `None` for any other text.
+fn identifier<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
+    serde_json::from_value(serde_json::Value::String(text.to_owned())).ok()
 }

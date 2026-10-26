@@ -14,8 +14,8 @@ use super::{GlobalLedgerResult, projection::EventIndexes};
 use crate::PersistedEvent;
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::{
-    ArtifactId, CorrelationId, EventId, EventPayload, EventQuery, FrameId, InstanceId, LeaseId,
-    LedgerView, PolicyPayload, RequestId, RunId, TerminalEvent,
+    ArtifactId, ArtifactKind, CorrelationId, EventId, EventPayload, EventQuery, EventType, FrameId,
+    InstanceId, LeaseId, LedgerView, PolicyPayload, RequestId, RunId, TerminalEvent,
 };
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -545,5 +545,81 @@ impl<B: DurableStorage> EventStore<B> {
             }
         }
         Ok(Some(events))
+    }
+
+    /// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): whether the store holds the capture frame
+    /// an evidence read confirmation names: the frame's own `artifact.verified` record, selected
+    /// by the `artifact_id` index, or for a run one such record among the run's, selected by its
+    /// link index. Pages of `history_page_rows` records, each authenticated; the first match
+    /// ends the read. `None` when `work`'s budget stopped it first.
+    pub(super) fn evidence_target_known(
+        &self,
+        target: &LedgerEvidenceTarget,
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<bool>> {
+        let links = match target {
+            LedgerEvidenceTarget::Frame(artifact) => LinkSet {
+                artifacts: BTreeSet::from([*artifact]),
+                ..LinkSet::default()
+            },
+            LedgerEvidenceTarget::Run(run) => LinkSet {
+                runs: BTreeSet::from([*run]),
+                ..LinkSet::default()
+            },
+        };
+        let query = EventQuery::default();
+        let selection = HistorySelection::linked(&query, &links);
+        let through = self.backend.head();
+        let mut cursor = 0;
+        while cursor < through {
+            let Some(page) = self.backend.history_page_within(
+                &selection,
+                (cursor, through),
+                self.history_page_rows,
+                &self.retention,
+                work,
+            )?
+            else {
+                return Ok(None);
+            };
+            let full = page.len() >= self.history_page_rows;
+            for event in &page {
+                cursor = event.sequence();
+                let going_on = work.visit();
+                if selection.selects(event) && target.is_verified_frame(event) {
+                    return Ok(Some(true));
+                }
+                if !going_on {
+                    return Ok(None);
+                }
+            }
+            if !full {
+                break;
+            }
+        }
+        Ok(Some(false))
+    }
+}
+
+/// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): what an evidence read confirmation names: one
+/// capture frame by its artifact id, or a run (every frame captured in it before the
+/// confirmation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerEvidenceTarget {
+    Frame(ArtifactId),
+    Run(RunId),
+}
+
+impl LedgerEvidenceTarget {
+    /// Whether `event` is the `artifact.verified` record of a capture frame this target names.
+    fn is_verified_frame(&self, event: &PersistedEvent) -> bool {
+        event.event_type() == EventType::ArtifactVerified
+            && event.projected_artifacts(false).iter().any(|reference| {
+                reference.kind == ArtifactKind::CaptureFrame
+                    && match self {
+                        Self::Frame(artifact) => reference.artifact_id == *artifact,
+                        Self::Run(run) => event.links().run_id() == Some(run),
+                    }
+            })
     }
 }
