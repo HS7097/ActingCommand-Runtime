@@ -26,7 +26,7 @@ mod owner_read;
 mod prior_epoch;
 mod resident;
 mod view;
-pub use material::{LedgerFrameRefsNote, LedgerOpenTiming};
+pub use material::{LedgerFrameRefsNote, LedgerOpenTiming, OwnerReadFull};
 pub(super) use material::{PendingMaterial, elapsed_ms};
 #[cfg(test)]
 pub(super) use owner_read::{
@@ -78,9 +78,9 @@ pub(super) struct RetentionIndex {
     /// again for a record that names them; the frame view does not list them.
     ghosts: BTreeSet<ArtifactId>,
     through_sequence: u64,
-    /// #422 LN-7c O: whether the open read every owner record, its bounded read having not
-    /// placed a retained owner in a start's epoch (`retention/owner_read.rs`).
-    owner_read_full: bool,
+    /// #422 LN-7c O: why the open read every owner record (`retention/owner_read.rs`): its
+    /// bounded read did not place a retained owner in a start's epoch, or a dump was present.
+    owner_read_full: Option<OwnerReadFull>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

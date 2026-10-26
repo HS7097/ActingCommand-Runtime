@@ -177,13 +177,22 @@ scopes, or when it is the owner before the latest) is read back the same way, fr
 last record to its first. Reading an owner back never passes the start before its own.
 Each retained owner then has its epochs, end, reopening, import, the closes of its scopes
 and their writer, its quiescences, scope sources and releases as the read of every owner
-record gives them; an owner change older than that read is not resident. When a retained
-owner's first block holds no start record (an owner in no start's epoch: a start that
-stopped before its start record) or reading it back reaches the start before its own, the
-open reads every owner record, as before, and actingd prints
+record gives them. An owner change older than that read is resident only where a frame's
+records name it, so `owner_at` may name a wrong owner for an older sequence. Only the
+eviction admission and candidates outside recovery read the owners the bounded read does
+not reach; today their one caller (`EvictionRecovery::round`) runs only at startup
+recovery, from the eviction proofs. When a retained owner's first block holds no start
+record (an owner in no start's epoch: a start that stopped before its start record) or
+reading it back reaches the start before its own, the open reads every owner record, as
+before, and actingd prints
 `actingd ledger_open owner_read=full reason=owner_in_no_start_epoch`
-(`LedgerOpenTiming::owner_read_full`). An open with fewer than two starts reads every
-owner record. Nothing is written: an older build opens the same root unchanged.
+(`LedgerOpenTiming::owner_read_full`). When a ledger dump an earlier run left is at the
+dump path or the fallback path, the open imports it after this read and its owner may
+precede the bounded read, so the open reads every owner record and actingd prints
+`actingd ledger_open owner_read=full reason=dump_present`. Dumps follow only a failed
+write, so this costs one full read on those starts. An open with fewer than two starts
+reads every owner record. Nothing is written: an older build opens the same root
+unchanged.
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit

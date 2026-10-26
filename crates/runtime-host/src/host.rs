@@ -1487,9 +1487,14 @@ impl RuntimeHost {
             ))
         })?;
         // #422 LN-7c O: the open read every owner record of the history, not those of the two
-        // latest owner epochs (it could not place a retained owner in a start's epoch).
-        if timing.owner_read_full {
-            println!("actingd ledger_open owner_read=full reason=owner_in_no_start_epoch");
+        // latest owner epochs: it could not place a retained owner in a start's epoch
+        // (`owner_in_no_start_epoch`), or a dump an earlier run left was present
+        // (`dump_present`).
+        if let Some(full) = timing.owner_read_full {
+            println!(
+                "actingd ledger_open owner_read=full reason={}",
+                full.reason()
+            );
         }
         let ledger_opened = ledger_open_outcome(HostCode::LedgerOpened, &timing, timeout_ms);
         let ledger_open_slow =

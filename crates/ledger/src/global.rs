@@ -17,7 +17,7 @@ mod retention;
 pub use retention::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming,
+    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, OwnerReadFull,
 };
 mod sqlite;
 mod storage;

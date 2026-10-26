@@ -671,6 +671,12 @@ pub(super) fn open_formal(
                 database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
             ledger_meta_has_marker(&connection)?
         };
+        // #422 LN-7c O (review F2): a dump this open imports (`open_running`) may name an owner
+        // the bounded owner read does not reach, so the open then reads every owner record.
+        let dump_present = match config.write_failure.as_deref() {
+            Some(state) => state.dump_present()?,
+            None => false,
+        };
         let next = increment_sequence(head)?;
         let (ownership, stale) =
             WriterOwnership::from_locked(lock, compatibility, &config.owner_id)?;
@@ -685,13 +691,19 @@ pub(super) fn open_formal(
         // LN-7 (#422): the retention state is read by type and by index; LN-8d: within the
         // open's deadline, in pages of `ledger_observer.history_page_rows` rows.
         Ok((
-            EventStore::recovered(backend, next, Some(deadline), config.history_page_rows)?,
+            EventStore::recovered(
+                backend,
+                next,
+                Some(deadline),
+                config.history_page_rows,
+                dump_present,
+            )?,
             stale,
         ))
     })();
     timing.index_ms = elapsed_ms(indexing);
     let (mut store, stale) = indexed?;
-    // #422 LN-7c O: an open that read every owner record says so.
+    // #422 LN-7c O: an open that read every owner record says why.
     timing.owner_read_full = store.retention.owner_read_full();
     // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.4, §12 step 2): a dump an earlier run
     // left is imported after the ledger is verified and before any new record; AO-2 (§10, §12
@@ -1018,9 +1030,15 @@ impl SqliteLedgerStore {
                     database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
                 ledger_meta_has_marker(&connection)?
             };
-            Ok((events, head_hash, meta_has_marker))
+            // #422 LN-7c O (review F2): as the formal open, a dump this open imports makes it
+            // read every owner record.
+            let dump_present = match config.write_failure.as_deref() {
+                Some(state) => state.dump_present()?,
+                None => false,
+            };
+            Ok((events, head_hash, meta_has_marker, dump_present))
         })();
-        let (events, head_hash, meta_has_marker) = match recovered {
+        let (events, head_hash, meta_has_marker, dump_present) = match recovered {
             Ok(recovered) => recovered,
             Err(error) => {
                 return Err(error.with_close_result(ownership.close()));
@@ -1039,7 +1057,8 @@ impl SqliteLedgerStore {
         // LN-5 (#422): the records are dropped; LN-7: the retention state is read by type and by
         // index, not from them.
         drop(events);
-        let mut store = Self::recovered(backend, next, None, config.history_page_rows)?;
+        let mut store =
+            Self::recovered(backend, next, None, config.history_page_rows, dump_present)?;
         // Workflow #383 AO-1: a candidate opened with a failure plan writes and imports as the
         // running Runtime's writer does (`contracts/ledger-observer.md` §9); AO-2: and records
         // the previous epoch's unconfirmed tail (§10).

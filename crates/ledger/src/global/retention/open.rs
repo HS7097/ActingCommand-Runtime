@@ -92,9 +92,11 @@ impl<B: DurableStorage> EventStore<B> {
     /// was checked when it was written and is authenticated when it is read); then only the facts
     /// of `live` and what their classes read stay. LN-8d (#422): every read stops at `deadline`
     /// (the open's, `ledger_observer.open_timeout_ms`) with `ledger_read_budget_exceeded`.
+    /// #422 LN-7c O: `dump_present`, a dump this open imports, makes it read every owner record.
     pub(in crate::global) fn open_retention(
         &mut self,
         live: &BTreeSet<ArtifactId>,
+        dump_present: bool,
         deadline: Option<Instant>,
     ) -> GlobalLedgerResult<()> {
         let head = self.backend.head();
@@ -116,7 +118,7 @@ impl<B: DurableStorage> EventStore<B> {
         let super::owner_read::OwnerRead {
             records: owner_records,
             full,
-        } = self.owner_records(&starts, deadline)?;
+        } = self.owner_records(&starts, dump_present, deadline)?;
         let owners = RetentionIndex::scratch(&RetentionIndex::default(), owner_records.clone());
         let mut selected = Selected::new();
         keep(&mut selected, owner_records);

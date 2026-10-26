@@ -24,6 +24,11 @@
 //! cannot place so (an owner in no start's epoch, as a start that stopped before it wrote its
 //! start record leaves) makes the open read every owner record, as before, and say so
 //! (`LedgerOpenTiming::owner_read_full`, which actingd prints as one stdout line).
+//!
+//! A ledger dump an earlier run left (at the dump path or the fallback path) makes the open read
+//! every owner record too, and say so: the open imports the dump after this read, and the owner
+//! the dump names may precede the bounded read (review F2). Dumps follow only a failed write, so
+//! this costs one full read on those starts.
 
 use super::open::OWNER_TYPES;
 use super::*;
@@ -32,13 +37,13 @@ use crate::global::storage::{DurableStorage, EventStore};
 use actingcommand_contract::EventQuery;
 use std::time::Instant;
 
-/// The owner records the open reads, in ledger order, and whether they are every owner record of
-/// the history because the bounded read could not place an owner (a retained owner whose first
-/// block holds no start record, an owner block that reaches past the start before its own, or no
-/// owner record after the start before the latest one).
+/// The owner records the open reads, in ledger order, and why they are every owner record of the
+/// history: the bounded read could not place an owner (a retained owner whose first block holds
+/// no start record, an owner block that reaches past the start before its own, or no owner record
+/// after the start before the latest one), or a dump was present.
 pub(super) struct OwnerRead {
     pub(super) records: Vec<PersistedEvent>,
-    pub(super) full: bool,
+    pub(super) full: Option<OwnerReadFull>,
 }
 
 /// One owner's block read back from a sequence: its owner records before that sequence, in
@@ -49,9 +54,9 @@ struct Block {
 }
 
 impl RetentionIndex {
-    /// #422 LN-7c O: whether the open read every owner record (it could not place a retained
-    /// owner in a start's epoch).
-    pub(in crate::global) fn owner_read_full(&self) -> bool {
+    /// #422 LN-7c O: why the open read every owner record (it could not place a retained owner
+    /// in a start's epoch, or a dump was present), `None` when it did not.
+    pub(in crate::global) fn owner_read_full(&self) -> Option<OwnerReadFull> {
         self.owner_read_full
     }
 
@@ -79,11 +84,13 @@ impl RetentionIndex {
 impl<B: DurableStorage> EventStore<B> {
     /// #422 LN-7c O: the owner records of the open (the module comment): those of the two latest
     /// owner epochs and of each older owner a start may still close, or, when a retained owner is
-    /// in no start's epoch, every owner record. `starts` are the sequences of the starts
-    /// (`runtime.started`, `runtime.takeover`) in ledger order. Every read stops at `deadline`.
+    /// in no start's epoch or `dump_present` (a dump this open imports), every owner record.
+    /// `starts` are the sequences of the starts (`runtime.started`, `runtime.takeover`) in ledger
+    /// order. Every read stops at `deadline`.
     pub(super) fn owner_records(
         &self,
         starts: &[u64],
+        dump_present: bool,
         deadline: Option<Instant>,
     ) -> GlobalLedgerResult<OwnerRead> {
         let head = self.backend.head();
@@ -91,16 +98,23 @@ impl<B: DurableStorage> EventStore<B> {
         if FULL_OWNER_READ.with(std::cell::Cell::get) {
             return Ok(OwnerRead {
                 records: self.owner_range(1, head, deadline)?,
-                full: false,
+                full: None,
             });
         }
         // Without a start before the latest one, the window is the whole history.
         let Some(after) = starts.len().checked_sub(2).map(|index| starts[index]) else {
             return Ok(OwnerRead {
                 records: self.owner_range(1, head, deadline)?,
-                full: false,
+                full: None,
             });
         };
+        // Review F2: the dump's owner may precede the bounded read.
+        if dump_present {
+            return Ok(OwnerRead {
+                records: self.owner_range(1, head, deadline)?,
+                full: Some(OwnerReadFull::DumpPresent),
+            });
+        }
         let mut from = after.saturating_add(1);
         let mut records = self.owner_range(from, head, deadline)?;
         let mut owner = records.first().and_then(recorded_owner);
@@ -134,14 +148,14 @@ impl<B: DurableStorage> EventStore<B> {
                 }
                 return Ok(OwnerRead {
                     records,
-                    full: false,
+                    full: None,
                 });
             }
             owner = None;
         }
         Ok(OwnerRead {
             records: self.owner_range(1, head, deadline)?,
-            full: true,
+            full: Some(OwnerReadFull::OwnerInNoStartEpoch),
         })
     }
 
@@ -271,7 +285,7 @@ impl RetentionIndex {
     /// Tests: keeps this open's owner state for `take_opened_owner_state_for_test`.
     pub(super) fn keep_owner_state_for_test(&self, head: u64) {
         let state = self.owner_state(head);
-        OPENED.with(|cell| *cell.borrow_mut() = Some((state, self.owner_read_full)));
+        OPENED.with(|cell| *cell.borrow_mut() = Some((state, self.owner_read_full.is_some())));
     }
 
     fn owner_state(&self, head: u64) -> OwnerState {

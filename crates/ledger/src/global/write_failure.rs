@@ -485,6 +485,32 @@ impl WriteFailureState {
         &self.plan
     }
 
+    /// #422 LN-7c O (review F2): whether a dump an earlier run left is at this plan's dump path
+    /// or its fallback path, so that the open imports it (§9.4, `import_dumps`). A place whose
+    /// presence cannot be read fails as the import's own read of it would: `ledger_io` of
+    /// `import_ledger_dump`.
+    pub(crate) fn dump_present(&self) -> GlobalLedgerResult<bool> {
+        for path in [
+            Some(&self.plan.dump_path),
+            self.plan.fallback_dump_path.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let present = path.try_exists().map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::ImportLedgerDump.location(),
+                    &error,
+                )
+            })?;
+            if present {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn watch(&self) -> MutexGuard<'_, Watch> {
         self.watch.lock().unwrap_or_else(PoisonError::into_inner)
     }
