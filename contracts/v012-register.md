@@ -3409,7 +3409,7 @@ revision changes. The number 1.188 is provisional for the parallel slices.
 | CF4-2 | code `fact_reference_unavailable` (info; `fact_key`, `unknown_reason`) | new catalog entry (no shape) | CF-4 | CF-4 | owner policy (registry `PolicyCode`, block `#386 CF-4`), `ladder_class` `none` (row 7: a scheduling decision reason), layer `policy`, review `pending`, since 0.12.14; the existing vocabulary `unknown_reason` (`fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired`, `type_mismatch`); no new key |
 | CF4-3 | `config.subsystems` row `fact_reference` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-4 | CF-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose rule writes a reference must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the reference) |
 
-### 1.189 Slice SR-4a2 (0.12.x): the policy closes over blackouts: positions 4 and 7, the day boundary, the admission re-check, the random delay's cut (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, D-4, D-6, §6 row SR-4a2; Alice's ruling 50, #386 6380164487: the day-boundary rule as recommended, per-instance switch, default on)
+### 1.191 Slice SR-4a2 (0.12.x): the policy closes over blackouts: positions 4 and 7, the day boundary, the admission re-check, the random delay's cut (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, D-4, D-6, §6 row SR-4a2; Alice's ruling 50, #386 6380164487: the day-boundary rule as recommended, per-instance switch, default on)
 
 The gate of catalog v35 on the Runtime side, over SR-4a1's pure judgements (§1.179).
 [scheduling-blackout.md](scheduling-blackout.md) ("Day-boundary fit", "Gradual quiet", "Order of
@@ -3417,7 +3417,7 @@ the deferrals", "Configuration", "Codes") and [actingd-check-config.md](actingd-
 are the contract. **No persisted ledger shape and no configuration key**: every key it reads is
 SR-4a1's (revision 11); the refusals are existing `policy.dispatch_rejected` records with the
 code's outcome. One code is added. Gates: the `gate_386_sr4a2` tests, ten rows of host.toml. The
-number 1.189 is provisional for the parallel slices.
+number 1.191 is provisional for the parallel slices (1.189 is SR-4a3's, 1.190 ED-2's).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
