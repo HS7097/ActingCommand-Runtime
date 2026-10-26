@@ -479,7 +479,9 @@ pub enum PredicateSpec {
         scope: ScopeSelector,
         fact_key: String,
         comparison: Comparison,
-        value: FactValue,
+        /// A typed value, or (#386 CF-4, `actingcommand.scheduling.v2` only) another fact of
+        /// this predicate's scope plus an integer offset ([`FactComparand`]).
+        value: FactComparand,
         max_age_ms: Option<u64>,
     },
     RecordDeadline {
@@ -601,6 +603,97 @@ pub enum FactValue {
     TimestampMs(u64),
     DurationMs(u64),
     RecordList(Vec<BTreeMap<String, FactScalar>>),
+}
+
+/// #386 CF-4: the `type` of a `fact` predicate's `value` that names another fact.
+pub const FACT_REFERENCE_TYPE: &str = "fact";
+/// #386 CF-4: the configuration-manifest subsystem of a Runtime that reads fact references; a
+/// `schedule.json` that writes one names it in `requires`.
+pub const FACT_REFERENCE_SUBSYSTEM: &str = "fact_reference";
+
+/// What a `fact` predicate compares its fact with (#386 CF-4, Alice 10-26: a red line is the
+/// current cap less a margin, never a fixed number).
+///
+/// - [`FactComparand::Value`]: a typed value, written and hashed exactly as [`FactValue`].
+/// - [`FactComparand::Fact`]: `{"type": "fact", "fact_key": <key>, "offset": <integer>}`, the
+///   value of the fact `fact_key` in the predicate's own scope plus `offset`; both facts are
+///   integers (`actingcommand.scheduling.v2` only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FactComparand {
+    Value(FactValue),
+    Fact(FactReference),
+}
+
+impl From<FactValue> for FactComparand {
+    fn from(value: FactValue) -> Self {
+        Self::Value(value)
+    }
+}
+
+/// #386 CF-4: another fact of the predicate's scope, and the signed integer added to its value.
+/// It names no scope of its own: it always reads the predicate's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactReference {
+    pub fact_key: String,
+    pub offset: i64,
+    /// Never valid: the compiler refuses a reference that names a scope (a cross-scope
+    /// reference) at `value/scope`. The member is read only so that the refusal can point at it;
+    /// a compiled catalog's references hold `None`.
+    pub scope: Option<ScopeSelector>,
+}
+
+/// The wire form of a [`FactReference`].
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FactReferenceWire {
+    #[serde(rename = "type")]
+    kind: FactReferenceTag,
+    fact_key: String,
+    offset: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<ScopeSelector>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FactReferenceTag {
+    Fact,
+}
+
+impl Serialize for FactComparand {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Value(value) => value.serialize(serializer),
+            Self::Fact(reference) => FactReferenceWire {
+                kind: FactReferenceTag::Fact,
+                fact_key: reference.fact_key.clone(),
+                offset: reference.offset,
+                scope: reference.scope.clone(),
+            }
+            .serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FactComparand {
+    /// A value whose `type` is `fact` is a reference; every other value is read as a
+    /// [`FactValue`], with its refusals as before.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if value.get("type").and_then(serde_json::Value::as_str) == Some(FACT_REFERENCE_TYPE) {
+            let wire = FactReferenceWire::deserialize(value)
+                .map_err(<D::Error as serde::de::Error>::custom)?;
+            Ok(Self::Fact(FactReference {
+                fact_key: wire.fact_key,
+                offset: wire.offset,
+                scope: wire.scope,
+            }))
+        } else {
+            FactValue::deserialize(value)
+                .map(Self::Value)
+                .map_err(<D::Error as serde::de::Error>::custom)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

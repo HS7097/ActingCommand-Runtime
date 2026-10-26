@@ -3354,6 +3354,23 @@ is provisional for the parallel slices.
 | RL1B-6 | `config.subsystems` row `standard_pack_schedule` (always on) | new row value of an existing fact | RL-1b | RL-1b | a `schedule.json` that requires it is composed only by a Runtime that names it |
 | RL1B-7 | check-config `report.standard_pack_schedule` (`composer_mode`, `games`, `rules`, `pools`, `profiles`, `events`, `unclassified`, `problems`, `left_out`) | check-config report member | RL-1b | — | the composition the workbench would make for the configured instances, in either mode; each problem is a note |
 
+### 1.186 Slice CF-4 (0.12.x): a `fact` predicate compares with another fact of its scope plus an offset (#386, condition-first; Alice 10-26: 「上限-1000才可能当做红线，并且这个红线绝对不是固定的」)
+
+[scheduling/README.md](scheduling/README.md) ("Fact references", "Why A Candidate Does Not
+Run"), [scheduling/v2/README.md](scheduling/v2/README.md) and
+[standard-pack-schedule.md](standard-pack-schedule.md) (`requires`) are the contract. **No
+persisted ledger shape**: the reference is a catalog format addition (the ledger holds only the
+catalog's `catalog_hash`, unchanged for a catalog without one); the reason is a catalog code
+carried by the evaluation's decisions and the existing dispatch decision records; the subsystem
+row is a value of the existing `config.subsystems` fact. No wire, configuration key or interface
+revision changes. The number 1.186 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF4-1 | `fact.value` may be `{"type": "fact", "fact_key", "offset"}` (`FactComparand::Fact`, `FactReference`; schema `factReference` in `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | CF-4 | the standard packs' `schedule.json` | V2 only (V1: `unknown_field` at `value/type`); the referenced fact is read in the predicate's scope with its `max_age_ms`; both facts integers, compared as `a C b + offset`; `contains` refused; a typed value serializes and hashes as before |
+| CF4-2 | code `fact_reference_unavailable` (info; `fact_key`, `unknown_reason`) | new catalog entry (no shape) | CF-4 | CF-4 | owner policy (registry `PolicyCode`, block `#386 CF-4`), `ladder_class` `none` (row 7: a scheduling decision reason), layer `policy`, review `pending`, since 0.12.14; the existing vocabulary `unknown_reason` (`fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired`, `type_mismatch`); no new key |
+| CF4-3 | `config.subsystems` row `fact_reference` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-4 | CF-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose rule writes a reference must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the reference) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
