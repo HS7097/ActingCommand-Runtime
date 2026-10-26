@@ -861,3 +861,13 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_412_b3_s2::b3_s2_t2_7_ac_lab_do_passes_operation_and_refuses_its_conflicts_before_the_child",
 ]
 incident = ["#412 B-3"]
+
+# #422 LN-7c C (v0.12.16; rd-1026/ln7c/final-query.md §4 and §7 row C; Alice's ruling 70): MCP ac_evidence_confirm_read records one client.action with the agent's origin (agent, adapter) and actingctl evidence confirm-read one with the command line's (cli, cli), after its identity card actingctl in the same correlation, for a frame (control evidence_read_frame) and for a run (evidence_read_run), each with its frame index row ('artifact' or 'run', id, 'read_confirmed') at the record's sequence; an artifact or a run the ledger does not hold is refused on both sides with client_action_invalid and nothing is recorded; reading evidence through ac_run_evidence and ac_observe records no confirmation
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_mcp_and_the_cli_each_record_one_client_action_with_its_frame_index_row",
+    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_an_unknown_artifact_or_run_is_refused_and_nothing_is_recorded",
+    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_ac_run_evidence_and_ac_observe_record_no_confirmation",
+]
+incident = ["#422 LN-7c C"]

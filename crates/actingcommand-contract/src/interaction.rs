@@ -12,6 +12,15 @@ const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_PATH_SAFE_VALUE_BYTES: usize = 256;
 const MAX_REDACTED_INPUT_BYTES: u32 = 4_096;
 
+/// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): the `control_id` of the `client.action` (kind
+/// `Command`) that confirms one capture frame was read; its value is the frame's artifact id as a
+/// path-safe string. The same on every surface (`mcp`, `cli`, later `ui`); the ledger's frame
+/// index spells it the same (`read_confirmed` rows, `contracts/ledger-observer.md` §11.7).
+pub const EVIDENCE_READ_FRAME_CONTROL: &str = "evidence_read_frame";
+/// #422 LN-7c C: the `control_id` that confirms a run was read (every frame captured in it before
+/// the confirmation); its value is the run id as a path-safe string.
+pub const EVIDENCE_READ_RUN_CONTROL: &str = "evidence_read_run";
+
 /// Classifies the client-side interaction without persisting arbitrary UI text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

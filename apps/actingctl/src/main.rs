@@ -79,6 +79,10 @@ mod capability_gap;
 // instance's remedy choices.
 mod remedy;
 
+// #422 LN-7c C: `evidence confirm-read` (MCP `ac_evidence_confirm_read`), the confirmation that an
+// evidence frame or a run was read.
+mod evidence_read;
+
 // Workflow #386 SR-6b, MCP-19b: `schedule` (MCP `ac_schedule`), the latest policy evaluation's
 // explanation, and what `overview` and `diagnose` show of it.
 mod schedule;
@@ -246,6 +250,11 @@ fn main() -> ExitCode {
     // Workflow #411 B15 R6: `remedy` takes its action as the second word and leaves before
     // `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = remedy::dispatch(&arguments, detail) {
+        return exit;
+    }
+    // #422 LN-7c C: `evidence` takes its action as the second word and leaves before
+    // `Invocation::parse`; its flags are `flags_of`'s.
+    if let Some(exit) = evidence_read::dispatch(&arguments, detail) {
         return exit;
     }
     match run(arguments, detail) {
@@ -1703,6 +1712,10 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         }
         remedy::COMMAND if matches!(action, Some(remedy::GET | remedy::LIFT)) => {
             &["--state-root", "--instance"]
+        }
+        // #422 LN-7c C: a confirmation names one frame (`--artifact`) or one run (`--run`).
+        evidence_read::COMMAND if action == Some(evidence_read::CONFIRM_READ) => {
+            &["--state-root", "--artifact", "--run"]
         }
         _ => return None,
     };

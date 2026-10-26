@@ -15,6 +15,8 @@ mod cli_grammar;
 mod emulator_restart;
 // Workflow #389 MCP-21: `actingctl emulator start|stop|restart --wait`.
 mod emulator_wait;
+// #422 LN-7c C: `actingctl evidence confirm-read` and `ac_evidence_confirm_read`.
+mod evidence_confirm_read;
 // Workflow #382 A1-FLAG: flags a subcommand does not take, flags given twice, stray words.
 mod flag_refusals;
 mod install_transition;

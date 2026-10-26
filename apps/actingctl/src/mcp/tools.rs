@@ -798,6 +798,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: operator::ladder_drill,
     },
     // ---- Workflow #390 DRILL-1 (end) ----
+    // ---- #422 LN-7c C (begin): `ac_evidence_confirm_read` ↔ `actingctl evidence confirm-read`;
+    // operator, since it writes (final-query.md §4). ----
+    ToolDef {
+        name: "ac_evidence_confirm_read",
+        title: "Confirm an evidence read",
+        tier: Tier::Operator,
+        description: super::evidence_read::DESCRIPTION,
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: super::evidence_read::input,
+        result_schema: super::evidence_read::result,
+        run: super::evidence_read::confirm,
+    },
+    // ---- #422 LN-7c C (end) ----
     ToolDef {
         name: "ac_targets_set",
         title: "Set resource targets",
