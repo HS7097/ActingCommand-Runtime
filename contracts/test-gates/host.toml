@@ -2043,3 +2043,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_tune::ln_tune_a_second_start_reads_no_planning_history_before_the_checkpoint",
 ]
 incident = ["#422 LN-TUNE"]
+
+# LN-8c (#422, LEAN-L model v1.0 §7.1 A3; scale run 40257524915): the start's runtime-fact recovery reads the record events after its newest complete snapshot set (every one of them without a set) through the ledger's head in pages of `GlobalLedger::history_page_events` events (`ledger_observer.history_page_rows`, at most 1 024), so no writer command of it returns more than one page; on the synthetic history, at every page size, it reads every runtime-fact event and rebuilds the store that one read of them and today's replay rebuild, its largest read one page (or the whole selection when that fits one) and no whole-ledger query
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln8c::ln8c_the_runtime_fact_recovery_reads_its_records_in_bounded_pages",
+]
+incident = ["#422 LN-8c"]

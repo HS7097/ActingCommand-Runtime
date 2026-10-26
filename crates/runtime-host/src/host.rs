@@ -1692,6 +1692,7 @@ impl RuntimeHost {
             owner_epoch,
             takeover,
             config.clock.sample()?.unix_ms,
+            ledger.history_page_events(),
         )?;
         // Workflow #375 R5d: with the frame cleaner off, the developer log says so once.
         if !config.frame_retention_enabled {
@@ -2401,6 +2402,26 @@ impl RuntimeHost {
     #[cfg(test)]
     pub(crate) fn take_last_runtime_fact_replay_for_test() -> Option<(u64, usize)> {
         runtime_facts::take_last_runtime_fact_replay()
+    }
+
+    /// #422 LN-8c: the start's runtime-fact recovery on `ledger` without a takeover, its record
+    /// events read in pages of `page_events` events: the records of the store it rebuilds.
+    #[cfg(test)]
+    pub(crate) fn recover_runtime_facts_for_test(
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+        owner_epoch: actingcommand_contract::OwnerEpoch,
+        page_events: usize,
+    ) -> RuntimeHostResult<Vec<RuntimeFactRecord>> {
+        let (store, _) = runtime_facts::recover_runtime_fact_store(
+            ledger,
+            events,
+            owner_epoch,
+            false,
+            0,
+            page_events,
+        )?;
+        Ok(store.records().cloned().collect())
     }
 
     /// Workflow #381 R6: the recovery timing this start printed.
