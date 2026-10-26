@@ -6,9 +6,9 @@
 //! `ledger_open_slow` (warning; `elapsed_ms`, `timeout_ms`, `event_count`), which actingd writes
 //! right after `ledger_opened`.
 //!
-//! A slow open is injected by the ledger's open delay gate: the open's SQL read starts as if the
-//! delay had already passed, so its deadline comes that much sooner and its measured time is that
-//! much longer; nothing waits the delay out.
+//! A slow open is injected by the ledger's open delay gate: the open starts as if the delay had
+//! already passed, so its deadline comes that much sooner and its measured time is that much
+//! longer; nothing waits the delay out.
 
 use super::*;
 use actingcommand_contract::RuntimeConfigManifest;
@@ -22,8 +22,18 @@ use serde_json::{Value, json};
 /// The configured deadline of a short open, in milliseconds.
 const SHORT_TIMEOUT_MS: u64 = 10_000;
 
-/// The phases of an open whose sum is its measured time.
-const PHASES: [&str; 4] = ["sql_read_ms", "verify_ms", "material_ms", "restore_ms"];
+/// The phases of an open whose sum is its measured time (#422 LN-8: the writer open's are
+/// `meta_ms`, `tail_ms`, `index_ms` and `import_ms`).
+const PHASES: [&str; 8] = [
+    "sql_read_ms",
+    "verify_ms",
+    "material_ms",
+    "restore_ms",
+    "meta_ms",
+    "tail_ms",
+    "index_ms",
+    "import_ms",
+];
 
 // The configuration a start reads, with `section` as its `ledger_observer` section.
 fn manifest(section: Value) -> RuntimeConfigManifest {

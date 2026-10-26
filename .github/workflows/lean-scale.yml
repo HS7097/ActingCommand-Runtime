@@ -2,15 +2,18 @@ name: Lean scale
 
 # LN-1 (Workflow #422, LEAN-L model §7.2): the scale harness. It writes a synthetic ledger of each
 # history size (10,000 and 1,000,000 records by default) into a fresh state root, starts the
-# Runtime host on it twice, each start in a child process of its own, and reports the time to
-# ready, the ledger open's phases, the recovery steps with the whole-ledger-query counter, and
-# private bytes at ready and 10 s later (crates/runtime-host/src/tests/lean_scale.rs).
+# Runtime host on it three times (two seeding starts, then the steady one), each start in a child
+# process of its own, and reports the time to ready, the ledger open's phases, the recovery steps
+# with the whole-ledger-query counter, and private bytes at ready and 10 s later
+# (crates/runtime-host/src/tests/lean_scale.rs).
 #
-# It reports only and is not a required check: ci.yml's `gate` does not need it, so it never
-# holds a merge; LN-8 turns the numbers into a gate. The 1M case takes a long time and the Actions
-# budget is $20 a month (ruling 10-19), so it never runs by itself: run it on demand (Actions ->
-# Lean scale -> Run workflow, on the branch to measure), or add the label `lean-scale` to a pull
-# request, which runs it once on that pull request. It builds in release, as production does.
+# LN-8 (#422) makes it a gate: after writing its report, the harness fails when the run misses a
+# target of model §7.1 (A1 time to ready and open and recovery time, A2 memory, A3 start reads),
+# and the summary lists every target with what was measured. ci.yml's `gate` does not need this
+# job, so it holds no merge by itself. The 1M case takes a long time and the Actions budget is
+# $20 a month (ruling 10-19), so it never runs by itself: run it on demand (Actions -> Lean scale
+# -> Run workflow, on the branch to measure), or add the label `lean-scale` to a pull request,
+# which runs it once on that pull request. It builds in release, as production does.
 
 on:
   workflow_dispatch:

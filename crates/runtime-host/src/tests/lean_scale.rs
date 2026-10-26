@@ -2,22 +2,36 @@
 
 //! LN-1 (Workflow #422, LEAN-L model §7.2): the scale harness. For each history size it fills a
 //! fresh state root with the ledger crate's synthetic ledger (no device, neutral words), then
-//! starts the Runtime host on it twice, each start in a child process of its own, as the test
-//! binary re-run on one ignored entry, so every measure has its own baseline. The first start
-//! carries the one-time work of a new build; the second is the steady start. Each start reports:
+//! starts the Runtime host on it three times, each start in a child process of its own, as the
+//! test binary re-run on one ignored entry, so every measure has its own baseline. The first start
+//! carries the one-time work of a new build, and seeds the tagged state without its marker (the
+//! synthetic history has no earlier start); the second seeds again and writes the marker
+//! (`seed_tagged_state`); the third is the steady start. Each start reports:
 //! - the time from the process's launch to ready (`RuntimeHost::start` returned, so
 //!   `runtime-info.json` is published) and the start call's own time;
 //! - the ledger open's phases (`ledger_opened`: `sql_read_ms`, `verify_ms`, `material_ms`,
-//!   `restore_ms`, `event_count`);
+//!   `restore_ms` and, from LN-8, `meta_ms`, `tail_ms`, `index_ms`, `import_ms`, with
+//!   `event_count`, the records the open authenticated);
 //! - the recovery steps of the `actingd startup_recovery` line, with the writer's peak, its
 //!   whole-ledger-query counter among it;
 //! - private bytes, peak private bytes, working set and peak working set at ready and again
 //!   `ACTINGCOMMAND_LEAN_SCALE_SETTLE_MS` (10 s by default) later.
 //!
-//! LN-1 only reports: the numbers are printed, and written as `lean-scale-report.json` and
-//! `lean-scale-report.md` to `ACTINGCOMMAND_LEAN_SCALE_REPORT_DIR` when it is set. LN-8 makes them
-//! a gate with the model's thresholds (§7.1). A start that fails, a child that ends without its
-//! report or a measure that is missing fails the harness.
+//! The numbers are printed, and written as `lean-scale-report.json` and `lean-scale-report.md` to
+//! `ACTINGCOMMAND_LEAN_SCALE_REPORT_DIR` when it is set. A start that fails, a child that ends
+//! without its report or a measure that is missing fails the harness. LN-8 (#422) makes the
+//! model's targets (§7.1) a gate: after the report is written, the harness fails naming every
+//! target the run missed.
+//! - A1: the steady start of the largest history is ready at most 2 s later than that of the
+//!   smallest; on the largest, its ledger open's phases total at most 1.5 s and its recovery at
+//!   most 5 s (the seeding starts are reported, not gated).
+//! - A2: 10 s after ready, the steady start of the largest history holds at most 64 MiB more
+//!   private bytes than that of the smallest, and its peak working set is at most 128 MiB higher.
+//! - A3: no start makes a whole-ledger query, and no writer command of a start reads more events
+//!   than the larger of the index table's rows and the open's tail
+//!   (`ledger_observer.open_verify_tail_records`); the open authenticates its tail, no more.
+//!
+//! A4 (steady capture after ready) and A5 (history queries) are not measured here.
 //!
 //! The sizes are `ACTINGCOMMAND_LEAN_SCALE_SIZES` (records, comma separated; 10,000 and
 //! 1,000,000 by default). The `Lean scale` workflow runs it on a release build, as production
@@ -47,10 +61,28 @@ pub(super) const OWNER: &str = "lean-scale-fixture";
 // The fixture instance: the host registers it under `POLICY_INSTANCE_ALIAS`, and the synthetic
 // history's runs, inputs and facts name it.
 const INSTANCE_ID: &str = "\"instance_000000000000000000000000000000a1\"";
-// The two starts on each history.
-const STARTS: [&str; 2] = ["first", "second"];
-// The ledger open's phases, whose sum is its measured time.
-const OPEN_PHASES: [&str; 4] = ["sql_read_ms", "verify_ms", "material_ms", "restore_ms"];
+// The three starts on each history: two seeding starts, then the steady one, which A1 and A2
+// gate.
+const STARTS: [&str; 3] = ["first", "second", "third"];
+const STEADY: &str = "third";
+// The ledger open's phases, whose sum is its measured time (LN-8: the writer open's are `meta_ms`,
+// `tail_ms`, `index_ms` and `import_ms`).
+const OPEN_PHASES: [&str; 8] = [
+    "sql_read_ms",
+    "verify_ms",
+    "material_ms",
+    "restore_ms",
+    "meta_ms",
+    "tail_ms",
+    "index_ms",
+    "import_ms",
+];
+// LN-8 (#422, LEAN-L model §7.1): the targets the harness gates.
+const A1_READY_DELTA_MS: u64 = 2_000;
+const A1_OPEN_MS: u64 = 1_500;
+const A1_RECOVERY_MS: u64 = 5_000;
+const A2_PRIVATE_DELTA_BYTES: u64 = 64 * 1024 * 1024;
+const A2_PEAK_WORKING_SET_DELTA_BYTES: u64 = 128 * 1024 * 1024;
 
 pub(super) fn scale_instance_id() -> InstanceId {
     serde_json::from_str(INSTANCE_ID).expect("the fixture instance id")
@@ -117,6 +149,29 @@ pub(super) fn formal_root(root: &Path) {
         .expect("the formal writer")
         .close()
         .expect("close the formal writer");
+}
+
+// The newest records the start's ledger open authenticates: the defaults file's
+// `ledger_observer.open_verify_tail_records`, which the harness's host reads.
+fn open_tail_records() -> u64 {
+    actingcommand_runtime_config::EffectiveConfig::default()
+        .ledger_observer()
+        .expect("the defaults file's ledger_observer section")
+        .open_verify_tail_records
+}
+
+// The rows of the root's index table (`ledger_index`).
+fn index_rows(root: &Path) -> u64 {
+    let database = RuntimeDatabase::open_existing(root, true).expect("the root's database");
+    let connection = database
+        .connection(
+            actingcommand_runtime_database::DatabaseLocation::OpenExistingDatabase.location(),
+        )
+        .expect("the root's connection");
+    let rows: i64 = connection
+        .query_row("SELECT COUNT(*) FROM ledger_index", [], |row| row.get(0))
+        .expect("the index table's rows");
+    u64::try_from(rows).expect("a row count")
 }
 
 // The bytes of the root's database and its write-ahead log.
@@ -278,12 +333,14 @@ fn start_child(root: &Path, report_dir: &Path, records: u64, start: &str) -> Val
     );
     report["startup_recovery_printed"] = json!(printed);
     report["spawn_to_exit_ms"] = json!(spawn_to_exit_ms);
+    // LN-8: the open authenticates its tail of the history, no more.
     let event_count = report["ledger_open"]["event_count"]
         .as_u64()
         .expect("the open's event count");
+    let tail = open_tail_records();
     assert!(
-        event_count >= records,
-        "the {start} start opened {event_count} records of {records}: {report}"
+        event_count >= records.min(tail) && event_count <= tail,
+        "the {start} start authenticated {event_count} records of {records}, its tail {tail}: {report}"
     );
     assert!(
         report["startup_recovery"]["recovery_ms"].is_u64(),
@@ -339,8 +396,122 @@ fn measure(records: u64, report_dir: &Path) -> Value {
         "records": records,
         "generation": generation,
         "database_bytes": bytes,
+        "index_rows": index_rows(root.path()),
         "starts": starts,
     })
+}
+
+// One target of model §7.1: its name, what it requires, what the run measured, and whether it
+// holds.
+struct Target {
+    name: &'static str,
+    required: String,
+    measured: String,
+    holds: bool,
+}
+
+// The records of a measured case.
+fn case_records(case: &Value) -> u64 {
+    case["records"].as_u64().unwrap_or(0)
+}
+
+// The case with the fewest records (`fewest`) or the most.
+fn case_by_size(cases: &[Value], fewest: bool) -> Option<&Value> {
+    let records = |case: &&Value| case_records(case);
+    if fewest {
+        cases.iter().min_by_key(records)
+    } else {
+        cases.iter().max_by_key(records)
+    }
+}
+
+// A value of the steady start of `case`, by its path in the start's report.
+fn steady(case: &Value, path: &[&str]) -> Option<u64> {
+    path.iter()
+        .fold(&case["starts"][STEADY], |value, key| &value[*key])
+        .as_u64()
+}
+
+// The targets of model §7.1 over the measured cases (LN-8): A3 on every start, A1 and A2 on the
+// steady starts of the smallest and the largest history.
+fn targets(cases: &[Value]) -> Vec<Target> {
+    let mut targets = Vec::new();
+    let tail = open_tail_records();
+    for case in cases {
+        let records = case_records(case);
+        let bound = case["index_rows"].as_u64().unwrap_or(0).max(tail);
+        for start in STARTS {
+            let recovery = &case["starts"][start]["startup_recovery"];
+            let queries = recovery["writer_whole_ledger_queries"].as_u64();
+            targets.push(Target {
+                name: "A3 whole-ledger queries",
+                required: format!("{records} records, {start} start: 0"),
+                measured: format!("{queries:?}"),
+                holds: queries == Some(0),
+            });
+            let largest = recovery["writer_largest_read_events"].as_u64();
+            targets.push(Target {
+                name: "A3 largest read",
+                required: format!("{records} records, {start} start: at most {bound} events"),
+                measured: format!("{largest:?}"),
+                holds: largest.is_some_and(|largest| largest <= bound),
+            });
+        }
+    }
+    let (Some(small), Some(large)) = (case_by_size(cases, true), case_by_size(cases, false)) else {
+        return targets;
+    };
+    let delta = |path: &[&str]| {
+        steady(large, path)
+            .zip(steady(small, path))
+            .map(|(large, small)| large.saturating_sub(small))
+    };
+    let pair = format!(
+        "{} vs {} records, steady start",
+        large["records"], small["records"]
+    );
+    let ready = delta(&["launch_to_ready_ms"]);
+    targets.push(Target {
+        name: "A1 ready delta",
+        required: format!("{pair}: at most {A1_READY_DELTA_MS} ms"),
+        measured: format!("{ready:?} ms"),
+        holds: ready.is_some_and(|ready| ready <= A1_READY_DELTA_MS),
+    });
+    let open = steady(large, &["ledger_open_ms"]);
+    targets.push(Target {
+        name: "A1 ledger open",
+        required: format!(
+            "{} records, steady start: at most {A1_OPEN_MS} ms",
+            large["records"]
+        ),
+        measured: format!("{open:?} ms"),
+        holds: open.is_some_and(|open| open <= A1_OPEN_MS),
+    });
+    let recovery = steady(large, &["startup_recovery", "recovery_ms"]);
+    targets.push(Target {
+        name: "A1 recovery",
+        required: format!(
+            "{} records, steady start: at most {A1_RECOVERY_MS} ms",
+            large["records"]
+        ),
+        measured: format!("{recovery:?} ms"),
+        holds: recovery.is_some_and(|recovery| recovery <= A1_RECOVERY_MS),
+    });
+    let private = delta(&["memory_settled", "private_bytes"]);
+    targets.push(Target {
+        name: "A2 private bytes delta",
+        required: format!("{pair}: at most {A2_PRIVATE_DELTA_BYTES} bytes"),
+        measured: format!("{private:?} bytes"),
+        holds: private.is_some_and(|private| private <= A2_PRIVATE_DELTA_BYTES),
+    });
+    let peak = delta(&["memory_settled", "peak_working_set_bytes"]);
+    targets.push(Target {
+        name: "A2 peak working set delta",
+        required: format!("{pair}: at most {A2_PEAK_WORKING_SET_DELTA_BYTES} bytes"),
+        measured: format!("{peak:?} bytes"),
+        holds: peak.is_some_and(|peak| peak <= A2_PEAK_WORKING_SET_DELTA_BYTES),
+    });
+    targets
 }
 
 fn mib(value: &Value) -> String {
@@ -356,12 +527,12 @@ fn number(value: &Value) -> String {
         .map_or_else(|| "-".to_owned(), |value| value.to_string())
 }
 
-// The report as a Markdown table, one row per start.
-fn markdown(cases: &[Value]) -> String {
+// The report as Markdown: one row per start, then the targets of model §7.1.
+fn markdown(cases: &[Value], targets: &[Target]) -> String {
     let mut text = String::from(
-        "## LN-1 scale harness (reports only; LN-8 gates)\n\n\
-         | records | start | launch to ready ms | start ms | ledger open ms (sql read / verify / restore) | recovery ms | fact store ms | monitor ms | policy host ms | runtime state ms | agent ms | whole-ledger queries | largest read events | private MiB at ready | private MiB settled | peak private MiB | peak working set MiB |\n\
-         |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+        "## LN-1 scale harness (LN-8 gates model §7.1 A1 to A3)\n\n\
+         | records | start | launch to ready ms | start ms | ledger open ms (meta / tail / index / import) | tail records | recovery ms | fact store ms | monitor ms | policy host ms | runtime state ms | agent ms | whole-ledger queries | largest read events | private MiB at ready | private MiB settled | peak private MiB | peak working set MiB |\n\
+         |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for case in cases {
         for start in STARTS {
@@ -369,14 +540,16 @@ fn markdown(cases: &[Value]) -> String {
             let recovery = &report["startup_recovery"];
             let open = &report["ledger_open"];
             text.push_str(&format!(
-                "| {} | {start} | {} | {} | {} ({} / {} / {}) | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                "| {} | {start} | {} | {} | {} ({} / {} / {} / {}) | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
                 number(&case["records"]),
                 number(&report["launch_to_ready_ms"]),
                 number(&report["start_ms"]),
                 number(&report["ledger_open_ms"]),
-                number(&open["sql_read_ms"]),
-                number(&open["verify_ms"]),
-                number(&open["restore_ms"]),
+                number(&open["meta_ms"]),
+                number(&open["tail_ms"]),
+                number(&open["index_ms"]),
+                number(&open["import_ms"]),
+                number(&open["event_count"]),
                 number(&recovery["recovery_ms"]),
                 number(&recovery["fact_store_ms"]),
                 number(&recovery["monitor_registry_ms"]),
@@ -392,26 +565,37 @@ fn markdown(cases: &[Value]) -> String {
             ));
         }
     }
-    text.push_str("\n| records | generated ms | canonical MiB | database MiB | runs | frames |\n|---|---|---|---|---|---|\n");
+    text.push_str("\n| records | generated ms | canonical MiB | database MiB | index rows | runs | frames |\n|---|---|---|---|---|---|---|\n");
     for case in cases {
         let generation = &case["generation"];
         text.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
             number(&case["records"]),
             number(&generation["elapsed_ms"]),
             mib(&generation["canonical_bytes"]),
             mib(&case["database_bytes"]),
+            number(&case["index_rows"]),
             number(&generation["runs"]),
             number(&generation["frames"]),
+        ));
+    }
+    text.push_str("\n| target (model §7.1) | required | measured | holds |\n|---|---|---|---|\n");
+    for target in targets {
+        text.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            target.name,
+            target.required,
+            target.measured,
+            if target.holds { "yes" } else { "**no**" },
         ));
     }
     text
 }
 
-// The harness: every size, both starts; the report printed and, with the report folder set,
-// written there.
+// The harness: every size, every start; the report printed and, with the report folder set,
+// written there; then the gate (LN-8): every target of model §7.1 the run missed fails it.
 #[test]
-#[ignore = "LN-1 scale harness: the Lean scale workflow runs it with --ignored --exact; it reports, LN-8 gates"]
+#[ignore = "LN-1 scale harness: the Lean scale workflow runs it with --ignored --exact; it gates from LN-8"]
 fn lean_scale_reports_start_measures() {
     let sizes = sizes();
     assert!(!sizes.is_empty(), "{SIZES_ENV} names no size");
@@ -428,12 +612,22 @@ fn lean_scale_reports_start_measures() {
         .iter()
         .map(|records| measure(*records, &report_dir))
         .collect::<Vec<_>>();
+    let targets = targets(&cases);
     let report = json!({
         "format": "actingcommand-lean-scale/1",
         "settle_ms": settle_ms(),
         "cases": cases,
+        "targets": targets
+            .iter()
+            .map(|target| json!({
+                "name": target.name,
+                "required": target.required,
+                "measured": target.measured,
+                "holds": target.holds,
+            }))
+            .collect::<Vec<_>>(),
     });
-    let table = markdown(&cases);
+    let table = markdown(&cases, &targets);
     println!("{table}");
     fs::write(
         report_dir.join("lean-scale-report.json"),
@@ -441,4 +635,20 @@ fn lean_scale_reports_start_measures() {
     )
     .expect("write the report");
     fs::write(report_dir.join("lean-scale-report.md"), table).expect("write the summary");
+    let missed = targets
+        .iter()
+        .filter(|target| !target.holds)
+        .map(|target| {
+            format!(
+                "{}: required {}, measured {}",
+                target.name, target.required, target.measured
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        missed.is_empty(),
+        "the run missed {} target(s) of LEAN-L model §7.1:\n{}",
+        missed.len(),
+        missed.join("\n")
+    );
 }

@@ -14,14 +14,16 @@ use actingcommand_contract::{ProjectedArtifactReference, VerifiedArtifactReferen
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// Timings of one complete formal opening (never persisted). The startup writer open prints
-/// them on one stdout line, and a failed `ledger-maintenance verify` reports them in its
-/// failure cause. A phase that did not run stays 0. Workflow #375 R5a: a formal opening
-/// reads no artifact material, so `artifacts`, `artifact_bytes`, `workers` and
-/// `material_ms` are always 0; they stay in the line so that its format is unchanged.
+/// Timings of one formal opening (never persisted). The startup writer open reports them as
+/// `ledger_opened`, and a failed `ledger-maintenance verify` reports them in its failure cause.
+/// A phase that did not run stays 0. Workflow #375 R5a: a formal opening reads no artifact
+/// material, so `artifacts`, `artifact_bytes`, `workers` and `material_ms` are always 0; they
+/// stay in the line so that its format is unchanged. LN-8 (#422, LEAN-L §3.2 step 2): the writer
+/// open runs the phases `meta_ms`, `tail_ms`, `index_ms` and `import_ms`; the complete read of
+/// `ledger-maintenance verify` runs `sql_read_ms`, `verify_ms` and `restore_ms`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LedgerOpenTiming {
-    /// Records authenticated and restored.
+    /// Records authenticated (and, for a complete read, restored): the writer open's tail.
     pub events: u64,
     /// Distinct artifact references verified: 0, since material is never read.
     pub artifacts: u64,
@@ -35,6 +37,16 @@ pub struct LedgerOpenTiming {
     /// Material verification: 0.
     pub material_ms: u64,
     pub restore_ms: u64,
+    /// LN-8: the format, the marker, the keyed meta row and `MAX(sequence)`.
+    pub meta_ms: u64,
+    /// LN-8: the newest `ledger_observer.open_verify_tail_records` rows read and authenticated.
+    pub tail_ms: u64,
+    /// LN-8: the views and indexes a database lacks created, the retention state read by type
+    /// and by index.
+    pub index_ms: u64,
+    /// LN-8: a dump an earlier run left imported, the previous epoch's tail gap and the stale
+    /// owner's recovery record written.
+    pub import_ms: u64,
 }
 
 impl std::fmt::Display for LedgerOpenTiming {
