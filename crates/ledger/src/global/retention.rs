@@ -22,11 +22,16 @@ use actingcommand_contract::{
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod material;
 mod open;
+mod owner_read;
 mod prior_epoch;
 mod resident;
 mod view;
-pub use material::{LedgerFrameRefsNote, LedgerOpenTiming};
+pub use material::{LedgerFrameRefsNote, LedgerOpenTiming, OwnerReadFull};
 pub(super) use material::{PendingMaterial, elapsed_ms};
+#[cfg(test)]
+pub(super) use owner_read::{
+    OwnerState, read_every_owner_record_for_test, take_opened_owner_state_for_test,
+};
 pub use resident::live_frame_ids;
 pub use view::{
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
@@ -73,6 +78,9 @@ pub(super) struct RetentionIndex {
     /// again for a record that names them; the frame view does not list them.
     ghosts: BTreeSet<ArtifactId>,
     through_sequence: u64,
+    /// #422 LN-7c O: why the open read every owner record (`retention/owner_read.rs`): its
+    /// bounded read did not place a retained owner in a start's epoch, or a dump was present.
+    owner_read_full: Option<OwnerReadFull>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

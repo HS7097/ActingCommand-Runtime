@@ -49,6 +49,10 @@ pub struct LedgerOpenTiming {
     /// LN-8: a dump an earlier run left imported, the previous epoch's tail gap and the stale
     /// owner's recovery record written.
     pub import_ms: u64,
+    /// #422 LN-7c O: why the writer open read every owner record of the history instead of those
+    /// of the two latest owner epochs; `None` when its owner read was bounded (or the history
+    /// has fewer than two starts). Not part of the line above.
+    pub owner_read_full: Option<OwnerReadFull>,
     /// #422 LN-7c R: what the open found of the frame index `ledger_frame_refs` when it had to
     /// rebuild it, fill a gap of records appended without rows, or stop its fill; `None` when the
     /// index was complete or was built for the first time. It never fails the open.
@@ -93,6 +97,31 @@ impl LedgerFrameRefsNote {
             outcome = outcome.caused_by(cause);
         }
         outcome
+    }
+}
+
+/// #422 LN-7c O (`contracts/ledger-store.md`): why the writer open read every owner record of
+/// the history. actingd prints it as one line, `actingd ledger_open owner_read=full
+/// reason=<reason>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerReadFull {
+    /// The bounded read could not place a retained owner in a start's epoch: its first block
+    /// holds no start record (a start that stopped before it wrote its start record), or
+    /// reading an owner back reached the start before its own (an epoch with no owner record
+    /// after its start record).
+    OwnerInNoStartEpoch,
+    /// A ledger dump an earlier run left is at the dump path or the fallback path. The open
+    /// imports it, and the owner it names may precede the bounded read.
+    DumpPresent,
+}
+
+impl OwnerReadFull {
+    /// The `reason` of actingd's line, as its token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OwnerInNoStartEpoch => "owner_in_no_start_epoch",
+            Self::DumpPresent => "dump_present",
+        }
     }
 }
 

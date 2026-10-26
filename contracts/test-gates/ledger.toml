@@ -712,3 +712,13 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r9_a_fill_that_meets_a_damaged_record_stops_short_of_it_and_the_open_succeeds",
 ]
 incident = ["#422 LN-7c R"]
+
+# LN-7c O (#422; rd-1026/ln7c/final-query.md §7 row O, §2): the writer open reads the owner records of the two latest owner epochs: those after the start before the latest one by the type index, read back in forward chunks to the first record of that owner, and of each older owner a start may still close, read back the same way; the owner state it keeps (the retained owners, the owners a next start closes, and of each retained owner its epochs, end, reopening, import, closes, their writer, quiescences, scope sources and releases) equals the read of every owner record on roots with many starts, a takeover, a dump import of the previous owner, a reopened owner and a prior-epoch close; a retained owner in no start's epoch makes the open read every owner record and say why (`owner_in_no_start_epoch`); the owner rows read stay in the two latest epochs and are the same on histories of 3 000, 12 000 and 30 000 records (`LedgerReadCounts`); fix round 1 (review `rd-1026/ln7c/review-o.md`): on a production-shaped root (live frames in four epochs, lease releases and run terminals, a takeover, a dump import of the previous owner) the bounded open's frame view and kept moves, at the open and at the cleaner's sweep start after the start's records, and the records a real startup reconcile writes equal the read of every owner record's; a dump present at the open makes it read every owner record and say why (`dump_present`), and so do the previous owner in no start's epoch and an epoch with no owner record after its start (`owner_in_no_start_epoch`)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o1_the_open_keeps_the_owner_state_of_the_read_of_every_owner_record",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o2_the_owner_rows_read_at_open_stay_in_the_two_latest_epochs_whatever_the_history",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o3_the_bounded_open_keeps_the_frame_view_and_the_startup_closes_of_the_full_read",
+]
+incident = ["#422 LN-7c O"]
