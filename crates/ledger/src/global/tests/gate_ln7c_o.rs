@@ -66,7 +66,6 @@ use actingcommand_runtime_state::RuntimeStateStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 // The State key (a bootstrap seed of at least 16 bytes), the writer's owner id and the fingerprint
@@ -1756,7 +1755,12 @@ fn started(root: &Root, every: bool, new: &NewStart) -> Started {
         .reconcile_prior_epoch_closes(
             new.writer,
             empty_journal(),
-            Instant::now() + Duration::from_millis(RECONCILE_MS),
+            MaintenanceLimits {
+                timeout_seconds: RECONCILE_MS / 1000,
+                ..MaintenanceLimits::default()
+            }
+            .deadline()
+            .expect("the reconcile's deadline"),
         )
         .expect("the startup reconcile");
     let reconciled = decided(&after(&ledger, first.sequence()));
