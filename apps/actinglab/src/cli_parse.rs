@@ -6,6 +6,21 @@ use crate::{
 use actingcommand_runtime_client::ChannelVia;
 use std::path::PathBuf;
 
+/// ROUT-L RL-T: the options a command declares as its own under the name of a global option. Given
+/// after the command's words, such an option and its value stay in the command's arguments; given
+/// before them, the option is the global one. `standard-pack compose` takes `--instance
+/// <alias>=<game>/<server>` once per bound instance (contracts/standard-pack-schedule.md, "Tools").
+const COMMAND_OPTIONS: [(&[&str], &[&str]); 1] = [(&["standard-pack", "compose"], &["--instance"])];
+
+/// Whether `option`, read after the words `rest` gathered so far, is the command's own.
+fn command_option(rest: &[String], option: &str) -> bool {
+    COMMAND_OPTIONS.iter().any(|(words, options)| {
+        options.contains(&option)
+            && rest.len() >= words.len()
+            && rest.iter().zip(words.iter()).all(|(word, own)| word == own)
+    })
+}
+
 pub(super) fn parse_invocation<I>(
     args: I,
     json_default: bool,
@@ -24,6 +39,11 @@ where
 
     while index < raw.len() {
         match raw[index].as_str() {
+            option if command_option(&rest, option) => {
+                rest.push(option.to_owned());
+                index += 1;
+                rest.push(require_raw(&raw, index, option)?);
+            }
             "--json" => global.json = true,
             "--run-root" => {
                 index += 1;
