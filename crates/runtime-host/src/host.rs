@@ -1493,7 +1493,7 @@ impl RuntimeHost {
         if let Some(full) = timing.owner_read_full {
             println!(
                 "actingd ledger_open owner_read=full reason={}",
-                full.reason()
+                full.as_str()
             );
         }
         let ledger_opened = ledger_open_outcome(HostCode::LedgerOpened, &timing, timeout_ms);

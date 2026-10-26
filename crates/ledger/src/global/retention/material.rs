@@ -116,8 +116,8 @@ pub enum OwnerReadFull {
 }
 
 impl OwnerReadFull {
-    /// The `reason` of actingd's line.
-    pub fn reason(self) -> &'static str {
+    /// The `reason` of actingd's line, as its token.
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::OwnerInNoStartEpoch => "owner_in_no_start_epoch",
             Self::DumpPresent => "dump_present",
