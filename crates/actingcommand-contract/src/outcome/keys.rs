@@ -600,4 +600,11 @@ outcome_keys! {
     // ---- IDLE-1 (the idle action, Alice's ruling 41): begin ----
     idle_action: name,
     // ---- IDLE-1: end ----
+    // ---- Workflow #392 DA-1 (the display adapter, model 392 v1.2 §9.1): begin ----
+    display_problem: vocab(display_problem),
+    frame_width: integer,
+    frame_height: integer,
+    base_width: integer,
+    base_height: integer,
+    // ---- Workflow #392 DA-1: end ----
 }

@@ -147,7 +147,7 @@ There are four workflows in total: three CI workflows and the on-demand `release
 
 ## Workspace members
 
-The workspace declares 31 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
+The workspace declares 32 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
 ### apps (5)
 
@@ -159,13 +159,14 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
-### crates (23)
+### crates (24)
 
 | Path | Package | Responsibility |
 | --- | --- | --- |
 | crates/actingcommand-contract | actingcommand-contract | Contract definitions for the protocol, device and engine boundaries; no target logic |
 | crates/artifact-store | actingcommand-artifact-store | Artifact bytes, hashes, retention metadata, frame buffers and evidence archives |
 | crates/device | actingcommand-device | Device-layer primitives; input selected through an explicit backend chain |
+| crates/display-adapter | actingcommand-display-adapter | Pure integer mapping between a package's base coordinates, the scale frame and the device frame: nine-grid anchors, rounding, rotation and crop; no I/O, no backend |
 | crates/execution-kernel | actingcommand-execution-kernel | Daemon-owned execution sessions and pure task/probe decision planning |
 | crates/host-metrics | actingcommand-host-metrics | Safe boundary for platform performance counters (windows-sys only under cfg(windows)) |
 | crates/lab | actingcommand-lab | Optional authoring and debugging adapter layer; production still builds and runs without it |
