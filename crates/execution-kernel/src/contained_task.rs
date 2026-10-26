@@ -27,6 +27,9 @@ use actingcommand_contract::{
 };
 // #411 A20: a phased route's refusal names the refused member.
 use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
+// Workflow #392 DA-2a: the run's display declaration, the frame gate's scale frame.
+use actingcommand_contract::StandardPackDisplayLayout;
+use display_gate::{FramePixels, ScaleFrame};
 // #411 A44: each candidate page's verdict (ledger revision 4, register §1.153 LR-8).
 use actingcommand_contract::{
     RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
@@ -249,6 +252,12 @@ mod gate_411_lab_rp;
 // ceiling of a declared interval, and the back-off on unchanged frames.
 #[cfg(test)]
 mod gate_407_b1;
+// Workflow #392 DA-2a: the display adapter's frame gate.
+mod display_gate;
+// Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity
+// test): the gate at the six capture entries.
+#[cfg(test)]
+mod gate_392_da2a;
 pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
@@ -2420,6 +2429,15 @@ pub trait ContainedTaskRuntime {
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error>;
 
+    /// Workflow #392 DA-2a (model 392 v1.2 §4.1, §12.1 row DA-2a): the display declaration of the
+    /// run's game (`display-layout.json`), read once in the run's preparation and fixed for the
+    /// whole run. Every frame of the run, its layers' frames included, passes the display
+    /// adapter's frame gate under it. A runtime without a standard-pack root answers `None`; only
+    /// the identity and a pure scale then map.
+    fn display_layout(&self) -> Option<&StandardPackDisplayLayout> {
+        None
+    }
+
     fn committed_input_frame(
         &mut self,
         _reference: actingcommand_contract::InputFrameReference,
@@ -3956,7 +3974,10 @@ impl PreparedContainedTask {
         let frame = runtime
             .capture()
             .map_err(ContainedTaskRunError::operation::<R>)?;
-        self.control.resolution.validate_frame(&frame)?;
+        let scale = self
+            .control
+            .resolution
+            .validate_frame(&frame, runtime.display_layout())?;
         runtime
             .record(ContainedTaskTrace::CaptureCompleted {
                 width: frame.width,
@@ -3974,9 +3995,16 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let scene = scene_from_frame(&frame)?;
+        let scene = scale.scene()?;
         let [page] = pages else {
-            return self.recognize_entry_set_frame(runtime, &frame, scene, pages, candidate_pages);
+            return self.recognize_entry_set_frame(
+                runtime,
+                &frame,
+                &scale,
+                scene,
+                pages,
+                candidate_pages,
+            );
         };
         let page = *page;
         let result = self.detector.evaluate_page(&self.evaluator, &scene, page);
@@ -4002,7 +4030,7 @@ impl PreparedContainedTask {
                 .with_ppocr_diagnostics(error.ppocr_diagnostics())
             })?;
         let matched = evaluation.matched;
-        let targets = recognized_targets(&self.evaluator, &evaluation)?;
+        let targets = scale.device_targets(recognized_targets(&self.evaluator, &evaluation)?)?;
         let candidate_scores =
             recognition_candidate_scores(std::slice::from_ref(&evaluation), &candidate_pages);
         runtime
@@ -4028,6 +4056,7 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         frame: &Frame,
+        scale: &ScaleFrame<'_>,
         scene: Scene,
         pages: &[&str],
         candidate_pages: Vec<String>,
@@ -4075,12 +4104,12 @@ impl PreparedContainedTask {
             .into());
         }
         let page = matched_pages.into_iter().next();
-        let targets = recognized_page_targets(
+        let targets = scale.device_targets(recognized_page_targets(
             &self.evaluator,
             &evaluations,
             page.as_deref(),
             &candidate_pages,
-        )?;
+        )?)?;
         let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
         runtime
             .record(ContainedTaskTrace::RecognitionCompleted {
@@ -4188,14 +4217,17 @@ impl PreparedContainedTask {
         let frame = runtime
             .capture()
             .map_err(ContainedTaskRunError::operation::<R>)?;
-        self.control.resolution.validate_frame(&frame)?;
+        let scale = self
+            .control
+            .resolution
+            .validate_frame(&frame, runtime.display_layout())?;
         runtime
             .record(ContainedTaskTrace::CaptureCompleted {
                 width: frame.width,
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(scene_from_frame(&frame)?)
+        Ok(scale.scene()?)
     }
 
     /// Workflow #373 NAV-6: this package's page ids.
@@ -6706,6 +6738,9 @@ impl PreparedContainedTask {
                 .min(timing.deadline());
             let mut sample_scenes = Vec::new();
             let mut sample_geometry: Option<Option<InputFrameContext>> = None;
+            // Workflow #392 DA-2a (model 392 v1.2 §5.1, C11): the map of the observation's first
+            // frame, which every later frame of it must keep.
+            let mut sample_map: Option<actingcommand_display_adapter::DisplayMap> = None;
             if sampled {
                 // Workflow #386 SR-1 (scheduling model §2.2): whether the runtime samples is its
                 // own answer; the checkpoint only answers cancellation.
@@ -6745,7 +6780,10 @@ impl PreparedContainedTask {
                     let sample = runtime
                         .capture()
                         .map_err(ContainedTaskRunError::operation::<R>)?;
-                    self.control.resolution.validate_frame(&sample)?;
+                    let sample_scale = self
+                        .control
+                        .resolution
+                        .validate_frame(&sample, runtime.display_layout())?;
                     runtime
                         .record(ContainedTaskTrace::CaptureCompleted {
                             width: sample.width,
@@ -6768,7 +6806,17 @@ impl PreparedContainedTask {
                     } else {
                         sample_geometry = Some(geometry);
                     }
-                    sample_scenes.push(scene_from_frame(&sample)?);
+                    match sample_map {
+                        Some(first) if first != *sample_scale.map() => {
+                            return Err(ContainedTaskError::new(
+                                ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
+                            )
+                            .into());
+                        }
+                        Some(_) => {}
+                        None => sample_map = Some(*sample_scale.map()),
+                    }
+                    sample_scenes.push(sample_scale.scene()?);
                     let interval =
                         Duration::from_millis(self.evaluator.target_sample_interval_ms());
                     if interval
@@ -6816,13 +6864,18 @@ impl PreparedContainedTask {
             let frame = runtime
                 .capture()
                 .map_err(ContainedTaskRunError::operation::<R>)?;
-            self.control.resolution.validate_frame(&frame)?;
+            let scale = self
+                .control
+                .resolution
+                .validate_frame(&frame, runtime.display_layout())?;
+            // Workflow #392 DA-2a: the stability region is cut from the scale frame, in base
+            // pixels.
             let stability_sample = self
                 .control
                 .stability_termination
                 .as_ref()
                 .filter(|_| feeds_collectors)
-                .map(|declaration| stability_sample(&frame, declaration))
+                .map(|declaration| stability_sample(&scale, declaration))
                 .transpose()?;
             runtime
                 .record(ContainedTaskTrace::CaptureCompleted {
@@ -6830,7 +6883,7 @@ impl PreparedContainedTask {
                     height: frame.height,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            let scene = scene_from_frame(&frame)?;
+            let scene = scale.scene()?;
             let input_context = match frame.input_reference {
                 Some(reference) => runtime
                     .committed_input_frame(reference)
@@ -6840,6 +6893,7 @@ impl PreparedContainedTask {
             if sample_geometry
                 .as_ref()
                 .is_some_and(|prior| !sample_geometry_matches(prior, &input_context))
+                || sample_map.is_some_and(|first| first != *scale.map())
             {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
@@ -7030,12 +7084,12 @@ impl PreparedContainedTask {
                 .into());
             }
             let page = matched_pages.into_iter().next();
-            let targets = recognized_page_targets(
+            let targets = scale.device_targets(recognized_page_targets(
                 &self.evaluator,
                 &evaluations,
                 page.as_deref(),
                 &candidate_pages,
-            )?;
+            )?)?;
             let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
             runtime
                 .record(ContainedTaskTrace::RecognitionCompleted {
@@ -7137,6 +7191,7 @@ impl PreparedContainedTask {
                 frame_started,
                 sample_scenes,
                 sampling: sampled.then_some((timing, sample_deadline)),
+                display_map: *scale.map(),
             }))
         })();
         let capture_ended = runtime.monotonic_now();
@@ -7481,6 +7536,9 @@ struct PageObservation {
     frame_started: Instant,
     sample_scenes: Vec<Scene>,
     sampling: Option<(ContainedTaskTimingContext, Instant)>,
+    /// Workflow #392 DA-2a: the display map of this observation's frame (its scene is that map's
+    /// scale frame).
+    display_map: actingcommand_display_adapter::DisplayMap,
 }
 
 fn sample_geometry_matches(
@@ -7550,11 +7608,14 @@ struct StabilityFrameSample {
 /// `contained_task_frame_invalid`. A region that is empty, overflows or does not lie inside the
 /// frame is the control declaration's: the frame passed the task resolution check before this
 /// call, and admission refuses the same region against that resolution with
-/// `contained_task_control_invalid`.
-fn stability_sample(
-    frame: &Frame,
+/// `contained_task_control_invalid`. Workflow #392 DA-2a: a run cuts it from the frame's scale
+/// frame (the display adapter's frame gate), whose pixels are base pixels, so the frame here is
+/// that scale frame or, in a test, a delivered frame of the package's size.
+fn stability_sample<'a>(
+    frame: impl Into<FramePixels<'a>>,
     declaration: &StabilityTerminationDeclaration,
 ) -> Result<StabilityFrameSample, ContainedTaskError> {
+    let frame = frame.into();
     let frame_invalid =
         || ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code());
     let region_invalid =
@@ -7929,15 +7990,8 @@ impl Resolution {
         }
     }
 
-    fn validate_frame(&self, frame: &Frame) -> Result<(), ContainedTaskError> {
-        if frame.width == self.width && frame.height == self.height {
-            Ok(())
-        } else {
-            Err(ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskFrameResolutionMismatch.code(),
-            ))
-        }
-    }
+    // Workflow #392 DA-2a: `validate_frame`, the display adapter's frame gate, is in
+    // `contained_task/display_gate.rs`.
 
     fn validate_point(&self, x: i32, y: i32) -> Result<(), ContainedTaskError> {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
@@ -11957,11 +12011,22 @@ impl ClickRect {
 }
 
 fn scene_from_frame(frame: &Frame) -> Result<Scene, ContainedTaskError> {
-    let format = match frame.pixel_format {
+    scene_from_pixels(frame.width, frame.height, &frame.pixels, frame.pixel_format)
+}
+
+/// Workflow #392 DA-2a: the scene of `width` x `height` pixels of `format`, a delivered frame's
+/// or a scale frame's.
+fn scene_from_pixels(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    format: PixelFormat,
+) -> Result<Scene, ContainedTaskError> {
+    let format = match format {
         PixelFormat::Rgb8 => ScenePixelFormat::Rgb8,
         PixelFormat::Rgba8 => ScenePixelFormat::Rgba8,
     };
-    Scene::from_pixels(frame.width, frame.height, &frame.pixels, format)
+    Scene::from_pixels(width, height, pixels, format)
         .map_err(|_| ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code()))
 }
 
@@ -15212,6 +15277,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         let mut runtime = ScriptedRuntime::new("home");
         let (outcome, target) = task.program.operations[0]
@@ -15306,6 +15372,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         assert!(
             task.evaluator
@@ -15348,6 +15415,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         let mut runtime = ScriptedRuntime::new("terminal");
         let (outcome, target) = task.program.operations[0]
@@ -15386,6 +15454,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         let mut runtime = ScriptedRuntime::new("home");
         let Err(ContainedTaskRunError::Task(error)) = task.program.operations[0].guard_outcome(

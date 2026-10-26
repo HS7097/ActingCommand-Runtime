@@ -1849,7 +1849,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A captured frame could not be converted for contained task recognition.",
+      "description": "A captured frame could not be converted for contained task recognition. Workflow #392 DA-2a: also a frame whose own geometry does not show the logical display it names (another aspect ratio, or a crop that is not the frame), when it reaches the kernel's frame gate without the host's task geometry check.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1867,11 +1867,13 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A captured frame's size differs from the task resolution.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.16",
+      "replaced_by": "display_map_unresolved",
+      "description": "Retired (Workflow #392 DA-2a, model 392 v1.2 §0.2 C10). A captured frame's size differed from the task resolution and the run was refused. Since 0.12.16 every frame passes the display adapter's frame gate: a frame of the package's size is the identity, a larger frame of its ratio a pure scale, and any other frame is display_map_unresolved.",
+      "common_causes": "A device or emulator display of another size than the package's coordinate space.",
+      "handling": "None in 0.12.16 and later: the code is no longer emitted."
     },
     "contained_task_input_out_of_bounds": {
       "category": "error",

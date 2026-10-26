@@ -1279,11 +1279,10 @@ mod tests {
             CaptureBackendName::AdbScreencap,
         )
         .expect("frame");
-        assert_same_refusal(
-            &navigable,
-            vec![wrong_size],
-            "contained_task_frame_resolution_mismatch",
-        );
+        // Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T12): a 1x1 frame of the 2x1 package
+        // is no pure scale of it and no display layout is declared, so the display adapter's
+        // frame gate refuses it (`layout_undeclared`).
+        assert_same_refusal(&navigable, vec![wrong_size], "display_map_unresolved");
 
         let exhaustion = prepare(&package(PackageOptions {
             step_timeout_ms: 60_000,
@@ -1351,7 +1350,8 @@ mod tests {
         .expect("frame");
         let resolution =
             simulate_contained_task(&task, vec![wrong_size]).expect("resolution refusal receipt");
-        assert_refusal(&resolution, "contained_task_frame_resolution_mismatch");
+        // Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T12): the frame gate's refusal.
+        assert_refusal(&resolution, "display_map_unresolved");
 
         let conflict = package(PackageOptions {
             conflicting_page: true,

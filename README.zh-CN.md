@@ -211,7 +211,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 识别目标分八类：Template、Color、ClickOnly、Ocr、Nn、ColorDigest（颜色摘要，`contracts/color-digest.md`）、Composite（对 2–8 个其他目标的具名「全部满足 / 任一满足」检查）与 ValueTest（比较读到的值）。模板匹配是 CPU 图像匹配，带 5 秒显式超时与粗匹配/精修两段，超时失败会报告发生在哪一段。生产 OCR 与 NN 在 `vision-ffi` 边界后的进程内引擎中运行；每个目标指明其模型文件夹与内容（`contracts/vision-model-folders.md`），宿主侧适配器强制该身份：`model_ref` 必须是不含 `/`、`\` 或 `:` 的有界逻辑标识（不接受主机路径），`model_sha256` 必须是恰好 64 位小写十六进制。模型在第一次用到时从 `<vision root>\models\<model_ref>\` 加载。页面投影是对单帧已解析事实的无副作用投影，schema `actingcommand.page-projection.v1`，上限 64 条 / 32 KiB，条目按角色（Navigate / PageOp / ControlPoint）、任务 ID、资源 ID 与页面为键，每条携带 Safety 分类且默认值为 Dangerous；操作 schema `0.8` 的 OCR 字段声明走 `post_admission_ocr.mode = fields_v1`，字段声明与旧的真值集合声明不可混用，且本合约不含任何目标专有值（`contracts/ocr-fields.md`、`contracts/page-projection.md`）。
 
-包的坐标处在它声明的分辨率下（今天的标准包都用 1280×720）；截图尺寸不同时任务以 `contained_task_frame_resolution_mismatch` 明确失败（`contracts/linear-steps.md`）。设备上受限任务的第一帧会把实例的显示记为事实（`display.frame_extent`、`display.rotation`、`display.orientation`、`display.aspect`）；不会因为帧自身的宽高比拒绝任何帧，只在帧的宽高比与采集它的显示不一致时拒绝（`contained_task_geometry_frame_display_mismatch`）。
+包的坐标处在它声明的分辨率下（今天的标准包都用 1280×720）。每一帧都经过显示适配壳的收帧闸（`contracts/display-adapter.md`）：与包同尺寸的帧原样使用，同比例更大的帧缩到包的尺寸再识别，其余的帧以 `display_map_unresolved` 明确失败；输入侧映射之前（Workflow #392 DA-3），缩放的帧不发输入。设备上受限任务的第一帧会把实例的显示记为事实（`display.frame_extent`、`display.rotation`、`display.orientation`、`display.aspect`）；不会因为帧自身的宽高比拒绝任何帧，只在帧的宽高比与采集它的显示不一致时拒绝（`contained_task_geometry_frame_display_mismatch`）。
 
 ## MCP 服务
 

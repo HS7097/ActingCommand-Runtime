@@ -716,7 +716,7 @@ starts the stuck-recovery ladder.
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |
 | A recognition error | `contained_task_recognition_failed` | none |
 | The vision provider failed or answered invalidly (Workflow #387 D1c-G) | `contained_task_vision_provider_failed` | none |
-| A frame of another size | `contained_task_frame_resolution_mismatch` | none |
+| A frame the display adapter cannot map: no pure scale of the package without a declaration, a translation or a cropped frame (until Workflow #392 DA-2b), a frame smaller than the package or in its other orientation (`contracts/display-adapter.md` section 8) | `display_map_unresolved` with its `display_problem` | none |
 | A package outside the admission rules | `contained_task_linear_invalid` (admission) | none |
 | The prerequisite gate ("Prerequisite packages" above) | `contained_task_prerequisite_*` | `page_recognition` / `entry_recognition` for `contained_task_prerequisite_entry_unmatched` |
 | The return-home package ran and the first step's page did not pass ("Return-home fallback" above) | `contained_task_return_home_entry_unmatched` | `page_recognition` / `entry_recognition` |

@@ -117,7 +117,8 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskTimeout => "contained_task_timeout": error / budget_or_permission,
         ContainedTaskRecordBoundary => "contained_task_record_boundary": error / none,
         ContainedTaskFrameInvalid => "contained_task_frame_invalid": error / environment_fault,
-        ContainedTaskFrameResolutionMismatch => "contained_task_frame_resolution_mismatch": error / declaration_error,
+        // Workflow #392 DA-2a: `contained_task_frame_resolution_mismatch` is retired; the display
+        // adapter's frame gate refuses a frame it cannot map with `display_map_unresolved`.
         ContainedTaskInputOutOfBounds => "contained_task_input_out_of_bounds": error / declaration_error,
         ContainedTaskRecognitionConflict => "contained_task_recognition_conflict": error / pack_logic_mismatch,
         ContainedTaskGuardRefused => "contained_task_guard_refused": error / pack_logic_mismatch,

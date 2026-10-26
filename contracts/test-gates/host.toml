@@ -2264,3 +2264,27 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_392_da5a::da5a_identity_a_1280x720_package_on_a_1280x720_frame_runs_as_declared",
 ]
 incident = ["#392 DA-5a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §0.2 C2 and C3, §6.6, §13 row DA2-T9): a device whose 720x1280 display becomes 1080x1920 during a run: the new frame's geometry is read again and recorded changed (extent_changed) with its display_map (a pure scale of 3/2 by the declaration), the display facts follow, and the run is not stopped and completes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_t9_a_frame_that_changes_its_size_rebuilds_the_map_and_the_run_goes_on",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §6.6; the input side maps from DA-3): on a 1920x1080 device a 1280x720 package's tap is not sent; the run ends display_map_unresolved (input_scale_unsupported at display_input_map) with no input
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_waits_for_the_input_side_under_a_pure_scale",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §4.5): a declaration measured on the safe area finds no insets before DA-4b; the run ends contained_task_geometry_unavailable (safe_area_unavailable) after its geometry record and before any input
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_a_safe_area_declaration_finds_no_insets_before_da_4b",
+]
+incident = ["#392 DA-2a"]

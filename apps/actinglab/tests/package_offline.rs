@@ -594,7 +594,9 @@ fn package_dry_run_emits_typed_receipts_for_runtime_refusals() {
     assert_refusal_receipt(
         &mismatch.run(&[], "mismatch.zip"),
         &mismatch.temp.path().join("mismatch.zip"),
-        "contained_task_frame_resolution_mismatch",
+        // Workflow #392 DA-2a: the display adapter's frame gate refuses a 1x1 frame of the
+        // package (no pure scale, no declaration).
+        "display_map_unresolved",
     );
 }
 

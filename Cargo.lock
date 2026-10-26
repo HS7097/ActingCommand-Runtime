@@ -149,6 +149,7 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-display-adapter",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",
  "actingcommand-recognition",
@@ -380,6 +381,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-display-adapter",
  "actingcommand-execution-kernel",
  "actingcommand-host-metrics",
  "actingcommand-ledger",
