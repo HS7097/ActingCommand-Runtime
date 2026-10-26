@@ -107,6 +107,13 @@ impl Frame {
     }
 }
 
+/// A run: its id, the links of its task records and their correlation.
+struct RunLinks {
+    id: IssuedRunId,
+    links: EventLinksDraft,
+    correlation: IssuedCorrelationId,
+}
+
 /// The records of one instance in one owner epoch, appended to the root's writer.
 struct Corpus<'a> {
     ledger: &'a GlobalLedger,
@@ -187,10 +194,18 @@ impl<'a> Corpus<'a> {
 
     /// Links of the instance in their own request and correlation.
     fn scoped(&self) -> EventLinksDraft {
+        self.scoped_in(self.request(), self.correlation())
+    }
+
+    fn scoped_in(
+        &self,
+        request: IssuedRequestId,
+        correlation: IssuedCorrelationId,
+    ) -> EventLinksDraft {
         EventLinksDraft::default()
             .with_instance_id(self.instance)
-            .with_request_id(self.request())
-            .with_correlation_id(self.correlation())
+            .with_request_id(request)
+            .with_correlation_id(correlation)
     }
 
     /// A `runtime.started`: the owner epoch of every run first seen before it has ended.
@@ -228,12 +243,20 @@ impl<'a> Corpus<'a> {
         );
     }
 
-    /// A capture frame captured at `at` in the scope of `links`, published through the store,
-    /// with its Explicit pin.
-    fn frame(&self, links: EventLinksDraft, run: Option<IssuedRunId>, at: u64) -> Frame {
+    /// A capture frame captured at `at` in the scope of `links` (whose correlation is
+    /// `correlation`), published through the store, with its Explicit pin.
+    fn frame(
+        &self,
+        links: EventLinksDraft,
+        correlation: IssuedCorrelationId,
+        run: Option<IssuedRunId>,
+        at: u64,
+    ) -> Frame {
         let frame = self.ids.mint_frame_id().expect("frame");
         let links = links.with_frame_id(frame);
-        let mut artifact_links = ArtifactLinksDraft::default().with_frame_id(frame);
+        let mut artifact_links = ArtifactLinksDraft::default()
+            .with_frame_id(frame)
+            .with_correlation_id(correlation);
         if let Some(run) = run {
             artifact_links = artifact_links.with_run_id(run);
         }
@@ -313,11 +336,16 @@ impl<'a> Corpus<'a> {
     /// A run-less observe frame of the instance at `at` in its own request and correlation, and
     /// its `capture.completed`.
     fn observe(&self, at: u64) -> Frame {
-        self.observe_in(self.scoped(), at)
+        self.observe_in(self.request(), self.correlation(), at)
     }
 
-    fn observe_in(&self, links: EventLinksDraft, at: u64) -> Frame {
-        let frame = self.frame(links, None, at);
+    fn observe_in(
+        &self,
+        request: IssuedRequestId,
+        correlation: IssuedCorrelationId,
+        at: u64,
+    ) -> Frame {
+        let frame = self.frame(self.scoped_in(request, correlation), correlation, None, at);
         self.append(
             at,
             EventSeverity::Info,
@@ -360,11 +388,12 @@ impl<'a> Corpus<'a> {
         );
     }
 
-    /// A run of the instance: its id and its task links; its `task.started` at `at`.
-    fn run(&self, at: u64) -> (IssuedRunId, EventLinksDraft) {
+    /// A run of the instance and its `task.started` at `at`.
+    fn run(&self, at: u64) -> RunLinks {
         let run = self.ids.mint_run_id().expect("run");
+        let correlation = self.correlation();
         let links = self
-            .scoped()
+            .scoped_in(self.request(), correlation)
             .with_task_id(self.ids.mint_task_id().expect("task"))
             .with_run_id(run);
         self.append(
@@ -374,7 +403,16 @@ impl<'a> Corpus<'a> {
             links.clone(),
             TaskPayloadDraft::started(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
         );
-        (run, links)
+        RunLinks {
+            id: run,
+            links,
+            correlation,
+        }
+    }
+
+    /// A frame of `run` captured at `at`.
+    fn run_frame(&self, run: &RunLinks, at: u64) -> Frame {
+        self.frame(run.links.clone(), run.correlation, Some(run.id), at)
     }
 
     /// The run's capture summary naming `frames`, then its successful terminal.
@@ -546,24 +584,18 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     corpus.marker(&f2, &f3, at(12));
     corpus.error_point(at(13));
     // A marker chain across two runs: G1 of run A, then G2 and G3 of run B.
-    let (run_a_id, run_a) = corpus.run(at(100));
-    let (run_b_id, run_b) = corpus.run(at(104));
-    let g1 = corpus.frame(run_a.clone(), Some(run_a_id), at(101));
-    let g2 = corpus.frame(run_b.clone(), Some(run_b_id), at(105));
-    let g3 = corpus.frame(run_b.clone(), Some(run_b_id), at(106));
+    let run_a = corpus.run(at(100));
+    let run_b = corpus.run(at(104));
+    let g1 = corpus.run_frame(&run_a, at(101));
+    let g2 = corpus.run_frame(&run_b, at(105));
+    let g3 = corpus.run_frame(&run_b, at(106));
     corpus.marker(&g1, &g2, at(105));
     corpus.marker(&g2, &g3, at(106));
-    corpus.close(&run_a, &[&g1], at(103));
-    corpus.close(&run_b, &[&g2, &g3], at(108));
+    corpus.close(&run_a.links, &[&g1], at(103));
+    corpus.close(&run_b.links, &[&g2, &g3], at(108));
     // Lab anchors: one on L1's request, one on L2's correlation.
     let l1_request = corpus.request();
-    let l1 = corpus.observe_in(
-        EventLinksDraft::default()
-            .with_instance_id(corpus.instance)
-            .with_request_id(l1_request)
-            .with_correlation_id(corpus.correlation()),
-        at(200),
-    );
+    let l1 = corpus.observe_in(l1_request, corpus.correlation(), at(200));
     corpus.lab_anchor(
         EventLinksDraft::default()
             .with_request_id(l1_request)
@@ -571,13 +603,7 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
         at(201),
     );
     let l2_correlation = corpus.correlation();
-    let l2 = corpus.observe_in(
-        EventLinksDraft::default()
-            .with_instance_id(corpus.instance)
-            .with_request_id(corpus.request())
-            .with_correlation_id(l2_correlation),
-        at(210),
-    );
+    let l2 = corpus.observe_in(corpus.request(), l2_correlation, at(210));
     corpus.lab_anchor(
         EventLinksDraft::default()
             .with_request_id(corpus.request())
@@ -586,17 +612,17 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     );
     // A run cut short: C1, C2, C3 without a terminal; the next start ends its epoch, and C3,
     // the last frame of its span, is deleted.
-    let (run_c_id, run_c) = corpus.run(at(300));
-    let c1 = corpus.frame(run_c.clone(), Some(run_c_id), at(301));
-    let c2 = corpus.frame(run_c.clone(), Some(run_c_id), at(310));
-    let c3 = corpus.frame(run_c.clone(), Some(run_c_id), at(320));
+    let run_c = corpus.run(at(300));
+    let c1 = corpus.run_frame(&run_c, at(301));
+    let c2 = corpus.run_frame(&run_c, at(310));
+    let c3 = corpus.run_frame(&run_c, at(320));
     corpus.start(at(400));
     // A stuck running run D after that start, and two run-less frames before its first frame:
     // N within 30 s of it, M not.
     let m = corpus.observe(at(470));
     let n = corpus.observe(at(480));
-    let (run_d_id, run_d) = corpus.run(at(500));
-    let d1 = corpus.frame(run_d, Some(run_d_id), at(505));
+    let run_d = corpus.run(at(500));
+    let d1 = corpus.run_frame(&run_d, at(505));
     f1.delete();
     c3.delete();
     let all = [&f2, &f3, &g1, &g2, &g3, &l1, &l2, &c1, &c2, &d1, &n, &m]
@@ -720,7 +746,7 @@ fn ln7_an_old_artifacts_identity_refusal_goes_through_the_index() {
     let reopened = reopen(&database);
     let corpus = Corpus::new(&reopened, &artifacts);
     corpus.owner_recorded(at(20));
-    let (_, run) = corpus.run(at(21));
+    let run = corpus.run(at(21)).links;
     let mut changed = old.reference.clone();
     changed.byte_count += 1;
     let summary = CaptureSummaryRecord::new(

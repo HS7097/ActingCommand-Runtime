@@ -1272,14 +1272,14 @@ impl super::super::GlobalLedger {
             )
             .with_detail(error.to_string())
         })?;
-        self.frame_retention_view_of(now_unix_ms, switches, Some(Box::new(live)))
+        self.frame_retention_view_of(now_unix_ms, switches, Some(live))
     }
 
     fn frame_retention_view_of(
         &self,
         now_unix_ms: u64,
         switches: FrameRetentionSwitches,
-        live: Option<Box<BTreeSet<ArtifactId>>>,
+        live: Option<BTreeSet<ArtifactId>>,
     ) -> GlobalLedgerResult<FrameRetentionView> {
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self

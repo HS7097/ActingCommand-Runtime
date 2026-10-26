@@ -55,6 +55,7 @@ fn ln7_a_sweep_start_lists_only_the_frames_present_in_the_store() {
         fixture.observe(&artifacts, CAPTURED[2], b"frame due for removal"),
     ];
     std::fs::remove_file(&absent.material).expect("the frame leaves the store");
+    assert!(!absent.material.exists(), "the frame left the store");
     #[cfg(windows)]
     let viewer = {
         use std::os::windows::fs::OpenOptionsExt;
