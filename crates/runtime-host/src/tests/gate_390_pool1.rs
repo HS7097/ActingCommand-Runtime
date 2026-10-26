@@ -60,16 +60,21 @@ fn live_pool_sources() -> CatalogSources {
 
 // A host under the live pool catalog whose instance binds the recognition maintenance package at
 // `package`, when one is given.
+// Workflow #386 SR-4a2: it evaluates at the wall clock on a window open all day, so its
+// instance's day boundary is off (`day_boundary_off`).
 fn live_pool_host(root: &TempDir, package: Option<&Path>, state: &Arc<FakeState>) -> RuntimeHost {
+    let instance = instance_id();
     let host = RuntimeHost::start(
-        config(root).with_recognition_packages(
-            package
-                .map(|package| (POLICY_INSTANCE_ALIAS.to_owned(), package.to_path_buf()))
-                .into_iter()
-                .collect(),
-        ),
+        config(root)
+            .with_recognition_packages(
+                package
+                    .map(|package| (POLICY_INSTANCE_ALIAS.to_owned(), package.to_path_buf()))
+                    .into_iter()
+                    .collect(),
+            )
+            .with_config_manifest(day_boundary_off_manifest(&instance)),
         Arc::new(
-            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(state))
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance, Arc::clone(state))
                 .fixture_simulation()
                 .with_vision_provider(Arc::new(TerminalReadings)),
         ),

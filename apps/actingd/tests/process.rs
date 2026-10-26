@@ -3641,6 +3641,15 @@ fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatc
     .expect("write config");
 }
 
+/// Workflow #386 SR-4a2 (SCH-M §3.2 D-6): an instance entry's `scheduling` member that turns its
+/// day boundary off. The daemon runs at the wall clock and these fixtures' activity window is
+/// open all day (00:00 to 24:00 UTC), and they do not test the day boundary: with the switch on,
+/// the shipped default, their 60 s run evaluated in the day's last minute would wait for the next
+/// window.
+fn day_boundary_off() -> Value {
+    json!({"day_boundary": {"quiet": false}})
+}
+
 fn write_legacy_physical_policy_config(path: &Path, state_root: &Path, instance_id: InstanceId) {
     let policy_root = state_root.join("policy");
     fs::create_dir(&policy_root).expect("create policy directory");
@@ -3683,7 +3692,8 @@ fn write_legacy_physical_policy_config(path: &Path, state_root: &Path, instance_
             "adb_path": "must-not-run-adb",
             "touch_backend": "maatouch",
             "capture_backend": "adb",
-            "push_touch_tool": false
+            "push_touch_tool": false,
+            "scheduling": day_boundary_off()
         }]
     });
     fs::write(
@@ -3767,7 +3777,8 @@ fn write_policy_execution_config_with_package(
             "fixture_backend": {
                 "frames": fixture_frames,
                 "max_inputs": max_inputs
-            }
+            },
+            "scheduling": day_boundary_off()
         }]
     });
     fs::write(

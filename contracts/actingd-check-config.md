@@ -352,6 +352,14 @@ The members of `report`:
       E ([scheduling/README.md](scheduling/README.md), "Settlement Feedback And
       Eligibility Age"); the catalog generator emits catalog v35 only for a
       Runtime that names this row.
+    - `scheduling_blackout` (Workflow #386 SR-4a2): always on
+      (`config_subsystem_always_on`), with `count` the number of entries of
+      `scheduling.blackout.host`. The policy reads blackouts of all three
+      sources (the host list, each instance's own list and catalog
+      `maintenance` events) and the day-boundary fit
+      ([scheduling-blackout.md](scheduling-blackout.md), "Order of the
+      deferrals"); a catalog generator emits `maintenance` events only for a
+      Runtime that names this row.
     - `env_overrides`: on only when `allow_env_overrides` is `true`
       (`config_subsystem_configured`, `config_subsystem_configured_off` or
       `config_subsystem_flag_absent`). When the flag is off, the outcome

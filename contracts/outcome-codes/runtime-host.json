@@ -20519,9 +20519,33 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate is deferred because its response deadline (required_ms) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms; blackout_id and blackout_source name the entry that covers the start); it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually.",
+      "description": "A candidate is deferred because its horizon (required_ms: its response deadline, or its expected duration under scheduling.blackout.quiet_horizon expected) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms; blackout_id and blackout_source name the entry that covers the start), or because the hard quiet before that start (scheduling.blackout.hard_quiet_ms) has begun; it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually. Admission refuses an intent that no longer fits with the same code.",
       "common_causes": "A blackout starts soon.",
       "handling": "Nothing to repair."
+    },
+    "policy_day_boundary_approaching": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "window_end_unix_ms": "required",
+        "required_ms": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "A Runtime-started policy run on an instance whose scheduling.day_boundary.quiet is true in effect would not end, by its expected duration (required_ms), before the end of the activity window it would be admitted in (window_end_unix_ms; in a bookkeeping-day profile the game's reset); it is deferred and wakes at the start of the profile's next window (next_eligible_unix_ms). Shorter work still runs up to the window's end. Admission refuses an intent that no longer fits with the same code (SCH-M D-6, Workflow #386 SR-4a2).",
+      "common_causes": "A long task became due shortly before the end of its activity window.",
+      "handling": "Nothing to repair. To let such runs start anyway, set scheduling.day_boundary.quiet (or the instance's own key) to false."
     },
     "blackout_run_stopped": {
       "category": "error",

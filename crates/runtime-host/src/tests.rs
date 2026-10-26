@@ -230,6 +230,9 @@ mod gate_386_sr2a;
 // Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
 // admission refuses with a suspend code.
 mod gate_386_sr3;
+// Workflow #386 SR-4a2 (SCH-M §3.2, §6 row SR-4a2): the policy's blackout positions 4 and 7, the
+// day boundary, the admission re-check and the random delay's cut.
+mod gate_386_sr4a2;
 // Workflow #386 SR-4a3, test rows T17, T17b, T17c and T46: complete silence at the ladder, the
 // startup package, the emulator autostart and the monitor probe; client runs pass.
 mod gate_386_sr4a3;

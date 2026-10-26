@@ -2630,13 +2630,35 @@ mod tests {
         ])
         .expect("procedure manifest");
         let now = system_unix_ms().expect("system clock");
+        // Workflow #386 SR-4a2 (SCH-M §3.2 D-6): the Recovery cycle runs at the wall clock on
+        // the resident catalog's window open all day, so the instance's day boundary is off; with
+        // it on, the shipped default, its 60 s run evaluated in the day's last minute would wait
+        // for the next window.
+        let mut parameters = vec![actingcommand_contract::ConfigParameter {
+            key: actingcommand_runtime_config::instance_key(
+                serde_json::to_value(instance_id)
+                    .expect("instance id JSON")
+                    .as_str()
+                    .expect("instance id text"),
+                actingcommand_runtime_config::scheduling::DAY_BOUNDARY_QUIET,
+            ),
+            value: actingcommand_contract::FactScalar::Boolean(false),
+            source: actingcommand_contract::ConfigParameterSource::Explicit,
+            settable: false,
+        }];
+        actingcommand_runtime_config::annotate_settable(&mut parameters)
+            .expect("the day-boundary key is in the key table");
         let host = RuntimeHost::start(
             RuntimeHostConfig::new(root.path(), b"0123456789abcdef")
                 .with_policy_inputs(PolicyInputSnapshot::new(
                     resident_test_facts(),
                     resident_test_resources(now),
                 ))
-                .with_procedure_manifest(manifest),
+                .with_procedure_manifest(manifest)
+                .with_config_manifest(actingcommand_contract::RuntimeConfigManifest {
+                    subsystems: Vec::new(),
+                    parameters,
+                }),
             provider,
         )
         .expect("start formal-provider runtime");

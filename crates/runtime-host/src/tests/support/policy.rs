@@ -300,6 +300,37 @@ fn detection_policy_sources_with_budget(
     sources
 }
 
+/// Workflow #386 SR-4a2 (SCH-M §3.2 D-6): the one setting
+/// `instance.<instance>.scheduling.day_boundary.quiet = false`. A fixture that evaluates at the
+/// wall clock on an activity window open all day (00:00 to 24:00 UTC) and does not test the day
+/// boundary sets it: with the switch on, the shipped default, a run of E = 60 s evaluated in the
+/// day's last minute waits for the next window, so the fixture's dispatch would fail about once
+/// in 1440 runs.
+fn day_boundary_off(instance: &InstanceId) -> actingcommand_contract::ConfigParameter {
+    let mut parameters = vec![actingcommand_contract::ConfigParameter {
+        key: actingcommand_runtime_config::instance_key(
+            &crate::failure_identity::identifier_text(instance),
+            actingcommand_runtime_config::scheduling::DAY_BOUNDARY_QUIET,
+        ),
+        value: actingcommand_contract::FactScalar::Boolean(false),
+        source: actingcommand_contract::ConfigParameterSource::Explicit,
+        settable: false,
+    }];
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("the day-boundary key is in the key table");
+    parameters.remove(0)
+}
+
+/// A configuration whose only setting is [`day_boundary_off`] for `instance`.
+fn day_boundary_off_manifest(
+    instance: &InstanceId,
+) -> actingcommand_contract::RuntimeConfigManifest {
+    actingcommand_contract::RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters: vec![day_boundary_off(instance)],
+    }
+}
+
 fn evaluated_policy_dispatch(
     host: &RuntimeHost,
     trigger: PolicyTrigger,

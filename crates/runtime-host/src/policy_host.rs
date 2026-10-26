@@ -2,6 +2,12 @@
 
 //! Runtime-owned catalog generations and replayable policy admission state.
 
+// Workflow #386 SR-4a2: the policy side of blackouts (positions 4 and 7, the day boundary, the
+// random delay's cut and the admission re-check).
+mod blackout;
+pub(crate) use blackout::{
+    BlackoutContext, BlackoutGate, evaluation_deadline_ms, policy_blackout_entry,
+};
 mod catalog_preview;
 pub(crate) mod clock_slot;
 pub use catalog_preview::{
@@ -276,6 +282,11 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     pub(crate) random_delay: &'a BTreeMap<String, actingcommand_runtime_config::RandomDelay>,
     /// Workflow #411 B41: the page each instance rests on as the cycle starts.
     pub(crate) chain_handover: &'a actingcommand_policy::ChainHandoverInputs,
+    /// Workflow #386 SR-4a2: the blackout keys in effect as the cycle starts.
+    pub(crate) blackout: &'a BlackoutContext,
+    /// Workflow #386 SR-4a2 (position 4): the blackout covering each instance as the cycle
+    /// starts, by alias ([`PolicyHost::blackout_holds`]).
+    pub(crate) blackout_holds: &'a BTreeMap<String, actingcommand_policy::Blackout>,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -936,6 +947,9 @@ impl RandomDelayTable {
     /// when it has none, decides: a planned start after `now_unix_ms` defers the candidate with
     /// `dispatch_random_delay_waiting` and a wake at the planned start (a fact refresh in its
     /// refresh form, the gate named, no limit); a planned start at or before it is eligible.
+    /// Workflow #386 SR-4a2: `quiet_point`, the latest start before the next blackout
+    /// ([`BlackoutContext::quiet_point`]), joins a new draw's cut.
+    #[allow(clippy::too_many_arguments)]
     fn gate(
         &mut self,
         intent: &DispatchIntent,
@@ -944,6 +958,7 @@ impl RandomDelayTable {
         profiles: &[ActivityProfile],
         now_unix_ms: u64,
         fact_refresh: bool,
+        quiet_point: Option<u64>,
     ) -> RuntimeHostResult<CandidateEligibility> {
         let Some(delay) = delay.filter(|delay| delay.enabled) else {
             return Ok(CandidateEligibility::Eligible);
@@ -952,7 +967,14 @@ impl RandomDelayTable {
         let entry = match self.entries.get(&key).copied() {
             Some(entry) => entry,
             None => {
-                let entry = draw_random_delay(intent, delay, cycle_seed, profiles, now_unix_ms)?;
+                let entry = draw_random_delay(
+                    intent,
+                    delay,
+                    cycle_seed,
+                    profiles,
+                    now_unix_ms,
+                    quiet_point,
+                )?;
                 self.entries.insert(key, entry);
                 entry
             }
@@ -1027,14 +1049,16 @@ impl RandomDelayTable {
 /// is `min_ms` plus a value uniform in `0..=max_ms - min_ms`, from the first eight bytes of the
 /// SHA-256 of `cycle seed NUL task NUL alias NUL due_at` (as `sampled_interval` draws an activity
 /// interval); it is cut so that the planned start stays at or before the allowed period's end
-/// (the earliest of the intent's facts freshness and the last millisecond of the activity window
-/// open at `now_unix_ms`), 0 when nothing is left.
+/// (the earliest of the intent's facts freshness, the last millisecond of the activity window
+/// open at `now_unix_ms` and, Workflow #386 SR-4a2, the quiet point before the next blackout),
+/// 0 when nothing is left.
 fn draw_random_delay(
     intent: &DispatchIntent,
     delay: &actingcommand_runtime_config::RandomDelay,
     cycle_seed: u64,
     profiles: &[ActivityProfile],
     now_unix_ms: u64,
+    quiet_point: Option<u64>,
 ) -> RuntimeHostResult<RandomDelayEntry> {
     let digest = Sha256::digest(
         format!(
@@ -1063,11 +1087,14 @@ fn draw_random_delay(
         })?
         .flatten();
     let window_last = window.and_then(|window| window.until_unix_ms.checked_sub(1));
-    let allowed_until_unix_ms = match (intent.prerequisites.facts_fresh_until_unix_ms, window_last)
-    {
-        (Some(fresh), Some(last)) => Some(fresh.min(last)),
-        (fresh, last) => fresh.or(last),
-    };
+    let allowed_until_unix_ms = [
+        intent.prerequisites.facts_fresh_until_unix_ms,
+        window_last,
+        quiet_point,
+    ]
+    .into_iter()
+    .flatten()
+    .min();
     let delay_ms =
         allowed_until_unix_ms.map_or(drawn, |until| drawn.min(until.saturating_sub(now_unix_ms)));
     let planned_start_unix_ms = now_unix_ms.checked_add(delay_ms).ok_or_else(|| {
@@ -2623,6 +2650,8 @@ impl PolicyHost {
             remedy,
             random_delay,
             chain_handover,
+            blackout,
+            blackout_holds,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -2680,8 +2709,15 @@ impl PolicyHost {
             &fact_refresh,
             scheduling_pause,
             instance_occupancy,
+            blackout_holds,
             time.unix_ms,
         )?;
+        // Workflow #386 SR-4a2: the instance each candidate is judged on at positions 4 and 7.
+        let instances: BTreeMap<&str, &InstanceSnapshot> = facts
+            .instances
+            .iter()
+            .map(|instance| (instance.instance_id.as_str(), instance))
+            .collect();
         // Workflow #411 B15 R4 (model-b15 §9.2): the remedy plan of this cycle; empty when no
         // bound package declares a remedy or remedies are off.
         let (remedy_plan, remedy_decisions) =
@@ -2728,6 +2764,29 @@ impl PolicyHost {
                         next_wake_unix_ms: None,
                     });
                 }
+                // Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals",
+                // position 4): a blackout covers the instance; the candidate wakes at its end.
+                if let Some(covering) = blackout_holds.get(&intent.instance_id) {
+                    return Ok(BlackoutGate::Active(covering.clone())
+                        .eligibility(&intent.instance_id, refresh));
+                }
+                let instance = instances
+                    .get(intent.instance_id.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        request(
+                            HostCode::PolicyEvaluationRejected,
+                            HostLocation::EvaluatePolicyCycle,
+                        )
+                    })?;
+                // Workflow #386 SR-4a2 (position 7): the quiet before the next blackout, then the
+                // day boundary (SCH-M D-4, D-6).
+                let deadline_ms = evaluation_deadline_ms(intent);
+                if let Some(gate) =
+                    blackout.quiet_gate(&active.compiled, instance, intent, time, deadline_ms)?
+                {
+                    return Ok(gate.eligibility(&intent.instance_id, refresh));
+                }
                 // Workflow #411 B15 R4 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 8a): a remedy round holds the task, or stopped it for a person, after
                 // positions 1 to 7 and before availability.
@@ -2747,16 +2806,33 @@ impl PolicyHost {
                     // position 9): an instance with the random delay on waits its pair's delay.
                     // Workflow #411 B8: an eligible candidate carries the runs its daily budgets
                     // still allow after this dispatch, as the admission preview counted them.
-                    Ok(admission) => self
-                        .random_delays
-                        .gate(
-                            intent,
-                            random_delay.get(&intent.instance_id),
-                            seed,
-                            &active.compiled.catalog().activity.profiles,
-                            time.unix_ms,
-                            refresh,
-                        )
+                    // Workflow #386 SR-4a2: a draw is cut at the quiet point before the next
+                    // blackout, so its planned start still passes position 7.
+                    Ok(admission) => random_delay
+                        .get(&intent.instance_id)
+                        .filter(|delay| delay.enabled)
+                        .map(|delay| {
+                            blackout.quiet_point(
+                                &active.compiled,
+                                instance,
+                                intent,
+                                time,
+                                delay.max_ms,
+                            )
+                        })
+                        .transpose()
+                        .map(Option::flatten)
+                        .and_then(|quiet_point| {
+                            self.random_delays.gate(
+                                intent,
+                                random_delay.get(&intent.instance_id),
+                                seed,
+                                &active.compiled.catalog().activity.profiles,
+                                time.unix_ms,
+                                refresh,
+                                quiet_point,
+                            )
+                        })
                         .map(|eligibility| match eligibility {
                             CandidateEligibility::Eligible => {
                                 CandidateEligibility::EligibleWithDailyRemaining {
@@ -2930,8 +3006,9 @@ impl PolicyHost {
     /// Workflow #384 D2-S4 (D2 model §3.4): the fact refresh inputs of a cycle: the kept
     /// recognition maintenance package of every instance in the snapshot, with the fact refresh
     /// dispatches admitted on it in its current activity day and the code of its latest failure
-    /// while no success followed it; the instances the closure's positions 1-2 hold; the
-    /// settings in effect; L.
+    /// while no success followed it; the instances the closure's positions 1-2 hold, and
+    /// (Workflow #386 SR-4a2) those a blackout covers at position 4; the settings in effect; L.
+    #[allow(clippy::too_many_arguments)]
     fn fact_refresh_inputs(
         &self,
         catalog: &CompiledCatalog,
@@ -2939,6 +3016,7 @@ impl PolicyHost {
         context: &FactRefreshContext<'_>,
         scheduling_pause: &dyn Fn(&str) -> Option<HostCode>,
         instance_occupancy: &dyn Fn(&str) -> Option<InstanceOccupancy>,
+        blackout_holds: &BTreeMap<String, actingcommand_policy::Blackout>,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<FactRefreshInputs> {
         let profiles = &catalog.catalog().activity.profiles;
@@ -2951,6 +3029,11 @@ impl PolicyHost {
                 instance_occupancy(&instance.instance_id),
             ) {
                 instance_holds.insert(instance.instance_id.clone(), hold.policy_hold());
+            } else if let Some(covering) = blackout_holds.get(&instance.instance_id) {
+                instance_holds.insert(
+                    instance.instance_id.clone(),
+                    BlackoutGate::Active(covering.clone()).hold(&instance.instance_id),
+                );
             }
             let Some(binding) = context.bindings.get(&instance.instance_id) else {
                 continue;
@@ -3528,17 +3611,6 @@ impl PolicyHost {
                 HostLocation::ValidatePolicyDispatch,
             ));
         }
-        if context.now_unix_ms < intent.prerequisites.evaluated_at_unix_ms
-            || intent
-                .prerequisites
-                .facts_fresh_until_unix_ms
-                .is_some_and(|expires| context.now_unix_ms > expires)
-        {
-            return Err(request(
-                HostCode::PolicyFactsStale,
-                HostLocation::ValidatePolicyDispatch,
-            ));
-        }
         if intent.prerequisites.daily_limit == 0
             || intent.prerequisites.window_iteration_limit == 0
             || intent.prerequisites.max_runtime_ms == 0
@@ -3550,6 +3622,32 @@ impl PolicyHost {
             ));
         }
         Ok(active.generation.clone())
+    }
+
+    /// The ceiling of `intent`'s facts at the admission's time: `policy_facts_stale` when the
+    /// admission precedes the intent's evaluation or passes its `facts_fresh_until_unix_ms`.
+    /// Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Admission"): judged after
+    /// [`Self::validate_dispatch`] and the blackout re-check ([`Self::blackout_admission`]), so
+    /// an intent that crossed into a catalog `maintenance` event, whose start bounds that
+    /// ceiling as every timeline boundary does, is refused `blackout_active` as for the other
+    /// sources.
+    pub(crate) fn validate_dispatch_freshness(
+        &self,
+        intent: &DispatchIntent,
+        context: &PolicyAdmissionContext,
+    ) -> RuntimeHostResult<()> {
+        if context.now_unix_ms < intent.prerequisites.evaluated_at_unix_ms
+            || intent
+                .prerequisites
+                .facts_fresh_until_unix_ms
+                .is_some_and(|expires| context.now_unix_ms > expires)
+        {
+            return Err(request(
+                HostCode::PolicyFactsStale,
+                HostLocation::ValidatePolicyDispatch,
+            ));
+        }
+        Ok(())
     }
 
     /// Workflow #422 LN-4 (coordinator ruling 2, 10-26): a decision the journal no longer holds
@@ -3661,6 +3759,58 @@ impl PolicyHost {
             now_unix_ms,
             Some(suspension_lift),
         )
+    }
+
+    /// Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals", position 4):
+    /// the blackout of the active catalog's and the configuration's sources that covers each of
+    /// `instances` at `time`, by alias; none without an active catalog (the evaluation then
+    /// refuses on its own).
+    pub(crate) fn blackout_holds(
+        &self,
+        blackout: &BlackoutContext,
+        instances: &[InstanceSnapshot],
+        time: EvaluationTime,
+    ) -> RuntimeHostResult<BTreeMap<String, actingcommand_policy::Blackout>> {
+        match &self.active {
+            Some(active) => blackout.holds(&active.compiled, instances, time),
+            None => Ok(BTreeMap::new()),
+        }
+    }
+
+    /// Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals"): admission
+    /// judges positions 4 and 7 again for `intent` at its own `time` on the instance as
+    /// `instances` (the admission's projection) holds it, with the response deadline of the
+    /// request it is admitted with, and refuses at Info with the evaluation's code
+    /// (`instance_id` names the instance by its opaque identifier). An instance the projection
+    /// no longer holds is `policy_facts_stale`.
+    pub(crate) fn blackout_admission(
+        &self,
+        blackout: &BlackoutContext,
+        intent: &DispatchIntent,
+        instances: &[InstanceSnapshot],
+        time: EvaluationTime,
+        deadline_ms: u64,
+        instance_id: &str,
+    ) -> RuntimeHostResult<()> {
+        let active = self.active.as_ref().ok_or_else(|| {
+            request(
+                SharedCode::PolicyCatalogUnavailable,
+                HostLocation::AdmitPolicyDispatch,
+            )
+        })?;
+        let instance = instances
+            .iter()
+            .find(|instance| instance.instance_id == intent.instance_id)
+            .ok_or_else(|| {
+                request(
+                    HostCode::PolicyFactsStale,
+                    HostLocation::AdmitPolicyDispatch,
+                )
+            })?;
+        match blackout.admission_gate(&active.compiled, instance, intent, time, deadline_ms)? {
+            Some(gate) => Err(gate.admission_error(instance_id)),
+            None => Ok(()),
+        }
     }
 
     /// Workflow #336 L6: the failure identity (if it has one) and the dispatch of a pair's

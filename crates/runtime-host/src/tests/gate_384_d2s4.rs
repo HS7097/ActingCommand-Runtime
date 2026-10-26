@@ -273,14 +273,19 @@ pub(super) fn chain_sources() -> CatalogSources {
 }
 
 // A host whose instance binds the recognition maintenance package at `package`.
+// Workflow #386 SR-4a2: it evaluates at the wall clock on a window open all day, so its
+// instance's day boundary is off (`day_boundary_off`).
 fn chain_host(root: &TempDir, package: &Path, state: &Arc<FakeState>) -> RuntimeHost {
+    let instance = instance_id();
     let host = RuntimeHost::start(
-        config(root).with_recognition_packages(BTreeMap::from([(
-            POLICY_INSTANCE_ALIAS.to_owned(),
-            package.to_path_buf(),
-        )])),
+        config(root)
+            .with_recognition_packages(BTreeMap::from([(
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                package.to_path_buf(),
+            )]))
+            .with_config_manifest(day_boundary_off_manifest(&instance)),
         Arc::new(
-            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(state))
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance, Arc::clone(state))
                 .fixture_simulation()
                 .with_vision_provider(Arc::new(TerminalReadings)),
         ),

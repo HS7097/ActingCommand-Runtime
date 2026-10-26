@@ -2599,12 +2599,18 @@ actingcommand_contract::outcome_codes! {
         /// changed (keys `package_id`, `actual_digest`, `runtime_commit`; SR-3).
         PackAdmissionLifted => "pack_admission_lifted": info / none,
         /// Info. A candidate is deferred inside a blackout until its end (keys `instance_id`,
-        /// `blackout_id`, `next_eligible_unix_ms`; SR-4a).
+        /// `blackout_id`, `blackout_source`, `next_eligible_unix_ms`; SR-4a2), and admission
+        /// refuses an intent that crossed into it.
         BlackoutActive => "blackout_active": info / none,
-        /// Info. A candidate is deferred because its response deadline plus the quiet margin
-        /// reaches the next blackout start (keys `instance_id`, `blackout_id`,
-        /// `blackout_start_unix_ms`, `required_ms`; SR-4a).
+        /// Info. A candidate is deferred because its horizon plus the quiet margin reaches the
+        /// next blackout start (keys `instance_id`, `blackout_id`, `blackout_source`,
+        /// `blackout_start_unix_ms`, `required_ms`; SR-4a2), and admission refuses it the same.
         BlackoutApproaching => "blackout_approaching": info / none,
+        /// Info. A Runtime-started policy run would not end, by its expected duration, before
+        /// the end of the activity window it would be admitted in; it waits for the next window
+        /// (keys `instance_id`, `window_end_unix_ms`, `required_ms`, `next_eligible_unix_ms`;
+        /// SCH-M D-6, slice SR-4a2), and admission refuses it the same.
+        PolicyDayBoundaryApproaching => "policy_day_boundary_approaching": info / none,
         /// Error. A run still active when a blackout started was stopped at its next
         /// checkpoint (keys `blackout_id`, `blackout_start_unix_ms`; SR-4b).
         BlackoutRunStopped => "blackout_run_stopped": error / planned_stop,
