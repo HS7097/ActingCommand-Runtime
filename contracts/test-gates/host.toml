@@ -2044,6 +2044,14 @@ tests = [
 ]
 incident = ["#422 LN-TUNE"]
 
+# LN-8c (#422, LEAN-L model v1.0 §7.1 A3; scale run 40257524915): the start's runtime-fact recovery reads the record events after its newest complete snapshot set (every one of them without a set) through the ledger's head in pages of `GlobalLedger::history_page_events` events (`ledger_observer.history_page_rows`, at most 1 024), so no writer command of it returns more than one page; on the synthetic history, at every page size, it reads every runtime-fact event and rebuilds the store that one read of them and today's replay rebuild, its largest read one page (or the whole selection when that fits one) and no whole-ledger query
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln8c::ln8c_the_runtime_fact_recovery_reads_its_records_in_bounded_pages",
+]
+incident = ["#422 LN-8c"]
+
 # LN-9 (#422, LEAN-L row LN-9, §3.7, §6.3; Alice's ruling 57): `ledger_observer.scrub_rows_per_second` (625, 1..=100000, settable), `scrub_chunk_rows` (256, 1..=4096) and `scrub_pass_interval_ms` (2 400 000, 60000..=86400000) are read from the defaults file and from explicit values, the rate is changed by an instruction and the other two refuse one, and a value out of range is refused (`out_of_range`); on a host with the shipped defaults and a stepping scrub clock, damage in an old row that no reader reads stops the Runtime within one pass as a Global failure, latched and closed with the code and operation the full verification gives for the same damage
 [[gate]]
 coverage = "Y"

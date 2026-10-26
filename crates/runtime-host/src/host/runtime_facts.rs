@@ -1194,15 +1194,18 @@ pub(super) fn take_last_runtime_fact_replay() -> Option<(u64, usize)> {
 /// `runtime.fact_recorded` / `runtime.fact_invalidated` appended after its last part, in
 /// ledger order (Workflow #308 5d-1). The set is searched backwards from the ledger tail;
 /// every incomplete set passed over is recorded as one `runtime.lifecycle_observed`
-/// `fact_snapshot_set_skipped`. Without a complete set every record event is replayed. On
-/// owner takeover, device-bound instance facts are then invalidated, ledger first. Returns
-/// the store and whether it is dirty.
+/// `fact_snapshot_set_skipped`. Without a complete set every record event is replayed. The
+/// record events are read through the ledger's head in pages of at most `page_events` events
+/// (#422 LN-8c; the start passes `GlobalLedger::history_page_events`). On owner takeover,
+/// device-bound instance facts are then invalidated, ledger first. Returns the store and
+/// whether it is dirty.
 pub(super) fn recover_runtime_fact_store(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
     owner_epoch: actingcommand_contract::OwnerEpoch,
     takeover: bool,
     now_unix_ms: u64,
+    page_events: usize,
 ) -> RuntimeHostResult<(RuntimeFactStore, bool)> {
     let mut store = RuntimeFactStore::new();
     let mut newest_first = SnapshotEventsNewestFirst {
@@ -1237,7 +1240,7 @@ pub(super) fn recover_runtime_fact_store(
             .append(draft)
             .map_err(|_| ledger_error(HostLocation::AppendRuntimeLifecycleObserved))?;
     }
-    let mut from_sequence = 1;
+    let mut from_sequence: u64 = 1;
     if let Some(set) = &search.set {
         // Part 1 replaces the empty store; the later parts' records join it in part order.
         for (index, (sequence, part)) in set.iter().enumerate() {
@@ -1256,13 +1259,26 @@ pub(super) fn recover_runtime_fact_store(
                 .ok_or_else(|| runtime_fact_replay_failed(*last, "ledger sequence overflow"))?;
         }
     }
-    let appended = ledger
-        .query(EventQuery {
+    // #422 LN-8c (LEAN-L model §7.1 A3): without a set every record event of the history is
+    // read, so one query grew with the history (8 424 events on the 1M-record synthetic
+    // ledger). The events after the set are read through the head in pages pinned to it: no
+    // writer command returns more than one page, and the events are those one query at that
+    // head returns, in ledger order.
+    let through = ledger
+        .latest_sequence()
+        .map_err(|_| ledger_error(HostLocation::RecoverRuntimeFacts))?;
+    let appended = crate::recovery_read::read_pages_after(
+        ledger,
+        &EventQuery {
             from_sequence: Some(from_sequence),
             origin_module: Some(OriginModule::RuntimeFacts),
             ..EventQuery::default()
-        })
-        .map_err(|_| ledger_error(HostLocation::RecoverRuntimeFacts))?;
+        },
+        from_sequence.saturating_sub(1),
+        through,
+        page_events,
+    )
+    .map_err(|_| ledger_error(HostLocation::RecoverRuntimeFacts))?;
     #[cfg(test)]
     LAST_RUNTIME_FACT_REPLAY.with(|last| last.set(Some((from_sequence, appended.len()))));
     for event in &appended {
