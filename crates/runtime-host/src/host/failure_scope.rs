@@ -32,6 +32,7 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Category, Code, Location};
 use actingcommand_execution_kernel::ExecutionKernelCode;
 use actingcommand_ledger::LedgerCode;
+use actingcommand_runtime_database::DatabaseCode;
 use actingcommand_scheduler::codes::SchedulerCode;
 
 /// The families of the closed Global list (ISO-M R0.3).
@@ -126,6 +127,18 @@ pub(crate) const GLOBAL_CODES: &[GlobalCode] = &[
     global(GlobalFamily::Ledger, LedgerCode::WriterPanicked.code()),
     global(GlobalFamily::Ledger, LedgerCode::CorruptLedgerRecord.code()),
     global(GlobalFamily::Ledger, LedgerCode::CorruptSegment.code()),
+    // #422 LN-9: what a full verification, and since LN-9 the ledger's scrub, finds in a row,
+    // the head or the file.
+    global(
+        GlobalFamily::Ledger,
+        LedgerCode::LedgerRecordMismatch.code(),
+    ),
+    global(GlobalFamily::Ledger, LedgerCode::LedgerMetaMismatch.code()),
+    global(GlobalFamily::Ledger, LedgerCode::DuplicateEventId.code()),
+    global(
+        GlobalFamily::Ledger,
+        DatabaseCode::StateDatabaseCorrupt.code(),
+    ),
     global(GlobalFamily::Ledger, LedgerCode::LedgerIndexMismatch.code()),
     global(
         GlobalFamily::Ledger,

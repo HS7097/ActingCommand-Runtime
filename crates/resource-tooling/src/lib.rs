@@ -46,6 +46,10 @@ mod gate_e4;
 #[cfg(test)]
 mod gate_412_b3_s0_restore;
 
+// #386 CF-4: standard-pack check reads a fact reference only under its `requires` entry.
+#[cfg(test)]
+mod gate_386_cf4;
+
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;

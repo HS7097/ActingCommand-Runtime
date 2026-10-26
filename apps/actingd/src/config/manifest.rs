@@ -167,6 +167,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #386 CF-4: this build reads a `fact` predicate whose value is another fact plus an
+        // offset; a `schedule.json` that writes one requires it, so an older Runtime refuses the
+        // file instead of misreading it.
+        subsystem(
+            "fact_reference",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
     let explicit_or_default = |present: bool| {
