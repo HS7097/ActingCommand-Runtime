@@ -287,6 +287,15 @@ use policy_dispatch::{SchedulingPauseTable, TrustedPolicyDispatchStore};
 pub(crate) use policy_outcome::insert_authoritative_policy_outcome;
 #[cfg(test)]
 use policy_outcome::{PolicyOutcomeCacheUpdate, validate_policy_run_admission_request};
+// #419 LN-WS-F, tests: the bounded reads with their forms, and the hooks around the tick's
+// settlement reads, a live settlement's completion read and a proposal's read.
+#[cfg(test)]
+pub(crate) use planning::{AROUND_VERIFIED_READ, verified_reference_sequences};
+#[cfg(test)]
+pub(crate) use policy_outcome::{
+    AROUND_COMPLETION_READ, AROUND_SETTLEMENT_READS, SettlementRead, policy_dispatch_intent,
+    policy_dispatch_intents,
+};
 use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
@@ -6058,15 +6067,20 @@ fn ledger_error_caused_by(
     operation: impl Into<Location>,
     error: &actingcommand_ledger::GlobalLedgerError,
 ) -> RuntimeHostError {
+    ledger_error(operation).with_caused_by(ledger_cause(error))
+}
+
+/// #411 A65 (R2): the ledger's own failure as an outcome's `caused_by` link: the ledger's code
+/// with the values the ledger attached and its operation.
+fn ledger_cause(error: &actingcommand_ledger::GlobalLedgerError) -> Outcome {
     let cause = error
         .outcome_values()
         .cloned()
         .unwrap_or_else(|| Outcome::relayed(error.code()));
-    let cause = match Location::relayed(error.operation()) {
+    match Location::relayed(error.operation()) {
         Some(location) if cause.value("operation").is_none() => cause.operation(location),
         _ => cause,
-    };
-    ledger_error(operation).with_caused_by(cause)
+    }
 }
 
 /// #411 A51 (R3): the ledger codes of a read the writer did not answer in time
@@ -6128,6 +6142,53 @@ fn unanswered_ledger_read(error: &RuntimeHostError) -> bool {
         && UNANSWERED_LEDGER_READS
             .iter()
             .any(|code| code.as_str() == error.code())
+}
+
+/// #419 LN-WS-F (R1): a failed ledger read of `operation` on a Runtime path that fails only its own
+/// unit of work (a request, or one step of a tick) when the writer does not answer the read: a
+/// read the writer did not answer in time, or stopped at its budget, is relayed as a request error
+/// with the ledger's code ([`ledger_read_error`]); any other read failure stays the fatal failure
+/// `fatal` gives, with the ledger's own failure as its `caused_by` link (#411 A65).
+pub(crate) fn tolerant_ledger_read_error(
+    error: &actingcommand_ledger::GlobalLedgerError,
+    operation: impl Into<Location>,
+    fatal: impl FnOnce() -> RuntimeHostError,
+) -> RuntimeHostError {
+    let read = ledger_read_error(error, operation);
+    if read.is_fatal() {
+        fatal().with_caused_by(ledger_cause(error))
+    } else {
+        read
+    }
+}
+
+/// #419 LN-WS-F (R1): a request's failure of `error` from a Runtime read that fails only the
+/// request when the writer does not answer it ([`unanswered_ledger_read`]): such a read is
+/// answered `failed` with the ledger's code; any other failure poisons the Runtime, as before.
+fn unanswered_or_poison(error: RuntimeHostError) -> RequestFailure {
+    if unanswered_ledger_read(&error) {
+        RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+    } else {
+        RequestFailure::poison_without_terminal(error)
+    }
+}
+
+/// #419 LN-WS-F, tests: a hook a test installs on its thread around one Runtime read: called right
+/// before the read, and what it returns is dropped once the read has returned (a test arms the
+/// writer's read hold in it, so the read waits out its reply limit, and the hold is released
+/// before anything else is sent to the writer).
+#[cfg(test)]
+pub(crate) type AroundReadForTest =
+    std::cell::RefCell<Option<Box<dyn FnOnce() -> Box<dyn std::any::Any>>>>;
+
+/// #419 LN-WS-F, tests: runs the hook installed in `hook` on this thread, once; what it returns
+/// lives until the caller drops it.
+#[cfg(test)]
+pub(crate) fn around_read_for_test(
+    hook: &'static std::thread::LocalKey<AroundReadForTest>,
+) -> Option<Box<dyn std::any::Any>> {
+    hook.with(|around| around.borrow_mut().take())
+        .map(|around| around())
 }
 
 /// Workflow #378 A6a (model section 7.4, N1): `code` (`ledger_opened` or, as a note link of a

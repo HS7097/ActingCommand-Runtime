@@ -127,6 +127,16 @@ pub(super) trait LedgerStore: Send + 'static {
         target: &super::LedgerEvidenceTarget,
         work: &ReadWork,
     ) -> GlobalLedgerResult<Option<bool>>;
+    /// #419 LN-WS-F (R2): the committed records through `through` that carry one of `artifacts`
+    /// (the `artifact_id` index), in ledger order, within `work`'s budget;
+    /// `ledger_read_budget_exceeded` of `operation` when it ran out.
+    fn artifact_records(
+        &self,
+        artifacts: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through: u64,
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -275,6 +285,17 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         work: &ReadWork,
     ) -> GlobalLedgerResult<Option<bool>> {
         Self::evidence_target_known(self, target, work)
+    }
+
+    fn artifact_records(
+        &self,
+        artifacts: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through: u64,
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        Self::read_artifact_records(self, artifacts, (0, through), work)?
+            .ok_or_else(|| ReadWork::exceeded(operation))
     }
 
     fn project_view_page(

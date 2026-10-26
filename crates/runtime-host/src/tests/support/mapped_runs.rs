@@ -25,6 +25,23 @@ fn admitted_mapped_run_fixture_with_policy_time(
     u64,
     Arc<ManualRuntimeClock>,
 ) {
+    admitted_mapped_run_fixture_configured(root, outcome_key, |config| config)
+}
+
+/// #419 LN-WS-F: [`admitted_mapped_run_fixture_with_policy_time`] with the host's configuration
+/// changed by `configure` before the host starts (a writer reply limit, say).
+fn admitted_mapped_run_fixture_configured(
+    root: &TempDir,
+    outcome_key: &str,
+    configure: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
+) -> (
+    RuntimeHost,
+    Arc<FakeState>,
+    Box<PolicyRunContext>,
+    ContainedTaskRequest,
+    u64,
+    Arc<ManualRuntimeClock>,
+) {
     let policy_unix_ms = POLICY_NOW_UNIX_MS;
     let clock = Arc::new(ManualRuntimeClock::new(policy_unix_ms, policy_unix_ms));
     let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
@@ -35,16 +52,18 @@ fn admitted_mapped_run_fixture_with_policy_time(
         .transition_capture_after_input
         .store(true, Ordering::Release);
     let host = RuntimeHost::start(
-        config(root)
-            .with_runtime_clock(clock.clone())
-            .with_policy_inputs(PolicyInputSnapshot::new(
-                mapped_policy_facts(outcome_key, false),
-                policy_resources(),
-            ))
-            .with_procedure_manifest(procedure_manifest_with_primary(
-                &package,
-                vec!["after_observation".to_owned()],
-            )),
+        configure(
+            config(root)
+                .with_runtime_clock(clock.clone())
+                .with_policy_inputs(PolicyInputSnapshot::new(
+                    mapped_policy_facts(outcome_key, false),
+                    policy_resources(),
+                ))
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &package,
+                    vec!["after_observation".to_owned()],
+                )),
+        ),
         Arc::new(
             FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
                 .fixture_simulation(),
