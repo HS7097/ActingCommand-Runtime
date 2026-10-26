@@ -15,6 +15,8 @@ mod code_lookup;
 // Workflow #398 RD-1c: ac_devices, ac_device_bind, ac_device_unbind.
 mod devices;
 mod events;
+// #422 LN-7c C: ac_evidence_confirm_read.
+mod evidence_read;
 // Workflow #389 MCP-4: ac_facts.
 mod facts;
 mod jobs;

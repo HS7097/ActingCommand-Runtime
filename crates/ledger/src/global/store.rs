@@ -123,6 +123,13 @@ pub(super) trait LedgerStore: Send + 'static {
         prefixes: &[String],
         work: &ReadWork,
     ) -> GlobalLedgerResult<super::LedgerTaggedState>;
+    /// #422 LN-7c C: whether the capture frame or the run `target` names is in the store; `None`
+    /// when `work`'s budget stopped the read first.
+    fn evidence_target_known(
+        &self,
+        target: &super::LedgerEvidenceTarget,
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<bool>>;
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -269,6 +276,14 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         work: &ReadWork,
     ) -> GlobalLedgerResult<super::LedgerTaggedState> {
         Self::tagged_state(self, prefixes, work)
+    }
+
+    fn evidence_target_known(
+        &self,
+        target: &super::LedgerEvidenceTarget,
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<bool>> {
+        Self::evidence_target_known(self, target, work)
     }
 
     fn project_view_page(

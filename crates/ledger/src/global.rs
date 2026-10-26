@@ -30,6 +30,8 @@ mod capture;
 mod flush;
 // LN-5 (#422, LEAN-L): the history is read from the store on demand.
 mod history;
+// #422 LN-7c C: what an evidence read confirmation names.
+pub use history::LedgerEvidenceTarget;
 mod index;
 // Workflow #422 LN-4: the start's checked read of the index table (§11.5).
 mod index_read;
@@ -1331,6 +1333,13 @@ enum WriterCommand {
         prefixes: Vec<String>,
         response: SyncSender<GlobalLedgerResult<LedgerTaggedState>>,
     },
+    /// #422 LN-7c C: whether the capture frame or the run an evidence read confirmation names is
+    /// in the ledger. Its writer command kind is `Query`, so task timing records keep their
+    /// closed set of command kinds.
+    EvidenceTarget {
+        target: LedgerEvidenceTarget,
+        response: SyncSender<GlobalLedgerResult<bool>>,
+    },
     ProjectViewPage {
         query: EventQuery,
         profile: ProjectionProfile,
@@ -1645,6 +1654,9 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
             let _ = response.send(Err(refused));
         }
         WriterCommand::TaggedState { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::EvidenceTarget { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::ProjectViewPage { response, .. } => {
@@ -2666,6 +2678,31 @@ impl GlobalLedger {
         )?
     }
 
+    /// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): whether the ledger holds the capture
+    /// frame an evidence read confirmation names (its `artifact.verified` record of a
+    /// `capture.frame` artifact, by the `artifact_id` index), or for a run at least one such
+    /// record linked to it (by the run's link index). Read on the writer's queue, a page at a
+    /// time within the read budget; a read the budget stopped is `ledger_read_budget_exceeded`.
+    pub fn evidence_target_known(&self, target: LedgerEvidenceTarget) -> GlobalLedgerResult<bool> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryEvents.location(),
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::EvidenceTarget { target, response },
+            LedgerLocation::QueryEvents.location(),
+        )?;
+        receive_response(
+            receiver,
+            LedgerLocation::QueryEvents.location(),
+            self.reply_timeout,
+        )?
+    }
+
     pub fn project_view_page(
         &self,
         query: EventQuery,
@@ -3202,6 +3239,7 @@ fn command_operation(command: &WriterCommand) -> Location {
         WriterCommand::QueryPage { .. } => LedgerLocation::QueryEventPage.location(),
         WriterCommand::IndexRecords { .. } => LedgerLocation::LedgerIndexRows.location(),
         WriterCommand::TaggedState { .. } => LedgerLocation::LedgerIndexRows.location(),
+        WriterCommand::EvidenceTarget { .. } => LedgerLocation::QueryEvents.location(),
         WriterCommand::ProjectViewPage { .. } => LedgerLocation::ProjectLedgerViewPage.location(),
         WriterCommand::ProjectSchedulingOutcomes { .. } => {
             LedgerLocation::ProjectSchedulingOutcomes.location()
@@ -3230,6 +3268,7 @@ const fn is_read_command(command: &WriterCommand) -> bool {
             | WriterCommand::QueryPage { .. }
             | WriterCommand::IndexRecords { .. }
             | WriterCommand::TaggedState { .. }
+            | WriterCommand::EvidenceTarget { .. }
             | WriterCommand::ProjectViewPage { .. }
             | WriterCommand::ProjectSchedulingOutcomes { .. }
             | WriterCommand::LatestSequence { .. }
@@ -3312,9 +3351,10 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::ReconcileScheduledPolicySettlement { .. } => {
                 LedgerWriterCommandKind::ReconcileScheduledPolicySettlement
             }
-            WriterCommand::Query { .. } | WriterCommand::TaggedState { .. } => {
-                LedgerWriterCommandKind::Query
-            }
+            // #422 LN-7c C: the evidence target read is a read too.
+            WriterCommand::Query { .. }
+            | WriterCommand::TaggedState { .. }
+            | WriterCommand::EvidenceTarget { .. } => LedgerWriterCommandKind::Query,
             WriterCommand::QueryPage { .. } => LedgerWriterCommandKind::QueryPage,
             // Workflow #422 LN-4: the index read is a read; the set of command kinds that task
             // timing records name stays closed.
@@ -3352,9 +3392,12 @@ fn writer_commands<S: LedgerStore>(
         // replay page) is bounded inside its SQLite statements too. The Runtime's own reads keep
         // their bound between rows: the policy driver ends on any cycle error, and their reads
         // are index-bounded.
+        // #422 LN-7c C: so is the evidence target read of a client's confirmation.
         let work = if matches!(
             command,
-            WriterCommand::ProjectViewPage { .. } | WriterCommand::ReplayPage { .. }
+            WriterCommand::ProjectViewPage { .. }
+                | WriterCommand::ReplayPage { .. }
+                | WriterCommand::EvidenceTarget { .. }
         ) {
             work.within_statements(context.read_check_vm_steps)
         } else {
@@ -3621,6 +3664,17 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::TaggedState { prefixes, response } => {
                 let result = store.tagged_state(&prefixes, &work);
                 read_events = result.as_ref().map_or(0, |state| state.records.len());
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::EvidenceTarget { target, response } => {
+                let result = store
+                    .evidence_target_known(&target, &work)
+                    .and_then(|known| {
+                        known.ok_or_else(|| {
+                            read_work::ReadWork::exceeded(LedgerLocation::QueryEvents.location())
+                        })
+                    });
                 command_succeeded = result.is_ok();
                 command_observation.replied(response.send(result).is_ok());
             }
