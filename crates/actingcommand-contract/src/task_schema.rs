@@ -44,7 +44,7 @@ impl TaskSchema {
     }
 
     /// The task schema `version` names exactly; `None` when it is absent or names none.
-    pub fn of(version: impl Into<Option<&str>>) -> Option<Self> {
+    pub fn of<'a>(version: impl Into<Option<&'a str>>) -> Option<Self> {
         let version = version.into()?;
         Self::ALL
             .into_iter()
@@ -53,7 +53,7 @@ impl TaskSchema {
 
     /// Whether `version` names `minimum` or a later task schema. An absent version, or one that
     /// names no task schema, is never at least any.
-    pub fn at_least(version: impl Into<Option<&str>>, minimum: Self) -> bool {
+    pub fn at_least<'a>(version: impl Into<Option<&'a str>>, minimum: Self) -> bool {
         Self::of(version).is_some_and(|schema| schema >= minimum)
     }
 }
