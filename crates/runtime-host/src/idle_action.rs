@@ -1,33 +1,53 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25; Workflow #386 comment
-//! 6393646823): the idle planner. It decides, for one instance at one idle check, whether the
-//! instance's idle action runs now or whether an idle instance is brought back now, from what the
-//! instance shows ([`IdleView`]), the scheduler's latest plan for it ([`IdlePlan`]: the latest
-//! policy evaluation's due candidates and next wake for the instance, the evaluator's own; no
-//! other estimate) and its idle keys in effect. It is pure: no clock, no device, no ledger. The
-//! host (`host/idle.rs`) gathers the inputs at every policy cycle and every lease sweep, carries
-//! the steps out and reports their ends ([`IdlePlanner::finished`]).
+//! 6393646823) and IDLE-2 (the owed wake, after v0.12.13 in production on 10-26): the idle
+//! planner. It decides, for one instance at one idle check, whether the instance's idle action
+//! runs now or whether an idle instance is brought back now, from what the instance shows
+//! ([`IdleView`]), the scheduler's latest plan for it ([`IdlePlan`]: the latest policy
+//! evaluation's due candidates and next wake for the instance, the evaluator's own; no other
+//! estimate) and its idle keys in effect. It is pure: no clock, no device, no ledger. The host
+//! (`host/idle.rs`) gathers the inputs at every policy cycle and every lease sweep, carries the
+//! steps out and reports their ends ([`IdlePlanner::finished`]).
+//!
+//! The rule (ruling 41): close the application when there is no task, and bring it back through
+//! the startup package when a task is due.
 //!
 //! - **The action** runs only when the instance is in no one's use (no lease, no queued request,
 //!   no keyless manual, Lab or ladder work), no scheduling pause holds it, its emulator runs (the
 //!   state both actions leave), it can be brought back (a startup package, and for
 //!   `stop_emulator` its configured emulator start), and the plan, made after the instance was
 //!   last seen in use, has no due task and no next wake closer than `idle.min_gap_ms`. It runs
-//!   once: the instance is `Acting` until the host reports the end, then `Idle`, or `Failed` when
-//!   the action failed (the instance is left as it is; only work on it again ends the wait, so
-//!   the next due task goes through the normal path).
+//!   once: the instance is `Acting` until the host reports the end ([`IdleEnd`]). Done, it is
+//!   `Idle` and owes its wake. Sent and failed with its result unknown (a `close_app` whose stop
+//!   request failed: the application may be closed), it is `Idle` and owes its wake all the
+//!   same. Not performed, it is `Failed`: it is left as it is, with no wake; only work on it
+//!   again ends the wait, so the next due task goes through the normal path.
 //! - **An action that cannot work** (Fail Loud): an instance that could not be brought back after
 //!   its action in effect (no startup package, or for `stop_emulator` no configured emulator
 //!   start) never acts, and the planner says so once per action in effect
 //!   ([`IdleStep::Unsupported`], naming what is missing), not silently at every check.
-//! - **The wake** of an idle instance comes at its next due time minus the action's wake lead,
-//!   the earlier of the one planned at the action and the one every later plan gives, or at once
-//!   when a plan shows a due task, or when the action in effect is no longer the one taken (the
-//!   switch). `stop_emulator` wakes through the configured emulator start and the startup
-//!   package, `close_app` through the startup package.
-//! - An idle instance that work holds again (a person's run, an emulator control, a ladder) is in
-//!   use: it is no longer idle and no wake is queued for it.
+//! - **An owed wake survives everything until it is queued.** The wake is an `Idle` instance's
+//!   only exit. It comes:
+//!   - at its time: the next due time minus the action's wake lead, the earlier of the one
+//!     planned at the action and the one every later plan gives;
+//!   - at once, when a plan shows a task of the instance due (a fact-refresh reading too: the
+//!     wake's claim is queued before the reading's dispatch is admitted, so the reading does not
+//!     meet a closed application);
+//!   - at once, when the action in effect is no longer the one taken (the switch).
+//!
+//!   Nothing in between cancels it: a claim, a queued request, a held admission guard (the
+//!   emulator watch's status read, a keyless observe), the action's own claim, a person's run or
+//!   a pause. A wake that comes due while the instance is held is queued all the same, and its
+//!   claims wait behind the holder. `stop_emulator` wakes through the configured emulator start
+//!   and the startup package, `close_app` through the startup package.
+//! - **Never acted on again before the wake.** An `Idle` instance is never acted on. Work in
+//!   between neither strands it (the owed wake follows at its time) nor cycles it: after the
+//!   wake, the action runs again only once a plan made after the instance's last work shows a
+//!   gap of at least `idle.min_gap_ms`, so a gap has at most one action and one wake. A start
+//!   begins with every instance active (the planner keeps no memory across a start), so its
+//!   first check may act once more on an instance its action already left, which arms the wake
+//!   again.
 
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
 use std::collections::BTreeMap;
@@ -161,6 +181,21 @@ pub(crate) enum IdleStep {
     },
 }
 
+/// How the action the planner asked for ended, as the host reports it
+/// ([`IdlePlanner::finished`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdleEnd {
+    /// The action was done: the instance owes its wake.
+    Done,
+    /// The action was not performed: it failed before its stop was sent, or it is a failed
+    /// `stop_emulator`, which the host reports so (the emulator watch starts a stopped emulator
+    /// again). The instance is left as it is, with no wake.
+    NotPerformed,
+    /// The action failed once its stop was sent (`close_app`'s stop request): what it left on the
+    /// instance is not known, so the instance owes its wake as after one done.
+    Indeterminate,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// The instance is in use, or may become idle.
@@ -170,13 +205,14 @@ enum Phase {
         action: IdleAction,
         wake_at_unix_ms: Option<u64>,
     },
-    /// The action finished: the instance is idle until its wake, `wake_at_unix_ms`: the wake
-    /// planned at the action, or an earlier one a later plan gave.
+    /// The action was done, or sent with its result unknown: the instance owes its wake,
+    /// `wake_at_unix_ms` (the wake planned at the action, or an earlier one a later plan gave).
+    /// The wake is its only exit.
     Idle {
         action: IdleAction,
         wake_at_unix_ms: Option<u64>,
     },
-    /// The action failed: the instance is left as it is until work holds it again.
+    /// The action was not performed: the instance is left as it is until work holds it again.
     Failed,
 }
 
@@ -234,15 +270,17 @@ impl IdlePlanner {
             }
             Phase::Failed => None,
             Phase::Active => decide(entry, config, view, plan, now_unix_ms),
-            Phase::Idle { .. } if view.in_use() => {
-                entry.in_use_at_unix_ms = Some(now_unix_ms);
-                entry.phase = Phase::Active;
-                None
-            }
+            // IDLE-2: a hold neither ends an idle instance's wait nor cancels its wake.
             Phase::Idle {
                 action,
                 wake_at_unix_ms,
-            } => wake(entry, config, action, wake_at_unix_ms, plan, now_unix_ms),
+            } => {
+                if view.in_use() {
+                    // After the wake, an action waits for a plan made after this work.
+                    entry.in_use_at_unix_ms = Some(now_unix_ms);
+                }
+                wake(entry, config, action, wake_at_unix_ms, plan, now_unix_ms)
+            }
         }
     }
 
@@ -259,22 +297,22 @@ impl IdlePlanner {
         true
     }
 
-    /// The host's report of the end of the action it was asked for: `succeeded` makes the
-    /// instance idle until its planned wake; a failure leaves it as it is.
-    pub(crate) fn finished(&mut self, alias: &str, succeeded: bool) {
+    /// The host's report of the end of the action it was asked for: one done, or sent with its
+    /// result unknown, leaves the instance idle and owing its planned wake; one not performed
+    /// leaves it as it is.
+    pub(crate) fn finished(&mut self, alias: &str, end: IdleEnd) {
         if let Some(entry) = self.instances.get_mut(alias)
             && let Phase::Acting {
                 action,
                 wake_at_unix_ms,
             } = entry.phase
         {
-            entry.phase = if succeeded {
-                Phase::Idle {
+            entry.phase = match end {
+                IdleEnd::Done | IdleEnd::Indeterminate => Phase::Idle {
                     action,
                     wake_at_unix_ms,
-                }
-            } else {
-                Phase::Failed
+                },
+                IdleEnd::NotPerformed => Phase::Failed,
             };
         }
     }
@@ -368,7 +406,8 @@ fn decide(
     })
 }
 
-/// An idle instance's check: the wake, when it is due; `current_unix_ms` is the wake in effect.
+/// An idle instance's check, held or not: the wake, when it is due; `current_unix_ms` is the wake
+/// in effect. Otherwise the instance stays idle with the same wake or an earlier one.
 fn wake(
     entry: &mut InstanceIdle,
     config: &IdleConfig,
