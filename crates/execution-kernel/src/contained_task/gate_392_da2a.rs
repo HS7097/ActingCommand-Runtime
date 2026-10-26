@@ -413,8 +413,11 @@ fn timing_of(runtime: &mut ScriptedRuntime) -> ContainedTaskTimingContext {
 struct Seen {
     matched: Vec<String>,
     captures: Vec<(u32, u32)>,
-    recognitions: Vec<((u32, u32), BTreeMap<String, Option<DeviceRect>>)>,
+    recognitions: Vec<SeenRecognition>,
 }
+
+/// One recognition's frame size and the region of each of its targets.
+type SeenRecognition = ((u32, u32), BTreeMap<String, Option<DeviceRect>>);
 
 fn seen(matched: Vec<String>, runtime: &ScriptedRuntime) -> Seen {
     let mut captures = Vec::new();
@@ -449,7 +452,7 @@ fn seen(matched: Vec<String>, runtime: &ScriptedRuntime) -> Seen {
 /// The kernel's capture entries; `Samples` takes a sample and the page frame.
 #[derive(Debug, Clone, Copy)]
 enum Entry {
-    EntryPage,
+    Page,
     Locate,
     Samples,
     Agreement,
@@ -457,7 +460,7 @@ enum Entry {
 }
 
 const ENTRIES: [Entry; 5] = [
-    Entry::EntryPage,
+    Entry::Page,
     Entry::Locate,
     Entry::Samples,
     Entry::Agreement,
@@ -471,7 +474,7 @@ fn at_entry(entry: Entry, k: u32) -> Seen {
     let mut runtime = ScriptedRuntime::new(vec![vec![scripted(k, HOME)]]);
     let timing = timing_of(&mut runtime);
     match entry {
-        Entry::EntryPage => {
+        Entry::Page => {
             let matched = match task.recognize_entry_frame(&mut runtime, HOME_PAGE, timing) {
                 Ok(EntryFrame::Matched(page)) => vec![page],
                 Ok(EntryFrame::Unmatched(_)) => Vec::new(),
@@ -572,7 +575,7 @@ fn expected(entry: Entry, k: u32, page: DeviceRect, icon: DeviceRect) -> Seen {
     let size = (640 * k, 360 * k);
     let home = || vec![HOME_PAGE.to_owned()];
     match entry {
-        Entry::EntryPage => Seen {
+        Entry::Page => Seen {
             matched: home(),
             captures: vec![size],
             recognitions: vec![(size, home_regions(page, icon))],
@@ -705,12 +708,7 @@ fn da2a_t2_a_1920x1080_frame_of_a_1280x720_package_reports_the_same_regions_scal
     assert_eq!(observation.scene.height(), 720);
     assert_eq!(
         seen(vec![observation.page_label.clone()], &runtime),
-        expected(
-            Entry::EntryPage,
-            3,
-            rect(0, 0, 6, 6),
-            rect(930, 480, 36, 36)
-        )
+        expected(Entry::Page, 3, rect(0, 0, 6, 6), rect(930, 480, 36, 36))
     );
 }
 
