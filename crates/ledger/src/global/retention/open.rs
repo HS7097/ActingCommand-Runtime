@@ -7,7 +7,7 @@ use super::view::ERROR_WINDOW_MS;
 use super::*;
 use crate::global::history::{HistorySelection, LinkSet};
 use crate::global::storage::{DurableStorage, EventStore};
-use actingcommand_contract::EventQuery;
+use actingcommand_contract::{EventQuery, parse_resource_reading_snapshot_id};
 
 /// The record types whose payload can name an owner epoch (`recorded_owner`): lifecycle
 /// observations (with the prior-epoch imports and closes and the quiescences), capacity samples
@@ -43,6 +43,26 @@ fn typed(types: &[EventType]) -> EventQuery {
         event_types: types.to_vec(),
         ..EventQuery::default()
     }
+}
+
+/// Whether `event` is a `fact.published` naming one of `frames` through a record's snapshot id
+/// (a resource reading's frame, an adjustment's confirmation frame) or one of `artifacts` as a
+/// record's content: what `FrameFacts::apply` takes from it into `published_frames`,
+/// `readings` and `published_artifacts`.
+fn publishes_on(
+    event: &PersistedEvent,
+    frames: &BTreeSet<FrameId>,
+    artifacts: &BTreeSet<ArtifactId>,
+) -> bool {
+    let EventPayload::Fact(FactPayload::Published(payload)) = event.payload() else {
+        return false;
+    };
+    payload.records().any(|record| {
+        parse_resource_reading_snapshot_id(&record.source_snapshot_id)
+            .is_some_and(|(_, frame)| frames.contains(&frame))
+            || matches!(&record.content, FactContent::Artifact { artifact }
+                if artifacts.contains(&artifact.artifact_id))
+    })
 }
 
 impl RetentionIndex {
@@ -119,7 +139,7 @@ impl<B: DurableStorage> EventStore<B> {
                 );
             }
         }
-        let framed = self.frame_records(&frames)?;
+        let framed = self.frame_records(&frames, live)?;
         selected.extend(framed);
         let mut retention =
             RetentionIndex::scratch(&RetentionIndex::default(), selected.into_values().collect());
@@ -145,12 +165,19 @@ impl<B: DurableStorage> EventStore<B> {
 
     /// The records the classes of `frames` read: those that reference them (by the
     /// `artifact_id` index) or carry their frame link; the records of the runs, leases, requests
-    /// and correlations these name; the markers of their instances from the first of those
-    /// records on (a marker preserving a frame names it in its payload only); the error points
-    /// whose window can hold one of them (Warning or higher, and failed terminals, from the oldest
-    /// capture through 30 s after the newest); then the records of the runs these name, of the
-    /// marker neighbours' frames and of the scopes linked to the runs read.
-    fn frame_records(&self, frames: &BTreeSet<ArtifactId>) -> GlobalLedgerResult<Selected> {
+    /// and correlations these name; the `fact.published` records naming a frame of `live` from
+    /// the first record of those frames on (a resource reading or a confirmation is published
+    /// with system links: no run, instance, lease or frame link, and inline content);
+    /// the markers of their instances from the first of those records on (a marker preserving a
+    /// frame names it in its payload only); the error points whose window can hold one of them
+    /// (Warning or higher, and failed terminals, from the oldest capture through 30 s after the
+    /// newest); then the records of the runs these name, of the marker neighbours' frames and of
+    /// the scopes linked to the runs read; and once more the runs the neighbours' records name.
+    fn frame_records(
+        &self,
+        frames: &BTreeSet<ArtifactId>,
+        live: &BTreeSet<ArtifactId>,
+    ) -> GlobalLedgerResult<Selected> {
         let mut selected = Selected::new();
         if frames.is_empty() {
             return Ok(selected);
@@ -163,6 +190,7 @@ impl<B: DurableStorage> EventStore<B> {
             })?,
         );
         let mut frame_ids = BTreeSet::new();
+        let mut live_frames = BTreeSet::new();
         let mut instances = BTreeSet::new();
         let mut captured = Vec::new();
         for event in selected.values() {
@@ -170,6 +198,9 @@ impl<B: DurableStorage> EventStore<B> {
                 if frames.contains(&reference.artifact_id) {
                     frame_ids.extend(reference.frame_id);
                     captured.push(reference.created_at_unix_ms);
+                }
+                if live.contains(&reference.artifact_id) {
+                    live_frames.extend(reference.frame_id);
                 }
             }
             instances.extend(event.links().instance_id().copied());
@@ -182,6 +213,19 @@ impl<B: DurableStorage> EventStore<B> {
                 ..LinkSet::default()
             })?,
         );
+        // The first record of the oldest live frame: no record before it can name a live frame.
+        let first_live = selected
+            .values()
+            .find(|event| {
+                event
+                    .links()
+                    .frame_id()
+                    .is_some_and(|frame| live_frames.contains(frame))
+                    || material_references(*event)
+                        .iter()
+                        .any(|reference| live.contains(&reference.artifact_id))
+            })
+            .map(PersistedEvent::sequence);
         let mut scoped = LinkSet::default();
         for event in selected.values() {
             let links = event.links();
@@ -192,6 +236,20 @@ impl<B: DurableStorage> EventStore<B> {
         }
         let read = scoped.clone();
         keep(&mut selected, self.read_linked(scoped)?);
+        if let Some(from) = first_live {
+            let published = EventQuery {
+                event_type: Some(EventType::FactPublished),
+                from_sequence: Some(from),
+                ..EventQuery::default()
+            };
+            keep(
+                &mut selected,
+                self.history()
+                    .select_where(&HistorySelection::of(&published), |event| {
+                        publishes_on(event, &live_frames, live)
+                    })?,
+            );
+        }
         if !instances.is_empty() {
             let markers = EventQuery {
                 event_type: Some(EventType::CaptureDedupWindow),
@@ -258,7 +316,23 @@ impl<B: DurableStorage> EventStore<B> {
                 }
             }
         }
-        keep(&mut selected, self.read_linked(more)?);
+        // A marker neighbour's records name its run, which nothing read before may have (a
+        // chain across runs): that run's terminal and summary are read too, or its frames would
+        // get an epoch-end point the full view does not have.
+        let mut runs_read = read.runs;
+        runs_read.extend(more.runs.iter().copied());
+        let neighboured = self.read_linked(more)?;
+        let further = LinkSet {
+            runs: neighboured
+                .iter()
+                .filter_map(|event| event.links().run_id())
+                .filter(|run| !runs_read.contains(*run))
+                .copied()
+                .collect(),
+            ..LinkSet::default()
+        };
+        keep(&mut selected, neighboured);
+        keep(&mut selected, self.read_linked(further)?);
         Ok(selected)
     }
 
