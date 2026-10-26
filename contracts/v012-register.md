@@ -3354,6 +3354,26 @@ is provisional for the parallel slices.
 | RL1B-6 | `config.subsystems` row `standard_pack_schedule` (always on) | new row value of an existing fact | RL-1b | RL-1b | a `schedule.json` that requires it is composed only by a Runtime that names it |
 | RL1B-7 | check-config `report.standard_pack_schedule` (`composer_mode`, `games`, `rules`, `pools`, `profiles`, `events`, `unclassified`, `problems`, `left_out`) | check-config report member | RL-1b | — | the composition the workbench would make for the configured instances, in either mode; each problem is a note |
 
+### 1.186 Slice LN-7 (0.12.x): retention without resident history: the facts of the live frames only, read by type and by index (#422 LEAN-L; frozen model v1.0 `rd-1024/lean-ledger/model.md` §3.5, §5.1 row LN-7, §7 A6; Alice 10-24 14:0x, #422 R1 and P2: nothing resident grows with the history)
+
+[ledger-store.md](ledger-store.md#open-ownership-and-append-durability), the LN-7 paragraphs of
+"Open, ownership and append durability", "Prior-epoch scope close" and "Frame cleaner", is the
+contract. No code, location, value key, vocabulary token or configuration key is added: a listing
+failure of the frame store reuses `ledger_io` (fatal at the open, a request error at a sweep
+start), an old artifact's other reference reuses `artifact_identity_conflict`. Part 1 (#1338): the
+prior-epoch closes come from the previous epoch only and `owner_epochs` keeps owner changes only.
+Gates: the `gate_ln7` tests of the ledger and of the frame cleaner. The number 1.186 is
+provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN7-1 | `GlobalLedger::frame_retention_view_live(now_unix_ms, switches, root)` | ledger interface (read) | LN-7 | — | lists `root`'s live frame store on the caller's thread, then the writer keeps only the facts of the frames present there and answers the frame view of `frame_retention_view`; its writer command kind stays `RetentionCandidates` |
+| LN7-2 | the writer's resident retention state | Runtime-internal behaviour | LN-7 | — | the eviction proof set; the owner changes, ends, imports and closes; the scopes of the latest owner, the one before it and the owners whose import or close they wrote; the facts of the live frames and what their classes read (every frame of their runs, the open runs, the runs with a frame at most 30 s after a live frame, the marker neighbours, the error points whose window can hold a live frame, the Lab scopes). Kept frames that left the store are classed beside the live ones and not listed. A record naming a run or a capture frame the writer no longer holds loads it by the run link, the `artifact_id` index and the frame link before it is checked; `classify` and `apply` are fed the records unchanged, in ledger order |
+| LN7-3 | the open's retention read | Runtime-internal behaviour | LN-7 | — | by type (owner records, starts, bindings, eviction intents and outcomes, `Performed` releases of the retained owners' epochs), by index (the live and proven frames' records and what they name) and the retained owners' scopes grouped in SQL over the link index; no `validate` replay of every record. The owner records scale with their types (lifecycle observations, capacity samples, runtime-state facts) |
+| LN7-4 | `actingcommand_artifact_store::list_live_frames(root)` | artifact store interface (read only) | LN-7 | — | the canonical artifact ids of `artifacts\<shard>\artifact_<hex>.png` under the state root; no file contents, never `kept\`; a missing `artifacts\` or a shard that vanishes lists nothing |
+| LN7-5 | the frame cleaner's sweep start | Runtime-internal behaviour | LN-7 | — | reads `frame_retention_view_live`; `handled` and `failed` keep only the ids its view lists, so they are bounded by the frames on disk; `absent` and `rescanned_absent` count only frames that left the store after the listing |
+| LN7-6 | the non-recovery branch of `retention_candidates` and eviction admission | Runtime-internal behaviour | LN-7 | — | lists and judges the resident objects: every admissible object has its material present, so it is live and resident; the host reads only `recovery_pending` outside recovery (startup recovery is the only caller) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

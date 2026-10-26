@@ -2931,3 +2931,7 @@ mod gate_ln6;
 // #422 LN-TUNE: a paged history read reads and authenticates each row once.
 #[path = "tests/gate_ln_tune.rs"]
 mod gate_ln_tune;
+// LN-7 (#422, LEAN-L §3.5): the writer keeps the facts of the live frames only, and decides them
+// as the full view does (A6); an old artifact's identity is read through its index.
+#[path = "tests/gate_ln7.rs"]
+mod gate_ln7;

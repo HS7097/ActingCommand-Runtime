@@ -496,9 +496,19 @@ impl FrameRetention {
             {
                 return Ok(None);
             }
+            // LN-7 (#422, LEAN-L §3.5): at a sweep start the ledger lists the live frame store and
+            // keeps the facts of the frames present in it; the view lists those frames only, so
+            // a frame this process removed, moved or found absent is not listed again.
             let view = ledger
-                .frame_retention_view(now_unix_ms, self.switches)
+                .frame_retention_view_live(now_unix_ms, self.switches, root)
                 .map_err(ledger_failure)?;
+            let listed = view
+                .frames
+                .iter()
+                .map(|frame| frame.reference.artifact_id)
+                .collect::<BTreeSet<_>>();
+            self.handled.retain(|id| listed.contains(id));
+            self.failed.retain(|id| listed.contains(id));
             self.begin_sweep(&view);
         } else {
             let view = ledger
