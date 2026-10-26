@@ -105,9 +105,9 @@ fn validate_admitted_lab_package(
     let entry_count = bundle.entry_count();
     let control = lab_control_from_bundle(&bundle)?;
     control.validate()?;
-    let resources = if matches!(
+    let resources = if actingcommand_contract::TaskSchema::at_least(
         bundle.operation()["schema_version"].as_str(),
-        Some("0.8" | "0.9")
+        actingcommand_contract::TaskSchema::V0_8,
     ) {
         // These contracts use Runtime admission for offline validation.
         runtime_admission().map_err(|error| CliError::package_invalid(error.to_string()))?;

@@ -2229,3 +2229,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_empty_lists_leave_the_evaluation_unchanged",
 ]
 incident = ["#386 SR-4a2"]
+
+# Workflow #392 DA-5a (model 392 v1.2 §0.2 C12 and C16, §12.1 row DA-5a): the task schema checks are one ordered type and no package behaves otherwise; a 1280x720 package on a 1280x720 frame, at task schema 0.6 under control v1 and at task schema 0.9 under control v2, passes the task geometry, completes on its target page and its one input is the tap it declares
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5a::da5a_identity_a_1280x720_package_on_a_1280x720_frame_runs_as_declared",
+]
+incident = ["#392 DA-5a"]

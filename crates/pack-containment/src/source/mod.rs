@@ -12,7 +12,7 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::page_projection::{ProjectionCatalog, ProjectionMetadata};
 use actingcommand_contract::{
     LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
-    OcrFieldsDeclaration, SchedulingOutcomeDeclaration,
+    OcrFieldsDeclaration, SchedulingOutcomeDeclaration, TaskSchema,
 };
 use actingcommand_recognition_pack::{AssetResolver, RecognitionPackError, RecognitionPackResult};
 use serde_json::{Map, Value, json};
@@ -699,10 +699,7 @@ impl OperationParser {
                     )),
                 }
             }
-            if !matches!(
-                bundle.data.get("schema_version").and_then(Value::as_str),
-                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7" | "0.8" | "0.9")
-            ) {
+            if TaskSchema::of(bundle.data.get("schema_version").and_then(Value::as_str)).is_none() {
                 errors.push(format!(
                     "{}: unsupported schema_version, expected 0.3 through 0.9",
                     bundle.task_json_path().display()
@@ -2012,6 +2009,15 @@ impl Bundle {
     pub fn task_json_path(&self) -> PathBuf {
         self.dir.join("task.json")
     }
+
+    /// Workflow #392 DA-5a: whether the task's `schema_version` names `minimum` or a later task
+    /// schema.
+    fn task_schema_at_least(&self, minimum: TaskSchema) -> bool {
+        TaskSchema::at_least(
+            self.data.get("schema_version").and_then(Value::as_str),
+            minimum,
+        )
+    }
 }
 
 pub fn resource_ids(resources: &Value) -> CliOutcome<HashSet<String>> {
@@ -2252,10 +2258,7 @@ fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<Str
 }
 
 fn validate_segmented_swipe_source(bundle: &Bundle, click: &Map<String, Value>) -> CliOutcome<()> {
-    if !matches!(
-        bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8" | "0.9")
-    ) {
+    if !bundle.task_schema_at_least(TaskSchema::V0_7) {
         return Err(CliError::package_invalid(
             "single_touch_drag_with_vertical_brake_v1 requires schema_version '0.7'",
         ));
@@ -2527,7 +2530,7 @@ fn with_unique(source: &Value, mut target: Value) -> Value {
 /// pair becomes the pack's `{"type": "range", "lower", "upper"}` (pack schema `0.7`); the
 /// entry is returned without them. An older task keeps them, and `pack_target` refuses them.
 fn split_template_mask(bundle: &Bundle, source: Value) -> CliOutcome<(Value, Option<Value>)> {
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.9") {
+    if !bundle.task_schema_at_least(TaskSchema::V0_9) {
         return Ok((source, None));
     }
     let mut entry = match source {
@@ -3031,10 +3034,7 @@ fn ocr_target_declarations(bundle: &Bundle) -> CliOutcome<&[Value]> {
     let Some(value) = bundle.data.get("ocr_targets") else {
         return Ok(&[]);
     };
-    if !matches!(
-        bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.6" | "0.7" | "0.8" | "0.9")
-    ) {
+    if !bundle.task_schema_at_least(TaskSchema::V0_6) {
         return Err(CliError::package_invalid(format!(
             "{}: ocr_targets requires schema_version '0.6' or '0.7'",
             bundle.task_json_path().display()
@@ -3194,7 +3194,7 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
     let Some(value) = bundle.data.get("phases") else {
         return Ok(());
     };
-    if bundle.data["schema_version"] != "0.9" {
+    if !bundle.task_schema_at_least(TaskSchema::V0_9) {
         return Err(CliError::package_invalid(
             "phases require operation schema_version '0.9'",
         ));
@@ -3479,10 +3479,7 @@ fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {
     let Some(value) = bundle.data.get("timeout_ms") else {
         return Ok(None);
     };
-    if !matches!(
-        bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8" | "0.9")
-    ) {
+    if !bundle.task_schema_at_least(TaskSchema::V0_7) {
         return Err(CliError::package_invalid(format!(
             "{}: timeout_ms requires schema_version '0.7'",
             bundle.task_json_path().display()
@@ -3504,10 +3501,7 @@ fn validate_task_max_steps_bundle(bundle: &Bundle) -> CliOutcome<Option<u32>> {
     let Some(value) = bundle.data.get("max_steps") else {
         return Ok(None);
     };
-    if !matches!(
-        bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8" | "0.9")
-    ) {
+    if !bundle.task_schema_at_least(TaskSchema::V0_7) {
         return Err(CliError::package_invalid(format!(
             "{}: max_steps requires schema_version '0.7'",
             bundle.task_json_path().display()
@@ -3789,14 +3783,14 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
         }
         return Ok(());
     }
-    match (schema, declaration) {
-        ("0.7", Some(Value::Null) | None) => {
+    match (TaskSchema::of(schema), declaration) {
+        (Some(TaskSchema::V0_7), Some(Value::Null) | None) => {
             return Err(CliError::package_invalid(format!(
                 "{}: schema 0.7 requires post_admission_ocr",
                 bundle.task_json_path().display()
             )));
         }
-        ("0.3" | "0.4" | "0.5" | "0.6" | "0.9", Some(_)) => {
+        (Some(schema), Some(_)) if !matches!(schema, TaskSchema::V0_7 | TaskSchema::V0_8) => {
             return Err(CliError::package_invalid(format!(
                 "{}: post_admission_ocr requires schema_version '0.7'",
                 bundle.task_json_path().display()
