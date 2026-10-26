@@ -10,8 +10,10 @@
 //! rows it saw; a row of a statement that selects no identity (an aggregate such as `COUNT(*)`,
 //! or one column such as a predecessor's stored hash) is counted apart, as unidentified (#422
 //! LN-7). #422 LN-8d: the counter also sums the SQLite virtual-machine steps of the medium's
-//! statements (`SQLITE_STMTSTATUS_VM_STEP`), the work SQLite did to select the rows, which a
-//! statement that sorts every candidate row to return a few makes grow past the rows it returns.
+//! statements (`SQLITE_STMTSTATUS_VM_STEP`, [`LedgerReadCounter::vm_steps`]), the work SQLite did
+//! to select the rows, which a statement that sorts every candidate row to return a few makes
+//! grow past the rows it returns. They are kept apart from [`LedgerReadCounts`], which counts
+//! rows: a read that returns the same rows reads the same counts, whatever SQLite's work for it.
 //! Dropping the counter stops counting. Counting changes nothing the medium reads or returns.
 //!
 //! The counters are per thread because an opening runs on the opening thread
@@ -63,8 +65,6 @@ pub struct LedgerReadCounts {
     pub other_rows: u64,
     /// Artifact material files the ledger asked its verifier to open.
     pub material_files_opened: u64,
-    /// #422 LN-8d: the SQLite virtual-machine steps of the medium's statements.
-    pub vm_steps: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -80,6 +80,8 @@ struct Counting {
     counts: LedgerReadCounts,
     /// The identities read: table, `sequence` and, for an artifact row, `ordinal`.
     seen: BTreeSet<(Table, i64, i64)>,
+    /// #422 LN-8d: the SQLite virtual-machine steps of the medium's statements.
+    vm_steps: u64,
 }
 
 thread_local! {
@@ -133,6 +135,17 @@ impl LedgerReadCounter {
                 }
             }
             read
+        })
+    }
+
+    /// #422 LN-8d: the SQLite virtual-machine steps of the statements the medium read rows with
+    /// since the counter started.
+    pub fn vm_steps(&self) -> u64 {
+        COUNTING.with(|counting| {
+            counting
+                .borrow()
+                .as_ref()
+                .map_or(0, |counting| counting.vm_steps)
         })
     }
 }
@@ -231,8 +244,7 @@ pub(crate) fn row_read(sql: &str, row: &[Value]) {
 pub(crate) fn statement_steps(steps: i32) {
     let _ = COUNTING.try_with(|counting| {
         if let Some(counting) = counting.borrow_mut().as_mut() {
-            counting.counts.vm_steps = counting
-                .counts
+            counting.vm_steps = counting
                 .vm_steps
                 .saturating_add(u64::try_from(steps).unwrap_or(0));
         }

@@ -33,12 +33,12 @@
 //!
 //! A4 (steady capture after ready) and A5 (history queries) are not measured here.
 //!
-//! #422 LN-8d: the history has production's frame store shape. Every `STORED_FRAME_EVERY`th frame
-//! of a run is stored and every `LIVE_FRAME_EVERY`th stored frame is live in the root's frame
-//! store, from the history's start to its end: on the production ledger of 10-26, 5 638 live
-//! frames of 95 479 captures, from sequence 101 557 to the head 1 579 741, in 1 323 runs. The
-//! open reads the retention state of those frames (LN-7); without them the scale run read none
-//! and did not see the v0.12.14 start's stall.
+//! #422 LN-8d: the history has production's frame store shape. Every `LIVE_FRAME_EVERY`th frame
+//! of a run is stored through the root's artifact store and stays live in its frame store, from
+//! the history's start to its end: on the production ledger of 10-26, 5 638 live frames of
+//! 95 479 captures, from sequence 101 557 to the head 1 579 741, in 1 323 runs. The open reads
+//! the retention state of those frames (LN-7); without them the scale run read none and did not
+//! see the v0.12.14 start's stall.
 //!
 //! The sizes are `ACTINGCOMMAND_LEAN_SCALE_SIZES` (records, comma separated; 10,000 and
 //! 1,000,000 by default). The `Lean scale` workflow runs it on a release build, as production
@@ -62,8 +62,7 @@ const CHILD_REPORT_ENV: &str = "ACTINGCOMMAND_LEAN_SCALE_CHILD_REPORT";
 const CHILD_TEST: &str = "tests::lean_scale::lean_scale_start_child";
 const DEFAULT_SIZES: [u64; 2] = [10_000, 1_000_000];
 // LN-8d: the frame store's shape (module documentation): one frame in sixteen is live.
-const STORED_FRAME_EVERY: u64 = 2;
-const LIVE_FRAME_EVERY: usize = 8;
+const LIVE_FRAME_EVERY: u64 = 16;
 const DEFAULT_SETTLE_MS: u64 = 10_000;
 // The host test configuration's salt (`config`), also the State database's bootstrap seed here.
 pub(super) const SALT: &[u8] = b"runtime-host-test-salt";
@@ -379,31 +378,16 @@ fn measure(records: u64, report_dir: &Path) -> Value {
             instance_id: scale_instance_id(),
         }],
     );
-    spec.mix.frame_artifact_every_frames = STORED_FRAME_EVERY;
+    // LN-8d: the live frame store, from the history's start to its end.
+    spec.mix.frame_artifact_every_frames = LIVE_FRAME_EVERY;
     let generated = write_synthetic_ledger(&database, &spec).expect("the synthetic ledger");
     drop(database);
     assert_eq!(generated.records, records, "{generated:?}");
-    // LN-8d: the live frame store, from the history's start to its end.
-    let live_objects = generated
-        .frame_objects
-        .iter()
-        .step_by(LIVE_FRAME_EVERY)
-        .collect::<Vec<_>>();
-    for object in &live_objects {
-        let path = root.path().join(&object.object_key);
-        fs::create_dir_all(path.parent().expect("an object's shard folder"))
-            .expect("the shard folder");
-        fs::write(&path, &object.material).expect("a live frame");
-    }
-    let live_frames = live_objects.len();
+    let live_frames = generated.stored_frames;
     let bytes = database_bytes(root.path());
     println!(
-        "lean_scale records={records} generated_ms={} canonical_bytes={} database_bytes={bytes} runs={} frames={} stored_frames={} live_frames={live_frames}",
-        generated.elapsed_ms,
-        generated.canonical_bytes,
-        generated.runs,
-        generated.frames,
-        generated.frame_objects.len()
+        "lean_scale records={records} generated_ms={} canonical_bytes={} database_bytes={bytes} runs={} frames={} live_frames={live_frames}",
+        generated.elapsed_ms, generated.canonical_bytes, generated.runs, generated.frames
     );
     let mut starts = serde_json::Map::new();
     for start in STARTS {

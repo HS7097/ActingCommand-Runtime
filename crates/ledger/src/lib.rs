@@ -65,8 +65,8 @@ pub use open_delay::LedgerOpenDelayGate;
 // LN-1 (Workflow #422): the synthetic ledger and process measures of the scale harness.
 #[cfg(any(test, feature = "test-hooks"))]
 pub use synthetic::{
-    ProcessMemory, SyntheticFrameObject, SyntheticInstance, SyntheticLedgerReport,
-    SyntheticLedgerSpec, SyntheticMix, process_age_ms, process_memory, write_synthetic_ledger,
+    ProcessMemory, SyntheticInstance, SyntheticLedgerReport, SyntheticLedgerSpec, SyntheticMix,
+    process_age_ms, process_memory, write_synthetic_ledger,
 };
 
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";

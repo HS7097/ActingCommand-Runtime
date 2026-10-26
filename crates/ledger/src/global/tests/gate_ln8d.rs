@@ -9,9 +9,9 @@
 // read for the runs alone, the start stalled), and the open's deadline was not checked inside
 // that read.
 //
-// The roots hold the synthetic ledger (LN-1) with stored capture frames
-// (`frame_artifact_every_frames`), some of them live in the root's frame store from the start of
-// the history to its end, as production's are:
+// The roots hold the synthetic ledger (LN-1) with capture frames stored through the root's
+// artifact store (`frame_artifact_every_frames`), so they are live in its frame store from the
+// start of the history to its end, as production's are:
 // - the open's SQLite work per record it reads does not grow with the history (it grew with the
 //   linked records after each page);
 // - the open's deadline stops its retention read with `ledger_read_budget_exceeded`.
@@ -31,16 +31,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-// The State key, the writer's owner id and the fixture instance: neutral fixture words.
-const STATE_KEY: &[u8] = b"ln8d-fixture";
-const OWNER: &str = "ln8d-fixture";
+// The State key (a bootstrap seed of at least 16 bytes), the writer's owner id and the fixture
+// instance: neutral fixture words.
+const STATE_KEY: &[u8] = b"ledger-ln8d-fixture";
+const OWNER: &str = "ledger-ln8d-fixture";
 const INSTANCE_ID: &str = "\"instance_000000000000000000000000000000a1\"";
 // Two histories of the same shape, one four times the other.
 const SMALL_RECORDS: u64 = 3_000;
 const LARGE_RECORDS: u64 = 12_000;
-// Every second frame is stored and every third stored frame is live: live frames in every run.
-const STORED_FRAME_EVERY: u64 = 2;
-const LIVE_FRAME_EVERY: usize = 3;
+// Every sixth frame of a run is stored and stays live: live frames in every run.
+const LIVE_FRAME_EVERY: u64 = 6;
 // The open authenticates a short tail, so its reads are mostly the retention state's.
 const TAIL: usize = 64;
 // The records' time, for the write policy's epoch.
@@ -48,12 +48,17 @@ const AT_MS: u64 = 1_752_147_200_000;
 const STALL_MS: u64 = 120_000;
 const PROBE_MS: u64 = 1_000;
 const DUMP_MAX_BYTES: u64 = 1_073_741_824;
+// The opens' deadlines (`MaintenanceLimits::timeout_seconds`): one no open here reaches, and the
+// one the index delay below passes.
+const OPEN_TIMEOUT_SECONDS: u64 = 600;
+const DEADLINE_SECONDS: u64 = 60;
+const INDEX_DELAY: Duration = Duration::from_secs(DEADLINE_SECONDS + 1);
 
-// A closed formal root holding `records` synthetic records with stored frames, some live.
+// A closed formal root holding `records` synthetic records with live stored frames.
 struct Root {
     dir: TempDir,
     database: Arc<RuntimeDatabase>,
-    live: usize,
+    live: u64,
 }
 
 fn root(records: u64) -> Root {
@@ -83,25 +88,12 @@ fn root(records: u64) -> Root {
             instance_id: serde_json::from_str(INSTANCE_ID).expect("a fixture instance id"),
         }],
     );
-    spec.mix.frame_artifact_every_frames = STORED_FRAME_EVERY;
+    spec.mix.frame_artifact_every_frames = LIVE_FRAME_EVERY;
     let generated = write_synthetic_ledger(&database, &spec).expect("the synthetic ledger");
     assert_eq!(generated.records, records, "{generated:?}");
-    // The live frame store: every `LIVE_FRAME_EVERY`th stored frame, from the history's start to
-    // its end, at its object key with the bytes its reference names.
-    let live_objects = generated
-        .frame_objects
-        .iter()
-        .step_by(LIVE_FRAME_EVERY)
-        .collect::<Vec<_>>();
-    for object in &live_objects {
-        let path = dir.path().join(&object.object_key);
-        std::fs::create_dir_all(path.parent().expect("an object's shard folder"))
-            .expect("the shard folder");
-        std::fs::write(&path, &object.material).expect("a live frame");
-    }
-    let live = live_objects.len();
+    let live = generated.stored_frames;
     assert!(
-        generated.runs > 4 && live as u64 > 2 * generated.runs,
+        generated.runs > 4 && live > 2 * generated.runs,
         "live frames throughout the history: {} runs, {live} live frames",
         generated.runs
     );
@@ -118,6 +110,16 @@ fn epoch() -> OwnerEpoch {
         .mint_owner_epoch()
         .expect("owner epoch")
         .transport()
+}
+
+// The deadline `timeout_seconds` from now, as `MaintenanceLimits` sets one.
+fn deadline_after(timeout_seconds: u64) -> Instant {
+    MaintenanceLimits {
+        timeout_seconds,
+        ..MaintenanceLimits::default()
+    }
+    .deadline()
+    .expect("deadline")
 }
 
 // A start's writer open of `root` with a tail of `TAIL` records, before `deadline`.
@@ -151,16 +153,17 @@ fn counted_open(root: &Root) -> (u64, u64) {
     let counter = LedgerReadCounter::start();
     let ledger = open(
         root,
-        Instant::now() + Duration::from_secs(600),
+        deadline_after(OPEN_TIMEOUT_SECONDS),
         &mut LedgerOpenTiming::default(),
     )
     .expect("the writer opens");
     let counts = counter.counts();
+    let steps = counter.vm_steps();
     drop(counter);
     ledger.close().expect("close the writer");
     let rows = counts.events.rows + counts.links.rows + counts.artifacts.rows;
-    assert!(rows > 0 && counts.vm_steps > 0, "{counts:?}");
-    (counts.vm_steps, rows)
+    assert!(rows > 0 && steps > 0, "{steps} VM steps, {counts:?}");
+    (steps, rows)
 }
 
 #[test]
@@ -190,11 +193,11 @@ fn ln8d_the_opens_work_per_record_read_does_not_grow_with_the_history_of_its_liv
 #[test]
 fn ln8d_the_opens_deadline_stops_its_retention_read() {
     let root = root(SMALL_RECORDS);
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = deadline_after(DEADLINE_SECONDS);
     {
         // The `index` phase starts past the deadline; `meta` and `tail` run at their own speed.
-        let _late = LedgerOpenDelayGate::arm_index(root.dir.path(), Duration::from_secs(61))
-            .expect("the index delay");
+        let _late =
+            LedgerOpenDelayGate::arm_index(root.dir.path(), INDEX_DELAY).expect("the index delay");
         let mut timing = LedgerOpenTiming::default();
         let error = open(&root, deadline, &mut timing)
             .expect_err("the open stops at its deadline in its retention read");
