@@ -39,8 +39,9 @@ impl HostShared {
                 return Ok(());
             }
             // #419 LN-WS-F (R1): a settlement whose read the writer did not answer in time, or
-            // stopped at its budget, did nothing; it stays pending and is read again at the next
-            // tick. Each is said in the daemon's log.
+            // stopped at its budget, did nothing; it and the settlements not read after it stay
+            // pending and are read again at the next tick (fix round 1, review L1). The skip is
+            // said in the daemon's log.
             let skipped = reconcile_scheduled_policy_outcomes_for(
                 &mut policy,
                 &self.ledger,
@@ -51,7 +52,7 @@ impl HostShared {
                     .collect(),
                 None,
             )?;
-            for error in &skipped {
+            if let Some(error) = &skipped {
                 self.fatal.report_skipped(&error.outcome());
             }
             let pending_completions = policy
@@ -147,9 +148,16 @@ impl HostShared {
             .ledger
             .latest_sequence()
             .map_err(|_| ledger_error(OPERATION))?;
+        // #419 LN-WS-F (fix round 1): the start's reads stay fatal (`SettlementRead::Fatal`).
         for decision_id in pending {
-            let intent =
-                policy_dispatch_intent(&self.ledger, &decision_id, None, through, OPERATION)?;
+            let intent = policy_dispatch_intent(
+                &self.ledger,
+                SettlementRead::Fatal,
+                &decision_id,
+                None,
+                through,
+                OPERATION,
+            )?;
             let links = intent.links();
             let (
                 Some(instance_id),
@@ -169,6 +177,7 @@ impl HostShared {
             };
             let grants = linked_policy_run_events(
                 &self.ledger,
+                SettlementRead::Fatal,
                 EventQuery {
                     to_sequence: Some(through),
                     event_type: Some(EventType::LeaseGranted),
@@ -453,7 +462,15 @@ impl HostShared {
     ) -> RuntimeHostResult<InstanceId> {
         let operation: Location = operation.into();
         const OPERATION: HostLocation = HostLocation::RecordScheduledDispatchDiagnostic;
-        let intent = policy_dispatch_intent(&self.ledger, decision_id, None, through, operation)?;
+        // #419 LN-WS-F (fix round 1): a start's reads, after its settlements, stay fatal.
+        let intent = policy_dispatch_intent(
+            &self.ledger,
+            SettlementRead::Fatal,
+            decision_id,
+            None,
+            through,
+            operation,
+        )?;
         let links = intent.links();
         let (
             Some(instance_id),
@@ -476,6 +493,7 @@ impl HostShared {
         };
         let grants = linked_policy_run_events(
             &self.ledger,
+            SettlementRead::Fatal,
             EventQuery {
                 to_sequence: Some(through),
                 event_type: Some(EventType::LeaseGranted),
@@ -571,9 +589,11 @@ impl HostShared {
         // sequence the dispatch journal holds for it), never the whole ledger; every original
         // predicate still selects the events it counts.
         // #419 LN-WS-F (R1): nothing is written before these reads end. A read the writer does
-        // not answer in time, or stops at its budget, fails only this tick's step: the head
-        // read's, every settlement's; a settlement's own read, that settlement's, which is not
-        // eligible this tick and is read again at the next. Each is said in the daemon's log.
+        // not answer in time, or stops at its budget, fails only this tick's step. The first one
+        // of the tick, the head read's or a settlement's, ends the tick's reads (fix round 1,
+        // review L1: a stalled writer costs one reply limit per tick, not one per settlement): no
+        // settlement is eligible this tick, and each is read again at the next. It is said in the
+        // daemon's log. These are tolerant reads (`SettlementRead::Tolerant`).
         let through = match self.ledger.latest_sequence() {
             Ok(through) => through,
             Err(error) => {
@@ -587,19 +607,21 @@ impl HostShared {
         let leases = lock(&self.scheduler, HostLocation::SelectPolicySettlements)?.active_tokens();
         let runs = lock(&self.contained_runs, HostLocation::SelectPolicySettlements)?;
         let mut eligible = Vec::new();
+        // #419 LN-WS-F, tests: the hook around this tick's settlement reads, from the first
+        // pending settlement's dispatch intent to the end of the selection; it ends before
+        // anything is written.
+        #[cfg(test)]
+        let _around = super::around_read_for_test(&AROUND_SETTLEMENT_READS);
         for decision_id in pending {
             let inactive = (|| -> RuntimeHostResult<bool> {
-                #[cfg(test)]
-                let around = super::around_read_for_test(&AROUND_SETTLEMENT_READ);
                 let intents = policy_dispatch_intents(
                     &self.ledger,
+                    SettlementRead::Tolerant,
                     decision_id,
                     policy.dispatch_intent_sequence(decision_id),
                     through,
                     HostLocation::SelectPolicySettlements,
                 )?;
-                #[cfg(test)]
-                drop(around);
                 let [intent] = intents.as_slice() else {
                     return Err(policy_admission_fatal(
                         HostCode::PolicyDispatchIntentNotUnique,
@@ -637,6 +659,7 @@ impl HostShared {
                 };
                 let grants = linked_policy_run_events(
                     &self.ledger,
+                    SettlementRead::Tolerant,
                     EventQuery {
                         event_type: Some(EventType::LeaseGranted),
                         request_id: links.request_id().copied(),
@@ -679,6 +702,7 @@ impl HostShared {
                 };
                 let releases = linked_policy_run_events(
                     &self.ledger,
+                    SettlementRead::Tolerant,
                     EventQuery {
                         event_type: Some(EventType::LeaseReleased),
                         ..lease_links.clone()
@@ -714,6 +738,7 @@ impl HostShared {
                     }
                     terminals += linked_policy_run_events(
                         &self.ledger,
+                        SettlementRead::Tolerant,
                         EventQuery {
                             event_type: Some(terminal_type),
                             ..lease_links.clone()
@@ -749,6 +774,7 @@ impl HostShared {
                     if !missing_outcomes.contains(decision_id)
                         || linked_policy_run_events(
                             &self.ledger,
+                            SettlementRead::Tolerant,
                             EventQuery {
                                 event_type: Some(EventType::LeaseReleased),
                                 request_id: links.request_id().copied(),
@@ -770,7 +796,13 @@ impl HostShared {
             match inactive {
                 Ok(true) => eligible.push(decision_id.clone()),
                 Ok(false) => {}
-                Err(error) => self.skip_unanswered_settlement_read(error)?,
+                // #419 LN-WS-F (fix round 1, review L1): the first unanswered read ends this
+                // tick's reads, as an unanswered head read does: no settlement is eligible this
+                // tick, and each is read again at the next.
+                Err(error) => {
+                    self.skip_unanswered_settlement_read(error)?;
+                    return Ok(Vec::new());
+                }
             }
         }
         Ok(eligible)
@@ -1664,21 +1696,30 @@ impl HostShared {
             // A scheduled run's completion carries that run's links, whether this host or the
             // ledger's settlement recovery appended it: read them through the link index
             // (Workflow #317 item C). Without a run context every completion is read.
+            // #419 LN-WS-F (fix round 1, review H1): this read comes after the run's execution
+            // record is appended and committed, so it stays fatal, with the ledger's code as its
+            // cause (`SettlementRead::Fatal`): skipped, it would leave the settlement half applied
+            // (no completion, result cache, value records, settlement facts or duration sample).
             let completions = match context {
-                Some(context) => linked_policy_run_events(
-                    &self.ledger,
-                    EventQuery {
-                        event_type: Some(EventType::PolicyDispatchCompleted),
-                        correlation_id: Some(context.correlation_id()),
-                        task_id: Some(context.task_id()),
-                        run_id: Some(context.run_id()),
-                        ..EventQuery::default()
-                    },
-                    u64::MAX,
-                    2,
-                    HostLocation::ReadPolicyDispatchCompletion,
-                    completes_decision,
-                )?,
+                Some(context) => {
+                    #[cfg(test)]
+                    let _around = super::around_read_for_test(&AROUND_COMPLETION_READ);
+                    linked_policy_run_events(
+                        &self.ledger,
+                        SettlementRead::Fatal,
+                        EventQuery {
+                            event_type: Some(EventType::PolicyDispatchCompleted),
+                            correlation_id: Some(context.correlation_id()),
+                            task_id: Some(context.task_id()),
+                            run_id: Some(context.run_id()),
+                            ..EventQuery::default()
+                        },
+                        u64::MAX,
+                        2,
+                        HostLocation::ReadPolicyDispatchCompletion,
+                        completes_decision,
+                    )?
+                }
                 // LN-5 (#422, LEAN-L §3.3): the type's history is read page by page.
                 None => self
                     .ledger
@@ -1959,9 +2000,11 @@ pub(super) fn reconcile_policy_dispatches(
     let through = ledger
         .latest_sequence()
         .map_err(|_| ledger_error(HostLocation::ReconcilePolicyDispatches))?;
+    // #419 LN-WS-F (fix round 1): the start's reads, after its settlements, stay fatal.
     for dispatch in pending {
         let intent = policy_dispatch_intent(
             ledger,
+            SettlementRead::Fatal,
             &dispatch.data.decision_id,
             None,
             through,
@@ -1969,6 +2012,7 @@ pub(super) fn reconcile_policy_dispatches(
         )?;
         let lease_granted = !linked_policy_run_events(
             ledger,
+            SettlementRead::Fatal,
             EventQuery {
                 from_sequence: Some(intent.sequence().saturating_add(1)),
                 to_sequence: Some(through),
@@ -2029,28 +2073,33 @@ fn reconcile_scheduled_policy_outcomes(
 
 /// `start`: the start's settlement context (`None` online). #419 LN-WS-F (R1): online, a
 /// settlement whose read the writer did not answer in time, or stopped at its budget, did nothing
-/// (all its reads come before its one write, and the policy is changed only after that write);
-/// it stays pending, is read again at the next tick, and its failure is returned among the
-/// skipped ones. At start every such failure fails the start, as before.
+/// (all its reads come before its one write, and the policy is changed only after that write).
+/// That first unanswered read ends this tick's reads (fix round 1, review L1): it and the
+/// settlements after it stay pending and are read again at the next tick, and its failure is
+/// returned. Online the reads are tolerant (`SettlementRead::Tolerant`); at start they are fatal
+/// (`SettlementRead::Fatal`), as before #419 LN-WS-F, and every such failure fails the start.
 fn reconcile_scheduled_policy_outcomes_for(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     pending: Vec<String>,
     mut start: Option<&mut StartSettlement>,
-) -> RuntimeHostResult<Vec<RuntimeHostError>> {
-    let mut skipped = Vec::new();
+) -> RuntimeHostResult<Option<RuntimeHostError>> {
     if pending.is_empty() {
-        return Ok(skipped);
+        return Ok(None);
     }
+    let read = if start.is_some() {
+        SettlementRead::Fatal
+    } else {
+        SettlementRead::Tolerant
+    };
     // Every read below is pinned to one position and goes through an index (Workflow #317
     // rf2), never the whole ledger; the original predicates still select the events.
     let through = match ledger.latest_sequence() {
         Ok(through) => through,
         Err(error) => {
-            let error = settlement_read_error(&error, HostLocation::ReconcilePolicyOutcomes);
-            if start.is_none() && unanswered_ledger_read(&error) {
-                skipped.push(error);
-                return Ok(skipped);
+            let error = read.error(&error, HostLocation::ReconcilePolicyOutcomes);
+            if unanswered_ledger_read(&error) {
+                return Ok(Some(error));
             }
             return Err(error);
         }
@@ -2060,6 +2109,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             // #419 LN-WS-F (R2): the intent from the sequence the dispatch journal holds.
             let intent = &policy_dispatch_intent(
                 ledger,
+                read,
                 &decision_id,
                 policy.dispatch_intent_sequence(&decision_id),
                 through,
@@ -2086,6 +2136,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             };
             let lease_grants = linked_policy_run_events(
                 ledger,
+                read,
                 EventQuery {
                     to_sequence: Some(through),
                     event_type: Some(EventType::LeaseGranted),
@@ -2131,6 +2182,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                 }
                 terminals.extend(linked_policy_run_events(
                     ledger,
+                    read,
                     EventQuery {
                         to_sequence: Some(through),
                         event_type: Some(terminal_type),
@@ -2167,6 +2219,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             // start records it (`record_open_scheduled_dispatches`).
             let run_releases = linked_policy_run_events(
                 ledger,
+                read,
                 EventQuery {
                     to_sequence: Some(through),
                     event_type: Some(EventType::LeaseReleased),
@@ -2211,7 +2264,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             let (observed_at_unix_ms, input, runtime_ms) = match terminals.as_slice() {
                 [terminal] if terminal.event_type() == EventType::TaskCompleted => {
                     let runtime_ms =
-                        recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
+                        recovered_scheduled_task_runtime_ms(ledger, read, through, terminal)?;
                     (
                         terminal.timestamp_unix_ms(),
                         PolicyExecutionInput::Succeeded,
@@ -2239,7 +2292,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                         ));
                     };
                     let runtime_ms =
-                        recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
+                        recovered_scheduled_task_runtime_ms(ledger, read, through, terminal)?;
                     (
                         terminal.timestamp_unix_ms(),
                         // Ledger revision 3 (model section 8.1): the class comes from the
@@ -2332,8 +2385,9 @@ fn reconcile_scheduled_policy_outcomes_for(
         // dispatch stays open, out of the pending settlements and the active workloads, and the
         // start records it and pauses its instance (`hold_unsettled_dispatches`). #419 LN-WS-F
         // (R1): online, a read the writer did not answer in time, or stopped at its budget,
-        // skips its settlement for this tick. Any other failure, at start and online, is
-        // returned.
+        // skips its settlement for this tick, and (fix round 1, review L1) ends this tick's
+        // reads: the settlements after it are read at the next tick. Any other failure, at start
+        // and online, is returned.
         if let Err(error) = settled {
             match start.as_deref_mut() {
                 Some(start) if per_run_settlement_refusal(&error) => {
@@ -2343,12 +2397,12 @@ fn reconcile_scheduled_policy_outcomes_for(
                         cause: error.code(),
                     });
                 }
-                None if unanswered_ledger_read(&error) => skipped.push(error),
+                None if unanswered_ledger_read(&error) => return Ok(Some(error)),
                 _ => return Err(error),
             }
         }
     }
-    Ok(skipped)
+    Ok(None)
 }
 
 fn scheduled_admission_release_matches(
@@ -2367,9 +2421,11 @@ fn scheduled_admission_release_matches(
 
 /// The events of one link-indexed query through `through` that `keep` selects, read two per
 /// page and stopping at `cap` (Workflow #317 items B and C). The query only narrows the rows
-/// read; `keep` is the original predicate over the whole ledger.
+/// read; `keep` is the original predicate over the whole ledger. A failed page read fails in the
+/// form `read` names (#419 LN-WS-F fix round 1, review H1).
 fn linked_policy_run_events(
     ledger: &GlobalLedger,
+    read: SettlementRead,
     query: EventQuery,
     through: u64,
     cap: usize,
@@ -2382,11 +2438,11 @@ fn linked_policy_run_events(
     let mut after = 0;
     loop {
         // #422 LN-WS (R4, R5): a fatal failure keeps the ledger's code as its cause. #419
-        // LN-WS-F (R1): a read the writer did not answer in time, or stopped at its budget, is a
-        // request error with the ledger's code (`settlement_read_error`).
+        // LN-WS-F (R1): in the tolerant form, a read the writer did not answer in time, or
+        // stopped at its budget, is a request error with the ledger's code.
         let page = ledger
             .query_page(query.clone(), after, through, LINKED_PAGE_EVENTS)
-            .map_err(|error| settlement_read_error(&error, operation))?;
+            .map_err(|error| read.error(&error, operation))?;
         let exhausted = page.len() < LINKED_PAGE_EVENTS;
         if let Some(last) = page.last() {
             after = last.sequence();
@@ -2409,14 +2465,21 @@ fn linked_policy_run_events(
 /// ([`policy_dispatch_intents`]); none or more than one is `policy_dispatch_intent_missing`.
 pub(crate) fn policy_dispatch_intent(
     ledger: &GlobalLedger,
+    read: SettlementRead,
     decision_id: &str,
     intent_sequence: Option<u64>,
     through: u64,
     operation: impl Into<Location>,
 ) -> RuntimeHostResult<PersistedEvent> {
     let operation: Location = operation.into();
-    let mut intents =
-        policy_dispatch_intents(ledger, decision_id, intent_sequence, through, operation)?;
+    let mut intents = policy_dispatch_intents(
+        ledger,
+        read,
+        decision_id,
+        intent_sequence,
+        through,
+        operation,
+    )?;
     match (intents.pop(), intents.is_empty()) {
         (Some(intent), true) => Ok(intent),
         _ => Err(policy_admission_fatal(
@@ -2433,13 +2496,19 @@ pub(crate) fn policy_dispatch_intent(
 /// decision's intent at, the record there is read by its sequence, then every intent under that
 /// record's own links (its instance, request, correlation, task and run; #419 DIAG-RUN R1 drives
 /// the read by a link index), so the read follows the decision's run, never the intent type's
-/// history. A second intent of the decision is one appended again under the same links (a
-/// repeated append); one under other links the journal already refuses when it loads it
-/// (`policy_decision_identity_conflict`). A record at `intent_sequence` that is not an intent of
-/// the decision is none. Without it (a start's read, or a decision the journal no longer holds),
-/// the type's history is paged two records at a time (Workflow #317 rf2), as before.
+/// history. A second intent of the decision under the same links (a repeated append) is read.
+/// One under other links is not: what keeps it out of the ledger is that a decision id is unique
+/// (a SHA-256 over the catalog, task, instance, ledger position, snapshot, time and seed) and that
+/// the dispatch journal refuses, as fatal, an appended intent of a decision it already holds
+/// (`check_seen_intent`, `policy_decision_identity_conflict`). The journal's load does not see an
+/// earlier one (fix round 1, review I1: a start from the value records reads only the intents
+/// they name and the tail). A record at `intent_sequence` that is not an intent of the decision
+/// is none. Without it (a start's read, or a decision the journal no longer holds), the type's
+/// history is paged two records at a time (Workflow #317 rf2), as before. Every read fails in
+/// the form `read` names.
 pub(crate) fn policy_dispatch_intents(
     ledger: &GlobalLedger,
+    read: SettlementRead,
     decision_id: &str,
     intent_sequence: Option<u64>,
     through: u64,
@@ -2449,6 +2518,7 @@ pub(crate) fn policy_dispatch_intents(
     let Some(at) = intent_sequence else {
         return linked_policy_run_events(
             ledger,
+            read,
             EventQuery {
                 to_sequence: Some(through),
                 event_type: Some(EventType::PolicyDispatchIntent),
@@ -2475,7 +2545,7 @@ pub(crate) fn policy_dispatch_intents(
             at,
             1,
         )
-        .map_err(|error| settlement_read_error(&error, operation))?;
+        .map_err(|error| read.error(&error, operation))?;
     let Some(intent) = recorded
         .into_iter()
         .find(|event| event.sequence() == at && intent_of_decision(event, decision_id))
@@ -2485,6 +2555,7 @@ pub(crate) fn policy_dispatch_intents(
     let links = intent.links();
     linked_policy_run_events(
         ledger,
+        read,
         EventQuery {
             to_sequence: Some(through),
             event_type: Some(EventType::PolicyDispatchIntent),
@@ -2511,11 +2582,11 @@ fn intent_of_decision(event: &PersistedEvent, decision_id: &str) -> bool {
     )
 }
 
-/// #419 LN-WS-F (R1): a settlement read's ledger failure at `operation`: a read the writer did
-/// not answer in time, or stopped at its budget, relayed as a request error with the ledger's
-/// code (`ledger_read_error`), which online fails only its settlement's step and at start still
-/// fails the start; any other read failure the fatal `ledger_failure` of `operation` with the
-/// ledger's own failure as its cause (#422 LN-WS R4).
+/// #419 LN-WS-F (R1): a tolerant settlement read's ledger failure at `operation`
+/// ([`SettlementRead::Tolerant`]): a read the writer did not answer in time, or stopped at its
+/// budget, relayed as a request error with the ledger's code (`ledger_read_error`), which fails
+/// only this tick's step; any other read failure the fatal `ledger_failure` of `operation` with
+/// the ledger's own failure as its cause (#422 LN-WS R4).
 fn settlement_read_error(
     error: &actingcommand_ledger::GlobalLedgerError,
     operation: impl Into<Location>,
@@ -2524,11 +2595,49 @@ fn settlement_read_error(
     tolerant_ledger_read_error(error, operation, || ledger_error(operation))
 }
 
+/// #419 LN-WS-F (fix round 1, review H1): the form of a settlement read, which decides how its
+/// ledger failure fails. Every caller of `linked_policy_run_events` and
+/// `policy_dispatch_intents` names its form, so no read takes another's tolerance by accident.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SettlementRead {
+    /// A read before its step writes anything: the reconciliation tick's reads
+    /// (`inactive_policy_settlements`, and `reconcile_scheduled_policy_outcomes_for` online). A
+    /// read the writer did not answer in time, or stopped at its budget, fails only this tick's
+    /// step (`settlement_read_error`); any other failure is fatal, with the ledger's cause.
+    Tolerant,
+    /// A read after a commit, or at start: the live settlement's completion read after its
+    /// execution record (`finish_policy_dispatch_outcome`), the start's reads and the failure
+    /// settlement's (`compare_error_frames`). Every failure is the fatal `ledger_failure` of the
+    /// read's operation with the ledger's own failure as its cause (#422 LN-WS R4), as before #419
+    /// LN-WS-F.
+    Fatal,
+}
+
+impl SettlementRead {
+    /// The failure of a read at `operation` that the ledger failed with `error`, in this form.
+    fn error(
+        self,
+        error: &actingcommand_ledger::GlobalLedgerError,
+        operation: impl Into<Location>,
+    ) -> RuntimeHostError {
+        match self {
+            Self::Tolerant => settlement_read_error(error, operation),
+            Self::Fatal => ledger_error_caused_by(operation, error),
+        }
+    }
+}
+
 #[cfg(test)]
 thread_local! {
-    /// #419 LN-WS-F, tests: the hook around the first read of the next pending settlement the
-    /// reconciliation tick reads on this thread (its dispatch intent).
-    pub(crate) static AROUND_SETTLEMENT_READ: super::AroundReadForTest =
+    /// #419 LN-WS-F, tests: the hook around the reconciliation tick's settlement reads on this
+    /// thread, from the first pending settlement's dispatch intent to the end of the selection
+    /// (`inactive_policy_settlements`); nothing is written while it lives.
+    pub(crate) static AROUND_SETTLEMENT_READS: super::AroundReadForTest =
+        const { std::cell::RefCell::new(None) };
+    /// #419 LN-WS-F (fix round 1, review H1), tests: the hook around the next live settlement's
+    /// completion read on this thread (`finish_policy_dispatch_outcome`, after the run's
+    /// execution record is committed).
+    pub(crate) static AROUND_COMPLETION_READ: super::AroundReadForTest =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -2545,8 +2654,11 @@ fn policy_run_effect_started(
         EventType::InputCommitted,
         EventType::InputFailed,
     ] {
+        // The reconciliation tick's read (`inactive_policy_settlements`), before anything is
+        // written: tolerant.
         let started = linked_policy_run_events(
             ledger,
+            SettlementRead::Tolerant,
             EventQuery {
                 to_sequence: Some(through),
                 event_type: Some(effect_type),
@@ -2915,8 +3027,10 @@ pub(crate) fn insert_authoritative_policy_outcome(
 /// none (`append_scheduled_request_lifecycle`), so its request is its scheduler
 /// `command.received` (`runtime.task_run`) under the run's links (Workflow #369 E3: a physical
 /// run cut between its terminal and `policy.execution_recorded` is otherwise unrecoverable).
+/// Its reads fail in the form `read` names: the reconciliation's (#419 LN-WS-F fix round 1).
 fn recovered_scheduled_task_runtime_ms(
     ledger: &GlobalLedger,
+    read: SettlementRead,
     through: u64,
     terminal: &PersistedEvent,
 ) -> RuntimeHostResult<u64> {
@@ -2941,6 +3055,7 @@ fn recovered_scheduled_task_runtime_ms(
     };
     let mut requests = linked_policy_run_events(
         ledger,
+        read,
         run_query(EventType::LabRequest),
         through,
         2,
@@ -2950,6 +3065,7 @@ fn recovered_scheduled_task_runtime_ms(
     if requests.is_empty() {
         requests = linked_policy_run_events(
             ledger,
+            read,
             run_query(EventType::CommandReceived),
             through,
             2,
@@ -3003,7 +3119,8 @@ fn policy_recovery_outcome_matches(
     }
 }
 
-/// The `lease.transferred` events that handed `lease_id` on, on its instance, at most `cap`.
+/// The `lease.transferred` events that handed `lease_id` on, on its instance, at most `cap`. A
+/// start's read (`recover_unreleased_policy_runs`): it stays fatal (#419 LN-WS-F fix round 1).
 fn lease_transfers_from(
     ledger: &GlobalLedger,
     through: u64,
@@ -3013,6 +3130,7 @@ fn lease_transfers_from(
 ) -> RuntimeHostResult<Vec<PersistedEvent>> {
     linked_policy_run_events(
         ledger,
+        SettlementRead::Fatal,
         EventQuery {
             to_sequence: Some(through),
             event_type: Some(EventType::LeaseTransferred),

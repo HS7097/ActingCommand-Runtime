@@ -27,13 +27,21 @@
 //!   is then evaluated;
 //! - T5: a damaged record on that settlement read (its dispatch intent) still latches and stops
 //!   the Runtime.
+//!
+//! Fix round 1 (brief rd-1026/brief-ln-ws-f-fix1.md, review rd-1026/ln-ws-f/review.md):
+//! - T6 (H1): a live settlement's completion read, which comes after its execution record is
+//!   committed, held past the reply limit stays fatal: the Runtime latches a `ledger_failure`
+//!   whose cause is the ledger's `writer_response_timeout`, and a stop is requested;
+//! - T7 (L1): with two pending settlements and the writer held from the tick's first settlement
+//!   read on, only that read waits out the reply limit (one skip in the daemon's log), nothing
+//!   latches, neither settlement wrote anything, and the next tick settles both.
 
 use super::lean_scale::{OWNER, SALT, formal_root};
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::host::{
-    AROUND_SETTLEMENT_READ, AROUND_VERIFIED_READ, AroundReadForTest, policy_dispatch_intent,
-    policy_dispatch_intents, verified_reference_sequences,
+    AROUND_COMPLETION_READ, AROUND_SETTLEMENT_READS, AROUND_VERIFIED_READ, AroundReadForTest,
+    SettlementRead, policy_dispatch_intent, policy_dispatch_intents, verified_reference_sequences,
 };
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactEventSink, ArtifactStoreResult, ArtifactWriteContext,
@@ -51,6 +59,7 @@ use actingcommand_ledger::{
     SyntheticLedgerSpec, WriterReadHoldGate, WriterStatementRecorder, write_synthetic_ledger,
 };
 use actingcommand_runtime_database::{DatabaseLocation, MaintenanceLimits, RuntimeDatabase};
+use std::sync::Mutex;
 use std::thread::LocalKey;
 
 // Two synthetic histories of the same shape, one four times the other.
@@ -409,6 +418,7 @@ fn ln_ws_f_t1_a_bounded_read_does_not_grow_with_the_history() {
         let (intents, intent_steps) = root.vm_steps(|ledger| {
             policy_dispatch_intents(
                 ledger,
+                SettlementRead::Tolerant,
                 SINGLE_DECISION,
                 Some(root.single_at),
                 root.head,
@@ -520,6 +530,7 @@ fn ln_ws_f_t2_a_bounded_read_answers_as_the_history_wide_read() {
         let expected = history_intents(decision_id);
         let bounded = policy_dispatch_intents(
             &root.ledger,
+            SettlementRead::Tolerant,
             decision_id,
             intent_sequence,
             root.head,
@@ -533,6 +544,7 @@ fn ln_ws_f_t2_a_bounded_read_answers_as_the_history_wide_read() {
         // None or more than one is `policy_dispatch_intent_missing`, as today.
         let one = policy_dispatch_intent(
             &root.ledger,
+            SettlementRead::Tolerant,
             decision_id,
             intent_sequence,
             root.head,
@@ -609,7 +621,7 @@ fn ln_ws_f_t2_a_bounded_read_answers_as_the_history_wide_read() {
     root.close();
 }
 
-/// The read hold a hook arms right before its read; once that read has returned, whether the hold
+/// The read hold a hook arms right before its reads; once they have returned, whether the hold
 /// held a read, and the hold released.
 struct HeldRead {
     gate: Option<WriterReadHoldGate>,
@@ -626,8 +638,8 @@ impl Drop for HeldRead {
     }
 }
 
-/// Installs on this thread, in `hook`, the read hold of `root` around the next read the hook
-/// names: whether it held that read, once the read has returned.
+/// Installs on this thread, in `hook`, the read hold of `root` around the next reads the hook
+/// names: whether it held a read, once they have returned.
 fn hold_next_read(hook: &'static LocalKey<AroundReadForTest>, root: &Path) -> Arc<AtomicBool> {
     let held = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&held);
@@ -678,7 +690,7 @@ fn ln_ws_f_t3_a_settlement_read_not_answered_in_time_skips_only_its_settlement_t
     );
 
     // The tick's read of the pending settlement's dispatch intent waits out the reply limit.
-    let held = hold_next_read(&AROUND_SETTLEMENT_READ, root.path());
+    let held = hold_next_read(&AROUND_SETTLEMENT_READS, root.path());
     if let Err(error) = host.evaluate_policy_cycle(PolicyTrigger::Reconciliation) {
         panic!("the tick goes on past the skipped settlement: {error:?}");
     }
@@ -896,4 +908,315 @@ fn ln_ws_f_t5_a_damaged_record_on_a_settlement_read_still_stops_the_runtime() {
     );
     host.close()
         .expect_err("the Runtime ends with its fatal failure");
+}
+
+/// Whether `outcome` names the ledger's `writer_response_timeout` as its cause.
+fn caused_by_writer_response_timeout(outcome: &Outcome) -> bool {
+    outcome
+        .causes()
+        .iter()
+        .any(|link| link.outcome().code().as_str() == LedgerCode::WriterResponseTimeout.as_str())
+}
+
+#[test]
+fn ln_ws_f_t6_a_completion_read_not_answered_after_the_execution_commit_stops_the_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, context, request, _policy_time, _clock) =
+        admitted_mapped_run_fixture_configured(&root, "completion-read-held", |config| {
+            config
+                .with_frame_retention_enabled(false)
+                .with_ledger_reply_timeout(REPLY_TIMEOUT)
+        });
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("one mapped contained run");
+
+    // The live settlement appends and commits the run's execution record, then reads its
+    // completion; that read waits out the reply limit.
+    let held = hold_next_read(&AROUND_COMPLETION_READ, root.path());
+    let error = host
+        .complete_scheduled_policy_run(&context, &receipt)
+        .expect_err("the completion read was not answered in time");
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the completion read was held past the reply limit"
+    );
+    assert!(error.is_fatal(), "{error:?}");
+    assert_eq!(error.code(), "ledger_failure", "{error:?}");
+    assert_eq!(
+        error.operation(),
+        HostLocation::ReadPolicyDispatchCompletion.as_str(),
+        "{error:?}"
+    );
+    assert!(
+        caused_by_writer_response_timeout(&error.outcome()),
+        "the failure names the ledger's code as its cause: {error:?}"
+    );
+    let latched = host
+        .fatal_error()
+        .expect("health")
+        .unwrap_or_else(|| panic!("the Runtime latched the failure: {error:?}"));
+    assert!(
+        latched.is_fatal() && latched.halts_runtime(),
+        "{latched:?} {error:?}"
+    );
+    assert!(
+        caused_by_writer_response_timeout(&latched.outcome()),
+        "the latched failure names the ledger's code as its cause: {latched:?}"
+    );
+    assert!(
+        host.is_shutdown_requested().expect("shutdown flag"),
+        "the latch stops the Runtime"
+    );
+    host.close()
+        .expect_err("the Runtime ends with its fatal failure");
+}
+
+/// T7: the daemon's log of the steps the host skipped, as actingd's reporter would write them.
+#[derive(Default)]
+struct DaemonLog {
+    skipped: Mutex<Vec<Outcome>>,
+}
+
+impl DaemonLog {
+    /// The skipped steps of the tick's settlement selection that the writer did not answer.
+    fn unanswered_settlement_reads(&self) -> usize {
+        let operation = serde_json::Value::from(HostLocation::SelectPolicySettlements.as_str());
+        self.skipped
+            .lock()
+            .expect("daemon log")
+            .iter()
+            .filter(|outcome| {
+                outcome.code().as_str() == LedgerCode::WriterResponseTimeout.as_str()
+                    && outcome.value("operation") == Some(&operation)
+            })
+            .count()
+    }
+}
+
+impl RuntimeDaemonReporter for DaemonLog {
+    fn fatal_latched(&self, _outcome: &Outcome) {}
+
+    fn step_skipped(&self, outcome: &Outcome) {
+        self.skipped
+            .lock()
+            .expect("daemon log")
+            .push(outcome.clone());
+    }
+
+    fn warning_recorded(&self, _outcome: &Outcome) {}
+}
+
+// T7: the outcome key the producers' package maps its designated effect to.
+const TWO_SETTLEMENTS_KEY: &str = "settlement-reads-held";
+
+/// T7: `facts` with instance B on its own host, as `pending_policy_facts` adds it.
+fn with_instance_b(mut facts: EvaluationFacts) -> EvaluationFacts {
+    facts.instances.push(InstanceSnapshot {
+        instance_id: POLICY_INSTANCE_ALIAS_B.to_owned(),
+        server_id: "fixture-server-b".to_owned(),
+        game_id: "fixture-game-a".to_owned(),
+        host_id: "fixture-host-b".to_owned(),
+        available: true,
+        capability_operation_ids: vec!["operation.observe".to_owned()],
+        preferred_task_ids: Vec::new(),
+    });
+    facts
+}
+
+/// T7: the mapped catalog with a copy of its producer on instance B (`fixture.observe-b`), as
+/// `pending_policy_sources` adds one.
+fn mapped_sources_with_instance_b() -> CatalogSources {
+    let mut sources = mapped_policy_sources(1, TWO_SETTLEMENTS_KEY);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("the mapped tasks");
+    let mut producer_b = tasks["tasks"][0].clone();
+    producer_b["id"] = serde_json::json!("fixture.observe-b");
+    producer_b["scope"] =
+        serde_json::json!({"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS_B});
+    producer_b["procedure_ref"] = serde_json::json!("procedure.observe-b");
+    producer_b["produces"] = serde_json::json!([]);
+    producer_b["instance_overrides"] = serde_json::json!([]);
+    tasks["tasks"]
+        .as_array_mut()
+        .expect("the mapped tasks array")
+        .push(producer_b);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the mapped task bytes");
+    sources
+}
+
+/// T7: a host on a fake Runtime clock with instances A and B, a 3 s writer reply limit and `log`
+/// as its daemon log, on which the producer of each instance was admitted and ran once, as the
+/// mapped-run fixture runs one: two settlements pending. Gives the host and the two runs'
+/// contexts.
+fn two_pending_settlements(
+    root: &TempDir,
+    log: &Arc<DaemonLog>,
+) -> (RuntimeHost, Vec<PolicyRunContext>) {
+    let clock = Arc::new(ManualRuntimeClock::new(
+        POLICY_NOW_UNIX_MS,
+        POLICY_NOW_UNIX_MS,
+    ));
+    let package =
+        neutral_mapped_contained_task_package(TWO_SETTLEMENTS_KEY, "designated_effect_completed");
+    let package_path = root.path().join("two-settlements-mapped-task.zip");
+    fs::write(&package_path, &package).expect("write the mapped package");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("the mapped package request");
+    let facts = with_instance_b(mapped_policy_facts(TWO_SETTLEMENTS_KEY, false));
+    let host = RuntimeHost::start(
+        config(root)
+            .with_runtime_clock(clock)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                facts.clone(),
+                pending_policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            ))
+            .with_frame_retention_enabled(false)
+            .with_ledger_reply_timeout(REPLY_TIMEOUT)
+            .with_daemon_reporter(log.clone()),
+        Arc::new(
+            FakeProvider::from_entries([POLICY_INSTANCE_ALIAS, POLICY_INSTANCE_ALIAS_B].map(
+                |alias| {
+                    let state = Arc::new(FakeState::default());
+                    state
+                        .transition_capture_after_input
+                        .store(true, Ordering::Release);
+                    (alias.to_owned(), instance_id(), state)
+                },
+            ))
+            .fixture_simulation(),
+        ),
+    )
+    .expect("the two-instance host");
+    host.activate_policy_catalog(&mapped_sources_with_instance_b())
+        .expect("activate the catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            70,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("the evaluation");
+    let evaluation = cycle.evaluation.expect("an evaluation");
+    let mut contexts = Vec::new();
+    for (task_id, alias) in [
+        ("fixture.observe", POLICY_INSTANCE_ALIAS),
+        ("fixture.observe-b", POLICY_INSTANCE_ALIAS_B),
+    ] {
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == task_id && intent.instance_id == alias)
+            .unwrap_or_else(|| panic!("{task_id} on {alias} is dispatched: {evaluation:#?}"))
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("the dispatch's reason chain")
+            .clone();
+        if contexts.is_empty() {
+            record_policy_approval(&host, &intent);
+        }
+        host.capacity_sampler_for_test().expect("capacity owner")()
+            .expect("a capacity sample at the admission time");
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("{task_id} is admitted: {error:?}"))
+        else {
+            panic!("expected a granted dispatch of {task_id}")
+        };
+        host.run_scheduled_contained_task(&context, &request)
+            .unwrap_or_else(|error| panic!("{task_id} runs: {error:?}"));
+        contexts.push(*context);
+    }
+    (host, contexts)
+}
+
+#[test]
+fn ln_ws_f_t7_the_first_unanswered_settlement_read_ends_the_ticks_reads() {
+    let root = TempDir::new().expect("tempdir");
+    let log = Arc::new(DaemonLog::default());
+    let (host, contexts) = two_pending_settlements(&root, &log);
+    for context in &contexts {
+        assert_eq!(
+            settlement_records(&host, context.run_id()),
+            0,
+            "both settlements are pending"
+        );
+    }
+
+    // The writer is held from the tick's first settlement read to the end of the selection: the
+    // first read waits out the reply limit, and no other settlement read is sent.
+    let held = hold_next_read(&AROUND_SETTLEMENT_READS, root.path());
+    if let Err(error) = host.evaluate_policy_cycle(PolicyTrigger::Reconciliation) {
+        panic!("the tick goes on past the skipped reads: {error:?}");
+    }
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the first settlement read was held past the reply limit"
+    );
+    assert_eq!(
+        log.unanswered_settlement_reads(),
+        1,
+        "one settlement read waited out the reply limit"
+    );
+    assert!(
+        host.fatal_error().expect("health").is_none(),
+        "nothing latched"
+    );
+    assert!(
+        !host.is_shutdown_requested().expect("shutdown flag"),
+        "no stop requested"
+    );
+    for context in &contexts {
+        assert_eq!(
+            settlement_records(&host, context.run_id()),
+            0,
+            "neither settlement wrote anything"
+        );
+        assert!(
+            host.pinned_policy_catalog(context.decision_id())
+                .expect("catalog pin")
+                .is_some(),
+            "both dispatches are still open"
+        );
+    }
+
+    // The next tick settles both.
+    if let Err(error) = host.evaluate_policy_cycle(PolicyTrigger::Reconciliation) {
+        panic!("the next tick settles: {error:?}");
+    }
+    for context in &contexts {
+        assert_eq!(
+            settlement_records(&host, context.run_id()),
+            2,
+            "each settlement's execution and completion, once each"
+        );
+        assert!(
+            host.pinned_policy_catalog(context.decision_id())
+                .expect("catalog pin")
+                .is_none(),
+            "both dispatches are closed"
+        );
+    }
+    assert_eq!(
+        log.unanswered_settlement_reads(),
+        1,
+        "the next tick waited for nothing"
+    );
+    assert!(
+        host.fatal_error().expect("health").is_none(),
+        "nothing latched"
+    );
+    host.close().expect("close host");
 }

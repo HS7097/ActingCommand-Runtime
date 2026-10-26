@@ -418,7 +418,8 @@ mod gate_ln_ws;
 // a fatal ledger failure of that read still stops the Runtime.
 mod gate_diag_run;
 // #419 LN-WS-F: the reconciliation's and the proposals' recurring ledger reads stay bounded, and
-// one the writer does not answer in time fails only its own settlement step or request.
+// one the writer does not answer in time fails only its own settlement step or request; a live
+// settlement's read after its commit stays fatal (fix round 1).
 mod gate_ln_ws_f;
 
 mod gate_epoch_close;

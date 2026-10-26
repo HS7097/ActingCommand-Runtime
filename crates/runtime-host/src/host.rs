@@ -287,13 +287,14 @@ use policy_dispatch::{SchedulingPauseTable, TrustedPolicyDispatchStore};
 pub(crate) use policy_outcome::insert_authoritative_policy_outcome;
 #[cfg(test)]
 use policy_outcome::{PolicyOutcomeCacheUpdate, validate_policy_run_admission_request};
-// #419 LN-WS-F, tests: the bounded reads and the hooks around a settlement's and a proposal's
-// read.
+// #419 LN-WS-F, tests: the bounded reads with their forms, and the hooks around the tick's
+// settlement reads, a live settlement's completion read and a proposal's read.
 #[cfg(test)]
 pub(crate) use planning::{AROUND_VERIFIED_READ, verified_reference_sequences};
 #[cfg(test)]
 pub(crate) use policy_outcome::{
-    AROUND_SETTLEMENT_READ, policy_dispatch_intent, policy_dispatch_intents,
+    AROUND_COMPLETION_READ, AROUND_SETTLEMENT_READS, SettlementRead, policy_dispatch_intent,
+    policy_dispatch_intents,
 };
 use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,

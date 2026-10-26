@@ -2372,3 +2372,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t5_a_damaged_record_on_a_settlement_read_still_stops_the_runtime",
 ]
 incident = ["#419 LN-WS-F"]
+
+# LN-WS-F fix round 1 (brief rd-1026/brief-ln-ws-f-fix1.md; review rd-1026/ln-ws-f/review.md H1, L1): a live settlement's completion read, which comes after its execution record is committed, held past a 3 s writer reply limit stays fatal: the Runtime latches a `ledger_failure` whose cause is the ledger's `writer_response_timeout` and a stop is requested. With two pending settlements and the writer held from the reconciliation tick's first settlement read on, only that read waits out the limit (one skipped step in the daemon's log), nothing latches, neither settlement writes anything, and the next tick settles both
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t6_a_completion_read_not_answered_after_the_execution_commit_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t7_the_first_unanswered_settlement_read_ends_the_ticks_reads",
+]
+incident = ["#419 LN-WS-F"]

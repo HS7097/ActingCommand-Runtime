@@ -21,7 +21,7 @@
 //! start suspends the bound packages it refuses so (`crate::pack_admission`).
 
 use super::contained_task::{PackageLoad, RefusedPackage, prepare_measured_naming_refusal};
-use super::policy_outcome::policy_dispatch_intent;
+use super::policy_outcome::{SettlementRead, policy_dispatch_intent};
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
@@ -481,21 +481,16 @@ impl HostShared {
         let intent_sequence = lock(self.policy()?, HostLocation::CompareFailureFrames)?
             .dispatch_intent_sequence(previous_decision);
         // A read the writer does not answer stays fatal here, as before: the failure settlement is
-        // not among the reads #419 LN-WS-F makes tolerant.
+        // not among the reads #419 LN-WS-F makes tolerant. Its failure keeps the ledger's own code,
+        // values and operation as its cause (fix round 1, review L2).
         let previous_run = policy_dispatch_intent(
             &self.ledger,
+            SettlementRead::Fatal,
             previous_decision,
             intent_sequence,
             through,
             HostLocation::CompareFailureFrames,
-        )
-        .map_err(|error| {
-            if unanswered_ledger_read(&error) {
-                ledger_error(HostLocation::CompareFailureFrames).with_caused_by(error.outcome())
-            } else {
-                error
-            }
-        })?
+        )?
         .links()
         .run_id()
         .copied();
