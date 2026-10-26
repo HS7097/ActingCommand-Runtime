@@ -894,11 +894,16 @@ fn da1_t16_every_display_problem_is_display_map_unresolved() {
     }
     // Workflow #392 DA-2a adds three tokens the map itself never gives (the frame gate's
     // `translation_unsupported`, the input side's `input_scale_unsupported` and the host's
-    // `safe_area_unavailable`); every other token of the vocabulary has its row here.
+    // `safe_area_unavailable`), and Workflow #392 DA-4b-D four the host's safe-area declarations
+    // give; every other token of the vocabulary has its row here.
     let outside_the_map = [
         DisplayProblem::TranslationUnsupported,
         DisplayProblem::InputScaleUnsupported,
         DisplayProblem::SafeAreaUnavailable,
+        DisplayProblem::SafeAreaDeclarationInvalid,
+        DisplayProblem::SafeAreaModelRepeated,
+        DisplayProblem::SafeAreaModelUndeclared,
+        DisplayProblem::SafeAreaFormUndeclared,
     ];
     assert_eq!(
         seen,

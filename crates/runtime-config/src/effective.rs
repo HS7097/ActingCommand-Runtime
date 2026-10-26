@@ -9,6 +9,7 @@ use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
+use crate::display_safe_area::DisplaySafeAreaConfig;
 use crate::execution::CaptureCadenceConfig;
 use crate::idle::IdleConfig;
 use crate::ledger_observer::LedgerObserverConfig;
@@ -22,8 +23,8 @@ use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, f
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, emulator_control, execution, host_claims, idle, instance,
-    ledger_observer, performance, recovery_ladder, scheduling, startup_discovery, touch,
+    device_link, device_state, display_safe_area, emulator_control, execution, host_claims, idle,
+    instance, ledger_observer, performance, recovery_ladder, scheduling, startup_discovery, touch,
 };
 use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
@@ -620,6 +621,22 @@ impl EffectiveConfig {
         idle::instance_idle(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
+    /// Workflow #392 DA-4b-D: the `display_safe_area` section in effect, checked whole.
+    pub fn display_safe_area_section(&self) -> Result<DisplaySafeAreaConfig, ConfigFailure> {
+        display_safe_area::section(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #392 DA-4b-D: the `display_safe_area` keys in effect for the instance whose
+    /// registry id is `instance_id`: the directory and the check interval, and the model of the
+    /// instance's own `instance.<instance_id>.display_safe_area.model` when the configuration
+    /// carries it, otherwise the section's `display_safe_area.model`; checked whole.
+    pub fn display_safe_area(
+        &self,
+        instance_id: &str,
+    ) -> Result<DisplaySafeAreaConfig, ConfigFailure> {
+        display_safe_area::instance(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
     /// Workflow #405 D1: the random delay in effect for the instance whose registry id is
     /// `instance_id`: `enabled`, `min_ms` and `max_ms`, each the instance's own
     /// `instance.<instance_id>.scheduling.random_delay.<member>` when the configuration carries
@@ -775,6 +792,9 @@ impl EffectiveConfig {
         }
         if sections.contains(idle::SECTION) {
             self.idle_section()?;
+        }
+        if sections.contains(display_safe_area::SECTION) {
+            self.display_safe_area_section()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

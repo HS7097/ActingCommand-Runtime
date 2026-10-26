@@ -472,6 +472,27 @@ impl HostShared {
         })
     }
 
+    /// Workflow #392 DA-4b-D (Alice's ruling 69): the `display_safe_area` keys in effect for the
+    /// instance `instance_id` (its own `instance.<id>.display_safe_area.model`, else the
+    /// section's), read at every frame of a run whose game's display declaration measures on the
+    /// safe area, so an instruction takes effect from the next frame.
+    pub(super) fn display_safe_area_settings(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::DisplaySafeAreaConfig> {
+        let id = crate::failure_identity::identifier_text(&instance_id);
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .display_safe_area(&id)
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, read
     /// when a run joins the readings it handed to recognition.
     pub(super) fn recognition_join_timeout(&self) -> RuntimeHostResult<Duration> {

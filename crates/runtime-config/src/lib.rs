@@ -22,7 +22,8 @@
 //!   A66, read by the watchdog and `actingctl` from the configuration file,
 //!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
 //!   capture cadence); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance with
-//!   no task soon, also per instance).
+//!   no task soon, also per instance); `display_safe_area` (Workflow #392 DA-4b-D, Alice's
+//!   ruling 69: the declared safe areas' directory and each instance's device model).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -33,6 +34,7 @@ mod codes;
 mod defaults;
 pub mod device_link;
 pub mod device_state;
+pub mod display_safe_area;
 mod effective;
 pub mod emulator_control;
 pub mod execution;
@@ -59,6 +61,9 @@ pub use defaults::{
 };
 pub use device_link::{DeviceLinkConfig, DeviceLinkFile, OfflineAction};
 pub use device_state::{DeviceStateConfig, DeviceStateFile, KeyguardInsecureAction, ThermalLevel};
+pub use display_safe_area::{
+    DisplaySafeAreaConfig, DisplaySafeAreaFile, InstanceDisplaySafeAreaFile,
+};
 pub use effective::{
     AppliedSettings, CheckContext, ConfigFailure, DeviceBounds, EffectiveConfig, InstructionStamp,
     InstructionValue, OVERRIDE_BASE_JSON, OVERRIDE_BASE_SOURCE, OVERRIDE_CHANNEL,
