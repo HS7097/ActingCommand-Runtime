@@ -147,7 +147,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## Workspace 成员
 
-工作区声明 31 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 32 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
 ### apps（5）
 
@@ -159,13 +159,14 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
-### crates（23）
+### crates（24）
 
 | 路径 | 包 | 职责 |
 | --- | --- | --- |
 | crates/actingcommand-contract | actingcommand-contract | 协议、设备与引擎边界的合约定义，不含目标逻辑 |
 | crates/artifact-store | actingcommand-artifact-store | 工件字节、哈希、保留元数据、帧缓冲与证据归档 |
 | crates/device | actingcommand-device | 设备层原语；输入经显式后端链选择 |
+| crates/display-adapter | actingcommand-display-adapter | 包的基准坐标、尺度帧与设备帧之间的纯整数映射：九宫格锚点、取整、旋转与裁剪；不做 I/O，不接后端 |
 | crates/execution-kernel | actingcommand-execution-kernel | 守护进程拥有的执行会话与纯任务/探测决策规划 |
 | crates/host-metrics | actingcommand-host-metrics | 平台性能计数器的安全边界（仅 cfg(windows) 依赖 windows-sys） |
 | crates/lab | actingcommand-lab | 可选的创作与调试适配层；排除后生产仍可构建可运行 |
