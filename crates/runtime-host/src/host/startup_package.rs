@@ -36,6 +36,15 @@
 //!
 //! The stuck-recovery ladder (`recovery_ladder`) runs its rung packages through the same
 //! runner on its own key.
+//!
+//! Workflow #386 SR-4a3 (frozen scheduling model v1.4.2 §5.2a, §5.3 rule 1, T17, T17b;
+//! `scheduling-blackout.md`, "Complete silence" and "Gradual quiet" rule 3): the startup claim
+//! is taken out of its queue only outside a blackout of its instance and only when the next
+//! blackout starts after the package's response deadline plus `quiet_margin_ms` (and before
+//! `start − hard_quiet_ms`). Otherwise the routine gate holds it (`ClaimGate::Silenced`): a hand-off
+//! finds no candidate and the claim waits queued, the key released. The wait is bounded: the
+//! lease sweep's pump grants it at the first tick after the blackout's end, before a policy
+//! dispatch could take the instance (an eligible waiting claim holds it).
 
 use super::contained_task::BusyEnd;
 use super::failure_scope::Contained;

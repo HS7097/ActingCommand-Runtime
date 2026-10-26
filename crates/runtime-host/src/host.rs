@@ -158,6 +158,8 @@ const CONNECTION_PREPARATION_CONNECTION_VALUE: u64 = u64::MAX - 3;
 
 mod agent_control;
 mod backend_open;
+// Workflow #386 SR-4a3: complete silence at the host's own entries, read from the blackouts.
+mod blackout_silence;
 // Workflow #411 B41: the resting pages and package entries the chain handover reads.
 mod chain_handover;
 pub(crate) use chain_handover::chain_entry_holds_page;
@@ -1846,6 +1848,7 @@ impl RuntimeHost {
             recovery_ladder_config: Mutex::new(None),
             stability_counter: Mutex::new(recovery_ladder::StabilityCounter::default()),
             unclassified_codes: Mutex::new(BTreeSet::new()),
+            blackout_silence: Mutex::new(blackout_silence::BlackoutSilence::default()),
             #[cfg(test)]
             performance_hold_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
@@ -2241,6 +2244,9 @@ impl RuntimeHost {
             // for a host started without a manifest), read and checked before any instance is
             // prepared.
             shared.refresh_ladder_config()?;
+            // Workflow #386 SR-4a3: the active catalog's `maintenance` events, before any instance
+            // is prepared (a failed daemon-start preparation's ladder reads its blackouts).
+            shared.refresh_blackout_catalog(true)?;
             // LN-9 (#422): the scrub's rate in effect, an instruction value included.
             shared.refresh_ledger_scrub_rate()?;
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
@@ -2728,6 +2734,13 @@ impl RuntimeHost {
             .performance_hold_for_test
             .store(held, Ordering::Release);
         Ok(())
+    }
+
+    /// Workflow #386 SR-4a3: the due monitor probes a blackout skipped so far.
+    #[cfg(test)]
+    pub(crate) fn monitor_probes_silenced_for_test(&self) -> RuntimeHostResult<u64> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?
+            .monitor_probes_silenced_for_test()
     }
 
     /// Workflow #361 B1: the held scheduling pauses, global and per instance alias.
@@ -5135,6 +5148,9 @@ struct HostShared {
     recovery_ladder_config: Mutex<Option<Arc<actingcommand_runtime_config::LadderConfig>>>,
     stability_counter: Mutex<recovery_ladder::StabilityCounter>,
     unclassified_codes: Mutex<BTreeSet<String>>,
+    // Workflow #386 SR-4a3: the active catalog's `maintenance` events the host's own entries read
+    // their blackouts from (a leaf lock).
+    blackout_silence: Mutex<blackout_silence::BlackoutSilence>,
     // Workflow #387 D1c, test only: holds every instance back from performance release (§3.7),
     // the stand-in for performance control's suspension.
     #[cfg(test)]
@@ -5724,6 +5740,13 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // #411 A38: a fence that waits for a person queues its periodic self-check when it is
         // due, on the host clock.
         if let Err(error) = shared.recheck_resource_fences() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
+        // Workflow #386 SR-4a3: the blackouts of every instance as the tick starts: direction ①
+        // counts nothing made inside one, and the ladder claims that wait for a covered instance
+        // are dropped before the sweep's pump could grant them.
+        if let Err(error) = shared.sweep_blackout_silence() {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
