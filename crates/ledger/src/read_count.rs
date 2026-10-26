@@ -9,8 +9,10 @@
 //! read again is counted as repeated, and the counter knows the sequences of the event and link
 //! rows it saw; a row of a statement that selects no identity (an aggregate such as `COUNT(*)`,
 //! or one column such as a predecessor's stored hash) is counted apart, as unidentified (#422
-//! LN-7). Dropping the counter stops counting. Counting changes nothing the medium reads or
-//! returns.
+//! LN-7). #422 LN-8d: the counter also sums the SQLite virtual-machine steps of the medium's
+//! statements (`SQLITE_STMTSTATUS_VM_STEP`), the work SQLite did to select the rows, which a
+//! statement that sorts every candidate row to return a few makes grow past the rows it returns.
+//! Dropping the counter stops counting. Counting changes nothing the medium reads or returns.
 //!
 //! The counters are per thread because an opening runs on the opening thread
 //! (`contracts/ledger-store.md`: the constructor "runs on the opening thread"), before the writer
@@ -61,6 +63,8 @@ pub struct LedgerReadCounts {
     pub other_rows: u64,
     /// Artifact material files the ledger asked its verifier to open.
     pub material_files_opened: u64,
+    /// #422 LN-8d: the SQLite virtual-machine steps of the medium's statements.
+    pub vm_steps: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -218,6 +222,19 @@ pub(crate) fn row_read(sql: &str, row: &[Value]) {
     let _ = COUNTING.try_with(|counting| {
         if let Some(counting) = counting.borrow_mut().as_mut() {
             counting.count_row(sql, row);
+        }
+    });
+}
+
+/// #422 LN-8d: called by the SQLite medium when a statement it read rows with is done, with
+/// that statement's virtual-machine steps.
+pub(crate) fn statement_steps(steps: i32) {
+    let _ = COUNTING.try_with(|counting| {
+        if let Some(counting) = counting.borrow_mut().as_mut() {
+            counting.counts.vm_steps = counting
+                .counts
+                .vm_steps
+                .saturating_add(u64::try_from(steps).unwrap_or(0));
         }
     });
 }
