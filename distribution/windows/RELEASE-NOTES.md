@@ -9,6 +9,37 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.13
+
+本版是 v0.12.12 之后合并的 13 个 PR（修复，以及为修复服务的功能），大部分属于 #422 账本精简：
+账本历史留在磁盘上，启动不再重放整个账本。`actingd-config` 升到 [5, 12]：新键都有默认值，
+没有写这些键的配置文件照常读取。
+
+运行上的变化：在 100 万条事件的合成账本上，启动完成后的内存从约 2.4 GB 降到约 0.13 GB
+（规模测量运行 40215455859 与 40242733023），启动过程中的峰值仍约 4.4 GB。本版第一次启动时要把
+标记状态播种一次（写 `ledger_tagged_state_seeded`），并给账本建一个新索引，所以比平常长（同一测量中
+约 345 秒，之后约 83 秒）；以后的启动直接从标记载入。RL-1b 的调度工作台只在 `policy` 节不写
+`catalog`（组合模式）时才工作，写了 `catalog` 的配置不受影响。IDLE-1 默认开启：`idle.action`
+默认是 `close_app`，配置中的实例在调度器看来 30 分钟（`idle.min_gap_ms`）内没有任务时，Runtime
+关闭模拟器里的游戏，在下一个任务前 1 分钟（`idle.close_app_wake_lead_ms`）用启动包拉起；不要这个
+行为就把 `idle.action` 设为 `none`（也可以按实例设）。`close_app` 要从标准包根目录下该游戏的
+`applications.json` 读出该服务器的应用 id，读不到时这次动作失败并记录，只影响该实例；没有启动包的
+实例不动作，只写一条警告 `instance_idle_action_unsupported`。
+
+- #1326 LN-5：账本历史只留在磁盘（SQLite）上，写入线程不再在内存里保存全部记录及其索引；历史读取按页读 SQLite，每页 `ledger_observer.history_page_rows` 行（默认 256），追加时的检查改为索引查找。
+- #1327 A67-R：帧存储的内存预算落到下限时，警告 `frame_store_budget_floor_applied` 写进 actingd 日志和账本，各一次；离开下限后再落下会再记一次。
+- #1329 LN-2：启动时实例基础信息库从账本索引的标记状态行载入，不再重放整个账本；索引行与记录不符时，启动以 `ledger_tag_index_mismatch` 停下。
+- #1330 RL-1a：标准包 `schedule.json`（`actingcommand.schedule.v1`）的读取和组合规则的纯函数；工具 `standard-pack check` 与 `package bundle --schedule` 检查 `schedule.json`，新增 `standard-pack compose`。
+- #1332 ISO-2：单个实例的设备故障和执行内核故障只隔离该实例或让该操作失败，不再停整个 Runtime；只有登记为全局的故障才会停。
+- #1333 IDLE-1：实例近期没有任务时关闭模拟器内的游戏（`close_app`，默认）或停掉模拟器（`stop_emulator`），在下一个任务前拉起；新增 `idle` 节和实例的 `idle` 成员（裁定 41）。
+- #1334 LN-4：调度的决策记忆、派发日志、唤醒义务和监视登记从标记记录载入；还没有标记的启动先重放一次，写入这些记录和标记；常驻的派发日志有上限，其余按需读取。
+- #1335 RL-1b：Runtime 内的调度工作台：组合模式下按在用的游戏组合标准包的 `schedule.json`，用到时载入、不用时卸载，不需要批准；新键 `standard_packs.check_interval_ms`（默认 60 秒）和 `standard_packs.cached_generations`（默认 1）。
+- #1336 LN-DIAG：Release 基线的读取改为按事件类型选取，100 万条事件的第一次启动不再因 `writer_response_timeout` 失败。
+- #1337 LN-TUNE：账本写入线程的应答等待改为配置键 `ledger_observer.writer_reply_timeout_ms`（默认 10 秒，原为固定值）；分页的历史读取每行只读一次，监视登记播种时的重放约减半。
+- #1338 LN-7 第 1 部分：启动时只收尾紧接的上一个纪元，日志导入按所有者只检查一次；`owner_epochs` 只记所有者的变化，不再随历史增长。
+- #1339 LN-6：视图分页和产物解析直接读 SQLite，写入线程不再保留已验证的历史前缀。
+- #1340 LN-4 后续：测试用的参照读取改为分页；`agent_ledger_failure` 保留账本的原始错误细节，日志里能看出原因。
+
 ## v0.12.12
 
 本版是 v0.12.11 之后合并的 17 个 PR（修复，以及为修复服务的功能）。`actingd-config` 升到 [5, 11]：
