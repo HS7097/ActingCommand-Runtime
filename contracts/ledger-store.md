@@ -164,6 +164,35 @@ the open reports one warning as a `note` of `ledger_opened`. The background scru
 (`ledger_index_mismatch`, `verify_ledger_frame_refs`). A difference marks the extent untrusted, so
 that the next writer open rebuilds the index. The scrub's finding there is non-fatal and never stops
 the Runtime; `verify` still fails.
+#422 LN-7c O (rd-1026/ln7c/final-query.md §2, §7): the open reads the owner records of
+the two latest owner epochs, not of the whole history. It reads the starts first, then
+the owner records after the start before the latest one by the type index. A start writes
+its first owner records (its capacity sample, its prior-epoch imports and closes, its
+startup recovery) before its `runtime.started` or `runtime.takeover`, so the open reads
+back from there, in chunks that are forward reads of the same index (the first one
+`ledger_observer.history_page_rows` sequences long, each next twice as long), to the
+first record of that owner, and keeps the owner record right before it. A retained owner
+whose records precede that point (the owner it ended, when a start still closes its
+scopes, or when it is the owner before the latest) is read back the same way, from its
+last record to its first. Reading an owner back never passes the start before its own.
+Each retained owner then has its epochs, end, reopening, import, the closes of its scopes
+and their writer, its quiescences, scope sources and releases as the read of every owner
+record gives them. An owner change older than that read is resident only where a frame's
+records name it, so `owner_at` may name a wrong owner for an older sequence. Only the
+eviction admission and candidates outside recovery read the owners the bounded read does
+not reach; today their one caller (`EvictionRecovery::round`) runs only at startup
+recovery, from the eviction proofs. When a retained owner's first block holds no start
+record (an owner in no start's epoch: a start that stopped before its start record) or
+reading it back reaches the start before its own, the open reads every owner record, as
+before, and actingd prints
+`actingd ledger_open owner_read=full reason=owner_in_no_start_epoch`
+(`LedgerOpenTiming::owner_read_full`). When a ledger dump an earlier run left is at the
+dump path or the fallback path, the open imports it after this read and its owner may
+precede the bounded read, so the open reads every owner record and actingd prints
+`actingd ledger_open owner_read=full reason=dump_present`. Dumps follow only a failed
+write, so this costs one full read on those starts. An open with fewer than two starts
+reads every owner record. Nothing is written: an older build opens the same root
+unchanged.
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit

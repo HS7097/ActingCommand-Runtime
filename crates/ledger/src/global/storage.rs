@@ -562,11 +562,14 @@ impl<B: DurableStorage> EventStore<B> {
     /// their classes read.
     /// LN-8d (#422): its reads stop at `deadline`, the open's, and read pages of `page_rows`
     /// rows (`ledger_observer.history_page_rows`, as every later history read does).
+    /// #422 LN-7c O: `dump_present`, a dump the open imports after this, makes it read every owner
+    /// record.
     pub(super) fn recovered(
         mut backend: B,
         next_sequence: u64,
         deadline: Option<std::time::Instant>,
         page_rows: usize,
+        dump_present: bool,
     ) -> GlobalLedgerResult<Self> {
         let commit_statistics = match CommitStatistics::new(backend.head()) {
             Ok(statistics) => Arc::new(statistics),
@@ -601,7 +604,7 @@ impl<B: DurableStorage> EventStore<B> {
             index_policy: IndexPolicy::default(),
             revisions: BTreeMap::new(),
         };
-        if let Err(error) = store.open_retention(&live, deadline) {
+        if let Err(error) = store.open_retention(&live, dump_present, deadline) {
             return Err(error.with_close_result(store.backend.close()));
         }
         Ok(store)

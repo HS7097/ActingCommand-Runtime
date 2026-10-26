@@ -2959,3 +2959,8 @@ mod gate_ln7c_r;
 // behind it commits.
 #[path = "tests/gate_ln_ws.rs"]
 mod gate_ln_ws;
+// #422 LN-7c O: the open reads the owner records of the two latest owner epochs (and of the older
+// owners a start may still close) and keeps the owner state, the frame view and the startup closes
+// of the read of every owner record; a dump present at the open makes it read every owner record.
+#[path = "tests/gate_ln7c_o.rs"]
+mod gate_ln7c_o;
