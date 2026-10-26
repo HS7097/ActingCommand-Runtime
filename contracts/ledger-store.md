@@ -150,13 +150,18 @@ a kept frame's pins.
 segment import) also writes the frame index rows of its records, the frames, artifacts and runs
 a capture summary, a publication, an input intent, a dedup marker or an evidence read
 confirmation names only in its payload, and moves the index's extent to the batch's last
-sequence ([ledger-observer.md §11.7](ledger-observer.md#117-the-frame-index-ledger_frame_refs-422-ln-7c-r)).
+sequence when the extent ends right before the batch; otherwise the batch's rows are not written
+and the batch commits as always
+([ledger-observer.md §11.7](ledger-observer.md#117-the-frame-index-ledger_frame_refs-422-ln-7c-r)).
 After it creates the views and indexes, and before any record is appended, the open fills the
-index: the records an older build appended after the extent and, for a root without the extent,
-every record down to the first, in pages of `ledger_observer.history_page_rows` pointer records
-read by the event type index, each authenticated on its own and each page committed, within the
-open's deadline. The background scrub and `ledger-maintenance verify` compare the rows inside the
-extent with the records (`ledger_index_mismatch`, `verify_ledger_frame_refs`).
+index: the records appended after the extent without rows and, for a root without a trusted
+extent, every record down to the first, in pages of `ledger_observer.history_page_rows` pointer
+records read by the event type index, each authenticated on its own and each page committed,
+within the open's deadline. The derived index never fails the open or an append: a fill that
+stops (a damaged record, the deadline) leaves the extent short and the next open tries again, and
+the open reports one warning as a `note` of `ledger_opened`. The background scrub and
+`ledger-maintenance verify` compare the rows inside the extent with the records
+(`ledger_index_mismatch`, `verify_ledger_frame_refs`).
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit

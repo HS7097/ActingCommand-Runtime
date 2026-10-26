@@ -11,17 +11,26 @@
 //!   The writer writes them in the transaction of the record's batch (the append, the synthetic
 //!   appender, the segment import), so no producer changes and a future producer is covered by
 //!   construction.
+//! - **The rule.** The table is derived and can be rebuilt, and nothing reads it yet, so no
+//!   state of it fails an open or an append (`contracts/ledger-observer.md` §11.7).
 //! - **The extent.** `ledger_frame_refs_extent` holds the sequences `from_sequence..=
-//!   through_sequence` whose records' rows are all written. An append moves `through_sequence` to
-//!   its batch's last sequence in the same transaction, and only from the sequence before the
-//!   batch. A row outside the extent is never trusted.
+//!   through_sequence` whose records' rows are all written; a row outside it is never trusted. A
+//!   batch writes its rows and moves `through_sequence` to its last sequence only when the extent
+//!   ends right before the batch. Otherwise, or when a statement of the index fails, the batch's
+//!   rows are not written (a savepoint takes them back), the extent stays and the batch commits as
+//!   always; the next open fills the gap and reports it.
 //! - **The fill at open.** An older build appends records without rows, and a copied or restored
 //!   root may have no extent. The writer open fills the gap `(through_sequence, head]` upwards
 //!   and, for a root without the extent, every record from the head down to 1 (the backfill;
 //!   ageing out is not safe, §3.3). It reads pages of at most `ledger_observer.history_page_rows`
 //!   pointer records, selected by the event type index with a sequence bound, authenticates each
 //!   record on its own, and commits each page with the extent moved, within the open's deadline.
-//!   One page is held in memory, and an interrupted fill goes on at the next open.
+//!   One page is held in memory. An untrusted extent (past the head, malformed, or missing on an
+//!   existing table) is removed with every row and rebuilt. A record that fails its
+//!   authentication, the deadline, or any failure of the index stops the fill: the page in
+//!   progress rolls back, so the extent stops short of the record and never covers the whole
+//!   history, and the next open tries again. The open itself never fails for the index; it
+//!   reports one warning ([`LedgerFrameRefsNote`], a `note` link of `ledger_opened`).
 //! - **The checks.** The scrub (LN-9) and `ledger-maintenance verify` compare, for every record they
 //!   authenticate inside the extent, its rows with [`frame_refs`]; a difference is
 //!   `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs`).
@@ -29,6 +38,7 @@
 //! Nothing decides on the rows yet (slice Q will). No name starts with `ledger_view_`, so an older
 //! build opens, writes and scrubs the database unchanged (§8).
 
+use super::super::retention::LedgerFrameRefsNote;
 use super::{
     ARTIFACT_COLUMNS, EVENT_COLUMNS, LINK_COLUMNS, RowReader, SqlRow, decode, encode, failure,
     increment_sequence, read_rows_bound, sql_error, views,
@@ -308,8 +318,11 @@ pub(super) fn insert_extent(
 }
 
 /// The rows of a batch (consecutive records) in its transaction, and the extent moved from the
-/// sequence before the batch to its last; an extent that does not end there is
-/// `ledger_index_mismatch` and the batch rolls back.
+/// sequence before the batch to its last, when the extent ends right before the batch. Otherwise,
+/// or when a statement of the index fails, the batch's rows are not written (the savepoint takes
+/// back what was written), the extent stays and the batch goes on; the next open fills the gap.
+/// Only a savepoint that cannot be taken back (the batch's own transaction is gone, as on a full
+/// disk) returns its error, which the batch's commit would meet anyway.
 pub(super) fn write_batch(
     database: &RuntimeDatabase,
     connection: &Connection,
@@ -321,24 +334,44 @@ pub(super) fn write_batch(
     if skipped(database.root()) {
         return Ok(());
     }
-    for event in events {
-        write_record(connection, event)?;
+    let before = first.sequence().saturating_sub(1);
+    // The extent must end right before the batch; any other state of the index leaves it be.
+    if !matches!(read_extent(connection), Ok(Some((_, through))) if through == before) {
+        return Ok(());
     }
     let operation = LedgerLocation::WriteLedgerFrameRefs.location();
-    let before = first.sequence().saturating_sub(1);
-    let changed = connection
-        .execute(
-            "UPDATE ledger_frame_refs_extent SET through_sequence=?1 WHERE singleton=1 AND through_sequence=?2",
-            params_from_iter([integer(last.sequence()), integer(before)]),
-        )
-        .map_err(|error| sql_error(error, operation))?;
-    if changed != 1 {
-        return Err(mismatch(
-            operation,
-            format!("table=ledger_frame_refs_extent through_sequence={before}"),
-        ));
+    if connection
+        .execute_batch("SAVEPOINT ledger_frame_refs")
+        .is_err()
+    {
+        return Ok(());
     }
-    Ok(())
+    let written = (|| -> GlobalLedgerResult<()> {
+        for event in events {
+            write_record(connection, event)?;
+        }
+        let changed = connection
+            .execute(
+                "UPDATE ledger_frame_refs_extent SET through_sequence=?1 WHERE singleton=1 AND through_sequence=?2",
+                params_from_iter([integer(last.sequence()), integer(before)]),
+            )
+            .map_err(|error| sql_error(error, operation))?;
+        if changed != 1 {
+            return Err(mismatch(
+                operation,
+                format!("table=ledger_frame_refs_extent through_sequence={before}"),
+            ));
+        }
+        Ok(())
+    })();
+    let closed = if written.is_ok() {
+        "RELEASE ledger_frame_refs"
+    } else {
+        "ROLLBACK TO ledger_frame_refs; RELEASE ledger_frame_refs"
+    };
+    connection
+        .execute_batch(closed)
+        .map_err(|error| sql_error(error, operation))
 }
 
 /// The extent row, when there is one (`from_sequence`, `through_sequence`).
@@ -363,12 +396,17 @@ pub(super) fn read_extent(connection: &Connection) -> GlobalLedgerResult<Option<
 }
 
 /// An extent is `1 <= from <= through + 1` and ends at or before the head.
+fn extent_fits((from, through): (u64, u64), head: u64) -> bool {
+    from != 0 && through <= head && from <= through.saturating_add(1)
+}
+
+/// [`extent_fits`], or `ledger_index_mismatch` of `operation`.
 fn check_extent(
     (from, through): (u64, u64),
     head: u64,
     operation: Location,
 ) -> GlobalLedgerResult<()> {
-    if from == 0 || through > head || from > through.saturating_add(1) {
+    if !extent_fits((from, through), head) {
         return Err(mismatch(
             operation,
             format!(
@@ -417,34 +455,85 @@ fn check_deadline(deadline: Option<Instant>) -> GlobalLedgerResult<()> {
 }
 
 /// The writer open's step (`final-query.md` §3.3), after the views and indexes exist and before
-/// any record is appended; `head` is the head the open verified. It creates the tables a root
-/// lacks. A root without the extent row (its rows, if any, are untrusted and removed) gets the
-/// extent `head + 1..=head` and its backfill; rows outside the extent are removed. Then the gap
-/// `(through_sequence, head]` is filled upwards and the backfill goes down to 1, in pages of at most
-/// `page_rows` pointer records, each committed with the extent moved. Afterwards the extent is
-/// `1..=head`.
+/// any record is appended; `head` is the head the open verified. It never fails: it returns the
+/// open's one warning about the index, if any ([`LedgerFrameRefsNote`]).
+///
+/// It creates the tables a root lacks. An untrusted extent (missing on an existing table, past
+/// the head or malformed) is removed with every row, and the index is rebuilt from the extent
+/// `head + 1..=head`; rows outside the extent are removed. Then the gap `(through_sequence, head]`
+/// is filled upwards and the backfill goes down to 1, in pages of at most `page_rows` pointer
+/// records, each committed with the extent moved; afterwards the extent is `1..=head`. A failure
+/// (a record's authentication, the deadline, a statement) stops the fill where it is: the page in
+/// progress rolls back, and the next open goes on from the extent left.
 pub(super) fn complete(
     database: &RuntimeDatabase,
     head: u64,
     deadline: Option<Instant>,
     page_rows: usize,
+) -> Option<LedgerFrameRefsNote> {
+    let mut found = None;
+    let mut at = None;
+    match fill_index(
+        database,
+        head,
+        deadline,
+        page_rows.max(1),
+        &mut found,
+        &mut at,
+    ) {
+        Ok(()) => found,
+        Err(error) => Some(LedgerFrameRefsNote {
+            stage: LedgerLocation::FillLedgerFrameRefs,
+            sequence: at,
+            cause: Some((error.code(), error.operation())),
+        }),
+    }
+}
+
+/// [`complete`]'s work: `found` gets what the open found (an untrusted extent, a gap), `at` the
+/// sequence the fill is at when it stops.
+fn fill_index(
+    database: &RuntimeDatabase,
+    head: u64,
+    deadline: Option<Instant>,
+    rows: usize,
+    found: &mut Option<LedgerFrameRefsNote>,
+    at: &mut Option<u64>,
 ) -> GlobalLedgerResult<()> {
     let operation = LedgerLocation::FillLedgerFrameRefs.location();
-    let rows = page_rows.max(1);
     let mut connection = database.connection(operation)?;
+    let existed: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='ledger_frame_refs_extent'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error(error, operation))?;
     connection
         .execute_batch(SCHEMA)
         .map_err(|error| sql_error(error, operation))?;
     let (mut from, mut through) = in_write(&mut connection, operation, |transaction| {
-        let extent = match read_extent(transaction)? {
-            Some(extent) => {
-                check_extent(extent, head, operation)?;
-                extent
-            }
-            None => {
-                transaction
-                    .execute("DELETE FROM ledger_frame_refs", [])
-                    .map_err(|error| sql_error(error, operation))?;
+        let stored = read_extent(transaction)?;
+        let extent = match stored {
+            Some(extent) if extent_fits(extent, head) => extent,
+            _ => {
+                // An untrusted extent, or none on a table that exists: every row goes and the
+                // index is rebuilt. A table this open created starts empty, without a warning.
+                if stored.is_some() || existed != 0 {
+                    *found = Some(LedgerFrameRefsNote {
+                        stage: LedgerLocation::VerifyLedgerFrameRefs,
+                        sequence: stored.map(|(_, through)| through),
+                        cause: None,
+                    });
+                }
+                for sql in [
+                    "DELETE FROM ledger_frame_refs",
+                    "DELETE FROM ledger_frame_refs_extent",
+                ] {
+                    transaction
+                        .execute(sql, [])
+                        .map_err(|error| sql_error(error, operation))?;
+                }
                 let top = increment_sequence(head)?;
                 insert_extent(transaction, top, head)?;
                 (top, head)
@@ -461,21 +550,32 @@ pub(super) fn complete(
         }
         Ok(extent)
     })?;
+    if through < head && found.is_none() {
+        // Records appended without their rows: an older build's, or batches the extent did not
+        // end before.
+        *found = Some(LedgerFrameRefsNote {
+            stage: LedgerLocation::WriteLedgerFrameRefs,
+            sequence: Some(through),
+            cause: None,
+        });
+    }
     while through < head {
+        *at = Some(through.saturating_add(1));
         check_deadline(deadline)?;
         through = in_write(&mut connection, operation, |transaction| {
             let (sequences, upper) =
                 select_page(transaction, Direction::Up, (through, head), rows)?;
-            fill(database, transaction, &sequences)?;
+            fill(database, transaction, &sequences, at)?;
             move_extent(transaction, "through_sequence", through, upper)?;
             Ok(upper)
         })?;
     }
     while from > 1 {
+        *at = Some(from - 1);
         check_deadline(deadline)?;
         from = in_write(&mut connection, operation, |transaction| {
             let (sequences, lower) = select_page(transaction, Direction::Down, (1, from), rows)?;
-            fill(database, transaction, &sequences)?;
+            fill(database, transaction, &sequences, at)?;
             move_extent(transaction, "from_sequence", from, lower)?;
             Ok(lower)
         })?;
@@ -547,11 +647,13 @@ fn select_page(
 }
 
 /// The rows of the records `sequences` (ascending), each record read and authenticated on its own
-/// with its link and artifact rows, as a history page reads them.
+/// with its link and artifact rows, as a history page reads them; `at` is the record being
+/// authenticated.
 fn fill(
     database: &RuntimeDatabase,
     connection: &Connection,
     sequences: &[u64],
+    at: &mut Option<u64>,
 ) -> GlobalLedgerResult<()> {
     if sequences.is_empty() {
         return Ok(());
@@ -582,6 +684,9 @@ fn fill(
     let mut expected_links: Vec<SqlRow> = Vec::with_capacity(rows.len());
     let mut expected_artifacts: Vec<SqlRow> = Vec::new();
     for row in rows {
+        if let Some(SqlValue::Integer(sequence)) = row.first() {
+            *at = Some(decode(*sequence));
+        }
         let (event, links, artifacts) = reader.authenticate(row, events.len() + 1)?;
         expected_links.push(links);
         expected_artifacts.extend(artifacts);

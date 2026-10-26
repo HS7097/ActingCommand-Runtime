@@ -676,7 +676,7 @@ tests = [
 ]
 incident = ["#422 LN-8d"]
 
-# LN-7c R (#422; rd-1026/ln7c/final-query.md §7 row R, §3; Alice's ruling 70): the frame index `ledger_frame_refs` of the pointers a record carries only in its payload. Each pointer kind (summary frame, summary pin, resource reading, published frame, published artifact, before-frame, preserved frame, frame and run read confirmations from a confirmer's origin) gives its row in the record's batch transaction and a confirmation from another origin none; a summary with N frames gives N rows; a backfilled synthetic root holds the rows the synthetic appender writes incrementally; records appended by a writer that skips the rows are filled at the next open and the extent moves to the head; a root without the extent is fully backfilled, a stray row gone; a doctored row is a scrub finding `ledger_index_mismatch` of `verify_ledger_frame_refs`, as `ledger-maintenance verify` refuses it
+# LN-7c R (#422; rd-1026/ln7c/final-query.md §7 row R, §3; Alice's ruling 70): the frame index `ledger_frame_refs` of the pointers a record carries only in its payload. Each pointer kind (summary frame, summary pin, resource reading, published frame, published artifact, before-frame, preserved frame, frame and run read confirmations from a confirmer's origin) gives its row in the record's batch transaction and a confirmation from another origin none; a summary with N frames gives N rows; a backfilled synthetic root holds the rows the synthetic appender writes incrementally; records appended by a writer that skips the rows are filled at the next open and the extent moves to the head; a root without the extent is fully backfilled, a stray row gone; a doctored row is a scrub finding `ledger_index_mismatch` of `verify_ledger_frame_refs`, as `ledger-maintenance verify` refuses it; the table never fails an open or an append: an extent past the head is rebuilt with one warning on `ledger_opened`, a batch the extent does not end before commits without its rows and the next open fills the gap with one warning, a fill that meets a damaged record stops short of it with one warning while the open succeeds, and the next open tries again
 [[gate]]
 coverage = "Y"
 tests = [
@@ -686,5 +686,8 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r4_records_appended_without_rows_are_filled_at_reopen_and_the_extent_moves",
     "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r5_a_root_without_the_extent_is_fully_backfilled",
     "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r6_a_doctored_row_is_a_scrub_finding",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r7_an_extent_past_the_head_is_rebuilt_with_its_warning",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r8_a_batch_the_extent_does_not_end_before_commits_and_is_filled_at_reopen",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r9_a_fill_that_meets_a_damaged_record_stops_short_of_it_and_the_open_succeeds",
 ]
 incident = ["#422 LN-7c R"]

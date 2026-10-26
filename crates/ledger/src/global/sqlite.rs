@@ -661,9 +661,11 @@ pub(super) fn open_formal(
     let indexed = (|| -> GlobalLedgerResult<(SqliteLedgerStore, Option<String>)> {
         upgrade_views(&database, head, head_hash.as_deref())?;
         ensure_history_index(&database)?;
-        // #422 LN-7c R (final-query.md §3.3): the frame index's gap and backfill, before any
-        // record is appended.
-        frame_refs::complete(&database, head, Some(deadline), config.history_page_rows)?;
+        // #422 LN-7c R (final-query.md §3.3, ledger-observer.md §11.7): the frame index's gap
+        // and backfill, before any record is appended; it never fails the open, and its one
+        // warning goes to `ledger_opened`.
+        timing.frame_refs =
+            frame_refs::complete(&database, head, Some(deadline), config.history_page_rows);
         let meta_has_marker = {
             let connection =
                 database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
@@ -1001,12 +1003,14 @@ impl SqliteLedgerStore {
             )?;
             ensure_history_index(&database)?;
             // #422 LN-7c R: the frame index's gap and backfill, before any record is appended.
-            frame_refs::complete(
+            // It never fails the open; a candidate open reports no open line, so its warning is
+            // not kept.
+            let _unreported = frame_refs::complete(
                 &database,
                 events.last().map_or(0, PersistedEvent::sequence),
                 None,
                 config.history_page_rows,
-            )?;
+            );
             let meta_has_marker = {
                 let connection =
                     database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;

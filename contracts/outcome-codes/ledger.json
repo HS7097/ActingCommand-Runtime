@@ -2227,7 +2227,9 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "stage": "optional",
+        "ledger_sequence": "optional"
       },
       "review": "pending",
       "status": "active",

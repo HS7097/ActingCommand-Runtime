@@ -6097,7 +6097,7 @@ pub(crate) fn ledger_open_outcome(
     timing: &actingcommand_ledger::LedgerOpenTiming,
     timeout_ms: u64,
 ) -> Outcome {
-    Outcome::new(code)
+    let outcome = Outcome::new(code)
         .event_count(timing.events)
         .artifact_count(timing.artifacts)
         .artifact_bytes(timing.artifact_bytes)
@@ -6110,7 +6110,16 @@ pub(crate) fn ledger_open_outcome(
         .tail_ms(timing.tail_ms)
         .index_ms(timing.index_ms)
         .import_ms(timing.import_ms)
-        .timeout_ms(timeout_ms)
+        .timeout_ms(timeout_ms);
+    // #422 LN-7c R (ledger-observer.md §11.7): the open's one warning about the derived frame
+    // index, as a `note` link; the index never fails the open.
+    match timing.frame_refs {
+        Some(note) => outcome.link(
+            actingcommand_contract::outcome::CauseRelation::Note,
+            note.outcome(),
+        ),
+        None => outcome,
+    }
 }
 
 /// The measured time of a ledger open: the sum of every phase it reports.

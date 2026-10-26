@@ -11,6 +11,11 @@
 //! - A root without the extent is fully backfilled (its untrusted rows replaced).
 //! - A doctored row is a scrub finding `ledger_index_mismatch` (and `ledger-maintenance verify`
 //!   refuses it the same way).
+//! - The table never fails an open or an append (§11.7, coordinator's fix round): an extent past
+//!   the head is rebuilt with one warning; a batch the extent does not end before commits without
+//!   its rows, the extent stays and the next open fills the gap with one warning; a fill that meets
+//!   a damaged record stops short of it, the open succeeds with one warning and the next open
+//!   tries again.
 //!
 //! Real formal SQLite roots; frames are stored through the root's ArtifactStore where a record
 //! needs a real capture frame reference (summaries, an artifact publication).
@@ -196,6 +201,82 @@ fn reopen_and_close(database: &Arc<RuntimeDatabase>, page_rows: Option<usize>) -
     let head = ledger.latest_sequence().expect("head");
     ledger.close().expect("close the writer");
     head
+}
+
+/// The writer reopened as a start opens it, with history pages (and frame index pages) of
+/// `page_rows` rows and an open that authenticates its newest `tail` records; the head it reads
+/// and the open's timings, after its close.
+fn reopen_noted(
+    database: &Arc<RuntimeDatabase>,
+    page_rows: usize,
+    tail: usize,
+) -> (u64, LedgerOpenTiming) {
+    let plan = LedgerFailurePlan::new(
+        LedgerWritePolicy::new(1, vec![0], 120_000, 1_000, 1_073_741_824).expect("write policy"),
+        &database.root().canonicalize().expect("state root"),
+        None,
+        epoch(),
+        AT_MS,
+    )
+    .with_history_page_rows(page_rows)
+    .with_open_verify_tail_records(tail);
+    let limits = MaintenanceLimits::default();
+    let mut timing = LedgerOpenTiming::default();
+    let ledger = LedgerMaintenance::acquire(
+        database.root(),
+        false,
+        limits,
+        limits.deadline().expect("deadline"),
+    )
+    .expect("maintenance owner")
+    .open_writer_timed(Arc::clone(database), OWNER.into(), Some(plan), &mut timing)
+    .expect("the writer opens");
+    let head = ledger.latest_sequence().expect("head");
+    ledger.close().expect("close the writer");
+    (head, timing)
+}
+
+/// Changes one digit inside the stored record's event id: the JSON stays valid and decodable, so
+/// only the record's hash, tag and index columns tell.
+fn flip_event_id_digit(database: &RuntimeDatabase, sequence: u64) {
+    let connection = database
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
+        .expect("the shared connection");
+    let mut record: Vec<u8> = connection
+        .query_row(
+            "SELECT canonical_record FROM ledger_events WHERE sequence=?1",
+            [stored(sequence)],
+            |row| row.get(0),
+        )
+        .expect("stored record");
+    let digit = record
+        .windows(5)
+        .position(|window| window == b"\"evt_")
+        .expect("event id string")
+        + 5;
+    record[digit] = if record[digit] == b'0' { b'1' } else { b'0' };
+    connection
+        .execute(
+            "UPDATE ledger_events SET canonical_record=?1 WHERE sequence=?2",
+            rusqlite::params![record, stored(sequence)],
+        )
+        .expect("damage the record");
+}
+
+/// The open's warning about the frame index: what it found, the sequence and the failure's code.
+fn warning(timing: &LedgerOpenTiming) -> Option<(&'static str, Option<u64>, Option<&'static str>)> {
+    timing.frame_refs.map(|note| {
+        assert!(
+            note.outcome().is(LedgerCode::LedgerIndexMismatch),
+            "the warning's code: {:?}",
+            note.outcome()
+        );
+        (
+            note.stage.as_str(),
+            note.sequence,
+            note.cause.map(|(code, _)| code),
+        )
+    })
 }
 
 /// A run: its id, the links of its records and their correlation.
@@ -897,5 +978,130 @@ fn ln7c_r6_a_doctored_row_is_a_scrub_finding() {
         (full.code(), full.operation()),
         (finding.code(), finding.operation()),
         "the full verification refuses it the same way"
+    );
+}
+
+#[test]
+fn ln7c_r7_an_extent_past_the_head_is_rebuilt_with_its_warning() {
+    let dir = tempfile::tempdir().expect("state root");
+    let (database, ledger) = formal_root(dir.path());
+    let records = Records::new(&ledger);
+    let mut written = pointer_records(&records);
+    written.extend(pointer_records(&records));
+    let head = ledger.latest_sequence().expect("head");
+    ledger.close().expect("close the writer");
+    assert_eq!(rows(&database), written);
+
+    doctor(
+        &database,
+        &format!(
+            "UPDATE ledger_frame_refs_extent SET through_sequence={}",
+            stored(head + 5)
+        ),
+    );
+    let (reopened, timing) = reopen_noted(&database, PAGE_ROWS, 4_096);
+    assert_eq!(reopened, head, "the open succeeds");
+    assert_eq!(
+        warning(&timing),
+        Some((
+            LedgerLocation::VerifyLedgerFrameRefs.as_str(),
+            Some(head + 5),
+            None
+        )),
+        "one warning names the untrusted extent"
+    );
+    assert_eq!(rows(&database), written, "the index is rebuilt");
+    assert_eq!(extent(&database), Some((1, head)), "over the whole history");
+}
+
+#[test]
+fn ln7c_r8_a_batch_the_extent_does_not_end_before_commits_and_is_filled_at_reopen() {
+    let dir = tempfile::tempdir().expect("state root");
+    let (database, ledger) = formal_root(dir.path());
+    let records = Records::new(&ledger);
+    let before = pointer_records(&records);
+    let kept = ledger.latest_sequence().expect("head");
+
+    // The extent no longer ends at the head: the next batches do not continue it, and commit.
+    doctor(
+        &database,
+        &format!(
+            "UPDATE ledger_frame_refs_extent SET through_sequence={}",
+            stored(kept - 1)
+        ),
+    );
+    let after = pointer_records(&records);
+    let head = ledger.latest_sequence().expect("head");
+    assert_eq!(head, kept + 6, "every batch committed");
+    assert_eq!(rows(&database), before, "the batches wrote no rows");
+    assert_eq!(extent(&database), Some((1, kept - 1)), "the extent stays");
+    ledger.close().expect("close the writer");
+
+    let (reopened, timing) = reopen_noted(&database, PAGE_ROWS, 4_096);
+    assert_eq!(reopened, head, "the open succeeds");
+    assert_eq!(
+        warning(&timing),
+        Some((
+            LedgerLocation::WriteLedgerFrameRefs.as_str(),
+            Some(kept - 1),
+            None
+        )),
+        "one warning names the gap"
+    );
+    let mut filled = before;
+    filled.extend(after);
+    assert_eq!(rows(&database), filled, "the gap is filled");
+    assert_eq!(
+        extent(&database),
+        Some((1, head)),
+        "the extent moved to the head"
+    );
+}
+
+#[test]
+fn ln7c_r9_a_fill_that_meets_a_damaged_record_stops_short_of_it_and_the_open_succeeds() {
+    // The open authenticates only its newest records; the damaged one is older.
+    const TAIL: usize = 4;
+    let dir = tempfile::tempdir().expect("state root");
+    let (database, ledger) = formal_root(dir.path());
+    let records = Records::new(&ledger);
+    let mut written = Vec::new();
+    for _ in 0..3 {
+        written.extend(pointer_records(&records));
+    }
+    let head = ledger.latest_sequence().expect("head");
+    ledger.close().expect("close the writer");
+    let damaged = written[0].0;
+    assert!(damaged + (TAIL as u64) < head, "below the open's tail");
+
+    // Without its extent the root is backfilled at the next open, one pointer record a page.
+    doctor(&database, "DELETE FROM ledger_frame_refs_extent");
+    flip_event_id_digit(&database, damaged);
+    let (reopened, timing) = reopen_noted(&database, 1, TAIL);
+    assert_eq!(reopened, head, "the open succeeds");
+    assert_eq!(
+        warning(&timing),
+        Some((
+            LedgerLocation::FillLedgerFrameRefs.as_str(),
+            Some(damaged),
+            Some(LedgerCode::LedgerRecordMismatch.as_str())
+        )),
+        "one warning names the record the fill stopped at"
+    );
+    let (from, through) = extent(&database).expect("the extent left");
+    assert!(
+        from > damaged && through == head,
+        "the extent stops short of the damaged record and never covers the history: {from}..={through}"
+    );
+    assert!(
+        rows(&database).iter().all(|row| row.0 > damaged),
+        "no row at or below the damaged record"
+    );
+
+    // The next open tries again, and stops there again.
+    let (_, again) = reopen_noted(&database, 1, TAIL);
+    assert_eq!(
+        warning(&again).map(|(_, sequence, _)| sequence),
+        Some(Some(damaged))
     );
 }

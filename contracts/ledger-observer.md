@@ -948,26 +948,44 @@ CREATE TABLE ledger_frame_refs_extent (
 | `capture.dedup_window` | `preserved_frame_id` | `('frame', frame, 'preserved_frame')` |
 | `client.action` from (agent, adapter), (cli, cli) or (user, ui) | control `evidence_read_frame` / `evidence_read_run`, a path-safe value | `('artifact', id, 'read_confirmed')` / `('run', id, 'read_confirmed')` |
 
+- **The rule: the derived table never fails an open or an append.** It is derived from the
+  records and can be rebuilt, and nothing reads it yet, so no state of it fails the writer open or
+  an append or stops the Runtime from either. Each case below ends in one warning: the open's is a
+  `note` link of `ledger_opened` (`ledger_index_mismatch` of `fill_ledger_frame_refs`, its `stage`
+  naming what was found and `ledger_sequence` where; the catalog fixes that code's category, and no
+  new code is added). The open itself fails only where it failed before this table existed.
 - **Written** by the writer in the record's own batch transaction (every append, the segment
   import), from the record alone, so no producer writes them and a new producer is covered.
-  Two pointers of one record to one target and pointer are one row. The same transaction moves
-  `through_sequence` from the sequence before the batch to its last; an extent that does not end
-  there is `ledger_index_mismatch` (`write_ledger_frame_refs`) and the batch rolls back. A new root
-  starts with the extent `1..=0`; the segment import writes `1..=cutover`.
+  Two pointers of one record to one target and pointer are one row. The extent moves only when it
+  is contiguous with the batch: when it ends right before the batch, its rows are written and
+  `through_sequence` moves to the batch's last sequence in the same transaction. Otherwise, or when
+  a statement of the index fails, the batch's rows are **not written** (a savepoint takes back what
+  was written), the extent stays, and the batch commits as always. The next open fills the gap and
+  warns (`stage` `write_ledger_frame_refs`, `ledger_sequence` the extent's end). Only a savepoint
+  that cannot be taken back, which means the batch's own transaction is gone (a full disk), returns
+  its error, as the batch's commit would. A new root starts with the extent `1..=0`; the segment
+  import writes `1..=cutover`.
 - **Trusted only inside the extent** `from_sequence..=through_sequence`, the records whose rows are
   all written. A row outside it is removed at the next writer open.
 - **Filled at the writer open**, after the views and indexes exist and before any record is
-  appended (`fill_ledger_frame_refs`). The open creates the tables a root lacks. A root without
-  the extent row (a copy, a restore, a root no writer of this release opened) removes its rows and
-  gets the extent `head + 1..=head`. Then the gap `(through_sequence, head]` an older build left is
-  filled upwards, and the backfill goes from the head down to 1 (ageing out is not safe:
-  `final-query.md` §3.3). Each page holds at most `history_page_rows` pointer records, selected by
-  type in `ledger_view_index_type_v1` with a sequence bound and authenticated one by one as a
-  history page reads them; it commits with the extent moved, so a stopped fill goes on at the next
-  open. The open's deadline is checked before each page (`ledger_read_budget_exceeded`, operation
-  `open_runtime_ledger`). After the open the extent is `1..=head`. On production the one-time
-  backfill reads about 85 000 records (estimate: 5–10 s); a gap after a day's rollback, about
-  11 000 (about 1 s).
+  appended (`fill_ledger_frame_refs`). The open creates the tables a root lacks; a table it creates
+  starts empty without a warning (the first open of this release backfills once). An **untrusted
+  extent** (past the head, malformed, or missing on a table that exists: a copy, a restore) is
+  removed with every row and the index is rebuilt from the extent `head + 1..=head`, with one
+  warning (`stage` `verify_ledger_frame_refs`, `ledger_sequence` the extent's end when there was
+  one). Then the gap `(through_sequence, head]` is filled upwards (records an older build or a
+  batch above appended without rows; one warning), and the backfill goes from the head down to 1
+  (ageing out is not safe: `final-query.md` §3.3). Each page holds at most `history_page_rows`
+  pointer records, selected by type in `ledger_view_index_type_v1` with a sequence bound and
+  authenticated one by one as a history page reads them; it commits with the extent moved. After
+  a complete fill the extent is `1..=head`. **A fill that stops** never fails the open: a record
+  that fails its authentication, the open's deadline (checked before each page), or any failure of
+  the index stops the fill where it is. The page in progress rolls back, so the extent stops short
+  of that record (below it for the gap, above it for the backfill) and does not cover the history,
+  and the next open tries again. The open warns once (`stage` `fill_ledger_frame_refs`,
+  `ledger_sequence` the record it stopped at, the failure as its cause). The damaged record itself
+  is found by the scrub, as before. On production the one-time backfill reads about 85 000 records
+  (estimate: 5–10 s); a gap after a day's rollback, about 11 000 (about 1 s).
 - **Checked** by the scrub (§15, LN-9): for every row a chunk authenticates inside the extent read
   with the pass's head, the chunk's frame index rows must be those the record gives, read in the
   chunk's transaction through `ledger_frame_refs_sequence`. `ledger-maintenance verify` does the
