@@ -76,6 +76,16 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
             material.absent
         ));
     }
+    // #422 LN-7c V: what `verify` compared of the frame cleaner's statements and the full view.
+    if let Some(checked) = receipt.frame_query {
+        write_stderr(&format!(
+            "INFO actingd: {} verify frame_query_live={} frame_query_kept={} frame_query_accounted={}\n",
+            ActingdCode::LedgerMaintenanceCompleted.as_str(),
+            checked.live_frames,
+            checked.kept_frames,
+            checked.accounted
+        ));
+    }
     let data = match serde_json::to_value(&receipt) {
         Ok(serde_json::Value::Object(data)) => data,
         _ => {

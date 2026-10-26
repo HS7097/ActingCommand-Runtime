@@ -743,20 +743,20 @@ impl<'a> Corpus<'a> {
     }
 }
 
-/// The live frames of the corpus, by role.
-struct Live {
+/// The live frames of the corpus, by role (#422 LN-7c V: the corpus of `gate_ln7c_v` too).
+pub(super) struct Live {
     f2: ArtifactId,
     f3: ArtifactId,
     g1: ArtifactId,
     g2: ArtifactId,
     g3: ArtifactId,
     l1: ArtifactId,
-    l2: ArtifactId,
+    pub(super) l2: ArtifactId,
     c1: ArtifactId,
     c2: ArtifactId,
     c3_at: u64,
     p1: ArtifactId,
-    r1: ArtifactId,
+    pub(super) r1: ArtifactId,
     h1: ArtifactId,
     h2: ArtifactId,
     h3: ArtifactId,
@@ -767,12 +767,12 @@ struct Live {
     f5: ArtifactId,
     k1: ArtifactId,
     w1: ArtifactId,
-    all: BTreeSet<ArtifactId>,
+    pub(super) all: BTreeSet<ArtifactId>,
 }
 
 /// The corpus of A6, with three frames deleted (`f1`, a marker neighbour, `c3`, the last frame
 /// of a run cut short by a start, and `q1`, a marker neighbour in another run).
-fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
+pub(super) fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     let corpus = Corpus::new(ledger, artifacts);
     corpus.start(at(0));
     corpus.owner_recorded(at(1));

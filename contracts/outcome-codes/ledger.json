@@ -2229,7 +2229,9 @@
         "receipt_state": "optional",
         "request_id": "optional",
         "stage": "optional",
-        "ledger_sequence": "optional"
+        "ledger_sequence": "optional",
+        "artifact_id": "optional",
+        "field": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -7912,6 +7914,14 @@
       "status": "active",
       "since": "0.12.16",
       "description": "The check of the frame index ledger_frame_refs by the scrub and by ledger-maintenance verify: inside its extent, each record's rows are the ones its payload gives (#422 LN-7c R, ledger observer §11.7)."
+    },
+    "verify_frame_query": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.17",
+      "description": "ledger-maintenance verify's check of the frame cleaner's statements W, L and K against the full frame view over the same root, listings and clock; a difference that the design neither rules nor calls safe is a finding (#422 LN-7c V, ledger store \"Frame cleaner\")."
     },
     "write_ledger_frame_refs": {
       "owner": "ledger",

@@ -3570,6 +3570,20 @@ and the cleaner's existing warnings carry every outcome; two ledger locations ar
 | LN7CQ-7 | `actingledger frames` | offline tool output | LN-7c Q | — | live classes from statement L; `evidence {max_age_days, kept_staying, kept_remove_confirmed, kept_remove_expired, kept_unknown, live_remove_confirmed, confirmed[]}` with `confirmed_by {actor, source, surface, client, at_unix_ms, sequence}` |
 | LN7CQ-8 | the writer's open and its retention state | Runtime-internal behaviour | LN-7c Q | — | the open reads no frame and does not list the live frame store; the writer keeps no frame facts and answers no frame view (`GlobalLedger::frame_retention_view`, `frame_retention_view_live` removed); `GlobalLedger::retain_live_frames` trims the frame objects at each pass start |
 
+### 1.197 Slice LN-7c V (0.12.17): `ledger-maintenance verify` checks the frame cleaner's statements against the full view (#422; Alice's ruling 70; design `rd-1026/ln7c/final-query.md` §7 row V, §6; coordinator work order `rd-1026/brief-ln7c-v.md`)
+
+[ledger-store.md](ledger-store.md) ("Frame cleaner", the offline check) and
+[ledger-maintenance.md](ledger-maintenance.md) are the contract. **No new code, key, revision or
+persisted shape**; one ledger location is added (`verify_frame_query`). Offline only: the Runtime
+never runs the check. Gates: the ledger's `ln7c_v_*` tests. The number 1.197 is provisional for
+parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN7CV-1 | `ledger_index_mismatch` optional values `artifact_id`, `field` (existing keys) | optional values (#420 S4: one domain code with values) | LN-7c V | LN-7c V | operation `verify_frame_query`: the frame whose statement answer differs from the full view, and the answer's member as a JSON pointer (`/class`, `/action`, `/created_at_unix_ms`, `/run_id`, `/folder`, empty for a frame one side does not answer); the ruled (E1, E11) and safe (E3, E4, E5) differences are not reported |
+| LN7CV-2 | `INFO actingd: ledger_maintenance_completed verify frame_query_live=<n> frame_query_kept=<n> frame_query_accounted=<n>` | daemon line (stderr) | LN-7c V | — | after a passing `verify` of a formal root; the receipt is unchanged |
+| LN7CV-3 | `actingd ledger-maintenance` reads `frame_retention_dedup_error` and `frame_retention_dedup_lab` | behaviour | LN-7c V | — | for `verify`'s check, with the defaults a start uses when the file names neither |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
