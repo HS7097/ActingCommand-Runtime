@@ -647,6 +647,15 @@ tests = [
 ]
 incident = ["#422 LN-TUNE"]
 
+# LN-8 (#422, LEAN-L §3.2 step 2, §6; brief rd-1026/brief-ln8.md "Tests"): the formal writer open reads the keyed meta row, `MAX(sequence)` and the newest `ledger_observer.open_verify_tail_records` records, each authenticated on its own; damage in that tail (a row's tag, the head's record, a row's link, the hash the oldest tail row chains to, a missing head row) fails the open with the code and operation `ledger-maintenance verify` gives for it; damage in an older row is not read at open (the open authenticates exactly its tail and opens), and is refused by a read of that row, which ends the writer, and by `ledger-maintenance verify`
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln8::ln8_damage_in_the_tail_is_refused_at_open_as_verify_refuses_it",
+    "actingcommand-ledger::lib::global::tests::gate_ln8::ln8_damage_in_an_old_row_is_not_read_at_open_and_is_found_by_its_read_and_by_verify",
+]
+incident = ["#422 LN-8"]
+
 # LN-9 (#422, LEAN-L row LN-9, §6; Alice's ruling 57): the paced background scrub of the Runtime's writer, on a stepping clock. Damage in an old row (its bytes, its link row, a missing row) is found within one pass with the code and operation the full verification gives for the same damage, and the finding is fatal; a chunk starts no earlier than the one before plus its rows at the rate in effect, a new rate takes effect at the next chunk, a rate out of range is refused and a pass starts once per pass interval; a whole pass runs while the writer's shared connection is held, and the writer commits while the scrub holds its chunk's snapshot
 [[gate]]
 coverage = "Y"

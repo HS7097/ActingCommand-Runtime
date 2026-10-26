@@ -2,7 +2,7 @@
 
 //! Candidate durable medium. Typed semantics remain in EventStore/GlobalLedger.
 
-use super::history::{HistorySelection, LabRelations};
+use super::history::{HistorySelection, LabRelations, ScopeExtent};
 use super::index::{IndexChange, IndexRows};
 use super::projection::{EventIndexes, LAB_ANCHOR_SOURCE, LAB_ANCHOR_TYPE, LabKeys};
 use super::read_only::check_read_budget;
@@ -553,7 +553,8 @@ fn authenticated_extent(
 }
 
 /// Classifies the formal medium from its keyed meta row without reading history.
-/// True does not mean the history is verified; the writer open is that verification.
+/// True does not mean the history is verified; the writer open verifies its newest records
+/// (LN-8), `ledger-maintenance verify` all of them.
 pub(super) fn formal_ready(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
     let mut connection = database.connection(LedgerLocation::InspectRuntimeLedger.location())?;
     let transaction = connection
@@ -618,8 +619,19 @@ pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedge
     }
 }
 
+/// LN-8 (#422, LEAN-L §3.7): how many of the newest records the writer open authenticates
+/// unless `ledger_observer.open_verify_tail_records` says otherwise, and the most it may name.
+pub(super) const DEFAULT_OPEN_VERIFY_TAIL_RECORDS: usize = 4_096;
+pub(super) const MAX_OPEN_VERIFY_TAIL_RECORDS: usize = 1_000_000;
+
 /// Workflow #375 R5a: the writer open reads no artifact material; `timing` keeps the phases
-/// that ran, also when an error is returned.
+/// that ran, also when an error is returned. LN-8 (#422, LEAN-L §3.2 step 2, §6): the open reads
+/// the format, the keyed meta row, `MAX(sequence)` and the newest
+/// `ledger_observer.open_verify_tail_records` rows (`verify_open_tail`, phases `meta` and
+/// `tail`), creates the views and indexes a database lacks and reads the retention state by type
+/// and by index (`index`), then imports a dump and writes the start's own records (`import`).
+/// It reads no other history row: a reader authenticates each row it reads, and
+/// `ledger-maintenance verify` reads them all.
 pub(super) fn open_formal(
     config: GlobalLedgerConfig,
     database: Arc<RuntimeDatabase>,
@@ -632,53 +644,133 @@ pub(super) fn open_formal(
     // P0-LO: a test gate may make this open slower by a delay it does not wait out.
     #[cfg(any(test, feature = "test-hooks"))]
     let (started, deadline) = crate::open_delay::slowed(database.root(), started, deadline);
-    let raw = read_formal_snapshot(&database, deadline);
-    timing.sql_read_ms = elapsed_ms(started);
-    let raw = raw?;
-    timing.events = raw.events.len() as u64;
-    let marker = SqliteMarker::parse(&raw.meta)?;
-    if marker.state != "ready" {
-        return Err(failure(
-            SharedCode::LedgerMigrationRequired.code(),
-            LedgerLocation::OpenRuntimeLedger.location(),
-        ));
-    }
-    let (events, head_hash) = verify_snapshot_unread(&database, raw, timing)?;
-    let head = events.last().map_or(0, PersistedEvent::sequence);
-    upgrade_views(&database, head, head_hash.as_deref())?;
-    ensure_history_index(&database)?;
-    let meta_has_marker = {
-        let connection =
-            database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
-        ledger_meta_has_marker(&connection)?
-    };
-    let next = increment_sequence(head)?;
-    let (ownership, stale) = WriterOwnership::from_locked(lock, compatibility, &config.owner_id)?;
-    let backend = SqliteStorage {
-        database,
-        ownership,
-        head,
-        head_hash,
-        marker,
-        meta_has_marker,
-    };
-    // LN-5 (#422, LEAN-L §5 LN-5): the open still reads every record (until LN-8), derives the
-    // retention state from them and drops them; the writer reads its history from the store.
-    let mut store = EventStore::recovered(backend, next, &events)?;
-    drop(events);
+    let (marker, head, head_hash) = verify_open_tail(
+        &database,
+        (started, deadline),
+        config.open_verify_tail_records,
+        timing,
+    )?;
+    let indexing = Instant::now();
+    let indexed = (|| -> GlobalLedgerResult<(SqliteLedgerStore, Option<String>)> {
+        upgrade_views(&database, head, head_hash.as_deref())?;
+        ensure_history_index(&database)?;
+        let meta_has_marker = {
+            let connection =
+                database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
+            ledger_meta_has_marker(&connection)?
+        };
+        let next = increment_sequence(head)?;
+        let (ownership, stale) =
+            WriterOwnership::from_locked(lock, compatibility, &config.owner_id)?;
+        let backend = SqliteStorage {
+            database,
+            ownership,
+            head,
+            head_hash,
+            marker,
+            meta_has_marker,
+        };
+        // LN-7 (#422): the retention state is read by type and by index.
+        Ok((EventStore::recovered(backend, next)?, stale))
+    })();
+    timing.index_ms = elapsed_ms(indexing);
+    let (mut store, stale) = indexed?;
     // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.4, §12 step 2): a dump an earlier run
     // left is imported after the ledger is verified and before any new record; AO-2 (§10, §12
     // step 5): then the previous epoch's unconfirmed tail.
-    if let Err(error) = store.open_running(&config, stale.is_some()) {
-        return Err(error.with_close_result(store.backend.close()));
-    }
-    if let Some(owner) = stale
-        && let Err(error) =
-            store.append_recovery(RecoveryReason::StaleOwner, Some(owner), None, None)
-    {
+    let importing = Instant::now();
+    let imported = store
+        .open_running(&config, stale.is_some())
+        .and_then(|()| match stale {
+            Some(owner) => store
+                .append_recovery(RecoveryReason::StaleOwner, Some(owner), None, None)
+                .map(|_| ()),
+            None => Ok(()),
+        });
+    timing.import_ms = elapsed_ms(importing);
+    if let Err(error) = imported {
         return Err(error.with_close_result(store.backend.close()));
     }
     Ok(store)
+}
+
+/// LN-8 (#422, LEAN-L §3.2 step 2, §6.2): the writer open's verification, in one read
+/// transaction. Phase `meta`: the format and the marker, the keyed meta row (its head and head
+/// hash) and the stored rows ending at that head (`MAX(sequence)`, through the primary key).
+/// Phase `tail`: the newest `tail` rows, read in chunks, each authenticated on its own
+/// (`RowReader`) with its link and artifact rows, contiguous through the head, the oldest chained
+/// to its predecessor's stored hash and the newest's hash the meta row's. `timing.events` counts
+/// the rows the tail authenticated. Both phases are bounded by `deadline`.
+fn verify_open_tail(
+    database: &RuntimeDatabase,
+    (started, deadline): (Instant, Instant),
+    tail: usize,
+    timing: &mut LedgerOpenTiming,
+) -> GlobalLedgerResult<(SqliteMarker, u64, Option<String>)> {
+    let budget = Some((u64::MAX, usize::MAX, deadline));
+    let mut tail_started = None;
+    let mut events = 0_u64;
+    let verified = (|| -> GlobalLedgerResult<(SqliteMarker, u64, Option<String>)> {
+        check_read_budget(budget, 0, 0)?;
+        let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
+        refuse_unsupported_format(&transaction)?;
+        // A different view schema refuses; absent views are created in phase `index`.
+        views::installed(&transaction)?;
+        let (marker, head) = match authenticated_extent(database, &transaction)? {
+            Some((marker, head)) if marker.state == "ready" => (marker, head),
+            _ => {
+                return Err(failure(
+                    SharedCode::LedgerMigrationRequired.code(),
+                    LedgerLocation::OpenRuntimeLedger.location(),
+                ));
+            }
+        };
+        let head_hash = meta_head_hash(&transaction, head)?;
+        // Rows past the meta head, or a missing head row, as a full read reports them.
+        if !rows_end_at(&transaction, head, budget)? {
+            return Err(failure(
+                LedgerCode::LedgerMetaMismatch.code(),
+                LedgerLocation::VerifySqliteHead.location(),
+            ));
+        }
+        tail_started = Some(Instant::now());
+        {
+            let mut reader = RowReader::new(database, &transaction, budget);
+            let after = head.saturating_sub(u64::try_from(tail).unwrap_or(u64::MAX));
+            reader.read_chunks(&[], after, head, true, &mut |_| {
+                events += 1;
+                Ok(true)
+            })?;
+            // The newest row read is the head: its authenticated hash is the meta row's head
+            // hash.
+            if reader.last.take().map(|(_, hash)| hash) != head_hash {
+                return Err(failure(
+                    LedgerCode::LedgerMetaMismatch.code(),
+                    LedgerLocation::VerifySqliteHead.location(),
+                ));
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
+        Ok((marker, head, head_hash))
+    })();
+    let ended = Instant::now();
+    let ms = |from: Instant, to: Instant| {
+        u64::try_from(to.saturating_duration_since(from).as_millis()).unwrap_or(u64::MAX)
+    };
+    match tail_started {
+        Some(tail_started) => {
+            timing.meta_ms = ms(started, tail_started);
+            timing.tail_ms = ms(tail_started, ended);
+        }
+        None => timing.meta_ms = ms(started, ended),
+    }
+    timing.events = events;
+    verified
 }
 
 pub(super) fn import_source(
@@ -914,9 +1006,10 @@ impl SqliteLedgerStore {
             marker: SqliteMarker::candidate(),
             meta_has_marker,
         };
-        // LN-5 (#422): the records are dropped once the retention state is derived from them.
-        let mut store = Self::recovered(backend, next, &events)?;
+        // LN-5 (#422): the records are dropped; LN-7: the retention state is read by type and by
+        // index, not from them.
         drop(events);
+        let mut store = Self::recovered(backend, next)?;
         // Workflow #383 AO-1: a candidate opened with a failure plan writes and imports as the
         // running Runtime's writer does (`contracts/ledger-observer.md` §9); AO-2: and records
         // the previous epoch's unconfirmed tail (§10).
@@ -1648,6 +1741,28 @@ impl DurableStorage for SqliteStorage {
         read_lab_relations(&connection, through, seed)
     }
 
+    fn scope_extents(&self, (from, through): (u64, u64)) -> GlobalLedgerResult<Vec<ScopeExtent>> {
+        let connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        let mut parameters = vec![
+            SqlValue::Integer(encode(from)),
+            SqlValue::Integer(encode(through)),
+        ];
+        for event_type in [
+            EventType::ArtifactPinRecorded,
+            EventType::ArtifactPinReleased,
+            EventType::ArtifactEvictionIntent,
+            EventType::ArtifactEvictionOutcome,
+        ] {
+            parameters.push(SqlValue::Text(views::key(event_type)?));
+        }
+        read_rows_bound(&connection, SCOPE_EXTENTS, &parameters, None, &mut 0, false)?
+            .into_iter()
+            .map(scope_extent)
+            .collect()
+    }
+
     fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>> {
         let connection = self
             .database
@@ -1983,18 +2098,6 @@ impl SqliteStorage {
         refuse_unsupported_format(connection)?;
         views::installed(connection)?;
         let meta = read_meta_columns(connection, self.meta_has_marker, None, &mut 0)?;
-        let last = read_rows(
-            connection,
-            "SELECT MAX(sequence) FROM ledger_events",
-            None,
-            &mut 0,
-            false,
-        )?;
-        let expected_last = if self.head == 0 {
-            SqlValue::Null
-        } else {
-            SqlValue::Integer(encode(self.head))
-        };
         if meta
             != meta_row_with_marker(
                 &self.database,
@@ -2003,7 +2106,7 @@ impl SqliteStorage {
                 self.head_hash.as_deref(),
                 &self.marker,
             )
-            || last != [vec![expected_last]]
+            || !rows_end_at(connection, self.head, None)?
         {
             return Err(failure(
                 LedgerCode::LedgerMetaMismatch.code(),
@@ -2269,6 +2372,11 @@ impl SqliteStorage {
         lab: &LabRelations,
         (work, page_rows): (&ReadWork, usize),
     ) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, Option<u64>)> {
+        // LN-7 (#422): a page of no rows selects none; asking a statement for no rows would read
+        // nothing and never advance (as `read_history` answers a limit of 0).
+        if limit == 0 {
+            return Ok((Vec::new(), None));
+        }
         let query = selection.query;
         let mut cursor = after.max(query.from_sequence.map_or(0, |from| from.saturating_sub(1)));
         let through = snapshot.min(query.to_sequence.unwrap_or(u64::MAX));
@@ -2357,6 +2465,10 @@ fn in_view<E: LedgerEventRead>(view: Option<LedgerView>, event: &E, lab: &LabRel
     })
 }
 
+/// Creates the stored views a database lacks over the history its writer open verified (`head`
+/// and its record hash `hash`). LN-8 (#422, LEAN-L §3.2 step 2): no history row is read again;
+/// in the write transaction the keyed meta row must still name that head and hash, and the
+/// stored rows must end at that head.
 fn upgrade_views(
     database: &RuntimeDatabase,
     head: u64,
@@ -2369,14 +2481,10 @@ fn upgrade_views(
     let result = (|| {
         refuse_unsupported_format(&transaction)?;
         if !views::installed(&transaction)? {
-            let raw = read_snapshot_connection(&transaction, None)?;
-            let VerifiedSnapshotRecords {
-                records,
-                head_hash: actual_hash,
-                ..
-            } = verify_snapshot_records(database, raw)?;
-            if records.last().map_or(0, StoredEventRecord::sequence) != head
-                || actual_hash.as_deref() != hash
+            let current = authenticated_extent(database, &transaction)?.map(|(_, current)| current);
+            if current != Some(head)
+                || meta_head_hash(&transaction, head)?.as_deref() != hash
+                || !rows_end_at(&transaction, head, None)?
             {
                 return Err(failure(
                     LedgerCode::LedgerSnapshotBoundaryMismatch.code(),
@@ -2632,9 +2740,10 @@ fn read_snapshot(
     Ok(raw)
 }
 
-/// `read_snapshot` for the writer open: the keyed meta row is authenticated first in the
-/// same read transaction, and the read is bounded by its head sequence and the caller's
-/// deadline rather than by maintenance material limits.
+/// `read_snapshot` for `ledger-maintenance verify` (LN-8: the writer open reads only the tail,
+/// `verify_open_tail`): the keyed meta row is authenticated first in the same read transaction,
+/// and the read is bounded by its head sequence and the caller's deadline rather than by
+/// maintenance material limits.
 fn read_formal_snapshot(
     database: &RuntimeDatabase,
     deadline: Instant,
@@ -2922,19 +3031,20 @@ fn authenticated_head(
             LedgerLocation::OpenRuntimeEvidence.location(),
         ));
     }
-    // The meta row was authenticated above, in this read transaction.
-    let meta = read_meta(connection)?;
-    let head_hash = match meta.get(4) {
-        Some(SqlValue::Text(hash)) if head != 0 => Some(hash.clone()),
-        Some(SqlValue::Null) if head == 0 => None,
-        _ => {
-            return Err(failure(
-                LedgerCode::LedgerMetaMismatch.code(),
-                LedgerLocation::VerifySqliteHead.location(),
-            ));
-        }
-    };
-    Ok((head, head_hash))
+    Ok((head, meta_head_hash(connection, head)?))
+}
+
+/// The head record hash of the keyed meta row whose head `authenticated_extent` authenticated in
+/// this read transaction.
+fn meta_head_hash(connection: &Connection, head: u64) -> GlobalLedgerResult<Option<String>> {
+    match read_meta(connection)?.get(4) {
+        Some(SqlValue::Text(hash)) if head != 0 => Ok(Some(hash.clone())),
+        Some(SqlValue::Null) if head == 0 => Ok(None),
+        _ => Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        )),
+    }
 }
 
 /// Rows per statement of a range read (Workflow #411 A4).
@@ -3465,6 +3575,27 @@ impl ViewCondition {
     }
 }
 
+/// LN-7 (#422): the stored keys of `ids` as one JSON array for `json_each`; `None` when it has
+/// none.
+fn key_list<T: serde::Serialize>(ids: &BTreeSet<T>) -> GlobalLedgerResult<Option<SqlValue>> {
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let keys = ids
+        .iter()
+        .map(views::key)
+        .collect::<GlobalLedgerResult<Vec<_>>>()?;
+    serde_json::to_string(&keys)
+        .map(|text| Some(SqlValue::Text(text)))
+        .map_err(|error| {
+            GlobalLedgerError::json(
+                LedgerCode::EventSerializationFailed.code(),
+                LedgerLocation::EncodeLedgerQuery.location(),
+                &error,
+            )
+        })
+}
+
 /// The statement of one history page and its bound values: the query's conditions that have a
 /// column or an index, and `view`'s, every value bound, in placeholder order.
 fn history_statement(
@@ -3573,6 +3704,37 @@ fn history_statement(
             "json_extract(CAST(e.canonical_record AS TEXT),'{DECISION_PATH}')=?"
         ));
         values.push(SqlValue::Text(decision.to_owned()));
+    }
+    // LN-7 (#422, LEAN-L §3.5): a link set selects the rows linked to one of its identifiers,
+    // each dimension through its link index, and the rows carrying one of its artifacts through
+    // the `artifact_id` index of `ledger_artifacts`. An empty set selects no row.
+    if let Some(set) = selection.links {
+        let mut alternatives = Vec::new();
+        for (column, keys) in [
+            ("l.run_id", key_list(&set.runs)?),
+            ("l.lease_id", key_list(&set.leases)?),
+            ("l.frame_id", key_list(&set.frames)?),
+            ("l.request_id", key_list(&set.requests)?),
+            ("l.correlation_id", key_list(&set.correlations)?),
+        ] {
+            if let Some(keys) = keys {
+                links = true;
+                alternatives.push(format!("{column} IN (SELECT value FROM json_each(?))"));
+                values.push(keys);
+            }
+        }
+        if let Some(keys) = key_list(&set.artifacts)? {
+            alternatives.push(
+                "e.sequence IN (SELECT a.sequence FROM ledger_artifacts a WHERE a.artifact_id IN (SELECT value FROM json_each(?)))"
+                    .to_owned(),
+            );
+            values.push(keys);
+        }
+        clauses.push(if alternatives.is_empty() {
+            "0".to_owned()
+        } else {
+            format!("({})", alternatives.join(" OR "))
+        });
     }
     if let Some(view) = view {
         links |= view.links;
@@ -3689,6 +3851,60 @@ fn link_texts(rows: Vec<SqlRow>) -> GlobalLedgerResult<Vec<String>> {
         .collect()
 }
 
+/// LN-7 (#422, LEAN-L §3.5): the closure scopes of the rows with a sequence in `?1..=?2` that
+/// are no retention fact (`?3` to `?6`), grouped by instance, run and lease link and, without a
+/// run, request and correlation link, as a replay keys them; each with its first row's sequence
+/// and event id and its last row's sequence, in the order of their first rows.
+const SCOPE_EXTENTS: &str = "SELECT g.instance_id, g.run_id, g.lease_id, g.request_id, g.correlation_id, g.first_sequence, f.event_id, g.last_sequence FROM (SELECT l.instance_id AS instance_id, l.run_id AS run_id, l.lease_id AS lease_id, CASE WHEN l.run_id IS NULL THEN l.request_id END AS request_id, CASE WHEN l.run_id IS NULL THEN l.correlation_id END AS correlation_id, MIN(e.sequence) AS first_sequence, MAX(e.sequence) AS last_sequence FROM ledger_events e JOIN ledger_links l ON l.sequence=e.sequence WHERE e.sequence>=?1 AND e.sequence<=?2 AND l.instance_id IS NOT NULL AND (l.run_id IS NOT NULL OR (l.request_id IS NOT NULL AND l.correlation_id IS NOT NULL)) AND e.event_type NOT IN (?3,?4,?5,?6) GROUP BY l.instance_id, l.run_id, l.lease_id, CASE WHEN l.run_id IS NULL THEN l.request_id END, CASE WHEN l.run_id IS NULL THEN l.correlation_id END) g JOIN ledger_events f ON f.sequence=g.first_sequence ORDER BY g.first_sequence";
+
+/// LN-7: one row of `SCOPE_EXTENTS`.
+fn scope_extent(row: SqlRow) -> GlobalLedgerResult<ScopeExtent> {
+    let invalid = || {
+        failure(
+            LedgerCode::InvalidEventLink.code(),
+            LedgerLocation::ReadLedgerView.location(),
+        )
+    };
+    let Ok(
+        [
+            SqlValue::Text(instance),
+            run,
+            lease,
+            request,
+            correlation,
+            SqlValue::Integer(first),
+            SqlValue::Text(event_id),
+            SqlValue::Integer(last),
+        ],
+    ) = <[SqlValue; 8]>::try_from(row)
+    else {
+        return Err(invalid());
+    };
+    let optional = |value: SqlValue| match value {
+        SqlValue::Null => Ok(None),
+        SqlValue::Text(text) => Ok(Some(text)),
+        _ => Err(invalid()),
+    };
+    Ok(ScopeExtent {
+        instance: id_from_text(&instance)?,
+        run: optional(run)?.map(|text| id_from_text(&text)).transpose()?,
+        lease: optional(lease)?
+            .map(|text| id_from_text(&text))
+            .transpose()?,
+        request: optional(request)?
+            .map(|text| id_from_text(&text))
+            .transpose()?,
+        correlation: optional(correlation)?
+            .map(|text| id_from_text(&text))
+            .transpose()?,
+        first: actingcommand_contract::TerminalEvent {
+            event_id: id_from_text(&event_id)?,
+            sequence: decode(first),
+        },
+        last: decode(last),
+    })
+}
+
 /// An identifier from its stored text (its serialization).
 fn id_from_text<T: serde::de::DeserializeOwned>(text: &str) -> GlobalLedgerResult<T> {
     serde_json::from_value(Value::String(text.to_owned())).map_err(|_| {
@@ -3697,6 +3913,24 @@ fn id_from_text<T: serde::de::DeserializeOwned>(text: &str) -> GlobalLedgerResul
             LedgerLocation::ReadLedgerView.location(),
         )
     })
+}
+
+/// Whether the stored rows end at `head` (none for a head of 0): `MAX(sequence)`, answered from
+/// the primary key (LN-6, LN-8).
+fn rows_end_at(connection: &Connection, head: u64, budget: ReadBudget) -> GlobalLedgerResult<bool> {
+    let last = read_rows(
+        connection,
+        "SELECT MAX(sequence) FROM ledger_events",
+        budget,
+        &mut 0,
+        false,
+    )?;
+    let expected = if head == 0 {
+        SqlValue::Null
+    } else {
+        SqlValue::Integer(encode(head))
+    };
+    Ok(last == [vec![expected]])
 }
 
 /// The stored sequences are exactly `1..=head`: `sequence` is the integer primary key, so

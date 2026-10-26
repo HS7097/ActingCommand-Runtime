@@ -8,12 +8,13 @@
 //! sample size, lag threshold and gap window with AO-8. P0-LO (`actingd-config` revision 10) adds
 //! the deadline of the start's ledger open and the share of it above which the open writes the
 //! warning `ledger_open_slow`; both are read when the ledger opens. LN-5 (#422, LEAN-L,
-//! `actingd-config` revision 11) adds the rows of one page of a history read, read when the
-//! ledger opens. LN-TUNE (#422, `actingd-config` revision 12) adds how long a caller waits for
-//! one reply of the ledger writer, read when the ledger opens. LN-9 (#422, `actingd-config`
-//! revision 13) adds the pace and the limits of the ledger's background scrub: its rows per
-//! second (settable, read before each chunk), the rows of one chunk and the least time between
-//! two passes (both read when the ledger opens).
+//! `actingd-config` revision 12, v0.12.13) adds the rows of one page of a history read, read when
+//! the ledger opens. LN-TUNE (#422, `actingd-config` revision 12) adds how long a caller waits for
+//! one reply of the ledger writer, read when the ledger opens. LN-8 (#422, `actingd-config`
+//! revision 13) adds how many of the newest records the start's ledger open authenticates, read
+//! when the ledger opens. LN-9 (#422, `actingd-config` revision 13) adds the pace and the limits
+//! of the ledger's background scrub: its rows per second (settable, read after each chunk), the
+//! rows of one chunk and the least time between two passes (both read when the ledger opens).
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -91,6 +92,10 @@ pub const HISTORY_PAGE_ROWS: &str = "ledger_observer.history_page_rows";
 /// (10 000 by default; until LN-TUNE the ledger's constant). A read's budget stays below it, so
 /// a read stops before its caller stops waiting for it.
 pub const WRITER_REPLY_TIMEOUT_MS: &str = "ledger_observer.writer_reply_timeout_ms";
+/// LN-8 (#422, LEAN-L §3.2 step 2, §3.7): how many of the newest records the start's ledger open
+/// reads and authenticates; older records are authenticated when they are read, and by
+/// `ledger-maintenance verify`.
+pub const OPEN_VERIFY_TAIL_RECORDS: &str = "ledger_observer.open_verify_tail_records";
 /// #422 LN-9 (LEAN-L §3.7, §6; Alice's ruling 57): the rows per second the ledger's background
 /// scrub reads and authenticates (625 by default: about 40 minutes a pass at 1.5 million records).
 /// Settable: the scrub reads the rate in effect before each chunk.
@@ -141,6 +146,12 @@ const OPEN_WARN_RATIO_RANGE: KeyRange = KeyRange::Integer {
 
 /// LN-5: a history page holds one row at least and 4096 at most.
 const HISTORY_PAGE_ROWS_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 4_096 };
+
+/// LN-8 (LEAN-L §3.7): the open authenticates one record at least and a million at most.
+const OPEN_VERIFY_TAIL_RECORDS_RANGE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: 1_000_000,
+};
 
 /// The largest attempt count a configuration may name: the write path counts in `u32`.
 const MAX_ATTEMPTS: i64 = u32::MAX as i64;
@@ -198,7 +209,7 @@ pub struct LedgerObserverFile {
     open_timeout_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     open_warn_ratio_milli: Option<Value>,
-    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
     // before LN-5 refuses a file that names it, because the section denies unknown members; a
     // file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,8 +220,12 @@ pub struct LedgerObserverFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     writer_reply_timeout_ms: Option<Value>,
     // Interface anchor `actingd-config` revision 13 (contracts/component-interfaces.md): a Runtime
-    // before LN-9 refuses a file that names one, because the section denies unknown members; a
-    // file that names none keeps its revision.
+    // before LN-8 refuses a file that names it, because the section denies unknown members; a
+    // file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_verify_tail_records: Option<Value>,
+    // LN-9 joins revision 13: a Runtime before LN-9 refuses a file that names one, because the
+    // section denies unknown members; a file that names none keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scrub_rows_per_second: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,7 +458,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
         default: DefaultSource::File,
         settable: AT_OPEN,
         reader: "LN-5",
-        since: "0.12.12",
+        since: "0.12.13",
     },
     // #422 LN-TUNE: read when the ledger opens, as the writer's other limits are.
     row_since(
@@ -452,6 +467,17 @@ pub(crate) static ROWS: &[KeyRow] = &[
         "LN-TUNE",
         "0.12.13",
     ),
+    // #422 LN-8: read when the ledger opens; it bounds that open.
+    KeyRow {
+        name: KeyName::Exact(OPEN_VERIFY_TAIL_RECORDS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: OPEN_VERIFY_TAIL_RECORDS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-8",
+        since: "0.12.14",
+    },
     // #422 LN-9: the rate is read before each chunk (settable); the chunk's rows and the pass
     // interval when the ledger opens, as the writer's other limits are.
     KeyRow {
@@ -543,6 +569,8 @@ pub struct LedgerObserverConfig {
     pub history_page_rows: u64,
     /// #422 LN-TUNE: how long a caller waits for one reply of the ledger writer.
     pub writer_reply_timeout_ms: u64,
+    /// #422 LN-8: how many of the newest records the start's ledger open authenticates.
+    pub open_verify_tail_records: u64,
     /// #422 LN-9: the rows per second of the ledger's background scrub.
     pub scrub_rows_per_second: u64,
     /// #422 LN-9: the rows of one scrub chunk.
@@ -712,6 +740,7 @@ impl LedgerObserverConfig {
             open_warn_ratio_milli: reader.count(OPEN_WARN_RATIO_MILLI)?,
             history_page_rows: reader.count(HISTORY_PAGE_ROWS)?,
             writer_reply_timeout_ms,
+            open_verify_tail_records: reader.count(OPEN_VERIFY_TAIL_RECORDS)?,
             scrub_rows_per_second: reader.count(SCRUB_ROWS_PER_SECOND)?,
             scrub_chunk_rows: reader.count(SCRUB_CHUNK_ROWS)?,
             scrub_pass_interval_ms: reader.duration(SCRUB_PASS_INTERVAL_MS)?,

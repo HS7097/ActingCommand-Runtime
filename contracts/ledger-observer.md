@@ -916,7 +916,8 @@ time L that D2 needs (D2 A-7) is the end of step 7.
 
 ## 12 Start and shutdown order (AO-6; G16 from AO-3)
 
-1. take the owner; open the ledger; verify it (today); start the capture queue and the flush
+1. take the owner; open the ledger; verify it (#422 LN-8: the meta row, `MAX(sequence)` and the
+   newest `open_verify_tail_records` records, §15); start the capture queue and the flush
    thread at once — every later record goes through `capture`;
 2. import the dump (§9.4), `ledger.dump_imported`;
 3. read and check the index (§11.5 steps 1–3); without the enabled marker, replay once (§11.6);
@@ -941,6 +942,10 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   `host.rs:1475`) move to step 9 (AO-6), so a new lineage's first change follows its base record.
 - Every G16 record goes through `capture`, so facts with `invalidate_on: [runtime.takeover]` are
   invalidated at once.
+- #422 LN-7: step 1's open reads the retention state by type and by index, not from the records
+  it verifies ([ledger-store.md](ledger-store.md#open-ownership-and-append-durability), the LN-7
+  paragraph); the prior-epoch closes the start writes take the previous epochs' scopes grouped
+  from the link index.
 - Reads that leave the start path (AO-6): full instance-store replay; workbench recovery; monitor
   registration scan (→ `monitor.journal`); `PolicyHost` folds by type; dispatch reconciliation and
   settlement projection; approval projection (→ the state document's projection); agent recovery;
@@ -1069,8 +1074,9 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `close_timeout_ms` | 60 000 | ms | how long the Runtime's close waits for the writer's answer and its end; then `ledger_close_timeout` (#411 A51) | A51, 0.12.9 |
 | `open_timeout_ms` | 600 000 | ms | the deadline of the start's ledger open (was a fixed 120 s); `10000..=600000` (P0-LO) | P0-LO, 0.12.11 |
 | `open_warn_ratio_milli` | 500 | integer | an open whose measured time exceeds `open_timeout_ms` × it / 1000 writes `ledger_open_slow`; `100..=1000` (P0-LO) | P0-LO, 0.12.11 |
-| `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.12 |
+| `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.13 |
 | `writer_reply_timeout_ms` | 10 000 | ms | how long a caller waits for one reply of the ledger writer (was a fixed 10 s); one that runs out is `writer_response_timeout`; `1000..=600000`, above `read_budget_ms` (#422 LN-TUNE) | LN-TUNE, 0.12.13 |
+| `open_verify_tail_records` | 4 096 | integer | how many of the newest records the start's ledger open reads and authenticates; older records are authenticated when they are read, by `ledger-maintenance verify` and by the background re-check; `1..=1000000` (#422 LN-8, LEAN-L §3.7) | LN-8, 0.12.14 |
 | `scrub_rows_per_second` | 625 | integer | rows a second the background scrub reads and authenticates: a chunk starts no earlier than the one before plus its rows at this rate, about 40 minutes a pass at 1.5 million records (Alice's ruling 57); `1..=100000`, settable, read after each chunk (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_chunk_rows` | 256 | integer | rows of one scrub chunk, each chunk in a read transaction of its own; `1..=4096` (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_pass_interval_ms` | 2 400 000 | ms | the least time from the start of one scrub pass to the start of the next; the first starts when the writer opens; `60000..=86400000` (#422 LN-9) | LN-9, 0.12.14 |
@@ -1107,7 +1113,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `timeout_ms`, `event_count`) right after `ledger_opened`; it is a daemon line, not a ledger
   record. Both keys are read when the ledger opens (`false`). The open's time grows with the
   ledger; archive and rotation (AO-3, AO-5, AO-6) are to bound the open's work itself.
-- #422 LN-5 (LEAN-L, the release after v0.12.11, `actingd-config` revision 11): the ledger's
+- #422 LN-5 (LEAN-L, v0.12.13, `actingd-config` revision 12): the ledger's
   history is on disk. The writer keeps no list and no index of its records: every read of the
   history (`query`, `query_page`, `project`, `project_page`, a subscription's replay, the
   scheduling outcome projection, the barrier's committed sequence) reads SQLite on the writer's
@@ -1123,7 +1129,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   their payload's decision, then `run_id`, `lease_id` and `instance_id` links), retention's sources
   by position and its Lab relation from the view and link indexes. A refused batch drops its
   staged records with nothing to rebuild; every refusal of a batch write ends the writer (§9.2).
-  The open still reads every record (until LN-8) and keeps only the retention state.
+  The open still read every record until LN-8 and kept only the retention state.
   `history_page_rows` is read when the ledger opens (`false`).
 - #422 LN-6 (LEAN-L): the Runtime's view pages and artifact resolution read SQLite as well; the
   writer keeps no verified prefix of the history (its second copy of every record's metadata,
@@ -1133,6 +1139,13 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   recovery context by the run's link, and stops within `read_budget_ms` with an incomplete page;
   an artifact's record is one authenticated point read and its eviction proof comes from the
   writer's proof set. No key is added.
+- #422 LN-7 (LEAN-L): retention keeps nothing that grows with the history. Resident are the
+  eviction proof set, the owner changes, ends, imports and closes, the scopes a start may still
+  close, and the facts of the frames present in the live frame store with what their classes read;
+  the open reads them by type and by index, each sweep start of the frame cleaner drops the rest,
+  and a record naming a run or a frame the writer no longer holds loads it again by index before
+  it is checked (ledger-store.md, "Open, ownership and append durability" and "Frame cleaner").
+  No key is added.
 - #422 LN-TUNE (the release after v0.12.12, `actingd-config` revision 12):
   `writer_reply_timeout_ms` is the wait of every caller of the writer, its replay pages and the
   confirmations of deferred appends included; it was the ledger's fixed 10 s. It is read when the
@@ -1141,6 +1154,21 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   rows than it can still return (at most `history_page_rows`), so each row is read and
   authenticated once: the monitor registry's replay reads 128 events a page, and each page read
   256 rows before.
+- #422 LN-8 (LEAN-L §3.2 step 2, §6; the release after v0.12.13, `actingd-config` revision 13):
+  the start's ledger open reads the format and marker, the keyed meta row, `MAX(sequence)` and the
+  newest `open_verify_tail_records` records, each authenticated on its own, chained to its
+  predecessor's stored hash and ending at the meta row's head hash; then the views and indexes a
+  database lacks and the retention state by type and by index (LN-7). Damage in that tail fails
+  the open with the code a complete read gives for it; an older record is authenticated when a
+  reader reads it, by `ledger-maintenance verify` (every row, the migrated prefix and the
+  whole-file `quick_check(1)`) and by the background re-check of LN-9. The Runtime's start no
+  longer runs the whole-file `quick_check(1)` when it opens the state database
+  ([runtime-database.md](runtime-database.md)). `ledger_opened` reports the open's phases as the
+  values `meta_ms`, `tail_ms`, `index_ms` and `import_ms` and the tail records it authenticated as
+  `event_count`; `sql_read_ms`, `verify_ms` and `restore_ms` remain the phases of
+  `ledger-maintenance verify`'s complete read and are 0 for the start, and `ledger_open_slow`'s
+  `elapsed_ms` is the sum of all of them. `open_verify_tail_records` is read when the ledger
+  opens (`false`).
 - #422 LN-9 (LEAN-L §6, Alice's ruling 57: damage in old rows that nobody reads is found by a
   background re-check of about 40 minutes a pass; the release after v0.12.13, `actingd-config`
   revision 13): the Runtime's writer (the one opened with a failure plan) runs a paced background

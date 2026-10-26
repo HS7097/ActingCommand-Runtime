@@ -14,8 +14,8 @@ use super::{GlobalLedgerResult, projection::EventIndexes};
 use crate::PersistedEvent;
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::{
-    CorrelationId, EventId, EventPayload, EventQuery, LedgerView, PolicyPayload, RequestId, RunId,
-    TerminalEvent,
+    ArtifactId, CorrelationId, EventId, EventPayload, EventQuery, FrameId, InstanceId, LeaseId,
+    LedgerView, PolicyPayload, RequestId, RunId, TerminalEvent,
 };
 use std::collections::BTreeSet;
 
@@ -33,6 +33,8 @@ pub(super) const MAX_HISTORY_PAGE_ROWS: usize = 4096;
 pub(super) struct HistorySelection<'a> {
     pub(super) query: &'a EventQuery,
     pub(super) decision_id: Option<&'a str>,
+    /// LN-7 (#422, LEAN-L §3.5): when set, only the records linked to one of its identifiers.
+    pub(super) links: Option<&'a LinkSet>,
 }
 
 impl<'a> HistorySelection<'a> {
@@ -40,6 +42,16 @@ impl<'a> HistorySelection<'a> {
         Self {
             query,
             decision_id: None,
+            links: None,
+        }
+    }
+
+    /// LN-7: the records `query` selects that are linked to one of `links`' identifiers.
+    pub(super) const fn linked(query: &'a EventQuery, links: &'a LinkSet) -> Self {
+        Self {
+            query,
+            decision_id: None,
+            links: Some(links),
         }
     }
 
@@ -49,6 +61,54 @@ impl<'a> HistorySelection<'a> {
             && self
                 .decision_id
                 .is_none_or(|decision| decision_of(event) == Some(decision))
+            && self.links.is_none_or(|links| links.matches(event))
+    }
+}
+
+/// LN-7 (#422, LEAN-L §3.5): the identifiers a retention read selects records by: a record is
+/// selected when its run, lease, frame, request or correlation link is one of them, or when one
+/// of the artifacts it carries is (`ledger_artifacts`, by its `artifact_id` index).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct LinkSet {
+    pub(super) runs: BTreeSet<RunId>,
+    pub(super) leases: BTreeSet<LeaseId>,
+    pub(super) frames: BTreeSet<FrameId>,
+    pub(super) requests: BTreeSet<RequestId>,
+    pub(super) correlations: BTreeSet<CorrelationId>,
+    pub(super) artifacts: BTreeSet<ArtifactId>,
+}
+
+impl LinkSet {
+    pub(super) fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+            && self.leases.is_empty()
+            && self.frames.is_empty()
+            && self.requests.is_empty()
+            && self.correlations.is_empty()
+            && self.artifacts.is_empty()
+    }
+
+    /// Whether `event` is linked to one of these identifiers.
+    pub(super) fn matches<E: LedgerEventRead>(&self, event: &E) -> bool {
+        let links = event.links();
+        links.run_id().is_some_and(|run| self.runs.contains(run))
+            || links
+                .lease_id()
+                .is_some_and(|lease| self.leases.contains(lease))
+            || links
+                .frame_id()
+                .is_some_and(|frame| self.frames.contains(frame))
+            || links
+                .request_id()
+                .is_some_and(|request| self.requests.contains(request))
+            || links
+                .correlation_id()
+                .is_some_and(|correlation| self.correlations.contains(correlation))
+            || !self.artifacts.is_empty()
+                && event
+                    .projected_artifacts(false)
+                    .iter()
+                    .any(|artifact| self.artifacts.contains(&artifact.artifact_id))
     }
 }
 
@@ -66,6 +126,77 @@ pub(super) fn decision_of<E: LedgerEventRead>(event: &E) -> Option<&str> {
         }
         _ => None,
     }
+}
+
+/// LN-7 (#422, LEAN-L §3.5): one closure scope of a range of records: its instance and its run
+/// and lease links, or without a run its request and correlation links, with its first record and
+/// the sequence of its last. A retention fact names no scope source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ScopeExtent {
+    pub(super) instance: InstanceId,
+    pub(super) run: Option<RunId>,
+    pub(super) lease: Option<LeaseId>,
+    pub(super) request: Option<RequestId>,
+    pub(super) correlation: Option<CorrelationId>,
+    pub(super) first: TerminalEvent,
+    pub(super) last: u64,
+}
+
+/// LN-7: the scope extents of `events` (in ledger order), as a replay groups them (the test
+/// medium's grouping; SQLite groups through its link index).
+#[cfg(test)]
+pub(super) fn scope_extents<'e, E: LedgerEventRead + 'e>(
+    events: impl IntoIterator<Item = &'e E>,
+) -> Vec<ScopeExtent> {
+    let mut extents = std::collections::BTreeMap::new();
+    for event in events {
+        if event.payload().artifact_retention().is_some() {
+            continue;
+        }
+        let links = event.links();
+        let Some(instance) = links.instance_id().copied() else {
+            continue;
+        };
+        let run = links.run_id().copied();
+        let (request, correlation) = match run {
+            Some(_) => (None, None),
+            None => match (links.request_id(), links.correlation_id()) {
+                (Some(request), Some(correlation)) => (Some(*request), Some(*correlation)),
+                _ => continue,
+            },
+        };
+        let key = (
+            instance,
+            run,
+            links.lease_id().copied(),
+            request,
+            correlation,
+        );
+        extents
+            .entry(key)
+            .and_modify(|value: &mut (TerminalEvent, u64)| value.1 = event.sequence())
+            .or_insert((
+                TerminalEvent {
+                    event_id: *event.event_id(),
+                    sequence: event.sequence(),
+                },
+                event.sequence(),
+            ));
+    }
+    extents
+        .into_iter()
+        .map(
+            |((instance, run, lease, request, correlation), (first, last))| ScopeExtent {
+                instance,
+                run,
+                lease,
+                request,
+                correlation,
+                first,
+                last,
+            },
+        )
+        .collect()
 }
 
 /// LN-5: the Lab relations of the history through one position (`LAB_RELATIONS`): the requests
@@ -175,6 +306,16 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
         &self,
         selection: &HistorySelection<'_>,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        self.select_where(selection, |_| true)
+    }
+
+    /// LN-7 (#422): the records `selection` selects that `keep` keeps, committed or staged, in
+    /// ledger order; the others are held only while their page is read.
+    pub(super) fn select_where(
+        &self,
+        selection: &HistorySelection<'_>,
+        keep: impl Fn(&PersistedEvent) -> bool,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         let head = self.backend.head();
         let through = selection.query.to_sequence.map_or(head, |to| to.min(head));
         let mut after = selection
@@ -194,7 +335,10 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
                 break;
             };
             after = last;
-            events.extend(page.into_iter().filter(|event| selection.selects(event)));
+            events.extend(
+                page.into_iter()
+                    .filter(|event| selection.selects(event) && keep(event)),
+            );
             if !full {
                 break;
             }
@@ -202,7 +346,7 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
         events.extend(
             self.staged
                 .iter()
-                .filter(|event| selection.selects(*event))
+                .filter(|event| selection.selects(*event) && keep(event))
                 .cloned(),
         );
         Ok(events)

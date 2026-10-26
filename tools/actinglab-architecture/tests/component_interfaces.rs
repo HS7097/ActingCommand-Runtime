@@ -32,16 +32,17 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `host_claims.run_end_grace_ms`, #411 A66 (same release) adds to it the `watchdog` section
 ///   (`start_window_ms`), PERF-B1 (Workflow #407 B1, register §1.177, same release) the
 ///   optional `execution` section, SCH-M ED-1 (register §1.178, same release) the
-///   expected-duration keys, emu-watch the emulator watch's `emulator_control` keys, and LN-5
-///   (#422, same release) `ledger_observer.history_page_rows`; revisions 5 to 10 are still
-///   read, so [5, 11]. IDLE-1 (the release after v0.12.12, Alice's ruling 41): revision 12
-///   adds the `idle` section and an instance entry's `idle` member; ROUT-L RL-1b (same
-///   release) adds to it the `standard_packs` keys `check_interval_ms` and
-///   `cached_generations`, and a `policy` section without `catalog` (composer mode);
-///   revisions 5 to 11 are still read, so [5, 12]. #422 LN-9 (the release after v0.12.13):
-///   revision 13 adds the scrub's `ledger_observer` keys `scrub_rows_per_second`,
-///   `scrub_chunk_rows` and `scrub_pass_interval_ms`; revisions 5 to 12 are still read, so
-///   [5, 13].
+///   expected-duration keys and emu-watch the emulator watch's `emulator_control` keys;
+///   revisions 5 to 10 are still read, so [5, 11]. IDLE-1 (v0.12.13, Alice's ruling 41):
+///   revision 12 adds the `idle` section and an instance entry's `idle` member; ROUT-L RL-1b
+///   (same release) adds to it the `standard_packs` keys `check_interval_ms` and
+///   `cached_generations`, and a `policy` section without `catalog` (composer mode), LN-5 (#422,
+///   same release) `ledger_observer.history_page_rows` and LN-TUNE (#422, same release)
+///   `ledger_observer.writer_reply_timeout_ms`; revisions 5 to 11 are still read, so [5, 12].
+///   LN-8 (#422, the release after v0.12.13): revision 13 adds
+///   `ledger_observer.open_verify_tail_records`, and LN-9 (#422, same release) the scrub's
+///   `ledger_observer` keys `scrub_rows_per_second`, `scrub_chunk_rows` and
+///   `scrub_pass_interval_ms`; revisions 5 to 12 are still read, so [5, 13].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

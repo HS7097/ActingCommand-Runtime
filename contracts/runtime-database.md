@@ -10,8 +10,9 @@ GlobalLedger shares this database through the
 ## Construction and file ownership
 
 The Host creates fresh storage through `RuntimeStateStore::open_database` and
-opens existing Runtime storage through `RuntimeDatabase::open_existing`. It
-injects the same owner into State using `from_database`.
+opens existing Runtime storage through `RuntimeDatabase::open_existing_for_start`
+(#422 LN-8; `open_existing` before it). It injects the same owner into State using
+`from_database`.
 `RuntimeStateStore::open` provides the same assembly for existing callers. Each
 assembly opens one connection; facades share that owner rather than reopening it.
 The Host's existing OwnerGuard continues to arbitrate process ownership.
@@ -22,9 +23,18 @@ read-only, with the same path, key and connection checks as
 `check-config` catalog preview uses it, for its selected ledger read and its
 State view, and the range opening of the offline `actingledger events` and
 `export --performance` (`GlobalLedger::open_range`, Workflow #411 A4): every
-row they read is authenticated on its own. Startup, `ledger-maintenance` and
-the other forensic readers open through `open_existing` and keep the whole-file
-check.
+row they read is authenticated on its own. `ledger-maintenance` and the other
+forensic readers open through `open_existing` and keep the whole-file check.
+
+`RuntimeDatabase::open_existing_for_start(root)` (#422 LN-8, LEAN-L §3.2 step 1) is
+the Runtime start's open of existing storage: read-write, with the same path, key,
+connection, journal and synchronous checks as `open_existing(root, false)`, but
+without `quick_check(1)`, whose time grows with the file. The start reads only the
+ledger's keyed meta row, the end of its rows, its newest records and its indexes,
+each authenticated ([ledger-store.md](ledger-store.md#open-ownership-and-append-durability));
+`ledger-maintenance verify` and the background re-check (LN-9) keep the whole-file
+check. A fresh root's construction below still runs it, over the database it has
+just created.
 
 `RuntimeDatabase::quick_check(connection, operation)` (#422 LN-9) runs the whole-file
 `PRAGMA quick_check(1)` on a caller's own connection to the file, outside any transaction: the
