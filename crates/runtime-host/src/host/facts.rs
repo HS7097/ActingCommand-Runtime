@@ -1088,8 +1088,10 @@ impl HostShared {
             value.writer_response.finish(appended.is_ok());
         }
         // Workflow #383 AO-1: no latch refuses the later appends; a write the ledger gave up on
-        // stops the Runtime by its dump (`contracts/ledger-observer.md` §9.2).
-        let event = appended.map_err(|_| ledger_error(HostLocation::AppendRuntimeEvent))?;
+        // stops the Runtime by its dump (`contracts/ledger-observer.md` §9.2). #422 LN-WS (R4):
+        // the failure keeps the ledger's code as its cause (`writer_response_timeout`, ...).
+        let event = appended
+            .map_err(|error| ledger_error_caused_by(HostLocation::AppendRuntimeEvent, &error))?;
         // Workflow #383 AO-7: the record is committed; its wake, if any, reaches the driver
         // from here, not from the ledger.
         self.policy_wakes.raise(event.event_type());

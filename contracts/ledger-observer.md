@@ -1180,6 +1180,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `scrub_rows_per_second` | 625 | integer | rows a second the background scrub reads and authenticates: a chunk starts no earlier than the one before plus its rows at this rate, about 40 minutes a pass at 1.5 million records (Alice's ruling 57); `1..=100000`, settable, read after each chunk (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_chunk_rows` | 256 | integer | rows of one scrub chunk, each chunk in a read transaction of its own; `1..=4096` (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_pass_interval_ms` | 2 400 000 | ms | the least time from the start of one scrub pass to the start of the next; the first starts when the writer opens; `60000..=86400000` (#422 LN-9) | LN-9, 0.12.14 |
+| `read_check_vm_steps` | 10 000 | integer | SQLite virtual-machine steps between two looks at the clock of a read that serves a Runtime request (a view page, a subscription's replay page): its `read_budget_ms` holds inside a statement too; `100..=1000000` (#422 LN-WS) | LN-WS, 0.12.16 |
+| `history_scan_rows` | 65 536 | integer | sequences one history statement of a view page (its selection and its runs' recovery context) spans at most, so a page its budget stops has always gone on; `1024..=1048576` (#422 LN-WS) | LN-WS, 0.12.16 |
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
@@ -1197,7 +1199,11 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `read_budget_ms` of 10 000 or more (a read stops before its caller stops waiting for it) and a
   `close_timeout_ms` not above `read_budget_ms` (the close waits longer than one read). A read
   looks at the writer's clock every 256 rows it visits; the appends that queued behind it commit
-  before the writer's next command. A close that passes its bound leaves the writer behind and
+  before the writer's next command. Since #422 LN-WS the budget holds inside a statement too: a
+  read that serves a Runtime request (a view page, a subscription's replay page) also looks at the
+  clock every `read_check_vm_steps` SQLite steps, so it ends within `read_budget_ms` and one check
+  interval even when one SQLite step scans many rows, and an append behind it waits at most that
+  plus its own flush. A close that passes its bound leaves the writer behind and
   ends with `ledger_close_timeout` (`stage` the writer's command, `elapsed_ms`, `timeout_ms`), so
   actingd ends and its watchdog starts it again.
 - P0-LO (0.12.11, `actingd-config` revision 10): the start's ledger open (§12 step 1) runs under
@@ -1303,6 +1309,36 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   ledger, and writes no record and no daemon line; the pass-end line `ledger_scrub_pass` of the
   LEAN-L model §3.8 is not added. At 1.5 million records a pass reads for about 2 400 s at the
   default rate, then runs `quick_check` once over the file.
+- #422 LN-WS (the production stop of 2026-10-26 19:12:43; the release after v0.12.15,
+  `actingd-config` revision 14): no read can make a write fail. A view page with a time window and
+  no instance ran on the writer's thread as one SQLite step that scanned the history from sequence
+  1 (about 1.58 million rows, 15 to 18 s); A51's budget looked at the clock only between returned
+  rows, so nothing stopped it, and an append behind it waited out `writer_reply_timeout_ms`.
+  - The budget holds inside a statement. While the writer handles a `ProjectViewPage` or a
+    `ReplayPage` command, and only then, the read's statements run under a progress handler on the
+    shared connection that looks at the command's clock every `read_check_vm_steps` steps;
+    installed while the read holds the connection and removed before it lets it go (before the
+    next flush), so no write runs under it. Once the budget is spent the handler interrupts the
+    statement in progress, which ends only that read: a page answers incomplete (`read_budget`) at
+    the end of its last whole statement, a replay page `ledger_read_budget_exceeded`, and a page
+    whose head check or Lab relations it interrupts `ledger_read_budget_exceeded` too (request
+    class). An `SQLITE_INTERRUPT` the handler did not cause stays a SQL failure. The Runtime's own
+    reads keep A51's bound between rows: the policy driver ends on any cycle error, and those
+    reads are index-bounded.
+  - A view page's history statements span at most `history_scan_rows` sequences each
+    (`e.sequence>c AND e.sequence<=min(c+span, through)`, which also bounds a link index range
+    through its join), its selection's and its runs' recovery context's alike. A page's first
+    statement spans one sequence and runs whatever the budget; each later span is twice the one
+    before, up to `history_scan_rows`, and the page looks at its budget before each. A page its
+    budget stops therefore answers a cursor past its start, and a client paging on always
+    advances. The rows and their order are those of one unbounded statement. A run's recovery
+    context that the budget cuts short is limited (`context_limit`, state `unknown`).
+  - A first page with `from_timestamp_unix_ms` starts at the first record at or after it, minus
+    one: `MIN(sequence)` through the time index alone (`ledger_view_index_time_v1`), exact
+    whatever the records' order of times; its work follows the records after the window's start.
+    When the handler interrupts that lookup, the page starts where it would have. Offline
+    readers keep their path.
+  - Both keys are read when the ledger opens (`false`). No code is added.
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
   [runtime-fact-store.md](runtime-fact-store.md));

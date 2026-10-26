@@ -33,6 +33,14 @@
 //!
 //! A4 (steady capture after ready) and A5 (history queries) are not measured here.
 //!
+//! #422 LN-WS (root cause rd-1026/writer-stall/root-cause.md §5): after each start has settled,
+//! the child sends the six read forms of the 10-26 19:12:43 stop as `QueryEvents` first pages
+//! (no instance with `changes`, `events` and `errors` over an 8-minute window at 90 % of the
+//! history, the fixture instance over that window, the run listing's read since its start, and
+//! one run's records) and reports, for each, the SQLite virtual-machine steps of every statement
+//! of its writer command, the command's time and the page it answered, with the longest of those
+//! times (`writer_longest_ms`). A measurement, not a gate.
+//!
 //! #422 LN-8d: the history has production's frame store shape. Every `LIVE_FRAME_EVERY`th frame
 //! of a run is stored through the root's artifact store and stays live in its frame store, from
 //! the history's start to its end: on the production ledger of 10-26, 5 638 live frames of
@@ -47,8 +55,9 @@
 
 use super::*;
 use actingcommand_ledger::{
-    LedgerMaintenance, ProcessMemory, SyntheticInstance, SyntheticLedgerSpec, process_age_ms,
-    process_memory, write_synthetic_ledger,
+    LedgerMaintenance, LedgerWriterCommandKind, ProcessMemory, SyntheticInstance,
+    SyntheticLedgerSpec, WriterStatementRecorder, process_age_ms, process_memory,
+    write_synthetic_ledger,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use serde_json::{Value, json};
@@ -59,6 +68,10 @@ const REPORT_DIR_ENV: &str = "ACTINGCOMMAND_LEAN_SCALE_REPORT_DIR";
 // The child's state root and the file it writes its report to.
 const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_LEAN_SCALE_ROOT";
 const CHILD_REPORT_ENV: &str = "ACTINGCOMMAND_LEAN_SCALE_CHILD_REPORT";
+// #422 LN-WS: the child's history length, for the read forms' window.
+const CHILD_RECORDS_ENV: &str = "ACTINGCOMMAND_LEAN_SCALE_CHILD_RECORDS";
+// #422 LN-WS: the read forms' window, as long as the 19:12:24 call's.
+const READ_FORM_WINDOW_MS: u64 = 8 * 60 * 1_000;
 const CHILD_TEST: &str = "tests::lean_scale::lean_scale_start_child";
 const DEFAULT_SIZES: [u64; 2] = [10_000, 1_000_000];
 // LN-8d: the frame store's shape (module documentation): one frame in sixteen is live.
@@ -208,12 +221,17 @@ fn memory_json(memory: ProcessMemory) -> Value {
 #[test]
 #[ignore = "child process entry: lean_scale_reports_start_measures runs it with --ignored --exact"]
 fn lean_scale_start_child() {
-    let (Ok(root), Ok(report_path)) = (
+    let (Ok(root), Ok(report_path), Ok(records)) = (
         std::env::var(CHILD_ROOT_ENV),
         std::env::var(CHILD_REPORT_ENV),
+        std::env::var(CHILD_RECORDS_ENV),
     ) else {
         return;
     };
+    let records: u64 = records
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("{CHILD_RECORDS_ENV}={records:?} is no record count"));
     let settle = Duration::from_millis(settle_ms());
     let launch_to_call_ms = process_age_ms().expect("the process's age before the start");
     let started = Instant::now();
@@ -233,6 +251,7 @@ fn lean_scale_start_child() {
     let recovery = host.startup_recovery_for_test();
     thread::sleep(settle);
     let settled = process_memory().expect("the memory after settling");
+    let read_forms = read_forms(&host, Path::new(&root), records);
     host.close().expect("close the Runtime host");
     let open = OPEN_PHASES
         .iter()
@@ -287,6 +306,7 @@ fn lean_scale_start_child() {
         "settle_ms": milliseconds(settle),
         "memory_at_ready": memory_json(at_ready),
         "memory_settled": memory_json(settled),
+        "read_forms": read_forms,
     });
     fs::write(
         report_path,
@@ -296,6 +316,156 @@ fn lean_scale_start_child() {
 }
 
 // The last lines of a child's output, for a failure message.
+// #422 LN-WS: the six read forms of the incident, each one first page as `ac_events` sends it,
+// on the started host over the synthetic history of `records` records: the page each answered,
+// the SQLite work of every statement of its writer command and that command's time.
+fn read_forms(host: &RuntimeHost, root: &Path, records: u64) -> Value {
+    let spec = SyntheticLedgerSpec::new(records, Vec::new());
+    let since = spec.first_timestamp_unix_ms + spec.record_interval_ms * (records * 90 / 100);
+    let until = since + READ_FORM_WINDOW_MS;
+    let instance = scale_instance_id();
+    let run = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::TaskRequested),
+            instance_id: Some(instance),
+            from_timestamp_unix_ms: Some(since),
+            ..EventQuery::default()
+        })
+        .expect("the requested tasks since the window's start")
+        .first()
+        .and_then(|event| event.links().run_id().copied());
+    let window = |view| EventQuery {
+        view,
+        from_timestamp_unix_ms: Some(since),
+        to_timestamp_unix_ms: Some(until),
+        ..EventQuery::default()
+    };
+    let mut forms = vec![
+        (
+            "A changes",
+            window(Some(actingcommand_contract::LedgerView::Changes)),
+            100,
+        ),
+        (
+            "A events",
+            window(Some(actingcommand_contract::LedgerView::Events)),
+            100,
+        ),
+        (
+            "A errors",
+            window(Some(actingcommand_contract::LedgerView::Errors)),
+            100,
+        ),
+        (
+            "B one instance",
+            EventQuery {
+                instance_id: Some(instance),
+                ..window(None)
+            },
+            30,
+        ),
+        (
+            "C run listing",
+            EventQuery {
+                event_type: Some(EventType::TaskRequested),
+                instance_id: Some(instance),
+                from_timestamp_unix_ms: Some(since),
+                ..EventQuery::default()
+            },
+            10,
+        ),
+    ];
+    if let Some(run) = run {
+        forms.push((
+            "D run evidence",
+            EventQuery {
+                run_id: Some(run),
+                ..EventQuery::default()
+            },
+            100,
+        ));
+    }
+    let recorder = WriterStatementRecorder::arm(root).expect("the statement recorder");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let mut measured = serde_json::Map::new();
+    for (index, (form, query, limit)) in forms.into_iter().enumerate() {
+        let request = runtime_request(
+            &ids,
+            RuntimeOperation::QueryEvents {
+                query,
+                profile: ProjectionProfile::Forensic,
+                page: RuntimeEventQueryPageRequest::new(limit, None).expect("a first page"),
+            },
+        );
+        let receipt = host
+            .process_request_for_test(
+                &request,
+                ConnectionId::new(9_000 + index as u64).expect("connection"),
+            )
+            .unwrap_or_else(|error| panic!("{form}: a receipt: {error:?}"));
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{form}: {receipt:?}"
+        );
+        let Some(RuntimeResult::EventPage { page }) = receipt.result() else {
+            panic!("{form}: an event page: {receipt:?}");
+        };
+        // The writer records a command after its reply: once a later request that reads the
+        // ledger's head has answered, the page's command is recorded.
+        let status = host
+            .process_request_for_test(
+                &runtime_request(&ids, RuntimeOperation::Status),
+                ConnectionId::new(9_100 + index as u64).expect("connection"),
+            )
+            .unwrap_or_else(|error| panic!("{form}: a status receipt: {error:?}"));
+        assert_eq!(
+            status.state(),
+            RuntimeReceiptState::Completed,
+            "{form}: {status:?}"
+        );
+        let commands = recorder.take();
+        let reads = commands
+            .iter()
+            .filter(|command| command.command == LedgerWriterCommandKind::ProjectViewPage)
+            .collect::<Vec<_>>();
+        let statements = reads
+            .iter()
+            .flat_map(|command| command.statements.iter())
+            .collect::<Vec<_>>();
+        let costliest = statements.iter().max_by_key(|statement| statement.vm_steps);
+        let scope = page.read_scope();
+        measured.insert(
+            form.to_owned(),
+            json!({
+                "complete": scope.map(|scope| scope.read_complete),
+                "scanned_through_position": scope.map(|scope| scope.scanned_through_position),
+                "returned": page.returned_count(),
+                "statements": statements.len(),
+                "vm_steps": statements
+                    .iter()
+                    .map(|statement| statement.vm_steps)
+                    .collect::<Vec<_>>(),
+                "costliest_vm_steps": costliest.map(|statement| statement.vm_steps),
+                "costliest_sql": costliest.map(|statement| statement.sql.clone()),
+                "writer_ms": reads
+                    .iter()
+                    .map(|command| milliseconds(command.processing))
+                    .max(),
+            }),
+        );
+    }
+    drop(recorder);
+    let writer_longest_ms = measured
+        .values()
+        .filter_map(|form| form["writer_ms"].as_u64())
+        .max();
+    json!({
+        "forms": measured,
+        "writer_longest_ms": writer_longest_ms,
+    })
+}
+
 fn tail(path: &Path) -> String {
     let text = fs::read_to_string(path).unwrap_or_else(|error| format!("<{error}>"));
     let lines = text.lines().collect::<Vec<_>>();
@@ -315,6 +485,7 @@ fn start_child(root: &Path, report_dir: &Path, records: u64, start: &str) -> Val
         .args(["--ignored", "--exact", CHILD_TEST, "--nocapture"])
         .env(CHILD_ROOT_ENV, root)
         .env(CHILD_REPORT_ENV, &report_path)
+        .env(CHILD_RECORDS_ENV, records.to_string())
         .env(SETTLE_ENV, settle_ms().to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
@@ -400,6 +571,10 @@ fn measure(records: u64, report_dir: &Path) -> Value {
             report["startup_recovery"]["writer_whole_ledger_queries"],
             report["memory_settled"]["private_bytes"],
             report["memory_settled"]["peak_private_bytes"],
+        );
+        println!(
+            "lean_scale records={records} start={start} read_forms={}",
+            report["read_forms"]
         );
         starts.insert(start.to_owned(), report);
     }
@@ -590,6 +765,29 @@ fn markdown(cases: &[Value], targets: &[Target]) -> String {
             number(&case["index_rows"]),
             number(&generation["runs"]),
             number(&generation["frames"]),
+        ));
+    }
+    // #422 LN-WS: the incident's read forms after the steady start (a measurement).
+    text.push_str("\n| records | read form (steady start) | complete | returned | statements | costliest statement VM steps | writer ms |\n|---|---|---|---|---|---|---|\n");
+    for case in cases {
+        let read_forms = &case["starts"][STEADY]["read_forms"];
+        if let Some(forms) = read_forms["forms"].as_object() {
+            for (form, measured) in forms {
+                text.push_str(&format!(
+                    "| {} | {form} | {} | {} | {} | {} | {} |\n",
+                    number(&case["records"]),
+                    measured["complete"],
+                    number(&measured["returned"]),
+                    number(&measured["statements"]),
+                    number(&measured["costliest_vm_steps"]),
+                    number(&measured["writer_ms"]),
+                ));
+            }
+        }
+        text.push_str(&format!(
+            "| {} | writer_longest_ms | | | | | {} |\n",
+            number(&case["records"]),
+            number(&read_forms["writer_longest_ms"]),
         ));
     }
     text.push_str("\n| target (model §7.1) | required | measured | holds |\n|---|---|---|---|\n");
