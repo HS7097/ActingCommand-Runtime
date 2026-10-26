@@ -2161,3 +2161,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_386_rlt::rlt_2_resource_validate_refuses_an_invalid_root_schedule_json_with_its_pointer",
 ]
 incident = ["#386 ROUT-L RL-T"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §4.1, §13 row DA4-T4; register §1.192 DL-3): package bundle --display-layout lays the given file beside bundle.json as display-layout.json byte for byte, whatever it is named; the installed game root made of that bundle passes standard-pack check, whose root_files list bundle.json and display-layout.json
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da4::da4_t4_package_bundle_lays_the_declaration_and_standard_pack_check_lists_it",
+]
+incident = ["#392 DA-4"]

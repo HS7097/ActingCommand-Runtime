@@ -17280,7 +17280,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack root file (bundle.json, pages.json or interrupts.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime.",
+      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -73,7 +73,8 @@ pub(super) fn help_data() -> Value {
                 "--maintenance <JSON array of package_id, server, uses; written into actingcommand.bundle.v4>",
                 "--pages <pages.json>", "--interrupts <interrupts.json>",
                 "--navigation <navigation.json> (root files: cross-checked, laid beside bundle.json)",
-                "--schedule <schedule.json> (the schedule rules: composed as the Runtime composes them, laid beside bundle.json)"
+                "--schedule <schedule.json> (the schedule rules: composed as the Runtime composes them, laid beside bundle.json)",
+                "--display-layout <display-layout.json> (the display declaration: checked as the Runtime reads it, laid beside bundle.json)"
             ],
             "standard-pack check": crate::standard_pack_cli::options(),
             "standard-pack compose": crate::standard_pack_cli::compose_options(),

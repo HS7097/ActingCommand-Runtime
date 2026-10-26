@@ -5561,7 +5561,7 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json, navigation.json, pages.json or (Workflow #357 DB-1) a tables directory but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json or (Workflow #357 DB-1) a tables directory but no bundle.json."
         },
         "pages_missing": {
           "description": "The game root holds interrupts.json or navigation.json but no pages.json."
@@ -5652,6 +5652,9 @@
         },
         "table_too_large": {
           "description": "A table holds more than 8192 rows or 2 MiB, or is a game root's 65th table or later by file name (Workflow #357 DB-1)."
+        },
+        "display_layout_invalid": {
+          "description": "display-layout.json breaks one of its rules: its correction.radius_px is above 64 (Workflow #392 DA-4, model 392 v1.2 section 4.1)."
         }
       }
     },

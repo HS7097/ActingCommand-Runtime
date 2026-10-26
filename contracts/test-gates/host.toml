@@ -2229,3 +2229,30 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_empty_lists_leave_the_evaluation_unchanged",
 ]
 incident = ["#386 SR-4a2"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §4.1, §13 rows DA4-T1 and DA4-T2; register §1.192 DL-1, DL-2): a valid display-layout.json is read by read_standard_pack_root with every member as written (radius 64 and 0 pass, a repository root's file names its game); a missing, unknown or misfit member is standard_pack_root_invalid malformed at that member's pointer at any depth (empty for the whole document), another game is game_mismatch, radius 65 is display_layout_invalid at /correction/radius_px, the root reader refusing each as the parser does; display-layout.json without bundle.json is bundle_missing, and with it no pages.json is needed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_display::tests::da4_t1_a_valid_display_layout_is_read_by_the_root_reader",
+    "actingcommand-contract::lib::standard_pack_display::tests::da4_t1_each_display_layout_violation_is_its_problem_at_its_pointer",
+    "actingcommand-contract::lib::standard_pack_display::tests::da4_t2_display_layout_without_bundle_json_is_bundle_missing_and_needs_no_pages",
+]
+incident = ["#392 DA-4"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §4.1, §13 row DA4-T3; register §1.192 DL-4): a broken display-layout.json is recorded at startup as standard_pack_root_invalid and the Runtime starts; a run of its game is refused in its preparation (display_layout_invalid at /correction/radius_px) with no task record and no input; repaired in place it is read by the next run, which goes on; a declaration replaced by a broken file during a run leaves that run to its end and refuses the next (malformed at /schema_version)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4::da4_t3_a_broken_declaration_refuses_the_run_before_its_lease_and_a_repaired_one_is_read_next",
+    "actingcommand-runtime-host::lib::tests::gate_392_da4::da4_t3_the_declaration_read_in_preparation_holds_for_the_whole_run",
+]
+incident = ["#392 DA-4"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §12.2, C16; Alice 10-26, merge is deploy): a 1280x720 package on a 1280x720 device records the same task records and sends the same input with a game root holding a valid display-layout.json as with a game root without one and as with no standard-pack root
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4::da4_identity_a_1280x720_package_on_a_1280x720_device_runs_byte_for_byte_as_before",
+]
+incident = ["#392 DA-4"]

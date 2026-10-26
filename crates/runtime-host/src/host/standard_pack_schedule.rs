@@ -40,10 +40,10 @@ use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
-    read_standard_pack_root,
+    BundleIndex, BundleMaintenance, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot,
+    StandardPackRootBytes, read_standard_pack_root,
 };
 use actingcommand_policy::{
     STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID, StandardPackBinding,
@@ -194,6 +194,9 @@ fn read_schedule_game(
     let pages = read_root_file(&path_of(STANDARD_PACK_PAGES_FILE))?;
     let interrupts = read_root_file(&path_of(STANDARD_PACK_INTERRUPTS_FILE))?;
     let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?;
+    // Workflow #392 DA-4: checked as every reader checks it, so no reader accepts what another
+    // refuses.
+    let display_layout = read_root_file(&path_of(STANDARD_PACK_DISPLAY_LAYOUT_FILE))?;
     let tables_path = path_of(STANDARD_PACK_TABLES_DIRECTORY);
     let tables = match fs::symlink_metadata(&tables_path) {
         Ok(_) => true,
@@ -213,6 +216,7 @@ fn read_schedule_game(
             interrupts: interrupts.as_deref(),
             navigation: navigation.as_deref(),
             tables,
+            display_layout: display_layout.as_deref(),
         },
         game,
     )

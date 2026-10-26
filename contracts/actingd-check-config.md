@@ -768,7 +768,10 @@ package admitted, and reports `standard_packs`:
 
 `root_files` lists the root files present: `bundle.json`, `pages.json`,
 `interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, which is checked
-against `pages.json` and the registry as a run's preparation checks it.
+against `pages.json` and the registry as a run's preparation checks it, and
+(Workflow #392 DA-4) `display-layout.json`, the game's display declaration,
+checked as a run's preparation checks it (`package-reference.md`, "Standard
+package root").
 
 Workflow #357 DB-1 (model M-357a v1.1 §2.3; `v012-register.md` §1.65 TB3): each
 sound game root also lists `tables`, its `tables/` files in file name order as

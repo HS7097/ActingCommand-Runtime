@@ -9,6 +9,7 @@
 //! bundle makes, its packages cross-checked for the parts the files name them for
 //! (`standard_pack_check`), and laid beside `bundle.json` byte for byte. ROUT-L RL-1a: so is
 //! `schedule.json` (`--schedule`), checked by the Runtime's composer (`standard_pack_schedule`).
+//! Workflow #392 DA-4: and `display-layout.json` (`--display-layout`), checked by the root reader.
 
 use crate::codes::ResourceToolingCode;
 use crate::standard_pack_check::{RootFileInputs, cross_check};

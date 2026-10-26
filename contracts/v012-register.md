@@ -3465,6 +3465,28 @@ number 1.191 is provisional for the parallel slices (1.189 is SR-4a3's, 1.190 ED
 | SR4A2-3 | `config.subsystems` row `scheduling_blackout` (always on, `count` the host entries) | new row value of an existing fact | SR-4a2 | SR-4a2 | a catalog generator emits `maintenance` events only for a Runtime that names it (GEN-35) |
 | SR4A2-4 | the random delay's cut gains the quiet point (the next blackout start minus the lead; where the day boundary applies, the window's end minus E) | behaviour (memory only) | SR-4a2 | — | the draw's `allowed_until` is the earliest of the four; `PolicyRandomDelay` unchanged |
 
+### 1.192 Slice DA-4 (0.12.x): a game root's display declaration `display-layout.json` (#392 / #401; model 392 v1.2 `rd-1012/m392/model-392-adapter-shell-v1.2.md` §4.1, §0.2 C9, §12.1 row DA-4; the coordinator's ruling of 10-13, §17 item 2: the declaration sits at the standard package's root and the NAV-5 root reader reads it)
+
+[package-reference.md](package-reference.md) ("Content-directory tools and the bundle index",
+"Standard package root", `display-layout.json`) and [actingd-check-config.md](actingd-check-config.md)
+are the contract. **No persisted ledger shape, no configuration key and no new code**: a broken
+file is the existing `standard_pack_root_invalid` with one more `standard_pack_problem` token
+(#420 S4); the display adapter that uses the declaration comes with DA-2a. The SH-2 rows X6 to
+X8 and X10 (§1.25) name DA-4 their first writer by model v1.1's slicing; under v1.2 their
+writers are DA-2a (X7, X8 and X10's `display.map`) and DA-4b (X6, the safe area), and this slice
+writes none of them. A game root without `display-layout.json` behaves as before, and no
+resource repository carries one in this wave. Gates: the contract's `standard_pack_display`
+tests (DA4-T1, DA4-T2), the host's `gate_392_da4` tests (DA4-T3 and the identity test) and
+actinglab's `gate_392_da4` test (DA4-T4). The number 1.192 is provisional for the parallel
+slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DL-1 | root file `display-layout.json` (`actingcommand.display-layout.v1`): `{schema_version, game, scale {by: height \| width, area: screen \| safe_area}, anchor_area: screen \| safe_area, correction {radius_px}}` (`StandardPackDisplayLayout`, `parse_standard_pack_display_layout`, `STANDARD_PACK_DISPLAY_LAYOUT_FILE`; `StandardPackRootBytes.display_layout`, `StandardPackRoot.display_layout`) | resource file format, not a ledger shape (tests DA4-T1, DA4-T2) | DA-4 (reader, contract checks) | resource side (DA-6) | every member required, unknown members refused, no Runtime default; `malformed` at the first unknown, missing or misfit member's pointer (empty for the whole document), `game_mismatch` at `/game`, `display_layout_invalid` at `/correction/radius_px` above 64 (the shape's bound, not a tunable); without `bundle.json` `bundle_missing`; no `pages.json` needed; read by `read_standard_pack_root` for every reader; the spellings are SH-2's `DisplayScaleBy` and `DisplayArea` (X7) |
+| DL-2 | `standard_pack_problem` token `display_layout_invalid` | vocabulary token of an existing code (`standard_pack_root_invalid`, contract) | DA-4 | DA-4 | model 392 §9.2: v1.1's code `display_layout_invalid` becomes this token; the code's description lists `display-layout.json` among the root files |
+| DL-3 | `package bundle --display-layout <file>`; output `display-layout.json` beside `bundle.json` (`StandardPackRootFiles.display_layout`); `resource verify`'s bundle step lays a repository root's `display-layout.json` the same way | new tool flag and output layout (test DA4-T4) | DA-4 | resource side (DA-6) | laid byte for byte, under its root file name whatever the given file is named, once the game root the bundle makes passes `read_standard_pack_root` (`standard_pack_root_invalid` with the given file's `path`); with it every pack is admitted for real as with any root file; `standard-pack check` lists it in `root_files` |
+| DL-4 | the Runtime's reading of the file: at startup with the other root files (a broken one only recorded); in a run's preparation, the game root read when it holds the file (a broken one refuses the run before any lease and task record); check-config's `root_files`; `actingctl packs`' sound root; the scheduler workbench's and `standard-pack compose`'s root read | behaviour (memory only) (tests DA4-T3, identity) | DA-4 | — | what a preparation read is not kept yet (DA-2a keeps it for the run's display map); a file replaced in place is read by the next run; a 1280x720 package on a 1280x720 device records and sends byte for byte what it does without the file and without a root |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

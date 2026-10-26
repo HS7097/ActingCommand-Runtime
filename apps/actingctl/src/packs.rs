@@ -17,10 +17,10 @@ use crate::instance_selector::SelectorMiss;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    InstalledProcess, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY,
-    StandardPackRootBytes, StandardPackTableReport, read_standard_pack_root,
-    read_standard_pack_tables,
+    InstalledProcess, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRootBytes, StandardPackTableReport,
+    read_standard_pack_root, read_standard_pack_tables,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -586,11 +586,13 @@ fn sound_game_root(directory: &Path, game: &str) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(None),
         Err(_) => None,
     };
-    let (Some(bundle), Some(pages), Some(interrupts), Some(navigation)) = (
+    // Workflow #392 DA-4: `display-layout.json` is checked as the Runtime checks it.
+    let (Some(bundle), Some(pages), Some(interrupts), Some(navigation), Some(display_layout)) = (
         read(STANDARD_PACK_BUNDLE_FILE),
         read(STANDARD_PACK_PAGES_FILE),
         read(STANDARD_PACK_INTERRUPTS_FILE),
         read(STANDARD_PACK_NAVIGATION_FILE),
+        read(STANDARD_PACK_DISPLAY_LAYOUT_FILE),
     ) else {
         return false;
     };
@@ -603,6 +605,7 @@ fn sound_game_root(directory: &Path, game: &str) -> bool {
                 interrupts: interrupts.as_deref(),
                 navigation: navigation.as_deref(),
                 tables,
+                display_layout: display_layout.as_deref(),
             },
             game,
         ),

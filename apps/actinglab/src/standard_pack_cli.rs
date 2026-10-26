@@ -4,7 +4,8 @@
 //! `actinglab standard-pack check --root <game root>` runs, on an installed game root
 //! `<standard_packs.root>/<game>/`, the checks `package bundle` runs on the root it lays out,
 //! and lists the packs whose entry pages the page list does not hold. It only reads. ROUT-L
-//! RL-1a: it checks the root's `schedule.json` too, by the Runtime's composer.
+//! RL-1a: it checks the root's `schedule.json` too, by the Runtime's composer. Workflow #392
+//! DA-4: and its `display-layout.json`, by the Runtime's root reader.
 //!
 //! ROUT-L RL-1a (contracts/standard-pack-schedule.md): `actinglab standard-pack compose --root
 //! <standard_packs.root> --instance <alias>=<game>/<server>... --out <new directory>` composes
