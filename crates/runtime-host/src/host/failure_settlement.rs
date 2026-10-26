@@ -70,12 +70,12 @@ struct ScheduledMain {
 }
 
 /// A scheduled run's admitted package, its prerequisite chain, its load and (Workflow #373
-/// NAV-6, NAV-5) its standard-pack data.
+/// NAV-6, NAV-5; Workflow #392 DA-2a) its standard-pack data.
 pub(super) type PreparedScheduledPackage = (
     PreparedContainedTask,
     Vec<PreparedContainedTask>,
     PackageLoad,
-    Option<Box<super::standard_pack::RunInterrupts>>,
+    super::standard_pack::RunStandardPack,
 );
 
 /// Two error frames compared (§12.5); `Unavailable` names why they could not be.
@@ -150,12 +150,12 @@ impl HostShared {
         self.pack_admission
             .learn_prepared(task_request.package_path(), prepared.package_label())?;
         // A broken game root refuses the run as before, after its main package is recorded.
-        let interrupts = self.prepare_run_interrupts(&prepared);
-        let navigated = interrupts
-            .as_ref()
-            .is_ok_and(|interrupts| super::navigation::navigation_applies(interrupts.as_deref()));
+        let standard_pack = self.prepare_run_interrupts(&prepared);
+        let navigated = standard_pack.as_ref().is_ok_and(|standard_pack| {
+            super::navigation::navigation_applies(standard_pack.interrupts.as_deref())
+        });
         let mut layers = Vec::new();
-        let chain = match &interrupts {
+        let chain = match &standard_pack {
             Ok(_) => self.resolve_prerequisite_chain_recorded(
                 instance_alias,
                 &prepared,
@@ -180,8 +180,8 @@ impl HostShared {
         .entry(decision_id.to_owned())
         .or_default()
         .main = Some(main);
-        let interrupts = interrupts?;
-        Ok((prepared, chain?, package_load, interrupts))
+        let standard_pack = standard_pack?;
+        Ok((prepared, chain?, package_load, standard_pack))
     }
 
     /// Workflow #386 SR-3 (§2.4 item 2): suspends the task package a scheduled run's preparation

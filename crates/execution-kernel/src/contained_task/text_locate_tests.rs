@@ -276,6 +276,7 @@ fn home_observation() -> PageObservation {
         stability_sample: None,
         captured_at: SystemTime::UNIX_EPOCH,
         frame_started: Instant::now(),
+        display_map: display_gate::identity_for_test(640, 360),
     }
 }
 

@@ -466,10 +466,10 @@ calls the existing `publish_facts`.
 ## Display facts
 
 Workflow #392 DA-A (model 392 v1.1, sections 8.1 and 12.1): a device instance's display is
-recorded, never checked. No frame is refused for its aspect ratio; a contained task's frame
-must still equal its package's resolution (`contained_task_frame_resolution_mismatch`), and its
-aspect ratio must still match the logical display it was captured from
-(`contained_task_geometry_frame_display_mismatch`).
+recorded, never checked. No frame is refused for its aspect ratio; its aspect ratio must still
+match the logical display it was captured from (`contained_task_geometry_frame_display_mismatch`),
+and (Workflow #392 DA-2a) the display adapter must be able to map it onto its package
+([display-adapter.md](display-adapter.md) section 8; `display_map_unresolved`).
 
 | Key | Value |
 | --- | --- |
@@ -479,7 +479,9 @@ aspect ratio must still match the logical display it was captured from
 | `display.aspect` | `record_list`, one row `{ "width": <integer>, "height": <integer> }`: the frame reduced by the greatest common divisor of its width and height (2340x1080 is 13:6) |
 
 **When.** The host writes the four keys when a contained task's first frame passes its task
-geometry (`task.geometry_observed` with conclusion `pass`), for an instance bound to a device:
+geometry (`task.geometry_observed` with conclusion `pass`), and (Workflow #392 DA-2a) again when a
+later frame of the run changed its size, rotation or insets and its geometry, read again
+(`changed`), passes, for an instance bound to a device:
 physical provenance and a device endpoint, the instances whose connection is self-checked
 ("Backend self-check availability" above). A fixture simulation and a provider without a device
 endpoint record nothing.

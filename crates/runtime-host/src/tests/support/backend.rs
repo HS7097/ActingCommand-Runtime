@@ -14,6 +14,9 @@ pub(super) struct FakeState {
     // Workflow #392 DA-A: the frame and display extent of `physical_task_geometry`, 16x9 when
     // not set.
     physical_task_extent: std::sync::Mutex<Option<(u32, u32)>>,
+    // Workflow #392 DA-2a: the frame and display extent once the device took an input, when set
+    // (a display that changes its size during a run).
+    physical_task_extent_after_input: std::sync::Mutex<Option<(u32, u32)>>,
     adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
@@ -120,12 +123,21 @@ pub(super) struct FakeState {
 type PixelScript = Arc<dyn Fn(usize, usize) -> Vec<(usize, [u8; 3])> + Send + Sync>;
 
 impl FakeState {
-    /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A).
+    /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A); after an
+    /// input, the extent `physical_task_extent_after_input` gives, when set (Workflow #392 DA-2a).
     fn physical_task_extent(&self) -> (u32, u32) {
-        self.physical_task_extent
+        let changed = *self
+            .physical_task_extent_after_input
             .lock()
-            .expect("fake physical task extent")
-            .unwrap_or((16, 9))
+            .expect("fake physical task extent after input");
+        match changed {
+            Some(extent) if self.input_count.load(Ordering::Acquire) > 0 => extent,
+            _ => self
+                .physical_task_extent
+                .lock()
+                .expect("fake physical task extent")
+                .unwrap_or((16, 9)),
+        }
     }
 }
 

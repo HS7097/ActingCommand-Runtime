@@ -43,8 +43,9 @@
 //! - **Display declaration** (Workflow #392 DA-4, model 392 v1.2 §4.1). A game root's
 //!   `display-layout.json` is a root file like the others: read and recorded at startup (a
 //!   broken one only recorded), listed by check-config, and read in the preparation of a run of
-//!   its game, which a broken one refuses before any lease. What the preparation read is not
-//!   kept yet: the display adapter (DA-2a), its first reader, keeps it for the run.
+//!   its game, which a broken one refuses before any lease. Workflow #392 DA-2a: the run keeps
+//!   what its preparation read ([`RunStandardPack`]), and the display adapter maps every frame
+//!   of the run, its layers' included, under it.
 
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
 use super::navigation::{RunNavigation, run_navigation};
@@ -54,9 +55,9 @@ use actingcommand_contract::{
     MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY,
-    StandardPackInterrupts, StandardPackNavigation, StandardPackPages, StandardPackRegistry,
-    StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport, TaskEntryRecoveryRole,
-    TaskInterruptThen, read_standard_pack_root, read_standard_pack_tables,
+    StandardPackDisplayLayout, StandardPackInterrupts, StandardPackNavigation, StandardPackPages,
+    StandardPackRegistry, StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport,
+    TaskEntryRecoveryRole, TaskInterruptThen, read_standard_pack_root, read_standard_pack_tables,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -167,13 +168,15 @@ pub(crate) fn read_registries(root: Option<&Path>) -> Vec<(String, PathBuf, Stan
 }
 
 /// One game root as read: where it is, its registry and, when present, its page list, its
-/// shared interrupt pages and (Workflow #373 NAV-5) its navigation data.
+/// shared interrupt pages, (Workflow #373 NAV-5) its navigation data and (Workflow #392 DA-2a)
+/// its display declaration.
 pub(super) struct GameRoot {
     pub(super) directory: PathBuf,
     pub(super) registry: StandardPackRegistry,
     pages: Option<StandardPackPages>,
     interrupts: Option<StandardPackInterrupts>,
     navigation: Option<StandardPackNavigation>,
+    display_layout: Option<StandardPackDisplayLayout>,
 }
 
 /// Why a game root (or the root itself) cannot be used.
@@ -296,6 +299,7 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
         pages: root.pages,
         interrupts: root.interrupts,
         navigation: root.navigation,
+        display_layout: root.display_layout,
     }))
 }
 
@@ -526,6 +530,15 @@ struct RunInterrupt {
     max_per_run: u8,
 }
 
+/// What a run's preparation read of its game's standard-pack root, fixed for the whole run (§7):
+/// its shared interrupt pages and navigation data (Workflow #373 NAV-6, NAV-5) and (Workflow #392
+/// DA-2a, model 392 v1.2 §4.1) its game's display declaration. Nothing read is the default.
+#[derive(Default)]
+pub(super) struct RunStandardPack {
+    pub(super) interrupts: Option<Box<RunInterrupts>>,
+    pub(super) display_layout: Option<StandardPackDisplayLayout>,
+}
+
 /// Workflow #373 NAV-6: a run's shared interrupt pages, fixed at its preparation (§7), and what
 /// the run has done with them; Workflow #373 NAV-5: and its navigation data, read with them.
 pub(super) struct RunInterrupts {
@@ -692,20 +705,21 @@ impl HostShared {
     }
 
     /// Workflow #373 NAV-6 (§7): the shared interrupt pages of a run of `prepared`, read in its
-    /// preparation. `None` (nothing read, nothing recorded) without a root, without the game's
+    /// preparation. None (nothing read, nothing recorded) without a root, without the game's
     /// directory, or when the game root holds no `interrupts.json` (Workflow #373 NAV-5: and no
     /// `navigation.json`; Workflow #392 DA-4: and no `display-layout.json`); also when the root
     /// names no feature package for the run's server, or neither a handler for it nor navigation
     /// data the run's package can use. A broken root refuses the run. Workflow #392 DA-4 (model
     /// 392 v1.2 §4.1): a root that holds `display-layout.json` is read so, once, and a broken
     /// declaration refuses the run before any lease; a declaration replaced in place is read by
-    /// the next run.
+    /// the next run. Workflow #392 DA-2a: the declaration read is the run's
+    /// ([`RunStandardPack::display_layout`]), whether or not interrupts apply.
     pub(super) fn prepare_run_interrupts(
         &self,
         prepared: &PreparedContainedTask,
-    ) -> Result<Option<Box<RunInterrupts>>, RequestFailure> {
+    ) -> Result<RunStandardPack, RequestFailure> {
         let Some(root) = &self.standard_packs.root else {
-            return Ok(None);
+            return Ok(RunStandardPack::default());
         };
         let game = prepared.game();
         let directory = root.join(game);
@@ -730,17 +744,21 @@ impl HostShared {
             }
         }
         if !marked {
-            return Ok(None);
+            return Ok(RunStandardPack::default());
         }
         let read = match read_game_root(&directory, game) {
             Ok(Some(read)) => read,
-            Ok(None) => return Ok(None),
+            Ok(None) => return Ok(RunStandardPack::default()),
             Err(failure) => return Err(failure.refusal(game)),
         };
         self.note_standard_pack_registry(game, &read.registry)
             .map_err(RequestFailure::poison_without_terminal)?;
+        let declared = |interrupts: Option<Box<RunInterrupts>>| RunStandardPack {
+            interrupts,
+            display_layout: read.display_layout.clone(),
+        };
         let Some(pages) = &read.pages else {
-            return Ok(None);
+            return Ok(declared(None));
         };
         let server = prepared.server();
         let for_server = |packages: &[String]| {
@@ -749,7 +767,7 @@ impl HostShared {
                 .and_then(|package_id| RegisteredPack::of(&read, package_id))
         };
         let Some(features) = for_server(&pages.features) else {
-            return Ok(None);
+            return Ok(declared(None));
         };
         let entries = read
             .interrupts
@@ -781,9 +799,9 @@ impl HostShared {
             .as_ref()
             .and_then(|navigation| run_navigation(&read, pages, navigation, prepared));
         if entries.is_empty() && navigation.is_none() {
-            return Ok(None);
+            return Ok(declared(None));
         }
-        Ok(Some(Box::new(RunInterrupts {
+        Ok(declared(Some(Box::new(RunInterrupts {
             identity: PackageIdentity::of(prepared),
             features,
             pages: pages.pages.iter().map(|page| page.id.clone()).collect(),
@@ -794,7 +812,7 @@ impl HostShared {
             total: 0,
             configured: BTreeSet::new(),
             navigation,
-        })))
+        }))))
     }
 }
 

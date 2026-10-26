@@ -17,11 +17,17 @@
 //! the device frame and come back by the rounding table. A cropped frame is mapped on its
 //! logical display; a frame in the display's natural orientation is turned upright first. The
 //! same inputs give the same map bit for bit on every host: nothing here is floating point.
+//!
+//! Workflow #392 DA-2a: the kernel's frame gate and the host's geometry records build the map of
+//! a delivered frame from the frame's own geometry ([`DisplayObservation::of_frame`]) and the
+//! game's declaration ([`DisplayRule`] from the contract's `StandardPackDisplayLayout`), and the
+//! host records it ([`DisplayMap::record`]).
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    CaptureExtent, CaptureFrameCrop, CaptureInsets, CaptureRotation, DisplayArea, DisplayMapKind,
-    DisplayScaleBy,
+    CaptureExtent, CaptureFrameCrop, CaptureFrameTransform, CaptureGeometryObservation,
+    CaptureInsets, CaptureRotation, CaptureRotationObservation, DisplayArea, DisplayInsetsSource,
+    DisplayMapKind, DisplayScaleBy, StandardPackDisplayLayout, TaskGeometryDisplayMap,
 };
 use std::cmp::Ordering;
 
@@ -177,12 +183,25 @@ impl Anchor {
 /// (`display-layout.json`, model 392 §4.1): the side and the area the scale factor is measured
 /// on, and the area the nine anchors lie on, in SH-2's `DisplayScaleBy` and `DisplayArea`. The
 /// declaration's types and its parsing are the contract crate's (DA-4, model 392 §0.2 C9); this
-/// is no second copy of that shape, and gives way to the contract's type once DA-4 is on main.
+/// is no second copy of that shape: Workflow #392 DA-2a builds it from the contract's
+/// `StandardPackDisplayLayout` (`DisplayRule::from`), the one declaration a run keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisplayRule {
     pub scale_by: DisplayScaleBy,
     pub scale_area: DisplayArea,
     pub anchor_area: DisplayArea,
+}
+
+impl From<&StandardPackDisplayLayout> for DisplayRule {
+    /// The declaration's `scale.by`, `scale.area` and `anchor_area` (Workflow #392 DA-2a); its
+    /// correction radius is the correction window's (DA-2b), not the map's.
+    fn from(layout: &StandardPackDisplayLayout) -> Self {
+        Self {
+            scale_by: layout.scale.by,
+            scale_area: layout.scale.area,
+            anchor_area: layout.anchor_area,
+        }
+    }
 }
 
 /// What one delivered frame shows (model 392 §2.2, §3.2).
@@ -200,6 +219,39 @@ pub struct DisplayObservation {
     /// The insets in use (the device's report or a declaration), in pixels of the logical
     /// display at its current rotation; `None` when none were read.
     pub insets: Option<CaptureInsets>,
+}
+
+impl DisplayObservation {
+    /// Workflow #392 DA-2a: what a delivered frame of `frame` size shows by the geometry its own
+    /// producer recorded with it (`geometry`): the logical display, its rotation when the source
+    /// provides it, the crop when a stream recorded one and the insets when they were read. A
+    /// frame whose producer recorded no geometry (a snapshot backend, a fixture) shows itself:
+    /// its own size is its display, with no known rotation, no crop and no insets.
+    pub fn of_frame(frame: CaptureExtent, geometry: &CaptureGeometryObservation) -> Self {
+        match geometry {
+            CaptureGeometryObservation::Observed(geometry) => Self {
+                frame,
+                display: geometry.logical_display_extent,
+                rotation: match geometry.rotation {
+                    CaptureRotationObservation::Observed { rotation, .. } => Some(rotation),
+                    CaptureRotationObservation::NotProvidedBySource => None,
+                },
+                crop: match geometry.frame_transform {
+                    Some(CaptureFrameTransform::Crop(crop)) => Some(crop),
+                    _ => None,
+                },
+                insets: geometry.safe_insets,
+            },
+            CaptureGeometryObservation::Unknown(_)
+            | CaptureGeometryObservation::NotApplicable(_) => Self {
+                frame,
+                display: frame,
+                rotation: None,
+                crop: None,
+                insets: None,
+            },
+        }
+    }
 }
 
 /// A quarter turn that brings a frame delivered in the display's natural orientation upright
@@ -625,6 +677,42 @@ impl DisplayMap {
     /// Whether the game declared a display layout.
     pub const fn declared(&self) -> bool {
         self.rule.is_some()
+    }
+
+    /// Whether the scale frame is the delivered frame itself (Workflow #392 DA-2a): the
+    /// identity, with no crop and no turn. Only then are the frame's pixels, base coordinates
+    /// and input coordinates one space.
+    pub fn is_plain_identity(&self) -> bool {
+        self.kind == DisplayMapKind::Identity && self.crop.is_none() && self.turn.is_none()
+    }
+
+    /// The map as a task geometry record's `display_map` (Workflow #392 DA-2a, register §1.25
+    /// X7): its kind, `s`, the scale space, the base, and the rule it was measured by. Without a
+    /// declaration that is the rule the map was built by: the width over the base's, on the
+    /// screen, the anchors on the screen. A rule that measures on the safe area names the device's
+    /// report as its insets' source, the only insets a frame's geometry carries.
+    pub fn record(&self) -> TaskGeometryDisplayMap {
+        let rule = self.rule.unwrap_or(DisplayRule {
+            scale_by: DisplayScaleBy::Width,
+            scale_area: DisplayArea::Screen,
+            anchor_area: DisplayArea::Screen,
+        });
+        let safe_area =
+            rule.scale_area == DisplayArea::SafeArea || rule.anchor_area == DisplayArea::SafeArea;
+        TaskGeometryDisplayMap {
+            kind: self.kind,
+            scale_num: self.scale.num,
+            scale_den: self.scale.den,
+            scale_width: self.scale_extent.width(),
+            scale_height: self.scale_extent.height(),
+            base_width: self.base.width(),
+            base_height: self.base.height(),
+            scale_by: rule.scale_by,
+            scale_area: rule.scale_area,
+            anchor_area: rule.anchor_area,
+            insets_source: safe_area.then_some(DisplayInsetsSource::Reported),
+            declared: self.rule.is_some(),
+        }
     }
 
     /// A base region in the scale frame (model 392 §4.4, §5.2): each corner by the anchor of

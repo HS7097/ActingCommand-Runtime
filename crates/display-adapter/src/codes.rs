@@ -35,9 +35,22 @@ actingcommand_contract::outcome_vocabulary! {
         /// A positional box crosses a third line, names no anchor, and the map is a
         /// translation.
         StraddlesZones => "straddles_zones",
-        /// The frame and the display both disagree with the package's orientation: the
-        /// application is not in its orientation yet. Only ever a cause.
+        /// The frame disagrees with the package's orientation, and its display does too or no
+        /// rotation says it is a turned frame of an agreeing display: the application is not in
+        /// its orientation yet. Until DA-2b the run ends with it; DA-2b makes it only a cause.
         OrientationMismatch => "orientation_mismatch",
+        /// Workflow #392 DA-2a: the map moves regions (a translation, or a frame cropped from its
+        /// display), which this Runtime does not map yet: translations and crops come with
+        /// DA-2b. The run ends with no input.
+        TranslationUnsupported => "translation_unsupported",
+        /// Workflow #392 DA-2a: the map is not the plain identity (a pure scale) and the input
+        /// side does not map boxes to the device frame yet (DA-3): the step sends nothing and the
+        /// run ends.
+        InputScaleUnsupported => "input_scale_unsupported",
+        /// Workflow #392 DA-2a: the game's declaration measures on the safe area and the frame's
+        /// geometry read no insets (no backend reads them before DA-4b); the value of the host's
+        /// `contained_task_geometry_unavailable`.
+        SafeAreaUnavailable => "safe_area_unavailable",
     }
 }
 

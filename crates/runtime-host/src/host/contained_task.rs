@@ -1032,7 +1032,7 @@ pub(super) struct PreparedPackageRun<'a> {
     task_request_message: RuntimeRequest,
     prepared: PreparedContainedTask,
     prerequisites: Vec<PreparedContainedTask>,
-    interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
+    standard_pack: super::standard_pack::RunStandardPack,
     task_id: IssuedTaskId,
     run_id: IssuedRunId,
     run_links: RuntimeRunLinks,
@@ -1351,7 +1351,20 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) diagnostic_frame: Option<IssuedFrameId>,
     geometry_session: Option<CaptureGeometrySessionRef>,
     geometry_frame: Option<TaskGeometryFrame>,
-    geometry_initial: Option<(CaptureExtent, CaptureGeometryObservation)>,
+    /// The frame extent and the display geometry the run's input prerequisite holds to: the
+    /// first frame's, and (Workflow #392 DA-2a, model 392 v1.2 §0.2 C2) each changed frame's once
+    /// its geometry was read again and its map rebuilt.
+    geometry_current: Option<(CaptureExtent, CaptureGeometryObservation)>,
+    /// Workflow #392 DA-2a: what the run's display map was last built on (the frame's size and
+    /// its producer's geometry), and that map; `None` before the first frame, and the map `None`
+    /// when the adapter could not build one (the kernel's frame gate then refuses the frame).
+    geometry_basis: Option<actingcommand_display_adapter::DisplayObservation>,
+    geometry_map: Option<actingcommand_display_adapter::DisplayMap>,
+    /// Workflow #392 DA-2a (model 392 v1.2 §4.1): the run's game's display declaration, read in
+    /// its preparation and fixed for the run, and the run's package base, which every layer of
+    /// the run shares.
+    display_layout: Option<actingcommand_contract::StandardPackDisplayLayout>,
+    display_base: Option<CaptureExtent>,
     geometry_deadline: Option<Instant>,
     geometry_rechecked: bool,
     input_step_action_id: Option<ActionId>,
@@ -1450,6 +1463,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     /// Test plan E-3 (EXEC-I3): the run's own clock.
     fn monotonic_now(&mut self) -> Instant {
         self.inner.monotonic_now()
+    }
+
+    /// Workflow #392 DA-2a: an entry recovery layer maps its frames under the run's declaration.
+    fn display_layout(&self) -> Option<&actingcommand_contract::StandardPackDisplayLayout> {
+        self.inner.display_layout()
     }
 
     /// Test plan E-3: the run's own waits.
@@ -1782,6 +1800,22 @@ fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
     }
 }
 
+/// Workflow #392 DA-2a (register §1.25 X8): what changed between the display the run's map was
+/// built on and the frame's: its size (the frame's, its display's or its crop), else its rotation,
+/// else its insets.
+fn display_change(
+    before: &actingcommand_display_adapter::DisplayObservation,
+    after: &actingcommand_display_adapter::DisplayObservation,
+) -> TaskGeometryRecheckTrigger {
+    if before.frame != after.frame || before.display != after.display || before.crop != after.crop {
+        TaskGeometryRecheckTrigger::ExtentChanged
+    } else if before.rotation != after.rotation {
+        TaskGeometryRecheckTrigger::RotationChanged
+    } else {
+        TaskGeometryRecheckTrigger::InsetsChanged
+    }
+}
+
 fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> RuntimeHostError {
     task_geometry_error(match conclusion {
         TaskGeometryConclusion::AspectMismatch { .. } => {
@@ -1935,12 +1969,16 @@ impl RuntimeContainedTask<'_> {
             .map_err(|error| RuntimeHostError::execution(HostLocation::ObserveTaskGeometry, &error))
     }
 
+    /// Records one task geometry observation. Workflow #392 DA-2a (register §1.25 X7): a passed
+    /// observation names `display_map`, the map its frame was built under, when that map is not
+    /// the plain identity; the identity leaves the record as it was, byte for byte.
     fn record_task_geometry(
         &self,
         phase: TaskGeometryPhase,
         trigger: Option<TaskGeometryRecheckTrigger>,
         original_failure: Option<TaskGeometryFailure>,
         result: &RuntimeHostResult<CaptureGeometryObservation>,
+        display_map: Option<&actingcommand_display_adapter::DisplayMap>,
     ) -> Result<(TaskGeometryConclusion, PersistedEvent), RequestFailure> {
         if let Err(error) = result {
             // Preserve the original fatal/Unconfirmed boundary before attempting another fact.
@@ -1987,6 +2025,15 @@ impl RuntimeContainedTask<'_> {
             ),
             Err(_) => TaskGeometryConclusion::Unavailable,
         };
+        let display_map = display_map
+            .filter(|map| {
+                !map.is_plain_identity()
+                    && matches!(
+                        conclusion,
+                        TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable
+                    )
+            })
+            .map(actingcommand_display_adapter::DisplayMap::record);
         let mut links = self.links();
         if let Some(frame) = self.last_frame_id {
             links = links.with_frame_id(frame);
@@ -2018,7 +2065,7 @@ impl RuntimeContainedTask<'_> {
                             trigger,
                             original_failure,
                             unavailable: result.as_ref().err().map(task_geometry_failure_ref),
-                            display_map: None,
+                            display_map,
                         }),
                     },
                     AuditInput::new(),
@@ -2098,19 +2145,63 @@ impl RuntimeContainedTask<'_> {
         if self.geometry_session.is_none() {
             self.geometry_session = Some(session);
         }
-        if self.geometry_initial.is_some() {
-            return Ok(());
-        }
+        // Workflow #392 DA-2a (model 392 v1.2 §0.2 C2, §6.6, §7): the run's display map holds
+        // while its frame's size and its producer's rotation, crop and insets hold. A frame that
+        // changes any of them reads the display's geometry again, records the change (`changed`,
+        // its trigger the first change of size, rotation or insets) and rebuilds the map; the run
+        // goes on.
+        let basis =
+            actingcommand_display_adapter::DisplayObservation::of_frame(extent, &frame.geometry);
+        let (phase, trigger) = match &self.geometry_basis {
+            None => (TaskGeometryPhase::Initial, None),
+            Some(current) if *current == basis => return Ok(()),
+            Some(current) => (
+                TaskGeometryPhase::Changed,
+                Some(display_change(current, &basis)),
+            ),
+        };
         // Workflow #392 DA-A: no frame is refused for its aspect ratio, so every first frame
         // reads its display's geometry.
         let result = self.read_task_geometry(true);
-        let (conclusion, event) =
-            self.record_task_geometry(TaskGeometryPhase::Initial, None, None, &result)?;
+        let map = self.display_base.map(|base| {
+            actingcommand_display_adapter::DisplayMap::build(
+                base,
+                basis,
+                self.display_layout
+                    .as_ref()
+                    .map(actingcommand_display_adapter::DisplayRule::from),
+            )
+        });
+        let (conclusion, event) = self.record_task_geometry(
+            phase,
+            trigger,
+            None,
+            &result,
+            map.as_ref().and_then(|map| map.as_ref().ok()),
+        )?;
         match (conclusion, result) {
             (
                 TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable,
                 Ok(value),
             ) => {
+                // Workflow #392 DA-2a (model 392 v1.2 §4.5): a declaration that measures on the
+                // safe area needs insets, which no capture backend reads before DA-4b.
+                if matches!(
+                    map,
+                    Some(Err(
+                        actingcommand_display_adapter::DisplayMapError::SafeAreaUnavailable
+                    ))
+                ) {
+                    return Err(task_geometry_request_failure(
+                        task_geometry_error(HostCode::ContainedTaskGeometryUnavailable)
+                            .with_outcome_values(|outcome| {
+                                outcome.display_problem(
+                                    actingcommand_display_adapter::DisplayProblem::SafeAreaUnavailable,
+                                )
+                            }),
+                        Some(&event),
+                    ));
+                }
                 if conclusion == TaskGeometryConclusion::Pass {
                     self.host
                         .publish_display_facts(
@@ -2122,7 +2213,9 @@ impl RuntimeContainedTask<'_> {
                         .map_err(|error| task_geometry_request_failure(error, Some(&event)))?;
                 }
                 // Only a confirmed GlobalLedger commit opens the input prerequisite.
-                self.geometry_initial = Some((extent, value));
+                self.geometry_current = Some((extent, value));
+                self.geometry_basis = Some(basis);
+                self.geometry_map = map.and_then(Result::ok);
                 Ok(())
             }
             (_, Err(error)) => Err(task_geometry_request_failure(
@@ -2143,16 +2236,43 @@ impl RuntimeContainedTask<'_> {
                 None,
             )
         };
-        let (initial_extent, initial_observation) =
-            self.geometry_initial.as_ref().ok_or_else(failure)?;
+        // Workflow #392 DA-2a (model 392 v1.2 §0.2 C2): the current geometry is the last one the
+        // run's map was rebuilt on, so a frame of a changed size no longer fails here.
+        let (current_extent, current_observation) =
+            self.geometry_current.as_ref().ok_or_else(failure)?;
         let frame = self.geometry_frame.as_ref().ok_or_else(failure)?;
         let session = self.geometry_session.as_ref().ok_or_else(failure)?;
         if self.last_frame_id.map(|id| *id.transport()) != Some(frame.frame_id)
-            || frame.extent != *initial_extent
+            || frame.extent != *current_extent
         {
             return Err(failure());
         }
-        let conclusion = TaskGeometryObservation::assess(frame, initial_observation);
+        // Workflow #392 DA-2a: the input side maps nothing to the device frame before DA-3, so
+        // an input is made only on a frame whose map is the plain identity; under a pure scale the
+        // step sends nothing and the run ends.
+        let map = self.geometry_map.as_ref().ok_or_else(failure)?;
+        if !map.is_plain_identity() {
+            return Err(task_geometry_request_failure(
+                RuntimeHostError::request(
+                    actingcommand_display_adapter::DisplayCode::MapUnresolved,
+                    HostLocation::ValidateTaskGeometryInput,
+                    RuntimeErrorCode::BackendOperationFailed,
+                )
+                .with_outcome_values(|outcome| {
+                    outcome
+                        .display_problem(
+                            actingcommand_display_adapter::DisplayProblem::InputScaleUnsupported,
+                        )
+                        .stage(actingcommand_display_adapter::DisplayLocation::InputMap)
+                        .frame_width(map.frame().width())
+                        .frame_height(map.frame().height())
+                        .base_width(map.base().width())
+                        .base_height(map.base().height())
+                }),
+                None,
+            ));
+        }
+        let conclusion = TaskGeometryObservation::assess(frame, current_observation);
         if !matches!(
             (self.execution_provenance, conclusion),
             (
@@ -2239,6 +2359,7 @@ impl RuntimeContainedTask<'_> {
             Some(trigger),
             Some(task_geometry_failure_ref(&primary)),
             &result,
+            None,
         ) {
             let observation_context = failure.error.lifecycle.as_ref();
             let mut preserved_primary = primary.clone();
@@ -3619,6 +3740,11 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
+
+    /// Workflow #392 DA-2a: the declaration the run's preparation read.
+    fn display_layout(&self) -> Option<&actingcommand_contract::StandardPackDisplayLayout> {
+        self.display_layout.as_ref()
+    }
 
     /// Test plan E-3 (EXEC-I3, test plan §3.10): every timer of the kernel reads the Runtime
     /// clock (`RuntimeHostConfig::with_runtime_clock`). A failed read is kept and ends the run
@@ -6263,9 +6389,10 @@ impl HostShared {
         )?;
         active_run.control.note_package_load(package_load);
         // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation;
-        // Workflow #373 NAV-5: with its navigation data, which replaces the return-home fallback.
-        let interrupts = self.prepare_run_interrupts(&prepared)?;
-        let navigated = super::navigation::navigation_applies(interrupts.as_deref());
+        // Workflow #373 NAV-5: with its navigation data, which replaces the return-home fallback;
+        // Workflow #392 DA-2a: with its game's display declaration.
+        let standard_pack = self.prepare_run_interrupts(&prepared)?;
+        let navigated = super::navigation::navigation_applies(standard_pack.interrupts.as_deref());
         let prerequisites =
             self.resolve_prerequisite_chain(instance_alias, &prepared, navigated, || {
                 self.package_material_deadline(active_run.control.deadline())
@@ -6332,7 +6459,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_request,
             token,
             task_id,
@@ -6569,8 +6696,9 @@ impl HostShared {
             self.resolve_prerequisite_chain(instance_alias, &prepared, false, || {
                 Ok(material_deadline)
             })?;
-        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
-        let interrupts = self.prepare_run_interrupts(&prepared)?;
+        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation
+        // (Workflow #392 DA-2a: with its game's display declaration).
+        let standard_pack = self.prepare_run_interrupts(&prepared)?;
         if pending.recovery_rung {
             let (capture, input) = prepared.recovery_entry_channels();
             if let Some(code) = self
@@ -6658,7 +6786,7 @@ impl HostShared {
             task_request_message,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_id,
             run_id,
             run_links,
@@ -6690,7 +6818,7 @@ impl HostShared {
             task_request_message,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_id,
             run_id,
             run_links,
@@ -6741,7 +6869,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             &task_request,
             token,
             task_id,
@@ -6938,7 +7066,7 @@ impl HostShared {
             .control
             .set_deadline(source_deadline)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let (prepared, prerequisites, package_load, interrupts) = match prepared {
+        let (prepared, prerequisites, package_load, standard_pack) = match prepared {
             Some(prepared) => prepared,
             None => self.prepare_scheduled_package(
                 context.decision_id(),
@@ -7038,7 +7166,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_request,
             token.clone(),
             context.issued_task_id(),
@@ -7071,7 +7199,7 @@ impl HostShared {
         connection_id: ConnectionId,
         prepared: PreparedContainedTask,
         prerequisites: Vec<PreparedContainedTask>,
-        interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
+        standard_pack: super::standard_pack::RunStandardPack,
         task_request: &ContainedTaskRequest,
         token: LeaseToken,
         task_id: IssuedTaskId,
@@ -7149,7 +7277,14 @@ impl HostShared {
             diagnostic_frame: None,
             geometry_session: None,
             geometry_frame: None,
-            geometry_initial: None,
+            geometry_current: None,
+            geometry_basis: None,
+            geometry_map: None,
+            display_layout: standard_pack.display_layout,
+            display_base: {
+                let (width, height) = prepared.resolution();
+                CaptureExtent::new(width, height)
+            },
             geometry_deadline: None,
             geometry_rechecked: false,
             input_step_action_id: None,
@@ -7169,7 +7304,7 @@ impl HostShared {
             step_index_offset: 0,
             executed_steps: Some(0),
             own_executed_steps: None,
-            interrupts,
+            interrupts: standard_pack.interrupts,
             interrupt_steps: 0,
             interrupt_configurations: 0,
             planned_steps,
