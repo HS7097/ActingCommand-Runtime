@@ -279,6 +279,8 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
     }
     println!("genericity non-Cargo roots: {GENERIC_NON_CARGO_ROOTS:?}");
     for required_root in [
+        // Workflow #392 DA-1 (model 392 v1.2 §13): the display adapter is Runtime-owned core.
+        "crates/display-adapter",
         "crates/host-metrics",
         "crates/policy",
         "crates/runtime-database",

@@ -1,0 +1,80 @@
+{
+  "owner": "display-adapter",
+  "codes": {
+    "display_map_unresolved": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "display_problem": "required",
+        "stage": "optional",
+        "frame_width": "optional",
+        "frame_height": "optional",
+        "base_width": "optional",
+        "base_height": "optional",
+        "target_id": "optional",
+        "pack_operation_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "The display adapter cannot map a frame, a region or an input box of a task package onto the delivered frame (Workflow #392, model 392 v1.2 §9.1); display_problem says why. As a run's end it is decidable without the screen and leaves the run with no input: no declaration where one is needed (layout_undeclared), a device smaller than the base (scale_below_base), a box with no size left (collapsed), a box wholly outside the frame (outside_frame), or a positional box across a third line under a translation without an anchor (straddles_zones). orientation_mismatch is only ever the cause under the run's own end. Ends only that run, never the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "display_map_stale": {
+      "category": "warning",
+      "ladder_class": "stability_warning",
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "The display geometry changed after a frame was taken and before its input (Workflow #392, model 392 v1.2 §6.6): that step sends no input and the next frame is taken. Registered by DA-1; first emitted by DA-3.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  },
+  "locations": {
+    "display_map_build": {
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "Building the display map of one frame: its orientation, the layout it is measured on, the scale factor and the scale space (Workflow #392 DA-1)."
+    },
+    "display_region_map": {
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "Mapping a region of a task package into the scale frame (Workflow #392 DA-1)."
+    },
+    "display_input_map": {
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "Mapping an input box or point of a task package to the device frame (Workflow #392 DA-1)."
+    }
+  }
+}

@@ -10,6 +10,7 @@ members = [
     "crates/actingcommand-contract",
     "crates/artifact-store",
     "crates/device",
+    "crates/display-adapter",
     "crates/execution-kernel",
     "crates/host-metrics",
     "crates/ledger",
@@ -45,6 +46,7 @@ repository = "https://github.com/HS7097/ActingCommand-Runtime"
 actingcommand-contract = { path = "crates/actingcommand-contract" }
 actingcommand-artifact-store = { path = "crates/artifact-store" }
 actingcommand-device = { path = "crates/device" }
+actingcommand-display-adapter = { path = "crates/display-adapter" }
 actingcommand-execution-kernel = { path = "crates/execution-kernel" }
 actingcommand-host-metrics = { path = "crates/host-metrics" }
 actingcommand-ledger = { path = "crates/ledger" }
