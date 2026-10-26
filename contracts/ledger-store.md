@@ -96,12 +96,16 @@ eviction proof set; the scopes of the epochs whose closes a start may still writ
 grouped through the link index, with their `Performed` releases; and what the classes of
 the frames present in the live frame store (`artifacts\<shard>\artifact_<hex>.png`) read:
 the records that reference them (by the `artifact_id` index) or carry their frame link,
-the records of the runs, leases, requests and correlations these name, the markers of
-their instances, the error points of their time span, then the runs, marker neighbours
-and run scopes these name. They are applied in ledger order without the replay's checks,
-which each record met when it was written; a listing failure of the frame store fails the
-open (`ledger_io`). Resident stay the eviction proof set, the owner changes, ends,
-imports and closes, the scopes a start may still close, and the facts of the live frames
+the records of the runs, leases, requests and correlations these name, the
+`fact.published` records from the first record of the oldest live frame on that name a
+live frame by a snapshot id or a live artifact as content (a resource reading or an
+adjustment's confirmation is published with system links and inline content), the
+markers of their instances, the error points of their time span, then the runs, marker
+neighbours and run scopes these name, and the runs the neighbours' records name. They are
+applied in ledger order without the replay's checks, which each record met when it was
+written; a listing failure of the frame store fails the open (`ledger_io`). Resident
+stay the eviction proof set, the owner changes, ends, imports and closes, the scopes a
+start may still close, and the facts of the live frames
 with what their classes read (their runs with every frame, the open runs, the runs with a
 frame at most 30 s after a live frame, the marker neighbours, the error points whose
 window can hold a live frame, the Lab scopes); the rest is dropped again at each sweep

@@ -4,7 +4,9 @@
 //! frames present in the live frame store (and what their classes read), and drops the rest:
 //! - A6: its frame view decides every live frame as the offline full view
 //!   (`GlobalLedgerEvidence::frame_retention_view`) does (class, entry, due time, kept folder and
-//!   windows), whether it dropped the other frames at a sweep start or opened anew;
+//!   windows), whether it dropped the other frames at a sweep start or opened anew, including a
+//!   resource reading frame and a confirmation frame whose facts are published with system links
+//!   (no run, instance, lease or frame link), and a marker neighbour in another run;
 //! - a record that references an artifact the writer no longer holds with another reference is
 //!   refused `artifact_identity_conflict`: its identity is read through the `artifact_id` index.
 //!
@@ -29,11 +31,13 @@ use actingcommand_contract::{
     CapturePersistedEvidence, CaptureSummaryRecord, CommandPayloadDraft, DiagnosticCode,
     DiagnosticDetailDraft, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
     EventOrigin, EventPayloadDraft, EventSeverity, EventSource, EventType, EvidenceCompleteness,
-    FRAME_RETENTION_POLICY_VERSION, IdentifierIssuer, IssuedCorrelationId, IssuedInstanceId,
-    IssuedRequestId, IssuedRunId, OriginModule, OwnerEpoch, OwnerResourceDisposition,
-    ProjectedArtifactReference, ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase,
-    RuntimePayloadDraft, TaskOutcome, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
-    outcome::Outcome,
+    FRAME_RETENTION_POLICY_VERSION, FactContent, FactPayloadDraft, FactRecord, FactScope,
+    FactValue, IdentifierIssuer, IssuedCorrelationId, IssuedInstanceId, IssuedRequestId,
+    IssuedRunId, OriginModule, OwnerEpoch, OwnerResourceDisposition, ProjectedArtifactReference,
+    RESOURCE_ADJUSTMENT_DETECTOR_PREFIX, RESOURCE_READING_DETECTOR_PREFIX, ResourceQuiescence,
+    RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft, TaskOutcome, TaskPayloadDraft,
+    TaskSemanticFact, TerminalEvent, outcome::Outcome, resource_adjustment_snapshot_id,
+    resource_reading_snapshot_id,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,6 +63,14 @@ fn terminal(event: &PersistedEvent) -> TerminalEvent {
     TerminalEvent {
         sequence: event.sequence(),
         event_id: *event.event_id(),
+    }
+}
+
+/// An identifier's canonical text, as a snapshot id names it.
+fn text<T: serde::Serialize>(id: &T) -> String {
+    match serde_json::to_value(id) {
+        Ok(serde_json::Value::String(text)) => text,
+        other => panic!("identifier text: {other:?}"),
     }
 }
 
@@ -99,6 +111,16 @@ struct Frame {
 impl Frame {
     fn id(&self) -> ArtifactId {
         self.reference.artifact_id
+    }
+
+    /// The canonical text of its frame id.
+    fn frame_text(&self) -> String {
+        text(
+            &self
+                .reference
+                .frame_id
+                .expect("a capture frame has a frame id"),
+        )
     }
 
     /// The frame leaves the live frame store.
@@ -487,6 +509,71 @@ impl<'a> Corpus<'a> {
         )
     }
 
+    /// A `fact.published` of one instance fact with `detector` and `snapshot`, published as the
+    /// Runtime publishes a resource reading or an adjustment: with system links (a new request
+    /// and correlation and an action; no run, instance, lease or frame link) and inline content.
+    fn publish(&self, detector: String, snapshot: String, at: u64) -> PersistedEvent {
+        let record = FactRecord {
+            scope: FactScope::Instance {
+                instance_id: "fixture-instance-a".to_owned(),
+            },
+            key: "resource.ln7_fixture_counter".to_owned(),
+            content: FactContent::Inline {
+                value: FactValue::Integer(1),
+            },
+            observed_at_unix_ms: at,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli: 1_000,
+            source_detector: detector,
+            source_snapshot_id: snapshot,
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: "5".repeat(64),
+            invalidate_on: Vec::new(),
+        };
+        self.append(
+            at,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::FactStore,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default()
+                .with_request_id(self.request())
+                .with_correlation_id(self.correlation())
+                .with_action_id(self.ids.mint_action_id().expect("action")),
+            FactPayloadDraft::published(record, AuditInput::new()).into(),
+        )
+    }
+
+    /// A resource reading taken on `frame` of `run`.
+    fn reading(&self, run: &RunLinks, frame: &Frame, at: u64) -> PersistedEvent {
+        self.publish(
+            format!("{RESOURCE_READING_DETECTOR_PREFIX}ln7_task/ln7_reading"),
+            resource_reading_snapshot_id(
+                &text(run.id.transport()),
+                &frame.frame_text(),
+                "ln7_reading",
+            ),
+            at,
+        )
+    }
+
+    /// An adjustment of `base` whose operation was confirmed on `frame` of `run`.
+    fn adjustment(&self, run: &RunLinks, frame: &Frame, base: &PersistedEvent, at: u64) {
+        self.publish(
+            format!("{RESOURCE_ADJUSTMENT_DETECTOR_PREFIX}ln7_task/ln7_adjustment"),
+            resource_adjustment_snapshot_id(
+                &text(run.id.transport()),
+                &frame.frame_text(),
+                "ln7_adjustment",
+                &text(base.event_id()),
+            ),
+            at,
+        );
+    }
+
     /// A Lab anchor (a record of the Lab) with `links`.
     fn lab_anchor(&self, links: EventLinksDraft, at: u64) {
         self.append(
@@ -564,14 +651,19 @@ struct Live {
     c1: ArtifactId,
     c2: ArtifactId,
     c3_at: u64,
+    p1: ArtifactId,
+    r1: ArtifactId,
+    h1: ArtifactId,
+    h2: ArtifactId,
+    h3: ArtifactId,
     d1: ArtifactId,
     n: ArtifactId,
     m: ArtifactId,
     all: BTreeSet<ArtifactId>,
 }
 
-/// The corpus of A6, with two frames deleted (`f1`, a marker neighbour, and `c3`, the last
-/// frame of a run cut short by a start).
+/// The corpus of A6, with three frames deleted (`f1`, a marker neighbour, `c3`, the last frame
+/// of a run cut short by a start, and `q1`, a marker neighbour in another run).
 fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     let corpus = Corpus::new(ledger, artifacts);
     corpus.start(at(0));
@@ -616,6 +708,31 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     let c1 = corpus.run_frame(&run_c, at(301));
     let c2 = corpus.run_frame(&run_c, at(310));
     let c3 = corpus.run_frame(&run_c, at(320));
+    // A marker chain across runs to a deleted neighbour: P1 of run P is the representative of Q1
+    // of run Q, both runs end before the start, and Q1 is deleted.
+    let run_p = corpus.run(at(330));
+    let run_q = corpus.run(at(331));
+    let p1 = corpus.run_frame(&run_p, at(340));
+    let q1 = corpus.run_frame(&run_q, at(342));
+    corpus.marker(&p1, &q1, at(342));
+    corpus.close(&run_p.links, &[&p1], at(343));
+    corpus.close(&run_q.links, &[&q1], at(344));
+    // A resource reading frame: R1, the frame of run R a reading is taken on, its fact published
+    // with system links after the run's terminal.
+    let run_r = corpus.run(at(350));
+    let r1 = corpus.run_frame(&run_r, at(355));
+    corpus.close(&run_r.links, &[&r1], at(356));
+    let reading = corpus.reading(&run_r, &r1, at(357));
+    // A confirmation frame: H2, the interior of the chain H1 -> H2 -> H3 of run S, on which an
+    // adjustment's operation was confirmed; its fact too is published with system links.
+    let run_s = corpus.run(at(360));
+    let h1 = corpus.run_frame(&run_s, at(365));
+    let h2 = corpus.run_frame(&run_s, at(366));
+    let h3 = corpus.run_frame(&run_s, at(367));
+    corpus.marker(&h1, &h2, at(366));
+    corpus.marker(&h2, &h3, at(367));
+    corpus.close(&run_s.links, &[&h1, &h2, &h3], at(368));
+    corpus.adjustment(&run_s, &h2, &reading, at(369));
     corpus.start(at(400));
     // A stuck running run D after that start, and two run-less frames before its first frame:
     // N within 30 s of it, M not.
@@ -625,10 +742,13 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
     let d1 = corpus.run_frame(&run_d, at(505));
     f1.delete();
     c3.delete();
-    let all = [&f2, &f3, &g1, &g2, &g3, &l1, &l2, &c1, &c2, &d1, &n, &m]
-        .iter()
-        .map(|frame| frame.id())
-        .collect();
+    q1.delete();
+    let all = [
+        &f2, &f3, &g1, &g2, &g3, &l1, &l2, &c1, &c2, &p1, &r1, &h1, &h2, &h3, &d1, &n, &m,
+    ]
+    .iter()
+    .map(|frame| frame.id())
+    .collect();
     Live {
         f2: f2.id(),
         f3: f3.id(),
@@ -640,6 +760,11 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
         c1: c1.id(),
         c2: c2.id(),
         c3_at: c3.reference.created_at_unix_ms,
+        p1: p1.id(),
+        r1: r1.id(),
+        h1: h1.id(),
+        h2: h2.id(),
+        h3: h3.id(),
         d1: d1.id(),
         n: n.id(),
         m: m.id(),
@@ -650,16 +775,18 @@ fn corpus(ledger: &GlobalLedger, artifacts: &ArtifactStore) -> Live {
 /// The classes the requirement fixes for the corpus, so the equality below is not vacuous: the
 /// window drops the interior duplicate F2 next to the deleted F1 and keeps F3; the chain across
 /// runs makes G2 a duplicate; both Lab anchors keep their frame; the start that cut run C short
-/// dates its epoch-end point at its deleted last frame, which keeps C1 and C2; the stuck run D
-/// holds itself and N; M settles.
+/// dates its epoch-end point at its deleted last frame, which keeps C1 and C2; P1, whose deleted
+/// neighbour's run Q ended before the start, gets no epoch-end point of Q; R1 is a reading frame,
+/// due 7 days after its entry; the published confirmation exempts the interior H2 from being a
+/// duplicate; the stuck run D holds itself and N; M settles.
 fn assert_required_classes(view: &FrameRetentionView, live: &Live) {
-    let class = |id: &ArtifactId| {
+    let frame_of = |id: &ArtifactId| {
         view.frames
             .iter()
             .find(|frame| frame.reference.artifact_id == *id)
-            .map(|frame| frame.class)
             .expect("a live frame is in the view")
     };
+    let class = |id: &ArtifactId| frame_of(id).class;
     use FrameRetentionClass as C;
     for (id, expected) in [
         (live.f2, C::Duplicate),
@@ -671,12 +798,23 @@ fn assert_required_classes(view: &FrameRetentionView, live: &Live) {
         (live.l2, C::Lab),
         (live.c1, C::Error),
         (live.c2, C::Error),
+        (live.p1, C::Default),
+        (live.r1, C::Resource),
+        (live.h1, C::Default),
+        (live.h2, C::Default),
+        (live.h3, C::Default),
         (live.d1, C::Running),
         (live.n, C::Running),
         (live.m, C::Default),
     ] {
         assert_eq!(class(&id), expected);
     }
+    let reading = frame_of(&live.r1);
+    assert_eq!(
+        reading.due_unix_ms,
+        reading.entry_unix_ms.map(|entry| entry + 7 * DAY_MS),
+        "a reading frame is due 7 days after its entry"
+    );
     let epoch_end = view
         .error_points
         .iter()
@@ -740,7 +878,9 @@ fn ln7_an_old_artifacts_identity_refusal_goes_through_the_index() {
     let artifacts = material_store(root.path());
     let corpus = Corpus::new(&ledger, &artifacts);
     corpus.owner_recorded(at(1));
-    let old = corpus.observe(at(10));
+    let first = corpus.run(at(5));
+    let old = corpus.run_frame(&first, at(10));
+    corpus.close(&first.links, &[&old], at(11));
     ledger.close().expect("close the writer");
     old.delete();
     let reopened = reopen(&database);

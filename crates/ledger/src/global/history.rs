@@ -346,7 +346,7 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
         events.extend(
             self.staged
                 .iter()
-                .filter(|event| selection.selects(*event) && keep(*event))
+                .filter(|event| selection.selects(*event) && keep(event))
                 .cloned(),
         );
         Ok(events)
