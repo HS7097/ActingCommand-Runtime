@@ -804,17 +804,12 @@ fn da2a_t6_positional_regions_are_mapped_and_never_widened() {
             target_kind: "color".to_owned(),
         }
     );
-    assert_eq!(
-        target
-            .and_then(|target| target.color)
-            .and_then(|color| color.region),
-        Some(PackRect {
-            x: 100,
-            y: 50,
-            width: 4,
-            height: 4
-        })
-    );
+    // The probe's mean is its own colour: its base box of the scale frame, neither widened into
+    // the ring nor read at the same numbers in device pixels (black there).
+    let color = target
+        .and_then(|target| target.color)
+        .expect("the probe's colour evaluation");
+    assert_eq!(color.mean, PROBE);
 
     let declaration: StabilityTerminationDeclaration = serde_json::from_value(json!({
         "region": {"x": PROBE_X, "y": PROBE_Y, "width": 4, "height": 4},
