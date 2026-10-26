@@ -411,6 +411,9 @@ mod gate_411_a67r;
 mod gate_411_harness_diag;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
+// SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2): the run-duration samples of the instance store
+// record `health.run_duration` and the expected duration E in the evaluation and its admission.
+mod gate_ed2;
 // Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's
 // not-run explanation in the policy host's memory and its read.
 mod gate_mcp19a;

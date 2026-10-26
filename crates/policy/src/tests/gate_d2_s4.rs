@@ -591,6 +591,7 @@ fn settings() -> FactRefreshSettings {
         daily_limit: DAILY_LIMIT,
         failure_backoff_ms: BACKOFF_MS,
         max_consecutive_failures: MAX_FAILURES,
+        expected_duration_ms: crate::FACT_REFRESH_EXPECTED_DURATION_MS,
     }
 }
 

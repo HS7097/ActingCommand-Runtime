@@ -182,6 +182,10 @@ fn catalog() -> CatalogSources {
                      "anchor_ms": 0}
     });
     main["loop_budget"]["window_iteration_limit"] = json!(8);
+    // SCH-M ED-2: after its first run a task reserves its expected duration E, its run plus the
+    // 300 000 ms margin, which the fixture's 300 000 ms window ceiling no longer holds for the
+    // later runs of one test; one hour holds them all.
+    main["loop_budget"]["max_runtime_ms"] = json!(3_600_000);
     let mut sink = main.clone();
     sink["id"] = json!(SINK_TASK);
     sink["procedure_ref"] = json!(SINK_PROCEDURE);

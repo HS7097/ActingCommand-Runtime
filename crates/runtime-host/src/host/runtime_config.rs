@@ -509,6 +509,34 @@ impl HostShared {
             daily_limit: config.daily_limit,
             failure_backoff_ms: config.failure_backoff_ms,
             max_consecutive_failures: config.max_consecutive_failures,
+            // SCH-M ED-2: the declared duration of a fact refresh read.
+            expected_duration_ms: config.expected_duration_ms,
+        })
+    }
+
+    /// SCH-M ED-2 (§3.4 "Configuration"): the expected-duration keys in effect for the instance
+    /// `alias` names (`EffectiveConfig::expected_runtime` by its registry id; an alias the
+    /// registry does not hold takes the section's keys), read at every write of a sample and
+    /// every projection of the evaluation inputs. The keys are checked whenever the
+    /// configuration is loaded or changed, so a value that cannot be read here is a halt.
+    pub(super) fn expected_runtime_settings(
+        &self,
+        alias: &str,
+    ) -> RuntimeHostResult<actingcommand_policy::ExpectedRuntimeSettings> {
+        let id = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == alias)
+        .map(|instance| crate::failure_identity::identifier_text(&instance.instance_id));
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .expected_runtime(id.as_deref().unwrap_or(alias))
+            .map_err(remedy_config_failure)?;
+        Ok(actingcommand_policy::ExpectedRuntimeSettings {
+            enabled: config.enabled,
+            runs: config.runs,
+            margin_ms: config.margin_ms,
         })
     }
 

@@ -50,8 +50,11 @@ pub const FACT_REFRESH_PROCEDURE_REF: &str = "_fact_refresh";
 /// The Runtime-owned operation of a fact refresh dispatch: every instance with a bound reader
 /// provides it.
 pub const FACT_REFRESH_OPERATION_ID: &str = "_fact_refresh";
-/// The run time one fact refresh reserves of its instance's activity budget. A reservation
-/// estimate, never a bound: the run's own package bounds how long it takes.
+/// The fact refresh task spec's nominal duration, the shipped default of
+/// `scheduling.fact_refresh.expected_duration_ms`. SCH-M ED-2: a fact refresh dispatch reserves
+/// the configured duration ([`FactRefreshSettings::expected_duration_ms`]) or the expected
+/// duration E of its reader's package; a dispatch record that names no duration reserved this
+/// one. A reservation estimate, never a bound: the run's own package bounds how long it takes.
 pub const FACT_REFRESH_EXPECTED_DURATION_MS: u64 = 60_000;
 /// The task runtime a fact refresh may reserve in one activity window: high enough never to bind,
 /// since the fact refresh settings, not the task's loop budget, limit how often R_I runs.
@@ -71,6 +74,9 @@ pub struct FactRefreshSettings {
     pub failure_backoff_ms: u64,
     /// The failed R_I runs in a row after which R_I rests for the rest of the activity day.
     pub max_consecutive_failures: u32,
+    /// SCH-M ED-2 (§3.4 D-12): the declared duration D of an R_I dispatch
+    /// (`scheduling.fact_refresh.expected_duration_ms`); the snapshot's E replaces it.
+    pub expected_duration_ms: u64,
 }
 
 /// One instance's recognition maintenance package R_I (D2 model §3.2), as the Runtime start
@@ -603,8 +609,9 @@ fn refresh_candidate(
         host_id: instance.host_id.clone(),
         operation_id: task.entrypoint.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
+        // SCH-M ED-2: the configured declared duration, unless the snapshot carries E.
         expected_duration_ms: snapshot_expected_runtime(task, state)
-            .unwrap_or(task.expected_duration_ms),
+            .unwrap_or(context.inputs.settings.expected_duration_ms),
         yield_points: task.yield_points.clone(),
         load_profile: task.load_profile.clone(),
         load: ResourceLoad::new(&task.load_profile, host.heavy_threshold_milli),

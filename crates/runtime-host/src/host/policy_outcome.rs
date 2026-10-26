@@ -1540,7 +1540,7 @@ impl HostShared {
             #[cfg(test)]
             let condition = self.take_policy_condition_for_test()?;
             let mut policy = lock(self.policy()?, HostLocation::RecordPolicyDispatchOutcome)?;
-            let data = match policy.prepare_execution(
+            let (data, recorded_now) = match policy.prepare_execution(
                 decision_id,
                 observed_at_unix_ms,
                 runtime_ms,
@@ -1589,9 +1589,9 @@ impl HostShared {
                     policy
                         .commit_execution(&data, budget_elapsed_ms)
                         .map_err(RuntimeHostError::into_fatal)?;
-                    data
+                    (data, true)
                 }
-                PolicyExecutionPreparation::Replay(data) => data,
+                PolicyExecutionPreparation::Replay(data) => (data, false),
             };
             self.finish_policy_dispatch_outcome(&mut policy, &data, context, cache_update)?;
             self.record_policy_values(&mut policy)?;
@@ -1601,6 +1601,12 @@ impl HostShared {
                 .ok_or_else(policy_settlement_missing)?;
             drop(policy);
             self.record_policy_settlement_facts(&settlement)?;
+            // SCH-M ED-2 (frozen model v1.0 §3.4 D-13): a successful scheduled run's duration
+            // becomes a sample of its package on its instance, once, at the settlement that
+            // recorded its execution.
+            if recorded_now {
+                self.record_run_duration_sample(&data)?;
+            }
             Ok(data)
         })();
         if let Err(error) = &result

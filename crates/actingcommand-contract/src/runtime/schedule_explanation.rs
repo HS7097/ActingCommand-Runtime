@@ -82,6 +82,16 @@ pub struct ScheduleExplanationCandidate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_wake_unix_ms: Option<u64>,
     pub since_unix_ms: u64,
+    /// SCH-M ED-2 (frozen model v1.0 §3.4 "Visible"): the duration the task's dispatch on the
+    /// instance would reserve in this evaluation: the expected duration E, or its declared
+    /// duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_runtime_ms: Option<u64>,
+    /// SCH-M ED-2: where `expected_runtime_ms` comes from: `declared`, or `runs:<n>` (the mean of
+    /// the latest `n` successful scheduled runs of the task's package on the instance, plus the
+    /// margin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_runtime_source: Option<String>,
 }
 
 /// The instance's one not-running row (scheduling model §8.2 item 4): its first due candidate
@@ -208,6 +218,8 @@ mod tests {
             reasons_omitted: None,
             next_wake_unix_ms: None,
             since_unix_ms: EVALUATED_AT,
+            expected_runtime_ms: None,
+            expected_runtime_source: None,
         }
     }
 

@@ -2925,3 +2925,37 @@ actingcommand_contract::outcome_locations! {
     }
 }
 // ---- IDLE-1: end ----
+
+// ---- SCH-M ED-2 (frozen model v1.0 §3.4; Alice 10-22 「近5次该任务包的平均时间加5分钟」): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the run-duration samples (SCH-M ED-2; #420 S4: the two codes the
+    /// model names, one of them a domain code with values). Everything else is an existing
+    /// code: the store's own refusals, `policy_facts_stale`.
+    pub(crate) enum RunDurationCode {
+        /// Error. A client published `health.run_duration`, which only the Runtime writes; the
+        /// publication is refused before the fact write gate and nothing is appended. Keys
+        /// `fact_key`.
+        KeyReserved => "run_duration_key_reserved": error / none,
+        /// Warning (Fail Loud). A row of an instance's `health.run_duration` record was dropped,
+        /// or a sample was not recorded: a new package's row beyond the 256-row bound dropped the
+        /// row with the oldest `at` (`package_id` that row's); the write dropped a stored row it
+        /// could not read (`package_id` when it could be read); or the store refused the
+        /// record's publication (`package_id` the run's, the refusal as the `caused_by` link).
+        /// That package's next expected duration is its declared one until it has runs again.
+        /// Keys `instance_id` (the instance alias), `package_id`.
+        RowDropped => "run_duration_row_dropped": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the run-duration samples (SCH-M ED-2).
+    pub(crate) enum RunDurationLocation {
+        /// One successful scheduled run's sample written to its instance's `health.run_duration`
+        /// record at its settlement (`HostShared::add_run_duration_sample`).
+        RecordSample => "record_run_duration_sample",
+        /// The expected durations E projected from the instances' records into an evaluation's
+        /// task states (`HostShared::project_expected_runtimes`).
+        Project => "project_expected_runtime",
+    }
+}
+// ---- SCH-M ED-2: end ----
