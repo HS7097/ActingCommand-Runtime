@@ -121,6 +121,7 @@ fn maintain(
             target,
             artifact_root: None,
             limits: MaintenanceLimits::default(),
+            frame_query: false,
         },
     )
 }

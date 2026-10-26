@@ -44,6 +44,11 @@ pub struct LedgerMaintenanceRequest {
     pub artifact_root: Option<PathBuf>,
     #[serde(default)]
     pub limits: MaintenanceLimits,
+    /// #422 LN-7c V (`--frame-query`, `verify` only): after the complete read of a formal root,
+    /// also check the frame cleaner's statements against the full view. Off, `verify` is the
+    /// complete read alone: no retention index, no statement, no count.
+    #[serde(default)]
+    pub frame_query: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,8 +63,9 @@ pub struct LedgerMaintenanceReceipt {
     /// never serialized, so the receipt schema is unchanged; actingd prints it on stderr.
     #[serde(skip)]
     pub restored_material: Option<LedgerMaintenanceRestoredMaterial>,
-    /// #422 LN-7c V: what `verify` of a formal root compared of the frame cleaner's statements
-    /// and the full view. Never serialized; actingd prints it on stderr.
+    /// #422 LN-7c V: what `verify --frame-query` of a formal root compared of the frame cleaner's
+    /// statements and the full view; `None` without the flag. Never serialized; actingd prints it
+    /// on stderr.
     #[serde(skip)]
     pub frame_query: Option<actingcommand_ledger::FrameQueryCheck>,
 }
@@ -175,7 +181,7 @@ struct BackupBinding {
 }
 
 /// `frame_query`: #422 LN-7c V, what `verify` of a formal root runs the frame cleaner's statements
-/// with (`RuntimeHost::maintain_ledger` gives it for `verify` only).
+/// with (`RuntimeHost::maintain_ledger` gives it for `verify` with `frame_query` only).
 pub(crate) fn run(
     root: &Path,
     salt: &[u8],
@@ -213,6 +219,7 @@ fn validate_request(request: &LedgerMaintenanceRequest) -> Result<()> {
         || (request.operation == LedgerMaintenanceOperation::Restore) != request.target.is_some()
         || request.artifact_root.is_some()
             && request.operation != LedgerMaintenanceOperation::Restore
+        || request.frame_query && request.operation != LedgerMaintenanceOperation::Verify
     {
         return Err(failure(
             HostCode::MaintenanceArgumentsInvalid,

@@ -749,11 +749,12 @@ tests = [
 ]
 incident = ["#422 LN-7c Q"]
 
-# LN-7c V (#422; rd-1026/ln7c/final-query.md §7 row V, §6; brief rd-1026/brief-ln7c-v.md): ledger-maintenance verify runs the frame cleaner's statements W, L and K against the full view over the same root, listings and clock. On T-eq's case fixture a matching root reports no difference (every live frame and a kept frame of the ledger compared, an unknown kept file left out, E4 accounted), on the ledger's call and through RuntimeHost::maintain_ledger; a root whose F5 row was removed consistently (a valid root with a wrong row: verify's index row check passes) is reported, ledger_index_mismatch of verify_frame_query with the frame's artifact_id and field /class
+# LN-7c V (#422; rd-1026/ln7c/final-query.md §7 row V, §6; briefs rd-1026/brief-ln7c-v.md and brief-ln7c-v-fix1.md): ledger-maintenance verify --frame-query (opt-in) runs the frame cleaner's statements W, L and K against the full view over the same root, listings and clock. On T-eq's case fixture a matching root reports no difference (every live frame and a kept frame of the ledger compared, an unknown kept file left out, E4 accounted), on the ledger's call and through RuntimeHost::maintain_ledger with the flag; a root whose F5 row was removed consistently (a valid root with a wrong row: verify's index row check passes) is reported, ledger_index_mismatch of verify_frame_query with the frame's artifact_id and field /class; without the flag, verify of the matching root answers the complete read's receipt alone and gives no count for the stderr line
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_a_matching_root_reports_no_difference",
     "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_a_consistently_removed_frame_index_row_is_reported",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_without_the_flag_verify_answers_the_complete_read_alone",
 ]
 incident = ["#422 LN-7c V"]

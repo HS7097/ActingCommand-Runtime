@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! #422 LN-7c V (`rd-1026/ln7c/final-query.md` §7 row V; brief `rd-1026/brief-ln7c-v.md`):
-//! `ledger-maintenance verify` runs the frame cleaner's statements W, L and K against the full view
-//! over the same root, listings and clock. The root is the case fixture of T-eq (`gate_ln7.rs`):
-//! twenty live frames of every class, F5 and F6, and E4's run-less Warning naming W1.
+//! #422 LN-7c V (`rd-1026/ln7c/final-query.md` §7 row V; briefs `rd-1026/brief-ln7c-v.md` and
+//! `brief-ln7c-v-fix1.md`): `ledger-maintenance verify --frame-query` runs the frame cleaner's
+//! statements W, L and K against the full view over the same root, listings and clock; the check is
+//! opt-in. The root is the case fixture of T-eq (`gate_ln7.rs`): twenty live frames of every class,
+//! F5 and F6, and E4's run-less Warning naming W1.
 //! - A matching root reports no difference: the check compares every live frame and the kept frame
 //!   of a ledger record (a kept file this ledger does not know is left out), and accounts W1's E4,
-//!   both on the ledger's own call and through `RuntimeHost::maintain_ledger` (`verify`).
+//!   both on the ledger's own call (what the flag runs) and through `RuntimeHost::maintain_ledger`
+//!   (`verify` with the flag).
 //! - A root whose F5 row was removed consistently (R1's `reading` row deleted, and the frame index's
 //!   own pointer reader made to miss it, so `verify`'s check of the index rows passes: a valid root
-//!   with a wrong row) is reported: `ledger_index_mismatch` of `verify_frame_query`, R1's
-//!   `artifact_id`, `field` `/class`.
+//!   with a wrong row) is reported, on the ledger's call that the flag runs: `ledger_index_mismatch`
+//!   of `verify_frame_query`, R1's `artifact_id`, `field` `/class`.
+//! - Without the flag, `verify` of the same matching root answers as before the check existed: the
+//!   receipt of the complete read alone, and no count for actingd's stderr line.
 
 use super::gate_ln7::{CHUNK_FRAMES, DAY_MS, EVIDENCE_MAX_AGE_MS, SWITCHES, T0, corpus};
 use super::missing_material::{formal_root, material_store};
@@ -65,8 +69,8 @@ fn fixture() -> (
     (root, database, live)
 }
 
-/// `ledger-maintenance verify`'s two steps on the ledger's side: the complete verification
-/// (records, chain and frame index rows), then the frame query check.
+/// `ledger-maintenance verify --frame-query`'s two steps on the ledger's side: the complete
+/// verification (records, chain and frame index rows), then the frame query check.
 fn verify(
     root: &Path,
     database: &Arc<RuntimeDatabase>,
@@ -93,11 +97,50 @@ fn live_file(root: &Path, artifact: ArtifactId) -> PathBuf {
         .expect("the frame's file")
 }
 
-#[test]
-fn ln7c_v_a_matching_root_reports_no_difference() {
+/// What `verify` answered of a formal root before the check existed: the complete read's ledger
+/// status, as JSON (the host's copy of the ledger crate is another type).
+fn complete_read_status(root: &Path, database: &Arc<RuntimeDatabase>) -> serde_json::Value {
+    let limits = MaintenanceLimits::default();
+    let maintenance =
+        LedgerMaintenance::acquire(root, false, limits, limits.deadline().expect("deadline"))
+            .expect("maintenance owner");
+    let (_, ledger) = maintenance
+        .verify_formal(database, &mut LedgerOpenTiming::default())
+        .expect("the complete verification passes");
+    maintenance.close().expect("close the maintenance owner");
+    serde_json::to_value(ledger).expect("the ledger status")
+}
+
+/// `ledger-maintenance verify` of `root` through the host, at its clock and keys, with or
+/// without `--frame-query`.
+fn host_verify(
+    root: &Path,
+    frame_query: bool,
+) -> Result<
+    actingcommand_runtime_host::LedgerMaintenanceReceipt,
+    actingcommand_runtime_host::LedgerMaintenanceFailure,
+> {
+    RuntimeHost::maintain_ledger(
+        RuntimeHostConfig::new(root, SALT),
+        LedgerMaintenanceRequest {
+            operation: LedgerMaintenanceOperation::Verify,
+            backup: None,
+            target: None,
+            artifact_root: None,
+            limits: MaintenanceLimits::default(),
+            frame_query,
+        },
+    )
+}
+
+/// The matching root: the case fixture with L2, a Lab frame, moved into `kept\` as the cleaner
+/// names it, and beside it a kept file whose artifact this ledger does not know.
+fn matching_root() -> (
+    tempfile::TempDir,
+    Arc<RuntimeDatabase>,
+    super::gate_ln7::Live,
+) {
     let (root, database, live) = fixture();
-    // L2, a Lab frame, moved into `kept\` as the cleaner names it; beside it a kept file whose
-    // artifact this ledger does not know.
     let leaf = root
         .path()
         .join(actingcommand_artifact_store::KEPT_DIRECTORY)
@@ -119,6 +162,12 @@ fn ln7c_v_a_matching_root_reports_no_difference() {
         b"a kept file of another ledger",
     )
     .expect("an unknown kept file");
+    (root, database, live)
+}
+
+#[test]
+fn ln7c_v_a_matching_root_reports_no_difference() {
+    let (root, database, live) = matching_root();
 
     // Every live frame but L2 compared, the kept L2 compared, W1's E4 accounted, nothing reported.
     let compared = live.all.len() as u64 - 1;
@@ -132,25 +181,42 @@ fn ln7c_v_a_matching_root_reports_no_difference() {
     );
     drop(database);
 
-    // The same through `ledger-maintenance verify` at the host's clock and keys.
-    let receipt = RuntimeHost::maintain_ledger(
-        RuntimeHostConfig::new(root.path(), SALT),
-        LedgerMaintenanceRequest {
-            operation: LedgerMaintenanceOperation::Verify,
-            backup: None,
-            target: None,
-            artifact_root: None,
-            limits: MaintenanceLimits::default(),
-        },
-    )
-    .expect("verify passes a matching root");
+    // The same through `ledger-maintenance verify --frame-query` at the host's clock and keys.
+    let receipt = host_verify(root.path(), true).expect("verify passes a matching root");
     assert_eq!(receipt.status, "verified-sqlite");
     let checked = receipt
         .frame_query
-        .expect("verify checked the frame queries");
+        .expect("verify --frame-query checked the frame queries");
     assert_eq!(
         (checked.live_frames, checked.kept_frames, checked.accounted),
         (compared, 1, 1)
+    );
+}
+
+#[test]
+fn ln7c_v_without_the_flag_verify_answers_the_complete_read_alone() {
+    let (root, database, _) = matching_root();
+    let ledger = complete_read_status(root.path(), &database);
+    drop(database);
+
+    // `verify` without `--frame-query`: the receipt of the complete read alone, and no count, so
+    // actingd prints no frame query line.
+    let receipt = host_verify(root.path(), false).expect("verify passes a matching root");
+    assert!(
+        receipt.frame_query.is_none(),
+        "no frame query count without the flag: {:?}",
+        receipt.frame_query
+    );
+    assert_eq!(
+        serde_json::to_value(&receipt).expect("the receipt"),
+        serde_json::json!({
+            "schema_version": "actingcommand.ledger-maintenance.v2",
+            "status": "verified-sqlite",
+            "ledger": ledger,
+            "backup_id": null,
+            "warnings": [],
+            "activated": false,
+        })
     );
 }
 

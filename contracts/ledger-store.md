@@ -1036,9 +1036,10 @@ writer keeps no frame facts and answers no frame view.
   time and its move count (16 bytes). A failed rename takes the map entry out again. A
   rename that finds no folder (a leaf deleted by hand right after its creation) while
   the frame is still there creates the folder again and renames once more.
-- **The offline check** (#422 LN-7c V, `final-query.md` §7 row V). `ledger-maintenance
-  verify`, after its complete read, runs W once and L and K per chunk over the root's live
-  and kept listings, every statement at one clock, with the configuration's dedup switches
+- **The offline check** (#422 LN-7c V, `final-query.md` §7 row V; opt-in).
+  `ledger-maintenance verify --frame-query`, after its complete read, runs W once and L
+  and K per chunk over the root's live and kept listings, every statement at one clock,
+  with the configuration's dedup switches
   and the keys in effect (`frame_retention_evidence_max_age_days`,
   `ledger_observer.frame_query_chunk_frames`, `.read_check_vm_steps`; the defaults file's
   without actingd's manifest), and compares each answer with the full view of the same
@@ -1061,6 +1062,8 @@ writer keeps no frame facts and answers no frame view.
   differences in its developer text), and the pass fails with a non-zero exit. A frame
   index that does not cover the ledger, or the deadline, fails it too
   (`ledger_index_mismatch` with `frame_refs_incomplete`, `ledger_read_budget_exceeded`).
+  Without the flag `verify` runs none of this and answers as its complete read alone
+  ([ledger-maintenance.md](ledger-maintenance.md)).
 - **Done set.** The process remembers the live frames it removed, moved or found absent,
   and the frames whose removal or move failed, and never visits them again; a pass start
   forgets those that left their listing. A listing holds no frame removed or moved before

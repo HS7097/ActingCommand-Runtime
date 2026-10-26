@@ -3575,14 +3575,16 @@ and the cleaner's existing warnings carry every outcome; two ledger locations ar
 [ledger-store.md](ledger-store.md) ("Frame cleaner", the offline check) and
 [ledger-maintenance.md](ledger-maintenance.md) are the contract. **No new code, key, revision or
 persisted shape**; one ledger location is added (`verify_frame_query`). Offline only: the Runtime
-never runs the check. Gates: the ledger's `ln7c_v_*` tests. The number 1.197 is provisional for
-parallel slices.
+never runs the check. Opt-in (fix round 1): only `verify --frame-query` runs it; without the flag
+`verify` is the complete read alone, as before this slice. Gates: the ledger's `ln7c_v_*` tests.
+The number 1.197 is provisional for parallel slices.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | LN7CV-1 | `ledger_index_mismatch` optional values `artifact_id`, `field` (existing keys) | optional values (#420 S4: one domain code with values) | LN-7c V | LN-7c V | operation `verify_frame_query`: the frame whose statement answer differs from the full view, and the answer's member as a JSON pointer (`/class`, `/action`, `/created_at_unix_ms`, `/run_id`, `/folder`, empty for a frame one side does not answer); the ruled (E1, E11) and safe (E3, E4, E5) differences are not reported |
-| LN7CV-2 | `INFO actingd: ledger_maintenance_completed verify frame_query_live=<n> frame_query_kept=<n> frame_query_accounted=<n>` | daemon line (stderr) | LN-7c V | — | after a passing `verify` of a formal root; the receipt is unchanged |
-| LN7CV-3 | `actingd ledger-maintenance` reads `frame_retention_dedup_error` and `frame_retention_dedup_lab` | behaviour | LN-7c V | — | for `verify`'s check, with the defaults a start uses when the file names neither |
+| LN7CV-2 | `INFO actingd: ledger_maintenance_completed verify frame_query_live=<n> frame_query_kept=<n> frame_query_accounted=<n>` | daemon line (stderr) | LN-7c V | — | after a passing `verify --frame-query` of a formal root; never without the flag; the receipt is unchanged |
+| LN7CV-3 | `actingd ledger-maintenance` reads `frame_retention_dedup_error` and `frame_retention_dedup_lab` | behaviour | LN-7c V | — | for `verify --frame-query`'s check, with the defaults a start uses when the file names neither |
+| LN7CV-4 | `actingd ledger-maintenance verify --frame-query`; `LedgerMaintenanceRequest.frame_query` (default `false`) | command-line flag; host request member | LN-7c V | — | opt-in: runs the check after the complete read; without it `verify` builds no retention index, runs no statement and prints no count line; another operation with it is `maintenance_arguments_invalid` |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
