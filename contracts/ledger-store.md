@@ -146,6 +146,17 @@ longer holds loads it again from the store, by its link and the `artifact_id` in
 before it is checked, so an old artifact's identity is still its first reference (a
 differing reference is refused `artifact_identity_conflict`) and a Lab pin release finds
 a kept frame's pins.
+#422 LN-7c R (`rd-1026/ln7c/final-query.md` §3): every batch transaction (append and
+segment import) also writes the frame index rows of its records, the frames, artifacts and runs
+a capture summary, a publication, an input intent, a dedup marker or an evidence read
+confirmation names only in its payload, and moves the index's extent to the batch's last
+sequence ([ledger-observer.md §11.7](ledger-observer.md#117-the-frame-index-ledger_frame_refs-422-ln-7c-r)).
+After it creates the views and indexes, and before any record is appended, the open fills the
+index: the records an older build appended after the extent and, for a root without the extent,
+every record down to the first, in pages of `ledger_observer.history_page_rows` pointer records
+read by the event type index, each authenticated on its own and each page committed, within the
+open's deadline. The background scrub and `ledger-maintenance verify` compare the rows inside the
+extent with the records (`ledger_index_mismatch`, `verify_ledger_frame_refs`).
 
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit

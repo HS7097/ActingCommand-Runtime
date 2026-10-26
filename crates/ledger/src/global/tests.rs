@@ -2950,3 +2950,7 @@ mod gate_ln8d;
 // never holds the writer.
 #[path = "tests/gate_ln9.rs"]
 mod gate_ln9;
+// #422 LN-7c R: the frame index of payload-only pointers, written with each batch, filled at the
+// open (gap and backfill) and checked by the scrub.
+#[path = "tests/gate_ln7c_r.rs"]
+mod gate_ln7c_r;

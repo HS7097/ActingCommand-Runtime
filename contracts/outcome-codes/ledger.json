@@ -7879,6 +7879,30 @@
       "since": "0.12.14",
       "description": "The paced background scrub of the Runtime's writer: a walk of the whole hash chain on its own read-only connection, in chunked read transactions, ended by the whole-file quick_check of each pass (#422 LN-9, ledger observer §15)."
     },
+    "fill_ledger_frame_refs": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.16",
+      "description": "The writer open's fill of the frame index ledger_frame_refs: the gap after its extent and, for a root without the extent, the backfill of every record, in pages of pointer records within the open's deadline (#422 LN-7c R, ledger observer §11.7)."
+    },
+    "verify_ledger_frame_refs": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.16",
+      "description": "The check of the frame index ledger_frame_refs by the scrub and by ledger-maintenance verify: inside its extent, each record's rows are the ones its payload gives (#422 LN-7c R, ledger observer §11.7)."
+    },
+    "write_ledger_frame_refs": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.16",
+      "description": "Writing a batch's frame index rows and moving the extent of ledger_frame_refs, in the batch's transaction (#422 LN-7c R, ledger observer §11.7)."
+    },
     "ledger_attempt_watch": {
       "owner": "ledger",
       "layer": "store",

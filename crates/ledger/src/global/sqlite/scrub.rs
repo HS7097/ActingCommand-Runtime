@@ -23,6 +23,10 @@
 //!   key is settable), so the rows read since a pass began never exceed the rate by more than one
 //!   chunk. A pass starts at most once every `ledger_observer.scrub_pass_interval_ms`, the first
 //!   when the writer opens.
+//! - **The frame index** (#422 LN-7c R). For every row it authenticates inside the extent of
+//!   `ledger_frame_refs` (read with the head), a chunk compares the record's frame index rows with
+//!   the ones its payload gives (`frame_refs::frame_refs`), in the chunk's read transaction; a
+//!   difference is `ledger_index_mismatch` of `verify_ledger_frame_refs`.
 //! - **A finding** is the failure a full verification (`ledger-maintenance verify`, and the open
 //!   before LN-8) gives for the same damage, with its code and operation (`ledger_record_mismatch`,
 //!   `ledger_index_mismatch`, `sequence_discontinuity`, `ledger_meta_mismatch`, ...;
@@ -37,11 +41,11 @@
 //! row's hash.
 
 use super::{
-    RowReader, append_detail, authenticated_head, decode, failure, read_rows,
+    RowReader, append_detail, authenticated_head, decode, failure, frame_refs, read_rows,
     refuse_unsupported_format, sql_error, views,
 };
 use crate::codes::{LedgerCode, LedgerLocation};
-use crate::fact::LedgerEventMetadata;
+use crate::fact::{LedgerEventMetadata, LedgerEventRead};
 use crate::global::{GlobalLedgerError, GlobalLedgerResult};
 use actingcommand_runtime_database::RuntimeDatabase;
 use rusqlite::{Connection, InterruptHandle, TransactionBehavior, types::Value as SqlValue};
@@ -323,12 +327,14 @@ fn passes(
 }
 
 /// Where one pass stands: the head and head hash its first read authenticated, and the last row
-/// it authenticated with that row's computed hash.
+/// it authenticated with that row's computed hash. #422 LN-7c R: and the extent of the frame
+/// index that read found (`from_sequence`, `through_sequence`).
 struct ScrubCursor {
     head: u64,
     head_hash: Option<String>,
     read: u64,
     last: Option<(u64, String)>,
+    frame_refs: Option<(u64, u64)>,
 }
 
 /// One pass on `connection`; returns early, without a finding, once the stop is raised.
@@ -410,11 +416,13 @@ fn begin(database: &RuntimeDatabase, connection: &Connection) -> GlobalLedgerRes
         head_hash,
         read: 0,
         last: None,
+        frame_refs: frame_refs::read_extent(connection)?,
     })
 }
 
 /// The next rows of the pass, at most `chunk_rows`, each authenticated on its own and chained to
-/// the row before it; returns how many were read.
+/// the row before it, and the frame index rows of those inside its extent (#422 LN-7c R); returns
+/// how many were read.
 fn chunk(
     shared: &ScrubShared,
     database: &RuntimeDatabase,
@@ -426,23 +434,34 @@ fn chunk(
     let through = cursor
         .head
         .min(after.saturating_add(u64::try_from(chunk_rows).unwrap_or(u64::MAX)));
+    let extent = cursor.frame_refs;
+    let mut expected = Vec::new();
     let mut reader = RowReader::new(database, connection, None);
     reader.last = cursor.last.take();
-    let read = reader
-        .read_chunks(
-            &[],
-            after,
-            through,
-            true,
-            &mut |_: LedgerEventMetadata| -> GlobalLedgerResult<bool> {
-                Ok(!shared.stop.is_raised())
-            },
-        )
+    let read = reader.read_chunks(
+        &[],
+        after,
+        through,
+        true,
+        &mut |event: LedgerEventMetadata| -> GlobalLedgerResult<bool> {
+            if extent.is_some_and(|(from, to)| (from..=to).contains(&event.sequence())) {
+                expected.push((event.sequence(), frame_refs::frame_refs(&event)?));
+            }
+            Ok(!shared.stop.is_raised())
+        },
+    );
+    let read = read
+        .and_then(|read| {
+            let read = read.unwrap_or(after);
+            if let Some(extent) = extent {
+                frame_refs::check_chunk(connection, extent, (after, read), &expected)?;
+            }
+            Ok(read)
+        })
         .map_err(|mut error| {
             append_detail(&mut error, &format!("after_sequence={after}"));
             error
-        })?
-        .unwrap_or(after);
+        })?;
     cursor.last = reader.last.take();
     cursor.read = read;
     Ok(read - after)

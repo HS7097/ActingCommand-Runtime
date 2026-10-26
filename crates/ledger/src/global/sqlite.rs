@@ -48,6 +48,8 @@ mod release_source;
 pub(super) mod synthetic;
 // LN-9 (#422, LEAN-L §6): the paced background scrub of the whole chain.
 pub(super) mod scrub;
+// #422 LN-7c R (final-query.md §3): the frame index links of payload-only pointers.
+pub(super) mod frame_refs;
 mod tagged;
 mod views;
 pub use release_source::*;
@@ -600,6 +602,8 @@ pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedge
             .map_err(|error| sql_error(error, LedgerLocation::CreateRuntimeLedger.location()))?;
         views::deploy(&transaction)?;
         mark_formal_format(&transaction)?;
+        // #422 LN-7c R: an empty root's frame index covers its no records.
+        frame_refs::insert_extent(&transaction, 1, 0)?;
         insert_row(
             &transaction,
             "ledger_meta",
@@ -657,6 +661,9 @@ pub(super) fn open_formal(
     let indexed = (|| -> GlobalLedgerResult<(SqliteLedgerStore, Option<String>)> {
         upgrade_views(&database, head, head_hash.as_deref())?;
         ensure_history_index(&database)?;
+        // #422 LN-7c R (final-query.md §3.3): the frame index's gap and backfill, before any
+        // record is appended.
+        frame_refs::complete(&database, head, Some(deadline), config.history_page_rows)?;
         let meta_has_marker = {
             let connection =
                 database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
@@ -850,8 +857,11 @@ pub(super) fn import_source(
             for artifact in &projected.artifacts {
                 insert_row(&transaction, "ledger_artifacts", ARTIFACT_COLUMNS, artifact)?;
             }
+            // #422 LN-7c R: each record's frame index rows in the import's transaction.
+            frame_refs::write_record(&transaction, event)?;
             head_hash = Some(projected.hash);
         }
+        frame_refs::insert_extent(&transaction, 1, record.cutover_sequence)?;
         insert_row(
             &transaction,
             "ledger_meta",
@@ -990,6 +1000,13 @@ impl SqliteLedgerStore {
                 head_hash.as_deref(),
             )?;
             ensure_history_index(&database)?;
+            // #422 LN-7c R: the frame index's gap and backfill, before any record is appended.
+            frame_refs::complete(
+                &database,
+                events.last().map_or(0, PersistedEvent::sequence),
+                None,
+                config.history_page_rows,
+            )?;
             let meta_has_marker = {
                 let connection =
                     database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
@@ -1307,6 +1324,8 @@ impl SqliteStorage {
                 ));
             }
             write_index_rows(&transaction, batch)?;
+            // #422 LN-7c R (final-query.md §3.1): the batch's frame index rows and extent.
+            frame_refs::write_batch(&self.database, &transaction, batch.events)?;
             if let (Some(work), Some(event)) = (work, batch.events.first()) {
                 work.apply(&self.database.borrow_transaction(&transaction), event)
                     .map_err(GlobalLedgerError::work_failure)?;
@@ -2596,10 +2615,14 @@ impl SqliteLedgerReadOnly {
         let started = Instant::now();
         let raw = read_formal_snapshot(database, deadline);
         timing.sql_read_ms = elapsed_ms(started);
-        let raw = raw?;
+        let (raw, stored_refs) = raw?;
         timing.events = raw.events.len() as u64;
         let marker = SqliteMarker::parse(&raw.meta)?;
         let (events, hash) = verify_snapshot_unread(database, raw, timing)?;
+        // #422 LN-7c R (final-query.md §3.4): the frame index rows inside their extent.
+        if let Some(stored_refs) = &stored_refs {
+            frame_refs::verify_stored(&events, stored_refs)?;
+        }
         let status = marker.status(&events, hash);
         Ok((events, status))
     }
@@ -2680,6 +2703,7 @@ fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult
                         sql_error(error, LedgerLocation::InitializeLedgerSchema.location())
                     })?;
                 views::deploy(&transaction)?;
+                frame_refs::insert_extent(&transaction, 1, 0)?;
                 insert_row(
                     &transaction,
                     "ledger_meta",
@@ -2750,11 +2774,12 @@ fn read_snapshot(
 /// `read_snapshot` for `ledger-maintenance verify` (LN-8: the writer open reads only the tail,
 /// `verify_open_tail`): the keyed meta row is authenticated first in the same read transaction,
 /// and the read is bounded by its head sequence and the caller's deadline rather than by
-/// maintenance material limits.
+/// maintenance material limits. #422 LN-7c R: the frame index's extent and rows are read in the
+/// same transaction.
 fn read_formal_snapshot(
     database: &RuntimeDatabase,
     deadline: Instant,
-) -> GlobalLedgerResult<RawSnapshot> {
+) -> GlobalLedgerResult<(RawSnapshot, Option<frame_refs::StoredFrameRefs>)> {
     check_read_budget(Some((u64::MAX, usize::MAX, deadline)), 0, 0)?;
     let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
     let transaction = connection
@@ -2776,10 +2801,11 @@ fn read_formal_snapshot(
         )
     })?;
     let raw = read_snapshot_connection(&transaction, Some((u64::MAX, head, deadline)))?;
+    let stored_refs = frame_refs::read_stored(&transaction)?;
     transaction
         .commit()
         .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
-    Ok(raw)
+    Ok((raw, stored_refs))
 }
 
 /// Workflow #363: `read_snapshot` bounded by a declared prefix. In one read transaction the
