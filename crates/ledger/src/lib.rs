@@ -46,7 +46,10 @@ pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
 // Workflow #382 L-3 (LED-I5): the read counters of the SQLite medium on the opening thread.
 #[cfg(test)]
-pub use read_count::{LedgerReadCounter, LedgerReadCounts, LedgerTableReads};
+pub use read_count::{
+    LedgerReadCounter, LedgerReadCounts, LedgerSequencesRead, LedgerTableReads,
+    LedgerUnidentifiedRows,
+};
 // Workflow #383 AO-1: the write faults of a state root, for tests in other crates.
 #[cfg(any(test, feature = "test-hooks"))]
 pub use read_hold::WriterReadHoldGate;

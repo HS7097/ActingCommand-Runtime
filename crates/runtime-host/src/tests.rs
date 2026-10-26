@@ -416,8 +416,8 @@ mod home_entry;
 mod input;
 mod input_failure;
 mod instance_workers;
-// LN-1 (Workflow #422, LEAN-L model §7.2): the scale harness on the synthetic ledger; it reports,
-// LN-8 makes it a gate.
+// LN-1 (Workflow #422, LEAN-L model §7.2): the scale harness on the synthetic ledger; from LN-8 on
+// it gates the model's targets (§7.1 A1 to A3).
 mod lean_scale;
 mod lease_fencing;
 mod lease_queue;

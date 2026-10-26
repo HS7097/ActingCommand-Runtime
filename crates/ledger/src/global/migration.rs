@@ -274,8 +274,8 @@ impl LedgerMaintenance {
     }
 
     /// Classifies the formal medium by authenticating only its keyed meta row; no history
-    /// is read. True does not mean the history is verified: the single complete
-    /// verification is `open_writer`.
+    /// is read. True does not mean the history is verified: `open_writer` verifies the newest
+    /// records (LN-8), and the single complete verification is `verify_formal`.
     pub fn formal_ready(&self, database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
         self.validate_database(database)?;
         sqlite::formal_ready(database)
@@ -321,9 +321,11 @@ impl LedgerMaintenance {
         sqlite::initialize_formal_empty(database)
     }
 
-    /// Opens the formal writer on the held lock. Its complete verification reads no
-    /// further than the authenticated head sequence and finishes within the held
-    /// operation deadline. Workflow #375 R5a: it reads no artifact material; a reference
+    /// Opens the formal writer on the held lock. LN-8 (#422, LEAN-L §3.2 step 2): it
+    /// authenticates the keyed meta row, the end of the stored rows at its head and the newest
+    /// `ledger_observer.open_verify_tail_records` records (4096 unless the plan names another
+    /// number), within the held operation deadline; an older record is authenticated when it is
+    /// read, and by `verify_formal`. Workflow #375 R5a: it reads no artifact material; a reference
     /// without an eviction proof is `Unrecorded`, so a missing or damaged artifact file
     /// never stops the open.
     pub fn open_writer(

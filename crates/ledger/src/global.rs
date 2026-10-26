@@ -896,6 +896,9 @@ pub struct GlobalLedgerConfig {
     /// LN-5 (#422, LEAN-L §3.3, §3.7): the rows of one page of a history read
     /// (`ledger_observer.history_page_rows`).
     history_page_rows: usize,
+    /// LN-8 (#422, LEAN-L §3.2 step 2, §3.7): how many of the newest records the formal writer
+    /// open authenticates (`ledger_observer.open_verify_tail_records`).
+    open_verify_tail_records: usize,
     /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
     #[cfg(test)]
     history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
@@ -921,6 +924,7 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("read_budget", &self.read_budget)
             .field("close_timeout", &self.close_timeout)
             .field("history_page_rows", &self.history_page_rows)
+            .field("open_verify_tail_records", &self.open_verify_tail_records)
             .finish()
     }
 }
@@ -941,6 +945,7 @@ impl GlobalLedgerConfig {
             close_timeout: None,
             clock: write_failure::process_clock(),
             history_page_rows: history::DEFAULT_HISTORY_PAGE_ROWS,
+            open_verify_tail_records: sqlite::DEFAULT_OPEN_VERIFY_TAIL_RECORDS,
             #[cfg(test)]
             history_rows_read: None,
         }
@@ -959,6 +964,9 @@ impl GlobalLedgerConfig {
         self.read_budget = plan.read_budget().or(self.read_budget);
         self.close_timeout = plan.close_timeout().or(self.close_timeout);
         self.history_page_rows = plan.history_page_rows().unwrap_or(self.history_page_rows);
+        self.open_verify_tail_records = plan
+            .open_verify_tail_records()
+            .unwrap_or(self.open_verify_tail_records);
         self.clock = plan.clock();
         if let Some(timeout) = plan.reply_timeout() {
             self.reply_timeout = timeout;
@@ -991,6 +999,14 @@ impl GlobalLedgerConfig {
     /// (`ledger_observer.history_page_rows`; 256 unless set).
     pub fn with_history_page_rows(mut self, rows: usize) -> Self {
         self.history_page_rows = rows;
+        self
+    }
+
+    /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the formal writer open
+    /// authenticates, `1..=1000000` (`ledger_observer.open_verify_tail_records`; 4096 unless
+    /// set).
+    pub fn with_open_verify_tail_records(mut self, records: usize) -> Self {
+        self.open_verify_tail_records = records;
         self
     }
 
@@ -1068,8 +1084,11 @@ impl GlobalLedgerConfig {
                 LedgerLocation::ValidateSubscriptionCapacity.location(),
             ));
         }
-        // LN-5: a history page holds at least one row and at most the key's bound.
-        if !(1..=history::MAX_HISTORY_PAGE_ROWS).contains(&self.history_page_rows) {
+        // LN-5: a history page holds at least one row and at most the key's bound; LN-8: so does
+        // the open's tail.
+        if !(1..=history::MAX_HISTORY_PAGE_ROWS).contains(&self.history_page_rows)
+            || !(1..=sqlite::MAX_OPEN_VERIFY_TAIL_RECORDS).contains(&self.open_verify_tail_records)
+        {
             return Err(GlobalLedgerError::fatal(
                 LedgerCode::InvalidLedgerConfig.code(),
                 LedgerLocation::ConfigureLedgerWritePolicy.location(),
@@ -1205,6 +1224,8 @@ enum WriterCommand {
     FrameRetentionView {
         now_unix_ms: u64,
         switches: FrameRetentionSwitches,
+        /// LN-7 (#422): the frames present in the live frame store, at a sweep start.
+        live: Option<std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
         response: SyncSender<GlobalLedgerResult<FrameRetentionView>>,
     },
     AdmitArtifactEviction {
@@ -3275,9 +3296,11 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::FrameRetentionView {
                 now_unix_ms,
                 switches,
+                live,
                 response,
             } => {
-                let result = store.frame_retention_view(now_unix_ms, switches, &work);
+                let result =
+                    store.frame_retention_view(now_unix_ms, switches, live.as_ref(), &work);
                 command_succeeded = result.is_ok();
                 if let Err(error) = &result
                     && error.terminal()

@@ -334,6 +334,22 @@
       "type": "duration_ms",
       "description": "Time spent restoring state while opening the ledger."
     },
+    "meta_ms": {
+      "type": "duration_ms",
+      "description": "Time the start's ledger open spent on the format, the keyed meta row and the end of the stored rows."
+    },
+    "tail_ms": {
+      "type": "duration_ms",
+      "description": "Time the start's ledger open spent reading and authenticating its newest records."
+    },
+    "index_ms": {
+      "type": "duration_ms",
+      "description": "Time the start's ledger open spent creating missing views and indexes and reading its retention state through the indexes."
+    },
+    "import_ms": {
+      "type": "duration_ms",
+      "description": "Time the start's ledger open spent importing a dump an earlier run left and writing its own recovery records."
+    },
     "pending_evictions": {
       "type": "integer",
       "description": "Artifacts whose eviction intent has no outcome yet."

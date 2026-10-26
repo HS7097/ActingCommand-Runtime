@@ -1360,13 +1360,14 @@ impl RuntimeHost {
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
             .map_err(|error| RuntimeHostError::scheduler(HostLocation::StartRuntimeHost, &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
+        // LN-8 (#422, LEAN-L §3.2 step 1): the existing storage opens without the whole-file
+        // `quick_check(1)`; `ledger-maintenance verify` keeps it.
         let database = Arc::new(if fresh_storage {
             RuntimeStateStore::open_database(&config.state_root, &config.secret_fingerprint_salt)
                 .map_err(|error| RuntimeHostError::state(&error))?
         } else {
-            actingcommand_runtime_database::RuntimeDatabase::open_existing(
+            actingcommand_runtime_database::RuntimeDatabase::open_existing_for_start(
                 &config.state_root,
-                false,
             )
             .map_err(|error| {
                 RuntimeHostError::fatal(
@@ -6012,7 +6013,10 @@ fn unanswered_ledger_read(error: &RuntimeHostError) -> bool {
 }
 
 /// Workflow #378 A6a (model section 7.4, N1): `code` (`ledger_opened` or, as a note link of a
-/// failed open, `ledger_open_measured`) with the phases of a ledger open and its deadline.
+/// failed open, `ledger_open_measured`) with the phases of a ledger open and its deadline. LN-8
+/// (#422): the writer open's phases are `meta_ms`, `tail_ms`, `index_ms` and `import_ms`, and
+/// `event_count` the records its tail authenticated; `sql_read_ms`, `verify_ms` and `restore_ms`
+/// are the phases of `ledger-maintenance verify`'s complete read, 0 for the writer open.
 pub(crate) fn ledger_open_outcome(
     code: HostCode,
     timing: &actingcommand_ledger::LedgerOpenTiming,
@@ -6027,7 +6031,27 @@ pub(crate) fn ledger_open_outcome(
         .verify_ms(timing.verify_ms)
         .material_ms(timing.material_ms)
         .restore_ms(timing.restore_ms)
+        .meta_ms(timing.meta_ms)
+        .tail_ms(timing.tail_ms)
+        .index_ms(timing.index_ms)
+        .import_ms(timing.import_ms)
         .timeout_ms(timeout_ms)
+}
+
+/// The measured time of a ledger open: the sum of every phase it reports.
+pub(crate) fn ledger_open_elapsed_ms(timing: &actingcommand_ledger::LedgerOpenTiming) -> u64 {
+    [
+        timing.sql_read_ms,
+        timing.verify_ms,
+        timing.material_ms,
+        timing.restore_ms,
+        timing.meta_ms,
+        timing.tail_ms,
+        timing.index_ms,
+        timing.import_ms,
+    ]
+    .into_iter()
+    .fold(0, u64::saturating_add)
 }
 
 /// P0-LO: `ledger_open_slow` (warning) when the open's measured time, the sum of the phases
@@ -6038,11 +6062,7 @@ pub(crate) fn ledger_open_slow_outcome(
     timeout_ms: u64,
     ratio_milli: u64,
 ) -> Option<Outcome> {
-    let elapsed_ms = timing
-        .sql_read_ms
-        .saturating_add(timing.verify_ms)
-        .saturating_add(timing.material_ms)
-        .saturating_add(timing.restore_ms);
+    let elapsed_ms = ledger_open_elapsed_ms(timing);
     let warn_ms = timeout_ms.saturating_mul(ratio_milli) / 1000;
     (elapsed_ms > warn_ms).then(|| {
         Outcome::new(HostCode::LedgerOpenSlow)
@@ -6165,7 +6185,11 @@ fn ledger_failure_plan(
         .with_close_timeout(Duration::from_millis(section.close_timeout_ms))
         // LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; a value the ledger
         // does not take is refused when it opens (`invalid_ledger_config`).
-        .with_history_page_rows(usize::try_from(section.history_page_rows).unwrap_or(usize::MAX));
+        .with_history_page_rows(usize::try_from(section.history_page_rows).unwrap_or(usize::MAX))
+        // LN-8 (#422, LEAN-L §3.2 step 2): the newest records the open authenticates.
+        .with_open_verify_tail_records(
+            usize::try_from(section.open_verify_tail_records).unwrap_or(usize::MAX),
+        );
     #[cfg(test)]
     if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
         plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
