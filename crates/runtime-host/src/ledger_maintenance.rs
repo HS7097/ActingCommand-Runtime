@@ -369,7 +369,9 @@ fn run_locked(
 
 /// Workflow #375 H2: `verify` of a formal root in one pass. A failure's cause also names the
 /// read's phase timings (`ledger_open …`, as the startup line prints them). Workflow #375
-/// R5a: the pass reads no artifact material, so its material fields are 0.
+/// R5a: the pass reads no artifact material, so its material fields are 0. #422 LN-8: the
+/// start's open authenticates only the newest records; this pass stays the complete read of
+/// every row, with the migrated prefix, after the whole-file check of `open_existing`.
 fn verify_formal_root(
     maintenance: &LedgerMaintenance,
     database: &RuntimeDatabase,
