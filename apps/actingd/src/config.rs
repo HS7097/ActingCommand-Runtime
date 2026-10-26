@@ -237,6 +237,14 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     idle: Option<actingcommand_runtime_config::IdleFile>,
+    /// Workflow #392 DA-4b-D (Alice's ruling 69): where the declared safe areas live and the
+    /// model every instance declares unless it names its own (`display_safe_area.*`), each member
+    /// optional; the defaults file holds every default.
+    // Interface anchor `actingd-config` revision 15 (contracts/component-interfaces.md): a Runtime
+    // before DA-4b-D refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    display_safe_area: Option<actingcommand_runtime_config::DisplaySafeAreaFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -800,6 +808,12 @@ struct InstanceConfig {
     // that names it, because the entry denies unknown members.
     #[serde(default)]
     idle: Option<actingcommand_runtime_config::IdleFile>,
+    /// Workflow #392 DA-4b-D: the device model the instance declares
+    /// (`instance.<id>.display_safe_area.model`); left out, the `display_safe_area` section's.
+    // Interface anchor `actingd-config` revision 15: a Runtime before DA-4b-D refuses an entry
+    // that names it, because the entry denies unknown members.
+    #[serde(default)]
+    display_safe_area: Option<actingcommand_runtime_config::InstanceDisplaySafeAreaFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
@@ -1338,6 +1352,13 @@ impl ActingdConfigFile {
                 serde_json::to_value(&instance.idle)
                     .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             );
+            // Workflow #392 DA-4b-D: reported as `instance.<id>.display_safe_area.model`; left
+            // out, the section's.
+            members.insert(
+                actingcommand_runtime_config::display_safe_area::SECTION.to_owned(),
+                serde_json::to_value(&instance.display_safe_area)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
             // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
             if let Some(device) = &instance.device {
                 members.insert(
@@ -1474,6 +1495,8 @@ impl ActingdConfigFile {
             "execution": serde_json::to_value(&self.execution)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "idle": serde_json::to_value(&self.idle)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "display_safe_area": serde_json::to_value(&self.display_safe_area)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self

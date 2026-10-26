@@ -30,9 +30,12 @@
 //! adds `idle.action`, `.min_gap_ms`, `.close_app_wake_lead_ms` and `.stop_emulator_wake_lead_ms`,
 //! in the entry's `idle` member, each defaulting to the `idle` section's key of the same name,
 //! settable; checked whole per instance, and `stop_emulator` only on an instance whose emulator
-//! the Runtime starts (`start_emulator`).
+//! the Runtime starts (`start_emulator`). Workflow #392 DA-4b-D adds
+//! `display_safe_area.model`, the device model the instance declares (the entry's
+//! `display_safe_area.model` member), default the `display_safe_area` section's key, settable.
 
 use crate::codes::ConfigValueProblem;
+use crate::display_safe_area;
 use crate::effective::ConfigFailure;
 use crate::idle;
 use crate::recovery_ladder;
@@ -193,6 +196,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
     idle::INSTANCE_ROWS[1],
     idle::INSTANCE_ROWS[2],
     idle::INSTANCE_ROWS[3],
+    // Workflow #392 DA-4b-D: the device model the instance declares; the section's value in
+    // effect is its default.
+    display_safe_area::INSTANCE_ROW,
 ];
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose

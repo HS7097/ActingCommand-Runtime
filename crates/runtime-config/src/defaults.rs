@@ -10,10 +10,11 @@
 //! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
 //! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
 //! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
-//! workbench's two keys).
+//! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
+use crate::display_safe_area::DisplaySafeAreaFile;
 use crate::emulator_control::EmulatorControlFile;
 use crate::execution::ExecutionFile;
 use crate::host_claims::HostClaimsFile;
@@ -83,6 +84,9 @@ pub struct DefaultsFile {
     /// ROUT-L RL-1b: `check_interval_ms` and `cached_generations` (no root).
     #[serde(default)]
     pub standard_packs: Option<StandardPacksDefaultsFile>,
+    /// Workflow #392 DA-4b-D.
+    #[serde(default)]
+    pub display_safe_area: Option<DisplaySafeAreaFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.
