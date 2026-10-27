@@ -22,9 +22,9 @@ use actingcommand_policy::{
 };
 use serde_json::{Value, json};
 
-const GAME_A: &str = "fixture-game-a";
+pub(super) const GAME_A: &str = "fixture-game-a";
 const GAME_B: &str = "fixture-game-b";
-const SERVER_A: &str = "fixture-server-a";
+pub(super) const SERVER_A: &str = "fixture-server-a";
 const SERVER_B: &str = "fixture-server-b";
 const INSTANCE_A: &str = POLICY_INSTANCE_ALIAS;
 const INSTANCE_B: &str = POLICY_INSTANCE_ALIAS_B;
@@ -34,7 +34,7 @@ const RULE_B: &str = "fixture.other";
 const PACKAGE_1: &str = "fixture.observe";
 const PACKAGE_2: &str = "fixture.second";
 const PACKAGE_B: &str = "fixture.other";
-const POOL_A: &str = "fixture-pool-a";
+pub(super) const POOL_A: &str = "fixture-pool-a";
 const POOL_B: &str = "fixture-pool-b";
 /// The default `standard_packs.check_interval_ms`.
 const INTERVAL_MS: u64 = 60_000;
@@ -168,7 +168,7 @@ fn event(id: &str) -> Value {
 
 /// Game A's `schedule.json`: `rules` (id, package, priority), the first producing into pool A,
 /// with pool A, catalog-a's two profiles and its event.
-fn schedule_a(rules: &[(&str, &str, u64)]) -> Value {
+pub(super) fn schedule_a(rules: &[(&str, &str, u64)]) -> Value {
     json!({
         "schema_version": "actingcommand.schedule.v1",
         "requires": [],
@@ -205,7 +205,7 @@ fn schedule_b(priority: u64, with_pool: bool) -> Value {
 }
 
 /// A bundle index v4 of `game` registering `packages` on `server`.
-fn bundle(game: &str, server: &str, packages: &[&str]) -> Value {
+pub(super) fn bundle(game: &str, server: &str, packages: &[&str]) -> Value {
     json!({
         "schema_version": "actingcommand.bundle.v4",
         "game": game,
@@ -223,7 +223,7 @@ fn bundle(game: &str, server: &str, packages: &[&str]) -> Value {
     })
 }
 
-fn write_json(path: &Path, value: &Value) {
+pub(super) fn write_json(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().expect("a parent directory")).expect("create the game root");
     fs::write(
         path,
@@ -301,7 +301,7 @@ fn facts(bound: &[Bound]) -> EvaluationFacts {
 }
 
 /// The fixture's resources with a static reading for each of `pools`.
-fn resources(pools: &[&str]) -> EvaluationResources {
+pub(super) fn resources(pools: &[&str]) -> EvaluationResources {
     let mut resources = policy_resources();
     resources.pools = pools
         .iter()

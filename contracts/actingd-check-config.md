@@ -475,6 +475,20 @@ The members of `report`:
   `check_config_passed`; a game in use whose game root is broken is in
   `left_out` (its problem is `standard_packs`'s).
 
+ROUT-L RL-1c (#411; v0.12.20): in composer mode (a `policy` section without
+`catalog`) the notes check-config computes over the configured catalog and
+`policy.procedure_manifest` (`fact_reader_missing`, `pack_admission_suspended`
+and `policy_remedy_declaration_unusable`, below) are computed over what the
+configuration schedules instead: the composition the scheduler workbench makes
+for the configured instances from the game roots below `standard_packs.root`
+(the same composer, the same games in use, the configuration manifest's
+subsystems), with its procedure bindings as the workbench installs them (each
+`package.<package_id>` at its package's place below its game root). A game
+whose root is broken or whose `schedule.json` is refused is left out of it (its
+problem is the `standard_packs` or `standard_pack_schedule` note); a
+composition refused as a whole gives none of these notes, as a catalog that
+does not compile gives none.
+
 What the check noted is not a member of `report`: each is one `note` link of
 `check_config_passed` (Workflow #378 A6a; v1's `warnings` strings and
 `mumu_root_unresolved`), in this order:

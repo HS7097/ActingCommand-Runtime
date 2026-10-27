@@ -9,7 +9,10 @@
 //! also carries `outcome` (`package_bindings_reported`, or the refusal alone), each warning is
 //! `{outcome}`, and a refusal is its outcome. Workflow #357 DB-1 (register §1.65 TB4): when the
 //! configuration sets `standard_packs.root`, the answer also lists the tables of each sound game
-//! root, as check-config does (`standard_packs.games[].tables`).
+//! root, as check-config does (`standard_packs.games[].tables`). ROUT-L RL-1c (#411): a
+//! composer-mode configuration (a `policy` without `catalog` and `procedure_manifest`) decodes as
+//! actingd decodes it, and its installation rows are the procedures the scheduler workbench
+//! composes from the games' `schedule.json` for the configured instances, with the same composer.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -17,13 +20,20 @@ use crate::instance_selector::SelectorMiss;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    InstalledProcess, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRootBytes, StandardPackTableReport,
-    read_standard_pack_root, read_standard_pack_tables,
+    BundleIndex, BundleMaintenance, InstalledProcess, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
+    StandardPackTableReport, read_standard_pack_root, read_standard_pack_tables,
 };
+use actingcommand_policy::{
+    STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeInput,
+    StandardPackComposition, StandardPackGameFiles, compose_standard_pack_rules,
+};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
@@ -251,9 +261,42 @@ struct StartupEntry {
     package: PathBuf,
 }
 
+/// ROUT-L RL-1c (#411): decoded as actingd's `config.rs` decodes it since RL-1b: `catalog`,
+/// `catalog_approval_ids` and `procedure_manifest` may be absent (composer mode).
 #[derive(Deserialize)]
 struct PolicySection {
+    #[serde(default)]
     procedure_manifest: Vec<ProcedureEntry>,
+    /// Whether the policy names a catalog; only its presence is read.
+    #[serde(default)]
+    catalog: Option<IgnoredAny>,
+    /// The instances the composer binds (composer mode).
+    #[serde(default)]
+    facts: Option<FactsSection>,
+}
+
+impl PolicySection {
+    /// Composer mode: no catalog and no procedure binding, so the scheduler workbench composes
+    /// the rules and their procedures. A file that binds procedures lists them as configured.
+    fn composer_mode(&self) -> bool {
+        self.catalog.is_none() && self.procedure_manifest.is_empty()
+    }
+}
+
+/// `policy.facts`: only its instances are read.
+#[derive(Deserialize)]
+struct FactsSection {
+    #[serde(default)]
+    instances: Vec<FactsInstance>,
+}
+
+/// One instance of `policy.facts.instances`: the alias the composer binds to its game and
+/// server.
+#[derive(Deserialize)]
+struct FactsInstance {
+    instance_id: String,
+    game_id: String,
+    server_id: String,
 }
 
 #[derive(Deserialize)]
@@ -290,7 +333,9 @@ pub(crate) fn read(
 
 /// Workflow #357 DB-1 (register §1.65 TB4): [`read`] for `actingctl packs` and `ac_packs`, which
 /// also list the tables of the configured standard-pack root (`standard_packs`). Only these two
-/// read the tables: other readers of the bindings (the overview) do not.
+/// read the tables: other readers of the bindings (the overview) do not. ROUT-L RL-1c: only these
+/// two compose a composer-mode configuration's procedures (the installation rows); the overview
+/// reads the instances' bindings only.
 pub(crate) fn read_with_tables(
     installation: Option<&InstalledProcess>,
     config: &Path,
@@ -345,7 +390,7 @@ fn read_answer(
         .into_iter()
         .map(|instance| rows.instance(instance))
         .collect();
-    let installation = rows.installation(&file);
+    let installation = rows.installation(&file, tables);
     let standard_packs = match &file.standard_packs {
         Some(section) if tables => Some(rows.standard_packs(&section.root, system_unix_ms()?)),
         _ => None,
@@ -490,36 +535,168 @@ impl Rows {
         (path.display().to_string(), readable)
     }
 
-    fn installation(&mut self, file: &ConfigFile) -> Vec<InstallationRow> {
+    /// The installation rows: the configured procedure bindings, or (ROUT-L RL-1c) in composer
+    /// mode, when `compose`, the procedures the composition of the games in use names.
+    fn installation(&mut self, file: &ConfigFile, compose: bool) -> Vec<InstallationRow> {
+        let Some(policy) = file.policy.as_ref().filter(|_| self.wants(Role::Procedure)) else {
+            return Vec::new();
+        };
+        if policy.composer_mode() {
+            return match &file.standard_packs {
+                Some(section) if compose => self.composed_installation(&section.root, policy),
+                _ => Vec::new(),
+            };
+        }
         let mut rows = Vec::new();
-        if self.wants(Role::Procedure) {
-            for binding in file
-                .policy
+        for binding in &policy.procedure_manifest {
+            let bound = binding
+                .scheduled_execution
                 .as_ref()
-                .map(|policy| policy.procedure_manifest.as_slice())
-                .unwrap_or_default()
-            {
-                let bound = binding
-                    .scheduled_execution
-                    .as_ref()
-                    .and_then(|scheduled| scheduled.package_path.as_deref())
-                    .map(|path| self.installation_path(path));
-                rows.push(InstallationRow {
-                    role: Role::Procedure,
-                    package_id: binding
-                        .procedure_ref
-                        .strip_prefix(PROCEDURE_PACKAGE_PREFIX)
-                        .filter(|package_id| !package_id.is_empty())
-                        .map(str::to_owned),
-                    readable: bound.as_ref().map(|(_, readable)| *readable),
-                    path: bound.map(|(path, _)| path),
-                    procedure_ref: Some(binding.procedure_ref.clone()),
-                    operation_id: Some(binding.operation_id.clone()),
-                    scheduled: binding.scheduled_execution.is_some(),
-                });
-            }
+                .and_then(|scheduled| scheduled.package_path.as_deref())
+                .map(|path| self.installation_path(path));
+            rows.push(InstallationRow {
+                role: Role::Procedure,
+                package_id: binding
+                    .procedure_ref
+                    .strip_prefix(PROCEDURE_PACKAGE_PREFIX)
+                    .filter(|package_id| !package_id.is_empty())
+                    .map(str::to_owned),
+                readable: bound.as_ref().map(|(_, readable)| *readable),
+                path: bound.map(|(path, _)| path),
+                procedure_ref: Some(binding.procedure_ref.clone()),
+                operation_id: Some(binding.operation_id.clone()),
+                scheduled: binding.scheduled_execution.is_some(),
+            });
         }
         rows
+    }
+
+    /// ROUT-L RL-1c (#411): the installation rows of a composer-mode configuration, one per
+    /// procedure the composition names, as actingd's scheduler workbench composes and binds them:
+    /// the games of `policy.facts.instances` below the standard-pack root `configured`, read by
+    /// the contract crate's one root check, composed by the policy crate's one composer. A row is
+    /// the package, its place below the game root as `path` (with `readable`), its
+    /// `package.<package_id>` procedure, the Runtime's package operation, and `scheduled`. The
+    /// subsystems a `schedule.json` requires are not checked here (check-config checks them
+    /// against the Runtime's). Each game root that cannot be read is `package_binding_unreadable`,
+    /// each broken root and each refused `schedule.json` is `standard_pack_root_invalid`, and that
+    /// game is left out while the others are composed; a composition refused as a whole lists
+    /// no row.
+    fn composed_installation(
+        &mut self,
+        configured: &Path,
+        policy: &PolicySection,
+    ) -> Vec<InstallationRow> {
+        let root = self.resolve(configured);
+        let bound = policy
+            .facts
+            .iter()
+            .flat_map(|facts| &facts.instances)
+            .map(|instance| {
+                (
+                    instance.instance_id.clone(),
+                    StandardPackBinding {
+                        game_id: instance.game_id.clone(),
+                        server_id: instance.server_id.clone(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let games = bound
+            .values()
+            .map(|binding| binding.game_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut read = BTreeMap::new();
+        for game in games {
+            match schedule_game(&root.join(&game), &game) {
+                Ok(Some(files)) => {
+                    read.insert(game, files);
+                }
+                Ok(None) => {}
+                Err(problem) => self.warn(problem),
+            }
+        }
+        let mut schedules = read
+            .iter()
+            .filter_map(|(game, files)| {
+                files
+                    .schedule
+                    .as_deref()
+                    .map(|schedule| (game.clone(), schedule))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let composition = loop {
+            let inputs = read
+                .iter()
+                .filter_map(|(game, files)| {
+                    schedules.get(game).map(|schedule| {
+                        (
+                            game.clone(),
+                            StandardPackGameFiles {
+                                schedule: *schedule,
+                                root: &files.root,
+                                maintenance: files.maintenance.as_slice(),
+                            },
+                        )
+                    })
+                })
+                .collect::<BTreeMap<_, _>>();
+            let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
+                instances: &bound,
+                games: &inputs,
+                subsystems: None,
+                catalog_version: 1,
+            }) {
+                Ok(composition) => break Some(composition),
+                Err(failure) => failure,
+            };
+            let mut refused = BTreeSet::new();
+            for issue in failure.issues() {
+                // A refusal of the composition as a whole is each composed game's problem: every
+                // `standard_pack_root_invalid` names its game and file.
+                let games = match &issue.game_id {
+                    Some(game) => vec![game.clone()],
+                    None => schedules.keys().cloned().collect(),
+                };
+                for game in &games {
+                    self.warn(
+                        Outcome::new(SharedCode::StandardPackRootInvalid)
+                            .game(game.as_str())
+                            .path(root.join(game).join(STANDARD_PACK_SCHEDULE_FILE))
+                            .standard_pack_problem(issue.issue.problem)
+                            .json_pointer(issue.issue.pointer.clone()),
+                    );
+                }
+                if let Some(game) = &issue.game_id {
+                    refused.insert(game.clone());
+                }
+            }
+            let before = schedules.len();
+            schedules.retain(|game, _| !refused.contains(game));
+            if schedules.len() == before {
+                break None;
+            }
+        };
+        composition
+            .iter()
+            .flat_map(StandardPackComposition::manifest)
+            .map(|procedure| {
+                let path = root.join(&procedure.game_id).join(&procedure.directory);
+                let readable = !matches!(path_kind(&path), PathKind::Unreadable);
+                if !readable {
+                    self.unreadable(&path, None);
+                }
+                InstallationRow {
+                    role: Role::Procedure,
+                    package_id: Some(procedure.package_id.clone()),
+                    path: Some(path.display().to_string()),
+                    readable: Some(readable),
+                    procedure_ref: Some(procedure.procedure_ref.clone()),
+                    operation_id: Some(STANDARD_PACK_OPERATION_ID.to_owned()),
+                    scheduled: true,
+                }
+            })
+            .collect()
     }
 
     /// Workflow #357 DB-1 (register §1.65 TB3, TB4): the tables of every sound game root below
@@ -611,6 +788,70 @@ fn sound_game_root(directory: &Path, game: &str) -> bool {
         ),
         Ok(Some(_))
     )
+}
+
+/// ROUT-L RL-1c: one game root as the composer reads it: the root, the bundle's maintenance
+/// entries, and `schedule.json`'s bytes when the root holds one.
+struct ScheduleGame {
+    root: StandardPackRoot,
+    maintenance: Vec<BundleMaintenance>,
+    schedule: Option<Vec<u8>>,
+}
+
+/// ROUT-L RL-1c: the game root of `game` at `directory` as the scheduler workbench reads it for
+/// the composer (its root files by the contract crate's [`read_standard_pack_root`], the
+/// bundle's maintenance entries, `schedule.json`); `None` when the directory holds no game root.
+/// A file that cannot be read is `package_binding_unreadable` with its `path`; a broken root is
+/// `standard_pack_root_invalid` with the game, the refused file, its problem and pointer.
+fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, Outcome> {
+    let read = |file: &str| {
+        let path = directory.join(file);
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(Outcome::new(ActingctlCode::PackageBindingUnreadable)
+                .path(path)
+                .caused_by(Outcome::from_io_error(&error, IoOp::Read))),
+        }
+    };
+    let bundle = read(STANDARD_PACK_BUNDLE_FILE)?;
+    let pages = read(STANDARD_PACK_PAGES_FILE)?;
+    let interrupts = read(STANDARD_PACK_INTERRUPTS_FILE)?;
+    let navigation = read(STANDARD_PACK_NAVIGATION_FILE)?;
+    let display_layout = read(STANDARD_PACK_DISPLAY_LAYOUT_FILE)?;
+    let tables = fs::symlink_metadata(directory.join(STANDARD_PACK_TABLES_DIRECTORY)).is_ok();
+    let root = read_standard_pack_root(
+        StandardPackRootBytes {
+            bundle: bundle.as_deref(),
+            pages: pages.as_deref(),
+            interrupts: interrupts.as_deref(),
+            navigation: navigation.as_deref(),
+            tables,
+            display_layout: display_layout.as_deref(),
+        },
+        game,
+    )
+    .map_err(|issue| {
+        Outcome::new(SharedCode::StandardPackRootInvalid)
+            .game(game)
+            .path(directory.join(issue.file))
+            .standard_pack_problem(issue.problem)
+            .json_pointer(issue.pointer)
+    })?;
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    let maintenance = bundle
+        .as_deref()
+        .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
+        .map(|index| index.maintenance().to_vec())
+        .unwrap_or_default();
+    let schedule = read(STANDARD_PACK_SCHEDULE_FILE)?;
+    Ok(Some(ScheduleGame {
+        root,
+        maintenance,
+        schedule,
+    }))
 }
 
 enum PathKind {
@@ -879,5 +1120,211 @@ mod tests {
             "{unknown}"
         );
         assert_eq!(unknown.category(), Category::Error);
+    }
+
+    // ROUT-L RL-1c (#411; work order `rd-1027/brief-rl1c.md`, tests C-1 and C-6): a neutral game
+    // root below `standard_packs.root`, bound by `policy.facts.instances`.
+    const GAME: &str = "fixture-game-a";
+    const GAME_B: &str = "fixture-game-b";
+    const SERVER: &str = "fixture-server-a";
+    const FIRST: &str = "fixture.first";
+    const SECOND: &str = "fixture.second";
+
+    /// The installation rows of an answer, as the CLI prints them.
+    fn installation_rows(answer: &Answer) -> Value {
+        serde_json::to_value(answer.packs()).expect("encode the answer")["installation"].clone()
+    }
+
+    /// C-1 (work order item 1): a composer-mode configuration (a `policy` without `catalog` and
+    /// `procedure_manifest`) decodes, and `packs` lists the procedures the composer makes from the
+    /// bound games' `schedule.json`, one row each in `procedure_ref` order: the package, its
+    /// place below the game root, the Runtime's package operation, scheduled. A composed package
+    /// that is not there and an instance's resource package that is not there are each
+    /// `package_binding_unreadable`; the bound game whose `schedule.json` is refused is
+    /// `standard_pack_root_invalid` and has no row. The overview's read (no composition) decodes
+    /// the same file and keeps the instances' checks.
+    #[test]
+    fn rl1c_c1_packs_lists_the_composed_procedures_of_a_composer_mode_configuration() {
+        use crate::standard_pack_schedule_fixture::{bundle, rule, schedule, write_json};
+        let root = TempDir::new().expect("tempdir");
+        let packages = root.path().join("packages");
+        write_json(
+            &packages.join(GAME).join("bundle.json"),
+            &bundle(GAME, SERVER, &[FIRST, SECOND]),
+        );
+        write_json(
+            &packages.join(GAME).join("schedule.json"),
+            &schedule(&[
+                rule("fixture.read", FIRST, false),
+                rule("fixture.clock", SECOND, true),
+            ]),
+        );
+        fs::create_dir_all(packages.join(GAME).join(FIRST)).expect("the first package");
+        write_json(
+            &packages.join(GAME_B).join("bundle.json"),
+            &bundle(GAME_B, SERVER, &[FIRST]),
+        );
+        fs::write(packages.join(GAME_B).join("schedule.json"), b"{").expect("schedule.json");
+        let config = root.path().join(ROOT_CONFIG_FILE);
+        let document = serde_json::json!({
+            "instances": [
+                {"alias": "node-a", "instance_id": "neutral-a",
+                 "resource_package": "missing-resources"},
+                {"alias": "node-b", "instance_id": "neutral-b"}
+            ],
+            "standard_packs": {"root": "packages"},
+            "policy": {
+                "facts": {"instances": [
+                    {"instance_id": "node-a", "game_id": GAME, "server_id": SERVER},
+                    {"instance_id": "node-b", "game_id": GAME_B, "server_id": SERVER}
+                ]}
+            }
+        });
+        fs::write(&config, document.to_string()).expect("write configuration");
+
+        let answer = read_with_tables(None, &config, &Query::default())
+            .unwrap_or_else(|error| panic!("packs reads a composer-mode configuration: {error}"));
+
+        let base = Path::new(&answer.packs().source().config)
+            .parent()
+            .expect("the configuration's folder")
+            .to_path_buf();
+        let place = |game: &str, package: &str| {
+            base.join("packages")
+                .join(game)
+                .join(package)
+                .display()
+                .to_string()
+        };
+        let row = |package: &str, readable: bool| {
+            serde_json::json!({
+                "role": "procedure",
+                "package_id": package,
+                "path": place(GAME, package),
+                "readable": readable,
+                "procedure_ref": format!("package.{package}"),
+                "operation_id": "operation.package.run",
+                "scheduled": true,
+            })
+        };
+        assert_eq!(
+            installation_rows(&answer),
+            serde_json::json!([row(FIRST, true), row(SECOND, false)])
+        );
+        let warnings = answer.warnings();
+        let unreadable = warnings
+            .iter()
+            .filter(|warning| warning.is(ActingctlCode::PackageBindingUnreadable))
+            .map(|warning| warning.value("path").cloned())
+            .collect::<Vec<_>>();
+        assert!(
+            unreadable.contains(&Some(Value::from(place(GAME, SECOND)))),
+            "{warnings:?}"
+        );
+        assert!(
+            unreadable.contains(&Some(Value::from(
+                base.join("missing-resources").display().to_string()
+            ))),
+            "the resource package check runs again: {warnings:?}"
+        );
+        let refused = warnings
+            .iter()
+            .filter(|warning| warning.is(SharedCode::StandardPackRootInvalid))
+            .collect::<Vec<_>>();
+        assert_eq!(refused.len(), 1, "{warnings:?}");
+        assert_eq!(
+            refused[0].value("game"),
+            Some(&Value::from(GAME_B)),
+            "{warnings:?}"
+        );
+        assert_eq!(
+            refused[0].value("path"),
+            Some(&Value::from(
+                base.join("packages")
+                    .join(GAME_B)
+                    .join("schedule.json")
+                    .display()
+                    .to_string()
+            )),
+            "{warnings:?}"
+        );
+
+        let overview = read(None, &config, &Query::default())
+            .unwrap_or_else(|error| panic!("the overview's read decodes it: {error}"));
+        assert_eq!(installation_rows(&overview), serde_json::json!([]));
+        assert!(
+            overview
+                .warnings()
+                .iter()
+                .any(|warning| warning.is(ActingctlCode::PackageBindingUnreadable)),
+            "{:?}",
+            overview.warnings()
+        );
+    }
+
+    /// C-6 (work order, tests): a catalog-mode configuration answers as before: its installation
+    /// rows are its `policy.procedure_manifest` bindings, and the bound game's `schedule.json` is
+    /// not composed.
+    #[test]
+    fn rl1c_c6_a_catalog_mode_configuration_lists_its_procedure_bindings_as_before() {
+        use crate::standard_pack_schedule_fixture::{bundle, rule, schedule, write_json};
+        let root = TempDir::new().expect("tempdir");
+        let packages = root.path().join("packages");
+        write_json(
+            &packages.join(GAME).join("bundle.json"),
+            &bundle(GAME, SERVER, &[FIRST]),
+        );
+        write_json(
+            &packages.join(GAME).join("schedule.json"),
+            &schedule(&[rule("fixture.read", FIRST, false)]),
+        );
+        fs::create_dir_all(packages.join(GAME).join(FIRST)).expect("the package");
+        let config = root.path().join(ROOT_CONFIG_FILE);
+        let document = serde_json::json!({
+            "instances": [{"alias": "node-a", "instance_id": "neutral-a"}],
+            "standard_packs": {"root": "packages"},
+            "policy": {
+                "facts": {"instances": [
+                    {"instance_id": "node-a", "game_id": GAME, "server_id": SERVER}
+                ]},
+                "catalog": {
+                    "tasks": "policy/tasks.json",
+                    "pools": "policy/pools.json",
+                    "activity": "policy/activity.json",
+                    "timeline": "policy/timeline.json"
+                },
+                "catalog_approval_ids": ["approval:fixture-a"],
+                "procedure_manifest": [{
+                    "procedure_ref": "package.neutral.task",
+                    "operation_id": "neutral.task",
+                    "yield_points": [],
+                    "scheduled_execution": {
+                        "mode": "fixture_simulation",
+                        "package_path": "policy/task.zip"
+                    }
+                }]
+            }
+        });
+        fs::write(&config, document.to_string()).expect("write configuration");
+
+        let answer = read_with_tables(None, &config, &Query::default())
+            .unwrap_or_else(|error| panic!("packs reads a catalog-mode configuration: {error}"));
+
+        let base = Path::new(&answer.packs().source().config)
+            .parent()
+            .expect("the configuration's folder")
+            .to_path_buf();
+        assert_eq!(
+            installation_rows(&answer),
+            serde_json::json!([{
+                "role": "procedure",
+                "package_id": "neutral.task",
+                "path": base.join("policy").join("task.zip").display().to_string(),
+                "readable": false,
+                "procedure_ref": "package.neutral.task",
+                "operation_id": "neutral.task",
+                "scheduled": true,
+            }])
+        );
     }
 }

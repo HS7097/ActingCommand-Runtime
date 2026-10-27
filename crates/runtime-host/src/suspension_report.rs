@@ -82,6 +82,17 @@ pub struct SuspensionReportRequest<'a> {
     pub catalog: &'a CatalogSources,
 }
 
+/// ROUT-L RL-1c (#411): what `actingd suspended` reads in composer mode: the loaded
+/// configuration's file, when it last changed, and what the configuration schedules, the
+/// composition of [`crate::compose_configured_standard_packs`] (its catalog in place of the
+/// configured one, its procedure bindings in place of `policy.procedure_manifest`).
+pub struct ComposedSuspensionReportRequest<'a> {
+    pub config_path: &'a Path,
+    /// The configuration file's modification time, when the file system reports one.
+    pub config_modified_unix_ms: Option<u64>,
+    pub schedule: &'a crate::ConfiguredStandardPackSchedule,
+}
+
 /// A report that could not be produced (Workflow #378 A6a): its outcome, the code with its
 /// operation, values and links.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,6 +362,63 @@ pub fn suspension_report(
             ContractLocation::ReadSuspensionConfig,
         )
     })?;
+    report(
+        request.config_path,
+        request.config_modified_unix_ms,
+        request.host,
+        manifest,
+        &compiled,
+    )
+}
+
+/// ROUT-L RL-1c (#411): `actingd suspended` in composer mode: the report of
+/// [`suspension_report`], judged against what the configuration schedules, the composition's
+/// catalog and procedure bindings. A composition refused as a whole is
+/// `policy_catalog_compile_failed` (`operation` `read_suspension_config`), caused by each of its
+/// problems; a game whose files are refused is left out of it, so its pairs are
+/// `task_not_in_catalog`.
+pub fn composed_suspension_report(
+    request: &ComposedSuspensionReportRequest<'_>,
+) -> Result<Value, SuspensionReportError> {
+    let host = request.schedule.host();
+    let manifest = host.procedure_manifest().ok_or_else(|| {
+        SuspensionReportError::new(
+            SharedCode::SuspendedPolicyUnconfigured,
+            ContractLocation::ReadSuspensionConfig,
+        )
+    })?;
+    let compiled = request.schedule.compiled().ok_or_else(|| {
+        SuspensionReportError::new(
+            SharedCode::PolicyCatalogCompileFailed,
+            ContractLocation::ReadSuspensionConfig,
+        )
+        .with_outcome(|outcome| {
+            request
+                .schedule
+                .problems()
+                .iter()
+                .cloned()
+                .fold(outcome, Outcome::caused_by)
+        })
+    })?;
+    report(
+        request.config_path,
+        request.config_modified_unix_ms,
+        host,
+        manifest,
+        compiled,
+    )
+}
+
+/// The report of the configured state root, judged against `host`'s procedure bindings
+/// (`manifest`) and the catalog `compiled`.
+fn report(
+    config_path: &Path,
+    config_modified_unix_ms: Option<u64>,
+    host: &RuntimeHostConfig,
+    manifest: &crate::ProcedureManifest,
+    compiled: &CompiledCatalog,
+) -> Result<Value, SuspensionReportError> {
     let procedure_refs = compiled
         .catalog()
         .tasks
@@ -358,7 +426,7 @@ pub fn suspension_report(
         .iter()
         .map(|task| (task.id.clone(), task.procedure_ref.clone()))
         .collect::<BTreeMap<_, _>>();
-    let state_root = request.host.state_root();
+    let state_root = host.state_root();
     if !state_root.is_dir() {
         return Err(SuspensionReportError::new(
             HostCode::SuspendedLedgerUnavailable,
@@ -396,7 +464,7 @@ pub fn suspension_report(
     // Workflow #373 NAV-3a: the layers' packages are those the standard-pack registries name.
     let view = SuspensionLiftView::new(
         manifest,
-        request.host.standard_packs_root(),
+        host.standard_packs_root(),
         &checks,
         LiftCheckTime::ONE_READ,
     );
@@ -455,10 +523,7 @@ pub fn suspension_report(
     match daemon_started_at_unix_ms {
         None => warnings.push("daemon_start_unknown".to_owned()),
         Some(started) => {
-            if request
-                .config_modified_unix_ms
-                .is_some_and(|modified| modified > started)
-            {
+            if config_modified_unix_ms.is_some_and(|modified| modified > started) {
                 warnings.push("config_newer_than_daemon_start".to_owned());
             }
         }
@@ -636,12 +701,12 @@ pub fn suspension_report(
             "detail": detail,
         }));
     }
-    let (clock_slots, clock_slots_total) = clock_slots(&snapshot, &compiled)?;
+    let (clock_slots, clock_slots_total) = clock_slots(&snapshot, compiled)?;
     let packs = packs(&snapshot, &view, &procedure_refs, daemon_started_at_unix_ms)?;
     let (remedies, remedies_total) = remedies(&snapshot)?;
     let mut report = json!({
         "schema_version": SCHEMA_VERSION,
-        "config_path": request.config_path.to_string_lossy(),
+        "config_path": config_path.to_string_lossy(),
         "state_root": state_root.to_string_lossy(),
         "through_sequence": through_sequence,
         "daemon_started_at_unix_ms": daemon_started_at_unix_ms,

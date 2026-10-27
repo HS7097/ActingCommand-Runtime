@@ -6,10 +6,15 @@
 //! again and again without accumulating.
 //! Loads and assembles the configuration exactly as startup does, then reads the state root's
 //! ledger read-only; nothing is written and no lock is taken, so it runs beside the daemon.
+//! ROUT-L RL-1c (#411): in composer mode (a `policy` without `catalog`) the pairs are judged
+//! against the composition the scheduler workbench makes for the configured instances.
 
 use super::*;
 use actingcommand_contract::codes::ContractLocation;
-use actingcommand_runtime_host::{SuspensionReportRequest, suspension_report};
+use actingcommand_runtime_host::{
+    ComposedSuspensionReportRequest, SuspensionReportRequest, compose_configured_standard_packs,
+    composed_suspension_report, suspension_report,
+};
 
 /// Workflow #378 A6a (model section 7.4): suspended v2, the report's members with `outcome`
 /// (`suspended_reported`); a failure is its outcome alone (v1's `status`, `code`, `operation`
@@ -43,20 +48,33 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
-    // ROUT-L RL-1b: the report reads the configured catalog; composer mode names none.
-    let Some(catalog) = policy.as_ref().and_then(|policy| policy.catalog.as_ref()) else {
+    let Some(policy) = policy.as_ref() else {
         let code = SharedCode::SuspendedPolicyUnconfigured;
         return Err(ActingdError::refused(
             code,
             Outcome::new(code).operation(ContractLocation::ReadSuspensionConfig),
         ));
     };
-    let report = suspension_report(&SuspensionReportRequest {
-        config_path: &config_path,
-        config_modified_unix_ms,
-        host: &host,
-        catalog,
-    })
+    let report = match policy.catalog.as_ref() {
+        Some(catalog) => suspension_report(&SuspensionReportRequest {
+            config_path: &config_path,
+            config_modified_unix_ms,
+            host: &host,
+            catalog,
+        }),
+        // ROUT-L RL-1c (#411; board 6435964241): composer mode names no catalog; the report reads
+        // what the configuration schedules, the composition the scheduler workbench makes for the
+        // configured instances.
+        None => {
+            let schedule =
+                compose_configured_standard_packs(&host).map_err(ActingdError::runtime)?;
+            composed_suspension_report(&ComposedSuspensionReportRequest {
+                config_path: &config_path,
+                config_modified_unix_ms,
+                schedule: &schedule,
+            })
+        }
+    }
     .map_err(|error| ActingdError::refused(error.code(), error.outcome().clone()))?;
     match report {
         serde_json::Value::Object(data) => Ok(Reported {

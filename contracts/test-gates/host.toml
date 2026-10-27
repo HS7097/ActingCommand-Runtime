@@ -2394,3 +2394,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t7_the_first_unanswered_settlement_read_ends_the_ticks_reads",
 ]
 incident = ["#419 LN-WS-F"]
+
+# ROUT-L RL-1c (#411; work order rd-1027/brief-rl1c.md C-5 and C-2; board #411 6432236193, 6435964241): in composer mode the task package admission after start waits for the scheduler workbench's first check and admits the composed procedure bindings: a composed package refused with a suspend code is suspended and the next evaluation defers its pair with pack_admission_suspended, naming the package, its refusal and its hash (C-5); the suspended report of the configuration's composition (compose_configured_standard_packs, composed_suspension_report) lists that package under packs with its content hash measured now at the composed binding (C-2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1c::rl1c_c5_the_admission_after_start_admits_the_composed_procedures",
+    "actingcommand-runtime-host::lib::tests::gate_rl1c::rl1c_c2_the_suspended_report_answers_against_the_composition",
+]
+incident = ["#411 RL-1c"]

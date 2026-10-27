@@ -481,10 +481,22 @@ pub fn remedy_declaration_notes(
             unreadable: Vec::new(),
         };
     };
+    remedy_declaration_notes_compiled(config, &compiled, lists)
+}
+
+/// ROUT-L RL-1c (#411): [`remedy_declaration_notes`] over a catalog already compiled: in composer
+/// mode the composition's (`ConfiguredStandardPackSchedule::compiled`), with `config` the
+/// configuration that holds the composition's procedure bindings
+/// (`ConfiguredStandardPackSchedule::host`).
+pub fn remedy_declaration_notes_compiled(
+    config: &crate::RuntimeHostConfig,
+    compiled: &actingcommand_policy::CompiledCatalog,
+    lists: &[RemedyChoiceList],
+) -> RemedyDeclarationNotes {
     let instances = config
         .policy_inputs()
         .map_or(&[][..], |inputs| inputs.facts().instances.as_slice());
-    let built = build_table(&compiled, config.procedure_manifest(), instances, 0);
+    let built = build_table(compiled, config.procedure_manifest(), instances, 0);
     let mut notes = built
         .findings
         .iter()

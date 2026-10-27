@@ -303,6 +303,16 @@ ledger read-only and without the owner lock, so it runs beside a running daemon.
 Workflow #336 PKG-S3 it reads the packages a paused pair names, read-only, to measure their
 content hashes now, each package once per report. Nothing is written.
 
+ROUT-L RL-1c (#411; v0.12.20): in composer mode (a `policy` section without `catalog`) the
+report is judged against what the configuration schedules: the composition the scheduler
+workbench makes for the configured instances from the game roots below `standard_packs.root`
+(its catalog in place of the configured one, its procedure bindings, each `package.<package_id>`
+at its package's place below its game root, in place of `policy.procedure_manifest`), with the
+same members. A game whose files are refused is left out of the composition, so its pairs carry
+`task_not_in_catalog`; a composition refused as a whole is `policy_catalog_compile_failed`
+(`operation` `read_suspension_config`) caused by each of its problems. Only a configuration
+without a `policy` section is `suspended_policy_unconfigured`.
+
 stdout is one JSON line, the v2 report (Workflow #378 A6a): `schema_version`, `outcome` and the
 report's members. `outcome` is the full `actingcommand.outcome.v1` envelope of
 `suspended_reported` (success); with `ACTINGCOMMAND_DETAIL=codes` in the environment it keeps
@@ -513,9 +523,14 @@ the packages again.
    suspend code becomes a `pack_admission_suspended` note and the configuration stays valid;
    any other refusal is handled as before (at dispatch). check-config reads the ledger
    read-only and writes nothing; acsetup prints its warning unchanged, installs the standard
-   package and lists that task package as suspended.
+   package and lists that task package as suspended. ROUT-L RL-1c: in composer mode (no
+   `policy.catalog`) it admits every package the composition's procedures locate
+   ([actingd-check-config.md](actingd-check-config.md)).
 2. After actingd has started (`scheduling.pack_admission.check_after_start`, default true), a
-   background thread runs the same check outside the start window. It only suspends.
+   background thread runs the same check outside the start window. It only suspends. ROUT-L
+   RL-1c: in composer mode the procedure bindings are the composition's, which the scheduler
+   workbench installs at its first check (the first policy cycle), so the thread waits for that
+   check, or for a stop, and then admits the packages the composed procedures locate.
 3. Dispatch preparation: the first refusal with a suspend code suspends the package.
 
 **While suspended.** Every task bound to the package, on every instance, is deferred in the

@@ -27,6 +27,7 @@ dependencies = [
  "actingcommand-device",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
+ "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-config",
  "actingcommand-runtime-database",

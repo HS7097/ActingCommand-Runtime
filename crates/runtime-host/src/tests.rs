@@ -446,6 +446,9 @@ mod gate_mcp19a;
 mod gate_p0;
 // ROUT-L RL-1b (frozen model v1.0 §6.1 row RL-1b, §7.1 A2-A6, A8, A9): the scheduler workbench.
 mod gate_rl1b;
+// ROUT-L RL-1c (#411; work order `rd-1027/brief-rl1c.md` C-2, C-5): the admission after start and
+// the suspended report in composer mode.
+mod gate_rl1c;
 mod home_entry;
 mod input;
 mod input_failure;

@@ -58,6 +58,7 @@ mod remedy_choices;
 // Workflow #411 B15 R7: what `actingd check-config` notes about declared remedies.
 pub use remedy::{
     RemedyChoiceList, RemedyDeclarationNote, RemedyDeclarationNotes, remedy_declaration_notes,
+    remedy_declaration_notes_compiled,
 };
 // Workflow #384 D2-S3.
 mod resource_adjustment;
@@ -117,7 +118,10 @@ pub use recognition_binding::{
     missing_fact_readers, recognition_binding_ignored, recognition_binding_invalid,
     recognition_binding_key_conflict, recognition_binding_qualification,
 };
-pub use suspension_report::{SuspensionReportError, SuspensionReportRequest, suspension_report};
+pub use suspension_report::{
+    ComposedSuspensionReportRequest, SuspensionReportError, SuspensionReportRequest,
+    composed_suspension_report, suspension_report,
+};
 
 #[cfg(test)]
 mod tests;
