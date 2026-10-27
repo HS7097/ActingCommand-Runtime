@@ -346,6 +346,12 @@ The members of `report`:
       scope plus an offset ([scheduling/README.md](scheduling/README.md),
       "Fact references"); a `schedule.json` whose rule writes one requires it,
       so it is composed only by a Runtime that names this row.
+    - `pool_fact_reference` (#386 CF-5): always on
+      (`config_subsystem_always_on`). The Runtime reads a pool's `capacity` and
+      a `resource_projection`'s `value` written as a fact of the pool's scope
+      plus an offset ([scheduling/README.md](scheduling/README.md), "Pool fact
+      references"); a `schedule.json` that writes either requires it, so it is
+      composed only by a Runtime that names this row.
     - `expected_runtime` (SCH-M ED-2): always on
       (`config_subsystem_always_on`). The Runtime keeps the run-duration
       samples (`health.run_duration`) and dispatches by the expected duration

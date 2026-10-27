@@ -3,10 +3,12 @@
 //! Pure forward planning and evidence-bounded maintenance assessment.
 
 use crate::codes::PolicyCode;
+use crate::evaluator::{PoolBound, pool_bound, project_time_validity, unknown_token};
 use crate::{
     CompiledCatalog, DetectionSuggestion, EffectDirection, EvaluationFacts, EvaluationResources,
-    EvaluationTime, HostResourceSnapshot, ObservationSource, PolicyEvaluationError, PoolProjection,
-    PoolSpec, PoolValueSnapshot, ScopeSelector, TaskRuntimeSnapshot, TaskTerminalState, evaluate,
+    EvaluationTime, HostResourceSnapshot, ObservationSource, PolicyEvaluationError, PoolCapacity,
+    PoolProjection, PoolSpec, PoolValueSnapshot, ScopeSelector, TaskRuntimeSnapshot,
+    TaskTerminalState, evaluate,
 };
 use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Serialize};
@@ -158,9 +160,21 @@ pub struct ForwardProjection {
 
 struct SimulatedPool {
     spec: PoolSpec,
+    /// #386 CF-5: the pool's capacity at the projection's start, held across the horizon (the
+    /// projection holds its facts).
+    capacity: u64,
     snapshot: PoolValueSnapshot,
     remainder_ms: u64,
     cumulative_waste: u64,
+}
+
+impl SimulatedPool {
+    /// The most the pool holds after an increase (#386 CF-5): its capacity, or its amount while
+    /// that is above a capacity read from its fact (an increase then adds nothing). An amount
+    /// never exceeds a constant capacity, so for one this is the capacity.
+    fn ceiling(&self) -> u64 {
+        self.capacity.max(self.snapshot.value)
+    }
 }
 
 /// Runs the existing deterministic evaluator over a bounded future horizon.
@@ -178,12 +192,22 @@ pub fn project_forward(
         .checked_add(config.horizon_ms)
         .ok_or_else(|| ForwardError::overflow("projection end time overflowed"))?;
     let mut projected_facts = facts.clone();
-    let mut pools = initialize_pools(catalog, resources, time.unix_ms)?;
+    let (mut pools, capacity_gaps) = initialize_pools(catalog, facts, resources, time)?;
     let hosts = resources.hosts.clone();
     let mut current = time.unix_ms;
     let mut current_monotonic = time.monotonic_ms;
     let mut steps = Vec::new();
     let mut gaps = BTreeMap::<(String, String, String), ForwardEvidenceGap>::new();
+    for gap in capacity_gaps {
+        gaps.insert(
+            (
+                String::new(),
+                gap.fact_key.clone().unwrap_or_default(),
+                gap.code.clone(),
+            ),
+            gap,
+        );
+    }
     let mut next_wake = None;
     let mut evaluation_budget_exhausted = true;
 
@@ -349,11 +373,17 @@ fn apply_round_effects(
     Ok(())
 }
 
+/// The simulated pools at the projection's start. #386 CF-5: a capacity fact is read there, with
+/// the evaluator's rules, and held across the horizon. A pool whose capacity fact gives no
+/// capacity is left out, as a pool without a snapshot is (its `resource_projection` is Unknown),
+/// and is reported as an evidence gap: the fact's key with its unknown reason.
 fn initialize_pools(
     catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
     resources: &EvaluationResources,
-    as_of_unix_ms: u64,
-) -> ForwardResult<BTreeMap<String, SimulatedPool>> {
+    time: EvaluationTime,
+) -> ForwardResult<(BTreeMap<String, SimulatedPool>, Vec<ForwardEvidenceGap>)> {
+    let as_of_unix_ms = time.unix_ms;
     let specs = catalog
         .catalog()
         .pools
@@ -361,6 +391,7 @@ fn initialize_pools(
         .iter()
         .map(|pool| (pool.id.as_str(), pool))
         .collect::<BTreeMap<_, _>>();
+    let mut gaps = Vec::new();
     let mut pools = BTreeMap::new();
     for snapshot in &resources.pools {
         let spec = specs.get(snapshot.pool_id.as_str()).ok_or_else(|| {
@@ -369,7 +400,29 @@ fn initialize_pools(
                 snapshot.pool_id
             ))
         })?;
-        if snapshot.observed_at_unix_ms > as_of_unix_ms || snapshot.value > spec.capacity {
+        let bound = match &spec.capacity {
+            PoolCapacity::Constant(capacity) => PoolBound::Constant(*capacity),
+            // The facts are read only for a capacity fact, so a catalog without one projects as
+            // before.
+            PoolCapacity::Fact(reference) => {
+                let effective = project_time_validity(catalog, facts, time)
+                    .map_err(ForwardError::evaluation)?;
+                match pool_bound(spec, &effective, time) {
+                    Ok(bound) => bound,
+                    Err(unknown_reason) => {
+                        gaps.push(ForwardEvidenceGap {
+                            code: unknown_token(unknown_reason).to_owned(),
+                            task_id: None,
+                            fact_key: Some(reference.fact_key.clone()),
+                        });
+                        continue;
+                    }
+                }
+            }
+        };
+        if snapshot.observed_at_unix_ms > as_of_unix_ms
+            || matches!(bound, PoolBound::Constant(capacity) if snapshot.value > capacity)
+        {
             return Err(ForwardError::invalid(format!(
                 "pool '{}' has an invalid initial snapshot",
                 snapshot.pool_id
@@ -380,6 +433,7 @@ fn initialize_pools(
                 snapshot.pool_id.clone(),
                 SimulatedPool {
                     spec: (*spec).clone(),
+                    capacity: bound.capacity(),
                     snapshot: snapshot.clone(),
                     remainder_ms: 0,
                     cumulative_waste: 0,
@@ -391,7 +445,7 @@ fn initialize_pools(
         }
     }
     advance_pools(&mut pools, as_of_unix_ms, false)?;
-    Ok(pools)
+    Ok((pools, gaps))
 }
 
 fn projected_resources(
@@ -431,13 +485,14 @@ fn advance_pools(
             .value
             .checked_add(regenerated)
             .ok_or_else(|| ForwardError::overflow("pool value overflowed"))?;
+        let ceiling = pool.ceiling();
         if count_waste {
             pool.cumulative_waste = pool
                 .cumulative_waste
-                .checked_add(raw.saturating_sub(pool.spec.capacity))
+                .checked_add(raw.saturating_sub(ceiling))
                 .ok_or_else(|| ForwardError::overflow("pool waste overflowed"))?;
         }
-        pool.snapshot.value = raw.min(pool.spec.capacity);
+        pool.snapshot.value = raw.min(ceiling);
         pool.snapshot.observed_at_unix_ms = to_unix_ms;
     }
     Ok(())
@@ -485,11 +540,12 @@ fn apply_declared_effects(
                         .value
                         .checked_add(amount)
                         .ok_or_else(|| ForwardError::overflow("task production overflowed"))?;
+                    let ceiling = pool.ceiling();
                     pool.cumulative_waste = pool
                         .cumulative_waste
-                        .checked_add(raw.saturating_sub(pool.spec.capacity))
+                        .checked_add(raw.saturating_sub(ceiling))
                         .ok_or_else(|| ForwardError::overflow("task waste overflowed"))?;
-                    pool.snapshot.value = raw.min(pool.spec.capacity);
+                    pool.snapshot.value = raw.min(ceiling);
                 }
             }
         }
@@ -1168,7 +1224,16 @@ mod tests {
         };
         let fixed = compile_catalog(&sources).unwrap();
         let original_resources = resources(119);
-        let mut pools = initialize_pools(&fixed, &original_resources, NOW + 86_400_000).unwrap();
+        let (mut pools, _) = initialize_pools(
+            &fixed,
+            &facts(true),
+            &original_resources,
+            EvaluationTime {
+                unix_ms: NOW + 86_400_000,
+                monotonic_ms: NOW + 86_400_000,
+            },
+        )
+        .unwrap();
         advance_pools(&mut pools, NOW + 2 * 86_400_000, true).unwrap();
         assert_eq!(pools["fixture-pool-a"].snapshot.value, 119);
         assert_eq!(

@@ -17,9 +17,10 @@ use crate::{
     MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
     MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
     MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS,
-    MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec,
-    PoolValuation, PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION,
-    SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec, TimelineDocument,
+    MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolCapacity,
+    PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ProjectionComparand,
+    ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector,
+    TaskSpec, TimelineDocument,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -434,13 +435,16 @@ fn validate_reserves(
                 descriptor,
             ));
         }
-        if reserve.at_least > pool.capacity {
+        // #386 CF-5: a capacity read from a fact is known only at evaluation.
+        if let Some(capacity) = pool.capacity.constant()
+            && reserve.at_least > capacity
+        {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 format!("{item_path}/at_least"),
                 format!(
-                    "a reserve of {} exceeds pool capacity {}",
-                    reserve.at_least, pool.capacity
+                    "a reserve of {} exceeds pool capacity {capacity}",
+                    reserve.at_least
                 ),
                 descriptor,
             ));
@@ -804,16 +808,17 @@ fn validate_effects(
                 descriptor,
             ));
         }
-        if let Some(pool) = pools.iter().find(|pool| pool.id == effect.pool_id)
-            && quantity_milli.is_some_and(|amount| amount > u128::from(pool.capacity) * 1_000)
+        // #386 CF-5: a capacity read from a fact is known only at evaluation.
+        if let Some(capacity) = pools
+            .iter()
+            .find(|pool| pool.id == effect.pool_id)
+            .and_then(|pool| pool.capacity.constant())
+            && quantity_milli.is_some_and(|amount| amount > u128::from(capacity) * 1_000)
         {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::EffectIncompatible,
                 effect_path.clone(),
-                format!(
-                    "effect quantity exceeds pool capacity {} real units",
-                    pool.capacity
-                ),
+                format!("effect quantity exceeds pool capacity {capacity} real units"),
                 descriptor,
             ));
         }
@@ -957,8 +962,19 @@ fn validate_predicate_node(
         PredicateSpec::ResourceProjection {
             pool_id,
             comparison,
-            ..
+            value,
         } => {
+            // #386 CF-5: a fact reference reads a fact of the pool's scope.
+            if let ProjectionComparand::Fact(reference) = value {
+                validate_reference_members(
+                    reference,
+                    &format!("{path}/value"),
+                    "pool",
+                    map,
+                    descriptor,
+                    diagnostics,
+                );
+            }
             if !pool_ids.contains(pool_id.as_str()) {
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::DanglingReference,
@@ -1297,39 +1313,15 @@ fn validate_fact_reference(
     descriptor: Option<(&str, u64)>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
-    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
-        diagnostics.push(map.diagnostic(
-            CatalogDiagnosticCode::UnknownField,
-            format!("{path}/value/type"),
-            "a fact reference requires actingcommand.scheduling.v2",
-            descriptor,
-        ));
-        return;
-    }
-    if reference.scope.is_some() {
-        diagnostics.push(map.diagnostic(
-            CatalogDiagnosticCode::UnknownField,
-            format!("{path}/value/scope"),
-            "a fact reference reads a fact of the predicate's own scope and names no scope",
-            descriptor,
-        ));
-    }
-    validate_identifier(
+    if !validate_reference_members(
+        reference,
+        &format!("{path}/value"),
+        "predicate",
         map,
-        &format!("{path}/value/fact_key"),
-        &reference.fact_key,
         descriptor,
         diagnostics,
-    );
-    if !(MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER).contains(&reference.offset) {
-        diagnostics.push(map.diagnostic(
-            CatalogDiagnosticCode::LimitExceeded,
-            format!("{path}/value/offset"),
-            format!(
-                "a fact reference offset must be within {MIN_CANONICAL_INTEGER}..={MAX_CANONICAL_INTEGER}"
-            ),
-            descriptor,
-        ));
+    ) {
+        return;
     }
     if comparison == Comparison::Contains {
         diagnostics.push(map.diagnostic(
@@ -1339,6 +1331,57 @@ fn validate_fact_reference(
             descriptor,
         ));
     }
+}
+
+/// #386 CF-4, CF-5: the members of the fact reference at `member` (a `fact` predicate's or a
+/// `resource_projection`'s `value`, or a pool's `capacity`). It is V2 only: a V1 document is
+/// refused as `unknown_field` at `<member>/type`, and nothing else is checked (`false`). It names
+/// a bounded identifier, an offset within the canonical integers and no scope: it always reads a
+/// fact of its `owner`'s own scope (the predicate's, or the pool's), so a `scope` member is
+/// refused as a cross-scope reference at `<member>/scope`.
+fn validate_reference_members(
+    reference: &FactReference,
+    member: &str,
+    owner: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) -> bool {
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{member}/type"),
+            "a fact reference requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return false;
+    }
+    if reference.scope.is_some() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{member}/scope"),
+            format!("a fact reference reads a fact of the {owner}'s own scope and names no scope"),
+            descriptor,
+        ));
+    }
+    validate_identifier(
+        map,
+        &format!("{member}/fact_key"),
+        &reference.fact_key,
+        descriptor,
+        diagnostics,
+    );
+    if !(MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER).contains(&reference.offset) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{member}/offset"),
+            format!(
+                "a fact reference offset must be within {MIN_CANONICAL_INTEGER}..={MAX_CANONICAL_INTEGER}"
+            ),
+            descriptor,
+        ));
+    }
+    true
 }
 
 /// Workflow #361 R7: `missed` is a V2 member, and its grace is one minute to seven days.
@@ -1570,7 +1613,19 @@ fn validate_pools(
             descriptor,
             diagnostics,
         );
-        if pool.capacity == 0
+        // #386 CF-5: a capacity read from a fact is checked as a reference here; a reading that
+        // gives no positive capacity leaves the pool without a value at evaluation.
+        if let PoolCapacity::Fact(reference) = &pool.capacity {
+            validate_reference_members(
+                reference,
+                &format!("{path}/capacity"),
+                "pool",
+                map,
+                descriptor,
+                diagnostics,
+            );
+        }
+        if pool.capacity.constant() == Some(0)
             || matches!(
                 &pool.projection,
                 PoolProjection::Regenerating(projection)

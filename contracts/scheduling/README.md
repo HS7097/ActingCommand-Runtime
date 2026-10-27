@@ -88,7 +88,9 @@ and follows the ordinary version, approval and activation path.
 Capacity keeps its positive safe-integer bound. Zero is a known empty amount;
 missing observations remain Unknown. For inventory, a declared numeric ceiling
 does not assert an account's physical storage limit. Neither projection mode
-clamps an invalid observed amount into a valid balance.
+clamps an invalid observed amount into a valid balance. A V2 pool may instead
+read its capacity from a fact of its scope (#386 CF-5, "Pool fact references"
+below): an account's cap is read, never written as a constant.
 
 Projection and value source are independent. `static_snapshot` keeps the caller's
 fixed snapshot; it has no additional TTL or automatic update from resource readings.
@@ -101,7 +103,8 @@ from a record that is not such a reading; the next reading or adjustment resets
 the base, and the projection above regenerates from its observation time
 (`contracts/resource-readings.md`, "Live pools"). A live pool with no usable
 record (none, expired, below the pool's minimum confidence, or not an integer
-within `0..=capacity`) leaves its `resource_projection` predicate Unknown with
+within `0..=capacity`; #386 CF-5: against a capacity read from a fact, any
+non-negative integer is usable) leaves its `resource_projection` predicate Unknown with
 that fact reason (`fact_missing`, `fact_expired`, `fact_low_confidence`,
 `type_mismatch`) instead of `resource_observation_missing`, so the task raises
 the fact refresh's demand for the key ("Fact Refresh"). A resource target on a
@@ -178,8 +181,8 @@ an older catalog.
 Each effect has exactly one quantity. `amount` is a positive integer in real inventory
 units and keeps its existing semantics. Only v2 `produces` may instead declare
 `expected_amount_milli`, an integer in `0..=9007199254740991` measured in thousandths of
-a real unit per completed task run. It has no default, cannot exceed `pool.capacity * 1000`,
-and is mutually exclusive with `amount`. Explicit null, missing quantities and unknown
+a real unit per completed task run. It has no default, cannot exceed `pool.capacity * 1000`
+(a constant capacity; #386 CF-5), and is mutually exclusive with `amount`. Explicit null, missing quantities and unknown
 fields are invalid. V1 effects and all `consumes` require `amount`.
 
 ```json
@@ -512,7 +515,9 @@ read it, and the candidate waits.
   A `resource_projection` predicate on a `ledger_fact` pool of exactly the
   instance's scope reads the pool's key: without a usable record it raises
   demand for that key (Workflow #390 POOL-1, "Pool Projection"); a static
-  snapshot pool raises none.
+  snapshot pool raises none. #386 CF-5: a pool of exactly the instance's scope
+  whose capacity fact gives no capacity raises demand for that fact's key
+  ("Pool fact references").
   Only candidates past the closure's positions 1-2 raise demand: on an instance
   an operator pause, a holder, a waiting claim or a takeover cooldown holds as
   the cycle starts, a candidate the selection document deferred carries that
@@ -701,8 +706,8 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
 - **The gate.** After the stage, on each instance, the ranked candidates are taken by
   `effective_milli`, the higher first (a tie in allocation order). A candidate with reserves is
   not admitted this round when, for one of its reserved pools:
-  1. the pool's amount is unknown (no usable reading or snapshot), so the reserve cannot be shown
-     to hold;
+  1. the pool's amount is unknown (no usable reading or snapshot, or, #386 CF-5, a capacity fact
+     that gives no capacity), so the reserve cannot be shown to hold;
   2. `after < at_least`;
   3. `after`, less the declared consumption of every other task whose latest dispatch on the
      instance is at or after the pool's latest observation (a reading that does not show that
@@ -910,7 +915,8 @@ for `dependency_completed` with `since_own_run`, and `fact_time_served` (info; `
 
 A `fact` predicate whose value is a fact reference adds `fact_reference_unavailable` (info;
 `fact_key` the referenced fact, `unknown_reason`) the same way when the referenced fact gives no
-integer (#386 CF-4, "Fact references" below).
+integer (#386 CF-4, "Fact references" below), and so does a `resource_projection` whose value is
+one (#386 CF-5, "Pool fact references" below).
 
 ## Settlement Feedback And Eligibility Age
 
@@ -1215,6 +1221,21 @@ It reads: the integer the fact at (S, A) holds compares by C with the integer th
 - **Refusals**, each at its pointer: in a V1 document, `unknown_field` at `value/type`; `contains`, `predicate_uncomputable` at `comparison`; a reference `fact_key` that is no identifier, `type_mismatch` at `value/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `value/offset`; a reference that names a `scope` (a cross-scope reference), `unknown_field` at `value/scope`. A `value` whose `type` is neither a value kind nor `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
 - **Capability.** A Runtime that reads fact references reports the always-on subsystem `fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` whose rule writes one must list `fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with a reference refuses it at its reader.
 - For example, a task due while the amount is at least the capacity less 1000: `"fact_key": "resource.neutral.amount", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -1000}`.
+
+## Pool fact references (#386 CF-5)
+
+An account's cap is read, never written as a constant (Alice 10-26). Two more V2 members accept the fact reference of "Fact references" above, `{"type": "fact", "fact_key": B, "offset": N}` ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only): a pool's `capacity`, and a `resource_projection` predicate's `value`. Both read B **in the pool's own scope**; all three members are required and the reference names no scope. A pool or a predicate that writes a number evaluates, serializes and hashes exactly as before.
+
+- **A capacity read from its fact.** `"capacity": {"type": "fact", "fact_key": B, "offset": N}`: at each evaluation the pool's capacity is the integer B holds plus N. B is read as the pool reads its own value: in the pool's scope, with at least the pool's `minimum_confidence_milli` (above 0 for a `static_snapshot` pool), not past its own `expires_at_unix_ms` (a timeline reset that invalidates its prefix removes it, as every fact), and the capacity must be at least 1. It has no `max_age_ms`: a reading's capacity expires with the reading (a `current_capacity` mark writes both parts with one lifetime, [resource-readings.md](../resource-readings.md)).
+- **No capacity, no value: the projection defers.** While B gives no capacity the pool has no value, and no constant stands in for it. Its `resource_projection` is Unknown with the detection suggestion of B in the pool's scope and B's unknown reason: `fact_missing`, `fact_low_confidence`, `fact_expired`, or `type_mismatch` (no integer, or no positive capacity). So the task is deferred with `trigger_unknown` (or `feedback_stop_unknown`), and the fact refresh is asked for B ("Fact Refresh"), as for an unknown `fact` predicate. The pool's own reading is checked first: a pool whose reading is unusable asks for its own key, as before. A reserve on the pool is case 1 of "Task Reserves", a task that consumes it gets no fullness urgency from it, and a resource target on a live pool awaits observation with the matching reason ([resource-targets.md](../resource-targets.md)).
+- **A reading above the capacity stays as read.** Against a capacity read from its fact, a pool's reading or snapshot above it is the pool's value (an amount can exceed its cap, for example through items): it is neither refused nor clamped, and it does not regenerate. Below the capacity each complete period adds `amount` up to the capacity, as before: regeneration stops at the capacity. Against a constant capacity a reading above it still leaves the pool without a value ("Pool Projection").
+- **Freshness and wake.** The projection's freshness ends at the earlier end of the pool reading's and B's, and the evaluation wakes one millisecond after B's expiry, as after the reading's.
+- **Bounds against a constant only.** The compiler checks a reserve's `at_least` ("Task Reserves") and an effect's quantity ("Expected production (v2)") against a constant capacity only. Against a capacity read from a fact nothing is checked at compilation: a reserve above the read capacity holds its task until the pool holds it.
+- **A comparand read from a fact.** `"value": {"type": "fact", "fact_key": B, "offset": N}` on a `resource_projection` compares the pool's projected amount with the integer B holds in the pool's scope plus N, by its `comparison` (`contains` is refused as before); the sum never overflows. B obeys its own expiry and needs a confidence above 0, as a reference of a `fact` predicate without `max_age_ms` (a projection has none). A B that gives no integer makes the predicate **false**, with the info reason `fact_reference_unavailable` {`fact_key` B, `unknown_reason`}, no wake and no fact refresh, then `trigger_false` when it decides the trigger, as for a `fact` predicate ("Fact references"). The pool is read first: a pool without a value leaves the predicate Unknown, as above.
+- **Forward projection** ("Forward Planning And Maintenance") reads B once, at its start, and holds that capacity across its horizon. A pool whose B gives no capacity there is left out, as a pool without a snapshot is, and reported as the evidence gap {`code` B's unknown reason, `fact_key` B}.
+- **Refusals**, each at its pointer, as for a reference of a `fact` predicate: in a V1 document, `unknown_field` at `capacity/type` or `value/type`; a key that is no identifier, `type_mismatch` at `…/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `…/offset`; a reference that names a `scope`, `unknown_field` at `…/scope`. A `type` other than `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
+- **Capability.** A Runtime that reads both forms reports the always-on subsystem `pool_fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` that writes either must list `pool_fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with either refuses it at its reader.
+- For example, a task due while the projected amount is at least the read capacity less 20: the pool `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}` and the trigger `{"kind": "resource_projection", "pool_id": "pool.neutral", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -20}}`.
 
 ## Runtime Boundary
 

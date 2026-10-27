@@ -12,9 +12,11 @@
 //! 1. **Games in use**: the games of the bound instances that hold `schedule.json`, by name; the
 //!    instances of each by alias. A game without a bound instance is left out.
 //! 2. **Read**: each game's file is read by the contract crate's reader, its `requires` checked
-//!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and against the
-//!    subsystems given (when given), its packages checked against the registry, and
-//!    the registry's packages classified. A refused game is reported with its game id.
+//!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and
+//!    `pool_fact_reference` when a pool's `capacity` or a `resource_projection`'s `value` is one
+//!    (#386 CF-5), and against the subsystems given (when given), its packages checked against
+//!    the registry, and the registry's packages classified. A refused game is reported with its
+//!    game id.
 //! 3. **Instantiate**: per bound instance `i` of game `g` on server `s`, every rule whose package
 //!    belongs to `s` and is not held, and every pool, profile and event for every server or for
 //!    `s`, each scope filled with `{kind: instance, instance_id: i}` (the item's own and those of
@@ -54,8 +56,9 @@ use sha2::{Digest, Sha256};
 use crate::canonical::canonical_serialized;
 use crate::{
     ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
-    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, PoolSpec, SCHEDULING_SCHEMA_VERSION_V2,
-    SchedulingDocumentKind, TaskSpec, TimelineEvent, compile_composed_catalog,
+    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec,
+    SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
+    compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -459,6 +462,22 @@ fn read_game(
             format!("a fact reference needs requires to name {FACT_REFERENCE_SUBSYSTEM}"),
         ));
     }
+    // #386 CF-5: likewise a pool's `capacity` or a `resource_projection`'s `value` written as a
+    // fact reference names its own subsystem.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == POOL_FACT_REFERENCE_SUBSYSTEM)
+        && let Some(pointer) = first_pool_fact_reference(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a pool capacity or a resource projection read from a fact needs requires to name \
+                 {POOL_FACT_REFERENCE_SUBSYSTEM}"
+            ),
+        ));
+    }
     if let Some(subsystems) = subsystems
         && let Some((index, name)) = schedule
             .requires
@@ -492,40 +511,65 @@ fn read_game(
 /// writes, in file order: the `value` of a `fact` node whose `type` is `fact`. `None` when no
 /// rule writes one.
 fn first_fact_reference(schedule: &StandardPackSchedule) -> Option<String> {
+    first_rule_reference(schedule, "fact")
+}
+
+/// #386 CF-5: the pointer of the first pool fact reference, in the order of the members `rules`
+/// then `pools`: the `value` of a `resource_projection` node in a rule's `trigger` or
+/// `feedback_stop`, then a pool's `capacity`, whose `type` is `fact`. `None` when there is none.
+fn first_pool_fact_reference(schedule: &StandardPackSchedule) -> Option<String> {
+    first_rule_reference(schedule, "resource_projection").or_else(|| {
+        schedule
+            .pools
+            .iter()
+            .enumerate()
+            .find(|(_, pool)| is_fact_reference(pool.body.get("capacity")))
+            .map(|(index, _)| format!("/pools/{index}/capacity"))
+    })
+}
+
+/// The pointer of the first fact reference a rule's `trigger` or `feedback_stop` writes as the
+/// `value` of a predicate node of `kind`, in file order.
+fn first_rule_reference(schedule: &StandardPackSchedule, kind: &str) -> Option<String> {
     schedule.rules.iter().enumerate().find_map(|(index, rule)| {
         ["trigger", "feedback_stop"].into_iter().find_map(|member| {
             rule.body
                 .get(member)
-                .and_then(|node| fact_reference_in(node, &format!("/rules/{index}/{member}")))
+                .and_then(|node| fact_reference_in(node, &format!("/rules/{index}/{member}"), kind))
         })
     })
 }
 
+/// Whether `value` is a fact reference: an object whose `type` is `fact`.
+fn is_fact_reference(value: Option<&Value>) -> bool {
+    value
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str)
+        == Some(FACT_REFERENCE_TYPE)
+}
+
 /// The pointer of the first fact reference at or below the predicate node `node` at `pointer`,
-/// through the children of `all`, `any` (`predicates`) and `not` (`predicate`).
-fn fact_reference_in(node: &Value, pointer: &str) -> Option<String> {
+/// the `value` of a node of `kind`, through the children of `all`, `any` (`predicates`) and
+/// `not` (`predicate`).
+fn fact_reference_in(node: &Value, pointer: &str, kind: &str) -> Option<String> {
     let Value::Object(members) = node else {
         return None;
     };
-    let reference = members.get("kind").and_then(Value::as_str) == Some("fact")
-        && members
-            .get("value")
-            .and_then(|value| value.get("type"))
-            .and_then(Value::as_str)
-            == Some(FACT_REFERENCE_TYPE);
+    let reference = members.get("kind").and_then(Value::as_str) == Some(kind)
+        && is_fact_reference(members.get("value"));
     if reference {
         return Some(format!("{pointer}/value"));
     }
     let in_children = match members.get("predicates") {
         Some(Value::Array(children)) => children.iter().enumerate().find_map(|(index, child)| {
-            fact_reference_in(child, &format!("{pointer}/predicates/{index}"))
+            fact_reference_in(child, &format!("{pointer}/predicates/{index}"), kind)
         }),
         _ => None,
     };
     in_children.or_else(|| {
         members
             .get("predicate")
-            .and_then(|child| fact_reference_in(child, &format!("{pointer}/predicate")))
+            .and_then(|child| fact_reference_in(child, &format!("{pointer}/predicate"), kind))
     })
 }
 

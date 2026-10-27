@@ -225,7 +225,8 @@ actingcommand_contract::outcome_codes! {
         /// false because the referenced fact gives no integer: it is missing, its confidence is
         /// 0, it is older than the predicate's `max_age_ms`, it is past its own expiry, or it
         /// holds no integer. No wake and no fact refresh (keys `fact_key` the referenced fact,
-        /// `unknown_reason`).
+        /// `unknown_reason`). #386 CF-5: likewise a `resource_projection` whose value is a fact
+        /// of the pool's scope plus an offset.
         FactReferenceUnavailable => "fact_reference_unavailable": info / none,
         // ---- #386 CF-4: end ----
     }
