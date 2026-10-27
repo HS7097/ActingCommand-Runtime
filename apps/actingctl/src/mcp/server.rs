@@ -727,6 +727,7 @@ fn run_job(shared: &Shared, job: Job) {
         runtime: &shared.runtime,
         cancelled: &call.cancelled,
         deadline: call.started + tools::CALL_BUDGET,
+        era,
         session: shared.session,
         jobs: &shared.jobs,
     };
@@ -738,7 +739,7 @@ fn run_job(shared: &Shared, job: Job) {
     let answered_ok = outcome.is_ok();
     let response = protocol::response(
         &id,
-        protocol::complete(era, tools::call_result(outcome, era)),
+        protocol::complete(era, tools::tool_call_result(tool, outcome, era)),
     );
     let mut phase = lock(&call.phase);
     phase.finished = true;

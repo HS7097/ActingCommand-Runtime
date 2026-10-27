@@ -592,9 +592,12 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 }
                 None => None,
             };
+            // #422 OV-24K: each distinct dwell written once, as the overview's block.
             reported(
-                &overview::performance_block(&client, selected.as_deref())
-                    .map_err(ActingctlError::Runtime)?,
+                &overview::performance_answer(
+                    &overview::performance_block(&client, selected.as_deref())
+                        .map_err(ActingctlError::Runtime)?,
+                ),
                 success,
             )
         }

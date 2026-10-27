@@ -930,3 +930,26 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::child::tests::rl1c_fix1_child_still_running_at_the_deadline_is_ended_in_time",
 ]
 incident = ["#411 RL-1c"]
+
+# #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and performance answer ac_overview within the 24 KiB output budget with every block, the budget counted on the bytes sent in every protocol version (O-1); the performance block writes each distinct dwell once and loses nothing (O-2); a spent call budget skips performance and fact_refresh with <block>_incomplete and call_budget_exhausted and asks the Runtime for neither (O-3); over the budget the cut keeps fact_refresh past every less urgent block and names what it cut (truncated, each marker, the warning output_budget_exceeded) (O-4); a configuration file whose sha256 is not the one actingd read warns config_generation_mismatch on an install without generations (O-5); the text content repeats the envelope only within the budget, else it is the summary beside structuredContent, and 2025-03-26 carries the envelope as text (O-6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o1_five_full_runs_and_performance_fit_the_budget_with_every_block",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o2_the_performance_block_writes_each_dwell_once",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o3_a_spent_budget_skips_performance_and_fact_refresh_and_asks_the_runtime_for_neither",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o4_over_the_budget_the_cut_keeps_fact_refresh_and_names_what_it_cut",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o5_a_configuration_file_actingd_has_not_loaded_warns_on_an_install_without_generations",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o6_text_and_structured_content_follow_the_negotiated_version",
+]
+incident = ["#422 OV-24K"]
+
+# #422 OV-24K fix round 1 (rd-1027/brief-ov24k-fix1.md, review rd-1027/v01220-review/ov24k.md M1, L1, L3): a client that reads only the text content of an overview sent once beside the summary still sees every warning, the cut list and how to narrow the call (instance or sections), and as many warnings as fit with warnings_omitted for the rest (M1); the overview is fitted to the protocol version the session negotiated, not cut to the 2025-03-26 size (L1); a spent call budget skips the not-running read with not_running_incomplete on each row and call_budget_exhausted naming not_running (L3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_m1_a_text_only_client_sees_every_warning_what_was_cut_and_how_to_narrow",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l1_the_overview_is_fitted_to_the_version_the_session_negotiated",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l3_a_spent_budget_skips_the_not_running_read",
+]
+incident = ["#422 OV-24K"]

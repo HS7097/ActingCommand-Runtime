@@ -217,7 +217,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An MCP tool result is larger than the tool output budget.",
+      "description": "An MCP tool result takes more bytes as sent than the tool output budget: actual_bytes is the bytes the tools/call result takes as sent in the session's protocol version (text content and structuredContent together), limit_bytes the budget (24 KiB). As the call's error, nothing of the answer was sent; as a warning beside a successful ac_overview, the answer was cut to fit (truncated lists what was cut) and actual_bytes is the whole answer's size.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -258,12 +258,13 @@
       "layer": "process",
       "uncertain": false,
       "values": {
-        "alias": "optional"
+        "alias": "optional",
+        "member": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An MCP call reached the end of its time budget.",
+      "description": "An MCP call reached the end of its time budget. In an overview, alias names the instance whose run was not read, and member the block that was not read (performance, fact_refresh or not_running).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1699,7 +1700,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now; path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
+      "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected configuration file's sha256 is not the one actingd read at its start (also on an installation without generations); path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

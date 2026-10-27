@@ -221,7 +221,9 @@ a contained run takes at each step (Step pacing below). `performance.pacing.mode
   the stage and factor in effect), and the warnings now (`perf_probe_unavailable`,
   `perf_baseline_clamped`). A monitor without counters answers its rows at their start with
   the health `unavailable`. `actingctl perf-status` prints it; `ac_overview` answers it as its
-  block `performance`.
+  block `performance`. Both write each distinct dwell object once, in `dwell`, each view naming
+  its 24 h and total dwell by their index there (`dwell_24h_ref`, `dwell_total_ref`; #422
+  OV-24K).
 - **GPU.** The GPU utilisation is summed per engine type and the busiest type counts
   (`performance.pressure.gpu_aggregate = max_engine_type`, the default); `sum` keeps the earlier
   sum of every engine.
