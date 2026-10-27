@@ -449,6 +449,9 @@ mod gate_rl1b;
 // ROUT-L RL-1c (#411; work order `rd-1027/brief-rl1c.md` C-2, C-5): the admission after start and
 // the suspended report in composer mode.
 mod gate_rl1c;
+// ROUT-L RL-1c fix round 1 (#411; work order `rd-1027/brief-rl1c-fix1.md`, review H1 and M1): the
+// suspended report's bounded ledger read and the composition's problems as its warnings.
+mod gate_rl1c_fix1;
 mod home_entry;
 mod input;
 mod input_failure;

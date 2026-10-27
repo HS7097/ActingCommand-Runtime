@@ -847,9 +847,17 @@ pub struct ConfiguredStandardPackSchedule {
     composition: Option<StandardPackComposition>,
     host: crate::RuntimeHostConfig,
     problems: Vec<Outcome>,
+    warnings: Vec<String>,
 }
 
 impl ConfiguredStandardPackSchedule {
+    /// RL-1c fix 1 (#411 M1): each of [`Self::problems`] as `<code>:<game>:sha256:<hex>` (the
+    /// game's `schedule.json` as read, `unread` when none was read): why a game has no rows, or
+    /// why its paused pairs are `task_not_in_catalog`, in `actingd suspended`'s warnings.
+    pub fn problem_warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
     /// The composed catalog; `None` when the composition as a whole is refused (its problems
     /// say why).
     pub fn compiled(&self) -> Option<&CompiledCatalog> {
@@ -934,7 +942,7 @@ pub fn compose_configured_standard_packs(
                     (
                         game.clone(),
                         StandardPackGameFiles {
-                            schedule: *schedule,
+                            schedule,
                             root: &files.root,
                             maintenance: files.maintenance.as_slice(),
                         },
@@ -995,10 +1003,24 @@ pub fn compose_configured_standard_packs(
             }),
         root,
     )?;
+    // RL-1c fix 1 (#411 M1): each problem as an offline reader's warning: its code, its game and
+    // the sha256 of the `schedule.json` read for that game (`unread` when none was read).
+    let warnings = problems
+        .iter()
+        .map(|problem| {
+            let game = problem.value("game").and_then(serde_json::Value::as_str);
+            let digest = game
+                .and_then(|game| read.get(game))
+                .and_then(|files| files.schedule.as_deref())
+                .map_or_else(|| "unread".to_owned(), sha256);
+            format!("{}:{}:{digest}", problem.code(), game.unwrap_or("-"))
+        })
+        .collect();
     Ok(ConfiguredStandardPackSchedule {
         host: config.clone().with_procedure_manifest(manifest),
         composition,
         problems,
+        warnings,
     })
 }
 

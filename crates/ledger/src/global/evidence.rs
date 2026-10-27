@@ -240,6 +240,10 @@ impl GlobalLedgerSelection {
     pub fn head_sequence(&self) -> u64 {
         self.head_sequence
     }
+    /// ROUT-L RL-1c fix 1 (#411 H1): the selected events, in ledger order.
+    pub fn events(&self) -> &[PersistedEvent] {
+        &self.events
+    }
     /// `query.event_type` must be one of the selected types and `query.view` must be absent;
     /// otherwise the request error `ledger_selection_query_unsupported` (never an empty or
     /// partial result). A view is refused because its Lab relation is decided from events of
@@ -791,8 +795,21 @@ impl GlobalLedger {
         event_types: &[EventType],
         deadline: Instant,
     ) -> GlobalLedgerResult<GlobalLedgerSelection> {
+        Self::open_selected_within(root, event_types, usize::MAX, deadline)
+    }
+
+    /// ROUT-L RL-1c fix 1 (#411 H1): [`GlobalLedger::open_selected`] that also holds at most
+    /// `max_events` rows: the read stops at the row after them (counting the head row), as it
+    /// stops at `deadline`, with the request error `ledger_read_budget_exceeded`. A segment root
+    /// is read whole within the same budget.
+    pub fn open_selected_within(
+        root: impl Into<PathBuf>,
+        event_types: &[EventType],
+        max_events: usize,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<GlobalLedgerSelection> {
         let root = root.into();
-        let budget = Some((u64::MAX, usize::MAX, deadline));
+        let budget = Some((u64::MAX, max_events, deadline));
         let ledger_root = root.join("ledger");
         let database_exists = root
             .join(actingcommand_runtime_database::DATABASE_FILE)
@@ -847,7 +864,7 @@ impl GlobalLedger {
         let source = Self::open_evidence(
             GlobalLedgerEvidenceConfig::new(root)
                 .sqlite_material_not_read()
-                .with_deadline(deadline),
+                .with_budget(u64::MAX, max_events, deadline),
             |_| None,
         )?;
         let events = source

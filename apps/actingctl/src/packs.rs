@@ -633,7 +633,7 @@ impl Rows {
                         (
                             game.clone(),
                             StandardPackGameFiles {
-                                schedule: *schedule,
+                                schedule,
                                 root: &files.root,
                                 maintenance: files.maintenance.as_slice(),
                             },
@@ -659,13 +659,19 @@ impl Rows {
                     None => schedules.keys().cloned().collect(),
                 };
                 for game in &games {
-                    self.warn(
-                        Outcome::new(SharedCode::StandardPackRootInvalid)
-                            .game(game.as_str())
-                            .path(root.join(game).join(STANDARD_PACK_SCHEDULE_FILE))
-                            .standard_pack_problem(issue.issue.problem)
-                            .json_pointer(issue.issue.pointer.clone()),
-                    );
+                    let mut warning = Outcome::new(SharedCode::StandardPackRootInvalid)
+                        .game(game.as_str())
+                        .path(root.join(game).join(STANDARD_PACK_SCHEDULE_FILE))
+                        .standard_pack_problem(issue.issue.problem)
+                        .json_pointer(issue.issue.pointer.clone());
+                    // RL-1c fix 1 (#411 M1): the refused file, by its sha256.
+                    if let Some(schedule) = schedules.get(game) {
+                        warning = warning.actual_digest(format!(
+                            "sha256:{:x}",
+                            <sha2::Sha256 as sha2::Digest>::digest(schedule)
+                        ));
+                    }
+                    self.warn(warning);
                 }
                 if let Some(game) = &issue.game_id {
                     refused.insert(game.clone());
@@ -1170,7 +1176,8 @@ mod tests {
             "instances": [
                 {"alias": "node-a", "instance_id": "neutral-a",
                  "resource_package": "missing-resources"},
-                {"alias": "node-b", "instance_id": "neutral-b"}
+                {"alias": "node-b", "instance_id": "neutral-b",
+                 "startup_package": {"package": "missing-startup"}}
             ],
             "standard_packs": {"root": "packages"},
             "policy": {
@@ -1227,6 +1234,18 @@ mod tests {
             ))),
             "the resource package check runs again: {warnings:?}"
         );
+        // RL-1c fix 1 (review L3): the startup-package check of item 1 runs again too.
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.is(ActingctlCode::PackageBindingUnreadable)
+                    && warning.value("path")
+                        == Some(&Value::from(
+                            base.join("missing-startup").display().to_string(),
+                        ))
+                    && warning.value("alias") == Some(&Value::from("node-b"))
+            }),
+            "the startup package check runs again: {warnings:?}"
+        );
         let refused = warnings
             .iter()
             .filter(|warning| warning.is(SharedCode::StandardPackRootInvalid))
@@ -1246,6 +1265,15 @@ mod tests {
                     .display()
                     .to_string()
             )),
+            "{warnings:?}"
+        );
+        // RL-1c fix 1 (review M1): the refused file, by its sha256.
+        assert_eq!(
+            refused[0].value("actual_digest"),
+            Some(&Value::from(format!(
+                "sha256:{:x}",
+                <sha2::Sha256 as sha2::Digest>::digest(b"{")
+            ))),
             "{warnings:?}"
         );
 

@@ -10,7 +10,11 @@
 // - C-5: the task package admission after start runs against the composed procedure bindings:
 //   it waits for the scheduler workbench's first check and then suspends the composed package,
 //   so the next evaluation defers the rule's pair with `pack_admission_suspended`. Before RL-1c it
-//   ran at once over the bindings the start had (none composed) and suspended nothing.
+//   ran at once over the bindings the start had (none composed). It then usually suspended
+//   nothing, but not always: released before the first check, it could still run after cycle(0)
+//   had installed the composed bindings. So this test is not a reliable red on the old code
+//   (review L3); a reliable red would have to show that the admission has not finished before the
+//   first check, which only a timed wait can, and the gates use no sleeps.
 // - C-2: `actingd suspended` answers in composer mode: the report of the composition the
 //   configuration names (`compose_configured_standard_packs`) lists the suspended package under
 //   `packs`, with its content hash measured now at the place the composed procedure binds.

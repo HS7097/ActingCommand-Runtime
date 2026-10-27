@@ -767,7 +767,7 @@ impl Program {
 /// reading; the outcome carries no text.
 pub(super) fn child_failure(failure: &ChildFailure, _what: &str) -> ToolError {
     match failure {
-        ChildFailure::StillRunning { .. } => {
+        ChildFailure::StillRunning { .. } | ChildFailure::Ended { .. } => {
             ToolError::new("runtime", ActingctlCode::LabProcessTimeout)
         }
         ChildFailure::Spawn(_) | ChildFailure::Io(_) => {

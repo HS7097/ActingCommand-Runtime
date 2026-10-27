@@ -119,8 +119,9 @@ pub use recognition_binding::{
     recognition_binding_key_conflict, recognition_binding_qualification,
 };
 pub use suspension_report::{
-    ComposedSuspensionReportRequest, SuspensionReportError, SuspensionReportRequest,
-    composed_suspension_report, suspension_report,
+    ComposedSuspensionReportRequest, SuspendedReadBudget, SuspensionReportError,
+    SuspensionReportRequest, composed_suspension_report, composed_suspension_report_within,
+    suspension_report, suspension_report_within,
 };
 
 #[cfg(test)]
