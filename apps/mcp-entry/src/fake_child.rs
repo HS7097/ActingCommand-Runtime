@@ -55,7 +55,7 @@ fn plan(words: &[String]) {
             "switch": switch,
             "build": {"commit": commit, "manifest_sha256": "0".repeat(64)},
             "child": child,
-            "tunables": {"poll_ms": 50, "settle_ms": 0, "verify_timeout_ms": 10_000, "drain_max_ms": 60_000},
+            "tunables": {"poll_ms": 50, "settle_ms": 0, "verify_timeout_ms": 10_000, "drain_max_ms": 60_000, "refused_retry_max_ms": 300_000},
             "entry_protocol": 1,
         })
     );

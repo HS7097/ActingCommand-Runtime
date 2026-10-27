@@ -32,6 +32,13 @@ pub(super) struct Jobs {
     table: Mutex<VecDeque<Arc<Job>>>,
 }
 
+/// The process-local handles `actingcommand/entryStatus` reports (Workflow #421 MCP-ENTRY D4).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Outstanding {
+    pub(super) handles: Vec<String>,
+    pub(super) kinds: Vec<&'static str>,
+}
+
 pub(super) struct Job {
     pub(super) handle: String,
     pub(super) kind: &'static str,
@@ -49,11 +56,30 @@ struct JobState {
     /// Workflow #421 MCP-ENTRY (D4): the result was handed to the client (an answer or
     /// ac_get_run), so it no longer holds a switch of the MCP entry back.
     collected: bool,
+    /// MCP-ENTRY fix round 1 (review M2): an answer carrying the handle went out to the client.
+    /// A finished job whose handle never went out (its call was cancelled) holds nothing back.
+    issued: bool,
     warnings: Vec<Value>,
 }
 
 /// The kind of a run job: its handle is the Runtime request_id, which survives any process.
 const RUN_KIND: &str = "run_pack";
+
+thread_local! {
+    /// The handles the tool call running on this thread put in its answer (review M2); the
+    /// call's worker marks them issued when that answer goes out.
+    static OFFERED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Notes that the answer of the call on this thread carries `handle`.
+pub(super) fn offer(handle: &str) {
+    OFFERED.with(|offered| offered.borrow_mut().push(handle.to_owned()));
+}
+
+/// The handles offered on this thread since the last call, emptied.
+pub(super) fn take_offered() -> Vec<String> {
+    OFFERED.with(|offered| std::mem::take(&mut *offered.borrow_mut()))
+}
 
 impl Jobs {
     pub(super) fn new() -> Self {
@@ -70,22 +96,40 @@ impl Jobs {
     }
 
     /// Workflow #421 MCP-ENTRY (D4, `actingcommand/entryStatus`): the handles only this process
-    /// can answer for, and their kinds. A job counts while it runs and, once ended, until its
-    /// result was handed out; run jobs never count (their handle is a Runtime request_id).
-    pub(super) fn outstanding(&self) -> (usize, Vec<&'static str>) {
+    /// can answer for, their kinds and the handles themselves. A job counts while it runs and,
+    /// once ended, until its result was handed out, but only if its handle went out to the
+    /// client (fix round 1, review M2). A run job counts only while its submission runs (review
+    /// M3); after that its handle is a Runtime request_id.
+    pub(super) fn outstanding(&self) -> Outstanding {
         let table = lock(&self.table);
-        let mut kinds = Vec::new();
-        let mut count = 0;
-        for job in table.iter().filter(|job| job.kind != RUN_KIND) {
+        let mut outstanding = Outstanding::default();
+        for job in table.iter() {
             let state = lock(&job.state);
-            if !state.finished || !state.collected {
-                count += 1;
-                if !kinds.contains(&job.kind) {
-                    kinds.push(job.kind);
+            let counts = if job.kind == RUN_KIND {
+                !state.finished
+            } else {
+                !state.finished || (state.issued && !state.collected)
+            };
+            if counts {
+                outstanding.handles.push(job.handle.clone());
+                if !outstanding.kinds.contains(&job.kind) {
+                    outstanding.kinds.push(job.kind);
                 }
             }
         }
-        (count, kinds)
+        outstanding
+    }
+
+    /// Review M2: the answer carrying `handles` went out to the client.
+    pub(super) fn issue(&self, handles: &[String]) {
+        if handles.is_empty() {
+            return;
+        }
+        for job in lock(&self.table).iter() {
+            if handles.contains(&job.handle) {
+                lock(&job.state).issued = true;
+            }
+        }
     }
 
     /// Whether another job may start now: `job_capacity_exhausted` (`limit_count`) while
@@ -142,6 +186,7 @@ impl Jobs {
                 finished: false,
                 result: None,
                 collected: false,
+                issued: false,
                 warnings,
             }),
             changed: Condvar::new(),

@@ -55,6 +55,8 @@ pub(crate) struct Tunables {
     pub(crate) settle_ms: u64,
     pub(crate) verify_timeout_ms: u64,
     pub(crate) drain_max_ms: u64,
+    /// Fix round 1 (review M4): the cap of the doubling wait after consecutive refusals.
+    pub(crate) refused_retry_max_ms: u64,
 }
 
 impl Tunables {
@@ -63,6 +65,7 @@ impl Tunables {
         settle_ms: 10_000,
         verify_timeout_ms: 60_000,
         drain_max_ms: 600_000,
+        refused_retry_max_ms: 300_000,
     };
 }
 
@@ -128,7 +131,8 @@ pub(crate) trait Host {
     fn now_ms(&self) -> u64;
     /// The watched metadata now.
     fn stamp(&self) -> Stamp;
-    /// Whether an install operation holds the writer lock or left `install\current.json`.
+    /// Whether an install operation holds the writer lock. An unfinished operation is the
+    /// plan's refusal (`operation_unfinished`, review M1), not the entry's decision.
     fn busy(&mut self) -> bool;
     /// Starts `command` as child `id`; its output arrives as [`Core::child_line`] and its end
     /// as [`Core::child_exited`]. Returns its pid.
@@ -183,6 +187,28 @@ struct Slot {
     build: Option<String>,
     since_ms: u64,
     /// `tools/call` requests forwarded to it.
+    calls: u64,
+    /// Fix round 1 (review H1): the install's stamp when it was started, the image it runs.
+    spawn_stamp: Stamp,
+    /// Fix round 1 (review L3): a fresh child's predecessor's build, until the first plan.
+    previous_build: Option<String>,
+}
+
+/// A candidate refused for one stamp (review L2: tried once more after `settle_ms`).
+struct Rejected {
+    stamp: Stamp,
+    at_ms: u64,
+    retried: bool,
+}
+
+/// The client lines held while a fresh child starts, with the requests they carry.
+type Held = (Vec<u8>, Vec<(String, Pending)>);
+
+/// The open `actingcommand/entryStatus` query: its id, its deadline and the current child's
+/// `calls` when it was sent (review L7).
+struct StatusQuery {
+    key: String,
+    deadline_ms: u64,
     calls: u64,
 }
 
@@ -264,7 +290,7 @@ enum DeferKind {
     HandlesUnknown,
     /// A client call is in flight.
     CallsInFlight,
-    /// An install operation holds the writer lock or is unfinished.
+    /// An install operation holds the writer lock.
     InstallBusy,
     /// The plan refused or could not run.
     PlanRefused,
@@ -276,6 +302,9 @@ struct Deferral {
     since_unix_ms: u64,
     outstanding_handles: Option<u64>,
     handle_kinds: Vec<String>,
+    /// Fix round 1 (review M2): the outstanding handles, to collect a stuck one with
+    /// `ac_get_run`.
+    handles: Vec<String>,
     past_drain_max: bool,
 }
 
@@ -339,18 +368,20 @@ pub(crate) struct Core<H: Host> {
     /// The stamp the current child's build stands for; `None` until a plan named its build.
     accepted: Option<Stamp>,
     pending: Option<(Stamp, u64)>,
-    rejected: Option<Stamp>,
+    rejected: Option<Rejected>,
     plan_running: Option<PlanRun>,
     plan_retry_at: u64,
+    /// Consecutive plan refusals (review M4): the wait before the next plan doubles with each.
+    plan_refusals: u32,
     planned: Option<Planned>,
     handles_clear: bool,
-    status_query: Option<(String, u64)>,
+    status_query: Option<StatusQuery>,
     handshake: Handshake,
     inflight: BTreeMap<String, Pending>,
     discover_ids: Vec<String>,
     /// Open `subscriptions/listen` requests by id, and whether each asked for tool changes.
     listens: BTreeMap<String, (Value, bool)>,
-    held: VecDeque<(Vec<u8>, Vec<(String, Pending)>)>,
+    held: VecDeque<Held>,
     history: VecDeque<PastChild>,
     last_switch: Option<SwitchRecord>,
     deferred: Option<Deferral>,
@@ -389,13 +420,18 @@ fn parse_plan(answer: &Value) -> Option<Plan> {
         .first()?
         .as_str()?
         .to_owned();
-    let tunables = serde_json::from_value::<Tunables>(answer.get("tunables")?.clone()).ok()?;
+    let tunables = parse_tunables(answer)?;
     Some(Plan {
         switch,
         build,
         exe,
         tunables,
     })
+}
+
+/// The tunables of a plan's answer, a refusal's too (review M4).
+fn parse_tunables(answer: &Value) -> Option<Tunables> {
+    serde_json::from_value::<Tunables>(answer.get("tunables")?.clone()).ok()
 }
 
 #[derive(Serialize)]
@@ -429,6 +465,7 @@ impl<H: Host> Core<H> {
             rejected: None,
             plan_running: None,
             plan_retry_at: 0,
+            plan_refusals: 0,
             planned: None,
             handles_clear: false,
             status_query: None,
@@ -779,10 +816,12 @@ impl<H: Host> Core<H> {
         self.finish_event();
     }
 
-    /// A response ends its request's flight.
+    /// A response ends its request's flight; the status's `calls_in_flight` follows (review L5).
     fn settle(&mut self, message: &Value) {
-        if let (None, Some(id)) = (message.get("method"), message.get("id")) {
-            self.inflight.remove(&key_of(id));
+        if let (None, Some(id)) = (message.get("method"), message.get("id"))
+            && self.inflight.remove(&key_of(id)).is_some()
+        {
+            self.dirty = true;
         }
     }
 
@@ -838,11 +877,11 @@ impl<H: Host> Core<H> {
         let status_answer = self
             .status_query
             .as_ref()
-            .is_some_and(|(awaited, _)| awaited == key)
+            .is_some_and(|query| query.key == key)
             && self.current_child() == Some(child);
         if status_answer {
-            self.status_query = None;
-            self.status_answer(message);
+            let asked_at_calls = self.status_query.take().map_or(0, |query| query.calls);
+            self.status_answer(message, asked_at_calls);
             return;
         }
         let step_answer = self.starting.as_ref().is_some_and(|starting| {
@@ -856,35 +895,46 @@ impl<H: Host> Core<H> {
             .note(&format!("ignored a late answer {key} of child {child}"));
     }
 
-    /// The current child's answer to `actingcommand/entryStatus` (D4).
-    fn status_answer(&mut self, message: &Value) {
+    /// The current child's answer to `actingcommand/entryStatus` (D4). A `0` counts only when no
+    /// call was delivered to the child since the query went out (review L7); otherwise it asks
+    /// again.
+    fn status_answer(&mut self, message: &Value, asked_at_calls: u64) {
         let now = self.host.now_ms();
+        let unchanged = self
+            .current
+            .as_ref()
+            .is_some_and(|slot| slot.calls == asked_at_calls);
+        let strings = |member: &str| {
+            message
+                .get("result")
+                .and_then(|result| result.get(member))
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
         if let Some(result) = message.get("result") {
             let handles = result.get("outstanding_handles").and_then(Value::as_u64);
             let calls = result
                 .get("calls_in_flight")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            let kinds = result
-                .get("kinds")
-                .and_then(Value::as_array)
-                .map(|kinds| {
-                    kinds
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
             match handles.map(|handles| handles.saturating_add(calls)) {
-                Some(0) => {
-                    self.handles_clear = true;
-                    self.deferred = None;
-                    self.dirty = true;
-                    self.try_switch();
-                }
-                Some(outstanding) => self.defer(DeferKind::Handles, Some(outstanding), kinds, now),
-                None => self.defer(DeferKind::HandlesUnknown, None, Vec::new(), now),
+                Some(0) if unchanged => self.clear_handles(),
+                Some(0) => self.try_switch(),
+                Some(outstanding) => self.defer(
+                    DeferKind::Handles,
+                    Some(outstanding),
+                    strings("kinds"),
+                    strings("handles"),
+                    now,
+                ),
+                None => self.defer(DeferKind::HandlesUnknown, None, Vec::new(), Vec::new(), now),
             }
             return;
         }
@@ -893,19 +943,32 @@ impl<H: Host> Core<H> {
             .and_then(|error| error.get("code"))
             .and_then(Value::as_i64)
             == Some(METHOD_NOT_FOUND);
-        if not_found && self.inflight.is_empty() {
+        if not_found && self.inflight.is_empty() && unchanged {
             // A child before `actingcommand/entryStatus`: none outstanding with no call in
             // flight (D4).
-            self.handles_clear = true;
-            self.deferred = None;
-            self.dirty = true;
+            self.clear_handles();
+        } else if not_found && self.inflight.is_empty() {
             self.try_switch();
         } else {
-            self.defer(DeferKind::HandlesUnknown, None, Vec::new(), now);
+            self.defer(DeferKind::HandlesUnknown, None, Vec::new(), Vec::new(), now);
         }
     }
 
-    fn defer(&mut self, kind: DeferKind, outstanding: Option<u64>, kinds: Vec<String>, now: u64) {
+    fn clear_handles(&mut self) {
+        self.handles_clear = true;
+        self.deferred = None;
+        self.dirty = true;
+        self.try_switch();
+    }
+
+    fn defer(
+        &mut self,
+        kind: DeferKind,
+        outstanding: Option<u64>,
+        kinds: Vec<String>,
+        handles: Vec<String>,
+        now: u64,
+    ) {
         let since = match &self.deferred {
             Some(deferral) if deferral.kind == kind => deferral.since_unix_ms,
             _ => now,
@@ -922,6 +985,7 @@ impl<H: Host> Core<H> {
             since_unix_ms: since,
             outstanding_handles: outstanding,
             handle_kinds: kinds,
+            handles,
             past_drain_max: past,
         };
         if self.deferred.as_ref() != Some(&deferral) {
@@ -952,10 +1016,10 @@ impl<H: Host> Core<H> {
         if self
             .status_query
             .as_ref()
-            .is_some_and(|(_, deadline)| now >= *deadline)
+            .is_some_and(|query| now >= query.deadline_ms)
         {
             self.status_query = None;
-            self.defer(DeferKind::HandlesUnknown, None, Vec::new(), now);
+            self.defer(DeferKind::HandlesUnknown, None, Vec::new(), Vec::new(), now);
         }
         self.watch(now);
         self.try_switch();
@@ -971,12 +1035,35 @@ impl<H: Host> Core<H> {
             return;
         }
         let stamp = self.host.stamp();
+        if self
+            .rejected
+            .as_ref()
+            .is_some_and(|rejected| rejected.stamp == stamp)
+        {
+            // Review L2: a candidate refused for this stamp is tried once more after
+            // `settle_ms`, then not again until the install changes.
+            let due = self.rejected.as_ref().is_some_and(|rejected| {
+                !rejected.retried && now.saturating_sub(rejected.at_ms) >= self.tunables.settle_ms
+            });
+            if self.pending.take().is_some() {
+                self.dirty = true;
+            }
+            if due {
+                let current = self.current.as_ref().and_then(|slot| slot.build.clone());
+                if self.run_plan(stamp, current, now)
+                    && let Some(rejected) = self.rejected.as_mut()
+                {
+                    rejected.retried = true;
+                }
+            }
+            return;
+        }
         if self.accepted.is_none() {
             // The current child's build is not known yet: the plan names it.
             self.run_plan(stamp, None, now);
             return;
         }
-        if self.accepted.as_ref() == Some(&stamp) || self.rejected.as_ref() == Some(&stamp) {
+        if self.accepted.as_ref() == Some(&stamp) {
             if self.pending.take().is_some() {
                 self.dirty = true;
             }
@@ -998,14 +1085,14 @@ impl<H: Host> Core<H> {
         }
     }
 
-    /// Asks the plan, never while an install operation is under way (E-8).
-    fn run_plan(&mut self, stamp: Stamp, current: Option<String>, now: u64) {
+    /// Asks the plan, never while an install operation is under way (E-8); true when it runs.
+    fn run_plan(&mut self, stamp: Stamp, current: Option<String>, now: u64) -> bool {
         if now < self.plan_retry_at {
-            return;
+            return false;
         }
         if self.host.busy() {
-            self.defer(DeferKind::InstallBusy, None, Vec::new(), now);
-            return;
+            self.defer(DeferKind::InstallBusy, None, Vec::new(), Vec::new(), now);
+            return false;
         }
         self.plan_running = Some(PlanRun {
             initial: current.is_none(),
@@ -1014,6 +1101,7 @@ impl<H: Host> Core<H> {
         self.host
             .start_plan(current.as_deref(), self.tunables.verify_timeout_ms);
         self.dirty = true;
+        true
     }
 
     pub(crate) fn plan_done(&mut self, end: PlanEnd) {
@@ -1046,10 +1134,15 @@ impl<H: Host> Core<H> {
         self.dirty = true;
         let Some(plan) = plan else {
             self.host.note(&format!("mcp-entry plan refused: {answer}"));
+            // Review M4: a refusal carries the tunables, so the retry policy stays the plan's.
+            if let Some(tunables) = parse_tunables(&answer) {
+                self.tunables = tunables;
+            }
             self.plan_refused(now);
             return;
         };
         self.tunables = plan.tunables;
+        self.plan_refusals = 0;
         if self.deferred.as_ref().is_some_and(|deferral| {
             matches!(
                 deferral.kind,
@@ -1058,7 +1151,15 @@ impl<H: Host> Core<H> {
         }) {
             self.deferred = None;
         }
-        if plan.switch && !run.initial {
+        // Review H1: an initial plan asked after the install changed under the current child
+        // (its stamp is not the one the child was started at) names a build the child may not
+        // run; it is a planned switch, never accepted as the child's build.
+        let changed_under_child = run.initial
+            && self
+                .current
+                .as_ref()
+                .is_some_and(|slot| slot.spawn_stamp != run.stamp);
+        if (plan.switch && !run.initial) || changed_under_child {
             self.planned = Some(Planned {
                 build: plan.build,
                 exe: plan.exe,
@@ -1066,19 +1167,37 @@ impl<H: Host> Core<H> {
             });
             self.try_switch();
         } else {
+            // Review L3: the first plan after a fresh child names a build other than its
+            // predecessor's: the client gets the change notice.
+            let previous = self
+                .current
+                .as_mut()
+                .and_then(|slot| slot.previous_build.take());
+            let differs = previous.is_some_and(|previous| previous != plan.build.commit);
             if let Some(current) = self.current.as_mut() {
                 current.build = Some(plan.build.commit);
             }
             self.accepted = Some(run.stamp);
             self.pending = None;
             self.rejected = None;
+            if differs {
+                self.send_notices(now);
+            }
         }
         self.finish_event();
     }
 
+    /// Review M4: consecutive refusals double the wait before the next plan, from
+    /// `settle_ms` (at least `poll_ms`) up to `refused_retry_max_ms`.
     fn plan_refused(&mut self, now: u64) {
-        self.defer(DeferKind::PlanRefused, None, Vec::new(), now);
-        self.plan_retry_at = now.saturating_add(self.tunables.settle_ms);
+        self.defer(DeferKind::PlanRefused, None, Vec::new(), Vec::new(), now);
+        let base = self.tunables.settle_ms.max(self.tunables.poll_ms);
+        let factor = 1_u64.checked_shl(self.plan_refusals).unwrap_or(u64::MAX);
+        let wait = base
+            .saturating_mul(factor)
+            .min(self.tunables.refused_retry_max_ms);
+        self.plan_refusals = self.plan_refusals.saturating_add(1);
+        self.plan_retry_at = now.saturating_add(wait);
         self.dirty = true;
         self.finish_event();
     }
@@ -1102,7 +1221,7 @@ impl<H: Host> Core<H> {
         };
         let now = self.host.now_ms();
         if !self.inflight.is_empty() {
-            self.defer(DeferKind::CallsInFlight, None, Vec::new(), now);
+            self.defer(DeferKind::CallsInFlight, None, Vec::new(), Vec::new(), now);
             return;
         }
         if self.status_query.is_some() {
@@ -1130,10 +1249,14 @@ impl<H: Host> Core<H> {
         };
         match self.internal_request(child, ENTRY_STATUS_METHOD, params) {
             Some(key) => {
-                self.status_query =
-                    Some((key, now.saturating_add(self.tunables.verify_timeout_ms)));
+                let calls = self.current.as_ref().map_or(0, |slot| slot.calls);
+                self.status_query = Some(StatusQuery {
+                    key,
+                    deadline_ms: now.saturating_add(self.tunables.verify_timeout_ms),
+                    calls,
+                });
             }
-            None => self.defer(DeferKind::HandlesUnknown, None, Vec::new(), now),
+            None => self.defer(DeferKind::HandlesUnknown, None, Vec::new(), Vec::new(), now),
         }
     }
 
@@ -1155,7 +1278,7 @@ impl<H: Host> Core<H> {
                     build: Some(build),
                     problem: CandidateProblem::StartFailed,
                 });
-                self.rejected = self.planned.take().map(|planned| planned.stamp);
+                self.reject_planned();
                 self.deferred = None;
                 self.dirty = true;
             }
@@ -1187,6 +1310,9 @@ impl<H: Host> Core<H> {
         let id = self.next_child;
         let mut command = vec![exe.to_owned()];
         command.extend(self.config.child_args.iter().cloned());
+        // Review H1: taken before the start, so a change racing the start errs towards one
+        // more switch, never towards a wrong build.
+        let spawn_stamp = self.host.stamp();
         let pid = self.host.spawn(id, &command)?;
         Ok(Slot {
             id,
@@ -1194,7 +1320,26 @@ impl<H: Host> Core<H> {
             build,
             since_ms: self.host.now_ms(),
             calls: 0,
+            spawn_stamp,
+            previous_build: None,
         })
+    }
+
+    /// The planned switch's candidate failed: its stamp is rejected (review L2 keeps whether
+    /// it was already tried again).
+    fn reject_planned(&mut self) {
+        let now = self.host.now_ms();
+        if let Some(planned) = self.planned.take() {
+            let retried = self
+                .rejected
+                .as_ref()
+                .is_some_and(|rejected| rejected.stamp == planned.stamp && rejected.retried);
+            self.rejected = Some(Rejected {
+                stamp: planned.stamp,
+                at_ms: now,
+                retried,
+            });
+        }
     }
 
     fn modern_only(&self) -> bool {
@@ -1348,9 +1493,12 @@ impl<H: Host> Core<H> {
         };
         match purpose {
             Purpose::Fresh => {
-                let Some(starting) = self.starting.take() else {
+                let Some(mut starting) = self.starting.take() else {
                     return;
                 };
+                // Review L3: the build its predecessor ran, to compare with the next plan's.
+                starting.slot.previous_build =
+                    self.history.front().and_then(|past| past.build.clone());
                 self.current = Some(starting.slot);
                 // Its build is learnt by the next plan.
                 self.accepted = None;
@@ -1387,7 +1535,7 @@ impl<H: Host> Core<H> {
         });
         match starting.purpose {
             Purpose::Switch => {
-                self.rejected = self.planned.take().map(|planned| planned.stamp);
+                self.reject_planned();
                 self.deferred = None;
             }
             Purpose::Fresh => self.fail_held(),
@@ -1559,6 +1707,7 @@ impl<H: Host> Core<H> {
             "deferred": self.deferred,
             "last_candidate_failure": self.failure,
             "last_plan": self.last_plan,
+            "plan_refusals": {"consecutive": self.plan_refusals, "next_plan_at_unix_ms": self.plan_retry_at},
             "notice": self.notice,
             "refresh": {"entry": refresh_entry, "needed": refresh_needed},
             "calls_in_flight": self.inflight.len(),

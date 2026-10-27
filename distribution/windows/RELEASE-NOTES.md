@@ -27,7 +27,9 @@ and artifact names bind the complete source SHA.
   - DSH 通过插件生命周期重新加载，工具白名单的名字不变。
 - **配置片段和状态。** 片段用 `actingctl mcp-config --client … --entry --root <root>` 打印，不写任何客户端文件。
   每个入口的状态写在 `<root>\mcp-entry\state\entry-<pid>.json`，用 `actingctl mcp-entry list --root <root>` 查看。
-- **新配置键。** `install.mcp_entry.poll_ms`、`settle_ms`、`verify_timeout_ms`、`drain_max_ms`（`actingd-config` 修订 17，只增不改）。
+  - **游标随子进程失效。** `ac_events` 等工具的 `next_cursor` 属于发出它的子进程，切换后答 `cursor_invalid`，从 `after_sequence` 重读即可。
+- **新配置键。** `install.mcp_entry.poll_ms`、`settle_ms`、`verify_timeout_ms`、`drain_max_ms`、`refused_retry_max_ms`（`actingd-config` 修订 17，只增不改）。
+  计划连续被拒时，入口下一次询问前的等待从 `settle_ms` 起逐次加倍，上限是 `refused_retry_max_ms`（默认 300000）。
 
 ## v0.12.17
 

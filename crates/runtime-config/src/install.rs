@@ -68,6 +68,9 @@ pub const MCP_ENTRY_VERIFY_TIMEOUT_MS: &str = "install.mcp_entry.verify_timeout_
 /// How long a switch waits for outstanding handles before the status says it waited past it
 /// (it keeps waiting).
 pub const MCP_ENTRY_DRAIN_MAX_MS: &str = "install.mcp_entry.drain_max_ms";
+/// MCP-ENTRY fix round 1 (review M4): the cap of the entry's wait before the next plan after
+/// consecutive refusals (the wait doubles from `settle_ms`).
+pub const MCP_ENTRY_REFUSED_RETRY_MAX_MS: &str = "install.mcp_entry.refused_retry_max_ms";
 
 /// The section as the configuration file and the defaults file write it: every member may be
 /// left out and none is unknown (M387 §5.3).
@@ -109,6 +112,8 @@ struct McpEntryFile {
     verify_timeout_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     drain_max_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refused_retry_max_ms: Option<Value>,
 }
 
 /// The deadlines of the programs the installer runs (INST-1b-F fix round 1, review S1 F4).
@@ -280,6 +285,11 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         milliseconds(0, 86_400_000),
     ),
+    row(
+        MCP_ENTRY_REFUSED_RETRY_MAX_MS,
+        ValueType::DurationMs,
+        milliseconds(1_000, 86_400_000),
+    ),
 ];
 
 /// One blocked window of `install.guard.blocked_windows`, in host local time, `[from, to)`,
@@ -320,6 +330,7 @@ pub struct InstallSettings {
     pub mcp_entry_settle_ms: u64,
     pub mcp_entry_verify_timeout_ms: u64,
     pub mcp_entry_drain_max_ms: u64,
+    pub mcp_entry_refused_retry_max_ms: u64,
 }
 
 /// The section of the configuration document `file` (actingd's configuration as `actingctl`
@@ -411,6 +422,7 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
         mcp_entry_settle_ms: duration(MCP_ENTRY_SETTLE_MS)?,
         mcp_entry_verify_timeout_ms: duration(MCP_ENTRY_VERIFY_TIMEOUT_MS)?,
         mcp_entry_drain_max_ms: duration(MCP_ENTRY_DRAIN_MAX_MS)?,
+        mcp_entry_refused_retry_max_ms: duration(MCP_ENTRY_REFUSED_RETRY_MAX_MS)?,
     })
 }
 
@@ -558,6 +570,7 @@ mod tests {
             mcp_entry_settle_ms: 10_000,
             mcp_entry_verify_timeout_ms: 60_000,
             mcp_entry_drain_max_ms: 600_000,
+            mcp_entry_refused_retry_max_ms: 300_000,
         };
         assert_eq!(settings(&json!({})), Ok(defaults.clone()));
         assert_eq!(settings(&json!({"install": {}})), Ok(defaults.clone()));

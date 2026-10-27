@@ -505,12 +505,19 @@ fn handle_request(
 }
 
 /// `actingcommand/entryStatus` (Workflow #421 MCP-ENTRY D4): the handles only this process can
-/// answer for (`outstanding_handles`, their `kinds`) and the `tools/call` requests still running
-/// (`calls_in_flight`, a cancelled one included until it ends). The entry switches only at 0.
+/// answer for (`outstanding_handles`, their `kinds`, and the `handles` themselves so a person can
+/// collect a stuck one with `ac_get_run`, fix round 1 review M2) and the `tools/call` requests
+/// still running (`calls_in_flight`, a cancelled one included until it ends). The entry switches
+/// only at 0.
 fn entry_status(shared: &Shared) -> Value {
-    let (handles, kinds) = shared.jobs.outstanding();
+    let outstanding = shared.jobs.outstanding();
     let calls = lock(&shared.calls).len();
-    json!({"outstanding_handles": handles, "kinds": kinds, "calls_in_flight": calls})
+    json!({
+        "outstanding_handles": outstanding.handles.len(),
+        "kinds": outstanding.kinds,
+        "handles": outstanding.handles,
+        "calls_in_flight": calls,
+    })
 }
 
 fn initialize(shared: &Shared, id: &Value, params: Option<&Value>) -> Value {
@@ -723,18 +730,26 @@ fn run_job(shared: &Shared, job: Job) {
         session: shared.session,
         jobs: &shared.jobs,
     };
+    // Handles a previous call on this thread offered but never answered are dropped.
+    drop(super::jobs::take_offered());
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| (tool.run)(&context, &arguments)))
         .unwrap_or_else(|_| Err(tool_panicked(tool)));
+    let offered = super::jobs::take_offered();
+    let answered_ok = outcome.is_ok();
     let response = protocol::response(
         &id,
         protocol::complete(era, tools::call_result(outcome, era)),
     );
     let mut phase = lock(&call.phase);
     phase.finished = true;
+    // A cancelled request gets no answer, so the handles it carried were never issued
+    // (Workflow #421 MCP-ENTRY fix round 1, review M2). Read once: the same reading decides both.
+    let delivered = !call.cancelled.load(Ordering::SeqCst);
+    if delivered && answered_ok {
+        shared.jobs.issue(&offered);
+    }
     lock(&shared.calls).remove(&key);
-    // A cancelled request gets no answer.
-    let response = (!call.cancelled.load(Ordering::SeqCst)).then_some(response);
-    sink.respond(shared, response);
+    sink.respond(shared, delivered.then_some(response));
 }
 
 /// A panic caught at the tool call boundary: the call fails with `mcp_tool_panicked`

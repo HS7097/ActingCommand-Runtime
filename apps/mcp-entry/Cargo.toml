@@ -18,11 +18,11 @@ name = "actingcommand-mcp-entry"
 path = "src/main.rs"
 
 # Test helper of the process test (tests/entry_process.rs): a fake `actingctl` that serves a
-# minimal MCP and answers `mcp-entry plan`. Never shipped.
+# minimal MCP and answers `mcp-entry plan`. Never shipped. It keeps the default `test = true`:
+# `cargo test --bins` runs its (empty) harness anyway, and CI's test build table must list it.
 [[bin]]
 name = "actingcommand-mcp-entry-fake-child"
 path = "src/fake_child.rs"
-test = false
 
 [dependencies]
 actingcommand-contract = { workspace = true }

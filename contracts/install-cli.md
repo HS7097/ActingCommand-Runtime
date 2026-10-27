@@ -672,27 +672,39 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
   the size and time of `runtime\BUILD-MANIFEST.json` and `runtime\actingctl.exe`; a change that
   stays put for `install.mcp_entry.settle_ms` makes it run
   `actingctl mcp-entry plan --root <root> --entry-protocol 1 --current-build <commit> -- <words>`
-  of the current install, never while `install\writer.lock` is held or `install\current.json`
-  exists.
+  of the current install, never while `install\writer.lock` is held. Whether an unfinished
+  operation blocks it is the plan's decision (`operation_unfinished`). The first plan after a
+  child started names that child's build only if the install has not changed since the child
+  started; otherwise its build is a planned switch.
 - **The plan** (`actingctl mcp-entry plan`, operation `install_mcp_entry_plan`) prints
   `{switch, reason (build_changed, same_build, no_current_build), build {commit, manifest_sha256},
-  child [exe, words…], tunables {poll_ms, settle_ms, verify_timeout_ms, drain_max_ms},
-  entry_protocol, outcome}`. It refuses with `install_command_refused`: `writer_lock_failed`,
-  `operation_unfinished`, `live_build_invalid` / `live_build_modified` (the installed files
-  checked against their manifests, as `install adopt` checks them), `config_unreadable`,
-  `install_section_invalid`.
+  child [exe, words…], tunables {poll_ms, settle_ms, verify_timeout_ms, drain_max_ms,
+  refused_retry_max_ms}, entry_protocol, outcome}`. It refuses with `install_command_refused`:
+  `writer_lock_failed`, `operation_unfinished`, `live_build_invalid` / `live_build_modified` (the
+  installed files checked against their manifests, as `install adopt` checks them),
+  `config_unreadable`, `install_section_invalid`. It reads the configuration before it checks the
+  installed files, and every refusal after that read carries `tunables` too. Consecutive refusals
+  double the entry's wait before the next plan, from `settle_ms` up to
+  `install.mcp_entry.refused_retry_max_ms`.
 - **A switch** happens only between calls. Before it, the entry asks the current child
-  `actingcommand/entryStatus` (`{outstanding_handles, kinds, calls_in_flight}`: background jobs
-  other than runs whose results were not read yet, and calls still running); a child before
-  v0.12.18 answers "method not found", which counts as none when no call is in flight. While some
-  are outstanding the switch waits (status `deferred: handles`); past
+  `actingcommand/entryStatus` (`{outstanding_handles, kinds, handles, calls_in_flight}`: background
+  jobs other than runs whose handle went out to the client and whose results were not read yet,
+  jobs still running (a run while it is still being submitted), and calls still running); a child
+  before v0.12.18 answers "method not found", which counts as none when no call is in flight. A
+  `0` counts only if no call reached the child after the question. While some are outstanding the
+  switch waits (status `deferred: handles`, with the `handles`, which `ac_get_run` collects); past
   `install.mcp_entry.drain_max_ms` it still waits and the status says so. Run handles are Runtime
-  request ids and need nothing. The candidate child gets the client's `initialize` (and
+  request ids and need nothing. Cursors (`next_cursor` of `ac_events` and similar tools) belong
+  to the child that issued them: after a switch they answer `cursor_invalid`, and the caller
+  reads again from `after_sequence`. The candidate child gets the client's `initialize` (and
   `notifications/initialized`) or, for a 2026-07-28 client, `server/discover` with the client's
   `_meta`, then `tools/list`; a different protocol version, an error or no answer within
-  `install.mcp_entry.verify_timeout_ms` refuses it, and the current child keeps serving. A
+  `install.mcp_entry.verify_timeout_ms` refuses it, and the current child keeps serving; the
+  same install is tried once more after `settle_ms`, then not again until it changes. A
   request in flight when its child ends is answered `mcp_entry_outcome_unknown` (inspect with
   `ac_get_run` or `ac_overview`) and never sent again; the next request goes to a fresh child.
+  When the first plan after a fresh child names a build other than its predecessor's, the client
+  gets the change notice below.
 - **The notice.** Legacy clients get `notifications/tools/list_changed` (the entry answers their
   `initialize` with `capabilities.tools.listChanged: true`). 2026-07-28 clients get the same
   notification on each `subscriptions/listen` stream that asked for `toolsListChanged`, with

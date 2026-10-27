@@ -9,7 +9,9 @@
 //!   should switch to it. It refuses while an install operation holds `install\writer.lock` or
 //!   left `install\current.json` (`writer_lock_failed`, `operation_unfinished`), and when the
 //!   installed files differ from their manifests (S1's `verify_live`: `live_build_invalid`,
-//!   `live_build_modified`). The tunables come from `install.mcp_entry.*`.
+//!   `live_build_modified`). The tunables come from `install.mcp_entry.*`; the configuration is
+//!   read before the installed files are hashed, and every refusal after that read carries
+//!   `tunables` too (fix round 1, review M4).
 //! - `list --root <root> [--all]` prints the entries' status files
 //!   (`<root>\mcp-entry\state\entry-<pid>.json`), each with `stale` when its pid is gone; stale
 //!   ones only with `--all`. Nothing is deleted.
@@ -50,6 +52,8 @@ struct Tunables {
     settle_ms: u64,
     verify_timeout_ms: u64,
     drain_max_ms: u64,
+    /// Fix round 1 (review M4): the cap of the entry's doubling wait after refusals.
+    refused_retry_max_ms: u64,
 }
 
 /// `mcp-entry plan` (D3).
@@ -75,19 +79,42 @@ pub(super) fn plan(words: &[&str]) -> Result<Answer, Outcome> {
     if !paths.is_single_location() {
         return Err(refusal(operation, InstallRefusal::NotSingleLocation).path(&paths.root));
     }
+    // Fix round 1 (review M4): the cheap configuration read before the hashing `verify_live`;
+    // every refusal after it carries the tunables, so the entry's retry policy stays here.
+    let settings = install_settings(&paths, operation)?;
+    let tunables = Tunables {
+        poll_ms: settings.mcp_entry_poll_ms,
+        settle_ms: settings.mcp_entry_settle_ms,
+        verify_timeout_ms: settings.mcp_entry_verify_timeout_ms,
+        drain_max_ms: settings.mcp_entry_drain_max_ms,
+        refused_retry_max_ms: settings.mcp_entry_refused_retry_max_ms,
+    };
+    match planned(operation, &paths, &flags, child, &tunables) {
+        Ok(answer) => Ok(answer),
+        Err(refused) => Answer::new(refused).with("tunables", &tunables),
+    }
+}
+
+/// The plan once the tunables are known: the checks that may refuse, then the answer.
+fn planned(
+    operation: InstallLocation,
+    paths: &Paths,
+    flags: &Flags<'_>,
+    child: &[&str],
+    tunables: &Tunables,
+) -> Result<Answer, Outcome> {
     // E-8: never while an install operation is under way.
     if state::unfinished_operation(&paths.root).is_some() {
         return Err(refusal(operation, InstallRefusal::OperationUnfinished).path(paths.current()));
     }
-    writer_lock_free(&paths, operation)?;
-    let build = adopt::verify_live(operation, &paths)?;
+    writer_lock_free(paths, operation)?;
+    let build = adopt::verify_live(operation, paths)?;
     let manifest = paths.root.join("runtime").join("BUILD-MANIFEST.json");
     let manifest_bytes = files::read_all(&manifest).map_err(|cause| {
         refusal(operation, InstallRefusal::LiveBuildInvalid)
             .path(&manifest)
             .caused_by(cause)
     })?;
-    let settings = install_settings(&paths, operation)?;
     let (switch, basis) = match flags.value("--current-build") {
         None => (false, PlanBasis::NoCurrentBuild),
         Some(current) if current.eq_ignore_ascii_case(&build.commit) => {
@@ -110,15 +137,7 @@ pub(super) fn plan(words: &[&str]) -> Result<Answer, Outcome> {
             },
         )?
         .with("child", command)?
-        .with(
-            "tunables",
-            Tunables {
-                poll_ms: settings.mcp_entry_poll_ms,
-                settle_ms: settings.mcp_entry_settle_ms,
-                verify_timeout_ms: settings.mcp_entry_verify_timeout_ms,
-                drain_max_ms: settings.mcp_entry_drain_max_ms,
-            },
-        )?
+        .with("tunables", tunables)?
         .with("entry_protocol", ENTRY_PROTOCOL)
 }
 

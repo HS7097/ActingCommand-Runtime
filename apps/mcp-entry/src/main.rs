@@ -172,6 +172,7 @@ fn serve(core: &mut Core<RealHost>, receiver: &Receiver<Event>, poll: &AtomicU64
             Event::Plan(end) => core.plan_done(end),
             Event::Tick => core.tick(),
         }
+        core.host.reap_overdue();
         poll.store(core.poll_ms().max(1), Ordering::Relaxed);
         if ending.is_some() && core.current_child().is_none() {
             return;
@@ -228,6 +229,8 @@ fn ticker(events: &Sender<Event>, poll: &AtomicU64) {
 struct Running {
     process: Child,
     stdin: Option<ChildStdin>,
+    /// When its input was closed (review L1); it is ended past [`STOP_GRACE`].
+    stopped_at: Option<Instant>,
 }
 
 struct RealHost {
@@ -263,50 +266,76 @@ fn file_stamp(path: &Path) -> Option<(u64, u128)> {
     Some((metadata.len(), modified))
 }
 
-/// Ends `process` after `grace` unless it ended by then; waits for it either way.
-fn reap_later(mut process: Child, grace: Duration) {
-    thread::spawn(move || {
-        let deadline = Instant::now() + grace;
-        loop {
-            match process.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) if Instant::now() < deadline => thread::sleep(REAP_POLL),
-                Ok(None) | Err(_) => {
-                    if let Err(error) = process.kill() {
-                        eprintln!(
-                            "ERROR actingcommand-mcp-entry: cannot end child pid {}: {error}",
-                            process.id()
-                        );
-                    }
-                    let _ = process.wait();
-                    return;
-                }
-            }
-        }
-    });
+/// Fix round 1 (review L1): whether a child stopped at `stopped_at` is due to be ended at
+/// `now`, its `grace` passed. A child never stopped is due at once (the entry is ending).
+fn end_due(stopped_at: Option<Instant>, now: Instant, grace: Duration) -> bool {
+    stopped_at.is_none_or(|stopped| now.saturating_duration_since(stopped) >= grace)
+}
+
+/// Ends `running` and waits for it.
+fn kill(running: &mut Running) {
+    if let Err(error) = running.process.kill() {
+        eprintln!(
+            "ERROR actingcommand-mcp-entry: cannot end child pid {}: {error}",
+            running.process.id()
+        );
+    }
+    let _ = running.process.wait();
 }
 
 impl RealHost {
+    /// Fix round 1 (review L1): a stopped child stays in `children` until it has ended, so
+    /// [`RealHost::end_all`] still finds it; one whose output ended is removed once it exited.
     fn reap(&mut self, child: u64) {
-        if let Some(mut running) = self.children.remove(&child) {
+        let exited = self.children.get_mut(&child).is_some_and(|running| {
             drop(running.stdin.take());
-            reap_later(running.process, STOP_GRACE);
+            if running.stopped_at.is_none() {
+                running.stopped_at = Some(Instant::now());
+            }
+            matches!(running.process.try_wait(), Ok(Some(_)))
+        });
+        if exited {
+            self.children.remove(&child);
         }
     }
 
+    /// Removes the stopped children that ended and ends those past [`STOP_GRACE`].
+    fn reap_overdue(&mut self) {
+        let now = Instant::now();
+        let mut done = Vec::new();
+        for (id, running) in &mut self.children {
+            if running.stopped_at.is_none() {
+                continue;
+            }
+            if matches!(running.process.try_wait(), Ok(Some(_))) {
+                done.push(*id);
+            } else if end_due(running.stopped_at, now, STOP_GRACE) {
+                kill(running);
+                done.push(*id);
+            }
+        }
+        for id in done {
+            self.children.remove(&id);
+        }
+    }
+
+    /// Ends every child still in `children`, stopped ones included: each gets what is left of
+    /// its grace, then it is ended.
     fn end_all(&mut self) {
         for (_, mut running) in self.children.drain() {
             drop(running.stdin.take());
-            if matches!(running.process.try_wait(), Ok(None)) {
-                let killed = running.process.kill();
-                if let Err(error) = killed {
-                    eprintln!(
-                        "ERROR actingcommand-mcp-entry: cannot end child pid {}: {error}",
-                        running.process.id()
-                    );
+            loop {
+                match running.process.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if !end_due(running.stopped_at, Instant::now(), STOP_GRACE) => {
+                        thread::sleep(REAP_POLL);
+                    }
+                    Ok(None) | Err(_) => {
+                        kill(&mut running);
+                        break;
+                    }
                 }
             }
-            let _ = running.process.wait();
         }
     }
 }
@@ -330,12 +359,10 @@ impl Host for RealHost {
         }
     }
 
+    /// Only the writer lock (fix round 1, review M1): whether an unfinished operation blocks a
+    /// switch is the plan's decision (`operation_unfinished`), in the hot-switchable `actingctl`.
     fn busy(&mut self) -> bool {
-        let install = self.root.join("install");
-        if install.join("current.json").exists() {
-            return true;
-        }
-        let lock = install.join("writer.lock");
+        let lock = self.root.join("install").join("writer.lock");
         let Ok(file) = File::open(&lock) else {
             return false;
         };
@@ -376,7 +403,14 @@ impl Host for RealHost {
                 let _ = events.send(Event::ChildEnd(id));
             });
         }
-        self.children.insert(id, Running { process, stdin });
+        self.children.insert(
+            id,
+            Running {
+                process,
+                stdin,
+                stopped_at: None,
+            },
+        );
         Ok(pid)
     }
 

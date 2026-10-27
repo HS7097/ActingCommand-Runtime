@@ -828,6 +828,7 @@ objects deny unknown members.
 | `install.mcp_entry.settle_ms` | milliseconds `0..=600000` | `10000` | how long a change must stay put before the entry asks for a plan (MCP-ENTRY) |
 | `install.mcp_entry.verify_timeout_ms` | milliseconds `1000..=600000` | `60000` | a candidate child's verification, the plan and a handle count (MCP-ENTRY) |
 | `install.mcp_entry.drain_max_ms` | milliseconds `0..=86400000` | `600000` | how long a switch waits for outstanding handles before its status says so; it keeps waiting (MCP-ENTRY) |
+| `install.mcp_entry.refused_retry_max_ms` | milliseconds `1000..=86400000` | `300000` | the cap of the entry's wait before the next plan after consecutive refusals; the wait doubles from `settle_ms` (MCP-ENTRY fix round 1) |
 
 A child still running at its `install.child.*` deadline is left running, never killed (the
 stall rule), and reported with its `pid` and the key ([install-cli.md](install-cli.md),

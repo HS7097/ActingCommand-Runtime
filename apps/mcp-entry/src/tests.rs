@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #421 MCP-ENTRY, test rows E-1 to E-11: the entry's logic with a fake child and a
-//! fake clock (no process, no sleep).
+//! Workflow #421 MCP-ENTRY, test rows E-1 to E-11, and fix round 1's E-13, E-14, E-16 and E-18
+//! to E-23: the entry's logic with a fake child and a fake clock (no process, no sleep).
 
 use crate::logic::{ClientKind, Core, EntryConfig, Host, PlanEnd, Stamp};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::io;
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct FakeHost {
@@ -98,13 +100,18 @@ fn entry() -> Core<FakeHost> {
     entry
 }
 
+static TUNABLES: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+    json!({"poll_ms": 1_000, "settle_ms": 5_000, "verify_timeout_ms": 30_000,
+        "drain_max_ms": 60_000, "refused_retry_max_ms": 12_000})
+});
+
 fn plan(switch: bool, commit: &str) -> Value {
     json!({
         "switch": switch,
         "reason": if switch { "build_changed" } else { "same_build" },
         "build": {"commit": commit, "manifest_sha256": "a".repeat(64)},
         "child": ["ROOT/runtime/actingctl.exe", "mcp-serve", "--tier", "observer,operator"],
-        "tunables": {"poll_ms": 1_000, "settle_ms": 5_000, "verify_timeout_ms": 30_000, "drain_max_ms": 60_000},
+        "tunables": TUNABLES.clone(),
         "entry_protocol": 1,
         "outcome": {},
     })
@@ -352,8 +359,9 @@ fn e4_a_failed_candidate_keeps_the_old_child_and_is_reported() {
     client(&mut entry, &call);
     assert_eq!(received(&entry, 1).last(), Some(&call));
 
-    // The same install is not tried again until it changes.
-    entry.host.now += 60_000;
+    // The same install is not tried again right away (fix round 1, review L2: once more after
+    // settle_ms, E-20).
+    entry.host.now += 4_000;
     entry.tick();
     assert_eq!(entry.host.plans.len(), 2);
 }
@@ -610,4 +618,276 @@ fn e11_the_status_file_says_what_the_entry_runs() {
     assert_eq!(status["notice"]["sent_at_unix_ms"], 1_005_000);
     assert_eq!(status["refresh"]["entry"], "codex_reload");
     assert_eq!(status["tunables"]["poll_ms"], 1_000);
+}
+
+// ---- fix round 1 (rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md) ------
+
+fn config() -> EntryConfig {
+    EntryConfig {
+        default_exe: "ROOT/runtime/actingctl.exe".to_owned(),
+        child_args: ARGS.iter().map(|word| (*word).to_owned()).collect(),
+        client_kind: Some(ClientKind::Codex),
+        pid: 77,
+    }
+}
+
+fn status_query_of(entry: &Core<FakeHost>, id: u64) -> Value {
+    let query = received(entry, id).last().expect("a query").clone();
+    assert_eq!(query["method"], "actingcommand/entryStatus");
+    query
+}
+
+/// A tools/call on child 1, answered.
+fn answered_call(entry: &mut Core<FakeHost>, id: u64, tool: &str) {
+    client(
+        entry,
+        &json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": tool}}),
+    );
+    child(
+        entry,
+        1,
+        &json!({"jsonrpc": "2.0", "id": id, "result": {"content": []}}),
+    );
+}
+
+/// The candidate child `id` refuses the replayed initialize.
+fn refuse_candidate(entry: &mut Core<FakeHost>, id: u64) {
+    let request = received(entry, id)[0].clone();
+    child(
+        entry,
+        id,
+        &json!({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32603, "message": "x"}}),
+    );
+}
+
+/// E-13 (review H1): the child started while an install was under way; the deferred first
+/// plan names the new build, which the child may not run: it is a switch, not the child's build.
+#[test]
+fn e13_an_initial_plan_after_the_install_changed_under_the_child_is_a_switch() {
+    let host = FakeHost {
+        now: 1_000_000,
+        stamp: Stamp {
+            files: vec![Some((10, 1))],
+        },
+        busy: true,
+        ..FakeHost::default()
+    };
+    let mut entry = Core::new(host, config());
+    entry.start();
+    assert!(
+        entry.host.plans.is_empty(),
+        "no plan while the install is busy"
+    );
+    entry.host.stamp = Stamp {
+        files: vec![Some((20, 2))],
+    };
+    entry.host.busy = false;
+    entry.tick();
+    assert_eq!(entry.host.plans, vec![None], "the first plan");
+    entry.plan_done(PlanEnd::Answered(plan(false, NEW)));
+    assert_eq!(
+        entry.host.status["child"]["build"],
+        Value::Null,
+        "the installed build is not taken as the running child's"
+    );
+    assert_eq!(entry.host.spawned.len(), 2, "a candidate starts");
+    serve_internal(&mut entry, 2, "2025-11-25", &json!({}));
+    assert_eq!(entry.current_child(), Some(2));
+    assert_eq!(entry.host.status["child"]["build"], NEW);
+    assert_eq!(entry.host.status["last_switch"]["to_build"], NEW);
+}
+
+/// E-14 (review M1): `install\current.json` alone does not hold the entry back (the plan
+/// decides); a held writer lock still does.
+#[test]
+fn e14_an_unfinished_operation_file_alone_does_not_hold_the_entry_back() {
+    let root = tempfile::TempDir::new().expect("tempdir");
+    let install = root.path().join("install");
+    std::fs::create_dir_all(&install).expect("the install directory");
+    std::fs::write(install.join("current.json"), b"{}").expect("current.json");
+    let (events, _receiver) = std::sync::mpsc::channel();
+    let mut host = crate::RealHost {
+        root: root.path().to_path_buf(),
+        child_args: Vec::new(),
+        events,
+        children: HashMap::new(),
+        status_path: root.path().join("entry-1.json"),
+        stdout: io::stdout(),
+    };
+    assert!(!host.busy(), "current.json alone is the plan's to judge");
+    let lock = std::fs::File::create(install.join("writer.lock")).expect("writer.lock");
+    lock.lock().expect("the lock is taken");
+    assert!(host.busy(), "a held writer lock still holds the plan back");
+}
+
+/// E-16 (review M2): the status names the outstanding handles the child reported, so a
+/// person can collect a stuck one.
+#[test]
+fn e16_the_status_names_the_outstanding_handles() {
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    answered_call(&mut entry, 5, "ac_lab_do");
+    plan_switch(&mut entry);
+    serve_internal(
+        &mut entry,
+        1,
+        "2025-11-25",
+        &json!({"outstanding_handles": 1, "kinds": ["lab"], "handles": ["lab_job_7"], "calls_in_flight": 0}),
+    );
+    assert_eq!(entry.host.status["deferred"]["kind"], "handles");
+    assert_eq!(
+        entry.host.status["deferred"]["handles"],
+        json!(["lab_job_7"])
+    );
+}
+
+/// E-18 (review M4): consecutive refusals double the wait before the next plan up to
+/// `refused_retry_max_ms`, a refusal's tunables are taken, and an answered plan resets it.
+#[test]
+fn e18_consecutive_refusals_back_off_and_carry_the_tunables() {
+    let mut entry = entry();
+    let refusal = json!({
+        "tunables": {"poll_ms": 1_000, "settle_ms": 4_000, "verify_timeout_ms": 30_000,
+            "drain_max_ms": 60_000, "refused_retry_max_ms": 10_000},
+        "outcome": {"code": "install_command_refused"},
+    });
+    entry.host.stamp = Stamp {
+        files: vec![Some((20, 2))],
+    };
+    entry.tick();
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(entry.host.plans.len(), 2);
+    entry.plan_done(PlanEnd::Answered(refusal.clone()));
+    assert_eq!(
+        entry.host.status["tunables"]["refused_retry_max_ms"],
+        10_000
+    );
+    assert_eq!(entry.host.status["plan_refusals"]["consecutive"], 1);
+    // Waits of 4 s, 8 s, then the 10 s cap.
+    for (wait, plans) in [(4_000, 3), (8_000, 4), (10_000, 5)] {
+        entry.host.now += wait - 1;
+        entry.tick();
+        assert_eq!(entry.host.plans.len(), plans - 1, "not before {wait} ms");
+        entry.host.now += 1;
+        entry.tick();
+        assert_eq!(entry.host.plans.len(), plans, "after {wait} ms");
+        if plans < 5 {
+            entry.plan_done(PlanEnd::Answered(refusal.clone()));
+        }
+    }
+    entry.plan_done(PlanEnd::Answered(plan(true, NEW)));
+    assert_eq!(entry.host.status["plan_refusals"]["consecutive"], 0);
+    assert_eq!(entry.host.spawned.len(), 2, "the switch goes on");
+}
+
+/// E-19 (review L1): a stopped child is ended only once its grace passed; one never stopped is
+/// ended at once when the entry ends.
+#[test]
+fn e19_a_stopped_child_is_ended_only_past_its_grace() {
+    let grace = Duration::from_secs(5);
+    let stopped = Instant::now();
+    assert!(!crate::end_due(
+        Some(stopped),
+        stopped + Duration::from_millis(4_999),
+        grace
+    ));
+    assert!(crate::end_due(Some(stopped), stopped + grace, grace));
+    assert!(crate::end_due(None, stopped, grace));
+}
+
+/// E-20 (review L2): a refused candidate is tried once more after `settle_ms`, then not again
+/// until the install changes.
+#[test]
+fn e20_a_rejected_candidate_is_tried_once_more_after_settle() {
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    plan_switch(&mut entry);
+    refuse_candidate(&mut entry, 2);
+    assert_eq!(entry.current_child(), Some(1));
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(entry.host.plans.len(), 3, "one more plan after settle_ms");
+    assert_eq!(entry.host.plans[2], Some(OLD.to_owned()));
+    entry.plan_done(PlanEnd::Answered(plan(true, NEW)));
+    assert_eq!(entry.host.spawned.len(), 3, "a second candidate");
+    refuse_candidate(&mut entry, 3);
+    assert_eq!(entry.current_child(), Some(1));
+    entry.host.now += 60_000;
+    entry.tick();
+    assert_eq!(
+        entry.host.plans.len(),
+        3,
+        "no third try for the same install"
+    );
+    assert_eq!(entry.host.spawned.len(), 3);
+}
+
+/// E-21 (review L3): the child died; the first plan after the fresh child names another build
+/// than its predecessor's, and the client gets the change notice.
+#[test]
+fn e21_a_fresh_child_of_another_build_sends_the_notice() {
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    entry.child_exited(1);
+    client(
+        &mut entry,
+        &json!({"jsonrpc": "2.0", "id": 42, "method": "tools/list"}),
+    );
+    serve_internal(&mut entry, 2, "2025-11-25", &json!({}));
+    assert_eq!(entry.current_child(), Some(2));
+    assert!(list_changed(&entry).is_empty());
+    entry.tick();
+    assert_eq!(entry.host.plans.last(), Some(&None), "its build is asked");
+    entry.plan_done(PlanEnd::Answered(plan(false, NEW)));
+    assert_eq!(entry.host.status["child"]["build"], NEW);
+    assert_eq!(
+        list_changed(&entry),
+        vec![json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})]
+    );
+}
+
+/// E-22 (review L5): the status drops an answered call at once.
+#[test]
+fn e22_the_status_drops_an_answered_call_at_once() {
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    client(
+        &mut entry,
+        &json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ac_overview"}}),
+    );
+    assert_eq!(entry.host.status["calls_in_flight"], 1);
+    child(
+        &mut entry,
+        1,
+        &json!({"jsonrpc": "2.0", "id": 5, "result": {"content": []}}),
+    );
+    assert_eq!(entry.host.status["calls_in_flight"], 0);
+}
+
+/// E-23 (review L7): a `0` answered after another call reached the child does not count; the
+/// entry asks again.
+#[test]
+fn e23_a_zero_count_is_ignored_after_a_call_reached_the_child() {
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    answered_call(&mut entry, 5, "ac_overview");
+    plan_switch(&mut entry);
+    let query = status_query_of(&entry, 1);
+    answered_call(&mut entry, 6, "ac_lab_do");
+    let zero = json!({"outstanding_handles": 0, "kinds": [], "handles": [], "calls_in_flight": 0});
+    child(
+        &mut entry,
+        1,
+        &json!({"jsonrpc": "2.0", "id": query["id"], "result": zero}),
+    );
+    assert_eq!(entry.host.spawned.len(), 1, "the stale 0 does not count");
+    let again = status_query_of(&entry, 1);
+    assert_ne!(again["id"], query["id"], "the entry asks again");
+    child(
+        &mut entry,
+        1,
+        &json!({"jsonrpc": "2.0", "id": again["id"], "result": zero}),
+    );
+    assert_eq!(entry.host.spawned.len(), 2);
 }
