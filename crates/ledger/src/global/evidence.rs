@@ -232,6 +232,9 @@ pub struct GlobalLedgerSelection {
     events: Vec<PersistedEvent>,
     indexes: projection::EventIndexes,
     head_sequence: u64,
+    head_time_unix_ms: Option<u64>,
+    latest_time_unix_ms: Option<u64>,
+    newest: Vec<Option<PersistedEvent>>,
     complete: bool,
     writer: GlobalLedgerWriterMetadataObservation,
 }
@@ -239,6 +242,22 @@ impl GlobalLedgerSelection {
     /// The authenticated head when opened (not the last selected event).
     pub fn head_sequence(&self) -> u64 {
         self.head_sequence
+    }
+    /// ROUT-L RL-1c fix 2 (#411 M2): the time of the authenticated head row, the last record;
+    /// `None` for an empty ledger.
+    pub fn head_time_unix_ms(&self) -> Option<u64> {
+        self.head_time_unix_ms
+    }
+    /// ROUT-L RL-1c fix 2 (#411 M2, A24): the ledger's latest time, its maximum
+    /// `timestamp_unix_ms`, when [`GlobalLedgerSelectionExtras::latest_time`] asked for it;
+    /// `None` otherwise and for an empty ledger.
+    pub fn latest_time_unix_ms(&self) -> Option<u64> {
+        self.latest_time_unix_ms
+    }
+    /// ROUT-L RL-1c fix 2 (#411 M2): the newest matching event of each
+    /// [`GlobalLedgerSelectionExtras::newest`] query, in their order; `None` where none matches.
+    pub fn newest(&self) -> &[Option<PersistedEvent>] {
+        &self.newest
     }
     /// ROUT-L RL-1c fix 1 (#411 H1): the selected events, in ledger order.
     pub fn events(&self) -> &[PersistedEvent] {
@@ -267,6 +286,33 @@ impl GlobalLedgerSelection {
     pub fn writer_metadata(&self) -> &GlobalLedgerWriterMetadataObservation {
         &self.writer
     }
+}
+
+/// ROUT-L RL-1c fix 2 (#411 M2): what a selected opening (`GlobalLedger::open_selected_within`)
+/// reads besides the rows of its types, in the same read transaction and within the same budget.
+#[derive(Debug, Clone, Default)]
+pub struct GlobalLedgerSelectionExtras {
+    /// Queries each answered by its newest matching event alone
+    /// ([`GlobalLedgerSelection::newest`]): the rows of the query's `event_type` are read newest
+    /// first through the type index, each authenticated on its own, until one matches; only that
+    /// one is kept. Each query names an `event_type` and no `view`; otherwise the request error
+    /// `ledger_selection_query_unsupported`.
+    pub newest: Vec<EventQuery>,
+    /// Whether the ledger's latest time is read ([`GlobalLedgerSelection::latest_time_unix_ms`],
+    /// #411 A24): the row of the maximum `timestamp_unix_ms`, through the time index, one row
+    /// authenticated on its own.
+    pub latest_time: bool,
+}
+
+/// A `newest` query must name its event type and no view.
+pub(super) fn check_newest_query(query: &EventQuery) -> GlobalLedgerResult<()> {
+    if query.event_type.is_none() || query.view.is_some() {
+        return Err(GlobalLedgerError::request(
+            LedgerCode::SelectionQueryUnsupported.code(),
+            LedgerLocation::QuerySelection.location(),
+        ));
+    }
+    Ok(())
 }
 
 /// What a range opening (`GlobalLedger::open_range`, Workflow #411 A4) reads.
@@ -795,19 +841,30 @@ impl GlobalLedger {
         event_types: &[EventType],
         deadline: Instant,
     ) -> GlobalLedgerResult<GlobalLedgerSelection> {
-        Self::open_selected_within(root, event_types, usize::MAX, deadline)
+        Self::open_selected_within(
+            root,
+            event_types,
+            &GlobalLedgerSelectionExtras::default(),
+            usize::MAX,
+            deadline,
+        )
     }
 
     /// ROUT-L RL-1c fix 1 (#411 H1): [`GlobalLedger::open_selected`] that also holds at most
     /// `max_events` rows: the read stops at the row after them (counting the head row), as it
     /// stops at `deadline`, with the request error `ledger_read_budget_exceeded`. A segment root
-    /// is read whole within the same budget.
+    /// is read whole within the same budget. RL-1c fix 2 (#411 M2): it also reads `extras`, in
+    /// the same transaction and budget; a row it keeps counts among the rows held.
     pub fn open_selected_within(
         root: impl Into<PathBuf>,
         event_types: &[EventType],
+        extras: &GlobalLedgerSelectionExtras,
         max_events: usize,
         deadline: Instant,
     ) -> GlobalLedgerResult<GlobalLedgerSelection> {
+        for query in &extras.newest {
+            check_newest_query(query)?;
+        }
         let root = root.into();
         let budget = Some((u64::MAX, max_events, deadline));
         let ledger_root = root.join("ledger");
@@ -834,28 +891,40 @@ impl GlobalLedger {
         if database_exists || key_exists {
             let database = RuntimeDatabase::open_existing_unchecked(&root)?;
             if sqlite::has_schema(&database)? {
-                let read = sqlite::read_selected(&database, event_types, budget)?;
+                let read = sqlite::read_selected(&database, event_types, extras, budget)?;
+                let into_event = |event: LedgerEventMetadata| {
+                    event
+                        .into_event_with_artifact_availability(&mut |_| Ok(None))
+                        .map_err(|error| {
+                            GlobalLedgerError::fatal(
+                                error.code(),
+                                LedgerLocation::ValidatePersistedEvent.location(),
+                            )
+                        })
+                };
                 let mut events = Vec::with_capacity(read.events.len());
                 for event in read.events {
                     read_only::check_read_budget(budget, 0, events.len() + 1)?;
-                    events.push(
-                        event
-                            .into_event_with_artifact_availability(&mut |_| Ok(None))
-                            .map_err(|error| {
-                                GlobalLedgerError::fatal(
-                                    error.code(),
-                                    LedgerLocation::ValidatePersistedEvent.location(),
-                                )
-                            })?,
-                    );
+                    events.push(into_event(event)?);
                 }
-                read_only::check_read_budget(budget, 0, events.len())?;
+                let mut newest = Vec::with_capacity(read.newest.len());
+                for event in read.newest {
+                    newest.push(event.map(into_event).transpose()?);
+                }
+                read_only::check_read_budget(
+                    budget,
+                    0,
+                    events.len() + newest.iter().flatten().count(),
+                )?;
                 let writer = read_only::read_writer_metadata(&ledger_root)?;
                 return Ok(GlobalLedgerSelection {
                     types: event_types.to_vec(),
                     indexes: projection::EventIndexes::from_events(&events),
                     events,
                     head_sequence: read.head_sequence,
+                    head_time_unix_ms: read.head_time_unix_ms,
+                    latest_time_unix_ms: read.latest_time_unix_ms,
+                    newest,
                     complete: true,
                     writer,
                 });
@@ -867,17 +936,34 @@ impl GlobalLedger {
                 .with_budget(u64::MAX, max_events, deadline),
             |_| None,
         )?;
-        let events = source
-            .events()
+        let all = source.events();
+        let events = all
             .iter()
             .filter(|event| event_types.contains(&event.event_type()))
             .cloned()
             .collect::<Vec<_>>();
+        let newest = extras
+            .newest
+            .iter()
+            .map(|query| {
+                all.iter()
+                    .rev()
+                    .find(|event| projection::query_matches(query, event))
+                    .cloned()
+            })
+            .collect();
         Ok(GlobalLedgerSelection {
             types: event_types.to_vec(),
             indexes: projection::EventIndexes::from_events(&events),
             events,
             head_sequence: source.latest_sequence(),
+            head_time_unix_ms: all.last().map(PersistedEvent::timestamp_unix_ms),
+            latest_time_unix_ms: if extras.latest_time {
+                all.iter().map(PersistedEvent::timestamp_unix_ms).max()
+            } else {
+                None
+            },
+            newest,
             complete: source.is_complete(),
             writer: source.writer_metadata().clone(),
         })

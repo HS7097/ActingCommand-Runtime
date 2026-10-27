@@ -1241,7 +1241,7 @@ impl SuspensionReport {
                         ChildFailure::Io(_) => ActingctlCode::SuspendedReportIoFailed,
                         // Still running at the end of the call budget, and ended there (RL-1c
                         // fix 1).
-                        ChildFailure::StillRunning { .. } | ChildFailure::Ended { .. } => {
+                        ChildFailure::StillRunning { .. } | ChildFailure::Ended => {
                             ActingctlCode::SuspendedReportTimeout
                         }
                     }

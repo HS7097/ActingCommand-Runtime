@@ -47,7 +47,7 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{compare_failure_frames, failure_frame_ccoeff};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerRangeRequest, GlobalLedgerSelection,
-    LedgerArtifactReference, LedgerCode, PersistedEvent,
+    GlobalLedgerSelectionExtras, LedgerArtifactReference, LedgerCode, PersistedEvent,
 };
 use actingcommand_policy::{CatalogSources, CompiledCatalog, PolicyCode, compile_catalog};
 use serde::{Deserialize, Serialize};
@@ -75,14 +75,15 @@ const REMEDY_LIFT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
 /// all.
 const REMEDY_LIMIT: usize = 200;
 /// ROUT-L RL-1c fix 1 (#411 H1): the record types the report reads by the ledger's type index.
-/// The other types it reads are a run's own rows ([`RUN_TYPES`]).
-const SELECTED_TYPES: [EventType; 8] = [
+/// The other types it reads are a run's own rows ([`RUN_TYPES`]). RL-1c fix 2 (#411 M2): no
+/// `runtime.lifecycle_observed` (nothing queried it) and no `runtime.fact_recorded`: of those
+/// only the newest `config.subsystems` fact is read ([`daemon_start_query`]), and the reference
+/// times are the ledger's own (the latest time and the head row's).
+const SELECTED_TYPES: [EventType; 6] = [
     EventType::PolicyDispatchIntent,
     EventType::PolicyExecutionRecorded,
     EventType::PolicyDispatchAdmitted,
     EventType::PolicyPlanningSignalObserved,
-    EventType::RuntimeFactRecorded,
-    EventType::RuntimeLifecycleObserved,
     EventType::TaskFailed,
     EventType::RuntimeFailed,
 ];
@@ -123,11 +124,30 @@ impl SuspendedReadBudget {
         }
     }
 
+    /// Judged by the clock the ledger's reads judge their deadline by (RL-1c fix 2).
     fn out_of_time(&self) -> bool {
         self.deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
+            .is_some_and(actingcommand_ledger::read_deadline_passed)
     }
 }
+
+/// ROUT-L RL-1c fix 2 (#411 M2): the newest `config.subsystems` fact, the latest daemon start's,
+/// which the selected read gives alone (newest first through the type index).
+fn daemon_start_query() -> EventQuery {
+    EventQuery {
+        event_type: Some(EventType::RuntimeFactRecorded),
+        fact_key: Some(CONFIG_SUBSYSTEMS_FACT_KEY.to_owned()),
+        ..EventQuery::default()
+    }
+}
+
+/// What the run of an execution failed with: its `task.failed` terminal (its failure's spelling
+/// and the record's severity), the run's failure severity, and its native detail.
+type RunFailure = (
+    Option<(CodeStr, EventSeverity)>,
+    Option<EventSeverity>,
+    Value,
+);
 
 /// What `actingd suspended` reads: the loaded configuration and when its file last changed.
 pub struct SuspensionReportRequest<'a> {
@@ -304,16 +324,23 @@ impl Snapshot<'_> {
         let rows = match GlobalLedger::open_range(self.state_root, &request)
             .map_err(|error| ledger_unavailable(self.state_root, &error))?
         {
-            Some(read) => read
-                .into_events()
-                .into_iter()
-                .filter(|event| RUN_TYPES.contains(&event.event_type()))
-                .collect::<Vec<_>>(),
+            Some(read) => {
+                let read = read.into_events();
+                // RL-1c fix 2 (#411 L3): the run's rows of every type count, so a read that
+                // stopped at `matches` leaves the run unread however few of its types it holds.
+                if read.len() > room {
+                    return Ok(None);
+                }
+                read.into_iter()
+                    .filter(|event| RUN_TYPES.contains(&event.event_type()))
+                    .collect::<Vec<_>>()
+            }
             // A segment root has no range read: its run types are read whole, within the budget.
             None => {
                 match GlobalLedger::open_selected_within(
                     self.state_root,
                     &RUN_TYPES,
+                    &GlobalLedgerSelectionExtras::default(),
                     room,
                     self.deadline,
                 ) {
@@ -344,14 +371,11 @@ impl Snapshot<'_> {
             .flatten()
     }
 
-    /// The latest time of the records read (#411 A24: the maximum timestamp, not the last
-    /// record's).
+    /// The ledger's latest time (#411 A24: the maximum timestamp, not the last record's). RL-1c
+    /// fix 2 (#411 M2): the ledger's own, its row read through the time index, no longer the
+    /// maximum over the selected types.
     fn latest_time(&self) -> Option<u64> {
-        self.selection
-            .events()
-            .iter()
-            .map(PersistedEvent::timestamp_unix_ms)
-            .max()
+        self.selection.latest_time_unix_ms()
     }
 
     /// The run's `task.failed` terminal (its failure's spelling and the record's severity,
@@ -366,14 +390,7 @@ impl Snapshot<'_> {
         &self,
         run_id: Option<RunId>,
         fallback: &CodeStr,
-    ) -> Result<
-        (
-            Option<(CodeStr, EventSeverity)>,
-            Option<EventSeverity>,
-            Value,
-        ),
-        SuspensionReportError,
-    > {
+    ) -> Result<RunFailure, SuspensionReportError> {
         let Some(run_id) = run_id else {
             return Ok((None, None, Value::Null));
         };
@@ -734,9 +751,16 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
     let deadline = budget
         .deadline
         .unwrap_or_else(|| Instant::now() + NO_DEADLINE);
+    // RL-1c fix 2 (#411 M2): with the newest `config.subsystems` fact alone and the ledger's
+    // latest time, in the same read.
+    let extras = GlobalLedgerSelectionExtras {
+        newest: vec![daemon_start_query()],
+        latest_time: true,
+    };
     let selection = match GlobalLedger::open_selected_within(
         state_root,
         &SELECTED_TYPES,
+        &extras,
         budget.max_events,
         deadline,
     ) {
@@ -751,7 +775,7 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         ));
     }
     let mut snapshot = Snapshot {
-        held: Cell::new(selection.events().len()),
+        held: Cell::new(selection.events().len() + selection.newest().iter().flatten().count()),
         selection,
         state_root,
         artifact_root: state_root,
@@ -820,21 +844,21 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
             }
         }
     }
-    let daemon_started_at_unix_ms = snapshot
-        .query(EventQuery {
-            event_type: Some(EventType::RuntimeFactRecorded),
-            ..EventQuery::default()
-        })?
-        .iter()
-        .rev()
-        .find_map(|event| match event.payload() {
-            EventPayload::Runtime(RuntimePayload::FactRecorded(payload))
-                if payload.record().key == CONFIG_SUBSYSTEMS_FACT_KEY =>
-            {
-                Some(payload.record().observed_at_unix_ms)
-            }
-            _ => None,
-        });
+    // RL-1c fix 2 (#411 M2): the newest `config.subsystems` fact, read alone.
+    let daemon_started_at_unix_ms =
+        snapshot
+            .selection
+            .newest()
+            .iter()
+            .flatten()
+            .find_map(|event| match event.payload() {
+                EventPayload::Runtime(RuntimePayload::FactRecorded(payload))
+                    if payload.record().key == CONFIG_SUBSYSTEMS_FACT_KEY =>
+                {
+                    Some(payload.record().observed_at_unix_ms)
+                }
+                _ => None,
+            });
     match daemon_started_at_unix_ms {
         None => warnings.push("daemon_start_unknown".to_owned()),
         Some(started) => {
@@ -1640,13 +1664,8 @@ fn remedy_stop(outcome: &Outcome) -> Option<(&str, &str, &str)> {
 /// and their `signal_id` prefix, never by their outcome; a stop whose outcome does not read back,
 /// or that names no task, is an unparsed entry and adds no warning.
 fn remedies(snapshot: &Snapshot<'_>) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
-    // RL-1c fix 1 (#411 H1): the last of the records the report selects.
-    let Some(reference_unix_ms) = snapshot
-        .selection
-        .events()
-        .last()
-        .map(PersistedEvent::timestamp_unix_ms)
-    else {
+    // RL-1c fix 2 (#411 M2): the ledger's latest event, its authenticated head row.
+    let Some(reference_unix_ms) = snapshot.selection.head_time_unix_ms() else {
         return Ok((Vec::new(), None));
     };
     let events = snapshot.query(EventQuery {

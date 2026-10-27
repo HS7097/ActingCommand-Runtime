@@ -23,29 +23,6 @@ use serde_json::{Value, json};
 const GAME_B: &str = "fixture-game-b";
 const SERVER_B: &str = "fixture-server-b";
 
-/// The record types the report reads by the type index (`SELECTED_TYPES`), as the ledger names
-/// them.
-fn selected_type_names() -> Vec<String> {
-    [
-        EventType::PolicyDispatchIntent,
-        EventType::PolicyExecutionRecorded,
-        EventType::PolicyDispatchAdmitted,
-        EventType::PolicyPlanningSignalObserved,
-        EventType::RuntimeFactRecorded,
-        EventType::RuntimeLifecycleObserved,
-        EventType::TaskFailed,
-        EventType::RuntimeFailed,
-    ]
-    .into_iter()
-    .map(|event_type| {
-        serde_json::to_value(event_type)
-            .ok()
-            .and_then(|name| name.as_str().map(str::to_owned))
-            .expect("an event type's name")
-    })
-    .collect()
-}
-
 fn warnings(report: &Value) -> Vec<String> {
     report["warnings"]
         .as_array()
@@ -55,10 +32,12 @@ fn warnings(report: &Value) -> Vec<String> {
         .collect()
 }
 
-/// H1 (work order item 1): a report on a large fake ledger whose budget holds half of the
-/// records of the types it selects answers incomplete within that budget, with no rows and the
-/// warning `ledger_read_incomplete`; the budget is far below the ledger's records, so the report
-/// never holds them all. Without that bound the same report answers complete.
+/// H1 (work order item 1): a report on a large fake ledger whose budget holds fewer records than
+/// its read must hold answers incomplete within that budget, with no rows and the warning
+/// `ledger_read_incomplete`; the budget is far below the ledger's records, so the report never
+/// holds them all. Without that bound the same report answers complete. RL-1c fix 2 (#411 M2)
+/// adapts the budget: the read no longer holds the fake ledger's `runtime.fact_recorded` rows,
+/// so half of them is no longer below what it holds; one record is (the read holds the head row).
 #[test]
 fn rl1c_fix1_the_suspended_report_answers_incomplete_within_its_budget() {
     let root = TempDir::new().expect("the state root");
@@ -78,18 +57,7 @@ fn rl1c_fix1_the_suspended_report_answers_incomplete_within_its_budget() {
         )
         .expect("the synthetic ledger")
     };
-    let selected_names = selected_type_names();
-    let selected = generated
-        .record_types
-        .iter()
-        .filter(|(name, _)| selected_names.contains(*name))
-        .map(|(_, count)| *count)
-        .sum::<u64>();
-    assert!(
-        selected >= 4,
-        "the ledger holds selected records: {generated:?}"
-    );
-    let max_events = usize::try_from(selected / 2).expect("a budget");
+    let max_events = 1_usize;
     assert!(
         (max_events as u64) * 10 < generated.records,
         "the budget is far below the ledger's records: {generated:?}"

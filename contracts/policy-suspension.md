@@ -304,7 +304,10 @@ ledger read-only and without the owner lock, so it runs beside a running daemon.
 ROUT-L RL-1c fix 1 (#411 H1): the ledger read is bounded and never reads the whole table. It reads
 the record types the report lists by the ledger's type index (`policy.dispatch_intent`,
 `policy.execution_recorded`, `policy.dispatch_admitted`, `policy.planning_signal_observed`,
-`runtime.fact_recorded`, `runtime.lifecycle_observed`, `task.failed`, `runtime.failed`), and a
+`task.failed`, `runtime.failed`; RL-1c fix 2, #411 M2: no longer `runtime.lifecycle_observed`,
+and of `runtime.fact_recorded` only the newest `config.subsystems` fact, read newest first through
+the type index in the same read), the ledger's latest time (the row of its maximum
+`timestamp_unix_ms`, through the time index) and its head row (the last record), and a
 run's own rows (its entry, step, application intent, capture and verified-artifact records) only
 for the runs of each pair's last two executions it shows, each over the rows after the run's
 dispatch intent and through its execution record. `--deadline-ms` is the caller's deadline,
@@ -434,8 +437,8 @@ only its registered names (`"detail":"codes"`).
   - `next_dispatch` is the pair's first `policy.dispatch_admitted` after the record, as its
     `sequence` and `admitted_at_unix_ms` (D); it is left out when there is none. The reference
     time is the ledger's latest time: its maximum `timestamp_unix_ms`, not the last record's
-    (since RL-1c fix 1, over the record types the report reads by the type index, which include
-    the Runtime's lifecycle and policy records),
+    (RL-1c fix 2, #411 M2: over the whole ledger again, its row read through the time index,
+    no longer over the record types the report reads by the type index),
     since a record's time is not monotonic in `sequence` (#411 A24,
     [ledger-observer.md §8.1](ledger-observer.md#81-order-and-sync)). Workflow #372 K5: a
     record of a task id that a task of the configured catalog continues (`continues_from`)

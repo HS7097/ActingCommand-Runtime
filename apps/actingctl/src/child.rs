@@ -39,8 +39,8 @@ pub(crate) enum ChildFailure {
     /// (Workflow #421 INST-1b-F: the installer reports the child it left running).
     StillRunning { pid: u32 },
     /// RL-1c fix 1 (#411 H1): the child was still running at the deadline and was ended there
-    /// ([`run_captured_ending`]); `pid` was its process id.
-    Ended { pid: u32 },
+    /// ([`run_captured_ending`]).
+    Ended,
 }
 
 impl ChildFailure {
@@ -54,7 +54,7 @@ impl ChildFailure {
             Self::Io(error) if !reader_panicked(error) => {
                 Some(Outcome::from_io_error(error, IoOp::Wait))
             }
-            Self::Io(_) | Self::StillRunning { .. } | Self::Ended { .. } => None,
+            Self::Io(_) | Self::StillRunning { .. } | Self::Ended => None,
         }
     }
 
@@ -226,7 +226,7 @@ fn wait<W: Waited, C: WaitClock>(
                 };
             }
             child.wait().map_err(ChildFailure::Io)?;
-            return Err(ChildFailure::Ended { pid });
+            return Err(ChildFailure::Ended);
         }
         clock.pause(POLL_INTERVAL);
     }
@@ -322,7 +322,7 @@ mod tests {
         let mut child = NeverEnds::default();
         let answer = wait(&mut child, Some(deadline_ms), AtDeadline::End, &clock);
         assert!(
-            matches!(answer, Err(ChildFailure::Ended { pid: PID })),
+            matches!(answer, Err(ChildFailure::Ended)),
             "the call answers that its child was ended"
         );
         assert!(
