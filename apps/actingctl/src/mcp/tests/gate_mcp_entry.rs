@@ -15,15 +15,11 @@ use super::gate_mcpt1::unreached_deadline;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
 /// Waits (a condition variable, no sleep) until the job ended.
 fn ended(job: &super::super::jobs::Job) {
     assert!(
-        job.wait_until(
-            Instant::now() + Duration::from_secs(30),
-            &AtomicBool::new(false)
-        ),
+        job.wait_until(unreached_deadline(), &AtomicBool::new(false)),
         "the job ends"
     );
 }
@@ -60,7 +56,7 @@ fn e15_a_cancelled_call_leaves_no_uncollectable_handle() {
         )
         .unwrap_or_else(|_| panic!("the job starts"));
     drop(take_offered());
-    let Ok(answer) = job_answer(&context, &job, Instant::now() + Duration::from_secs(20)) else {
+    let Ok(answer) = job_answer(&context, &job, unreached_deadline()) else {
         panic!("a cancelled wait answers the handle");
     };
     assert_eq!(answer.result["handle"], "lab_job_1");

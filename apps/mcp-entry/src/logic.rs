@@ -1500,8 +1500,10 @@ impl<H: Host> Core<H> {
                 starting.slot.previous_build =
                     self.history.front().and_then(|past| past.build.clone());
                 self.current = Some(starting.slot);
-                // Its build is learnt by the next plan.
+                // Its build is learnt by the next plan, even when the install's stamp is one
+                // whose candidates were refused (re-review N1).
                 self.accepted = None;
+                self.rejected = None;
                 self.handles_clear = false;
                 self.dirty = true;
                 let held = std::mem::take(&mut self.held);

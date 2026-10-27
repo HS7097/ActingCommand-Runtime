@@ -824,7 +824,8 @@ fn e20_a_rejected_candidate_is_tried_once_more_after_settle() {
 }
 
 /// E-21 (review L3): the child died; the first plan after the fresh child names another build
-/// than its predecessor's, and the client gets the change notice.
+/// than its predecessor's, and the client gets the change notice. Re-review N1: also when both
+/// candidates for the install's build were refused before the child died.
 #[test]
 fn e21_a_fresh_child_of_another_build_sends_the_notice() {
     let mut entry = entry();
@@ -839,6 +840,38 @@ fn e21_a_fresh_child_of_another_build_sends_the_notice() {
     assert!(list_changed(&entry).is_empty());
     entry.tick();
     assert_eq!(entry.host.plans.last(), Some(&None), "its build is asked");
+    entry.plan_done(PlanEnd::Answered(plan(false, NEW)));
+    assert_eq!(entry.host.status["child"]["build"], NEW);
+    assert_eq!(
+        list_changed(&entry),
+        vec![json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})]
+    );
+
+    // Re-review N1: two refused candidates for the new build, then the child exits.
+    let mut entry = self::entry();
+    legacy_session(&mut entry);
+    plan_switch(&mut entry);
+    refuse_candidate(&mut entry, 2);
+    entry.host.now += 5_000;
+    entry.tick();
+    entry.plan_done(PlanEnd::Answered(plan(true, NEW)));
+    refuse_candidate(&mut entry, 3);
+    assert_eq!(entry.host.plans.len(), 3);
+    assert_eq!(entry.current_child(), Some(1));
+    entry.child_exited(1);
+    client(
+        &mut entry,
+        &json!({"jsonrpc": "2.0", "id": 42, "method": "tools/list"}),
+    );
+    serve_internal(&mut entry, 4, "2025-11-25", &json!({}));
+    assert_eq!(entry.current_child(), Some(4));
+    entry.tick();
+    assert_eq!(
+        entry.host.plans.len(),
+        4,
+        "the fresh child's build is asked although its stamp was refused"
+    );
+    assert_eq!(entry.host.plans.last(), Some(&None));
     entry.plan_done(PlanEnd::Answered(plan(false, NEW)));
     assert_eq!(entry.host.status["child"]["build"], NEW);
     assert_eq!(
