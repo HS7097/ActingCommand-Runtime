@@ -21,13 +21,20 @@
 //!   repeats the envelope only within the budget, else it is the summary beside
 //!   structuredContent; 2025-03-26, which has no structuredContent, carries the envelope as text.
 //!
-//! The Runtime of O-3 and O-5 is a fake on loopback that answers Status, RuntimeFactSnapshot,
-//! PerformanceStatus and FactRefreshStatus from fixed answers and lists the reads it was asked
-//! for.
+//! Fix round 1 (rd-1027/brief-ov24k-fix1.md, review rd-1027/v01220-review/ov24k.md):
+//! - M1: a client that reads only the text content still sees every warning, what was cut and
+//!   how to narrow the call (`instance` or `sections`), and as many warnings as fit, with a count
+//!   of the rest, where not all fit;
+//! - L1: the overview is fitted to the protocol version the session negotiated, not the worst;
+//! - L3: a spent call budget skips the not-running read too.
+//!
+//! The Runtime of O-3, O-5 and L3 is a fake on loopback that answers Status,
+//! RuntimeFactSnapshot, MonitorStatus, PerformanceStatus and FactRefreshStatus from fixed answers
+//! and lists the reads it was asked for.
 
 use super::super::observer::{cut_to_fit, fit_answer};
 use super::super::protocol::{self, Era, LegacyVersion};
-use super::super::tools::{self, ToolSuccess, call_result};
+use super::super::tools::{self, ToolDef, ToolSuccess, call_result, tool_call_result};
 use super::gate_422_idle_ov::spent_deadline;
 use super::gate_mcpt1::unreached_deadline;
 use crate::codes::ActingctlCode;
@@ -38,9 +45,9 @@ use actingcommand_contract::{
     PerformanceMonitorHealth, PerformancePacingMode, PerformancePacingStage, PerformanceStageDwell,
     PerformanceViewStatus, RUNTIME_FACT_SCHEMA_VERSION, RUNTIME_INFO_FILE,
     RuntimeControlPlaneStatus, RuntimeFactRecord, RuntimeFactRefreshStatus, RuntimeFactSnapshot,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeOperation, RuntimePerformanceHostStatus,
-    RuntimePerformanceInstanceStatus, RuntimePerformanceStatus, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorRegistryStatus, RuntimeOperation,
+    RuntimePerformanceHostStatus, RuntimePerformanceInstanceStatus, RuntimePerformanceStatus,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
@@ -253,8 +260,8 @@ fn fact_refresh() -> RuntimeFactRefreshStatus {
             json!({
                 "instance_alias": alias,
                 "demands": [
-                    demand(&alias, "neutral.resource.stamina"),
-                    demand(&alias, "neutral.timer.dispatch"),
+                    demand(&alias, "resource.neutral.stamina"),
+                    demand(&alias, "timeline.neutral.dispatch"),
                 ],
             })
         })
@@ -320,16 +327,26 @@ fn overview_answer(issuer: &IdentifierIssuer, instances: usize) -> Value {
 
 /// The warning a binding of the selected configuration leaves beside the answer.
 fn read_warnings() -> Vec<Value> {
+    vec![unreadable_binding(
+        FLEET - 1,
+        "neutral-install-root/packages/neutral-missing",
+    )]
+}
+
+/// The warning `package_binding_unreadable` of instance `index`'s binding at `path`.
+fn unreadable_binding(index: usize, path: &str) -> Value {
     let mut outcome = json!({
         "schema_version": "actingcommand.outcome.v1",
-        "values": {
-            "alias": alias(FLEET - 1),
-            "path": "neutral-install-root/packages/neutral-missing",
-        },
+        "values": {"alias": alias(index), "path": path},
     });
     outcome["code"] = json!("package_binding_unreadable");
     outcome["category"] = json!("warning");
-    vec![json!({"outcome": outcome})]
+    json!({"outcome": outcome})
+}
+
+/// ac_overview's row of the tool table.
+fn overview_tool() -> &'static ToolDef {
+    tools::find("ac_overview").expect("ac_overview is in the tool table")
 }
 
 /// `{ok: true, result, warnings}`, the envelope a successful call carries.
@@ -399,6 +416,17 @@ fn warning_codes(warnings: &[Warning]) -> Vec<String> {
         .collect()
 }
 
+/// The value `member` of each warning, the block a `call_budget_exhausted` names.
+fn warning_members(warnings: &[Warning]) -> Vec<Option<Value>> {
+    warnings
+        .iter()
+        .map(|warning| match warning {
+            Warning::Outcome(outcome) => outcome.value("member").cloned(),
+            Warning::Runtime(_) => None,
+        })
+        .collect()
+}
+
 fn sections(names: &[&str]) -> Sections {
     Sections::parse(names.iter().copied()).expect("section names")
 }
@@ -439,18 +467,12 @@ fn ov24k_o1_five_full_runs_and_performance_fit_the_budget_with_every_block() {
         twice.to_string().len()
     );
 
-    // It fits now, whole: no block cut, no warning added.
-    let answer = fit_answer(result.clone(), warnings.clone());
-    assert_eq!(answer.result, result, "the answer was cut");
-    assert_eq!(answer.warnings, warnings);
+    // It fits now, whole, in each protocol version: no block cut, no warning added.
     for (era, _) in ERAS {
-        let sent = call_result(
-            Ok(ToolSuccess {
-                result: answer.result.clone(),
-                warnings: answer.warnings.clone(),
-            }),
-            era,
-        );
+        let answer = fit_answer(result.clone(), warnings.clone(), era);
+        assert_eq!(answer.result, result, "{era:?}: the answer was cut");
+        assert_eq!(answer.warnings, warnings, "{era:?}");
+        let sent = tool_call_result(overview_tool(), Ok(answer), era);
         let bytes = sent_bytes(era, &sent);
         assert!(
             bytes <= tools::RESULT_LIMIT,
@@ -554,6 +576,11 @@ fn ov24k_o3_a_spent_budget_skips_performance_and_fact_refresh_and_asks_the_runti
         warning_codes(&skipped.warnings),
         vec!["call_budget_exhausted".to_owned(); 2]
     );
+    // Fix round 1 (L2): each warning names the block it skipped.
+    assert_eq!(
+        warning_members(&skipped.warnings),
+        vec![Some(json!("performance")), Some(json!("fact_refresh"))]
+    );
 
     // With budget left both are read, and the performance block writes each dwell once.
     let read_both = read(&client, &place, both, unreached_deadline());
@@ -599,78 +626,93 @@ fn ov24k_o4_over_the_budget_the_cut_keeps_fact_refresh_and_names_what_it_cut() {
     let issuer = IdentifierIssuer::new().expect("identifier issuer");
     let result = overview_answer(&issuer, LARGE_FLEET);
     let warnings = read_warnings();
-    assert!(
-        !tools::fits_sent(&result, &warnings),
-        "setup: {LARGE_FLEET} instances fit the budget"
-    );
-    let whole = tools::most_sent_bytes(&result, &warnings);
-
-    let answer = fit_answer(result.clone(), warnings.clone());
-    assert!(
-        tools::fits_sent(&answer.result, &answer.warnings),
-        "the cut answer does not fit"
-    );
-    // Never silently: after the read's own warnings, output_budget_exceeded with the whole
-    // answer's size and the budget.
-    assert_eq!(
-        answer.warnings.len(),
-        warnings.len() + 1,
-        "{:?}",
-        answer.warnings
-    );
-    assert_eq!(answer.warnings[..warnings.len()], warnings[..]);
-    let budget = &answer.warnings[warnings.len()]["outcome"];
-    assert_eq!(
-        (
-            &budget["code"],
-            &budget["values"]["actual_bytes"],
-            &budget["values"]["limit_bytes"]
-        ),
-        (
-            &json!("output_budget_exceeded"),
-            &json!(whole),
-            &json!(tools::RESULT_LIMIT)
-        ),
-        "{budget}"
-    );
-
-    // What was cut, in order: the less urgent blocks, then the runs from the last row back.
-    let truncated = answer.result["truncated"]
-        .as_array()
-        .expect("the list of what was cut")
-        .iter()
-        .map(|pointer| pointer.as_str().expect("a JSON pointer").to_owned())
-        .collect::<Vec<_>>();
-    let less_urgent = [
+    // What may be cut, in order: the less urgent blocks, then the runs from the last row back.
+    let order = [
         "/performance",
         "/watchdog",
         "/catalog",
         "/config_generation",
-    ];
-    assert!(truncated.len() > less_urgent.len(), "{truncated:?}");
-    assert_eq!(truncated[..less_urgent.len()], less_urgent, "{truncated:?}");
-    for (offset, pointer) in truncated[less_urgent.len()..].iter().enumerate() {
-        assert_eq!(
-            *pointer,
-            format!("/instances/{}/run", LARGE_FLEET - 1 - offset),
-            "{truncated:?}"
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain(
+        (0..LARGE_FLEET)
+            .rev()
+            .map(|index| format!("/instances/{index}/run")),
+    )
+    .collect::<Vec<_>>();
+    // Fix round 1 (L1): fitted to each protocol version as the session negotiated it.
+    for (era, _) in ERAS {
+        assert!(
+            !tools::fits_sent(&result, &warnings, era),
+            "setup: {era:?}: {LARGE_FLEET} instances fit the budget"
         );
-    }
-    // Each cut block left its marker where it was.
-    for pointer in &truncated {
-        let (place, block) = pointer.rsplit_once('/').expect("a JSON pointer");
-        let parent = answer.result.pointer(place).unwrap_or(&answer.result);
+        let whole = tools::sent_size(&result, &warnings, era);
+
+        let answer = fit_answer(result.clone(), warnings.clone(), era);
+        assert!(
+            tools::fits_sent(&answer.result, &answer.warnings, era),
+            "{era:?}: the cut answer does not fit"
+        );
+        // Never silently: after the read's own warnings, output_budget_exceeded with the whole
+        // answer's size and the budget.
+        assert_eq!(
+            answer.warnings.len(),
+            warnings.len() + 1,
+            "{era:?}: {:?}",
+            answer.warnings
+        );
+        assert_eq!(answer.warnings[..warnings.len()], warnings[..], "{era:?}");
+        let budget = &answer.warnings[warnings.len()]["outcome"];
         assert_eq!(
             (
-                parent.get(block),
-                &parent[format!("{block}_truncated").as_str()]
+                &budget["code"],
+                &budget["values"]["actual_bytes"],
+                &budget["values"]["limit_bytes"]
             ),
-            (None, &json!(true)),
-            "{pointer}"
+            (
+                &json!("output_budget_exceeded"),
+                &json!(whole),
+                &json!(tools::RESULT_LIMIT)
+            ),
+            "{era:?}: {budget}"
+        );
+
+        // What was cut, in that order and nothing else.
+        let truncated = answer.result["truncated"]
+            .as_array()
+            .expect("the list of what was cut")
+            .iter()
+            .map(|pointer| pointer.as_str().expect("a JSON pointer").to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            !truncated.is_empty() && truncated.len() <= order.len(),
+            "{era:?}: {truncated:?}"
+        );
+        assert_eq!(
+            truncated[..],
+            order[..truncated.len()],
+            "{era:?}: {truncated:?}"
+        );
+        // Each cut block left its marker where it was.
+        for pointer in &truncated {
+            let (place, block) = pointer.rsplit_once('/').expect("a JSON pointer");
+            let parent = answer.result.pointer(place).unwrap_or(&answer.result);
+            assert_eq!(
+                (
+                    parent.get(block),
+                    &parent[format!("{block}_truncated").as_str()]
+                ),
+                (None, &json!(true)),
+                "{era:?}: {pointer}"
+            );
+        }
+        // The warnings an operator needs are whole.
+        assert_eq!(
+            answer.result["fact_refresh"], result["fact_refresh"],
+            "{era:?}"
         );
     }
-    // The warnings an operator needs are whole.
-    assert_eq!(answer.result["fact_refresh"], result["fact_refresh"]);
 
     // And fact_refresh outlasts every other block: cut to nothing, it goes last.
     let mut everything = result;
@@ -783,9 +825,15 @@ fn ov24k_o6_text_and_structured_content_follow_the_negotiated_version() {
         assert_eq!(answer["content"][0]["type"], json!("text"), "{era:?}");
         if structured {
             assert_eq!(answer["structuredContent"], large_envelope, "{era:?}");
+            // Fix round 1 (M1): the summary also carries the warnings and how to narrow the call.
             assert_eq!(
                 text_content(&answer),
-                json!({"ok": true, "structured_content_only": ["result", "warnings"]}),
+                json!({
+                    "ok": true,
+                    "structured_content_only": ["result", "warnings"],
+                    "warnings": warnings,
+                    "narrow": tools::NARROW_HINT,
+                }),
                 "{era:?}"
             );
         } else {
@@ -808,6 +856,195 @@ fn ov24k_o6_text_and_structured_content_follow_the_negotiated_version() {
     }
 }
 
+#[test]
+fn ov24k_fix1_m1_a_text_only_client_sees_every_warning_what_was_cut_and_how_to_narrow() {
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    assert!(
+        tools::OVERVIEW_NARROW_HINT.contains("instance")
+            && tools::OVERVIEW_NARROW_HINT.contains("sections"),
+        "{}",
+        tools::OVERVIEW_NARROW_HINT
+    );
+    for (era, structured) in ERAS {
+        if !structured {
+            // 2025-03-26 has no structuredContent: its text is the envelope itself (O-6).
+            continue;
+        }
+        // Production's five instances, sent once beside the summary, and twelve, cut as well.
+        for (instances, cut) in [(FLEET, false), (LARGE_FLEET, true)] {
+            let answer = fit_answer(overview_answer(&issuer, instances), read_warnings(), era);
+            assert_eq!(
+                answer.result.get("truncated").is_some(),
+                cut,
+                "setup: {era:?}, {instances} instances"
+            );
+            let mut expected = json!({
+                "ok": true,
+                "structured_content_only": ["result", "warnings"],
+                "warnings": answer.warnings,
+                "narrow": tools::OVERVIEW_NARROW_HINT,
+            });
+            if cut {
+                expected["truncated"] = answer.result["truncated"].clone();
+            }
+            let whole = envelope(&answer.result, &answer.warnings);
+            let sent = tool_call_result(overview_tool(), Ok(answer), era);
+            let bytes = sent_bytes(era, &sent);
+            assert!(
+                bytes <= tools::RESULT_LIMIT,
+                "{era:?}, {instances} instances: {bytes} bytes"
+            );
+            assert_eq!(sent["isError"], json!(false), "{era:?}");
+            assert_eq!(
+                sent["structuredContent"], whole,
+                "{era:?}, {instances} instances"
+            );
+            // The text alone lists every warning (output_budget_exceeded too, when cut), what was
+            // cut, and how to have the whole answer.
+            assert_eq!(
+                text_content(&sent),
+                expected,
+                "{era:?}, {instances} instances"
+            );
+        }
+
+        // Warnings too large to repeat whole: as many as fit, in order, and how many did not.
+        let small = json!({"daemon": {"online": true}});
+        let warnings = vec![
+            unreadable_binding(0, "neutral-install-root/packages/neutral-a"),
+            unreadable_binding(1, "neutral-install-root/packages/neutral-b"),
+            unreadable_binding(
+                2,
+                &format!("neutral-install-root/packages/{}", "n".repeat(14_000)),
+            ),
+            unreadable_binding(3, "neutral-install-root/packages/neutral-d"),
+        ];
+        let sent = tool_call_result(
+            overview_tool(),
+            Ok(ToolSuccess {
+                result: small.clone(),
+                warnings: warnings.clone(),
+            }),
+            era,
+        );
+        let bytes = sent_bytes(era, &sent);
+        assert!(bytes <= tools::RESULT_LIMIT, "{era:?}: {bytes} bytes");
+        assert_eq!(sent["isError"], json!(false), "{era:?}");
+        assert_eq!(
+            sent["structuredContent"],
+            envelope(&small, &warnings),
+            "{era:?}"
+        );
+        assert_eq!(
+            text_content(&sent),
+            json!({
+                "ok": true,
+                "structured_content_only": ["result", "warnings"],
+                "warnings": warnings[..2].to_vec(),
+                "warnings_omitted": 2,
+                "narrow": tools::OVERVIEW_NARROW_HINT,
+            }),
+            "{era:?}"
+        );
+    }
+}
+
+#[test]
+fn ov24k_fix1_l1_the_overview_is_fitted_to_the_version_the_session_negotiated() {
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let mut result = overview_answer(&issuer, FLEET);
+    let warnings = read_warnings();
+    // Grow the block cut first by quotes until the answer takes the whole budget as 2026-07-28
+    // sends it: structuredContent escapes a quote once, the 2025-03-26 text twice.
+    result["performance"]["padding"] = json!("");
+    let base = tools::sent_size(&result, &warnings, Era::Modern);
+    assert!(base < tools::RESULT_LIMIT, "setup: {base} bytes");
+    result["performance"]["padding"] = json!("\"".repeat((tools::RESULT_LIMIT - base) / 2));
+    for (era, structured) in ERAS {
+        assert_eq!(
+            tools::fits_sent(&result, &warnings, era),
+            structured,
+            "setup: {era:?} takes {} bytes",
+            tools::sent_size(&result, &warnings, era)
+        );
+    }
+
+    for (era, structured) in ERAS {
+        let answer = fit_answer(result.clone(), warnings.clone(), era);
+        if structured {
+            // Sent whole where it fits as negotiated, not cut to the 2025-03-26 size.
+            assert_eq!(answer.result, result, "{era:?}: the answer was cut");
+            assert_eq!(answer.warnings, warnings, "{era:?}");
+        } else {
+            assert!(
+                answer.result["truncated"]
+                    .as_array()
+                    .is_some_and(|cut| cut.first() == Some(&json!("/performance"))),
+                "{era:?}: {}",
+                answer.result["truncated"]
+            );
+            assert_eq!(
+                answer.warnings.last().map(|last| &last["outcome"]["code"]),
+                Some(&json!("output_budget_exceeded")),
+                "{era:?}"
+            );
+        }
+        let sent = tool_call_result(overview_tool(), Ok(answer), era);
+        let bytes = sent_bytes(era, &sent);
+        assert!(bytes <= tools::RESULT_LIMIT, "{era:?}: {bytes} bytes");
+        assert_eq!(sent["isError"], json!(false), "{era:?}");
+    }
+}
+
+#[test]
+fn ov24k_fix1_l3_a_spent_budget_skips_the_not_running_read() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime = FakeRuntime::start(root.path(), Answers::busy());
+    let client = connect(root.path());
+    let place = Place {
+        root: None,
+        install_root: None,
+        state_root: None,
+    };
+
+    let skipped = read(&client, &place, sections(&["instances"]), spent_deadline());
+    // No ScheduleExplanation (nor a run listing) was asked for.
+    assert_eq!(
+        runtime.asked(),
+        vec!["status", "runtime_fact_snapshot", "monitor_status"]
+    );
+    let result = Value::Object(skipped.result);
+    let rows = result["instances"].as_array().expect("instance rows");
+    assert_eq!(rows.len(), FLEET, "{result}");
+    for row in rows {
+        assert_eq!(row.get("not_running"), None, "{row}");
+        assert_eq!(row["not_running_incomplete"], json!(true), "{row}");
+    }
+    assert_eq!(result["incomplete"], json!(true), "{result}");
+    // One call_budget_exhausted names the not-running block; the others name each row's run.
+    let not_running = skipped
+        .warnings
+        .iter()
+        .filter(|warning| {
+            matches!(
+                warning,
+                Warning::Outcome(outcome)
+                    if outcome.is(ActingctlCode::CallBudgetExhausted)
+                        && outcome.value("member") == Some(&json!("not_running"))
+            )
+        })
+        .count();
+    assert_eq!(
+        not_running,
+        1,
+        "{:?} {:?}",
+        warning_codes(&skipped.warnings),
+        warning_members(&skipped.warnings)
+    );
+    drop(client);
+    drop(runtime);
+}
+
 // ---- The fake Runtime -------------------------------------------------------------------------
 
 /// What the fake Runtime answers: the instances of its status, its program facts, its shadow
@@ -828,7 +1065,7 @@ impl Answers {
             instances: (0..FLEET)
                 .map(|index| {
                     RuntimeInstanceStatus::new(
-                        &alias(index),
+                        alias(index),
                         *issuer.mint_instance_id().expect("instance id").transport(),
                         false,
                         0,
@@ -967,6 +1204,13 @@ fn serve(
                 record("runtime_fact_snapshot");
                 RuntimeResult::RuntimeFactSnapshot {
                     snapshot: answers.facts.clone(),
+                }
+            }
+            RuntimeOperation::MonitorStatus => {
+                record("monitor_status");
+                RuntimeResult::MonitorStatus {
+                    status: RuntimeMonitorRegistryStatus::new(owner_epoch, Vec::new())
+                        .expect("fake monitor status"),
                 }
             }
             RuntimeOperation::PerformanceStatus => {

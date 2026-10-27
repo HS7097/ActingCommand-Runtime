@@ -580,15 +580,20 @@ tier goes from 8 to 9 tools, and U-3's count gains one general tool.
 - The output budget of every MCP tool (#422 OV-24K) is counted on the bytes of the
   `tools/call` result as sent, 24 KiB: the text content repeats the envelope beside
   structuredContent while both fit; where they do not, from 2025-06-18 on the text content is
-  the summary `{ok, structured_content_only}` (the names of the members only structuredContent
-  carries) beside the whole structuredContent; 2025-03-26, without structuredContent, carries
-  the envelope once as the text. A result that does not fit even so is
-  `output_budget_exceeded` (`actual_bytes`, `limit_bytes`). A tool that pages sizes each page
-  to the envelope sent twice, as before.
+  the summary beside the whole structuredContent; 2025-03-26, without structuredContent,
+  carries the envelope once as the text. The summary, for a client that reads only the text
+  content (#422 OV-24K fix 1), is `{ok, structured_content_only, warnings?,
+  warnings_omitted?, truncated?, narrow}`: the names of the members whose whole only
+  structuredContent carries, the envelope's warnings in order as many as fit
+  (`warnings_omitted` counts the rest), the result's `truncated`, and `narrow`, a short
+  instruction to narrow the call (`ac_overview`'s names `instance` and `sections`). A result
+  that does not fit even so is `output_budget_exceeded` (`actual_bytes`, `limit_bytes`). A
+  tool that pages sizes each page to the envelope sent twice, as before.
 - `ac_overview` past the output budget (#389 MCP-8, MCP-0 command table §4.9): it is never cut
   silently (#422 OV-24K): the warning `output_budget_exceeded` gives the whole answer's size
   (`actual_bytes`) and the budget (`limit_bytes`), and the answer is cut one block at a time
-  until it fits in every protocol version, in this order: `host`, `startup`, `tagged_state`,
+  until it fits in the protocol version the session negotiated, with every warning in the
+  summary text where there is one (#422 OV-24K fix 1), in this order: `host`, `startup`, `tagged_state`,
   `ledger`, `performance`, `watchdog`, `catalog`, `config_generation`, each instance row's
   `run` (the last row first), each row's `monitor`, each row's `foreground` (#389 MCP-5b),
   `install.build`, and `fact_refresh` last (#422 OV-24K: its rows are the warnings an operator
@@ -606,8 +611,10 @@ tier goes from 8 to 9 tools, and U-3's count gains one general tool.
   total dwell by their index there, `dwell_24h_ref` and `dwell_total_ref` (#422 OV-24K).
 - `performance` and `fact_refresh` are read only while the call budget leaves time to start
   their read (#422 OV-24K), as an instance row's run is: a block not read is
-  `<block>_incomplete: true` in its place with the warning `call_budget_exhausted`, and the
-  overview is `incomplete`.
+  `<block>_incomplete: true` in its place with the warning `call_budget_exhausted` naming the
+  block (`member`), and the overview is `incomplete`. So is the instance rows' `not_running`
+  (#422 OV-24K fix 1): not read, each row carries `not_running_incomplete: true`, with one
+  `call_budget_exhausted` (`member` `not_running`).
 - The block `fact_refresh` (#384 D2-S5) is what the scheduler's fact refresh waits for, the
   object `actingctl fact-refresh` prints (FactRefreshStatus, register §1.68): the numbers of
   the latest cycle and transition and one row per instance with a waiting key, its rows

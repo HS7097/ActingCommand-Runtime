@@ -8,6 +8,7 @@
 
 use super::super::jobs::{Jobs, Outstanding, take_offered};
 use super::super::operator::job_answer;
+use super::super::protocol::Era;
 use super::super::runtime::RuntimeAccess;
 use super::super::tools::ToolContext;
 use super::super::{Client, entry_snippet};
@@ -38,6 +39,7 @@ fn e15_a_cancelled_call_leaves_no_uncollectable_handle() {
         runtime: &runtime,
         cancelled: &cancelled,
         deadline: unreached_deadline(),
+        era: Era::Modern,
         session: 1,
         jobs: &jobs,
     };

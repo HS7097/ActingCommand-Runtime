@@ -922,3 +922,13 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o6_text_and_structured_content_follow_the_negotiated_version",
 ]
 incident = ["#422 OV-24K"]
+
+# #422 OV-24K fix round 1 (rd-1027/brief-ov24k-fix1.md, review rd-1027/v01220-review/ov24k.md M1, L1, L3): a client that reads only the text content of an overview sent once beside the summary still sees every warning, the cut list and how to narrow the call (instance or sections), and as many warnings as fit with warnings_omitted for the rest (M1); the overview is fitted to the protocol version the session negotiated, not cut to the 2025-03-26 size (L1); a spent call budget skips the not-running read with not_running_incomplete on each row and call_budget_exhausted naming not_running (L3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_m1_a_text_only_client_sees_every_warning_what_was_cut_and_how_to_narrow",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l1_the_overview_is_fitted_to_the_version_the_session_negotiated",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l3_a_spent_budget_skips_the_not_running_read",
+]
+incident = ["#422 OV-24K"]

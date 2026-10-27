@@ -10,7 +10,7 @@ use super::jobs::Jobs;
 use super::lab;
 use super::observer;
 use super::operator;
-use super::protocol::{self, Era, LegacyVersion};
+use super::protocol::{self, Era};
 use super::runs;
 use super::runtime::RuntimeAccess;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -57,14 +57,12 @@ pub(super) const RESULT_LIMIT: usize = 24 * 1024;
 /// Room for the 2026-07-28 `resultType` and `_meta` server identity, where a size is estimated
 /// before the era is known (`fits_success`).
 const MODERN_FIELDS_RESERVE: usize = 256;
-/// #422 OV-24K: one era of each result shape: the text content alone (2025-03-26), the text
-/// beside structuredContent (2025-06-18 and 2025-11-25 alike), and the 2026-07-28 result with its
-/// `resultType` and `_meta`.
-const RESULT_SHAPES: [Era; 3] = [
-    Era::Legacy(LegacyVersion::V20250326),
-    Era::Legacy(LegacyVersion::V20251125),
-    Era::Modern,
-];
+/// #422 OV-24K fix 1 (M1): the instruction the summary text gives a client that reads only the
+/// text content.
+pub(super) const NARROW_HINT: &str =
+    "only structuredContent carries the whole answer; narrow the call to have it here as text";
+/// ac_overview's, naming the arguments that narrow its answer.
+pub(super) const OVERVIEW_NARROW_HINT: &str = "only structuredContent carries the whole answer; narrow the call with instance or sections to have it here as text";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Tier {
@@ -146,6 +144,9 @@ pub(super) struct ToolContext<'a> {
     pub(super) cancelled: &'a AtomicBool,
     /// The end of this call's 25 s budget.
     pub(super) deadline: Instant,
+    /// The protocol version this session negotiated (#422 OV-24K fix 1, L1: ac_overview fits its
+    /// answer to it).
+    pub(super) era: Era,
     /// This server process's identity; it binds every cursor it issues.
     pub(super) session: u64,
     pub(super) jobs: &'a Jobs,
@@ -390,13 +391,25 @@ pub(super) struct ToolDef {
     pub(super) run: fn(&ToolContext<'_>, &Map<String, Value>) -> ToolOutcome,
 }
 
+impl ToolDef {
+    /// #422 OV-24K fix 1 (M1): the instruction of this tool's summary text: ac_overview's names
+    /// `instance` and `sections`, the arguments that narrow its answer.
+    pub(super) fn narrow_hint(&self) -> &'static str {
+        if self.name == "ac_overview" {
+            OVERVIEW_NARROW_HINT
+        } else {
+            NARROW_HINT
+        }
+    }
+}
+
 /// Every tool in this build; `tools/list` serves those of the enabled tiers.
 pub(super) static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "ac_overview",
         title: "ActingCommand overview",
         tier: Tier::Observer,
-        description: "Snapshot of the local ActingCommand Runtime, the same read and answer as actingctl overview; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person, person_wait} when an unconfirmed close of its own resources fenced it (person_wait, only while it waits for a person: {since_unix_ms, recheck_attempts, recheck_max_attempts, next_recheck_unix_ms}, the Runtime's periodic self-check of the instance, absent next_recheck_unix_ms once no further recheck will run), its ladder_busy_hold {kind, held_ms, limit_ms} while a recovery ladder of the instance holds instead of climbing (kind busy_outcome: a rung run ended on a mapping its package marks busy; screen_changing: the screen still changed after a return-home failure; held_ms since the climb's first hold of that kind, limit_ms the configured limit; absent otherwise), emulator_state: whether its emulator runs as the Runtime last read it (at instance discovery, an emulator start, stop or restart, a self-check, and every emulator_control.watch_interval_ms while emulator_control.watch_enabled), {state: on|off, observed_at_unix_ms} or {state: unknown} when the Runtime holds no reading (the running state only, not the emulator's health), backend_selfcheck {<entry>: {status, checked_at_unix_ms}}: the last self-check of each backend entry (input, capture, nemu) as the Runtime recorded it at its last open (start, emulator control, resume, self-check or task; status passed, failed or unknown; never probed for this read), {} while no entry was checked, its monitor, foreground {package, observed_at_unix_ms}: the package the instance last reported in the foreground before a pointer input (not a live read; absent until one was seen), run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish, or run_none_in_window {since_unix_ms, until_unix_ms} when it finished and the instance has no run in that window (the read lists the window forward, normally from its first record: its runs' admissions and terminals, then entry facts only from its newest run on; a first page whose window lookup the Runtime's read budget cut, under contention, starts at the history's first record instead and reads more pages), and not_running: the instance's not-running row as ac_schedule answers it {task_id, why, next_wake_unix_ms, since_unix_ms} (its first due task that did not run, or no task_id and why due_task_missing with the next wake when nothing is due), absent when the latest policy evaluation since the Runtime started had no decision for the instance; plus lab_tool {present}, install {root, state_root, build} and performance: the shadow measurement's status as actingctl perf-status prints it (mode, phase, monitor_health, the host row and one row per instance with responsiveness, curve stage and factor, the learning and normal views' stage, share, allowed, 24 h and total dwell and stops, and the effective stage and factor, which mode observe keeps at s0 and 1000; warnings perf_probe_unavailable and perf_baseline_clamped; each distinct dwell {s0_ms, s1_ms, s2_ms, s3_ms, s4_ms} is written once in dwell, and each view names its 24 h and total dwell by their index there, dwell_24h_ref and dwell_total_ref), its rows narrowed by instance too. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. catalog: the active policy catalog generation {catalog_id, catalog_version, catalog_hash, activated_event_id, approval_id, approval_disposition, previous_catalog_id, previous_catalog_version}, null while none is active. config_generation {running, selected}: the configuration generation actingd runs and the one the install selects now; when they differ, or when the selected configuration file's sha256 is not the one actingd read at its start (config.selection; so also on an install without generations, whose block is {}), the warning config_generation_mismatch says a restart is needed, and each package binding of the selected configuration whose path is missing or unreadable adds the warning package_binding_unreadable. watchdog: actingctl watchdog status read locally, {decision, attention, starts_24h, last_tick}, null without an installation. fact_refresh: what the scheduler's fact refresh waits for, as actingctl fact-refresh prints it: {cycle_seq, transition_seq, instances}, one row per instance with a waiting key {instance_alias, demands: [{fact_key, outcome (the latest cycle's fact_refresh_pending, _unresolved, _exhausted or _unbound with its values), package_id (the recognition maintenance package that reads it), since_unix_ms, overdue}]}, its rows narrowed by instance too; no row means nothing waits. sections (global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh; default all) answers only the blocks named; daemon and incomplete are always answered. incomplete true means part of the snapshot could not be read (see warnings); performance and fact_refresh are not read once the call budget is spent: performance_incomplete or fact_refresh_incomplete true in place of the block, with the warning call_budget_exhausted. The output budget counts the bytes sent: where the JSON does not fit twice, the text content is the summary {ok, structured_content_only} beside structuredContent (2025-06-18 on). An answer larger than the output budget even so is never cut silently: the warning output_budget_exceeded gives the whole answer's size (actual_bytes) and the budget (limit_bytes), and the answer is cut, one block at a time until it fits: performance, watchdog, catalog, config_generation, then each instance row's run (the last row first), then each row's monitor, then each row's foreground, then install.build, and fact_refresh last; each cut block leaves <block>_truncated: true where it was, and truncated lists the JSON pointer of each cut block in the order it was cut. The daemon, the global pause, each row's identity, emulator_state, backend_selfcheck, not_running, pause, lease_active and queued, incomplete and each <block>_incomplete are never cut; an answer that still does not fit is output_budget_exceeded: narrow it with instance or sections. It only reads: it starts, stops and pauses nothing, and the emulator state it shows is the last reading, not a live one.",
+        description: "Snapshot of the local ActingCommand Runtime, the same read and answer as actingctl overview; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person, person_wait} when an unconfirmed close of its own resources fenced it (person_wait, only while it waits for a person: {since_unix_ms, recheck_attempts, recheck_max_attempts, next_recheck_unix_ms}, the Runtime's periodic self-check of the instance, absent next_recheck_unix_ms once no further recheck will run), its ladder_busy_hold {kind, held_ms, limit_ms} while a recovery ladder of the instance holds instead of climbing (kind busy_outcome: a rung run ended on a mapping its package marks busy; screen_changing: the screen still changed after a return-home failure; held_ms since the climb's first hold of that kind, limit_ms the configured limit; absent otherwise), emulator_state: whether its emulator runs as the Runtime last read it (at instance discovery, an emulator start, stop or restart, a self-check, and every emulator_control.watch_interval_ms while emulator_control.watch_enabled), {state: on|off, observed_at_unix_ms} or {state: unknown} when the Runtime holds no reading (the running state only, not the emulator's health), backend_selfcheck {<entry>: {status, checked_at_unix_ms}}: the last self-check of each backend entry (input, capture, nemu) as the Runtime recorded it at its last open (start, emulator control, resume, self-check or task; status passed, failed or unknown; never probed for this read), {} while no entry was checked, its monitor, foreground {package, observed_at_unix_ms}: the package the instance last reported in the foreground before a pointer input (not a live read; absent until one was seen), run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish, or run_none_in_window {since_unix_ms, until_unix_ms} when it finished and the instance has no run in that window (the read lists the window forward, normally from its first record: its runs' admissions and terminals, then entry facts only from its newest run on; a first page whose window lookup the Runtime's read budget cut, under contention, starts at the history's first record instead and reads more pages), and not_running: the instance's not-running row as ac_schedule answers it {task_id, why, next_wake_unix_ms, since_unix_ms} (its first due task that did not run, or no task_id and why due_task_missing with the next wake when nothing is due), absent when the latest policy evaluation since the Runtime started had no decision for the instance; plus lab_tool {present}, install {root, state_root, build} and performance: the shadow measurement's status as actingctl perf-status prints it (mode, phase, monitor_health, the host row and one row per instance with responsiveness, curve stage and factor, the learning and normal views' stage, share, allowed, 24 h and total dwell and stops, and the effective stage and factor, which mode observe keeps at s0 and 1000; warnings perf_probe_unavailable and perf_baseline_clamped; each distinct dwell {s0_ms, s1_ms, s2_ms, s3_ms, s4_ms} is written once in dwell, and each view names its 24 h and total dwell by their index there, dwell_24h_ref and dwell_total_ref), its rows narrowed by instance too. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. catalog: the active policy catalog generation {catalog_id, catalog_version, catalog_hash, activated_event_id, approval_id, approval_disposition, previous_catalog_id, previous_catalog_version}, null while none is active. config_generation {running, selected}: the configuration generation actingd runs and the one the install selects now; when they differ, or when the selected configuration file's sha256 is not the one actingd read at its start (config.selection; so also on an install without generations, whose block is {}), the warning config_generation_mismatch says a restart is needed, and each package binding of the selected configuration whose path is missing or unreadable adds the warning package_binding_unreadable. watchdog: actingctl watchdog status read locally, {decision, attention, starts_24h, last_tick}, null without an installation. fact_refresh: what the scheduler's fact refresh waits for, as actingctl fact-refresh prints it: {cycle_seq, transition_seq, instances}, one row per instance with a waiting key {instance_alias, demands: [{fact_key, outcome (the latest cycle's fact_refresh_pending, _unresolved, _exhausted or _unbound with its values), package_id (the recognition maintenance package that reads it), since_unix_ms, overdue}]}, its rows narrowed by instance too; no row means nothing waits. sections (global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh; default all) answers only the blocks named; daemon and incomplete are always answered. incomplete true means part of the snapshot could not be read (see warnings); performance and fact_refresh are not read once the call budget is spent: performance_incomplete or fact_refresh_incomplete true in place of the block, with the warning call_budget_exhausted naming the block (member); nor is not_running: not_running_incomplete true on each row, with call_budget_exhausted (member not_running). The output budget counts the bytes sent in the protocol version the session negotiated: where the JSON does not fit twice, the text content is the summary {ok, structured_content_only, warnings, warnings_omitted, truncated, narrow} beside structuredContent (2025-06-18 on): the answer's warnings (warnings_omitted counts those that did not fit), what was cut, and how to have the whole answer as text (narrow the call with instance or sections). An answer larger than the output budget even so is never cut silently: the warning output_budget_exceeded gives the whole answer's size (actual_bytes) and the budget (limit_bytes), and the answer is cut, one block at a time until it fits: performance, watchdog, catalog, config_generation, then each instance row's run (the last row first), then each row's monitor, then each row's foreground, then install.build, and fact_refresh last; each cut block leaves <block>_truncated: true where it was, and truncated lists the JSON pointer of each cut block in the order it was cut. The daemon, the global pause, each row's identity, emulator_state, backend_selfcheck, not_running, pause, lease_active and queued, incomplete and each <block>_incomplete are never cut; an answer that still does not fit is output_budget_exceeded: narrow it with instance or sections. It only reads: it starts, stops and pauses nothing, and the emulator state it shows is the last reading, not a live one.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -1063,16 +1076,26 @@ pub(super) fn tier_not_enabled(tool: &ToolDef) -> ToolError {
 /// would not fit, the text is the summary instead (`summary`; MCP 2025-06-18 on: a tool that
 /// returns structured content SHOULD also return it serialized as text, so the text repeats it
 /// only within the budget). A result that does not fit even so becomes `output_budget_exceeded`,
-/// with the bytes it would take (`actual_bytes`) and the budget (`limit_bytes`).
+/// with the bytes it would take (`actual_bytes`) and the budget (`limit_bytes`). The summary's
+/// instruction is [`NARROW_HINT`]; a tool's own call is answered by [`tool_call_result`].
 pub(super) fn call_result(outcome: ToolOutcome, era: Era) -> Value {
+    respond(outcome, era, NARROW_HINT)
+}
+
+/// #422 OV-24K fix 1 (M1): [`call_result`] for a call of `tool`, whose summary text names the
+/// arguments that narrow its answer ([`ToolDef::narrow_hint`]).
+pub(super) fn tool_call_result(tool: &ToolDef, outcome: ToolOutcome, era: Era) -> Value {
+    respond(outcome, era, tool.narrow_hint())
+}
+
+fn respond(outcome: ToolOutcome, era: Era, hint: &str) -> Value {
     let envelope = call_envelope(outcome);
-    match carried(&envelope, era) {
+    match carried(&envelope, era, hint) {
         Ok(result) => result,
-        Err(sent_bytes) => tool_result(
-            &call_envelope(Err(budget_exceeded(sent_bytes))),
-            era,
-            TextContent::Envelope,
-        ),
+        Err(sent_bytes) => {
+            let envelope = call_envelope(Err(budget_exceeded(sent_bytes)));
+            tool_result(&envelope, era, envelope.to_string())
+        }
     }
 }
 
@@ -1086,22 +1109,10 @@ pub(super) fn budget_exceeded(sent_bytes: usize) -> ToolError {
     )
 }
 
-/// What the text content of a `tools/call` result holds.
-#[derive(Clone, Copy)]
-enum TextContent {
-    /// The envelope's compact JSON.
-    Envelope,
-    /// The summary of an envelope only structuredContent carries (`summary`).
-    Summary,
-}
-
-/// The `tools/call` result of `envelope` in `era`, with `text` as its text content.
-fn tool_result(envelope: &Value, era: Era, text: TextContent) -> Value {
+/// The `tools/call` result of `envelope` in `era`, with `text` as its text content: the envelope's
+/// compact JSON, or the summary of an envelope only structuredContent carries (`summary`).
+fn tool_result(envelope: &Value, era: Era, text: String) -> Value {
     let is_error = envelope.get("ok") == Some(&Value::Bool(false));
-    let text = match text {
-        TextContent::Envelope => envelope.to_string(),
-        TextContent::Summary => summary(envelope).to_string(),
-    };
     let mut result = Map::new();
     result.insert(
         "content".to_owned(),
@@ -1114,10 +1125,13 @@ fn tool_result(envelope: &Value, era: Era, text: TextContent) -> Value {
     Value::Object(result)
 }
 
-/// #422 OV-24K: the text content beside a structuredContent too large to repeat:
-/// `{ok, structured_content_only}`, the envelope's `ok` and the names of its other members, which
-/// only structuredContent carries.
-fn summary(envelope: &Value) -> Value {
+/// #422 OV-24K: the text content beside a structuredContent too large to repeat, for a client
+/// that reads only the text content (fix 1, M1): `{ok, structured_content_only, warnings?,
+/// warnings_omitted?, truncated?, narrow}`. That is the envelope's `ok`; the names of its other
+/// members, whose whole only structuredContent carries; its first `kept` warnings, and how many
+/// others there are; the result's `truncated`, what an answer cut to the budget lost; and `hint`,
+/// how to have the whole answer as text.
+fn summary(envelope: &Value, kept: usize, hint: &str) -> Value {
     let members = envelope
         .as_object()
         .map(|members| {
@@ -1128,7 +1142,37 @@ fn summary(envelope: &Value) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    json!({"ok": envelope.get("ok"), "structured_content_only": members})
+    let mut text = Map::new();
+    text.insert("ok".to_owned(), json!(envelope.get("ok")));
+    text.insert("structured_content_only".to_owned(), json!(members));
+    let warnings = warnings_of(envelope);
+    let kept = kept.min(warnings.len());
+    if kept > 0 {
+        text.insert(
+            "warnings".to_owned(),
+            Value::Array(warnings[..kept].to_vec()),
+        );
+    }
+    if kept < warnings.len() {
+        text.insert("warnings_omitted".to_owned(), json!(warnings.len() - kept));
+    }
+    if let Some(truncated) = envelope
+        .get("result")
+        .and_then(|result| result.get("truncated"))
+    {
+        text.insert("truncated".to_owned(), truncated.clone());
+    }
+    text.insert("narrow".to_owned(), json!(hint));
+    Value::Object(text)
+}
+
+/// The warnings an envelope carries.
+fn warnings_of(envelope: &Value) -> &[Value] {
+    envelope
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
 }
 
 /// The bytes the `tools/call` result `result` takes as sent in `era`, the 2026-07-28 members
@@ -1139,10 +1183,11 @@ fn sent_bytes(result: &Value, era: Era) -> usize {
 
 /// The `tools/call` result carrying `envelope` in `era` within the budget, counted on the bytes
 /// sent: the text repeating the envelope (beside structuredContent when the era has it) when that
-/// fits; else, in an era with structuredContent, the summary text beside it when that fits. When
-/// neither fits, the bytes of the smaller one.
-fn carried(envelope: &Value, era: Era) -> Result<Value, usize> {
-    let repeated = tool_result(envelope, era, TextContent::Envelope);
+/// fits; else, in an era with structuredContent, the summary text (instruction `hint`) beside it
+/// with as many of the envelope's warnings as fit, in order (#422 OV-24K fix 1, M1). When neither
+/// fits, the bytes of the smaller one, the summary without warnings.
+fn carried(envelope: &Value, era: Era, hint: &str) -> Result<Value, usize> {
+    let repeated = tool_result(envelope, era, envelope.to_string());
     let bytes = sent_bytes(&repeated, era);
     if bytes <= RESULT_LIMIT {
         return Ok(repeated);
@@ -1150,39 +1195,50 @@ fn carried(envelope: &Value, era: Era) -> Result<Value, usize> {
     if !era.structured() {
         return Err(bytes);
     }
-    let summarised = tool_result(envelope, era, TextContent::Summary);
-    let summarised_bytes = sent_bytes(&summarised, era);
-    if summarised_bytes <= RESULT_LIMIT {
-        Ok(summarised)
-    } else {
-        Err(summarised_bytes.min(bytes))
+    let summarised = |kept: usize| {
+        let result = tool_result(envelope, era, summary(envelope, kept, hint).to_string());
+        let result_bytes = sent_bytes(&result, era);
+        (result, result_bytes)
+    };
+    let count = warnings_of(envelope).len();
+    let (every, every_bytes) = summarised(count);
+    if every_bytes <= RESULT_LIMIT {
+        return Ok(every);
     }
+    let (mut kept, fewest_bytes) = summarised(0);
+    if fewest_bytes > RESULT_LIMIT {
+        return Err(fewest_bytes.min(bytes));
+    }
+    for more in 1..count {
+        let (result, more_bytes) = summarised(more);
+        if more_bytes > RESULT_LIMIT {
+            break;
+        }
+        kept = result;
+    }
+    Ok(kept)
 }
 
-/// #422 OV-24K: whether a successful answer, `result` with `warnings`, is sent within the budget
-/// in every protocol era as `call_result` sends it: its JSON twice where both copies fit, else
-/// once beside the summary text. ac_overview cuts its answer to it; a tool that pages sizes its
-/// pages to `fits_success` instead.
-pub(super) fn fits_sent(result: &Value, warnings: &[Value]) -> bool {
+/// #422 OV-24K: the bytes ac_overview's successful answer, `result` with `warnings`, takes as sent
+/// in `era`, the version the session negotiated (fix 1, L1). That is its JSON twice, as the text
+/// and as structuredContent, where that fits; else, in an era with structuredContent, the smaller
+/// of that and its JSON once beside the summary text with every warning (fix 1, M1: a client
+/// that reads only the text content still sees each one).
+pub(super) fn sent_size(result: &Value, warnings: &[Value], era: Era) -> usize {
     let envelope = success_envelope(result.clone(), warnings.to_vec());
-    RESULT_SHAPES
-        .into_iter()
-        .all(|era| carried(&envelope, era).is_ok())
+    let repeated = sent_bytes(&tool_result(&envelope, era, envelope.to_string()), era);
+    if repeated <= RESULT_LIMIT || !era.structured() {
+        return repeated;
+    }
+    let text = summary(&envelope, warnings.len(), OVERVIEW_NARROW_HINT).to_string();
+    repeated.min(sent_bytes(&tool_result(&envelope, era, text), era))
 }
 
-/// #422 OV-24K: the most bytes a successful answer, `result` with `warnings`, takes as sent in
-/// any protocol era, as `call_result` would send it or, where it does not fit, the bytes of its
-/// smaller form.
-pub(super) fn most_sent_bytes(result: &Value, warnings: &[Value]) -> usize {
-    let envelope = success_envelope(result.clone(), warnings.to_vec());
-    RESULT_SHAPES
-        .into_iter()
-        .map(|era| match carried(&envelope, era) {
-            Ok(sent) => sent_bytes(&sent, era),
-            Err(bytes) => bytes,
-        })
-        .max()
-        .unwrap_or_default()
+/// #422 OV-24K: whether ac_overview's successful answer, `result` with `warnings`, is sent within
+/// the budget in `era` (`sent_size`). ac_overview cuts its answer to it; a tool that pages sizes
+/// its pages to `fits_success` instead.
+pub(super) fn fits_sent(result: &Value, warnings: &[Value], era: Era) -> bool {
+    sent_size(result, warnings, era) <= RESULT_LIMIT
 }
 
 /// Whether a successful `result` stays inside the output budget with its JSON sent twice, as
@@ -1473,6 +1529,9 @@ fn overview_result() -> Value {
     properties["performance_incomplete"] = json!({"const": true});
     properties["fact_refresh_incomplete"] = json!({"const": true});
     properties["truncated"] = json!({"type": "array", "items": {"type": "string"}});
+    // #422 OV-24K fix 1 (L3): the not-running row the call budget left no time to read.
+    properties["instances"]["items"]["properties"]["not_running_incomplete"] =
+        json!({"const": true});
     result
 }
 

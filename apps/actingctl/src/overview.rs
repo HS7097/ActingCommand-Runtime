@@ -88,6 +88,8 @@ const READ_RESERVE: Duration = Duration::from_secs(1);
 /// #422 OV-24K: the selected configuration file is read whole up to this size for its sha256,
 /// the size actingd reads its configuration up to.
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+/// An instance row's not-running row (Workflow #386 SR-6b, MCP-19b).
+const NOT_RUNNING: &str = "not_running";
 
 /// The blocks `--sections` / `sections` names (command table §4.9). `daemon` and `incomplete`
 /// are always answered and are not among them; a slice that adds a block adds its name here and
@@ -372,13 +374,19 @@ pub(crate) fn read(
         });
     // Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-3): each row's not-running row, from one
     // ScheduleExplanation read without candidates, of the selected instance or of every one.
+    // #422 OV-24K fix 1 (L3): a read the call budget left no time to start is not started.
     if let Some(rows) = instances.as_mut() {
-        not_running_rows(
-            rows,
-            client.schedule_explanation(selected_alias, false),
-            &mut warnings,
-            &mut incomplete,
-        );
+        if budget_spent(deadline) {
+            not_running_skipped(rows, &mut warnings);
+            incomplete = true;
+        } else {
+            not_running_rows(
+                rows,
+                client.schedule_explanation(selected_alias, false),
+                &mut warnings,
+                &mut incomplete,
+            );
+        }
     }
     result.insert(
         "daemon".to_owned(),
@@ -710,12 +718,26 @@ fn budget_spent(deadline: Instant) -> bool {
 
 /// #422 OV-24K: the block `section`, whose Runtime read the call budget left no time to start,
 /// as a run is (`run_block`): no block, `<block>_incomplete: true` in its place and the warning
-/// `call_budget_exhausted`; the caller marks the overview incomplete.
+/// `call_budget_exhausted` naming the block (`member`, fix 1, L2); the caller marks the overview
+/// incomplete.
 fn budget_skipped(result: &mut Map<String, Value>, section: Section, warnings: &mut Vec<Warning>) {
     result.insert(format!("{}_incomplete", section.name()), json!(true));
-    warnings.push(Warning::Outcome(Outcome::new(
-        ActingctlCode::CallBudgetExhausted,
-    )));
+    warnings.push(Warning::Outcome(
+        Outcome::new(ActingctlCode::CallBudgetExhausted).member(section.name()),
+    ));
+}
+
+/// #422 OV-24K fix 1 (L3): the not-running rows, whose ScheduleExplanation read the call budget
+/// left no time to start: no row gains `not_running`, each gains `not_running_incomplete: true`,
+/// and one warning `call_budget_exhausted` names the block (`member` `not_running`); the caller
+/// marks the overview incomplete.
+fn not_running_skipped(rows: &mut Value, warnings: &mut Vec<Warning>) {
+    for row in rows.as_array_mut().into_iter().flatten() {
+        row["not_running_incomplete"] = json!(true);
+    }
+    warnings.push(Warning::Outcome(
+        Outcome::new(ActingctlCode::CallBudgetExhausted).member(NOT_RUNNING),
+    ));
 }
 
 /// Now, in Unix milliseconds.
@@ -923,7 +945,7 @@ fn not_running_rows(
             .and_then(|alias| not_running.get(alias))
             .cloned();
         if let Some(found) = found {
-            row["not_running"] = found;
+            row[NOT_RUNNING] = found;
         }
     }
 }

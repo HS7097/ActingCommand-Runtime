@@ -6,9 +6,11 @@
 //! `events` (Workflow #389 MCP-1). Errors and warnings are outcomes (Workflow #378 A5).
 //! ac_overview is `actingctl overview` (`crate::overview`, Workflow #389 MCP-8): the same read
 //! and result, cut here to the output budget in the order of the MCP-0 command table §4.9.
-//! #422 OV-24K (v0.12.20): the budget is counted on the bytes sent, the JSON once where twice
-//! does not fit (`tools::fits_sent`); `fact_refresh` is cut last, and a cut answer says so.
+//! #422 OV-24K (v0.12.20): the budget is counted on the bytes sent in the protocol version the
+//! session negotiated, the JSON once where twice does not fit (`tools::fits_sent`); `fact_refresh`
+//! is cut last, and a cut answer says so.
 
+use super::protocol::Era;
 use super::runtime::{self, Connected};
 use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess,
@@ -116,19 +118,26 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
             }
         })
         .collect::<Vec<_>>();
-    Ok(fit_answer(Value::Object(answer.result), warnings))
+    Ok(fit_answer(
+        Value::Object(answer.result),
+        warnings,
+        context.era,
+    ))
 }
 
 /// #422 OV-24K: an ac_overview answer, `result` with `warnings`, within the output budget as it is
-/// sent in every protocol era (`tools::fits_sent`: the bytes sent, the JSON once where twice does
-/// not fit). An answer that fits is returned whole. Otherwise it is never cut silently: the
-/// warning `output_budget_exceeded` says how many bytes the whole answer takes (`actual_bytes`)
-/// and the budget (`limit_bytes`), and `cut_to_fit` cuts it, naming each cut in `truncated`.
-pub(super) fn fit_answer(mut result: Value, mut warnings: Vec<Value>) -> ToolSuccess {
-    if !tools::fits_sent(&result, &warnings) {
-        let whole = tools::most_sent_bytes(&result, &warnings);
+/// sent in `era`, the protocol version the session negotiated (fix 1, L1; `tools::fits_sent`: the
+/// bytes sent, the JSON once beside a summary text with every warning where twice does not fit).
+/// An answer that fits is returned whole. Otherwise it is never cut silently: the warning
+/// `output_budget_exceeded` says how many bytes the whole answer takes (`actual_bytes`) and the
+/// budget (`limit_bytes`), and `cut_to_fit` cuts it, naming each cut in `truncated`.
+pub(super) fn fit_answer(mut result: Value, mut warnings: Vec<Value>, era: Era) -> ToolSuccess {
+    if !tools::fits_sent(&result, &warnings, era) {
+        let whole = tools::sent_size(&result, &warnings, era);
         warnings.push(tools::budget_exceeded(whole).into_warning());
-        cut_to_fit(&mut result, |result| tools::fits_sent(result, &warnings));
+        cut_to_fit(&mut result, |result| {
+            tools::fits_sent(result, &warnings, era)
+        });
     }
     ToolSuccess { result, warnings }
 }
@@ -156,7 +165,8 @@ fn runtime_failure(
 /// 九处-1), `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b), `pause`,
 /// `lease_active` and `queued`, `incomplete` and each `<block>_incomplete` are never cut: an
 /// answer that still does not fit when nothing is left to cut is returned as it is, and the call
-/// answers `output_budget_exceeded` (`tools::call_result`).
+/// sends it with as many warnings in the summary text as fit, or answers
+/// `output_budget_exceeded` (`tools::tool_call_result`).
 pub(super) fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
     let mut cut = Vec::new();
     while !fits(result) {

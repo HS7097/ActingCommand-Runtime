@@ -5,6 +5,7 @@
 //! an MCP session with only the observer tier may send them (§5.6: observer until U-3).
 
 use super::super::jobs::Jobs;
+use super::super::protocol::Era;
 use super::super::runtime::RuntimeAccess;
 use super::super::settings::changes as mcp_changes;
 use super::super::tools::{Tier, TierSet, ToolContext, find};
@@ -154,6 +155,7 @@ fn rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top() 
         runtime: &runtime,
         cancelled: &cancelled,
         deadline: super::gate_mcpt1::unreached_deadline(),
+        era: Era::Modern,
         session: 1,
         jobs: &jobs,
     };

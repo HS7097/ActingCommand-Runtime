@@ -8,6 +8,7 @@
 //! read, so no Runtime runs here.
 
 use super::super::jobs::Jobs;
+use super::super::protocol::Era;
 use super::super::runtime::RuntimeAccess;
 use super::super::tools::{ToolContext, find};
 use super::gate_mcpt1::unreached_deadline;
@@ -28,6 +29,7 @@ fn e4_t1_ac_events_names_the_event_type_it_does_not_know() {
         runtime: &runtime,
         cancelled: &cancelled,
         deadline: unreached_deadline(),
+        era: Era::Modern,
         session: 1,
         jobs: &jobs,
     };
