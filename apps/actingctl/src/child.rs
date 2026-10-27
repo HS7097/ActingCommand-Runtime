@@ -4,12 +4,13 @@
 //! diagnose`, which runs `actingd suspended` as `ac_diagnose` does (Workflow #389 MCP-7): the
 //! child's stdin is null, its stdout and stderr are piped and read to the end at the same time,
 //! and on Windows it opens no console window (`CREATE_NO_WINDOW` through std's `CommandExt`, no
-//! new dependency). A child still running at the caller's deadline is deliberately not
-//! killed (std's `Child::kill` could end it): Lab children are not killed by the model, and
-//! `actingd suspended` is a bounded batch job that ends on its own. A Lab call's background job
-//! waits for its child without any deadline; the child ends by its own time limits. Only
-//! children left behind when this server itself is killed would need a Job Object (a new
-//! dependency) to end.
+//! new dependency). [`run_captured`] leaves a child still running at the caller's deadline
+//! running: the installer's children follow the stall rule (INST-1b-F) and Lab children are not
+//! killed by the model. ROUT-L RL-1c fix 1 (#411 H1): [`run_captured_ending`] ends a child still
+//! running at the deadline (std's `Child::kill`, then reaps it), so `actingd suspended` never
+//! outlives the diagnosis that started it. A Lab call's background job waits for its child
+//! without any deadline; the child ends by its own time limits. Only children left behind when
+//! this server itself is killed would need a Job Object (a new dependency) to end.
 
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use std::fmt;
@@ -32,24 +33,28 @@ pub(crate) struct Captured {
 pub(crate) enum ChildFailure {
     /// The program could not be started.
     Spawn(io::Error),
-    /// Waiting for the child or reading its output failed.
+    /// Waiting for the child, ending it or reading its output failed.
     Io(io::Error),
     /// The child was still running at the deadline; it keeps running. `pid` is its process id
     /// (Workflow #421 INST-1b-F: the installer reports the child it left running).
     StillRunning { pid: u32 },
+    /// RL-1c fix 1 (#411 H1): the child was still running at the deadline and was ended there
+    /// ([`run_captured_ending`]).
+    Ended,
 }
 
 impl ChildFailure {
     /// The OS failure beneath a spawn or I/O failure, as its `foreign_os_error` link (Workflow
-    /// #378 A5). `None` when the child was still running, and when a thread reading its output
-    /// panicked: that error is actingctl's own (`reader_panicked`), not one the OS raised.
+    /// #378 A5). `None` when the child was still running at the deadline, and when a thread
+    /// reading its output panicked: that error is actingctl's own (`reader_panicked`), not one
+    /// the OS raised.
     pub(crate) fn os_failure(&self) -> Option<Outcome> {
         match self {
             Self::Spawn(error) => Some(Outcome::from_io_error(error, IoOp::Spawn)),
             Self::Io(error) if !reader_panicked(error) => {
                 Some(Outcome::from_io_error(error, IoOp::Wait))
             }
-            Self::Io(_) | Self::StillRunning { .. } => None,
+            Self::Io(_) | Self::StillRunning { .. } | Self::Ended => None,
         }
     }
 
@@ -78,14 +83,25 @@ fn reader_panicked(error: &io::Error) -> bool {
         .is_some_and(|inner| inner.is::<ReaderPanicked>())
 }
 
+/// Runs `command` until `deadline`; a child still running then keeps running
+/// ([`ChildFailure::StillRunning`]).
 pub(crate) fn run_captured(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
-    run(command, Some(deadline))
+    run(command, Some(deadline), AtDeadline::Leave)
+}
+
+/// RL-1c fix 1 (#411 H1): runs `command` until `deadline`; a child still running then is ended
+/// there and reaped ([`ChildFailure::Ended`]).
+pub(crate) fn run_captured_ending(
+    command: Command,
+    deadline: Instant,
+) -> Result<Captured, ChildFailure> {
+    run(command, Some(deadline), AtDeadline::End)
 }
 
 /// Waits for the child however long it runs (a Lab call's background job).
 #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub(crate) fn run_to_end(command: Command) -> Result<Captured, ChildFailure> {
-    run(command, None)
+    run(command, None, AtDeadline::Leave)
 }
 
 /// Pins a child of an installed process to that installation: the install root and the
@@ -108,7 +124,11 @@ pub(crate) fn pin_child(
     }
 }
 
-fn run(mut command: Command, deadline: Option<Instant>) -> Result<Captured, ChildFailure> {
+fn run(
+    mut command: Command,
+    deadline: Option<Instant>,
+    at_deadline: AtDeadline,
+) -> Result<Captured, ChildFailure> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -117,7 +137,7 @@ fn run(mut command: Command, deadline: Option<Instant>) -> Result<Captured, Chil
     let mut child = command.spawn().map_err(ChildFailure::Spawn)?;
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
-    let status = wait(&mut child, deadline)?;
+    let status = wait(&mut child, deadline, at_deadline, &SystemClock)?;
     Ok(Captured {
         status,
         stdout: collect(stdout)?,
@@ -125,7 +145,67 @@ fn run(mut command: Command, deadline: Option<Instant>) -> Result<Captured, Chil
     })
 }
 
-fn wait(child: &mut Child, deadline: Option<Instant>) -> Result<ExitStatus, ChildFailure> {
+/// What a wait does with a child still running at its deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtDeadline {
+    /// It keeps running.
+    Leave,
+    /// It is ended and reaped.
+    End,
+}
+
+/// The child operations a wait uses (a fake child in tests).
+trait Waited {
+    type Status;
+    fn try_wait(&mut self) -> io::Result<Option<Self::Status>>;
+    fn kill(&mut self) -> io::Result<()>;
+    fn wait(&mut self) -> io::Result<Self::Status>;
+    fn id(&self) -> u32;
+}
+
+impl Waited for Child {
+    type Status = ExitStatus;
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+    fn kill(&mut self) -> io::Result<()> {
+        Child::kill(self)
+    }
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        Child::wait(self)
+    }
+    fn id(&self) -> u32 {
+        Child::id(self)
+    }
+}
+
+/// The clock of a wait: now, and the pause between two looks at the child (a fake clock in
+/// tests).
+trait WaitClock {
+    type Time: PartialOrd + Copy;
+    fn now(&self) -> Self::Time;
+    fn pause(&self, duration: Duration);
+}
+
+/// The wall clock.
+struct SystemClock;
+
+impl WaitClock for SystemClock {
+    type Time = Instant;
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+    fn pause(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
+fn wait<W: Waited, C: WaitClock>(
+    child: &mut W,
+    deadline: Option<C::Time>,
+    at_deadline: AtDeadline,
+    clock: &C,
+) -> Result<W::Status, ChildFailure> {
     let Some(deadline) = deadline else {
         return child.wait().map_err(ChildFailure::Io);
     };
@@ -133,10 +213,22 @@ fn wait(child: &mut Child, deadline: Option<Instant>) -> Result<ExitStatus, Chil
         if let Some(status) = child.try_wait().map_err(ChildFailure::Io)? {
             return Ok(status);
         }
-        if Instant::now() >= deadline {
-            return Err(ChildFailure::StillRunning { pid: child.id() });
+        if clock.now() >= deadline {
+            let pid = child.id();
+            if at_deadline == AtDeadline::Leave {
+                return Err(ChildFailure::StillRunning { pid });
+            }
+            if let Err(error) = child.kill() {
+                // It ended between the look and the kill: its status is the answer.
+                return match child.try_wait().map_err(ChildFailure::Io)? {
+                    Some(status) => Ok(status),
+                    None => Err(ChildFailure::Io(error)),
+                };
+            }
+            child.wait().map_err(ChildFailure::Io)?;
+            return Err(ChildFailure::Ended);
         }
-        thread::sleep(POLL_INTERVAL);
+        clock.pause(POLL_INTERVAL);
     }
 }
 
@@ -166,3 +258,87 @@ fn hide_window(command: &mut Command) {
 
 #[cfg(not(windows))]
 fn hide_window(_command: &mut Command) {}
+
+#[cfg(test)]
+mod tests {
+    //! ROUT-L RL-1c fix 1 (#411 H1): a child still running at the call's deadline is ended there,
+    //! and the call answers in time. A fake child that never ends on its own and a fake clock
+    //! that moves only when the wait pauses; no sleep, no wall clock.
+
+    use super::*;
+    use std::cell::Cell;
+
+    const PID: u32 = 4242;
+
+    /// A child that never ends until it is killed; it records the kill and the reap.
+    #[derive(Default)]
+    struct NeverEnds {
+        killed: bool,
+        reaped: bool,
+        looks: usize,
+    }
+
+    impl Waited for NeverEnds {
+        type Status = i32;
+        fn try_wait(&mut self) -> io::Result<Option<i32>> {
+            self.looks += 1;
+            Ok(self.killed.then_some(1))
+        }
+        fn kill(&mut self) -> io::Result<()> {
+            self.killed = true;
+            Ok(())
+        }
+        fn wait(&mut self) -> io::Result<i32> {
+            assert!(self.killed, "the wait reaps only a child it ended");
+            self.reaped = true;
+            Ok(1)
+        }
+        fn id(&self) -> u32 {
+            PID
+        }
+    }
+
+    /// Milliseconds that pass only when the wait pauses.
+    #[derive(Default)]
+    struct FakeClock {
+        now_ms: Cell<u64>,
+    }
+
+    impl WaitClock for FakeClock {
+        type Time = u64;
+        fn now(&self) -> u64 {
+            self.now_ms.get()
+        }
+        fn pause(&self, duration: Duration) {
+            let ms = u64::try_from(duration.as_millis()).expect("a short pause");
+            self.now_ms.set(self.now_ms.get() + ms);
+        }
+    }
+
+    #[test]
+    fn rl1c_fix1_child_still_running_at_the_deadline_is_ended_in_time() {
+        let deadline_ms = 24_000;
+        let clock = FakeClock::default();
+        let mut child = NeverEnds::default();
+        let answer = wait(&mut child, Some(deadline_ms), AtDeadline::End, &clock);
+        assert!(
+            matches!(answer, Err(ChildFailure::Ended)),
+            "the call answers that its child was ended"
+        );
+        assert!(
+            child.killed && child.reaped,
+            "the child is ended and reaped"
+        );
+        let poll_ms = u64::try_from(POLL_INTERVAL.as_millis()).expect("a short poll");
+        assert!(
+            clock.now() >= deadline_ms && clock.now() < deadline_ms + poll_ms,
+            "the call answers at its deadline, within one poll: {} ms",
+            clock.now()
+        );
+        assert_eq!(
+            child.looks,
+            usize::try_from(deadline_ms / poll_ms).expect("looks") + 1,
+            "the wait looks once per poll until the deadline"
+        );
+    }
+}

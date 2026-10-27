@@ -46,15 +46,17 @@ use actingcommand_contract::{
 };
 use actingcommand_execution_kernel::{compare_failure_frames, failure_frame_ccoeff};
 use actingcommand_ledger::{
-    GlobalLedger, GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, LedgerArtifactReference,
-    PersistedEvent,
+    GlobalLedger, GlobalLedgerError, GlobalLedgerRangeRequest, GlobalLedgerSelection,
+    GlobalLedgerSelectionExtras, LedgerArtifactReference, LedgerCode, PersistedEvent,
 };
 use actingcommand_policy::{CatalogSources, CompiledCatalog, PolicyCode, compile_catalog};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 const SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v2";
 /// Workflow #336 PKG-S3: a pause lifts once the content hash of a package it names changes.
@@ -72,6 +74,80 @@ const REMEDY_LIFT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
 /// `remedies` keeps at most this many entries, newest first; `remedies_total` then counts them
 /// all.
 const REMEDY_LIMIT: usize = 200;
+/// ROUT-L RL-1c fix 1 (#411 H1): the record types the report reads by the ledger's type index.
+/// The other types it reads are a run's own rows ([`RUN_TYPES`]). RL-1c fix 2 (#411 M2): no
+/// `runtime.lifecycle_observed` (nothing queried it) and no `runtime.fact_recorded`: of those
+/// only the newest `config.subsystems` fact is read ([`daemon_start_query`]), and the reference
+/// times are the ledger's own (the latest time and the head row's).
+const SELECTED_TYPES: [EventType; 6] = [
+    EventType::PolicyDispatchIntent,
+    EventType::PolicyExecutionRecorded,
+    EventType::PolicyDispatchAdmitted,
+    EventType::PolicyPlanningSignalObserved,
+    EventType::TaskFailed,
+    EventType::RuntimeFailed,
+];
+/// ROUT-L RL-1c fix 1 (#411 H1): a run's own rows the report reads (its step and its error
+/// frame), only for the runs it shows, each between its dispatch intent and its execution record.
+const RUN_TYPES: [EventType; 6] = [
+    EventType::TaskEntryPreflight,
+    EventType::TaskStepStarted,
+    EventType::TaskStepFinished,
+    EventType::ApplicationIntent,
+    EventType::CaptureCompleted,
+    EventType::ArtifactVerified,
+];
+/// The warning of a report whose ledger read ran out of its budget.
+const LEDGER_READ_INCOMPLETE: &str = "ledger_read_incomplete";
+/// A read without a caller's deadline: far enough that only `max_events` bounds it.
+const NO_DEADLINE: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
+/// ROUT-L RL-1c fix 1 (#411 H1): how much of the ledger `actingd suspended` may read. The report
+/// reads the record types it lists by the ledger's type index (`SELECTED_TYPES`) and a run's own
+/// rows only for the runs it shows, each over the rows between the run's dispatch intent and its
+/// execution record; it never reads the whole table. When the budget runs out the report answers
+/// with what it read and the warning `ledger_read_incomplete`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuspendedReadBudget {
+    /// When the read stops: the caller's deadline; `None`, none.
+    pub deadline: Option<Instant>,
+    /// The most ledger records the report holds, selected and run rows together.
+    pub max_events: usize,
+}
+
+impl SuspendedReadBudget {
+    /// A read bounded by `deadline` alone.
+    pub const fn until(deadline: Option<Instant>) -> Self {
+        Self {
+            deadline,
+            max_events: usize::MAX,
+        }
+    }
+
+    /// Judged by the clock the ledger's reads judge their deadline by (RL-1c fix 2).
+    fn out_of_time(&self) -> bool {
+        self.deadline
+            .is_some_and(actingcommand_ledger::read_deadline_passed)
+    }
+}
+
+/// ROUT-L RL-1c fix 2 (#411 M2): the newest `config.subsystems` fact, the latest daemon start's,
+/// which the selected read gives alone (newest first through the type index).
+fn daemon_start_query() -> EventQuery {
+    EventQuery {
+        event_type: Some(EventType::RuntimeFactRecorded),
+        fact_key: Some(CONFIG_SUBSYSTEMS_FACT_KEY.to_owned()),
+        ..EventQuery::default()
+    }
+}
+
+/// What the run of an execution failed with: its `task.failed` terminal (its failure's spelling
+/// and the record's severity), the run's failure severity, and its native detail.
+type RunFailure = (
+    Option<(CodeStr, EventSeverity)>,
+    Option<EventSeverity>,
+    Value,
+);
 
 /// What `actingd suspended` reads: the loaded configuration and when its file last changed.
 pub struct SuspensionReportRequest<'a> {
@@ -80,6 +156,17 @@ pub struct SuspensionReportRequest<'a> {
     pub config_modified_unix_ms: Option<u64>,
     pub host: &'a RuntimeHostConfig,
     pub catalog: &'a CatalogSources,
+}
+
+/// ROUT-L RL-1c (#411): what `actingd suspended` reads in composer mode: the loaded
+/// configuration's file, when it last changed, and what the configuration schedules, the
+/// composition of [`crate::compose_configured_standard_packs`] (its catalog in place of the
+/// configured one, its procedure bindings in place of `policy.procedure_manifest`).
+pub struct ComposedSuspensionReportRequest<'a> {
+    pub config_path: &'a Path,
+    /// The configuration file's modification time, when the file system reports one.
+    pub config_modified_unix_ms: Option<u64>,
+    pub schedule: &'a crate::ConfiguredStandardPackSchedule,
 }
 
 /// A report that could not be produced (Workflow #378 A6a): its outcome, the code with its
@@ -133,17 +220,162 @@ struct Execution {
     outcome: PolicyExecutionOutcome,
 }
 
-/// The read-only ledger snapshot and the artifact root its frames are read from.
+/// The read-only ledger reads and the artifact root its frames are read from. ROUT-L RL-1c fix 1
+/// (#411 H1): the [`SELECTED_TYPES`] by the type index, and the rows of each run the report shows,
+/// read on first use within the budget.
 struct Snapshot<'a> {
-    ledger: GlobalLedgerEvidence,
+    selection: GlobalLedgerSelection,
+    state_root: &'a Path,
     artifact_root: &'a Path,
+    budget: SuspendedReadBudget,
+    deadline: Instant,
+    /// The records held: the selection's and those of the runs read.
+    held: Cell<usize>,
+    /// The rows a run's own records lie in, after its dispatch intent and through its execution
+    /// record, by the run's id.
+    spans: BTreeMap<String, (u64, u64)>,
+    /// The rows of each run read; `None` for a run the budget left unread.
+    runs: RefCell<BTreeMap<String, Option<Vec<PersistedEvent>>>>,
+    /// Whether the budget ran out.
+    incomplete: Cell<bool>,
 }
 
 impl Snapshot<'_> {
     fn query(&self, query: EventQuery) -> Result<Vec<PersistedEvent>, SuspensionReportError> {
-        let mut events = self.ledger.query(&query);
+        let selected = query
+            .event_type
+            .is_some_and(|event_type| SELECTED_TYPES.contains(&event_type));
+        let mut events = if selected {
+            self.selection
+                .query(&query)
+                .map_err(|error| ledger_unavailable(self.state_root, &error))?
+        } else {
+            let rows = match query.run_id {
+                Some(run_id) if self.run_read(Some(run_id))? => self.run_rows(run_id),
+                _ => None,
+            };
+            let Some(rows) = rows else {
+                // Only a run's own rows are read outside the selection, and only a run read.
+                return Err(SuspensionReportError::new(
+                    HostCode::SuspendedLedgerIncomplete,
+                    HostLocation::OpenSuspensionLedger,
+                )
+                .with_outcome(|outcome| {
+                    outcome.caused_by(Outcome::new(LedgerCode::LedgerReadBudgetExceeded.code()))
+                }));
+            };
+            rows.into_iter()
+                .filter(|event| {
+                    query
+                        .event_type
+                        .is_none_or(|event_type| event.event_type() == event_type)
+                        && query
+                            .frame_id
+                            .is_none_or(|frame_id| event.links().frame_id() == Some(&frame_id))
+                })
+                .collect()
+        };
         events.sort_by_key(PersistedEvent::sequence);
         Ok(events)
+    }
+
+    /// Whether the rows of `run_id` are read, reading them on first use: the rows between its
+    /// dispatch intent and its execution record (`GlobalLedger::open_range`, of that run), never
+    /// past the deadline or the most records the budget holds.
+    fn run_read(&self, run_id: Option<RunId>) -> Result<bool, SuspensionReportError> {
+        let Some(run_id) = run_id else {
+            return Ok(true);
+        };
+        let key = identifier_text(&run_id);
+        if let Some(read) = self.runs.borrow().get(&key) {
+            return Ok(read.is_some());
+        }
+        let rows = self.read_run(run_id, &key)?;
+        if rows.is_none() {
+            self.incomplete.set(true);
+        }
+        let read = rows.is_some();
+        self.runs.borrow_mut().insert(key, rows);
+        Ok(read)
+    }
+
+    fn read_run(
+        &self,
+        run_id: RunId,
+        key: &str,
+    ) -> Result<Option<Vec<PersistedEvent>>, SuspensionReportError> {
+        let Some(&(after_sequence, through_sequence)) = self.spans.get(key) else {
+            return Ok(None);
+        };
+        if self.budget.out_of_time() {
+            return Ok(None);
+        }
+        let room = self.budget.max_events.saturating_sub(self.held.get());
+        let request = GlobalLedgerRangeRequest {
+            query: EventQuery {
+                run_id: Some(run_id),
+                ..EventQuery::default()
+            },
+            after_sequence,
+            through_sequence: Some(through_sequence),
+            matches: room.saturating_add(1),
+            eviction_proofs: false,
+        };
+        let rows = match GlobalLedger::open_range(self.state_root, &request)
+            .map_err(|error| ledger_unavailable(self.state_root, &error))?
+        {
+            Some(read) => {
+                let read = read.into_events();
+                // RL-1c fix 2 (#411 L3): the run's rows of every type count, so a read that
+                // stopped at `matches` leaves the run unread however few of its types it holds.
+                if read.len() > room {
+                    return Ok(None);
+                }
+                read.into_iter()
+                    .filter(|event| RUN_TYPES.contains(&event.event_type()))
+                    .collect::<Vec<_>>()
+            }
+            // A segment root has no range read: its run types are read whole, within the budget.
+            None => {
+                match GlobalLedger::open_selected_within(
+                    self.state_root,
+                    &RUN_TYPES,
+                    &GlobalLedgerSelectionExtras::default(),
+                    room,
+                    self.deadline,
+                ) {
+                    Ok(selection) => selection
+                        .events()
+                        .iter()
+                        .filter(|event| event.links().run_id() == Some(&run_id))
+                        .cloned()
+                        .collect(),
+                    Err(error) if budget_exceeded(&error) => return Ok(None),
+                    Err(error) => return Err(ledger_unavailable(self.state_root, &error)),
+                }
+            }
+        };
+        if rows.len() > room || self.budget.out_of_time() {
+            return Ok(None);
+        }
+        self.held.set(self.held.get() + rows.len());
+        Ok(Some(rows))
+    }
+
+    /// The rows of `run_id` read, `None` when the budget left them unread.
+    fn run_rows(&self, run_id: RunId) -> Option<Vec<PersistedEvent>> {
+        self.runs
+            .borrow()
+            .get(&identifier_text(&run_id))
+            .cloned()
+            .flatten()
+    }
+
+    /// The ledger's latest time (#411 A24: the maximum timestamp, not the last record's). RL-1c
+    /// fix 2 (#411 M2): the ledger's own, its row read through the time index, no longer the
+    /// maximum over the selected types.
+    fn latest_time(&self) -> Option<u64> {
+        self.selection.latest_time_unix_ms()
     }
 
     /// The run's `task.failed` terminal (its failure's spelling and the record's severity,
@@ -158,13 +390,9 @@ impl Snapshot<'_> {
         &self,
         run_id: Option<RunId>,
         fallback: &CodeStr,
-    ) -> (
-        Option<(CodeStr, EventSeverity)>,
-        Option<EventSeverity>,
-        Value,
-    ) {
+    ) -> Result<RunFailure, SuspensionReportError> {
         let Some(run_id) = run_id else {
-            return (None, None, Value::Null);
+            return Ok((None, None, Value::Null));
         };
         let by_run = |event_type| EventQuery {
             event_type: Some(event_type),
@@ -172,8 +400,7 @@ impl Snapshot<'_> {
             ..EventQuery::default()
         };
         let terminal = self
-            .ledger
-            .query(&by_run(EventType::TaskFailed))
+            .query(by_run(EventType::TaskFailed))?
             .iter()
             .find_map(|event| match event.payload() {
                 EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
@@ -186,7 +413,7 @@ impl Snapshot<'_> {
                 _ => None,
             });
         let code = terminal.as_ref().map_or(fallback, |(spelling, _)| spelling);
-        let runtime_failures = self.ledger.query(&by_run(EventType::RuntimeFailed));
+        let runtime_failures = self.query(by_run(EventType::RuntimeFailed))?;
         // Ledger revision 3: the lifecycle failure's code is the record's outcome and its
         // native detail the `raw_text` of that outcome's direct foreign link.
         let lifecycle_failures = runtime_failures
@@ -217,18 +444,22 @@ impl Snapshot<'_> {
                 .map(|(event, _)| event.severity())
                 .or_else(|| runtime_failures.last().map(|event| event.severity())),
         };
-        (
+        Ok((
             terminal,
             severity,
             detail.map_or(Value::Null, Value::String),
-        )
+        ))
     }
 
-    /// §12.4 scope and step re-derived from the run's rows, for display.
+    /// §12.4 scope and step re-derived from the run's rows, for display; `null` when the budget
+    /// left the run's rows unread (RL-1c fix 1).
     fn step(&self, run_id: Option<RunId>, terminal: bool) -> Result<Value, SuspensionReportError> {
         let Some(run_id) = run_id.filter(|_| terminal) else {
             return Ok(json!({ "scope": "prepare", "operation_label": "prepare" }));
         };
+        if !self.run_read(Some(run_id))? {
+            return Ok(Value::Null);
+        }
         let rows = failure_rows(run_id, |query| self.query(query))?;
         let chain = rows
             .iter()
@@ -256,6 +487,22 @@ impl Snapshot<'_> {
         previous_run: Option<RunId>,
         current_run: Option<RunId>,
     ) -> Result<(Value, Option<&'static str>), SuspensionReportError> {
+        // RL-1c fix 1: frames of a run the budget left unread are not compared.
+        if !(self.run_read(previous_run)? && self.run_read(current_run)?) {
+            return Ok((
+                json!({
+                    "previous": null,
+                    "current": null,
+                    "comparison": {
+                        "source": "recomputed", "status": "unavailable",
+                        "outcome": Outcome::new(LedgerCode::LedgerReadBudgetExceeded.code()),
+                        "changed_cells_milli": null, "digest_mean_milli": null,
+                        "ccoeff": null, "ccoeff_failure": null,
+                    },
+                }),
+                None,
+            ));
+        }
         let previous = self.frame(previous_run)?;
         let current = self.frame(current_run)?;
         let describe = |artifact: &Option<LedgerArtifactReference>| {
@@ -339,6 +586,14 @@ fn compare_failure(error: &actingcommand_execution_kernel::FailureFrameCompareEr
 pub fn suspension_report(
     request: &SuspensionReportRequest<'_>,
 ) -> Result<Value, SuspensionReportError> {
+    suspension_report_within(request, SuspendedReadBudget::until(None))
+}
+
+/// ROUT-L RL-1c fix 1 (#411 H1): [`suspension_report`] whose ledger read stays within `budget`.
+pub fn suspension_report_within(
+    request: &SuspensionReportRequest<'_>,
+    budget: SuspendedReadBudget,
+) -> Result<Value, SuspensionReportError> {
     let manifest = request.host.procedure_manifest().ok_or_else(|| {
         SuspensionReportError::new(
             SharedCode::SuspendedPolicyUnconfigured,
@@ -351,6 +606,130 @@ pub fn suspension_report(
             ContractLocation::ReadSuspensionConfig,
         )
     })?;
+    report(&ReportInputs {
+        config_path: request.config_path,
+        config_modified_unix_ms: request.config_modified_unix_ms,
+        host: request.host,
+        manifest,
+        compiled: &compiled,
+        budget,
+        composition_warnings: &[],
+    })
+}
+
+/// ROUT-L RL-1c (#411): `actingd suspended` in composer mode: the report of
+/// [`suspension_report`], judged against what the configuration schedules, the composition's
+/// catalog and procedure bindings. A composition refused as a whole is
+/// `policy_catalog_compile_failed` (`operation` `read_suspension_config`), caused by each of its
+/// problems; a game whose files are refused is left out of it, so its pairs are
+/// `task_not_in_catalog`. RL-1c fix 1 (#411 M1): each problem of the composition is a warning
+/// `<code>:<game>:sha256:<hex>`, which says why.
+pub fn composed_suspension_report(
+    request: &ComposedSuspensionReportRequest<'_>,
+) -> Result<Value, SuspensionReportError> {
+    composed_suspension_report_within(request, SuspendedReadBudget::until(None))
+}
+
+/// ROUT-L RL-1c fix 1 (#411 H1): [`composed_suspension_report`] whose ledger read stays within
+/// `budget`.
+pub fn composed_suspension_report_within(
+    request: &ComposedSuspensionReportRequest<'_>,
+    budget: SuspendedReadBudget,
+) -> Result<Value, SuspensionReportError> {
+    let host = request.schedule.host();
+    let manifest = host.procedure_manifest().ok_or_else(|| {
+        SuspensionReportError::new(
+            SharedCode::SuspendedPolicyUnconfigured,
+            ContractLocation::ReadSuspensionConfig,
+        )
+    })?;
+    let compiled = request.schedule.compiled().ok_or_else(|| {
+        SuspensionReportError::new(
+            SharedCode::PolicyCatalogCompileFailed,
+            ContractLocation::ReadSuspensionConfig,
+        )
+        .with_outcome(|outcome| {
+            request
+                .schedule
+                .problems()
+                .iter()
+                .cloned()
+                .fold(outcome, Outcome::caused_by)
+        })
+    })?;
+    report(&ReportInputs {
+        config_path: request.config_path,
+        config_modified_unix_ms: request.config_modified_unix_ms,
+        host,
+        manifest,
+        compiled,
+        budget,
+        composition_warnings: request.schedule.problem_warnings(),
+    })
+}
+
+/// What one report is judged against and how much of the ledger it may read.
+struct ReportInputs<'a> {
+    config_path: &'a Path,
+    config_modified_unix_ms: Option<u64>,
+    host: &'a RuntimeHostConfig,
+    manifest: &'a crate::ProcedureManifest,
+    compiled: &'a CompiledCatalog,
+    budget: SuspendedReadBudget,
+    /// RL-1c fix 1 (#411 M1): the composition's problems, first among the warnings.
+    composition_warnings: &'a [String],
+}
+
+/// A ledger failure of the report: the ledger is unavailable, caused by the ledger's code.
+fn ledger_unavailable(state_root: &Path, error: &GlobalLedgerError) -> SuspensionReportError {
+    SuspensionReportError::new(
+        HostCode::SuspendedLedgerUnavailable,
+        HostLocation::OpenSuspensionLedger,
+    )
+    .with_outcome(|outcome| {
+        outcome
+            .state_root(state_root)
+            .joined(CauseRelation::CausedBy, Outcome::relayed(error.code()))
+    })
+}
+
+/// Whether a ledger read stopped at its budget (its deadline or its most records).
+fn budget_exceeded(error: &GlobalLedgerError) -> bool {
+    !error.is_fatal() && error.code() == LedgerCode::LedgerReadBudgetExceeded.as_str()
+}
+
+/// RL-1c fix 1 (#411 H1): the report when the budget ran out before the selected records were
+/// read: no rows, and the warnings with `ledger_read_incomplete` last.
+fn incomplete_report(inputs: &ReportInputs<'_>, mut warnings: Vec<String>) -> Value {
+    warnings.push(LEDGER_READ_INCOMPLETE.to_owned());
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "config_path": inputs.config_path.to_string_lossy(),
+        "state_root": inputs.host.state_root().to_string_lossy(),
+        "through_sequence": null,
+        "daemon_started_at_unix_ms": null,
+        "suspended": [],
+        "lifted": [],
+        "repeating": [],
+        "warnings": warnings,
+        "clock_slots": [],
+        "packs": [],
+        "remedies": [],
+    })
+}
+
+/// The report of the configured state root, judged against `host`'s procedure bindings
+/// (`manifest`) and the catalog `compiled`.
+fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
+    let ReportInputs {
+        config_path,
+        config_modified_unix_ms,
+        host,
+        manifest,
+        compiled,
+        budget,
+        composition_warnings,
+    } = *inputs;
     let procedure_refs = compiled
         .catalog()
         .tasks
@@ -358,7 +737,7 @@ pub fn suspension_report(
         .iter()
         .map(|task| (task.id.clone(), task.procedure_ref.clone()))
         .collect::<BTreeMap<_, _>>();
-    let state_root = request.host.state_root();
+    let state_root = host.state_root();
     if !state_root.is_dir() {
         return Err(SuspensionReportError::new(
             HostCode::SuspendedLedgerUnavailable,
@@ -366,55 +745,70 @@ pub fn suspension_report(
         )
         .with_outcome(|outcome| outcome.state_root(state_root)));
     }
-    let ledger = GlobalLedger::open_evidence(
-        GlobalLedgerEvidenceConfig::new(state_root).sqlite_material_not_read(),
-        |_| None,
-    )
-    .map_err(|error| {
-        SuspensionReportError::new(
-            HostCode::SuspendedLedgerUnavailable,
-            HostLocation::OpenSuspensionLedger,
-        )
-        .with_outcome(|outcome| {
-            outcome
-                .state_root(state_root)
-                .joined(CauseRelation::CausedBy, Outcome::relayed(error.code()))
-        })
-    })?;
-    if !ledger.is_complete() {
+    let mut warnings = composition_warnings.to_vec();
+    // RL-1c fix 1 (#411 H1): the selected types by the type index, within the budget; the whole
+    // table is never read.
+    let deadline = budget
+        .deadline
+        .unwrap_or_else(|| Instant::now() + NO_DEADLINE);
+    // RL-1c fix 2 (#411 M2): with the newest `config.subsystems` fact alone and the ledger's
+    // latest time, in the same read.
+    let extras = GlobalLedgerSelectionExtras {
+        newest: vec![daemon_start_query()],
+        latest_time: true,
+    };
+    let selection = match GlobalLedger::open_selected_within(
+        state_root,
+        &SELECTED_TYPES,
+        &extras,
+        budget.max_events,
+        deadline,
+    ) {
+        Ok(selection) => selection,
+        Err(error) if budget_exceeded(&error) => return Ok(incomplete_report(inputs, warnings)),
+        Err(error) => return Err(ledger_unavailable(state_root, &error)),
+    };
+    if !selection.is_complete() {
         return Err(SuspensionReportError::new(
             HostCode::SuspendedLedgerIncomplete,
             HostLocation::OpenSuspensionLedger,
         ));
     }
-    let snapshot = Snapshot {
-        ledger,
+    let mut snapshot = Snapshot {
+        held: Cell::new(selection.events().len() + selection.newest().iter().flatten().count()),
+        selection,
+        state_root,
         artifact_root: state_root,
+        budget,
+        deadline,
+        spans: BTreeMap::new(),
+        runs: RefCell::new(BTreeMap::new()),
+        incomplete: Cell::new(false),
     };
     // Workflow #336 PKG-S3: each package is measured once for the whole report.
     let checks = LiftChecks::default();
     // Workflow #373 NAV-3a: the layers' packages are those the standard-pack registries name.
     let view = SuspensionLiftView::new(
         manifest,
-        request.host.standard_packs_root(),
+        host.standard_packs_root(),
         &checks,
         LiftCheckTime::ONE_READ,
     );
-    let through_sequence = snapshot.ledger.latest_sequence();
-    let intents = snapshot
-        .query(EventQuery {
-            event_type: Some(EventType::PolicyDispatchIntent),
-            ..EventQuery::default()
-        })?
-        .into_iter()
-        .filter_map(|event| match event.payload() {
-            EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => Some((
+    let through_sequence = snapshot.selection.head_sequence();
+    let mut intents = BTreeMap::<String, Option<RunId>>::new();
+    let mut intent_sequences = BTreeMap::<String, u64>::new();
+    for event in snapshot.query(EventQuery {
+        event_type: Some(EventType::PolicyDispatchIntent),
+        ..EventQuery::default()
+    })? {
+        if let EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) = event.payload() {
+            intents.insert(
                 payload.decision_id().to_owned(),
                 event.links().run_id().copied(),
-            )),
-            _ => None,
-        })
-        .collect::<BTreeMap<_, _>>();
+            );
+            intent_sequences.insert(payload.decision_id().to_owned(), event.sequence());
+        }
+    }
     let mut pairs = BTreeMap::<(String, String), Vec<Execution>>::new();
     for event in snapshot.query(EventQuery {
         event_type: Some(EventType::PolicyExecutionRecorded),
@@ -436,29 +830,39 @@ pub fn suspension_report(
                 });
         }
     }
-    let daemon_started_at_unix_ms = snapshot
-        .query(EventQuery {
-            event_type: Some(EventType::RuntimeFactRecorded),
-            ..EventQuery::default()
-        })?
-        .iter()
-        .rev()
-        .find_map(|event| match event.payload() {
-            EventPayload::Runtime(RuntimePayload::FactRecorded(payload))
-                if payload.record().key == CONFIG_SUBSYSTEMS_FACT_KEY =>
-            {
-                Some(payload.record().observed_at_unix_ms)
+    // RL-1c fix 1 (#411 H1): the runs the report may show are those of each pair's last two
+    // executions; a run's own rows lie after its dispatch intent and through its execution record.
+    for executions in pairs.values() {
+        for execution in executions.iter().rev().take(2) {
+            if let (Some(Some(run_id)), Some(&intent)) = (
+                intents.get(&execution.decision_id),
+                intent_sequences.get(&execution.decision_id),
+            ) {
+                snapshot
+                    .spans
+                    .insert(identifier_text(run_id), (intent, execution.sequence));
             }
-            _ => None,
-        });
-    let mut warnings = Vec::new();
+        }
+    }
+    // RL-1c fix 2 (#411 M2): the newest `config.subsystems` fact, read alone.
+    let daemon_started_at_unix_ms =
+        snapshot
+            .selection
+            .newest()
+            .iter()
+            .flatten()
+            .find_map(|event| match event.payload() {
+                EventPayload::Runtime(RuntimePayload::FactRecorded(payload))
+                    if payload.record().key == CONFIG_SUBSYSTEMS_FACT_KEY =>
+                {
+                    Some(payload.record().observed_at_unix_ms)
+                }
+                _ => None,
+            });
     match daemon_started_at_unix_ms {
         None => warnings.push("daemon_start_unknown".to_owned()),
         Some(started) => {
-            if request
-                .config_modified_unix_ms
-                .is_some_and(|modified| modified > started)
-            {
+            if config_modified_unix_ms.is_some_and(|modified| modified > started) {
                 warnings.push("config_newer_than_daemon_start".to_owned());
             }
         }
@@ -494,7 +898,7 @@ pub fn suspension_report(
         let base = identity
             .as_ref()
             .map_or_else(|| recorded.clone(), |identity| identity.base.clone());
-        let (terminal, run_severity, detail) = snapshot.run_failure(current_run, &failure_code);
+        let (terminal, run_severity, detail) = snapshot.run_failure(current_run, &failure_code)?;
         let failure_spelling = terminal
             .as_ref()
             .map_or(base.as_str(), |(spelling, _)| spelling.as_str());
@@ -636,12 +1040,16 @@ pub fn suspension_report(
             "detail": detail,
         }));
     }
-    let (clock_slots, clock_slots_total) = clock_slots(&snapshot, &compiled)?;
+    let (clock_slots, clock_slots_total) = clock_slots(&snapshot, compiled)?;
     let packs = packs(&snapshot, &view, &procedure_refs, daemon_started_at_unix_ms)?;
     let (remedies, remedies_total) = remedies(&snapshot)?;
+    // RL-1c fix 1 (#411 H1): a run the budget left unread is shown without its step and frames.
+    if snapshot.incomplete.get() {
+        warnings.push(LEDGER_READ_INCOMPLETE.to_owned());
+    }
     let mut report = json!({
         "schema_version": SCHEMA_VERSION,
-        "config_path": request.config_path.to_string_lossy(),
+        "config_path": config_path.to_string_lossy(),
         "state_root": state_root.to_string_lossy(),
         "through_sequence": through_sequence,
         "daemon_started_at_unix_ms": daemon_started_at_unix_ms,
@@ -1072,13 +1480,7 @@ fn clock_slots(
     snapshot: &Snapshot<'_>,
     catalog: &CompiledCatalog,
 ) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
-    let Some(reference_unix_ms) = snapshot
-        .ledger
-        .events()
-        .iter()
-        .map(PersistedEvent::timestamp_unix_ms)
-        .max()
-    else {
+    let Some(reference_unix_ms) = snapshot.latest_time() else {
         return Ok((Vec::new(), None));
     };
     let in_window = |event_type| EventQuery {
@@ -1262,12 +1664,8 @@ fn remedy_stop(outcome: &Outcome) -> Option<(&str, &str, &str)> {
 /// and their `signal_id` prefix, never by their outcome; a stop whose outcome does not read back,
 /// or that names no task, is an unparsed entry and adds no warning.
 fn remedies(snapshot: &Snapshot<'_>) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
-    let Some(reference_unix_ms) = snapshot
-        .ledger
-        .events()
-        .last()
-        .map(PersistedEvent::timestamp_unix_ms)
-    else {
+    // RL-1c fix 2 (#411 M2): the ledger's latest event, its authenticated head row.
+    let Some(reference_unix_ms) = snapshot.selection.head_time_unix_ms() else {
         return Ok((Vec::new(), None));
     };
     let events = snapshot.query(EventQuery {

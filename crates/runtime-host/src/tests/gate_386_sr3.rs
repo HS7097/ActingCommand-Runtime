@@ -19,16 +19,16 @@ use actingcommand_policy::PolicyEvaluation;
 use serde_json::{Value, json};
 
 // The build of the Runtime under test, and another build.
-const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+pub(super) const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";
 // The package admission refuses, and its task on each instance.
-const REFUSED_ID: &str = "neutral.suspended.task";
+pub(super) const REFUSED_ID: &str = "neutral.suspended.task";
 const OBSERVE: &str = "fixture.observe";
 const OBSERVE_B: &str = "fixture.observe-b";
 // A task of another task package (the neutral fixture package, which admission admits).
 const OTHER: &str = "fixture.other";
 const OTHER_PROCEDURE: &str = "procedure.detect";
-const SUSPEND_CODE: &str = "recognition_sample_budget_invalid";
+pub(super) const SUSPEND_CODE: &str = "recognition_sample_budget_invalid";
 const SUSPENDED_CODE: &str = "pack_admission_suspended";
 const LIFTED_CODE: &str = "pack_admission_lifted";
 // The default least time between two measurements of one package.
@@ -40,7 +40,7 @@ const GATE_WAIT: Duration = Duration::from_secs(30);
 // The package the kernel refuses at admission with `recognition_sample_budget_invalid`: page
 // `home` declares two frames `consensus_interval_ms` apart while the step timeout is 50 ms (the
 // SR-1 T5 package). Another interval is the same package changed in place.
-fn refused_package(consensus_interval_ms: u64) -> Vec<u8> {
+pub(super) fn refused_package(consensus_interval_ms: u64) -> Vec<u8> {
     let entries = [
         (
             "control.json",
@@ -127,7 +127,7 @@ fn refused_package(consensus_interval_ms: u64) -> Vec<u8> {
 
 // Writes an assembled package and gives its content hash: the SHA-256 of the whole file (M-PKG
 // D3), in lowercase hex.
-fn write_package(path: &Path, bytes: &[u8]) -> String {
+pub(super) fn write_package(path: &Path, bytes: &[u8]) -> String {
     fs::write(path, bytes).expect("write the package");
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -247,7 +247,11 @@ fn intent_of<'a>(
 }
 
 // The `pack_admission_suspended` reason that defers the pair, if any.
-fn suspension_of(evaluation: &PolicyEvaluation, task_id: &str, instance: &str) -> Option<Outcome> {
+pub(super) fn suspension_of(
+    evaluation: &PolicyEvaluation,
+    task_id: &str,
+    instance: &str,
+) -> Option<Outcome> {
     evaluation
         .decisions
         .iter()

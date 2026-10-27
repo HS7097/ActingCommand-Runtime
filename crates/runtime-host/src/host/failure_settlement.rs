@@ -201,7 +201,9 @@ impl HostShared {
 
     /// Workflow #386 SR-3 (§2.4 item 2): the task package admission after start, unless
     /// `scheduling.pack_admission.check_after_start` is off: each package location the procedure
-    /// bindings name is admitted once; a refusal with a suspend code suspends its package.
+    /// bindings name is admitted once; a refusal with a suspend code suspends its package. ROUT-L
+    /// RL-1c: in composer mode it runs after the scheduler workbench's first check
+    /// (`pack_admission_check`), against the composed bindings that check installed.
     pub(super) fn check_pack_admission(&self) -> RuntimeHostResult<()> {
         let settings = self.pack_admission_settings()?;
         if !settings.check_after_start {

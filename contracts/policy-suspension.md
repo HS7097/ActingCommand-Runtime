@@ -295,13 +295,40 @@ suspension.
 ## `actingd suspended`
 
 ```text
-actingd suspended --config <path>
+actingd suspended --config <path> [--deadline-ms <ms>]
 ```
 
 Loads and assembles the configuration exactly as startup does, then opens the state root's
-ledger read-only and without the owner lock, so it runs beside a running daemon. Since
+ledger read-only and without the owner lock, so it runs beside a running daemon.
+
+ROUT-L RL-1c fix 1 (#411 H1): the ledger read is bounded and never reads the whole table. It reads
+the record types the report lists by the ledger's type index (`policy.dispatch_intent`,
+`policy.execution_recorded`, `policy.dispatch_admitted`, `policy.planning_signal_observed`,
+`task.failed`, `runtime.failed`; RL-1c fix 2, #411 M2: no longer `runtime.lifecycle_observed`,
+and of `runtime.fact_recorded` only the newest `config.subsystems` fact, read newest first through
+the type index in the same read), the ledger's latest time (the row of its maximum
+`timestamp_unix_ms`, through the time index) and its head row (the last record), and a
+run's own rows (its entry, step, application intent, capture and verified-artifact records) only
+for the runs of each pair's last two executions it shows, each over the rows after the run's
+dispatch intent and through its execution record. `--deadline-ms` is the caller's deadline,
+counted from the command's start: the read stops there, and the report then answers with what it
+read and the warning `ledger_read_incomplete` (before the selected records are read: no rows and
+`through_sequence` `null`; a run left unread: its `step` is `null` and its `frames` comparison is
+`unavailable` with `ledger_read_budget_exceeded`). Without `--deadline-ms` only the index
+selection bounds it. `actingctl diagnose` and `ac_diagnose` pass their call's deadline less 2 s
+and end the child still running at the deadline (`suspended_report_timeout`). Since
 Workflow #336 PKG-S3 it reads the packages a paused pair names, read-only, to measure their
 content hashes now, each package once per report. Nothing is written.
+
+ROUT-L RL-1c (#411; v0.12.20): in composer mode (a `policy` section without `catalog`) the
+report is judged against what the configuration schedules: the composition the scheduler
+workbench makes for the configured instances from the game roots below `standard_packs.root`
+(its catalog in place of the configured one, its procedure bindings, each `package.<package_id>`
+at its package's place below its game root, in place of `policy.procedure_manifest`), with the
+same members. A game whose files are refused is left out of the composition, so its pairs carry
+`task_not_in_catalog`; a composition refused as a whole is `policy_catalog_compile_failed`
+(`operation` `read_suspension_config`) caused by each of its problems. Only a configuration
+without a `policy` section is `suspended_policy_unconfigured`.
 
 stdout is one JSON line, the v2 report (Workflow #378 A6a): `schema_version`, `outcome` and the
 report's members. `outcome` is the full `actingcommand.outcome.v1` envelope of
@@ -390,10 +417,15 @@ only its registered names (`"detail":"codes"`).
   measured now, `task_not_in_catalog:<task>/<instance>`.
 - `warnings` is text in v0.12.0, not outcomes: Workflow #378 A6a turned the rest of the report
   into outcomes and left this list as v1 printed it. Each entry is a developer string, a token
-  alone or followed by `:<task>/<instance>`: first the daemon-start warning, if any, then, pair by pair
+  alone or followed by `:<task>/<instance>`: in composer mode first each problem of the
+  composition as `<code>:<game>:sha256:<hex>` (RL-1c fix 1, #411 M1: the code, e.g.
+  `standard_pack_root_invalid`, the game, and the sha256 of the `schedule.json` read for it,
+  `unread` when none was read; it says why a game has no rows and why its paused pairs are
+  `task_not_in_catalog`), then the daemon-start warning, if any, then, pair by pair
   in (task, instance) order, `error_code_unparsed`, `task_not_in_catalog`,
-  `lift_check_hash_unmeasured` and `comparison_disagrees_with_record`. No entry is an outcome
-  envelope; a reader matches the strings.
+  `lift_check_hash_unmeasured` and `comparison_disagrees_with_record`, and last
+  `ledger_read_incomplete` when the read ran out of its deadline (RL-1c fix 1). No entry is an
+  outcome envelope; a reader matches the strings.
 - `clock_slots` (Workflow #372 K3): the clock-slot records (`scheduling/README.md`, "Clock-slot
   records") whose event time is within 48 h of the ledger's latest time, newest first, at most
   200; `clock_slots_total` is added with their number when the list is cut. A record is a
@@ -404,7 +436,9 @@ only its registered names (`"detail":"codes"`).
     out. `recorded_sequence` and `recorded_at_unix_ms` place the record in the ledger.
   - `next_dispatch` is the pair's first `policy.dispatch_admitted` after the record, as its
     `sequence` and `admitted_at_unix_ms` (D); it is left out when there is none. The reference
-    time is the ledger's latest time: its maximum `timestamp_unix_ms`, not the last record's,
+    time is the ledger's latest time: its maximum `timestamp_unix_ms`, not the last record's
+    (RL-1c fix 2, #411 M2: over the whole ledger again, its row read through the time index,
+    no longer over the record types the report reads by the type index),
     since a record's time is not monotonic in `sequence` (#411 A24,
     [ledger-observer.md §8.1](ledger-observer.md#81-order-and-sync)). Workflow #372 K5: a
     record of a task id that a task of the configured catalog continues (`continues_from`)
@@ -513,9 +547,14 @@ the packages again.
    suspend code becomes a `pack_admission_suspended` note and the configuration stays valid;
    any other refusal is handled as before (at dispatch). check-config reads the ledger
    read-only and writes nothing; acsetup prints its warning unchanged, installs the standard
-   package and lists that task package as suspended.
+   package and lists that task package as suspended. ROUT-L RL-1c: in composer mode (no
+   `policy.catalog`) it admits every package the composition's procedures locate
+   ([actingd-check-config.md](actingd-check-config.md)).
 2. After actingd has started (`scheduling.pack_admission.check_after_start`, default true), a
-   background thread runs the same check outside the start window. It only suspends.
+   background thread runs the same check outside the start window. It only suspends. ROUT-L
+   RL-1c: in composer mode the procedure bindings are the composition's, which the scheduler
+   workbench installs at its first check (the first policy cycle), so the thread waits for that
+   check, or for a stop, and then admits the packages the composed procedures locate.
 3. Dispatch preparation: the first refusal with a suspend code suspends the package.
 
 **While suspended.** Every task bound to the package, on every instance, is deferred in the

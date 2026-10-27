@@ -29,6 +29,10 @@ mod held_runtime;
 mod mcp;
 mod packs;
 mod process_probe;
+// Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
+#[cfg(test)]
+#[path = "../../../tests/support/standard_pack_schedule.rs"]
+mod standard_pack_schedule_fixture;
 // Workflow #421 INST-1: `install`, the command-line installer of a single-location root.
 #[cfg(windows)]
 mod install;

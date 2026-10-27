@@ -2394,3 +2394,31 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t7_the_first_unanswered_settlement_read_ends_the_ticks_reads",
 ]
 incident = ["#419 LN-WS-F"]
+
+# ROUT-L RL-1c (#411; work order rd-1027/brief-rl1c.md C-5 and C-2; board #411 6432236193, 6435964241): in composer mode the task package admission after start waits for the scheduler workbench's first check and admits the composed procedure bindings: a composed package refused with a suspend code is suspended and the next evaluation defers its pair with pack_admission_suspended, naming the package, its refusal and its hash (C-5); the suspended report of the configuration's composition (compose_configured_standard_packs, composed_suspension_report) lists that package under packs with its content hash measured now at the composed binding (C-2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1c::rl1c_c5_the_admission_after_start_admits_the_composed_procedures",
+    "actingcommand-runtime-host::lib::tests::gate_rl1c::rl1c_c2_the_suspended_report_answers_against_the_composition",
+]
+incident = ["#411 RL-1c"]
+
+# ROUT-L RL-1c fix round 1 (#411; work order rd-1027/brief-rl1c-fix1.md, review H1 and M1): actingd suspended's ledger read is bounded: on a large fake ledger a report whose budget holds fewer records than the ledger's selected records answers incomplete (no rows, the warning ledger_read_incomplete) and never holds the whole ledger, and without that bound answers complete (H1); in composer mode a game whose schedule.json the composition refuses is the report's first warning standard_pack_root_invalid:<game>:sha256:<hex> of the refused file (M1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1c_fix1::rl1c_fix1_the_suspended_report_answers_incomplete_within_its_budget",
+    "actingcommand-runtime-host::lib::tests::gate_rl1c_fix1::rl1c_fix1_the_suspended_report_carries_the_composition_problems",
+]
+incident = ["#411 RL-1c"]
+
+# ROUT-L RL-1c fix round 2 (#411; work order rd-1027/brief-rl1c-fix2.md, re-review M2 and L3): actingd suspended reads no runtime.lifecycle_observed and of runtime.fact_recorded only the newest config.subsystems fact, newest first through the type index, so on a ledger with many fact rows it completes within a budget below them and answers as the old full read (M2); a deadline that passes during the main read (a fake read clock, no sleep) answers ledger_read_incomplete with every list empty and through_sequence null, and a run the budget leaves unread is listed with step null and its frames unavailable with ledger_read_budget_exceeded (L3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1c_fix2::rl1c_fix2_a_deadline_passing_during_the_main_read_answers_incomplete",
+    "actingcommand-runtime-host::lib::tests::gate_rl1c_fix2::rl1c_fix2_a_run_left_unread_has_no_step_and_unavailable_frames",
+    "actingcommand-runtime-host::lib::tests::gate_rl1c_fix2::rl1c_fix2_the_report_reads_only_the_newest_config_fact",
+]
+incident = ["#411 RL-1c"]

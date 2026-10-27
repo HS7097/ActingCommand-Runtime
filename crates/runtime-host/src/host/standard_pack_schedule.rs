@@ -33,6 +33,11 @@
 //! - **Static pool readings** (RL-1a review, #386 6399836824, item 1). A reading the configuration
 //!   gives for a pool no composed game declares is left out of the evaluation (policy dispatch),
 //!   and the workbench records `policy_pool_reading_unused` once per pool.
+//! - **Readers outside the Runtime** (RL-1c, #411; board 6432236193, 6435964241).
+//!   [`compose_configured_standard_packs`] composes what a composer-mode configuration schedules
+//!   with the same composer, for check-config and `actingd suspended`; the task package admission
+//!   after start waits for the workbench's first check (`await_first_standard_pack_check`), so it
+//!   admits the composed procedures.
 
 use super::standard_pack::{RootFailure, read_root_file};
 use super::*;
@@ -46,7 +51,7 @@ use actingcommand_contract::{
     StandardPackRootBytes, read_standard_pack_root,
 };
 use actingcommand_policy::{
-    STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID, StandardPackBinding,
+    CompiledCatalog, STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID, StandardPackBinding,
     StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
     StandardPackRuleIssue, compose_standard_pack_rules,
 };
@@ -57,6 +62,10 @@ use std::time::SystemTime;
 
 /// The composition record's schema, kept in each composed generation's directory.
 const COMPOSITION_RECORD_SCHEMA: &str = "actingcommand.standard-pack-composition.v1";
+/// RL-1c: how long the task package admission after start waits at a time for the workbench's
+/// first check before it looks at the shutdown request again. It bounds only how soon a stop ends
+/// a wait; the first check itself wakes the admission at once.
+const FIRST_CHECK_WAIT_TICK: Duration = Duration::from_millis(50);
 
 /// The size and modification time of one root file, `None` when it does not exist.
 type FileMark = Option<(u64, Option<SystemTime>)>;
@@ -70,22 +79,31 @@ pub(super) struct StandardPackWorkbench {
     /// has no manifest (then `requires` is not checked).
     subsystems: Option<BTreeSet<String>>,
     state: Mutex<WorkbenchState>,
+    /// RL-1c: notified when a check has ended, for the admission waiting for the first one.
+    checked: Condvar,
 }
 
 impl StandardPackWorkbench {
     pub(super) fn new(manifest: Option<&RuntimeConfigManifest>) -> Self {
         Self {
-            subsystems: manifest.map(|manifest| {
-                manifest
-                    .subsystems
-                    .iter()
-                    .filter(|subsystem| subsystem.enabled)
-                    .map(|subsystem| subsystem.name.clone())
-                    .collect()
-            }),
+            subsystems: enabled_subsystems(manifest),
             state: Mutex::new(WorkbenchState::default()),
+            checked: Condvar::new(),
         }
     }
+}
+
+/// The enabled subsystems of the configuration manifest, which each `requires` must name; `None`
+/// without a manifest.
+fn enabled_subsystems(manifest: Option<&RuntimeConfigManifest>) -> Option<BTreeSet<String>> {
+    manifest.map(|manifest| {
+        manifest
+            .subsystems
+            .iter()
+            .filter(|subsystem| subsystem.enabled)
+            .map(|subsystem| subsystem.name.clone())
+            .collect()
+    })
 }
 
 /// What the workbench remembers between two checks (memory only).
@@ -320,9 +338,41 @@ impl HostShared {
             return Ok(());
         }
         state.checked_at_ms = Some(monotonic_ms);
-        lock(self.policy()?, HostLocation::StandardPackRead)?
-            .set_cached_generations(settings.cached_generations)?;
-        self.refresh_standard_pack_rules(workbench, &mut state)
+        let checked = self
+            .policy()
+            .and_then(|policy| lock(policy, HostLocation::StandardPackRead))
+            .and_then(|policy| policy.set_cached_generations(settings.cached_generations))
+            .and_then(|()| self.refresh_standard_pack_rules(workbench, &mut state));
+        // RL-1c: the admission after start waits for the first check; whatever this check's
+        // result, the procedure bindings it leaves are the ones to admit.
+        drop(state);
+        workbench.checked.notify_all();
+        checked
+    }
+
+    /// ROUT-L RL-1c (#411; `pack_admission.rs`, the admission after start): in composer mode the
+    /// procedure bindings are the composition's, which the workbench installs at its first check
+    /// (the active composed generation's, then the composition of the files as they are). Waits
+    /// until that check has ended and answers `true`, or answers `false` once a stop is
+    /// requested first. Without a workbench (configured mode) it answers `true` at once.
+    pub(super) fn await_first_standard_pack_check(&self) -> RuntimeHostResult<bool> {
+        let Some(workbench) = self.standard_packs.schedule.as_ref() else {
+            return Ok(true);
+        };
+        let mut state = lock(&workbench.state, HostLocation::CheckPackAdmission)?;
+        // A check holds the state for its whole run, so a set `checked_at_ms` seen here is a
+        // check that has ended.
+        while state.checked_at_ms.is_none() {
+            if self.fatal.is_shutdown_requested() {
+                return Ok(false);
+            }
+            state = workbench
+                .checked
+                .wait_timeout(state, FIRST_CHECK_WAIT_TICK)
+                .map_err(|_| lock_poison_error(HostLocation::CheckPackAdmission))?
+                .0;
+        }
+        Ok(true)
     }
 
     fn refresh_standard_pack_rules(
@@ -687,27 +737,16 @@ impl HostShared {
         record: &CompositionRecord,
         root: Option<&Path>,
     ) -> RuntimeHostResult<()> {
-        let bindings = record
-            .procedures
-            .iter()
-            .map(|procedure| {
-                crate::ProcedureBinding::new(
-                    procedure.procedure_ref.clone(),
-                    STANDARD_PACK_OPERATION_ID,
-                    Vec::new(),
+        let manifest = composed_manifest(
+            record.procedures.iter().map(|procedure| {
+                (
+                    procedure.procedure_ref.as_str(),
+                    procedure.game_id.as_str(),
+                    procedure.directory.as_str(),
                 )
-                .map(|binding| match root {
-                    Some(root) => binding.with_package_path(
-                        root.join(&procedure.game_id)
-                            .join(&procedure.directory)
-                            .to_string_lossy()
-                            .into_owned(),
-                    ),
-                    None => binding,
-                })
-            })
-            .collect::<RuntimeHostResult<Vec<_>>>()?;
-        let manifest = ProcedureManifest::composed(bindings)?;
+            }),
+            root,
+        )?;
         *lock(
             &self.procedure_manifest,
             HostLocation::ReadProcedureManifest,
@@ -768,6 +807,221 @@ impl HostShared {
             None => 0,
         })
     }
+}
+
+/// ROUT-L RL-1b (model §3.4): the procedure bindings of a composition, each `(procedure_ref,
+/// game, directory)`: the Runtime's package operation, no yield points, and its package's place
+/// below `root` as the binding's location. It may bind no procedure.
+fn composed_manifest<'a>(
+    procedures: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+    root: Option<&Path>,
+) -> RuntimeHostResult<ProcedureManifest> {
+    let bindings = procedures
+        .into_iter()
+        .map(|(procedure_ref, game_id, directory)| {
+            crate::ProcedureBinding::new(procedure_ref, STANDARD_PACK_OPERATION_ID, Vec::new()).map(
+                |binding| match root {
+                    Some(root) => binding.with_package_path(
+                        root.join(game_id)
+                            .join(directory)
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    None => binding,
+                },
+            )
+        })
+        .collect::<RuntimeHostResult<Vec<_>>>()?;
+    ProcedureManifest::composed(bindings)
+}
+
+/// ROUT-L RL-1c (#411; board 6432236193, 6435964241): what a composer-mode configuration
+/// schedules, for the readers outside the running Runtime: the composition the scheduler workbench
+/// makes for the configured instances from the game roots below `standard_packs.root`, with the
+/// same composer and the same games in use, and the configuration with the composition's
+/// procedure bindings installed, as the workbench installs them. check-config computes over it
+/// what catalog mode computes over `policy.catalog` (the missing fact readers, the remedy
+/// declarations and the task package admission); `actingd suspended` reads its report against
+/// it. Read only; nothing is recorded.
+pub struct ConfiguredStandardPackSchedule {
+    composition: Option<StandardPackComposition>,
+    host: crate::RuntimeHostConfig,
+    problems: Vec<Outcome>,
+    warnings: Vec<String>,
+}
+
+impl ConfiguredStandardPackSchedule {
+    /// RL-1c fix 1 (#411 M1): each of [`Self::problems`] as `<code>:<game>:sha256:<hex>` (the
+    /// game's `schedule.json` as read, `unread` when none was read): why a game has no rows, or
+    /// why its paused pairs are `task_not_in_catalog`, in `actingd suspended`'s warnings.
+    pub fn problem_warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// The composed catalog; `None` when the composition as a whole is refused (its problems
+    /// say why).
+    pub fn compiled(&self) -> Option<&CompiledCatalog> {
+        self.composition
+            .as_ref()
+            .map(StandardPackComposition::compiled)
+    }
+
+    /// The configuration with the composition's procedure bindings (none without a
+    /// composition): the bindings check-config admits and the report reads.
+    pub fn host(&self) -> &crate::RuntimeHostConfig {
+        &self.host
+    }
+
+    /// Each refusal met while composing, in order: a game root that cannot be read
+    /// (`standard_pack_root_unreadable`) or is broken, and each refused `schedule.json`
+    /// (`standard_pack_root_invalid`). The game is left out and the others are composed, as the
+    /// workbench composes them; offline there is no last good file to keep.
+    pub fn problems(&self) -> &[Outcome] {
+        &self.problems
+    }
+}
+
+/// ROUT-L RL-1c: [`ConfiguredStandardPackSchedule`] of `config`: its policy inputs' instances,
+/// its `standard_packs.root` and its configuration manifest's subsystems, as the workbench of a
+/// Runtime started from it reads them. A refused game is left out and each round of the
+/// composition takes out at least one, so it ends; a refusal of the composition as a whole leaves
+/// no composition. Only a binding the composition cannot make fails.
+pub fn compose_configured_standard_packs(
+    config: &crate::RuntimeHostConfig,
+) -> RuntimeHostResult<ConfiguredStandardPackSchedule> {
+    let identities = config
+        .policy_inputs()
+        .map(|inputs| {
+            inputs
+                .instance_identities()
+                .map(|identity| {
+                    (
+                        identity.instance_id.to_owned(),
+                        identity.game_id.to_owned(),
+                        identity.server_id.to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let bound = games_in_use(&identities);
+    let subsystems = enabled_subsystems(config.config_manifest.as_ref());
+    let root = config.standard_packs_root();
+    let mut problems = Vec::new();
+    let mut read = BTreeMap::new();
+    if let Some(root) = root {
+        let games = bound
+            .values()
+            .map(|binding| binding.game_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut reads = BTreeMap::new();
+        for game in &games {
+            match read_schedule_game(&root.join(game), game, &mut reads) {
+                Ok(Some(files)) => {
+                    read.insert(game.clone(), files);
+                }
+                Ok(None) => {}
+                Err(failure) => problems.push(failure.outcome(Some(game.as_str()))),
+            }
+        }
+    }
+    let mut schedules = read
+        .iter()
+        .filter_map(|(game, files)| {
+            files
+                .schedule
+                .as_ref()
+                .map(|bytes| (game.clone(), bytes.as_slice()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let composition = loop {
+        let inputs = read
+            .iter()
+            .filter_map(|(game, files)| {
+                schedules.get(game).map(|schedule| {
+                    (
+                        game.clone(),
+                        StandardPackGameFiles {
+                            schedule,
+                            root: &files.root,
+                            maintenance: files.maintenance.as_slice(),
+                        },
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
+            instances: &bound,
+            games: &inputs,
+            subsystems: subsystems.as_ref(),
+            catalog_version: 1,
+        }) {
+            Ok(composition) => break Some(composition),
+            Err(failure) => failure,
+        };
+        let mut refused = BTreeSet::new();
+        for issue in failure.issues() {
+            // A refusal of the composition as a whole is each composed game's problem: every
+            // `standard_pack_root_invalid` names its game and file.
+            let games = match &issue.game_id {
+                Some(game) => vec![game.clone()],
+                None => schedules.keys().cloned().collect(),
+            };
+            if let Some(root) = root {
+                for game in &games {
+                    problems.push(
+                        RootFailure::Invalid {
+                            path: root.join(game).join(STANDARD_PACK_SCHEDULE_FILE),
+                            issue: issue.issue.clone(),
+                        }
+                        .outcome(Some(game.as_str())),
+                    );
+                }
+            }
+            if let Some(game) = &issue.game_id {
+                refused.insert(game.clone());
+            }
+        }
+        let before = schedules.len();
+        schedules.retain(|game, _| !refused.contains(game));
+        if schedules.len() == before {
+            // A refusal of the composition as a whole, or one naming no game this round
+            // composed: no composition.
+            break None;
+        }
+    };
+    let manifest = composed_manifest(
+        composition
+            .iter()
+            .flat_map(StandardPackComposition::manifest)
+            .map(|procedure| {
+                (
+                    procedure.procedure_ref.as_str(),
+                    procedure.game_id.as_str(),
+                    procedure.directory.as_str(),
+                )
+            }),
+        root,
+    )?;
+    // RL-1c fix 1 (#411 M1): each problem as an offline reader's warning: its code, its game and
+    // the sha256 of the `schedule.json` read for that game (`unread` when none was read).
+    let warnings = problems
+        .iter()
+        .map(|problem| {
+            let game = problem.value("game").and_then(serde_json::Value::as_str);
+            let digest = game
+                .and_then(|game| read.get(game))
+                .and_then(|files| files.schedule.as_deref())
+                .map_or_else(|| "unread".to_owned(), sha256);
+            format!("{}:{}:{digest}", problem.code(), game.unwrap_or("-"))
+        })
+        .collect();
+    Ok(ConfiguredStandardPackSchedule {
+        host: config.clone().with_procedure_manifest(manifest),
+        composition,
+        problems,
+        warnings,
+    })
 }
 
 /// ROUT-L RL-1b (model §6.4 step 1, §7.2): what check-config shows of the composition the

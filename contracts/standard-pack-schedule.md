@@ -224,6 +224,35 @@ nothing.
 - **Approval.** An intent of a composed generation names no approval, so its admission reads no
   approval projection.
 
+## The readers of composer mode (RL-1c)
+
+ROUT-L RL-1c (#411; v0.12.20). Every reader that reads `policy.catalog` or
+`policy.procedure_manifest` in catalog mode reads, in composer mode, what the configuration
+schedules: the composition the workbench makes for the configured instances, by the same
+composer over the same games in use, with the procedure bindings the workbench installs. Offline
+there is no active generation to fall back on, so a game whose root is broken or whose
+`schedule.json` is refused is left out (its problem is reported where it was before), and the
+other games are composed.
+
+- **The admission after start** ([policy-suspension.md](policy-suspension.md), "Task package
+  suspension") waits for the workbench's first check and then admits the packages the composed
+  procedures locate.
+- **`actingd check-config`** computes `fact_reader_missing`, `pack_admission_suspended` and
+  `policy_remedy_declaration_unusable` over the composition
+  ([actingd-check-config.md](actingd-check-config.md)).
+- **`actingd suspended`** (and so `ac_diagnose`'s `suspended`, `packs`, `remedies`, `lift`,
+  `repeating` and `clock_slots`) is judged against the composition's catalog and bindings
+  ([policy-suspension.md](policy-suspension.md)).
+- **`actingctl packs` / `ac_packs`** decode the configuration as actingd does and list one
+  installation row per composed procedure (`package_id`, its place below the game root as
+  `path` with `readable`, `procedure_ref` `package.<package_id>`, `operation_id`
+  `operation.package.run`, `scheduled` true). They read the files as the workbench does (the
+  contract crate's root check, the policy crate's composer) but cannot see the Runtime's
+  subsystems, so `requires` is not checked there (check-config checks it). A game root that
+  cannot be read adds `package_binding_unreadable`, a broken one or a refused `schedule.json`
+  adds `standard_pack_root_invalid`, and that game has no row. The overview reads the same file
+  without composing.
+
 ## What does not change
 
 No ledger record type or member is added. A composed generation is activated with the existing

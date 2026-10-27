@@ -82,6 +82,9 @@ const RUN_LIST_PAGE: usize = 100;
 /// How long the CLI reads: MCP's 25 s call budget less the second it keeps back to answer, so
 /// that both sides end a long read alike.
 const CLI_READ_BUDGET: Duration = Duration::from_secs(24);
+/// ROUT-L RL-1c fix 1 (#411 H1): what `actingd suspended` keeps back from the call's deadline to
+/// answer with what it read before it is ended there.
+const SUSPENDED_ANSWER_MARGIN: Duration = Duration::from_secs(2);
 const ACTINGD: &str = "actingcommand-actingd.exe";
 /// The run states `runs` and `runs_grouped` keep: failed, and not ended.
 const FAILED_OR_OPEN: [ContainedRunState; 4] = [
@@ -195,20 +198,32 @@ pub(crate) fn now_unix_ms() -> Result<u64, Failure> {
 pub(crate) struct SuspensionReport(Result<JoinHandle<Result<Captured, ChildFailure>>, Outcome>);
 
 impl SuspensionReport {
-    /// Starts `<program root>\runtime\actingcommand-actingd.exe suspended --config <config>` of
-    /// the generation selected at this call, found from `root` (the CLI's `--root`, or the
+    /// Starts `<program root>\runtime\actingcommand-actingd.exe suspended --config <config>
+    /// --deadline-ms <ms>` of the generation selected at this call, found from `root` (the CLI's
+    /// `--root`, or the
     /// `--root` the MCP server was given), never from a selection this process holds from an
-    /// earlier moment. The child ends on its own; it is not waited for past `deadline`.
+    /// earlier moment. ROUT-L RL-1c fix 1 (#411 H1): the child reads the ledger until
+    /// `--deadline-ms`, [`SUSPENDED_ANSWER_MARGIN`] before `deadline`, and answers with what it
+    /// read; a child still running at `deadline` is ended there, never left running.
     pub(crate) fn start(root: Option<&Path>, deadline: Instant) -> Self {
         let (program_root, config, installation) = match suspension_source(root) {
             Ok(source) => source,
             Err(outcome) => return Self(Err(outcome)),
         };
+        let read_ms = deadline
+            .saturating_duration_since(Instant::now())
+            .saturating_sub(SUSPENDED_ANSWER_MARGIN)
+            .as_millis();
         let mut command = Command::new(program_root.join("runtime").join(ACTINGD));
-        command.arg("suspended").arg("--config").arg(config);
+        command
+            .arg("suspended")
+            .arg("--config")
+            .arg(config)
+            .arg("--deadline-ms")
+            .arg(read_ms.to_string());
         child::pin_child(&mut command, installation.as_ref());
         Self(Ok(thread::spawn(move || {
-            child::run_captured(command, deadline)
+            child::run_captured_ending(command, deadline)
         })))
     }
 }
@@ -1224,8 +1239,11 @@ impl SuspensionReport {
                     match failure {
                         ChildFailure::Spawn(_) => ActingctlCode::SuspendedReportSpawnFailed,
                         ChildFailure::Io(_) => ActingctlCode::SuspendedReportIoFailed,
-                        // Still running at the end of the call budget.
-                        ChildFailure::StillRunning { .. } => ActingctlCode::SuspendedReportTimeout,
+                        // Still running at the end of the call budget, and ended there (RL-1c
+                        // fix 1).
+                        ChildFailure::StillRunning { .. } | ChildFailure::Ended => {
+                            ActingctlCode::SuspendedReportTimeout
+                        }
                     }
                 };
                 let outcome = Outcome::new(code);
@@ -1281,7 +1299,16 @@ impl SuspensionReport {
                     None => clock_slot_rows_of(&document, None, since_unix_ms),
                 };
                 SuspensionRows {
-                    complete: true,
+                    // RL-1c fix 1 (#411 H1): a report whose ledger read ran out of its deadline
+                    // answers with what it read; the diagnosis is then incomplete.
+                    complete: !document
+                        .get("warnings")
+                        .and_then(Value::as_array)
+                        .is_some_and(|warnings| {
+                            warnings
+                                .iter()
+                                .any(|warning| warning == "ledger_read_incomplete")
+                        }),
                     suspended: rows("suspended"),
                     packs: pack_rows(&document, instance),
                     remedies: remedy_rows(&document, instance),

@@ -203,8 +203,22 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
             ActingdLocation::RecognitionBinding,
         ));
     }
+    // ROUT-L RL-1c (#411; board 6432236193, 6435964241): in composer mode (a `policy` without
+    // `catalog`) the missing fact readers, the task package admission and the remedy declarations
+    // are computed over the composition the scheduler workbench makes for the configured
+    // instances, as catalog mode computes them over `policy.catalog`. Its problems are the
+    // `standard_pack_schedule` notes below.
+    let composed = match policy.as_ref() {
+        Some(policy) if policy.catalog.is_none() => Some(
+            actingcommand_runtime_host::compose_configured_standard_packs(&host).map_err(
+                |error| staged(ActingdError::runtime(error), ActingdLocation::PolicyState),
+            )?,
+        ),
+        _ => None,
+    };
     let missing_readers = config::recognition_package::missing_reader_warnings(
         policy.as_ref(),
+        composed.as_ref(),
         &config::recognition_package::marked_keys(&recognition),
     )
     .map_err(|code| {
@@ -249,7 +263,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     notes.extend(missing_readers);
     // Workflow #386 SR-3 (scheduling model §2.4 item 2): with
     // `scheduling.pack_admission.check_in_check_config` on, this Runtime's kernel admits every
-    // package `policy.procedure_manifest` locates; one refused with a suspend code is a
+    // package `policy.procedure_manifest` locates (ROUT-L RL-1c: in composer mode, every package
+    // the composition's procedures locate); one refused with a suspend code is a
     // `pack_admission_suspended` note and the configuration stays valid. Nothing is written.
     let pack_admission =
         actingcommand_runtime_config::EffectiveConfig::from_manifest(&checked.manifest)
@@ -262,31 +277,47 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
             })?;
     if pack_admission.check_in_check_config {
         notes.extend(actingcommand_runtime_host::pack_admission_notes(
-            &checked.host,
+            composed
+                .as_ref()
+                .map_or(&checked.host, |composed| composed.host()),
             &pack_admission.suspend_codes,
             option_env!("ACTINGCOMMAND_RUNTIME_HEAD"),
         ));
     }
     // Workflow #411 B15 R7 (model-b15 §9.1, §13): the remedy table built offline over
-    // `policy.procedure_manifest`; each of its findings, and each configuration row whose names
-    // the bound packages do not declare, is a `policy_remedy_declaration_unusable` note, a row's
-    // also a developer line naming it; each package the table cannot read is the developer line
-    // the running Runtime writes for it. The configuration stays valid. Nothing is written.
-    if let Some(policy) = policy.as_ref()
-        && let Some(catalog) = policy.catalog.as_ref()
-    {
+    // `policy.procedure_manifest` (ROUT-L RL-1c: in composer mode over the composition's catalog
+    // and procedures); each of its findings, and each configuration row whose names the bound
+    // packages do not declare, is a `policy_remedy_declaration_unusable` note, a row's also a
+    // developer line naming it; each package the table cannot read is the developer line the
+    // running Runtime writes for it. The configuration stays valid. Nothing is written.
+    if let Some(policy) = policy.as_ref() {
         let lists = remedy_choice_lists(&checked.manifest).map_err(|failure| {
             staged(
                 ActingdError::refused(failure.failure_code(), failure.outcome()),
                 ActingdLocation::ConfigAssemble,
             )
         })?;
-        let remedies =
-            actingcommand_runtime_host::remedy_declaration_notes(&checked.host, catalog, &lists);
-        for line in &remedies.unreadable {
+        let remedies = match (policy.catalog.as_ref(), composed.as_ref()) {
+            (Some(catalog), _) => Some(actingcommand_runtime_host::remedy_declaration_notes(
+                &checked.host,
+                catalog,
+                &lists,
+            )),
+            // A composition refused as a whole gives no note, as a catalog that does not
+            // compile gives none: its problem is a note of its own.
+            (None, Some(composed)) => composed.compiled().map(|compiled| {
+                actingcommand_runtime_host::remedy_declaration_notes_compiled(
+                    composed.host(),
+                    compiled,
+                    &lists,
+                )
+            }),
+            (None, None) => None,
+        };
+        for line in remedies.iter().flat_map(|remedies| &remedies.unreadable) {
             write_stderr(&format!("{line}\n"));
         }
-        for note in remedies.notes {
+        for note in remedies.into_iter().flat_map(|remedies| remedies.notes) {
             if let Some(detail) = &note.detail {
                 write_stderr(&developer_line(&note.outcome, Some(detail)));
             }
