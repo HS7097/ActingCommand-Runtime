@@ -594,15 +594,20 @@ the backend self-check facts (source `device-proxy` or `capture`).
   Runtime's integer or names no earlier start event fails the start with
   `contained_settlement_anchor_invalid`.
 - `host.idle_state` (#405 IDLE-1P, 0.12.20) — runtime scope, `record_list`,
-  no lifetime: the instances the idle action closed, or is closing, one row
-  per instance (`instance_alias`, `action` `close_app` or `stop_emulator`, and
-  `wake_at_unix_ms` when a wake is planned), recorded whenever that set or a
-  wake changes and again by the start that restores the idle planner from it
-  ([runtime-config.md](runtime-config.md), "The `idle` section"). A start of a
-  configuration that names an idle action records it even when no instance is
-  closed, so the next start knows. A value of another shape is
-  `invalid_runtime_state_fact` (operation `restore_idle_state`), recorded, and
-  the start goes on with every instance's state unknown (closed, never open).
+  no lifetime: the instances the idle action closed, or is closing. The first
+  row names the writer, `owner_epoch` alone (the recording owner's epoch);
+  each further row is one instance (`instance_alias`, `action` `close_app` or
+  `stop_emulator`, and `wake_at_unix_ms` when a wake is planned). Recorded
+  whenever that set or a wake changes and again by the start that restores
+  the idle planner from it ([runtime-config.md](runtime-config.md), "The
+  `idle` section"). A start of a configuration that names an idle action
+  records it even when no instance is closed, so the next start knows. A
+  start restores from it only when its writer is the owner before that start;
+  a record an earlier owner wrote (a start that kept none ran in between, such
+  as a rollback's older build) leaves every instance's state unknown (closed,
+  never open). A value of another shape is `invalid_runtime_state_fact`
+  (operation `restore_idle_state`), recorded, and the start goes on with every
+  instance's state unknown.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

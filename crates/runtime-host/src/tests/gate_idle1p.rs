@@ -14,6 +14,10 @@
 //!   says why: `fact_refresh_pending` with the gate `instance_idle_action`, `gate_d2_s4`).
 //! - L-6: a reading that a task due within the lead needs wakes it.
 //!
+//! Review fixes (rd-1027/brief-idle1p-fix1.md): M-2, a record an older build outlived (a
+//! rollback) leaves the instance closed; L-3, the daemon-start autostart leaves an emulator the
+//! restored `stop_emulator` holds stopped; L-2, any eligible task with no later wake is due.
+//!
 //! L-1 to L-3 go through the host with the scripted emulator of `gate_idle1_host` (X's idle action
 //! `stop_emulator`, its configured emulator start and a startup package) on a manual clock; each
 //! restart starts a new host on the same state root. L-5 and L-6 read the plan the idle check
@@ -33,7 +37,8 @@ use actingcommand_contract::{
 };
 use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_policy::{
-    EligibilityState, FACT_REFRESH_TASK_ID, PolicyEvaluation, SchedulingDecisionState, TaskDecision,
+    EligibilityState, FACT_REFRESH_TASK_ID, PolicyEvaluation, SchedulingDecisionState,
+    TaskDecision, TaskRank,
 };
 use actingcommand_runtime_config::{
     DefaultsFile, IdleAction, IdleConfig, annotate_settable, mechanism_rows, render_parameters,
@@ -108,6 +113,23 @@ fn start(
     state: &Arc<FakeState>,
     failing: bool,
 ) -> RuntimeHostResult<RuntimeHost> {
+    start_with(root, clock, x, state, |config| {
+        if failing {
+            config.with_start_failure_after_start_event_for_test()
+        } else {
+            config
+        }
+    })
+}
+
+/// [`start`] with `adjust` applied to its configuration.
+fn start_with(
+    root: &TempDir,
+    clock: &Arc<ManualRuntimeClock>,
+    x: InstanceId,
+    state: &Arc<FakeState>,
+    adjust: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
+) -> RuntimeHostResult<RuntimeHost> {
     let package_path = root.path().join("idle1p-startup-package.zip");
     fs::write(&package_path, neutral_contained_task_package(true)).expect("write startup package");
     let startup = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
@@ -127,13 +149,8 @@ fn start(
         .with_network_connectivity_for_test(read)
         .with_startup_packages(BTreeMap::from([(X_ALIAS.to_owned(), startup)]))
         .with_config_manifest(idle_manifest(x));
-    let config = if failing {
-        config.with_start_failure_after_start_event_for_test()
-    } else {
-        config
-    };
     RuntimeHost::start(
-        config,
+        adjust(config),
         Arc::new(FakeProvider::from_entries([(
             X_ALIAS.to_owned(),
             x,
@@ -207,15 +224,30 @@ fn wake_records() -> Vec<String> {
     ]
 }
 
-/// The rows of `host.idle_state` the host holds; none when it holds no such fact.
+/// The instance rows of `host.idle_state` the host holds, after its writer row; none when it
+/// holds no such fact.
 fn kept_rows(host: &RuntimeHost) -> Option<Vec<BTreeMap<String, FactScalar>>> {
+    kept_record(host).map(|(_, rows)| rows)
+}
+
+/// `host.idle_state` as the host holds it: the owner epoch its writer row names (review M-2),
+/// and its instance rows.
+fn kept_record(host: &RuntimeHost) -> Option<(String, Vec<BTreeMap<String, FactScalar>>)> {
     host.runtime_fact_snapshot()
         .expect("the program facts")
         .records
         .into_iter()
         .find(|record| record.scope == RuntimeFactScope::Runtime && record.key == IDLE_STATE)
         .map(|record| match record.value {
-            FactValue::RecordList(rows) => rows,
+            FactValue::RecordList(mut rows) => {
+                assert!(!rows.is_empty(), "host.idle_state has its writer row");
+                let writer = rows.remove(0);
+                let epoch = match (writer.len(), writer.get("owner_epoch")) {
+                    (1, Some(FactScalar::String(epoch))) => epoch.clone(),
+                    _ => panic!("the first row names the writer's owner_epoch alone: {writer:?}"),
+                };
+                (epoch, rows)
+            }
             other => panic!("host.idle_state is a record list: {other:?}"),
         })
 }
@@ -378,6 +410,112 @@ fn idle1p_l3_an_unknown_state_at_start_is_not_treated_as_open() {
     host.close().expect("close the host");
 }
 
+/// Review M-2 (a rollback): v0.12.20 keeps its state, an older build runs (it keeps none, and its
+/// own idle action closes X), then v0.12.20 starts again. The record names the first start, not
+/// the owner before this one, so it is stale: X's state is unknown and X counts as closed, never
+/// as open: it is not acted on, and it is woken at its next task minus the lead.
+#[test]
+fn idle1p_m2_a_record_an_older_build_outlived_leaves_the_instance_closed() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(NOW_UNIX_MS, 0));
+    let x = instance_id();
+    // v0.12.20: the ledger's first start keeps X open (nothing closed) under its own epoch.
+    let first = start(&root, &clock, x, &x_state(), false).expect("the first start");
+    let (first_epoch, rows) = kept_record(&first).expect("the first start keeps its state");
+    assert!(
+        rows.is_empty(),
+        "nothing is closed at the ledger's first start"
+    );
+    first.close().expect("close the first host");
+
+    // The older build: it keeps no idle state, and its idle action closes X.
+    let older_at = NOW_UNIX_MS + MINUTE_MS;
+    clock.set_unix_ms(older_at);
+    let older_state = x_state();
+    let older = start_with(
+        &root,
+        &clock,
+        x,
+        &older_state,
+        RuntimeHostConfig::with_idle_state_unkept_for_test,
+    )
+    .expect("the older build's start");
+    older
+        .check_idle_instances_for_test(&x_plan_at(older_at))
+        .expect("the older build's check");
+    assert_eq!(
+        older.await_idle_action_ends_for_test(1, WAIT),
+        Some(1),
+        "the older build's idle action ended"
+    );
+    assert_eq!(stops(&older_state), 1, "the older build stopped X");
+    older.close().expect("close the older build");
+
+    // v0.12.20 again.
+    let now = NOW_UNIX_MS + 2 * MINUTE_MS;
+    clock.set_unix_ms(now);
+    let state = x_state();
+    let host = start(&root, &clock, x, &state, false).expect("the start after the rollback");
+    let after_start = head(&host);
+    let (epoch, rows) = kept_record(&host).expect("the start keeps its state");
+    assert_ne!(
+        epoch, first_epoch,
+        "the start keeps its state under its own epoch"
+    );
+    assert_eq!(
+        rows,
+        vec![x_row(None)],
+        "X, whose record is stale, counts as closed"
+    );
+    host.check_idle_instances_for_test(&x_plan_at(now))
+        .expect("the check");
+    assert_eq!(stops(&state), 0, "X is not treated as open");
+    assert!(idle_records(&host, x, after_start).is_empty());
+
+    clock.set_unix_ms(WAKE_UNIX_MS);
+    host.check_idle_instances_for_test(&x_plan_at(WAKE_UNIX_MS))
+        .expect("the check at the wake");
+    assert_eq!(idle_records(&host, x, after_start), wake_records());
+    host.close().expect("close the host");
+}
+
+/// Review L-3: the daemon-start emulator start (S6c) leaves an emulator that the restored
+/// `stop_emulator` holds stopped to its wake: a restart does not bring a closed instance back.
+#[test]
+fn idle1p_l3_the_daemon_start_autostart_leaves_a_held_stopped_emulator_to_its_wake() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(NOW_UNIX_MS, 0));
+    let x = instance_id();
+    let (first, _) = close_x(&root, &clock, x);
+    first.close().expect("close the first host");
+
+    // The restart, well before the wake, with X's emulator stopped as the action left it.
+    clock.set_unix_ms(NOW_UNIX_MS + 30 * MINUTE_MS);
+    let state = x_state();
+    state.emulator.rebind(None);
+    state.refuse_pending_opens.store(true, Ordering::Release);
+    let host = start(&root, &clock, x, &state, false).expect("the restart");
+    assert_eq!(
+        kept_rows(&host),
+        Some(vec![x_row(Some(WAKE_UNIX_MS))]),
+        "X is restored closed with its wake"
+    );
+    assert_eq!(
+        host.enqueue_emulator_autostart()
+            .expect("the daemon-start autostart"),
+        0,
+        "X's held-stopped emulator gets no autostart claim"
+    );
+    assert!(
+        !state
+            .emulator
+            .calls()
+            .contains(&EmulatorCall::Control(EmulatorInstanceAction::Start)),
+        "X's emulator is not started before its wake"
+    );
+    host.close().expect("close the restarted host");
+}
+
 // ---- L-5, L-6: the plan the idle check reads, from a recorded evaluation ----
 
 const NODE: &str = "node-a";
@@ -471,37 +609,54 @@ fn closed(next_due: u64) -> IdlePlanner {
 fn idle1p_l5_a_reading_with_no_due_task_does_not_wake_the_closed_instance() {
     let next_due = T0 + 4 * 60 * MINUTE_MS;
     let now = T0 + 10 * MINUTE_MS;
-    // The reading as an evaluation may show it: selected (an evaluation that did not know the
-    // instance closed), held back by the idle action (no wake), or by its minimum interval (its
-    // own wake). The task that reads the fact waits for it with its trigger undecided: it is not
-    // due.
-    for reading in [
+    // The task that reads the fact waits for the reading with its trigger undecided: it is not
+    // due. The reading and that task as the evaluator gives them (`gate_d2_s4`):
+    // 1. the reading selected (an evaluation that did not know the instance closed): the task
+    //    waits under `fact_refresh_pending` with no wake (§3.7 row 3);
+    // 2. the reading held back by the idle action, past its own gates (no wake): the task waits
+    //    with the gate `instance_idle_action` and no wake (`idle1p_l5_a_reading_...`);
+    // 3. the reading held by its own minimum interval or failure backoff on the closed instance
+    //    (review M-1): the reading keeps its own wake, the cooldown's end, and the task waits with
+    //    the gate `task_cooldown_active` and takes no wake of the reading's
+    //    (`idle1p_l5_within_the_cooldown_...`).
+    let waiting = || {
         decision(
-            FACT_REFRESH_TASK_ID,
-            EligibilityState::True,
-            SchedulingDecisionState::Selected,
-            None,
-        ),
-        decision(
-            FACT_REFRESH_TASK_ID,
-            EligibilityState::True,
-            SchedulingDecisionState::Deferred,
-            None,
-        ),
-        decision(
-            FACT_REFRESH_TASK_ID,
-            EligibilityState::True,
-            SchedulingDecisionState::Deferred,
-            Some(now + 5 * MINUTE_MS),
-        ),
-    ] {
-        let mut planner = closed(next_due);
-        let waiting = decision(
             "task.reads_the_fact",
             EligibilityState::Unknown,
             SchedulingDecisionState::Deferred,
             None,
-        );
+        )
+    };
+    for (reading, waiting) in [
+        (
+            decision(
+                FACT_REFRESH_TASK_ID,
+                EligibilityState::True,
+                SchedulingDecisionState::Selected,
+                None,
+            ),
+            waiting(),
+        ),
+        (
+            decision(
+                FACT_REFRESH_TASK_ID,
+                EligibilityState::True,
+                SchedulingDecisionState::Deferred,
+                None,
+            ),
+            waiting(),
+        ),
+        (
+            decision(
+                FACT_REFRESH_TASK_ID,
+                EligibilityState::True,
+                SchedulingDecisionState::Deferred,
+                Some(now + 5 * MINUTE_MS),
+            ),
+            waiting(),
+        ),
+    ] {
+        let mut planner = closed(next_due);
         let plan = explained(vec![reading.clone(), waiting, later_task(next_due)], now);
         let read = plan.expect("an evaluated plan");
         assert!(!read.due_now, "{reading:?}: the reading is no due task");
@@ -564,4 +719,57 @@ fn idle1p_l6_a_reading_a_task_due_within_the_lead_needs_wakes_the_closed_instanc
             "{needing:?}"
         );
     }
+}
+
+/// Review L-2 (IDLE-1P keeps the new meaning): a task of the instance is due when any eligible
+/// decision of it has no wake of its own later than the evaluation, not only the top-ranked one.
+/// Here the top-ranked eligible task is deferred to a later wake (a random delay) and a
+/// lower-ranked one waits with none: the plan is due now, so an open instance is not closed and a
+/// closed one is woken.
+#[test]
+fn idle1p_l2p_any_eligible_task_with_no_later_wake_is_due() {
+    let next_due = T0 + 4 * 60 * MINUTE_MS;
+    let now = T0 + 10 * MINUTE_MS;
+    let ranked = |task_id: &str, total_score: i64, wake: Option<u64>| TaskDecision {
+        rank: Some(TaskRank {
+            priority: 0,
+            aging_ms: 0,
+            strategic_weight_milli: 1_000,
+            urgency_milli: 0,
+            load_cost_milli: 0,
+            contention_penalty: 0,
+            total_score,
+            effective_milli: 0,
+        }),
+        ..decision(
+            task_id,
+            EligibilityState::True,
+            SchedulingDecisionState::Deferred,
+            wake,
+        )
+    };
+    let decisions = || {
+        vec![
+            ranked("task.top", 900, Some(now + 60 * MINUTE_MS)),
+            ranked("task.lower", 100, None),
+            later_task(next_due),
+        ]
+    };
+    let plan = explained(decisions(), now);
+    assert!(
+        plan.is_some_and(|plan| plan.due_now),
+        "the lower-ranked task with no later wake is due: {plan:?}"
+    );
+    let mut open = IdlePlanner::default();
+    assert_eq!(
+        open.check(NODE, &PRODUCTION, free(), plan, now),
+        None,
+        "the open instance is not closed"
+    );
+    let mut planner = closed(next_due);
+    assert_eq!(
+        planner.check(NODE, &PRODUCTION, free(), explained(decisions(), now), now),
+        Some(WAKE),
+        "the closed instance is woken"
+    );
 }

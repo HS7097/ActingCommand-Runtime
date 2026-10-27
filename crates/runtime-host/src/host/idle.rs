@@ -70,7 +70,9 @@
 //!   it, and the start restores the planner from it before any instance is prepared, as the
 //!   scheduling pauses are restored (`HostShared::restore_idle_state`). A closed instance whose
 //!   wake has come, or whose plan shows a task due, is woken at the start's first check; one the
-//!   start knows nothing about is restored as closed, never as open. The configured emulator
+//!   start knows nothing about is restored as closed, never as open, and so is every instance
+//!   when the record names another writer than the owner before this start (review M-2: an
+//!   older build ran in between and its idle action was not recorded). The configured emulator
 //!   start at start leaves an emulator the action holds stopped to its wake.
 //! - **The scheduler's fact refresh** (IDLE-1P): the closed instances are an input of every
 //!   evaluation (`HostShared::idle_closed_for_policy`); a reading of one waits for its next wake
@@ -87,9 +89,9 @@ use crate::codes::{HostCode, IdleCode, IdleLocation};
 use crate::idle_action::{
     IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, KeptIdle, WakeWork,
 };
-use actingcommand_contract::EmulatorRunningState;
-use actingcommand_contract::codes::SanitizationCode;
+use actingcommand_contract::codes::{SanitizationCode, SharedCode};
 use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::{EmulatorRunningState, OwnerEpoch};
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_runtime_config::IdleAction;
 
@@ -99,12 +101,15 @@ const APPLICATIONS_FILE: &str = "applications.json";
 /// policy cycle runs it too.
 const IDLE_SWEEP_INTERVAL_MS: u64 = 1_000;
 /// IDLE-1P (#405): the runtime fact (scope Runtime, a record list, tagged so a start loads it)
-/// that keeps the instances the idle action closed or is closing: one row per instance,
-/// `instance_alias`, `action` (`close_app` or `stop_emulator`) and, when one is planned,
-/// `wake_at_unix_ms`. The idle planner's changes record it; a start restores the planner from it
-/// and records it again.
+/// that keeps the instances the idle action closed or is closing. Its first row names the writer,
+/// `owner_epoch` alone (review M-2); every further row is one instance, `instance_alias`,
+/// `action` (`close_app` or `stop_emulator`) and, when one is planned, `wake_at_unix_ms`. The idle
+/// planner's changes record it; a start restores the planner from it when the owner before it
+/// wrote it, and records it again.
 const IDLE_STATE_FACT_KEY: &str = "host.idle_state";
-/// The members of a `host.idle_state` row.
+/// The member of a `host.idle_state` writer row.
+const KEPT_OWNER: &str = "owner_epoch";
+/// The members of a `host.idle_state` instance row.
 const KEPT_ALIAS: &str = "instance_alias";
 const KEPT_ACTION: &str = "action";
 const KEPT_WAKE: &str = "wake_at_unix_ms";
@@ -122,15 +127,22 @@ pub(super) struct PendingIdleAction {
     causation_id: actingcommand_contract::IssuedCausationId,
 }
 
-/// IDLE-1P (#405): the closed instances a `host.idle_state` record keeps, by alias; none when the
-/// record is not of the shape this build writes (not the Runtime's own record list, a row without
-/// its alias, an action other than `close_app` or `stop_emulator`, a wake of another type).
-fn kept_idle(record: &RuntimeFactRecord) -> Option<BTreeMap<String, KeptIdle>> {
+/// IDLE-1P (#405): the owner epoch that wrote a `host.idle_state` record (review M-2) and the
+/// closed instances it keeps, by alias; none when the record is not of the shape this build
+/// writes (not the Runtime's own record list, no writer row first, a row without its alias, an
+/// action other than `close_app` or `stop_emulator`, a wake of another type).
+fn kept_idle(record: &RuntimeFactRecord) -> Option<(String, BTreeMap<String, KeptIdle>)> {
     if record.source != OriginModule::Runtime {
         return None;
     }
     let ContractFactValue::RecordList(rows) = &record.value else {
         return None;
+    };
+    // Review M-2: the writer row first, naming the owner epoch that wrote the record.
+    let (writer, rows) = rows.split_first()?;
+    let writer = match writer.get(KEPT_OWNER) {
+        Some(FactScalar::String(epoch)) if writer.len() == 1 => epoch.clone(),
+        _ => return None,
     };
     let mut kept = BTreeMap::new();
     for row in rows {
@@ -156,7 +168,19 @@ fn kept_idle(record: &RuntimeFactRecord) -> Option<BTreeMap<String, KeptIdle>> {
             },
         );
     }
-    Some(kept)
+    Some((writer, kept))
+}
+
+/// Review M-2: `owner_epoch` as `host.idle_state` names it (its canonical text).
+fn idle_epoch_text(owner_epoch: OwnerEpoch, location: IdleLocation) -> RuntimeHostResult<String> {
+    match serde_json::to_value(owner_epoch) {
+        Ok(serde_json::Value::String(text)) => Ok(text),
+        _ => Err(RuntimeHostError::fatal(
+            SharedCode::RuntimeIdentifierIssueFailed,
+            location,
+            RuntimeErrorCode::RuntimeHalted,
+        )),
+    }
 }
 
 /// `instance_idle_action` for `alias` and `action` at `operation`.
@@ -270,7 +294,7 @@ impl HostShared {
             let policy = self.policy()?;
             if from_sweep {
                 match policy.try_lock() {
-                    Ok(policy) => read(&*policy),
+                    Ok(policy) => read(&policy),
                     Err(TryLockError::WouldBlock) => return Ok(()),
                     Err(TryLockError::Poisoned(_)) => {
                         return Err(lock_poison_error(IdleLocation::Check));
@@ -335,6 +359,10 @@ impl HostShared {
     /// it was last recorded. The caller holds the planner, so the records follow its changes in
     /// order.
     fn keep_idle_state(&self, planner: &mut IdlePlanner) -> RuntimeHostResult<()> {
+        #[cfg(test)]
+        if self.idle_state_unkept_for_test {
+            return Ok(());
+        }
         let Some(closed) = planner.unkept() else {
             return Ok(());
         };
@@ -343,12 +371,16 @@ impl HostShared {
         Ok(())
     }
 
-    /// `host.idle_state` with one row per instance of `closed`, observed strictly after the
-    /// previous record (a manual clock may not move between two).
+    /// `host.idle_state`: the writer row naming this owner's epoch (review M-2), then one row per
+    /// instance of `closed`, observed strictly after the previous record (a manual clock may not
+    /// move between two).
     fn record_idle_state(&self, closed: &BTreeMap<String, KeptIdle>) -> RuntimeHostResult<()> {
-        let rows = closed
-            .iter()
-            .map(|(alias, kept)| {
+        let writer = BTreeMap::from([(
+            KEPT_OWNER.to_owned(),
+            FactScalar::String(idle_epoch_text(self.owner_epoch, IdleLocation::Check)?),
+        )]);
+        let rows = std::iter::once(writer)
+            .chain(closed.iter().map(|(alias, kept)| {
                 let mut row = BTreeMap::from([
                     (KEPT_ALIAS.to_owned(), FactScalar::String(alias.clone())),
                     (
@@ -360,7 +392,7 @@ impl HostShared {
                     row.insert(KEPT_WAKE.to_owned(), FactScalar::TimestampMs(at));
                 }
                 row
-            })
+            }))
             .collect::<Vec<_>>();
         let now = self.runtime_clock_sample()?.unix_ms;
         let previous = lock(&self.runtime_facts, IdleLocation::Check)?
@@ -413,21 +445,34 @@ impl HostShared {
 
     /// IDLE-1P (#405): restores the idle planner at start, after the runtime facts and the
     /// scheduling pauses and before any instance is prepared, as the pauses are restored:
-    /// - `host.idle_state` names the instances the idle action closed, or was closing, when the
-    ///   Runtime stopped: each registered physical instance the configuration names comes back
-    ///   idle after its action, owing its kept wake;
-    /// - without that record after an earlier start (the Runtime before did not keep it), or with
-    ///   a record this build does not read (`invalid_runtime_state_fact`, recorded, and the start
-    ///   goes on), the start does not know what the action left: every such instance whose action
-    ///   in effect could have run on it (not `none`, its startup package configured, and for
-    ///   `stop_emulator` its emulator start) comes back idle with no wake, closed rather than
-    ///   open, and the first plan that shows a task gives its wake;
+    /// - `host.idle_state` written by the owner before this one (`previous_owner_epoch`, its
+    ///   writer row) names the instances the idle action closed, or was closing, when the Runtime
+    ///   stopped: each registered physical instance the configuration names comes back idle after
+    ///   its action, owing its kept wake;
+    /// - without that record after an earlier start (the Runtime before did not keep it), with a
+    ///   record another owner wrote (review M-2: a start that kept none ran in between, such as a
+    ///   rollback's older build, whose own idle action may have closed what the record shows
+    ///   open), or with a record this build does not read (`invalid_runtime_state_fact`,
+    ///   recorded, and the start goes on), the start does not know what the action left: every
+    ///   such instance whose action in effect could have run on it (not `none`, its startup
+    ///   package configured, and for `stop_emulator` its emulator start) comes back idle with no
+    ///   wake, closed rather than open, and the first plan that shows a task gives its wake;
     /// - on the ledger's first start nothing was closed.
     ///
-    /// The restored instances are then recorded again, which is the ledger's record of the
-    /// restore; a start whose configuration names no idle action and that finds no record keeps
-    /// nothing.
-    pub(super) fn restore_idle_state(&self, earlier_start: bool) -> RuntimeHostResult<()> {
+    /// The restored instances are then recorded again under this owner's epoch, which is the
+    /// ledger's record of the restore; a start whose configuration names no idle action and that
+    /// finds no record keeps nothing.
+    pub(super) fn restore_idle_state(
+        &self,
+        previous_owner_epoch: Option<OwnerEpoch>,
+    ) -> RuntimeHostResult<()> {
+        #[cfg(test)]
+        if self.idle_state_unkept_for_test {
+            return Ok(());
+        }
+        let previous = previous_owner_epoch
+            .map(|epoch| idle_epoch_text(epoch, IdleLocation::Restore))
+            .transpose()?;
         let instances = lock(&self.registered_instances, IdleLocation::Restore)?
             .values()
             .filter(|instance| instance.provenance() == ExecutionBackendProvenance::PhysicalDevice)
@@ -472,9 +517,11 @@ impl HostShared {
                         None,
                     )?;
                 }
-                kept
+                // Review M-2: only the owner before this one's record is current; one an earlier
+                // owner wrote leaves every instance's state unknown.
+                kept.and_then(|(writer, kept)| (previous.as_ref() == Some(&writer)).then_some(kept))
             }
-            None if earlier_start => None,
+            None if previous.is_some() => None,
             None => Some(BTreeMap::new()),
         };
         let mut planner = lock(&self.idle, IdleLocation::Restore)?;
@@ -714,8 +761,16 @@ impl HostShared {
             || self.fatal.is_shutdown_requested()
         {
             let kept = self.end_idle_action(|planner| planner.abandoned(alias));
-            let released = self.release_host_key(&key);
-            return kept.and(released);
+            self.release_host_key(&key)?;
+            // Review L-4: a failed `host.idle_state` record goes through the one decision point
+            // for this instance, as on the action's end below (#419).
+            return match kept {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let links = self.idle_links(pending.instance_id)?;
+                    self.contain_idle_failure(pending.instance_id, error, links)
+                }
+            };
         }
         let claim = key.request.clone();
         let validated = claim.validate().map_err(|_| {

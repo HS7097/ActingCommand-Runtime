@@ -915,24 +915,30 @@ that is the Runtime's as a whole latches it.
 Across a start (#405 IDLE-1P; on 10-27 a restart at 17:32 forgot a game closed since 14:35 and its
 17:54 wake, and its 18:01 task met the closed game): every change of the instances the action
 closed, or is closing, is recorded as the runtime fact `host.idle_state` (scope Runtime, a record
-list, one row per instance: `instance_alias`, `action`, and `wake_at_unix_ms` when a wake is
-planned; tagged in `ledger_observer.tag.workbench_patterns`, so a start loads it,
-[runtime-fact-store.md](runtime-fact-store.md)). A start restores them, as the scheduling pauses
-are restored and before any instance is prepared, and records them again: each comes back idle,
-owing its wake, which the start's first idle check queues when its time has passed or a plan shows
-a task due, so an instance restarted within its wake lead is brought back at once. An action in
-flight at the stop counts as done. After an earlier start that kept no record, or with a record of
-another shape (`invalid_runtime_state_fact`, operation `restore_idle_state`, recorded, and the start
-goes on), the start does not know what the action left: every instance whose action in effect
+list: first a writer row naming the recording owner's `owner_epoch` alone, then one row per
+instance: `instance_alias`, `action`, and `wake_at_unix_ms` when a wake is planned; tagged in
+`ledger_observer.tag.workbench_patterns`, so a start loads it,
+[runtime-fact-store.md](runtime-fact-store.md)). A start restores them from a record the owner
+before it wrote, as the scheduling pauses are restored and before any instance is prepared, and
+records them again under its own epoch: each comes back idle, owing its wake, which the start's
+first idle check queues when its time has passed or a plan shows a task due, so an instance
+restarted within its wake lead is brought back at once. An action in flight at the stop counts as
+done. After an earlier start that kept no record, with a record an earlier owner wrote (a start that
+kept none ran in between, such as a rollback's older build, whose idle action was not recorded), or
+with a record of another shape (`invalid_runtime_state_fact`, operation `restore_idle_state`,
+recorded, and the start goes on), the start does not know what the action left: every instance whose action in effect
 could have run on it (its startup package, and for `stop_emulator` its emulator start) counts as
 closed, never as open, with no wake, and the first plan that shows a task gives its wake. The
 configured emulator start at daemon start leaves an emulator the action holds stopped to its wake.
 
 The scheduler's fact refresh on a closed instance (#405 IDLE-1P): its recognition maintenance
-package (R_I, [scheduling/README.md](scheduling/README.md)) is held back, past its own gates, until
-the instance's next natural wake unless a candidate it would read for is due (its trigger true): R_I's
-decision carries `instance_idle_action` and the waiting candidates `fact_refresh_pending` with
-`gate_code` `instance_idle_action` and no wake. The idle check reads the plan's tasks and its
+package (R_I, [scheduling/README.md](scheduling/README.md)) is held back until the instance's next
+natural wake unless a candidate it would read for is due (its trigger true): R_I's decision carries
+`instance_idle_action` and the waiting candidates `fact_refresh_pending` with `gate_code`
+`instance_idle_action` and no wake. When one of R_I's own gates holds it as well (its minimum
+interval, its failure backoff, a limit), the candidates name that gate instead, and its wake stays
+on R_I alone: no wake of R_I's becomes a candidate's, so the end of R_I's cooldown never wakes the
+closed game. The idle check reads the plan's tasks and its
 reading apart: a reading alone neither wakes an idle instance nor sets its wake (a task due that
 waits for a reading does), while on an active instance a reading due, or one within
 `idle.min_gap_ms`, keeps it from the action as a task does. The daily limit and the other gates of

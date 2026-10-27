@@ -1094,3 +1094,74 @@ fn idle1p_l6_a_due_candidate_that_needs_the_reading_lets_it_run_on_a_closed_inst
     assert_values(coded(waiting, PENDING)[0], &pending(None, None, None));
     assert!(has_intent(&evaluation, ALPHA, B), "B runs as usual");
 }
+
+// IDLE-1P (#405) L-5 within the cooldown (review M-1): A's game is closed by the idle action, task
+// X reads A's K through its trigger, and R_I is inside its own minimum interval (it read K a
+// minute ago, and K has expired since) or its failure backoff. R_I keeps its own gate and wake,
+// and carries the idle reason too; X waits under `fact_refresh_pending` with the gate that holds
+// R_I (`task_cooldown_active`) and takes no wake of R_I's: the end of the cooldown is no task
+// wake, so it never cold-starts the closed game.
+#[test]
+fn idle1p_l5_within_the_cooldown_the_candidate_takes_no_wake_on_a_closed_instance() {
+    let failure = Code::relayed(NAVIGATION_FAILED).expect("a registered code");
+    let dispatched = NOW - 60_000;
+    let instance_stock = trigger_fact(json!({"kind": "instance", "instance_id": A}), STOCK);
+    for (case, state, failure_code, cooldown_end) in [
+        (
+            "the minimum interval",
+            refresh_state(
+                dispatched,
+                TaskTerminalState::Succeeded,
+                Some(dispatched + 10_000),
+                0,
+            ),
+            None,
+            dispatched + MIN_INTERVAL_MS,
+        ),
+        (
+            "the failure backoff",
+            refresh_state(
+                dispatched,
+                TaskTerminalState::Failed,
+                Some(dispatched + 10_000),
+                1,
+            ),
+            Some(failure),
+            dispatched + 10_000 + BACKOFF_MS,
+        ),
+    ] {
+        // K was written by R_I's latest run and has expired since.
+        let read_then_expired = fact(A, STOCK, 5, dispatched + 20_000, Some(NOW - 1_000));
+        let evaluation = evaluate(
+            &predicate_catalog(instance_stock.clone()),
+            &[instance(A, &[])],
+            vec![read_then_expired],
+            vec![state],
+            &closed_a(inputs(vec![reader(1, failure_code)])),
+            NOW,
+        );
+        assert!(intents_on(&evaluation, A).is_empty(), "{case}");
+        let refresh = refresh_decision(&evaluation, A).expect("R_I's decision");
+        assert_eq!(refresh.state, SchedulingDecisionState::Deferred, "{case}");
+        assert!(codes(refresh).contains(&COOLDOWN), "{case}");
+        assert_eq!(last_code(refresh), IDLE, "{case}");
+        assert_eq!(refresh.next_wake_unix_ms, Some(cooldown_end), "{case}");
+        let waiting = decision(&evaluation, X, A);
+        assert_eq!(waiting.state, SchedulingDecisionState::Deferred, "{case}");
+        assert!(codes(waiting).contains(&TRIGGER_UNKNOWN), "{case}");
+        assert_eq!(refresh_codes(waiting), [PENDING], "{case}");
+        let mut expected = vec![
+            ("instance_id", json!(A)),
+            ("fact_key", json!(STOCK)),
+            ("unknown_reason", json!("fact_expired")),
+            ("package_id", json!(READER)),
+            ("gate_code", json!(COOLDOWN)),
+        ];
+        expected.extend(failure_code.map(|_| ("failure_code", json!(NAVIGATION_FAILED))));
+        assert_values(coded(waiting, PENDING)[0], &expected);
+        assert_eq!(
+            waiting.next_wake_unix_ms, None,
+            "{case}: the cooldown's end is no wake of the waiting task"
+        );
+    }
+}

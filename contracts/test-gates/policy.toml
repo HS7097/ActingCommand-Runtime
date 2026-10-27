@@ -865,11 +865,12 @@ tests = [
 ]
 incident = ["#420 ROUT-L RL-1a"]
 
-# #405 IDLE-1P L-5, L-6 (brief rd-1027/brief-idle1p.md; the scheduler's part): on an instance the Runtime's idle action closed as the cycle starts, R_I past its own gates is held back when no candidate it reads for is due (a candidate whose trigger reads the unknown key): no intent on the instance, R_I's decision ends with instance_idle_action and has no wake, and the candidate waits under fact_refresh_pending with gate_code instance_idle_action and no wake; a due candidate that reads the key in its selection document lets R_I be dispatched as on an open instance, the candidate waiting under fact_refresh_pending without a gate
+# #405 IDLE-1P L-5, L-6 (brief rd-1027/brief-idle1p.md; the scheduler's part): on an instance the Runtime's idle action closed as the cycle starts, R_I past its own gates is held back when no candidate it reads for is due (a candidate whose trigger reads the unknown key): no intent on the instance, R_I's decision ends with instance_idle_action and has no wake, and the candidate waits under fact_refresh_pending with gate_code instance_idle_action and no wake; a due candidate that reads the key in its selection document lets R_I be dispatched as on an open instance, the candidate waiting under fact_refresh_pending without a gate; within R_I's own minimum interval or failure backoff on the closed instance (review M-1, rd-1027/brief-idle1p-fix1.md), R_I keeps task_cooldown_active and its wake and ends with instance_idle_action, and the candidate waits under fact_refresh_pending with gate_code task_cooldown_active (and the failure's code after a failure) and no wake
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-policy::lib::tests::gate_d2_s4::idle1p_l5_a_reading_no_due_candidate_needs_waits_on_a_closed_instance",
     "actingcommand-policy::lib::tests::gate_d2_s4::idle1p_l6_a_due_candidate_that_needs_the_reading_lets_it_run_on_a_closed_instance",
+    "actingcommand-policy::lib::tests::gate_d2_s4::idle1p_l5_within_the_cooldown_the_candidate_takes_no_wake_on_a_closed_instance",
 ]
 incident = ["#405 IDLE-1P"]

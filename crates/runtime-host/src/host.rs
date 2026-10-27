@@ -618,6 +618,10 @@ pub struct RuntimeHostConfig {
     /// so its ledger is an old one without the anchor.
     #[cfg(test)]
     contained_settlement_unrecorded_for_test: bool,
+    /// #405 IDLE-1P (review M-2), test only: the start neither restores nor records
+    /// `host.idle_state`, as a build before IDLE-1P did; its idle planner starts empty.
+    #[cfg(test)]
+    idle_state_unkept_for_test: bool,
     /// #411 A67-R, test only: the memory sample every capture frame store reads in place of the
     /// host's physical memory.
     #[cfg(test)]
@@ -686,6 +690,8 @@ impl RuntimeHostConfig {
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: false,
             #[cfg(test)]
+            idle_state_unkept_for_test: false,
+            #[cfg(test)]
             capture_memory_sample_for_test: None,
         }
     }
@@ -736,6 +742,14 @@ impl RuntimeHostConfig {
     #[cfg(test)]
     pub(crate) fn with_contained_settlement_unrecorded_for_test(mut self) -> Self {
         self.contained_settlement_unrecorded_for_test = true;
+        self
+    }
+
+    /// #405 IDLE-1P (review M-2), test only: the start neither restores nor records
+    /// `host.idle_state`, as a build before IDLE-1P did (a rollback's older build).
+    #[cfg(test)]
+    pub(crate) fn with_idle_state_unkept_for_test(mut self) -> Self {
+        self.idle_state_unkept_for_test = true;
         self
     }
 
@@ -1862,6 +1876,8 @@ impl RuntimeHost {
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: config
                 .contained_settlement_unrecorded_for_test,
+            #[cfg(test)]
+            idle_state_unkept_for_test: config.idle_state_unkept_for_test,
             host_claim_work: Mutex::new(BTreeMap::new()),
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
             #[cfg(test)]
@@ -2309,8 +2325,9 @@ impl RuntimeHost {
             shared.note_start_pauses(&host.scheduling_pause_restore)?;
             // IDLE-1P (#405): the instances the idle action closed and their wakes, as the pauses
             // are restored and before any instance is prepared; after an earlier start that kept
-            // none, every instance with an idle action counts as closed, never as open.
-            shared.restore_idle_state(previous_owner_epoch.is_some())?;
+            // none, or whose record another owner wrote (review M-2: an older build ran in
+            // between), every instance with an idle action counts as closed, never as open.
+            shared.restore_idle_state(previous_owner_epoch)?;
             // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.
@@ -5220,6 +5237,10 @@ struct HostShared {
     /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
     #[cfg(test)]
     contained_settlement_unrecorded_for_test: bool,
+    /// #405 IDLE-1P (review M-2), test only: see
+    /// [`RuntimeHostConfig::with_idle_state_unkept_for_test`].
+    #[cfg(test)]
+    idle_state_unkept_for_test: bool,
     // Workflow #369 W-2: what each queued or handed-off host claim runs once granted, by the
     // claim's request id (like `queued_requests`, with no state of its own), and the
     // per-instance workers that run it.
