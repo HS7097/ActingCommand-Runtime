@@ -9,6 +9,89 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.20
+
+本版是 v0.12.19 之后合并的 3 个 PR：组合模式（`policy` 节没有 `catalog`，由组合器按标准包组合）下读配置的各个读者
+都能用了，`ac_packs` 和 `ac_diagnose` 重新有答复（RL-1c）；概览总在 MCP 输出预算之内，只读文本的客户端也能看到它的
+每条警告（OV-24K）；空闲动作关掉的游戏在 Runtime 重启之后仍按关着处理、按时唤醒（IDLE-1P）。v0.12.19 已在本版之前
+发布。
+
+配置：没有新键，也没有新的 revision，`actingd-config` 仍是 [5, 18]。
+
+- `idle.close_app_wake_lead_ms` 的默认值从 60 000 改为 300 000（5 分钟，够游戏冷启动一次），每个实例的
+  `instance.<实例>.idle.close_app_wake_lead_ms` 默认跟随节里的值。配置文件里显式写的值和运行中设的指令仍然优先。每个
+  唤醒提前量仍须小于 `idle.min_gap_ms`（两个提前量都检查，不论用哪个动作）：把 `idle.min_gap_ms` 设在 300 000 或
+  以下、写了更小的 `stop_emulator_wake_lead_ms` 却没写 `close_app_wake_lead_ms` 的文件，v0.12.19 接受，本版以
+  `config_value_invalid`（`section_check`）拒绝，要同时写上一个更小的 `close_app_wake_lead_ms`。
+- `ledger_observer.tag.workbench_patterns` 的默认值加上 `host.idle_state`（空闲状态记录，见下）。配置文件显式写了这个
+  列表的，显式的列表优先，要自己加上 `host.idle_state`，否则启动载入不了这条记录，每次启动都按未知处理。
+- 现有的配置都不需要修改。退回 v0.12.19 之前也不需要做任何事：本版没有新键，v0.12.19 照样读本版的配置文件；本版写进
+  账本的 `host.idle_state` 不在 v0.12.19 的 `tag.workbench_patterns` 默认值里，v0.12.19 启动时不载入它，也不因它拒绝
+  （账本索引不拒绝按别的标记模式写下的行）。回退之后 `idle.close_app_wake_lead_ms` 的默认值回到 60 000，空闲关掉的
+  游戏在重启之后又会被忘记（v0.12.19 原来的行为）；之后再升到 v0.12.20 时，那条记录是更早的所有者写的，启动按未知
+  处理（见下）。
+
+运行上的变化：
+
+- 从 v0.12.19 升级后的第一次启动（IDLE-1P）：v0.12.19 没有留下空闲状态记录，这次启动不知道哪些游戏关着。每个空闲
+  动作不是 `none`、配置了启动包（`stop_emulator` 还要配置了模拟器启动）的实例都按“已关闭、唤醒时间就是启动时刻”
+  恢复：启动后的第一次空闲检查把它唤醒一次，跑它的启动包。启动包是例行的认领，排在部署的保持和任何调度暂停后面，
+  保持释放、暂停解除之后才跑；`stop_emulator` 的配置的模拟器启动照旧不受暂停影响（裁定 35）。下一次计划再按正常的
+  唤醒时间把它关上。代价是这次启动每个这样的实例多跑一次启动包；之后的启动都从上一个所有者的记录恢复。
+- 重启之后仍记得关着的游戏（IDLE-1P）：空闲动作关掉（或正在关）的实例和它们的唤醒时间，每次变化都记成 runtime 事实
+  `host.idle_state`（第一行是写入者的 `owner_epoch`，之后每个实例一行：`instance_alias`、`action`，有唤醒时还有
+  `wake_at_unix_ms`）。启动只用上一个所有者写的记录，在恢复调度暂停之后、准备任何实例之前恢复，再以自己的纪元记
+  一次。恢复的实例欠着它的唤醒：唤醒时间已过、或计划显示有任务到期时，第一次空闲检查就唤醒它，所以在唤醒提前量之内
+  重启的实例在启动时就被唤醒。记录是更早的所有者写的（中间跑过不记录的旧构建，例如回退之后）、或读不懂的记录
+  （`invalid_runtime_state_fact`，操作 `restore_idle_state`，记录下来、启动继续），都和升级后的第一次启动一样按未知
+  处理。daemon 启动时的配置的模拟器启动跳过空闲动作停着的模拟器，留给它的唤醒。
+- 关着的游戏不再只为读一个状态事实而冷启动（IDLE-1P）：实例被空闲动作关着时，它的识别维护包（R_I）只在有需要这次
+  读取的任务到期时才跑，这时空闲检查先唤醒实例；否则 R_I 不跑、也不带唤醒，决定带 `instance_idle_action`，等待的
+  任务答 `fact_refresh_pending`，`gate_code` 是 `instance_idle_action`。R_I 自己也在最小间隔、失败退避或限额之内时，
+  等待的任务带那个闸门的 `gate_code`，但不拿 R_I 的唤醒时间，所以 R_I 的冷却结束不会冷启动关着的游戏。单独一次读取
+  既不唤醒空闲的实例，也不设它的唤醒；在运行的实例上，到期或临近的读取仍和任务一样让它不被关掉。
+- `ac_packs`（RL-1c）：`actingctl packs` 能解码组合模式的配置（以前报 `config_decode_failed`，缺 `procedure_manifest`），
+  安装行是组合出的程序（`operation.package.run`，`scheduled: true`），启动包和资源路径检查重新运行。
+- `ac_diagnose`（RL-1c）：`actingd suspended` 按组合判断，不再答 `suspended_policy_unconfigured`（只有没有 `policy` 节
+  的配置才这样答），所以 `ac_diagnose` 的 `suspended`、`packs`、`remedies`、`lift`、`repeating` 和 `clock_slots` 重新
+  有内容。组合时被拒的游戏不在组合里，它的暂停对是 `task_not_in_catalog`；整个组合被拒是
+  `policy_catalog_compile_failed`，原因列出各个问题。组合的问题排在报告 `warnings` 最前面，形如
+  `<code>:<game>:sha256:<hex>`（没读到 `schedule.json` 时 `<hex>` 处是 `unread`）。
+  - 读取有界：按类型索引只读 6 种记录（`policy.dispatch_intent`、`policy.execution_recorded`、
+    `policy.dispatch_admitted`、`policy.planning_signal_observed`、`task.failed`、`runtime.failed`），配置事实只读最新的
+    一条 `config.subsystems`，账本的最新时间经时间索引读一行，只为显示的运行读它自己的行。
+  - 截止时间：`actingd suspended --deadline-ms <ms>` 是调用方的截止时间，`actingctl diagnose` 和 `ac_diagnose` 传调用
+    截止时间减 2 秒。读到截止时间就停下，以已读到的内容答复，`warnings` 最后加 `ledger_read_incomplete`（还没读到选中
+    的记录时各列表为空、`through_sequence` 为 `null`；没读到的运行 `step` 为 `null`，帧比较是 `unavailable`，原因
+    `ledger_read_budget_exceeded`），这次诊断标为 `incomplete`。到调用截止时间子进程还在运行，就在那时结束它，答
+    `suspended_report_timeout`，不再留着运行。
+- check-config 和启动后的准入（RL-1c）：组合模式下 `fact_reader_missing`、`pack_admission_suspended`、
+  `policy_remedy_declaration_unusable` 和识别包的检查都按组合计算，不再悄悄跳过。启动后的标准包准入等工作台的第一次
+  检查（第一个策略周期）组合好、或 Runtime 停下，再准入组合出的程序；以前组合模式下它什么也没准入。
+- 概览的输出预算（OV-24K）：预算（24 KiB）按会话协商的协议版本实际发出的字节计算，所有工具都走这条路径。
+  - 放得下时答复逐字节不变。2025-06-18 起的会话里 text 和 structuredContent 放不下两份时，text 改为摘要
+    `{ok, structured_content_only, warnings, warnings_omitted, truncated, narrow}`，旁边是完整的 structuredContent：
+    摘要带答复的每条警告（放不下的数在 `warnings_omitted`）、被截掉的块和缩小范围的提示（`ac_overview` 提示用
+    `instance` 或 `sections`）。`ac_overview` 截到摘要能放下每条警告为止，所以只读文本的客户端也能看到每条警告。
+    2025-03-26 没有 structuredContent，答复以文本发一次。
+  - 超出预算时不悄悄截断：警告 `output_budget_exceeded` 给出整个答复的大小（`actual_bytes`）和预算（`limit_bytes`），
+    `truncated` 依次列出每个被截块的 JSON 指针，被截的块留下 `<block>_truncated: true`。截断顺序是 performance、
+    watchdog、catalog、config_generation、各行的 run（从最后一行起）、各行的 monitor、各行的 foreground、
+    install.build，`fact_refresh` 最后截（以前最先截，会把 `fact_refresh_unbound` 藏掉）。
+  - `performance` 里每种不同的 dwell 只写一次（`dwell`），各视图用 `dwell_24h_ref`、`dwell_total_ref` 按下标引用；
+    `perf-status` 打印同一个对象。
+  - 截止时间：`performance`、`fact_refresh` 和各行的 `not_running` 读之前先检查调用预算，用完就不读，留下
+    `<block>_incomplete: true`（`not_running` 是每行的 `not_running_incomplete: true`），警告 `call_budget_exhausted`
+    用 `member` 指出跳过的块，概览标为 `incomplete`。
+  - 配置未生效：选中的配置文件的 sha256 和 actingd 启动时读的（`config.selection` 的 `config_sha256`）不同，就报
+    `config_generation_mismatch`（`path`），在 `config_generation` 为 `{}` 的单目录安装上也一样；重启 actingd 才生效。
+
+本版合并的 PR：
+
+- #1379 OV-24K（#422）：`ac_overview` 在 MCP 输出预算之内：按协商的协议版本只序列化一次，放不下时文本是带每条警告、截掉的块和缩小提示的摘要，放得下的答复逐字节不变；`dwell` 只写一次；每个块（包括各行的 `not_running`）都检查调用截止时间，`call_budget_exhausted` 用 `member` 指出跳过的块；超出预算时 `fact_refresh` 最后截，每次截断都写明；配置文件的 sha256 和运行中的不同时报 `config_generation_mismatch`，单目录安装也一样。没有新键、新结果码。
+- #1380 RL-1c（#411）：组合模式下每个读者都能用：`actingctl packs` 解码组合配置、列出组合出的程序；`actingd suspended` 读组合，`ac_diagnose` 重新有答复，读取有界（6 种记录、只读最新的配置事实、经时间索引读最新时间、调用方的截止时间 `--deadline-ms`、截短时 `ledger_read_incomplete`、到截止时间结束子进程 `suspended_report_timeout`）；check-config 按组合计算 `fact_reader_missing`、补救、准入和识别检查；启动后的标准包准入在第一次组合之后运行；组合的问题先作为警告列出。没有新键、新结果码。
+- #1381 IDLE-1P（#405）：空闲关掉的游戏在 Runtime 重启之后仍按关着处理：空闲状态记成带写入者纪元的 `host.idle_state`，启动只用上一个所有者的记录，没有可用记录时每个有空闲动作的实例以启动时刻为唤醒、跑一次启动包（排在部署保持和暂停之后）；`idle.close_app_wake_lead_ms`（和每个实例的默认）默认改为 300 000；读取器在间隔或退避之内时，关着的游戏不再只为读一个状态事实而冷启动，等待的任务答 `fact_refresh_pending` 并带闸门。新位置 `restore_idle_state`，没有新键、新结果码。
+
 ## v0.12.19
 
 本版是 v0.12.18 之后合并的 2 个 PR（为可靠部署服务的功能，按 Alice 的规则编为 0.12.x）：部署成为一条产品命令，
