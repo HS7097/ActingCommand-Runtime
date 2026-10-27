@@ -12,7 +12,11 @@
 //!   starts, on a history whose Lab relations' read is longer than one look interval of the bound;
 //! - I-4: the Lab view still gets its relations: through a Lab anchor's request, its correlation
 //!   and a run that names one of them; and a page of rows outside the Lab view still names the
-//!   Lab view among the views of a related row.
+//!   Lab view among the views of a related row;
+//! - I-8 (review M1, fix round 2): a page outside the Lab view reads its Lab relations at its
+//!   first row that names a request, a correlation or a run; when its budget runs out there, the
+//!   page answers incomplete with the rows before that row, never a refusal, and the next page
+//!   starts at that row.
 //!
 //! The ledger runs on a writer clock in milliseconds that moves a set step each time it is read
 //! (1 ms, or two budgets to spend a read's budget at its first look); nothing sleeps. The
@@ -27,8 +31,8 @@ use crate::{LedgerWriterCommandStatements, WriterStatementRecorder};
 use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, CommandPayloadDraft, EventAction, EventActor, EventDraft,
     EventId, EventLinksDraft, EventOrigin, EventPayloadDraft, EventQuery, EventSeverity,
-    EventSource, EventType, IdentifierIssuer, LedgerView, OriginModule, ProjectionProfile,
-    RuntimeEventQueryPageRequest, SanitizedEventDraft,
+    EventSource, EventType, IdentifierIssuer, LedgerPageLimit, LedgerView, OriginModule,
+    ProjectionProfile, RuntimeEventQueryPage, RuntimeEventQueryPageRequest, SanitizedEventDraft,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +50,11 @@ const CHECK_VM_STEPS: u64 = 10_000;
 /// The Lab anchors of the history: enough that one statement of the Lab relations' read runs
 /// past one look interval of the bound.
 const LAB_ANCHORS: u64 = 2_000;
+/// I-8: the writer clock's step during the page: a page reads the clock when it starts, before
+/// its selection's second span and at each look of its bound inside a statement, so the look
+/// before the second span sees three quarters of the budget spent and the next look, the first
+/// inside the Lab relations' read, sees it spent.
+const I8_STEP_MS: u64 = BUDGET_MS * 3 / 4;
 const PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
 
 fn salt() -> Sha256SecretFingerprinter {
@@ -114,7 +123,7 @@ impl Clock {
 }
 
 /// The history's identities: instance B, which has no record, instance C and C's four records
-/// in ledger order.
+/// in ledger order; and the request of a third Lab anchor, which no record of C names.
 struct Corpus {
     instance_b: actingcommand_contract::InstanceId,
     instance_c: actingcommand_contract::InstanceId,
@@ -122,6 +131,7 @@ struct Corpus {
     by_correlation: EventId,
     by_run: EventId,
     unrelated: EventId,
+    third_anchor_request: actingcommand_contract::IssuedRequestId,
 }
 
 /// Commits the history: `LAB_ANCHORS` Lab requests of instance A, each with its own request and
@@ -184,6 +194,7 @@ fn corpus(ledger: &GlobalLedger) -> Corpus {
         by_correlation,
         by_run,
         unrelated,
+        third_anchor_request: anchors[2].0,
     }
 }
 
@@ -370,5 +381,99 @@ fn idle_ov_i4_the_lab_view_still_gets_its_relations() {
         vec![corpus.by_request, corpus.by_correlation, corpus.by_run],
         "the rows that name the Lab view"
     );
+    ledger.close().expect("close");
+}
+
+#[test]
+fn idle_ov_i8_a_page_whose_budget_ends_at_its_first_linked_row_answers_the_rows_before_it() {
+    let root = TempDir::new().expect("state root");
+    let clock = Clock::new();
+    let ledger = open(&root, &clock, "idle-ov-i8");
+    let corpus = corpus(&ledger);
+    // Instance D, one record after another: two that name no request, correlation or run, one
+    // under a Lab anchor's request (the page's first linked row) and one more without a link.
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let instance_d = ids.mint_instance_id().expect("instance");
+    let mut offset = 2 * LAB_ANCHORS;
+    let mut append = |links: EventLinksDraft| {
+        offset += 1;
+        ledger
+            .append(draft(
+                &ids,
+                offset,
+                cli(),
+                links.with_instance_id(instance_d),
+                received(),
+            ))
+            .expect("a record of instance D")
+    };
+    let first = append(EventLinksDraft::default());
+    let second = append(EventLinksDraft::default());
+    let linked = append(EventLinksDraft::default().with_request_id(corpus.third_anchor_request));
+    let last = append(EventLinksDraft::default());
+    assert_eq!(
+        [second.sequence(), linked.sequence(), last.sequence()],
+        [
+            first.sequence() + 1,
+            first.sequence() + 2,
+            first.sequence() + 3
+        ],
+        "instance D's records follow one another"
+    );
+    let query = EventQuery {
+        instance_id: Some(*instance_d.transport()),
+        from_sequence: Some(first.sequence()),
+        ..EventQuery::default()
+    };
+    let rows = |page: &RuntimeEventQueryPage| {
+        page.events()
+            .iter()
+            .map(|row| row.event_id)
+            .collect::<Vec<_>>()
+    };
+
+    // The page's first span selects the first record; the look before its second span sees
+    // the budget not yet spent; the second span selects the second record and reaches the
+    // linked row, whose Lab relations' read the bound cuts off at its first look.
+    clock.step_ms(I8_STEP_MS);
+    let cut = ledger.project_view_page(query.clone(), PROFILE, first_page(10));
+    clock.step_ms(1);
+    let page = cut.expect("the page whose budget ended at its linked row is answered, not refused");
+    assert_eq!(
+        rows(&page),
+        vec![*first.event_id(), *second.event_id()],
+        "the rows before the linked row"
+    );
+    let scope = page.read_scope().expect("a Runtime page has its scope");
+    assert!(
+        !scope.read_complete && scope.limits.contains(&LedgerPageLimit::ReadBudget),
+        "the budget ended the page: {scope:?}"
+    );
+    assert!(page.has_more(), "{scope:?}");
+    let cursor = page.next_cursor().expect("a page that continues").clone();
+    assert_eq!(
+        cursor.after_sequence(),
+        second.sequence(),
+        "the page ends just before the linked row"
+    );
+
+    // The next page, its budget whole, starts at the linked row, which names the Lab view.
+    let next = ledger
+        .project_view_page(
+            query,
+            PROFILE,
+            RuntimeEventQueryPageRequest::new(10, Some(cursor)).expect("the next page"),
+        )
+        .expect("the next page");
+    assert_eq!(
+        rows(&next),
+        vec![*linked.event_id(), *last.event_id()],
+        "the next page"
+    );
+    assert!(
+        next.events()[0].views.contains(&LedgerView::Lab),
+        "the linked row names the Lab view"
+    );
+    assert!(!next.has_more(), "the next page ends the read");
     ledger.close().expect("close");
 }

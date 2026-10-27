@@ -1327,9 +1327,15 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     statement in progress, which ends only that read: a page answers incomplete (`read_budget`) at
     the end of its last whole statement, a replay page `ledger_read_budget_exceeded`, and a page
     whose head check or Lab relations it interrupts `ledger_read_budget_exceeded` too (request
-    class). #422 IDLE-OV (0.12.19): a page reads its Lab relations only when it needs them,
-    before its selection for the Lab view, otherwise after it and only when a selected row names
-    a request, a correlation or a run; an empty page never reads them. QueryEvents relays a
+    class). #422 IDLE-OV (0.12.19): a page reads its Lab relations only when it needs them:
+    before its selection for the Lab view; otherwise at the first row its selection selects
+    among the page's own rows (not its lookahead) that names a request, a correlation or a run.
+    An empty page, and a page without such a row, never reads them. When the bound cuts those
+    relations off at that row, the page ends just before it: it answers incomplete
+    (`read_budget`) with the rows before that row and a cursor at the sequence before it, and
+    the next page starts at that row. Only when no sequence after the page's cursor precedes
+    that row is the page refused `ledger_read_budget_exceeded`, as a page that read its
+    relations before its selection was refused when they were cut. QueryEvents relays a
     page's `ledger_read_budget_exceeded` or `writer_response_timeout` as `runtime_unavailable`
     with state `failed` (A51 R3), not `protocol_invalid`. An `SQLITE_INTERRUPT` the handler did
     not cause stays a SQL failure. The Runtime's own

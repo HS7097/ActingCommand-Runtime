@@ -30,6 +30,15 @@ const RUN_LISTING_EVENT_TYPES: [EventType; 5] = [
     EventType::TaskFailed,
     EventType::TaskCancelled,
 ];
+/// #422 IDLE-OV (H1): the listing facts a run records one of each, its main admission and its
+/// terminal. `latest_runs` lists these over its whole window and the entry facts, which a busy
+/// window holds thousands of, only from its newest runs on.
+const RUN_ADMISSION_AND_TERMINAL_TYPES: [EventType; 4] = [
+    EventType::TaskRequested,
+    EventType::TaskCompleted,
+    EventType::TaskFailed,
+    EventType::TaskCancelled,
+];
 /// The most pages one listing type is read in (Workflow #411 A6), each of up to 256 records:
 /// the listing keeps no record, so it ends at its deadline or at its last page, never at a
 /// record count.
@@ -272,6 +281,84 @@ struct RunListing {
     complete: bool,
 }
 
+/// A run listing while its listing queries are folded into it (Workflow #411 A6; #422 IDLE-OV
+/// H1): its runs, each once with its first listing fact read so far, at the snapshot of its
+/// first query.
+struct RunListingFold {
+    runs: Vec<ListedRun>,
+    listed: BTreeMap<RequestId, usize>,
+    runs_seen: BTreeSet<RunId>,
+    snapshot: Option<u64>,
+    complete: bool,
+}
+
+impl RunListingFold {
+    fn at(snapshot: Option<u64>) -> Self {
+        Self {
+            runs: Vec::new(),
+            listed: BTreeMap::new(),
+            runs_seen: BTreeSet::new(),
+            snapshot,
+            complete: true,
+        }
+    }
+
+    /// The first listing fact read so far of the `nth` newest run by that fact (1: the
+    /// newest); `None` when fewer runs are listed.
+    fn nth_newest_first_sequence(&self, nth: usize) -> Option<u64> {
+        let mut sequences = self.runs.iter().map(|run| run.sequence).collect::<Vec<_>>();
+        sequences.sort_unstable();
+        sequences
+            .len()
+            .checked_sub(nth)
+            .and_then(|index| sequences.get(index).copied())
+    }
+
+    /// One listing fact: a run it names the first time is listed, a later fact of a listed
+    /// run can only move its first listing fact earlier.
+    fn fold(&mut self, event: &ProjectedEvent) -> RuntimeClientResult<()> {
+        let Some(identity) = run_fact_identity(event)? else {
+            return Ok(());
+        };
+        match self.listed.get(&identity.request_id) {
+            Some(index) => {
+                let run = &mut self.runs[*index];
+                if run.identity != identity {
+                    return Err(status_error(ClientCode::RunStatusIdentityMismatch));
+                }
+                run.sequence = run.sequence.min(event.sequence);
+            }
+            None => {
+                if !self.runs_seen.insert(identity.run_id) {
+                    return Err(status_error(ClientCode::RunStatusIdentityAmbiguous));
+                }
+                if self.runs.len() == MAX_LISTED_RUNS {
+                    return Err(RuntimeClientError::fatal(
+                        ClientCode::RunStatusResidentLimitExceeded,
+                        RECENT_RUNS_OPERATION,
+                    ));
+                }
+                self.listed.insert(identity.request_id, self.runs.len());
+                self.runs.push(ListedRun {
+                    identity,
+                    sequence: event.sequence,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The listing, oldest first by each run's first listing fact.
+    fn finish(mut self) -> RunListing {
+        self.runs.sort_by_key(|run| run.sequence);
+        RunListing {
+            runs: self.runs,
+            snapshot: self.snapshot.unwrap_or(0),
+            complete: self.complete,
+        }
+    }
+}
+
 struct ReadRunStatus {
     status: ContainedRunStatus,
     first_fact_timestamp_unix_ms: Option<u64>,
@@ -366,14 +453,28 @@ impl RuntimeClient {
 
     /// The newest `limit` (1-10) contained runs first recorded on `instance` since
     /// `since_unix_ms`, newest first, each in brief mode (Workflow #411 A42; #422 IDLE-OV).
-    /// The window is listed once, forward, by run, as `recent_runs` lists it: one query per
-    /// listing fact type on the instance, each a first page that starts at the window's first
-    /// record (LN-WS R3), so an instance without a run in the window costs one page per type
-    /// however busy the window was and never reads the history before it. Its runs are then read
-    /// newest first. An instance without a run since `since_unix_ms` answers no run, complete. A
-    /// listing `deadline` ended is `incomplete` with no run (it may miss a newer run), never "no
-    /// run"; `deadline` is checked between reads, and reaching it ends the read `incomplete`.
-    /// Read-only.
+    /// The window is listed forward, by run, on the instance, each listing query a first page
+    /// that normally starts at the window's first record (LN-WS R3):
+    /// - its main admissions and terminals over the whole window, a few facts per run;
+    /// - then its entry facts (H1), which a busy instance records thousands of a day, only from
+    ///   the first listing fact of the `limit`-th newest run found (for the overview, the
+    ///   newest), or from the window's start when fewer were found. Runs on one instance do not
+    ///   overlap: a run records its facts under its lease, the scheduler holds one lease per
+    ///   instance, and an entry fact is recorded only before the run's end phase. So every
+    ///   entry fact of a newer run, also of one still in its entry phase, lies after that fact.
+    ///   The one fact recorded after a lease ended is a terminal the sweep's expiry found
+    ///   (#411 A64); a run without a main admission that ends so is listed at that terminal.
+    ///
+    /// An instance without a run in the window so normally costs one page per listing type,
+    /// however many records of other types the window holds; a busy one its admissions and
+    /// terminals and the entry facts of its newest runs, not those of the whole window. A first
+    /// page whose window lookup the Runtime's read budget cut (the budget was spent waiting for
+    /// the shared connection) starts at the query's first sequence instead (sequence 1 without
+    /// `from_sequence`) and pages through the history before the window on the type's index,
+    /// its rows still filtered to the window. Its runs are then read newest first. An instance
+    /// without a run since `since_unix_ms` answers no run, complete. A listing `deadline` ended
+    /// is `incomplete` with no run (it may miss a newer run), never "no run"; `deadline` is
+    /// checked between reads, and reaching it ends the read `incomplete`. Read-only.
     pub fn latest_runs(
         &self,
         instance: InstanceId,
@@ -387,15 +488,31 @@ impl RuntimeClient {
                 RECENT_RUNS_OPERATION,
             ));
         }
-        let listing = self.list_runs(
-            &EventQuery {
-                instance_id: Some(instance),
-                from_timestamp_unix_ms: Some(since_unix_ms),
-                ..EventQuery::default()
-            },
-            None,
+        let window = EventQuery {
+            instance_id: Some(instance),
+            from_timestamp_unix_ms: Some(since_unix_ms),
+            ..EventQuery::default()
+        };
+        let mut fold = RunListingFold::at(None);
+        self.fold_run_listing(
+            &mut fold,
+            &RUN_ADMISSION_AND_TERMINAL_TYPES,
+            &window,
             Some(deadline),
         )?;
+        // H1: the entry facts from the `limit`-th newest run found on; a run they list besides
+        // came after it. An incomplete fold reads no further.
+        let entries = EventQuery {
+            from_sequence: fold.nth_newest_first_sequence(limit),
+            ..window
+        };
+        self.fold_run_listing(
+            &mut fold,
+            &[EventType::TaskEntryPreflight],
+            &entries,
+            Some(deadline),
+        )?;
+        let listing = fold.finish();
         let mut latest = RecentContainedRuns {
             runs: Vec::with_capacity(limit),
             incomplete: !listing.complete,
@@ -577,64 +694,39 @@ impl RuntimeClient {
         snapshot: Option<u64>,
         deadline: Option<Instant>,
     ) -> RuntimeClientResult<RunListing> {
-        let mut listing = RunListing {
-            runs: Vec::new(),
-            snapshot: 0,
-            complete: true,
-        };
-        let mut snapshot = snapshot;
-        let mut listed = BTreeMap::<RequestId, usize>::new();
-        let mut runs_seen = BTreeSet::new();
-        for event_type in RUN_LISTING_EVENT_TYPES {
-            let runs = &mut listing.runs;
-            let read = self.visit_listing_pages(
-                EventQuery {
-                    event_type: Some(event_type),
-                    ..window.clone()
-                },
-                snapshot,
-                deadline,
-                |event| {
-                    let Some(identity) = run_fact_identity(event)? else {
-                        return Ok(());
-                    };
-                    match listed.get(&identity.request_id) {
-                        Some(index) => {
-                            let run = &mut runs[*index];
-                            if run.identity != identity {
-                                return Err(status_error(ClientCode::RunStatusIdentityMismatch));
-                            }
-                            run.sequence = run.sequence.min(event.sequence);
-                        }
-                        None => {
-                            if !runs_seen.insert(identity.run_id) {
-                                return Err(status_error(ClientCode::RunStatusIdentityAmbiguous));
-                            }
-                            if runs.len() == MAX_LISTED_RUNS {
-                                return Err(RuntimeClientError::fatal(
-                                    ClientCode::RunStatusResidentLimitExceeded,
-                                    RECENT_RUNS_OPERATION,
-                                ));
-                            }
-                            listed.insert(identity.request_id, runs.len());
-                            runs.push(ListedRun {
-                                identity,
-                                sequence: event.sequence,
-                            });
-                        }
-                    }
-                    Ok(())
-                },
-            )?;
-            snapshot = Some(read.snapshot);
-            listing.snapshot = read.snapshot;
-            if !read.complete {
-                listing.complete = false;
+        let mut fold = RunListingFold::at(snapshot);
+        self.fold_run_listing(&mut fold, &RUN_LISTING_EVENT_TYPES, window, deadline)?;
+        Ok(fold.finish())
+    }
+
+    /// Folds the listing facts of `event_types` in `window` into `fold`, one query per type at
+    /// the fold's snapshot (or else the first query's, which the fold keeps). A query its
+    /// deadline ended leaves the fold incomplete and reads no further type; an incomplete fold
+    /// reads nothing.
+    fn fold_run_listing(
+        &self,
+        fold: &mut RunListingFold,
+        event_types: &[EventType],
+        window: &EventQuery,
+        deadline: Option<Instant>,
+    ) -> RuntimeClientResult<()> {
+        for event_type in event_types {
+            if !fold.complete {
                 break;
             }
+            let read = self.visit_listing_pages(
+                EventQuery {
+                    event_type: Some(*event_type),
+                    ..window.clone()
+                },
+                fold.snapshot,
+                deadline,
+                |event| fold.fold(event),
+            )?;
+            fold.snapshot = Some(read.snapshot);
+            fold.complete = read.complete;
         }
-        listing.runs.sort_by_key(|run| run.sequence);
-        Ok(listing)
+        Ok(())
     }
 
     /// Every page of one listing query on one snapshot (Workflow #411 A6), with the cursor,

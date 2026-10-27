@@ -48,8 +48,8 @@ use actingcommand_contract::{
     RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeInstanceStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint, TaskOutcome,
-    TaskPayloadDraft, TaskSemanticFact,
+    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
+    TaskEntryRecognitionPhase, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
 };
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
@@ -622,6 +622,60 @@ impl Recorder {
                 task_timing: None,
             },
         );
+        json!(request.transport())
+    }
+
+    /// #422 IDLE-OV (H1): one run of `instance` with an entry check, as its listing facts record
+    /// it: `entry_facts` entry facts (its entry gate's navigation), then, once `admitted`, its
+    /// main admission and its terminal; without them it is still in its entry phase. Its
+    /// request_id.
+    pub(super) fn entry_run(
+        &mut self,
+        instance: IssuedInstanceId,
+        entry_facts: usize,
+        admitted: bool,
+    ) -> Value {
+        let issuer = &self.issuer;
+        let request = issuer.mint_request_id().expect("request id");
+        let links = EventLinksDraft::default()
+            .with_instance_id(instance)
+            .with_request_id(request)
+            .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
+            .with_task_id(issuer.mint_task_id().expect("task id"))
+            .with_run_id(issuer.mint_run_id().expect("run id"));
+        for _ in 0..entry_facts {
+            self.fact(
+                links.clone(),
+                TaskSemanticFact::EntryRecognition {
+                    phase: TaskEntryRecognitionPhase::NavigationTarget,
+                    required_pages: vec!["neutral/entry_page".to_owned()],
+                    matched_page: Some("neutral/entry_page".to_owned()),
+                    matched: true,
+                },
+            );
+        }
+        if admitted {
+            self.fact(
+                links.clone(),
+                TaskSemanticFact::PackageAdmitted {
+                    package_label: "neutral.package".to_owned(),
+                    task_label: "neutral.task".to_owned(),
+                    response_deadline_monotonic_ms: None,
+                },
+            );
+            self.fact(
+                links,
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Success,
+                    final_page: Some("neutral/page_done".to_owned()),
+                    executed_steps: Some(1),
+                    outcome: None,
+                    failure_severe: false,
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+            );
+        }
         json!(request.transport())
     }
 

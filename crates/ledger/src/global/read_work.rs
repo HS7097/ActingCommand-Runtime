@@ -209,6 +209,14 @@ impl ReadWork {
         }
     }
 
+    /// #422 IDLE-OV (M1): whether the statement bound lets the statement in progress run past
+    /// the budget now.
+    pub(in crate::global) fn is_exempt(&self) -> bool {
+        self.statements
+            .as_ref()
+            .is_some_and(|bound| bound.exempt.load(Ordering::Relaxed))
+    }
+
     /// #422 LN-WS (R1): whether `error` is a statement of this read that its bound interrupted
     /// (SQLite's `SQLITE_INTERRUPT` after the handler returned `true`). Any other interrupt stays
     /// the SQL failure it is.

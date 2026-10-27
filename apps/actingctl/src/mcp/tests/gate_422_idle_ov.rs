@@ -13,7 +13,10 @@
 //! - I-6: a read that cannot finish keeps `run_incomplete` with its warning, never "no run": a
 //!   listing page the Runtime did not read (its budget stopped it; the host answers `failed`,
 //!   `ledger_read_budget_exceeded`, `runtime_unavailable`), and a read the call budget left no
-//!   time to start.
+//!   time to start;
+//! - I-7 (review H1, fix round 2): a busy instance, whose window holds many entry facts (a busy
+//!   production day passed 16 384 on one instance), answers its newest run, one still in its
+//!   entry phase, within a bound of pages that does not grow with the window's entry facts.
 //!
 //! The Runtime is A42's fake (`gate_411_a42`): one in-memory ledger whose first page with a lower
 //! time bound starts at the window's first record (LN-WS R3), which counts the QueryEvents pages
@@ -24,8 +27,8 @@ use super::gate_mcpt1::unreached_deadline;
 use crate::overview::{self, RunWindow, Warning};
 use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, EventAction, EventActor, EventLinksDraft, EventOrigin,
-    EventSource, EventType, IssuedInstanceId, OriginModule, ProjectedEvent, RuntimeErrorCode,
-    RuntimeInstanceStatus,
+    EventSource, EventType, IssuedInstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule,
+    ProjectedEvent, RuntimeErrorCode, RuntimeInstanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
@@ -48,6 +51,17 @@ const LONG_WINDOW_RECORDS: usize = 24_000;
 const LISTING_TYPES: u64 = 5;
 /// In the window: another instance's runs, one every this many of the instance's records.
 const OTHER_RUN_EVERY: usize = 100;
+/// I-7: the busy instance's finished runs before the window and in it, each with this many
+/// entry facts: a few, and twenty times as many, when the window's entry facts fill fifteen
+/// pages of `MAX_RUNTIME_EVENT_QUERY_EVENTS` (256).
+const BUSY_RUNS: usize = 48;
+const FEW_ENTRY_FACTS: usize = 4;
+const MANY_ENTRY_FACTS: usize = 80;
+/// I-7: the busy instance's newest run, still in its entry phase, and its entry facts so far.
+const NEWEST_ENTRY_FACTS: usize = 3;
+/// I-7: the newest run's own status read (runtime-client `read_contained_run_status`): its facts
+/// by request, one page, and the two Runtime restart checks, one page each.
+const RUN_STATUS_PAGES: u64 = 3;
 
 /// A ledger of `instance`'s `HISTORY_RUNS` runs before the window, then `window_records` Lab
 /// requests of `instance` in the window with another instance's runs among them, and, when
@@ -83,6 +97,28 @@ fn ledger(
             ClientPayloadDraft::lab_request(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
         );
     }
+    (instance, ledger.events, newest)
+}
+
+/// I-7: a ledger of the busy instance's `BUSY_RUNS` runs before the window and `BUSY_RUNS` in
+/// it, each with `entry_facts` entry facts, its main admission and its terminal, another
+/// instance's runs among them, and then its newest run, still in its entry phase: the instance's
+/// id, the ledger and the newest run's request_id.
+fn busy_ledger(entry_facts: usize) -> (IssuedInstanceId, Vec<ProjectedEvent>, Value) {
+    let mut ledger = Recorder::new(WINDOW_START_UNIX_MS - 24 * 60 * 60 * 1000);
+    let instance = ledger.issuer.mint_instance_id().expect("instance id");
+    let other = ledger.issuer.mint_instance_id().expect("instance id");
+    for _ in 0..BUSY_RUNS {
+        ledger.entry_run(instance, entry_facts, true);
+    }
+    ledger.at(WINDOW_START_UNIX_MS);
+    for index in 0..BUSY_RUNS {
+        if index % 4 == 0 {
+            ledger.listed_run(other);
+        }
+        ledger.entry_run(instance, entry_facts, true);
+    }
+    let newest = ledger.entry_run(instance, NEWEST_ENTRY_FACTS, false);
     (instance, ledger.events, newest)
 }
 
@@ -256,4 +292,53 @@ fn idle_ov_i6_a_read_that_cannot_finish_keeps_run_incomplete_and_its_warning() {
     );
     drop(client);
     drop(runtime);
+}
+
+#[test]
+fn idle_ov_i7_a_busy_instance_answers_its_newest_run_within_a_bound_its_entry_facts_do_not_grow() {
+    // The many-entry window: a listing of all its entry facts would take this many pages.
+    let many_entry_pages =
+        (BUSY_RUNS * MANY_ENTRY_FACTS).div_ceil(usize::from(MAX_RUNTIME_EVENT_QUERY_EVENTS));
+    let bound = LISTING_TYPES + RUN_STATUS_PAGES;
+    assert!(
+        u64::try_from(many_entry_pages).expect("pages") > bound,
+        "the window's entry facts fill {many_entry_pages} pages, more than the bound {bound}"
+    );
+    let mut pages = Vec::new();
+    for entry_facts in [FEW_ENTRY_FACTS, MANY_ENTRY_FACTS] {
+        let (instance, events, newest) = busy_ledger(entry_facts);
+        let root = TempDir::new().expect("tempdir");
+        let runtime = FakeRuntime::start(root.path(), events);
+        let client = connect_client(root.path());
+        let before = runtime.stats().pages;
+        let (row, warnings, incomplete) = run_row(&client, instance, unreached_deadline());
+        let read = runtime.stats().pages - before;
+        // The newest run, the one still in its entry phase, read whole.
+        assert_eq!(
+            row["run"]["request_id"], newest,
+            "runs with {entry_facts} entry facts: {row}"
+        );
+        assert!(
+            row.get("run_none_in_window").is_none() && row.get("run_incomplete").is_none(),
+            "runs with {entry_facts} entry facts: {row}"
+        );
+        assert!(
+            !incomplete && warnings.is_empty(),
+            "runs with {entry_facts} entry facts: incomplete {incomplete}, warnings {:?}",
+            warning_codes(&warnings)
+        );
+        // The bound: one page per listing type and the newest run's own status read.
+        assert!(
+            read <= bound,
+            "runs with {entry_facts} entry facts read {read} pages, more than {bound}"
+        );
+        drop(client);
+        pages.push(read);
+        drop(runtime);
+    }
+    // Twenty times the entry facts cost not one page more.
+    assert_eq!(
+        pages[1], pages[0],
+        "pages read with {MANY_ENTRY_FACTS} entry facts per run and with {FEW_ENTRY_FACTS}"
+    );
 }
