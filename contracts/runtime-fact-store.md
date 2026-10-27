@@ -605,7 +605,8 @@ the backend self-check facts (source `device-proxy` or `capture`).
   start restores from it only when its writer is the owner before that start;
   a record an earlier owner wrote (a start that kept none ran in between, such
   as a rollback's older build) leaves every instance's state unknown (closed,
-  never open). A value of another shape is `invalid_runtime_state_fact`
+  never open, with its wake at the start's time, so the start's first idle
+  check wakes it once). A value of another shape is `invalid_runtime_state_fact`
   (operation `restore_idle_state`), recorded, and the start goes on with every
   instance's state unknown.
 

@@ -72,7 +72,8 @@
 //!   wake has come, or whose plan shows a task due, is woken at the start's first check; one the
 //!   start knows nothing about is restored as closed, never as open, and so is every instance
 //!   when the record names another writer than the owner before this start (review M-2: an
-//!   older build ran in between and its idle action was not recorded). The configured emulator
+//!   older build ran in between and its idle action was not recorded); such an instance owes its
+//!   wake at the start, so the first check wakes it once (review N-1). The configured emulator
 //!   start at start leaves an emulator the action holds stopped to its wake.
 //! - **The scheduler's fact refresh** (IDLE-1P): the closed instances are an input of every
 //!   evaluation (`HostShared::idle_closed_for_policy`); a reading of one waits for its next wake
@@ -455,8 +456,10 @@ impl HostShared {
     ///   open), or with a record this build does not read (`invalid_runtime_state_fact`,
     ///   recorded, and the start goes on), the start does not know what the action left: every
     ///   such instance whose action in effect could have run on it (not `none`, its startup
-    ///   package configured, and for `stop_emulator` its emulator start) comes back idle with no
-    ///   wake, closed rather than open, and the first plan that shows a task gives its wake;
+    ///   package configured, and for `stop_emulator` its emulator start) comes back idle, closed
+    ///   rather than open, owing its wake at the start's time (review N-1): the start's first idle
+    ///   check wakes it once, its startup package waiting behind any pause, and the next plan
+    ///   closes it again with its wake;
     /// - on the ledger's first start nothing was closed.
     ///
     /// The restored instances are then recorded again under this owner's epoch, which is the
@@ -534,13 +537,19 @@ impl HostShared {
                 }
             }
             None => {
+                // Review N-1: each such instance owes its wake at the start, so the start's first
+                // idle check brings it back once through its startup package (which waits behind
+                // any pause or install hold, as after every wake), and the next plan closes it
+                // again with its proper wake. Without it, an instance whose only work waits for a
+                // status reading that expired meanwhile would get no wake at all.
+                let started_at_unix_ms = self.runtime_clock_sample()?.unix_ms;
                 for (alias, (action, wakeable)) in &configured {
                     if *action != IdleAction::None && *wakeable {
                         planner.restore(
                             alias,
                             KeptIdle {
                                 action: *action,
-                                wake_at_unix_ms: None,
+                                wake_at_unix_ms: Some(started_at_unix_ms),
                             },
                         );
                     }
@@ -761,16 +770,8 @@ impl HostShared {
             || self.fatal.is_shutdown_requested()
         {
             let kept = self.end_idle_action(|planner| planner.abandoned(alias));
-            self.release_host_key(&key)?;
-            // Review L-4: a failed `host.idle_state` record goes through the one decision point
-            // for this instance, as on the action's end below (#419).
-            return match kept {
-                Ok(()) => Ok(()),
-                Err(error) => {
-                    let links = self.idle_links(pending.instance_id)?;
-                    self.contain_idle_failure(pending.instance_id, error, links)
-                }
-            };
+            let released = self.release_host_key(&key);
+            return self.contain_abandoned_idle_ends(pending.instance_id, released, kept);
         }
         let claim = key.request.clone();
         let validated = claim.validate().map_err(|_| {
@@ -834,6 +835,35 @@ impl HostShared {
             None => outcome,
         };
         self.record_idle(links, outcome)
+    }
+
+    /// The two ends of an action not carried out (on its key it met a pause or work): the key's
+    /// release (`released`) and the `host.idle_state` record (`kept`). Each failure goes through
+    /// the one decision point for this instance (#419), as on the action's end, the release's
+    /// first: review L-4 for the record, review N-3 for the release, so neither is lost when both
+    /// fail. The first failure the Runtime does not survive is the error.
+    fn contain_abandoned_idle_ends(
+        &self,
+        instance_id: InstanceId,
+        released: RuntimeHostResult<()>,
+        kept: RuntimeHostResult<()>,
+    ) -> RuntimeHostResult<()> {
+        let failures = [released, kept]
+            .into_iter()
+            .filter_map(Result::err)
+            .collect::<Vec<_>>();
+        if failures.is_empty() {
+            return Ok(());
+        }
+        let links = self.idle_links(instance_id)?;
+        let mut ended = Ok(());
+        for failure in failures {
+            let contained = self.contain_idle_failure(instance_id, failure, links.clone());
+            if ended.is_ok() {
+                ended = contained;
+            }
+        }
+        ended
     }
 
     /// IDLE-1P (#405): the planner learns how an action it asked for ended (`end`), and the
@@ -1207,5 +1237,31 @@ impl RuntimeHost {
         wait: Duration,
     ) -> Option<u64> {
         self.shared.as_deref()?.await_idle_action_ends(ended, wait)
+    }
+
+    /// Review N-3, tests: the two ends of an abandoned idle action of `instance_alias`, its key's
+    /// release failing with `release` and its `host.idle_state` record with `record` when given
+    /// (each as the instance's request failure at `run_idle_action`).
+    pub(crate) fn contain_abandoned_idle_ends_for_test(
+        &self,
+        instance_alias: &str,
+        release: Option<HostCode>,
+        record: Option<HostCode>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(IdleLocation::Action)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let ended = |code: Option<HostCode>| match code {
+            Some(code) => Err(idle_error(
+                code,
+                IdleLocation::Action,
+                instance_id,
+                format!("instance_alias={instance_alias}; injected by the test"),
+            )),
+            None => Ok(()),
+        };
+        shared.contain_abandoned_idle_ends(instance_id, ended(release), ended(record))
     }
 }

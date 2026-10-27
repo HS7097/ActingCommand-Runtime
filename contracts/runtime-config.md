@@ -928,8 +928,13 @@ kept none ran in between, such as a rollback's older build, whose idle action wa
 with a record of another shape (`invalid_runtime_state_fact`, operation `restore_idle_state`,
 recorded, and the start goes on), the start does not know what the action left: every instance whose action in effect
 could have run on it (its startup package, and for `stop_emulator` its emulator start) counts as
-closed, never as open, with no wake, and the first plan that shows a task gives its wake. The
-configured emulator start at daemon start leaves an emulator the action holds stopped to its wake.
+closed, never as open, and owes its wake at the start's time (review N-1): the start's first idle
+check wakes it once, its startup package waits behind a scheduling pause or an install hold as
+after every wake (for `stop_emulator` after its configured emulator start, which a pause never
+holds, [emulator-control.md](emulator-control.md)), and the next plan
+closes it again with its proper wake. So an instance whose only work waits for a status reading
+that expired meanwhile is not left closed with no wake. The configured emulator start at daemon
+start leaves an emulator the action holds stopped to its wake.
 
 The scheduler's fact refresh on a closed instance (#405 IDLE-1P): its recognition maintenance
 package (R_I, [scheduling/README.md](scheduling/README.md)) is held back until the instance's next

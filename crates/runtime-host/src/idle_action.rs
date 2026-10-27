@@ -57,7 +57,8 @@
 //!   ([`IdlePlanner::closed`], the runtime fact `host.idle_state`), and the next start restores
 //!   them as idle ([`IdlePlanner::restore`]): each owes its wake, which comes at once when its
 //!   time has passed or a plan shows a task due. An action in flight at the stop, and an instance
-//!   whose state the start does not know, are restored as closed too, never as open.
+//!   whose state the start does not know, are restored as closed too, never as open; the latter
+//!   owes its wake at the start, so the start's first check wakes it once (review N-1).
 
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
 use std::collections::BTreeMap;
@@ -423,7 +424,8 @@ impl IdlePlanner {
     /// `kept.wake_at_unix_ms` (none: the first plan that shows a task gives it). An action in
     /// flight when the Runtime stopped, and an instance whose state the start does not know, are
     /// restored so too: what is left on them is not known, so they count as closed, never as
-    /// open, and their wake brings them back through the startup package.
+    /// open, and their wake brings them back through the startup package (the host restores the
+    /// latter with its wake at the start's time, review N-1).
     pub(crate) fn restore(&mut self, alias: &str, kept: KeptIdle) {
         self.instances.insert(
             alias.to_owned(),
