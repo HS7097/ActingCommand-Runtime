@@ -909,3 +909,16 @@ tests = [
     "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e23_a_zero_count_is_ignored_after_a_call_reached_the_child",
 ]
 incident = ["#421 MCP-ENTRY"]
+
+# #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and performance answer ac_overview within the 24 KiB output budget with every block, the budget counted on the bytes sent in every protocol version (O-1); the performance block writes each distinct dwell once and loses nothing (O-2); a spent call budget skips performance and fact_refresh with <block>_incomplete and call_budget_exhausted and asks the Runtime for neither (O-3); over the budget the cut keeps fact_refresh past every less urgent block and names what it cut (truncated, each marker, the warning output_budget_exceeded) (O-4); a configuration file whose sha256 is not the one actingd read warns config_generation_mismatch on an install without generations (O-5); the text content repeats the envelope only within the budget, else it is the summary beside structuredContent, and 2025-03-26 carries the envelope as text (O-6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o1_five_full_runs_and_performance_fit_the_budget_with_every_block",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o2_the_performance_block_writes_each_dwell_once",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o3_a_spent_budget_skips_performance_and_fact_refresh_and_asks_the_runtime_for_neither",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o4_over_the_budget_the_cut_keeps_fact_refresh_and_names_what_it_cut",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o5_a_configuration_file_actingd_has_not_loaded_warns_on_an_install_without_generations",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o6_text_and_structured_content_follow_the_negotiated_version",
+]
+incident = ["#422 OV-24K"]

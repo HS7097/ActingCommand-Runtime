@@ -1699,7 +1699,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now; path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
+      "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected configuration file's sha256 is not the one actingd read at its start (also on an installation without generations); path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

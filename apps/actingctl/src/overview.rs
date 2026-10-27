@@ -48,6 +48,12 @@
 //! instance row whose instance the latest policy evaluation decided for carries `not_running`,
 //! that instance's not-running row as `actingctl schedule` prints it, from one
 //! ScheduleExplanation read without candidates (it records nothing); never cut by MCP.
+//!
+//! #422 OV-24K (v0.12.20): the `performance` block writes each distinct dwell object once
+//! (`performance_answer`); `performance` and `fact_refresh` are not read once the call budget is
+//! spent (`<block>_incomplete`, `call_budget_exhausted`), as a run is not; and
+//! `config_generation_mismatch` also warns when the selected configuration file's sha256 is not
+//! the one actingd runs (`config.selection`), so on an install without generations too.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -79,6 +85,9 @@ const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 const CLI_READ_BUDGET: Duration = Duration::from_secs(25);
 /// Time kept back from the read's deadline before another run read starts.
 const READ_RESERVE: Duration = Duration::from_secs(1);
+/// #422 OV-24K: the selected configuration file is read whole up to this size for its sha256,
+/// the size actingd reads its configuration up to.
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// The blocks `--sections` / `sections` names (command table §4.9). `daemon` and `incomplete`
 /// are always answered and are not among them; a slice that adds a block adds its name here and
@@ -392,15 +401,24 @@ pub(crate) fn read(
     insert(&mut result, Section::LabTool, lab_tool);
     insert(&mut result, Section::Install, install);
     // Workflow #385 P-m (PERF §4.6): the shadow measurement's status; a read that fails
-    // leaves a warning and no block, never an empty one.
+    // leaves a warning and no block, never an empty one. #422 OV-24K: a read the call budget
+    // left no time to start is not started.
     if sections.contains(Section::Performance) {
-        match performance_block(client, selected_alias) {
-            Ok(status) => {
-                result.insert(Section::Performance.name().to_owned(), json!(status));
-            }
-            Err(error) => {
-                warnings.push(Warning::Runtime(error));
-                incomplete = true;
+        if budget_spent(deadline) {
+            budget_skipped(&mut result, Section::Performance, &mut warnings);
+            incomplete = true;
+        } else {
+            match performance_block(client, selected_alias) {
+                Ok(status) => {
+                    result.insert(
+                        Section::Performance.name().to_owned(),
+                        performance_answer(&status),
+                    );
+                }
+                Err(error) => {
+                    warnings.push(Warning::Runtime(error));
+                    incomplete = true;
+                }
             }
         }
     }
@@ -425,15 +443,21 @@ pub(crate) fn read(
     );
     insert(&mut result, Section::Watchdog, watchdog);
     // Workflow #384 D2-S5 (D2 model §6 S5): what the fact refresh waits for; a read that fails
-    // leaves a warning and no block, never an empty one.
+    // leaves a warning and no block, never an empty one. #422 OV-24K: a read the call budget
+    // left no time to start is not started.
     if sections.contains(Section::FactRefresh) {
-        match fact_refresh_block(client, selected_alias) {
-            Ok(status) => {
-                result.insert(Section::FactRefresh.name().to_owned(), json!(status));
-            }
-            Err(error) => {
-                warnings.push(Warning::Runtime(error));
-                incomplete = true;
+        if budget_spent(deadline) {
+            budget_skipped(&mut result, Section::FactRefresh, &mut warnings);
+            incomplete = true;
+        } else {
+            match fact_refresh_block(client, selected_alias) {
+                Ok(status) => {
+                    result.insert(Section::FactRefresh.name().to_owned(), json!(status));
+                }
+                Err(error) => {
+                    warnings.push(Warning::Runtime(error));
+                    incomplete = true;
+                }
             }
         }
     }
@@ -448,6 +472,9 @@ struct Selected {
     /// `None` for an install root without generations (no `install\active.json`).
     generation: Option<u64>,
     config: PathBuf,
+    /// #422 OV-24K: the configuration file's `sha256:<hex>`, as actingd names the file it read
+    /// in `config.selection`; `None` when the file could not be read.
+    config_sha256: Option<String>,
 }
 
 /// The configuration generation the install root selects now, read as `actingctl packs` reads
@@ -455,7 +482,9 @@ struct Selected {
 /// per binding of that configuration whose path is missing or cannot be read (command table
 /// §4.10; M-PKG §5.5: no package content is pinned, only the bound paths are checked). Without
 /// an install root there is nothing to read; a selection or configuration that cannot be read is
-/// its refusal, as a warning.
+/// its refusal, as a warning. #422 OV-24K: the configuration file's bytes are read once more for
+/// their sha256; a file that cannot be read for it is a warning too, unless the packs read
+/// already warned about the configuration.
 fn selected_generation(place: &Place<'_>, warnings: &mut Vec<Warning>) -> Option<Selected> {
     let root = place.install_root?;
     let (installation, config) = match crate::packs::selected_config(Some(root)) {
@@ -465,66 +494,93 @@ fn selected_generation(place: &Place<'_>, warnings: &mut Vec<Warning>) -> Option
             return None;
         }
     };
-    match crate::packs::read(
+    let packs_warned = match crate::packs::read(
         installation.as_ref(),
         &config,
         &crate::packs::Query::default(),
     ) {
-        Ok(answer) => warnings.extend(
-            answer
-                .warnings()
-                .iter()
-                .filter(|warning| warning.is(ActingctlCode::PackageBindingUnreadable))
-                .cloned()
-                .map(Warning::Outcome),
-        ),
-        Err(error) => warnings.push(Warning::Outcome(error.outcome())),
-    }
+        Ok(answer) => {
+            warnings.extend(
+                answer
+                    .warnings()
+                    .iter()
+                    .filter(|warning| warning.is(ActingctlCode::PackageBindingUnreadable))
+                    .cloned()
+                    .map(Warning::Outcome),
+            );
+            false
+        }
+        Err(error) => {
+            warnings.push(Warning::Outcome(error.outcome()));
+            true
+        }
+    };
+    let config_sha256 = match read_bounded(&config, MAX_CONFIG_BYTES) {
+        Ok(bytes) => Some(actingcommand_runtime_config::sha256_text(&bytes)),
+        Err(outcome) => {
+            if !packs_warned {
+                warnings.push(Warning::Outcome(outcome));
+            }
+            None
+        }
+    };
     Some(Selected {
         generation: installation.map(|installation| installation.selection().generation),
         config,
+        config_sha256,
     })
 }
 
 /// `{running?, selected?}`: the configuration generation the Runtime runs (`config.selection`,
 /// an installed Runtime only) and the one the install root selects now; when both are known and
 /// differ, the warning `config_generation_mismatch` names the selected configuration (`path`): a
-/// restart is needed for it to take effect.
+/// restart is needed for it to take effect. #422 OV-24K: so it does, once, when the selected
+/// configuration file's sha256 is not the `config_sha256` of `config.selection`, the file actingd
+/// read at its start: an edit actingd has not loaded, on an install without generations too.
 fn config_generation_block(
     facts: Option<&RuntimeFactSnapshot>,
     selected: Option<&Selected>,
     warnings: &mut Vec<Warning>,
 ) -> Value {
-    let running = facts.and_then(running_generation);
+    let running = facts.and_then(|facts| running_selection(facts, "config_generation"));
+    let running_generation = running.and_then(|generation| generation.parse::<u64>().ok());
+    let running_config = facts.and_then(|facts| running_selection(facts, "config_sha256"));
     let mut block = Map::new();
-    if let Some(running) = running {
+    if let Some(running) = running_generation {
         block.insert("running".to_owned(), json!(running));
     }
     if let Some(selected) = selected.and_then(|selected| selected.generation) {
         block.insert("selected".to_owned(), json!(selected));
     }
-    if let (Some(running), Some(selected)) = (running, selected)
-        && selected
-            .generation
-            .is_some_and(|generation| generation != running)
-    {
-        warnings.push(Warning::Outcome(
-            Outcome::new(ActingctlCode::ConfigGenerationMismatch).path(&selected.config),
-        ));
+    if let Some(selected) = selected {
+        let generation_differs = matches!(
+            (running_generation, selected.generation),
+            (Some(running), Some(generation)) if generation != running
+        );
+        let config_differs = matches!(
+            (running_config, selected.config_sha256.as_deref()),
+            (Some(running), Some(file)) if file != running
+        );
+        if generation_differs || config_differs {
+            warnings.push(Warning::Outcome(
+                Outcome::new(ActingctlCode::ConfigGenerationMismatch).path(&selected.config),
+            ));
+        }
     }
     Value::Object(block)
 }
 
-/// The generation in the Runtime's `config.selection` row (decimal text), when it records one.
-fn running_generation(facts: &RuntimeFactSnapshot) -> Option<u64> {
+/// The text member `member` of the Runtime's `config.selection` row (`config_generation` in
+/// decimal text, `config_sha256`), when it records one.
+fn running_selection<'f>(facts: &'f RuntimeFactSnapshot, member: &str) -> Option<&'f str> {
     let record = facts.records.iter().find(|record| {
         record.scope == RuntimeFactScope::Runtime && record.key == CONFIG_SELECTION_FACT_KEY
     })?;
     let FactValue::RecordList(rows) = &record.value else {
         return None;
     };
-    match rows.first()?.get("config_generation")? {
-        FactScalar::String(generation) => generation.parse().ok(),
+    match rows.first()?.get(member)? {
+        FactScalar::String(text) => Some(text.as_str()),
         _ => None,
     }
 }
@@ -574,6 +630,58 @@ pub(crate) fn performance_block(
     Ok(status)
 }
 
+/// The views of each performance row, and the dwell members of each view.
+const PERFORMANCE_VIEWS: [&str; 2] = ["learning_view", "normal_view"];
+const PERFORMANCE_DWELLS: [&str; 2] = ["dwell_24h", "dwell_total"];
+
+/// #422 OV-24K: the performance status as `perf-status` prints it and `ac_overview` answers its
+/// `performance` block. It is `status` with every dwell written once: `dwell` lists each
+/// distinct dwell object (`{s0_ms, …, s4_ms}`) once, in the order first met (the host row, then
+/// each instance row; in a row the learning view, then the normal view; in a view 24 h, then
+/// total), and each view names its own by their index there, `dwell_24h_ref` and
+/// `dwell_total_ref`, in place of `dwell_24h` and `dwell_total`. Nothing is lost: a view whose
+/// dwell differs from every other has an entry of its own. The rows' identical dwell was written
+/// up to 24 times (host and five instances, two views, two periods).
+pub(crate) fn performance_answer(status: &RuntimePerformanceStatus) -> Value {
+    let mut answer = json!(status);
+    let mut dwell = Vec::<Value>::new();
+    let mut share = |row: &mut Value| {
+        for view in PERFORMANCE_VIEWS {
+            let Some(view) = row.get_mut(view).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            for member in PERFORMANCE_DWELLS {
+                let Some(value) = view.remove(member) else {
+                    continue;
+                };
+                let index = match dwell.iter().position(|seen| *seen == value) {
+                    Some(index) => index,
+                    None => {
+                        dwell.push(value);
+                        dwell.len() - 1
+                    }
+                };
+                view.insert(format!("{member}_ref"), json!(index));
+            }
+        }
+    };
+    if let Some(host) = answer.get_mut("host") {
+        share(host);
+    }
+    for row in answer
+        .get_mut("instances")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        share(row);
+    }
+    if let Some(members) = answer.as_object_mut() {
+        members.insert("dwell".to_owned(), Value::Array(dwell));
+    }
+    answer
+}
+
 /// Workflow #384 D2-S5 (D2 model §6 S5, §8 T39): what the scheduler's fact refresh waits for
 /// (`FactRefreshStatus`), its rows narrowed to the instance `selected` names (an alias) when
 /// given. `fact-refresh` prints it and `ac_overview` answers it as its `fact_refresh` block.
@@ -592,6 +700,22 @@ fn insert(result: &mut Map<String, Value>, section: Section, block: Option<Value
     if let Some(block) = block {
         result.insert(section.name().to_owned(), block);
     }
+}
+
+/// Whether the call budget leaves no time to start another Runtime read: `deadline` less the
+/// reserve kept back for answering has passed.
+fn budget_spent(deadline: Instant) -> bool {
+    Instant::now() + READ_RESERVE >= deadline
+}
+
+/// #422 OV-24K: the block `section`, whose Runtime read the call budget left no time to start,
+/// as a run is (`run_block`): no block, `<block>_incomplete: true` in its place and the warning
+/// `call_budget_exhausted`; the caller marks the overview incomplete.
+fn budget_skipped(result: &mut Map<String, Value>, section: Section, warnings: &mut Vec<Warning>) {
+    result.insert(format!("{}_incomplete", section.name()), json!(true));
+    warnings.push(Warning::Outcome(Outcome::new(
+        ActingctlCode::CallBudgetExhausted,
+    )));
 }
 
 /// Now, in Unix milliseconds.
@@ -688,7 +812,7 @@ pub(crate) fn run_block(
     warnings: &mut Vec<Warning>,
     incomplete: &mut bool,
 ) {
-    if Instant::now() + READ_RESERVE >= deadline {
+    if budget_spent(deadline) {
         // The call budget left no time to read the runs of this instance.
         *incomplete = true;
         row["run_incomplete"] = json!(true);
@@ -1214,23 +1338,28 @@ mod tests {
     // no warning.
     #[test]
     fn mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ() {
+        let config_sha256 = format!("sha256:{}", "b".repeat(64));
         let running = |generation: u64| {
             facts(vec![
                 ConfigSelection {
                     config_generation: Some(generation),
-                    config_sha256: format!("sha256:{}", "b".repeat(64)),
+                    config_sha256: config_sha256.clone(),
                     defaults_sha256: format!("sha256:{}", "c".repeat(64)),
                 }
                 .to_fact_record(1, OriginModule::Runtime),
             ])
         };
+        // #422 OV-24K: the selected file is the one actingd read (the same sha256), so only the
+        // generations decide here.
         let selected = Selected {
             generation: Some(2),
             config: PathBuf::from("neutral-install").join("actingd.config.json"),
+            config_sha256: Some(config_sha256.clone()),
         };
         let without_generation = Selected {
             generation: None,
             config: selected.config.clone(),
+            config_sha256: Some(config_sha256.clone()),
         };
         let cases = [
             (

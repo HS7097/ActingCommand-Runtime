@@ -603,6 +603,10 @@ mod tests {
     // answers within one page per listing type, a busy instance's within a bound its entry
     // facts do not grow; an unfinished read stays incomplete.
     mod gate_422_idle_ov;
+    // #422 OV-24K: ac_overview fits its budget with every block, counted on the bytes sent;
+    // dwell once; a spent budget skips performance and fact_refresh; fact_refresh is cut last;
+    // an unapplied configuration warns.
+    mod gate_422_ov24k;
     mod gate_mcp19b;
     mod gate_mcp8;
     // Workflow #421 MCP-ENTRY, test row E-12: `mcp-config --entry` for the four clients.
