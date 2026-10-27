@@ -9,6 +9,108 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.19
+
+本版是 v0.12.18 之后合并的 2 个 PR（为可靠部署服务的功能，按 Alice 的规则编为 0.12.x）：部署成为一条产品命令，
+`actingctl install update apply … --stop --hold … --start` 依次保持各实例、正式停下 Runtime、换文件、启动新版本、
+做启动后检查；新版本启动之后、恢复调度之前检查不通过，就自动回退到上一个构建（S2，裁定 74 A）；保持期间推迟的
+工作逐条记下，释放时交还（裁定 75）。长时间空闲的实例在概览里读最近一次运行不再因读取预算用完而失败（IDLE-OV）。
+v0.12.18 已在本版之前发布。
+
+配置：`actingd-config` 升到 [5, 18]。revision 18 在 `install` 节新增五个可选键。和 revision 17 的 `install` 节一样，
+actingd 只解析和检查它们、不使用；`actingctl install` 每次执行时从根目录的配置文件读取，不能在运行中修改，改了配置
+文件之后从下一次命令起生效。各键（时间单位都是毫秒）：
+
+- `install.start.sample_interval_ms`：安装器的启动多久记一次进度样本（启动日志的大小、正在启动的 Runtime 读了多少），
+  默认 30 000，范围 1 000 到 600 000。
+- `install.start.stall_after_ms`：启动日志这么久没有增长，就报疑似卡住 `start_stalled`，默认 720 000，范围 60 000 到
+  3 600 000。只报告，不杀任何进程。
+- `install.start.stall_read_bytes`（整数，单位字节）：正在启动的 Runtime 在就绪之前读了超过这么多，就报 `start_stalled`，
+  默认 53 687 091 200（50 GiB），范围 0 到 1 099 511 627 776。只报告，不杀任何进程。
+- `install.start.memory_wait_ms`：每次启动尝试等 `memory` 守卫通过的时间（刚停下的 Runtime 的内存会陆续释放），超过就
+  拒绝，默认 120 000，范围 0 到 3 600 000。
+- `install.stop.busy_wait_ms`：Runtime 因实例还有排队的请求而拒绝暂停时，保持等这些请求清空、再暂停一次的时间（进行中
+  的运行交给暂停自己的排空），默认 300 000，范围 0 到 3 600 000。
+
+revision 17 已有的 INST-2 键（`install.stop.drain_timeout_ms`、`install.stop.shutdown_wait_ms`、
+`install.start.ready_timeout_ms`、`install.start.attempts`、`install.hold_after_start`、
+`install.guard.min_available_memory_mb`、`install.guard.before_next_start_ms` 和 `install.guard.adb_timeout_ms`）从本版
+起起作用，默认值和范围不变；`install.guard.before_next_start_ms` 只决定 `schedule_near` 列出多久之内到期的工作。
+`install.hot.idle_wait_ms` 仍属于之后的 INST-4。
+
+`install.guard.blocked_windows` 在 revision 18 退役（裁定 75：部署没有允许或禁止的时间段，改为保持期间记下推迟的工作、
+释放时交还）：配置文件仍可以写它，是列表就接受、不起作用、其中的时间窗不再判断，每个读这一节的 `actingctl install`
+命令都以 `install_caveat_noted`（`config_key_retired`，`config_key` 是这个键）提示；不是列表的值仍是
+`config_value_invalid`。默认文件里的 `[]` 不提示。守卫 `blocked_window` 不再评估。
+
+现有的配置都不需要修改：没有写这五个新键的配置文件保持原来的 revision，Runtime 仍读 revision 5 到 17 的文件。
+v0.12.18 拒绝写了任何 revision 18 键的配置文件，因为 `install` 节和其中每个对象都不接受未知成员；退回 v0.12.18 之前
+要先去掉这些键（回退闸门的 check-config 部分同样因此不通过，自动回退也一样）。
+
+运行上的变化：
+
+- 一条命令部署（S2）：`actingctl install update apply --root <root> --build <commit> --plan <id> --stop --hold <reason>
+  [--known-pause ALIAS=REASON]… [--start] [--ack-guard <id>]… [--detach]`。计划在 Runtime 运行时用
+  `update plan … --preview` 做，apply 重算一次；命令从保持之前到结束一直持写锁，整个过程是一次操作、逐步写进日志，
+  任何一步中断都能 `install resume`。单独的 `install stop --hold <reason>`、`install start` 和
+  `install guards --for stop|start`（只报告、不改动）也可以用。
+  - 保持：改动之前先从运行中的 Runtime 读 S0（所有者纪元、所有暂停、所有运行时指令）记进日志，并在第一次暂停之前记下
+    推迟记录：每个实例排队的请求、是否有运行在进行，以及 Runtime 最近的计划里选中的决定、到期的任务和最早的唤醒。然后
+    同时暂停 S0 里所有未暂停的实例（原因就是 `--hold`），不会有实例在别的实例排空时继续派发。进行中的运行由 Runtime
+    自己排空：在 `install.stop.drain_timeout_ms` 内跑完，否则在下一个检查点停下，绝不在动作中途切断。实例因有排队的
+    请求拒绝暂停时，等它清空再暂停一次。别人的暂停原样保留，只有用 `--known-pause` 写明它的原因才允许；全局暂停或
+    没写明的暂停直接拒绝（`guard_failed`，确认也不放行）。保持在任何改动之前被拒绝时，恢复它暂停的实例，命令仍以
+    拒绝结束。
+  - 停下：`request-shutdown` 正式关闭，在 `install.stop.shutdown_wait_ms` 内等它退出；关闭之前再读一次运行时指令和别人
+    的暂停，启动时恢复的就是这一份。读不到停下的结局时报 `stop_terminal_unconfirmed`（Runtime 照样已停）。
+  - 启动：每次尝试之前检查 `memory` 守卫，在 `install.start.memory_wait_ms` 内每 500 毫秒重读；组合命令里正在运行的
+    Runtime 占用的内存算作可用（停下后会释放）。经看门狗的手动启动方法启动，等就绪，按 `sample_interval_ms` 记进度
+    样本；疑似卡住只报 `start_stalled`；到 `install.start.ready_timeout_ms` 还没就绪是 `start_timeout`，进程留着运行，
+    也不在旁边再起一个。
+  - 启动后检查：`ready`（就绪，且启动时就绪的那个所有者仍在应答）、`open`、`no_seeding`、`bindings`、`packs`、
+    `pauses`、`instructions`、`no_dispatch`、`new_keys`、`config`、`indexes` 和 `one_way`，对照 S0、配置和
+    `state.json` 判断，不对照某个版本的预期。新版本用新的 Runtime 读取 `StartReport` 报告自己的启动（账本打开的各阶段、
+    载入还是重新播种、恢复的暂停和指令、绑定的实例、登记的标准包、启动以来每个实例准入的派发；`runtime-client` 仍是 2，
+    只有同一构建的 actingctl 发送它）；更早的构建（例如回退到的 v0.12.18）从状态、配置事实和启动日志检查，看不出的
+    记为 `not_evaluated`，不会触发回退。`config` 对照操作开始时的配置文件哈希，所以 adopt 之后改过配置不算失败。
+  - 自动回退（裁定 74 A）：只在带 `--start` 的组合更新里，只在新版本启动之后、恢复调度之前。失败类检查不通过，或新
+    启动没有就绪就退出了，就先把回退的各步写进日志，再关闭新的 Runtime、对上一个构建过回退闸门、反做这次的文件步骤
+    （被换下的文件都留着）、启动上一个构建并检查，它的检查通过就释放保持、恢复调度。命令以 `deploy_rolled_back` 结束，
+    即使调度已经恢复也报失败。回退中途中断时 `install resume` 继续回退，不再重新判断新版本。闸门不通过
+    （`rollback_gate_failed`）时新构建和保持都留着，只能向前修。`start_timeout` 和疑似卡住不触发回退；恢复调度之后不再
+    自动回退，`install rollback plan|apply`（带闸门）照旧。单独的 `stop`、`start` 或回退命令从不自动回退，失败类检查不
+    通过以 `post_check_failed` 结束、保持留着。自动回退到 INST-2 之前的构建之后，要从最新的留存构建
+    （`install\builds\<提交>\runtime\`）运行 `install`，因为旧构建的 actingctl 读不懂停、启的日志。
+  - `release-hold --reason <reason>`：只恢复以这个原因暂停的实例，从不动别人的暂停，并交还推迟的工作：按推迟记录逐个
+    实例记下是否已恢复、每个到期任务和选中的决定是否已重新评估（`re_evaluated` 或 `pending_evaluation`）、排队的请求，
+    以及排空时在检查点停下的运行。Runtime 从下一轮起自己重新评估推迟的派发；安装器不重发记录里的任何东西，已经发出的
+    操作不会重放。`install.hold_after_start`（默认 true）让组合命令启动后仍保持，直到人释放；失败的步骤也保留保持，
+    并在 `next` 里写出 `release-hold` 的用法。
+  - 不在中途继续的：排空时在检查点停下的运行不从中途继续，释放后 Runtime 从头重新评估它们的任务
+    （提示 `runs_not_continued`，带数量）；空闲动作不是 `none` 的实例欠下的空闲唤醒没有读出、也没有记录，Runtime 启动
+    后重新推导（提示 `idle_wakes_rederived`，带数量）。每个做了保持的答复都带这两个提示。
+  - `--detach`：先拒绝未完成的操作和读不了的配置，然后经看门狗的手动启动方法在后台运行同一条命令（不带 `--detach`），
+    它不随启动它的会话结束，输出追加到 `install\detached-<ms>.log`，命令立即答复 `pid` 和 `log`。之后的拒绝（计划
+    过期、守卫不通过）只在这个日志里，`next` 指向 `install status`。
+  - 守卫：`schedule_near` 只列出保持会推迟的、`install.guard.before_next_start_ms` 之内到期的工作，从不拒绝
+    （`--ack-guard schedule_near` 接受、没有作用）；`adb` 探测不应答时再试一次；`memory` 和 `foreign_pauses` 照上。
+  - 什么都不杀、不删：等待超时只报告，进程留着；被替换的文件留作 `.old-<ms>`。`install status` 新增
+    `mcp_servers_on_old_images`，列出映像已被更新改名挪开、还在运行的 `mcp-serve`，它们的客户端重新连接即可。
+- 概览读最近一次运行（IDLE-OV）：每个实例行的最近一次运行改为在实例上按时间窗向前列出（从窗口的第一条记录起），不再
+  从账本尾部按窗口一段段往回走。窗口里没有运行的空闲实例约 5 页（每种列表一页）就答 `run_none_in_window`，不论窗口里
+  别的记录有多少，也从不读窗口之前的历史；忙的实例只从最近一次运行的第一条列表事实起读入口记录，读取量不再随窗口里的
+  入口记录增长。被时限截断的列表仍是 `run_incomplete`（带原因），从不说“没有运行”。
+- 账本读取页的 Lab 关系（IDLE-OV）：只有 Lab 视图在选择之前读；其他的页只在第一行指向请求、关联或运行的记录处读，空页
+  从不读，所以不会再因此被拒绝。关系在那一行被预算截断时，这一页在它之前结束、答不完整，下一页从那一行起。
+- 事件读取的失败码（IDLE-OV）：QueryEvents 的读取用完读取预算或写入线程没有按时答复时，以 `ledger_read_failure`
+  （`runtime_unavailable`，状态 `failed`）答复，不再是 `protocol_invalid`，和其他 Runtime 读取一样，稍后再读即可，
+  Runtime 照常运行；`ac_observe` 在终态之后的投影也以这个读取失败作为原因。Lab 视图订阅的重放仍报 `protocol_invalid`。
+
+本版合并的 PR：
+
+- #1375 INST-2（S2）：部署成为一条产品命令：`actingctl install stop`、`start`、`release-hold`、`guards` 和组合的 `update apply … --stop --hold … [--start] [--detach]`，保持期间的自动回退（裁定 74 A），保持、记录并交还推迟的工作（裁定 75），新的 Runtime 读取 `StartReport`（`runtime-client` 仍是 2）和启动后检查，`schedule_near` 只作提示，`install.guard.blocked_windows` 退役，`actingd-config` [5, 18] 的五个新键（见上）。新结果码 `request_start_report_completed` 和 `invalid_start_report`，新位置 `runtime_start_report`；`install_refusal` 新增 `runtime_not_running`、`runtime_stop_failed`、`post_check_failed`、`deploy_rolled_back`，`install_caveat` 新增 `start_stalled`、`stop_terminal_unconfirmed`、`runs_not_continued`、`idle_wakes_rederived`、`config_key_retired`。
+- #1377 IDLE-OV：概览按时间窗向前列出实例的最近一次运行，空闲实例约 5 页答 `run_none_in_window`，忙的实例读取量不再随入口记录增长；Lab 关系只在第一行有关联的记录处读；QueryEvents 把读取预算用完和写入线程超时报为 `ledger_read_failure`（`runtime_unavailable`）。没有新键、新结果码。
+
 ## v0.12.18
 
 本版是 v0.12.17 之后合并的 3 个 PR（为可靠部署服务的功能，按 Alice 的规则编为 0.12.x）：部署改由产品自己的
