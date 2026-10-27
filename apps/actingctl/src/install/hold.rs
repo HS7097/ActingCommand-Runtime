@@ -360,8 +360,10 @@ pub(crate) fn stop_failed(operation: InstallLocation, cause: Outcome) -> Outcome
         .joined(CauseRelation::CausedBy, cause)
 }
 
-/// Waits until the instance `alias` has no queued request and no lease, at most `wait_ms` on the
-/// host's clock; whether it cleared, and the queued requests it last showed.
+/// Waits until the instance `alias` has no queued request, at most `wait_ms` on the host's
+/// clock; whether it cleared, and the queued requests it last showed. A lease is not waited for:
+/// the pause's own drain waits for the run in flight (re-review S2 N2: the routine work the
+/// scheduler dispatches right after an operator's run would otherwise outlast the wait).
 fn wait_not_busy(
     host: &dyn Host,
     state_root: &Path,
@@ -375,7 +377,7 @@ fn wait_not_busy(
         let Some(instance) = seen.as_ref().and_then(|seen| seen.instance(alias)) else {
             return Ok((false, 0));
         };
-        if instance.queued_requests == 0 && !instance.lease_active {
+        if instance.queued_requests == 0 {
             return Ok((true, 0));
         }
         if host.now_unix_ms() >= deadline {
@@ -385,12 +387,20 @@ fn wait_not_busy(
     }
 }
 
+/// A pause step refused: its refusal, and how the drains that ran before it ended (their cut
+/// runs are reported all the same: re-review S2 N3).
+pub(crate) struct PauseRefused {
+    pub(crate) refusal: Outcome,
+    pub(crate) drained: BTreeMap<String, Drained>,
+}
+
 /// The pause step: every instance of the intent not yet paused with the hold's reason is paused,
 /// all at once, and drained, how each drain ended recorded (`drained`, the earlier record kept
-/// when the step runs again); a pause refused while its instance was busy is tried again once
-/// after the instance cleared within `busy_wait_ms`. Then the status must show the hold on every
-/// instance of the intent, and on every other instance the pause S0 had or none. A Runtime that
-/// no longer runs keeps its persisted pauses: the step is then done as far as it got.
+/// when the step runs again); a pause refused while its instance had a queued request is tried
+/// again once after its queue cleared within `busy_wait_ms`. Then the status must show the hold
+/// on every instance of the intent, and on every other instance the pause S0 had or none. A
+/// Runtime that no longer runs keeps its persisted pauses: the step is then done as far as it
+/// got. A refusal carries the drains recorded so far.
 pub(crate) fn run_pause(
     host: &dyn Host,
     state_root: &Path,
@@ -399,13 +409,36 @@ pub(crate) fn run_pause(
     s0_pauses: &BTreeMap<String, String>,
     mut drained: BTreeMap<String, Drained>,
     busy_wait_ms: u64,
-) -> Result<BTreeMap<String, Drained>, Outcome> {
+) -> Result<BTreeMap<String, Drained>, PauseRefused> {
+    match pause_all(
+        host,
+        state_root,
+        operation,
+        intent,
+        s0_pauses,
+        &mut drained,
+        busy_wait_ms,
+    ) {
+        Ok(()) => Ok(drained),
+        Err(refusal) => Err(PauseRefused { refusal, drained }),
+    }
+}
+
+fn pause_all(
+    host: &dyn Host,
+    state_root: &Path,
+    operation: InstallLocation,
+    intent: &PauseIntent,
+    s0_pauses: &BTreeMap<String, String>,
+    drained: &mut BTreeMap<String, Drained>,
+    busy_wait_ms: u64,
+) -> Result<(), Outcome> {
     let runtime = host.runtime();
     let Some(seen) = runtime
         .status(state_root)
         .map_err(|cause| stop_failed(operation, cause))?
     else {
-        return Ok(drained);
+        return Ok(());
     };
     let pending = intent
         .instances
@@ -429,16 +462,19 @@ pub(crate) fn run_pause(
         &intent.reason,
         intent.drain_timeout_ms,
     );
+    // Every drain that ran is recorded before any refused pause is handled (re-review S2 N3).
+    let mut refused = Vec::new();
     for (alias, answer) in answers {
-        let cause = match answer {
+        match answer {
             Ok(result) => {
                 drained.insert(alias, result);
-                continue;
             }
-            Err(cause) => cause,
-        };
-        // A queued operator request or a held lease makes the Runtime refuse the pause (review S2
-        // M4): wait for them to clear, then pause it again once.
+            Err(cause) => refused.push((alias, cause)),
+        }
+    }
+    for (alias, cause) in refused {
+        // A queued operator request makes the Runtime refuse the pause (review S2 M4): wait for
+        // the queue to clear, then pause it again once (re-review S2 N2).
         let (cleared, queued) = wait_not_busy(host, state_root, &alias, busy_wait_ms)
             .map_err(|status| stop_failed(operation, status))?;
         if !cleared {
@@ -477,7 +513,7 @@ pub(crate) fn run_pause(
             .count(unexpected.len())
             .aliases(unexpected));
     }
-    Ok(drained)
+    Ok(())
 }
 
 /// The drains as the pause step's evidence records them.

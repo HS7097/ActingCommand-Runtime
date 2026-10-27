@@ -36,6 +36,13 @@
 //   and pauses again; a hold that cannot be taken is released and the stop ends refused;
 // - F-8 (M6, decision 75's retirement): the composite's own answer carries
 //   `runs_not_continued`, `idle_wakes_rederived` and `config_key_retired`.
+// Fix round 2 (re-review S2, `rd-1027\inst-deploy\review-s2-fix1.md`; work order items 1-4) adds:
+// - N4: a rollback resumed past its gate reverses nothing while an actingd runs under the root,
+//   and goes on once it is gone;
+// - N1: a close whose wait passes after `request-shutdown` names `install start` in `next`;
+// - N2: a pause refused for a queued request is tried again once the queue is empty, though a
+//   run holds the lease;
+// - N3: a refused hold reports the runs the drains of the instances that paused cut.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device,
 // no sleep; every root is a temporary folder with neutral files.
 
@@ -43,7 +50,7 @@ use super::fixture::{
     BuildSpec, C1, C2, FakeHost, FakeStart, code, live_root, run, tree, word, write_json,
 };
 use super::hold::PauseIntent;
-use super::host::Host;
+use super::host::{Host, RunningImage};
 use super::journal::S0;
 use super::postcheck::{self, CheckInputs, CheckResult};
 use super::runtime::{Drained, PauseSeen, PlanRow, PlanSeen};
@@ -1371,4 +1378,243 @@ fn inst2_f_8_the_composite_reports_cut_runs_rederived_idle_wakes_and_a_retired_k
         "{noted:?}"
     );
     assert_eq!(answer.members["hold"]["kept"], true);
+}
+
+// N4 (re-review S2; work order item 1): a rollback resumed after a crash past its gate checks,
+// as `install undo` does, that no actingd runs under the root before it reverses a file: one
+// found running leaves every file and the operation as they were (unfinished, for `install
+// resume`); once it is gone the resumed rollback finishes as designed.
+#[test]
+fn inst2_n4_a_rollback_resumed_past_its_gate_reverses_nothing_while_an_actingd_runs() {
+    let temp = TempDir::new().expect("tempdir");
+    let setup = |name: &str| {
+        let host = FakeHost::new(&temp.path().join(format!("work-{name}")));
+        let root = prepared(temp.path(), name, &host, json!({}));
+        host.runtime.boot(&["node.a"]);
+        host.runtime
+            .report_patch
+            .borrow_mut()
+            .insert(C2.to_owned(), json!({"tagged_state": "seed"}));
+        (host, root)
+    };
+    // Where the rollback's close and reversal are, from a whole run.
+    let (host, root) = setup("n4-whole");
+    let whole = composite(&host, &root, "deploy-n4", &[]);
+    assert_refused(&whole, "install_update_apply", "deploy_rolled_back");
+    let steps = journal_of(&root, &operation_id(&whole))["steps"]
+        .as_array()
+        .cloned()
+        .expect("steps");
+    let close = steps
+        .iter()
+        .position(|step| step["kind"] == "close" && step["intent"]["rollback"] == true)
+        .expect("the rollback's close")
+        + 1;
+    assert_eq!(steps[close]["kind"], "reverse_files", "{steps:?}");
+    let reverse = close + 1;
+
+    let (host, root) = setup("n4");
+    host.crash_after.set(Some(close));
+    let stopped = composite(&host, &root, "deploy-n4", &[]);
+    assert_eq!(
+        code(&stopped),
+        "install_operation_interrupted",
+        "{stopped:?}"
+    );
+    let id = text(&stopped, "install_operation_id")
+        .expect("the operation")
+        .to_owned();
+    // The journal as a crash right after the gate's pass leaves it: the rollback recorded, the
+    // reversal started with its gate passed, no file reversed yet.
+    let mut journal = journal_of(&root, &id);
+    journal["rollback"] = json!({"started_at_unix_ms": host.now_unix_ms(), "to": C1,
+        "failed": ["no_seeding"], "reversed_at_unix_ms": null});
+    journal["steps"][reverse - 1]["state"] = json!("started");
+    journal["steps"][reverse - 1]["evidence"] = json!({"gate_passed": true, "rollback_gate": []});
+    write_json(
+        &root
+            .join("install")
+            .join("operations")
+            .join(format!("{id}.json")),
+        &journal,
+    );
+    // An actingd runs under the root (started by hand meanwhile).
+    host.processes.borrow_mut().push(RunningImage {
+        pid: 7_777,
+        path: format!(
+            "{}\\runtime\\actingcommand-actingd.exe",
+            super::files::plain(&root)
+        ),
+        mcp_serve: false,
+    });
+    let before = calls(&host);
+
+    let refused = run(
+        &host,
+        &["resume", "--root", word(&root), "--operation", &id],
+    );
+    assert_eq!(
+        code(&refused),
+        "install_operation_interrupted",
+        "{refused:?}"
+    );
+    let refusals = refused
+        .outcome
+        .causes()
+        .iter()
+        .filter_map(|link| {
+            Some(
+                link.outcome()
+                    .value("install_refusal")?
+                    .as_str()?
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(refusals, ["runtime_running"], "{refused:?}");
+    assert!(holds_build(&root, &BuildSpec::new(C2)), "nothing reversed");
+    assert_eq!(state_of(&root)["live"]["commit"], C2);
+    assert_eq!(calls(&host), before, "nothing started");
+    let journal = journal_of(&root, &id);
+    assert_eq!(journal["steps"][reverse - 1]["state"], "started");
+    assert!(
+        journal["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .all(|step| step["state"] != "undone"),
+        "{journal}"
+    );
+    assert!(journal["finished_at_unix_ms"].is_null(), "unfinished");
+    assert!(root.join("install").join("current.json").exists());
+
+    host.processes.borrow_mut().clear();
+    let resumed = run(
+        &host,
+        &["resume", "--root", word(&root), "--operation", &id],
+    );
+    assert_refused(&resumed, "install_update_apply", "deploy_rolled_back");
+    assert_eq!(resumed.members["failed_checks"], json!(["no_seeding"]));
+    assert_rolled_back_to_c1(&root, &host, &id, "n4");
+}
+
+// N1 (re-review S2; work order item 2): a close whose wait passes after `request-shutdown` was
+// sent ends `runtime_stop_failed` with the hold kept, and `next` names `install start` beside
+// `release-hold` (the Runtime may still go down; nothing is killed).
+#[test]
+fn inst2_n1_a_close_whose_wait_passes_names_install_start() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(temp.path(), "slow-close", &host, json!({}));
+    host.runtime.boot(&["node.a"]);
+    host.runtime.refuse_shutdown.set(true);
+
+    let refused = run(
+        &host,
+        &["stop", "--root", word(&root), "--hold", "deploy-n1"],
+    );
+    assert_refused(&refused, "install_stop", "runtime_stop_failed");
+    assert_eq!(calls(&host), ["pause node.a deploy-n1", "shutdown"]);
+    assert_eq!(
+        refused.members["next"]["start"][0], "install",
+        "{refused:?}"
+    );
+    assert_eq!(refused.members["next"]["start"][1], "start", "{refused:?}");
+    assert_eq!(
+        refused.members["next"]["release_hold"][5], "deploy-n1",
+        "{refused:?}"
+    );
+    assert_eq!(refused.members["hold"]["kept"], true, "{refused:?}");
+    assert_eq!(
+        host.runtime.pause_of("node.a").as_deref(),
+        Some("deploy-n1"),
+        "the hold kept"
+    );
+}
+
+// N2 (re-review S2; work order item 3): a pause refused for an operator's queued request is
+// tried again once the queue is empty, though a run still holds the instance's lease (the
+// operator's run, then the routine work dispatched after it): the hold is taken well within
+// `install.stop.busy_wait_ms` and the pause's own drain waits for that run.
+#[test]
+fn inst2_n2_a_refused_pause_is_tried_again_once_the_queue_is_empty() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(temp.path(), "leased", &host, json!({}));
+    host.runtime.boot(&["node.a", "node.b"]);
+    for instance in host.runtime.instances.borrow_mut().iter_mut() {
+        if instance.alias == "node.b" {
+            instance.lease_active = true;
+        }
+    }
+    let until = host.now_unix_ms() + 3_000;
+    host.runtime
+        .queued_until
+        .borrow_mut()
+        .insert("node.b".to_owned(), until);
+
+    let stopped = run(
+        &host,
+        &["stop", "--root", word(&root), "--hold", "deploy-n2"],
+    );
+    assert_done(&stopped, "install_stop");
+    assert_eq!(
+        calls(&host),
+        [
+            "pause node.a deploy-n2",
+            "pause node.b deploy-n2 refused",
+            "pause node.b deploy-n2",
+            "shutdown",
+        ]
+    );
+    assert_eq!(
+        host.runtime.pause_of("node.b").as_deref(),
+        Some("deploy-n2")
+    );
+}
+
+// N3 (re-review S2; work order item 4): a hold refused after other instances paused and their
+// drains cut runs is released and ends refused, and its answer reports those runs
+// (`runs_not_continued`); the pause step journals how the drains ended.
+#[test]
+fn inst2_n3_a_refused_hold_reports_the_runs_its_drains_cut() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(
+        temp.path(),
+        "cut-refused",
+        &host,
+        json!({"install": {"stop": {"busy_wait_ms": 1_000}}}),
+    );
+    host.runtime.boot(&["node.a", "node.b"]);
+    host.runtime.drains.borrow_mut().insert(
+        "node.a".to_owned(),
+        Drained {
+            finished: 0,
+            cancelled: 2,
+        },
+    );
+    let until = host.now_unix_ms() + 600_000;
+    host.runtime
+        .queued_until
+        .borrow_mut()
+        .insert("node.b".to_owned(), until);
+
+    let refused = run(
+        &host,
+        &["stop", "--root", word(&root), "--hold", "deploy-n3"],
+    );
+    assert_refused(&refused, "install_stop", "runtime_stop_failed");
+    assert_eq!(text(&refused, "alias"), Some("node.b"), "{refused:?}");
+    assert_eq!(refused.members["hold"]["kept"], false, "{refused:?}");
+    assert_eq!(host.runtime.pause_of("node.a"), None, "the hold released");
+    assert!(host.runtime.running.get(), "nothing closed");
+    let noted = caveats(&refused);
+    assert_eq!(noted["runs_not_continued"]["count"], 2, "{noted:?}");
+    let journal = journal_of(&root, &operation_id(&refused));
+    assert_eq!(journal["steps"][0]["kind"], "pause");
+    assert_eq!(
+        journal["steps"][0]["evidence"]["drained"],
+        json!([{"alias": "node.a", "finished": 0, "cancelled": 2}])
+    );
 }

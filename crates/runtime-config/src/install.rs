@@ -89,8 +89,8 @@ pub const START_STALL_READ_BYTES: &str = "install.start.stall_read_bytes";
 /// milliseconds (the pages of a Runtime that just stopped are released over time).
 pub const START_MEMORY_WAIT_MS: &str = "install.start.memory_wait_ms";
 /// INST-2 fix round 1 (review S2 M4; revision 18): how long the hold waits for an instance's
-/// queued requests and operator lease to clear when its pause is refused because of them,
-/// before it pauses again, in milliseconds.
+/// queued requests to clear when its pause is refused, before it pauses again (a run in flight
+/// is left to the pause's own drain: re-review S2 N2), in milliseconds.
 pub const STOP_BUSY_WAIT_MS: &str = "install.stop.busy_wait_ms";
 
 /// The keys of the section retired in `actingd-config` revision 18 (Alice's decision 75 of

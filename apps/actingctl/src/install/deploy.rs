@@ -223,7 +223,23 @@ fn pause(
             "known": intent.known,
             "runs_stopped_at_checkpoint": hold::runs_cut(&drained),
         })))),
-        Err(refusal) => {
+        Err(hold::PauseRefused { refusal, drained }) => {
+            // The runs the drains before the refusal cut are journalled and reported (re-review
+            // S2 N3).
+            let cut = hold::runs_cut(&drained);
+            operation.progress(
+                n,
+                json!({
+                    "deferred": deferred,
+                    "drained": hold::drained_value(&drained),
+                    "held": intent.instances,
+                    "known": intent.known,
+                    "runs_stopped_at_checkpoint": cut,
+                }),
+            )?;
+            if cut > 0 {
+                notes.push(super::caveat(command, InstallCaveat::RunsNotContinued).count(cut));
+            }
             // Nothing changed yet (review S2 M4): the instances this hold paused are released
             // again, and the command still ends refused. A release that fails keeps the hold.
             match hold::release(host.runtime(), &loaded.state_root, command, &intent.reason) {
@@ -319,9 +335,12 @@ fn close(
             return Ok(StepEnd::Ends(refusal, members));
         }
         Err(refusal) => {
+            // `request-shutdown` sent and its wait passed: the Runtime may still go down, so
+            // `next` names `install start` too, which refuses a Runtime still running (re-review
+            // S2 N1).
             return Ok(StepEnd::Ends(
                 refusal,
-                hold_kept(&paths, reason.as_ref(), false),
+                hold_kept(&paths, reason.as_ref(), true),
             ));
         }
     };
@@ -609,8 +628,9 @@ fn rollback_failed(journal: &journal::Journal) -> Vec<String> {
 }
 
 /// The reversal: the rollback gate toward the previous build first (once: its passing is
-/// journalled), then the operation's file steps reversed as `install undo` reverses them (each
-/// displaced file kept), then the previous build verified in place.
+/// journalled), then no actingd running under the root (checked every time), then the
+/// operation's file steps reversed as `install undo` reverses them (each displaced file kept),
+/// then the previous build verified in place.
 fn reverse_files(
     operation: &mut Operation<'_>,
     n: usize,
@@ -694,6 +714,10 @@ fn reverse_files(
         })?;
         operation.progress(n, json!({"gate_passed": true, "rollback_gate": gate.rows}))?;
     }
+    // No program file is reversed under a running actingd, as `install undo` checks (re-review
+    // S2 N4): also a rollback resumed past its gate. One found running leaves the operation
+    // unfinished, its gate's pass journalled, for `install resume` once it is gone.
+    launch::refuse_running(operation.host(), &paths, &loaded.state_root, command)?;
     let ms2 = operation.host().now_unix_ms();
     let steps = operation.journal().steps.clone();
     let previous = operation.journal().previous.clone();

@@ -53,9 +53,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   read, so [5, 16]. Workflow #421 INST-1 (v0.12.18): revision 17 adds the `install` section
 ///   (`actingctl install`'s waits, attempts, margins and guard values); revisions 5 to 16 are
 ///   still read, so [5, 17]. Workflow #421 INST-2 (v0.12.19, Alice's decision 75 of 10-27):
-///   revision 18 adds `install.start.sample_interval_ms`, `install.start.stall_after_ms` and
-///   `install.start.stall_read_bytes` and retires `install.guard.blocked_windows`; revisions 5 to
-///   17 are still read, so [5, 18].
+///   revision 18 adds `install.start.sample_interval_ms`, `install.start.stall_after_ms`,
+///   `install.start.stall_read_bytes`, `install.start.memory_wait_ms` and
+///   `install.stop.busy_wait_ms` and retires `install.guard.blocked_windows`; revisions 5 to 17
+///   are still read, so [5, 18].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

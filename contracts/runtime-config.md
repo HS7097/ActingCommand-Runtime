@@ -834,7 +834,7 @@ v0.12.19, Workflow #421 INST-2) adds the keys marked "revision 18" below and ret
 | `install.start.stall_after_ms` | milliseconds `60000..=3600000` | `720000` | the stall rule's detection: a start log that did not grow for this long is the caveat `start_stalled`; nothing is killed (INST-2, revision 18, since v0.12.19) |
 | `install.start.stall_read_bytes` | integer `0..=1099511627776` | `53687091200` | the stall rule's detection: a starting Runtime that read more than this before it was ready is the caveat `start_stalled`; nothing is killed (INST-2, revision 18, since v0.12.19) |
 | `install.start.memory_wait_ms` | milliseconds `0..=3600000` | `120000` | how long a start attempt waits for guard `memory` to pass (the pages of a Runtime that just stopped are released over time) before it refuses (INST-2 fix round 1, revision 18, since v0.12.19) |
-| `install.stop.busy_wait_ms` | milliseconds `0..=3600000` | `300000` | how long the hold waits for an instance's queued requests and lease to clear when the Runtime refuses its pause because of them, before it pauses it again once (INST-2 fix round 1, revision 18, since v0.12.19) |
+| `install.stop.busy_wait_ms` | milliseconds `0..=3600000` | `300000` | how long the hold waits for an instance's queued requests to clear when the Runtime refuses its pause, before it pauses it again once (a run in flight is left to the pause's own drain) (INST-2 fix round 1, revision 18, since v0.12.19) |
 
 A child still running at its `install.child.*` deadline is left running, never killed (the
 stall rule), and reported with its `pid` and the key ([install-cli.md](install-cli.md),

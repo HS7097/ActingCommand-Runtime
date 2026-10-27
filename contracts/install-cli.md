@@ -386,13 +386,15 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   checkpoint (the Runtime's own drain; never cut mid-action, never killed); how each drain ended
   is journalled (`drained: [{alias, finished, cancelled}]`). A pause the Runtime refuses while the
   instance has a queued request or a lease (an operator's `ac_run_pack` waiting) is tried again
-  once after the status shows neither, read every 500 ms within `install.stop.busy_wait_ms`;
+  once after the status shows no queued request (a run in flight is left to the pause's own
+  drain: re-review S2 N2), read every 500 ms within `install.stop.busy_wait_ms`;
   otherwise `runtime_stop_failed` with `alias` and `count` the requests still queued (the
   request ids are not readable from the status). `status` must then show the hold on every
   instance it took and, on every other instance, the pause S0 had or none (its owner may lift it
   meanwhile); `runtime_stop_failed` with `count` and `aliases` otherwise. A hold refused here,
-  before anything changed, resumes the instances it paused (`hold.kept: false`) and still ends
-  refused. Tools pauses only with `--hold` and resumes only that reason; another party's pause is
+  before anything changed, journals the drains that ran, resumes the instances it paused
+  (`hold.kept: false`), reports the runs those drains cut (`runs_not_continued`, re-review S2 N3)
+  and still ends refused. Tools pauses only with `--hold` and resumes only that reason; another party's pause is
   kept and allowed only when named by `--known-pause` with exactly its reason; a global pause and
   an unnamed pause refuse (`guard_failed`, which no acknowledgment passes). A Runtime that does
   not answer refuses `runtime_not_running`.
@@ -411,7 +413,9 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   stopped at a checkpoint) and `idle_wakes_rederived` (`count` the held instances whose idle
   action is not `none`: their owed idle wakes were not read and the Runtime derives them again).
   A failed step keeps the hold's pauses, ends the operation refused and names `release-hold` in
-  `next`, and `install start` too once the Runtime is down.
+  `next`, and `install start` too once the Runtime is down or may be going down (a close whose
+  wait passed after `request-shutdown`: re-review S2 N1; `install start` refuses a Runtime still
+  running).
 - **Start**: no live owner, no actingd under the root, the configuration passes the check-config
   of `runtime\` (`config_refused_by_target`); guard `adb`; `writer.lock` and
   `<root>\watchdog\run.lock` held; before every attempt the `memory` guard, read again every
@@ -476,9 +480,12 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   build the update replaced, with this operation's S0, its passing journalled; a gate that fails
   ends the command with its refusal `rollback_gate_failed` (`rollback_gate_parts`,
   `ledger_sequence`; the result's `gate`): the new build and the hold stay, a forward fix only. A
-  gate that passes journals `rollback {started_at_unix_ms, to, failed, reversed_at_unix_ms}`, then
-  every file step of the operation is reversed as `undo` reverses it, every displaced file kept,
-  the previous build verified in place and `state.json` rewritten), `start` and `post_check` of
+  gate that passes journals `rollback {started_at_unix_ms, to, failed, reversed_at_unix_ms}`;
+  then, also in a rollback resumed past its gate, no owner lock held and no actingd running under
+  the root, as `undo` checks (re-review S2 N4; otherwise `install_operation_interrupted` with
+  `runtime_running` or `owner_lock_held`, the operation left unfinished for `install resume`),
+  then every file step of the operation is reversed as `undo` reverses it, every displaced file
+  kept, the previous build verified in place and `state.json` rewritten), `start` and `post_check` of
   the previous build, and `release_hold` when its checks passed (otherwise the hold stays and the
   caveat `post_check_mismatch` says so). The
   command ends refused `deploy_rolled_back` (`commit_sha` the previous build, `count` the failed
