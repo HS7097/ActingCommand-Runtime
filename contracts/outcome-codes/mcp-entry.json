@@ -1,0 +1,51 @@
+{
+  "owner": "mcp-entry",
+  "codes": {
+    "mcp_entry_outcome_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "mcp-entry",
+      "layer": "process",
+      "uncertain": true,
+      "values": {
+        "mcp_tool": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.18",
+      "description": "The MCP entry's child ended while this request was in flight, so whether it ran is unknown; the entry never sends it again, and the next request goes to a fresh child.",
+      "common_causes": "The actingctl mcp-serve child exited or was ended while it was answering.",
+      "handling": "Inspect before anything is sent again: ac_get_run for a run's request_id, otherwise ac_overview."
+    },
+    "mcp_entry_child_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "mcp-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "mcp_tool": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.18",
+      "description": "The MCP entry could not start or reach an actingctl mcp-serve child for this request, which was not sent.",
+      "common_causes": "<root>\\runtime\\actingctl.exe is missing or does not start, or it refused the replayed handshake.",
+      "handling": "Read the entry's status file (actingctl mcp-entry list) and stderr; the next request tries a fresh child."
+    },
+    "mcp_entry_usage_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "mcp-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.18",
+      "description": "The MCP entry was started without --root, with an unknown flag or client, or without the child arguments after --.",
+      "common_causes": "A client configuration that does not follow actingctl mcp-config --entry.",
+      "handling": "Register the entry with the snippet actingctl mcp-config --entry prints."
+    }
+  }
+}

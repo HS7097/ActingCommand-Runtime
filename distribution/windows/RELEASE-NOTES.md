@@ -9,6 +9,26 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.18（MCP 统一入口一节；本版其余内容随发版补全）
+
+- **MCP 统一入口（#421 MCP-ENTRY）。** Tools 新增 `actingcommand-mcp-entry.exe`。部署时复制到
+  `<root>\mcp-entry\g1\`，四个客户端（Claude Code、Codex、Antigravity、DSH）都改为启动
+  `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier …`，
+  `--` 之后的参数原样传给 `<root>\runtime\actingctl.exe`，档位不变。
+  - **之后的更新不再需要重启客户端。** 入口在两次调用之间、只对核验完整的安装切到新的子进程：写锁空闲、
+    没有未完成的安装操作、文件哈希与清单一致（`actingctl mcp-entry plan`）。它会重放客户端的握手，并发出变更通知。
+  - **切换会等句柄。** 旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等，绝不切断。运行句柄就是 Runtime 的 request_id，不受影响。
+  - **进行中的请求不重发。** 子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`，先用
+    `ac_get_run` 或 `ac_overview` 查清结果；下一个请求交给新的子进程。
+- **第一次接入要重启一次客户端。** 各客户端拿到新工具表的方式：
+  - Claude Code 收到 `notifications/tools/list_changed` 后会自己重新拉取；
+  - Codex 要重新加载该服务；
+  - Antigravity 在 MCP 管理器里点 Refresh；
+  - DSH 通过插件生命周期重新加载，工具白名单的名字不变。
+- **配置片段和状态。** 片段用 `actingctl mcp-config --client … --entry --root <root>` 打印，不写任何客户端文件。
+  每个入口的状态写在 `<root>\mcp-entry\state\entry-<pid>.json`，用 `actingctl mcp-entry list --root <root>` 查看。
+- **新配置键。** `install.mcp_entry.poll_ms`、`settle_ms`、`verify_timeout_ms`、`drain_max_ms`（`actingd-config` 修订 17，只增不改）。
+
 ## v0.12.17
 
 本版是 v0.12.16 之后合并的 3 个 PR（修复，以及为修复服务的功能）：Runtime 自己定期做的账本读取不再从

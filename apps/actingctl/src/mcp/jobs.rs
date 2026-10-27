@@ -46,8 +46,14 @@ struct JobState {
     finished: bool,
     /// The body's result once the job ended.
     result: Option<Result<Value, ToolError>>,
+    /// Workflow #421 MCP-ENTRY (D4): the result was handed to the client (an answer or
+    /// ac_get_run), so it no longer holds a switch of the MCP entry back.
+    collected: bool,
     warnings: Vec<Value>,
 }
+
+/// The kind of a run job: its handle is the Runtime request_id, which survives any process.
+const RUN_KIND: &str = "run_pack";
 
 impl Jobs {
     pub(super) fn new() -> Self {
@@ -61,6 +67,25 @@ impl Jobs {
             .iter()
             .find(|job| job.handle == handle)
             .cloned()
+    }
+
+    /// Workflow #421 MCP-ENTRY (D4, `actingcommand/entryStatus`): the handles only this process
+    /// can answer for, and their kinds. A job counts while it runs and, once ended, until its
+    /// result was handed out; run jobs never count (their handle is a Runtime request_id).
+    pub(super) fn outstanding(&self) -> (usize, Vec<&'static str>) {
+        let table = lock(&self.table);
+        let mut kinds = Vec::new();
+        let mut count = 0;
+        for job in table.iter().filter(|job| job.kind != RUN_KIND) {
+            let state = lock(&job.state);
+            if !state.finished || !state.collected {
+                count += 1;
+                if !kinds.contains(&job.kind) {
+                    kinds.push(job.kind);
+                }
+            }
+        }
+        (count, kinds)
     }
 
     /// Whether another job may start now: `job_capacity_exhausted` (`limit_count`) while
@@ -116,6 +141,7 @@ impl Jobs {
                 phase,
                 finished: false,
                 result: None,
+                collected: false,
                 warnings,
             }),
             changed: Condvar::new(),
@@ -180,7 +206,9 @@ impl Job {
     /// The job's result once it ended (Workflow #378 A5 L6, formerly `outcome`): the body's
     /// answer, or its error as the body returned it.
     pub(super) fn job_result(&self) -> Option<Result<Value, ToolError>> {
-        lock(&self.state).result.clone()
+        let mut state = lock(&self.state);
+        state.collected |= state.result.is_some();
+        state.result.clone()
     }
 
     pub(super) fn warnings(&self) -> Vec<Value> {
@@ -190,7 +218,8 @@ impl Job {
     /// `{kind, phase, warnings}`, and once the job ended its `job_result`: the answer, or
     /// `{error {class, outcome}}`.
     pub(super) fn snapshot(&self) -> Value {
-        let state = lock(&self.state);
+        let mut state = lock(&self.state);
+        state.collected |= state.result.is_some();
         let mut snapshot = json!({
             "kind": self.kind,
             "phase": state.phase,

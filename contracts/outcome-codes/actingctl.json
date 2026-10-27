@@ -3159,6 +3159,22 @@
       "since": "0.12.12",
       "description": "The operation of the command actingctl install leftovers (Workflow #421 INST-1; contracts/install-cli.md)."
     },
+    "install_mcp_entry_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.18",
+      "description": "The operation of the command actingctl mcp-entry plan, which tells the MCP entry which build to run (Workflow #421 MCP-ENTRY; contracts/install-cli.md)."
+    },
+    "install_mcp_entry_list": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.18",
+      "description": "The operation of the command actingctl mcp-entry list, which lists the MCP entries' status files (Workflow #421 MCP-ENTRY; contracts/install-cli.md)."
+    },
     "install_stop": {
       "owner": "actingctl",
       "layer": "process",

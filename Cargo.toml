@@ -6,6 +6,8 @@ members = [
     "apps/actingd",
     "apps/actinglab",
     "apps/ledger-forensics",
+    # Workflow #421 MCP-ENTRY: the stable MCP entry every client starts.
+    "apps/mcp-entry",
     "apps/vision-provider-check",
     "crates/actingcommand-contract",
     "crates/artifact-store",

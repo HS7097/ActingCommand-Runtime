@@ -871,3 +871,23 @@ tests = [
     "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_ac_run_evidence_and_ac_observe_record_no_confirmation",
 ]
 incident = ["#422 LN-7c C"]
+
+# Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, Alice 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways with ids kept (E-1); replays the client's handshake to a candidate and refuses one that negotiates another protocol version (E-2); switches only between calls (E-3); keeps the old child and reports a failed candidate (E-4); answers a request in flight when its child dies with mcp_entry_outcome_unknown, never resends it, and starts a fresh child for the next (E-5); waits while the child holds process-local handles, past drain_max_ms too, and switches at 0 (E-6); counts a child without actingcommand/entryStatus as 0 (E-7); asks no plan while an install operation is under way (E-8); sends the legacy notice and records the refetch (E-9); sends the 2026-07-28 notice through subscriptions/listen (E-10); writes the status file (E-11); actingctl mcp-config --entry renders the four clients' snippets (E-12); the real entry binary pipes a session and switches once with a fake child (process)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e1_the_entry_pipes_both_ways_and_keeps_ids",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e2_the_handshake_is_replayed_and_a_changed_protocol_version_is_refused",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e3_a_switch_happens_only_between_calls",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e4_a_failed_candidate_keeps_the_old_child_and_is_reported",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e5_a_child_that_dies_mid_call_gives_outcome_unknown_and_is_never_resent",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e6_outstanding_handles_defer_the_switch_until_they_reach_zero",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e7_a_child_without_entry_status_counts_as_zero",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e8_no_plan_while_an_install_operation_is_under_way",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e9_the_legacy_notice_is_sent_and_the_refetch_recorded",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e10_the_2026_07_28_notice_goes_through_subscriptions_listen",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e11_the_status_file_says_what_the_entry_runs",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e12_mcp_config_entry_renders_each_clients_snippet",
+    "actingcommand-mcp-entry::entry_process::mcp_entry_process_pipes_a_session_and_switches_once",
+]
+incident = ["#421 MCP-ENTRY"]

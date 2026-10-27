@@ -38,6 +38,8 @@ const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 const WORKERS: usize = 4;
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 const PROGRESS_TICK: Duration = Duration::from_millis(500);
+/// The MCP entry's private request (Workflow #421 MCP-ENTRY D4).
+const ENTRY_STATUS_METHOD: &str = "actingcommand/entryStatus";
 /// How long answers in flight may still be written after stdin ends.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const SHUTDOWN_POLL: Duration = Duration::from_millis(20);
@@ -451,6 +453,11 @@ fn handle_request(
         let response = initialize(shared, &id, params.as_ref());
         return sink.respond(shared, Some(response));
     }
+    // Workflow #421 MCP-ENTRY (D4): the MCP entry's private question before it switches, answered
+    // in either era and without a session.
+    if method == ENTRY_STATUS_METHOD {
+        return sink.respond(shared, Some(protocol::response(&id, entry_status(shared))));
+    }
     let era = match protocol::meta_version(params.as_ref()) {
         MetaVersion::Modern => Era::Modern,
         MetaVersion::Unsupported(requested) => {
@@ -495,6 +502,15 @@ fn handle_request(
             )),
         ),
     }
+}
+
+/// `actingcommand/entryStatus` (Workflow #421 MCP-ENTRY D4): the handles only this process can
+/// answer for (`outstanding_handles`, their `kinds`) and the `tools/call` requests still running
+/// (`calls_in_flight`, a cancelled one included until it ends). The entry switches only at 0.
+fn entry_status(shared: &Shared) -> Value {
+    let (handles, kinds) = shared.jobs.outstanding();
+    let calls = lock(&shared.calls).len();
+    json!({"outstanding_handles": handles, "kinds": kinds, "calls_in_flight": calls})
 }
 
 fn initialize(shared: &Shared, id: &Value, params: Option<&Value>) -> Value {

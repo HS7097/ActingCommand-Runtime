@@ -488,7 +488,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      CI_PACKAGES: -p actingcommand-actingd -p actingcommand-actingctl -p actingcommand-vision-provider-check
+      CI_PACKAGES: -p actingcommand-actingd -p actingcommand-actingctl -p actingcommand-vision-provider-check -p actingcommand-mcp-entry
       CI_SKIP: ''
     steps:
       - uses: actions/checkout@v4

@@ -651,7 +651,62 @@ ignores it; `actingctl` reads it from the root's configuration file through
 (INST-1b-F fix round 1, "Children and their deadlines" above). Fixed by this contract, not
 tunable: the readiness probe period (500 ms), the 2 s clock slack, the layouts, schema names and
 file names, the ledger page of the gate (1024 events), and the `actingd-config` revision whose
-check-config takes `--install-root` (17).
+check-config takes `--install-root` (17). The MCP entry's tunables are its `mcp_entry` keys
+("The MCP entry" below).
+
+## The MCP entry (Workflow #421 MCP-ENTRY, Runtime v0.12.18)
+
+Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry instead of
+`actingctl mcp-serve`:
+
+`<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier …`
+
+- **What it is.** A small program shipped in the Tools half (listed in its `BUILD-MANIFEST.json`).
+  `g1` is the entry's own generation (`--generation` prints it); it changes only when the contract
+  between the entry and its children changes (`entry_protocol`, now 1). A new generation goes in a
+  new `g<N>` directory; nothing overwrites a running entry. Placing `g1` is a deploy step today
+  (copy `tools\actingcommand-mcp-entry.exe`); placement by `install update` is a follow-up.
+- **What it does.** It pipes JSON-RPC between the client and one current child,
+  `<root>\runtime\actingctl.exe` with the words after `--` unchanged (so `--tier` and the client's
+  permission scope stay as they are), and keeps the client's handshake to replay it. It watches
+  the size and time of `runtime\BUILD-MANIFEST.json` and `runtime\actingctl.exe`; a change that
+  stays put for `install.mcp_entry.settle_ms` makes it run
+  `actingctl mcp-entry plan --root <root> --entry-protocol 1 --current-build <commit> -- <words>`
+  of the current install, never while `install\writer.lock` is held or `install\current.json`
+  exists.
+- **The plan** (`actingctl mcp-entry plan`, operation `install_mcp_entry_plan`) prints
+  `{switch, reason (build_changed, same_build, no_current_build), build {commit, manifest_sha256},
+  child [exe, words…], tunables {poll_ms, settle_ms, verify_timeout_ms, drain_max_ms},
+  entry_protocol, outcome}`. It refuses with `install_command_refused`: `writer_lock_failed`,
+  `operation_unfinished`, `live_build_invalid` / `live_build_modified` (the installed files
+  checked against their manifests, as `install adopt` checks them), `config_unreadable`,
+  `install_section_invalid`.
+- **A switch** happens only between calls. Before it, the entry asks the current child
+  `actingcommand/entryStatus` (`{outstanding_handles, kinds, calls_in_flight}`: background jobs
+  other than runs whose results were not read yet, and calls still running); a child before
+  v0.12.18 answers "method not found", which counts as none when no call is in flight. While some
+  are outstanding the switch waits (status `deferred: handles`); past
+  `install.mcp_entry.drain_max_ms` it still waits and the status says so. Run handles are Runtime
+  request ids and need nothing. The candidate child gets the client's `initialize` (and
+  `notifications/initialized`) or, for a 2026-07-28 client, `server/discover` with the client's
+  `_meta`, then `tools/list`; a different protocol version, an error or no answer within
+  `install.mcp_entry.verify_timeout_ms` refuses it, and the current child keeps serving. A
+  request in flight when its child ends is answered `mcp_entry_outcome_unknown` (inspect with
+  `ac_get_run` or `ac_overview`) and never sent again; the next request goes to a fresh child.
+- **The notice.** Legacy clients get `notifications/tools/list_changed` (the entry answers their
+  `initialize` with `capabilities.tools.listChanged: true`). 2026-07-28 clients get the same
+  notification on each `subscriptions/listen` stream that asked for `toolsListChanged`, with
+  `_meta["io.modelcontextprotocol/subscriptionId"]`; the entry acknowledges and owns those streams
+  across children. Whether `tools/list` followed is recorded.
+- **Status.** Each entry writes `<root>\mcp-entry\state\entry-<pid>.json`
+  (`actingcommand.mcp-entry-status.v1`): generation, pid, client, protocol, child (pid, build,
+  since), previous children, last switch, deferral, last candidate failure, last plan, notice and
+  whether `tools/list` followed, and the client's refresh entry (`tools_list_changed` for Claude
+  Code, `codex_reload`, `antigravity_refresh`, `dsh_plugin_reload`, else `client_restart`).
+  `actingctl mcp-entry list --root <root> [--all]` (operation `install_mcp_entry_list`) prints
+  them with `stale` when the pid is gone. Nothing deletes a status file.
+- **Registration.** `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root
+  <root> [--tier …]` prints the snippet; it writes no client file.
 
 ## Outcome codes
 
