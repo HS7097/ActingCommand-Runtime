@@ -2338,11 +2338,24 @@ impl SqliteStorage {
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         self.verify_extent(connection)?;
-        // Every row's view memberships name the Lab view as of the snapshot.
-        let lab = read_lab_relations(connection, snapshot, &LabRelations::default())?;
+        // #422 IDLE-OV (R2): the Lab relations read every Lab anchor of the history, outside the
+        // page's selection, so a statement the budget interrupts there refuses the page. They
+        // are read only when the page needs them: before the selection for the Lab view, whose
+        // condition they are; otherwise after it, only when a row it selected names a link a
+        // relation reads (the row's view memberships name the Lab view as of the snapshot). Any
+        // other selection reads nothing of them (`in_view` and a stored view's condition read
+        // them for the Lab view only), and a page without such a row (an empty page among them)
+        // never reads them.
+        let no_relations = LabRelations::default();
+        let lab_view = if query.view == Some(LedgerView::Lab) {
+            Some(read_lab_relations(connection, snapshot, &no_relations)?)
+        } else {
+            None
+        };
+        let selection_lab = lab_view.as_ref().unwrap_or(&no_relations);
         let view = query
             .view
-            .map(|view| ViewCondition::of(view, &lab))
+            .map(|view| ViewCondition::of(view, selection_lab))
             .transpose()?;
         let selection = HistorySelection::of(query);
         let selection_limit = usize::from(request.limit()) + 1;
@@ -2356,7 +2369,7 @@ impl SqliteStorage {
             (&selection, view.as_ref()),
             (after, snapshot),
             (selection_limit, request.cursor().is_none()),
-            &lab,
+            selection_lab,
             read,
         );
         if let Some(value) = observation {
@@ -2366,6 +2379,18 @@ impl SqliteStorage {
             value.selection_work = LedgerProjectViewCount::from_len(read.0.visited());
         }
         let (selected, budget_stop) = selected?;
+        let lab = match lab_view {
+            Some(lab) => lab,
+            // The page's rows are its first `limit` selected; the one after them is lookahead.
+            None if selected
+                .iter()
+                .take(usize::from(request.limit()))
+                .any(|event| LabKeys::of(event.links()).names_a_relation_link()) =>
+            {
+                read_lab_relations(connection, snapshot, &no_relations)?
+            }
+            None => no_relations,
+        };
         if let Some(value) = observation {
             value.selected_sequences = LedgerProjectViewCount::from_len(selected.len());
             value.project_page.begin(Instant::now());

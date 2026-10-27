@@ -327,6 +327,15 @@ impl HostShared {
             .map_err(|error| {
                 if error.is_fatal() {
                     RequestFailure::poison(ledger_error(ContractLocation::QueryRuntimeEvents), None)
+                } else if UNANSWERED_LEDGER_READS
+                    .iter()
+                    .any(|code| code.as_str() == error.code())
+                {
+                    // #422 IDLE-OV (R3): a page the writer did not answer in time, or whose read
+                    // its budget stopped outside the page's selection, was not read: it fails
+                    // this request only, `runtime_unavailable` with the ledger's code, as every
+                    // other Runtime read relays it (#411 A51 R3). It is not a protocol error.
+                    ledger_read_failure(&error, ContractLocation::QueryRuntimeEvents)
                 } else {
                     RequestFailure::request(
                         RuntimeHostError::relayed_request(

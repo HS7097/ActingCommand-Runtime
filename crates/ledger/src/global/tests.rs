@@ -2978,3 +2978,7 @@ mod gate_ln7c_q;
 // view: a matching root reports nothing, a consistently wrong frame index row is reported.
 #[path = "tests/gate_ln7c_v.rs"]
 mod gate_ln7c_v;
+// #422 IDLE-OV: a view page reads the Lab relations only when it needs them: an empty page never
+// reads them and is never refused for them; the Lab view still gets them.
+#[path = "tests/gate_idle_ov.rs"]
+mod gate_idle_ov;

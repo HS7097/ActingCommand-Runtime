@@ -1327,7 +1327,12 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     statement in progress, which ends only that read: a page answers incomplete (`read_budget`) at
     the end of its last whole statement, a replay page `ledger_read_budget_exceeded`, and a page
     whose head check or Lab relations it interrupts `ledger_read_budget_exceeded` too (request
-    class). An `SQLITE_INTERRUPT` the handler did not cause stays a SQL failure. The Runtime's own
+    class). #422 IDLE-OV (0.12.19): a page reads its Lab relations only when it needs them,
+    before its selection for the Lab view, otherwise after it and only when a selected row names
+    a request, a correlation or a run; an empty page never reads them. QueryEvents relays a
+    page's `ledger_read_budget_exceeded` or `writer_response_timeout` as `runtime_unavailable`
+    with state `failed` (A51 R3), not `protocol_invalid`. An `SQLITE_INTERRUPT` the handler did
+    not cause stays a SQL failure. The Runtime's own
     reads keep A51's bound between rows: the policy driver ends on any cycle error, and those
     reads are index-bounded.
   - A view page's history statements span at most `history_scan_rows` sequences each
