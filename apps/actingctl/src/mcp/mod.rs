@@ -599,6 +599,10 @@ mod tests {
     mod gate_387_d1b;
     mod gate_411_a42;
     mod gate_411_b15w2;
+    // #422 IDLE-OV: the overview's run lookup of an instance without a run in a long window
+    // answers within one page per listing type, a busy instance's within a bound its entry
+    // facts do not grow; an unfinished read stays incomplete.
+    mod gate_422_idle_ov;
     mod gate_mcp19b;
     mod gate_mcp8;
     // Workflow #421 MCP-ENTRY, test row E-12: `mcp-config --entry` for the four clients.

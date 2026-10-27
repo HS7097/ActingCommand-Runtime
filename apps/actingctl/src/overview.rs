@@ -667,9 +667,14 @@ pub(crate) struct RunWindow {
 }
 
 /// One instance row's run members. `run` is at most one brief run status: the instance's newest
-/// run admitted in `window`, the open one when a run is open. #411 A42: it is found from the
-/// ledger's tail back (runtime-client `latest_runs`), so the read is bounded by the window and
-/// never scans the instance's history before it, and it ends by `deadline` less the reserve.
+/// run admitted in `window`, the open one when a run is open. #411 A42, #422 IDLE-OV: it is found
+/// by a forward listing of the window on the instance (runtime-client `latest_runs`): its main
+/// admissions and terminals, then its entry facts from its newest run on (H1). An instance
+/// without a run there normally costs one page per listing type, a busy one does not read the
+/// entry facts of its whole window, and the read ends by `deadline` less the reserve. A first
+/// listing page whose window lookup the Runtime's read budget cut (under contention for the
+/// shared connection) starts at the query's first sequence instead, sequence 1 for most, and
+/// pages through the history before the window, its rows still filtered to the window.
 /// When the read finished without a run, the row says so: `run_none_in_window {since_unix_ms,
 /// until_unix_ms}`, the window's bounds. A read the call budget left no time to start
 /// (`call_budget_exhausted` naming the instance), one the deadline stopped, and one that failed

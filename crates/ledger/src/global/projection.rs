@@ -54,6 +54,12 @@ impl LabKeys {
             run: links.run_id().copied(),
         }
     }
+
+    /// #422 IDLE-OV (R2): whether the record names a link a Lab relation reads; a record that
+    /// names none relates to no Lab anchor, whatever the relations are.
+    pub(super) fn names_a_relation_link(&self) -> bool {
+        self.request.is_some() || self.correlation.is_some() || self.run.is_some()
+    }
 }
 
 #[derive(Default)]

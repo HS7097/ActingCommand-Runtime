@@ -21,7 +21,12 @@
 //! (`MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES`, a lone record over it answering
 //! `runtime_event_query_response_too_large`), and the records a query examines are those of the
 //! smallest index it names, between its sequence bounds (the ledger's own index read,
-//! `candidates_from`); a time bound selects nothing by itself.
+//! `candidates_from`); a time bound selects nothing by itself, except that a first page with a
+//! lower time bound starts at the first record at or after it (#422 LN-WS R3, the ledger's
+//! `time_start`; #422 IDLE-OV: the overview's run lookup lists the window forward from there).
+//! The fake is shared with the #422 IDLE-OV gate (`gate_422_idle_ov`), which also counts its
+//! pages and has it refuse the pages of one event type as the host refuses a page it did not
+//! read.
 
 use super::super::jobs::Jobs;
 use super::super::run_evidence as tool;
@@ -35,15 +40,16 @@ use actingcommand_contract::page_projection::Rect;
 use actingcommand_contract::{
     ArtifactKind, ArtifactPayloadDraft, ArtifactProducer, ArtifactRedactionState, AuditInput,
     ClientPayloadDraft, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
-    EventPayloadDraft, EventQuery, EventSeverity, EventSource, IdentifierIssuer, InputAction,
-    InputSamplingEvidence, InputSamplingRegion, InstanceId, IssuedFrameId, IssuedInstanceId,
-    MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES, OriginModule, OwnerEpoch, ProjectedArtifactReference,
-    ProjectedEvent, ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RecognizedTarget,
-    RecognizedTargetRole, RetentionClass, RuntimeControlPlaneStatus, RuntimeEventQueryCursor,
+    EventPayloadDraft, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
+    InputAction, InputSamplingEvidence, InputSamplingRegion, InstanceId, IssuedFrameId,
+    IssuedInstanceId, MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES, OriginModule, OwnerEpoch,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    RUNTIME_INFO_FILE, RecognizedTarget, RecognizedTargetRole, RetentionClass,
+    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeInstanceStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint, TaskOutcome,
-    TaskPayloadDraft, TaskSemanticFact,
+    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
+    TaskEntryRecognitionPhase, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
 };
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
@@ -516,15 +522,15 @@ impl SecretFingerprinter for NoSecrets {
 }
 
 /// Records events one after another, as a Forensic read projects them.
-struct Recorder {
-    issuer: IdentifierIssuer,
-    events: Vec<ProjectedEvent>,
+pub(super) struct Recorder {
+    pub(super) issuer: IdentifierIssuer,
+    pub(super) events: Vec<ProjectedEvent>,
     /// The next record's time.
     next_unix_ms: u64,
 }
 
 impl Recorder {
-    fn new(start_unix_ms: u64) -> Self {
+    pub(super) fn new(start_unix_ms: u64) -> Self {
         Self {
             issuer: IdentifierIssuer::new().expect("identifier issuer"),
             events: Vec::new(),
@@ -533,7 +539,7 @@ impl Recorder {
     }
 
     /// The next record is recorded at `unix_ms`.
-    fn at(&mut self, unix_ms: u64) {
+    pub(super) fn at(&mut self, unix_ms: u64) {
         assert!(
             unix_ms >= self.next_unix_ms,
             "the ledger's time goes forward"
@@ -541,7 +547,12 @@ impl Recorder {
         self.next_unix_ms = unix_ms;
     }
 
-    fn push(&mut self, origin: EventOrigin, links: EventLinksDraft, payload: EventPayloadDraft) {
+    pub(super) fn push(
+        &mut self,
+        origin: EventOrigin,
+        links: EventLinksDraft,
+        payload: EventPayloadDraft,
+    ) {
         let sequence = u64::try_from(self.events.len()).expect("ledger length") + 1;
         let sanitized = EventDraft::new(
             self.issuer.mint_event_id().expect("event id"),
@@ -581,12 +592,13 @@ impl Recorder {
     }
 
     /// One run of `instance` as its listing facts record it: its main admission and its
-    /// terminal.
-    fn listed_run(&mut self, instance: IssuedInstanceId) {
+    /// terminal; its request_id.
+    pub(super) fn listed_run(&mut self, instance: IssuedInstanceId) -> Value {
         let issuer = &self.issuer;
+        let request = issuer.mint_request_id().expect("request id");
         let links = EventLinksDraft::default()
             .with_instance_id(instance)
-            .with_request_id(issuer.mint_request_id().expect("request id"))
+            .with_request_id(request)
             .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
             .with_task_id(issuer.mint_task_id().expect("task id"))
             .with_run_id(issuer.mint_run_id().expect("run id"));
@@ -610,6 +622,61 @@ impl Recorder {
                 task_timing: None,
             },
         );
+        json!(request.transport())
+    }
+
+    /// #422 IDLE-OV (H1): one run of `instance` with an entry check, as its listing facts record
+    /// it: `entry_facts` entry facts (its entry gate's navigation), then, once `admitted`, its
+    /// main admission and its terminal; without them it is still in its entry phase. Its
+    /// request_id.
+    pub(super) fn entry_run(
+        &mut self,
+        instance: IssuedInstanceId,
+        entry_facts: usize,
+        admitted: bool,
+    ) -> Value {
+        let issuer = &self.issuer;
+        let request = issuer.mint_request_id().expect("request id");
+        let links = EventLinksDraft::default()
+            .with_instance_id(instance)
+            .with_request_id(request)
+            .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
+            .with_task_id(issuer.mint_task_id().expect("task id"))
+            .with_run_id(issuer.mint_run_id().expect("run id"));
+        for _ in 0..entry_facts {
+            self.fact(
+                links.clone(),
+                TaskSemanticFact::EntryRecognition {
+                    phase: TaskEntryRecognitionPhase::NavigationTarget,
+                    required_pages: vec!["neutral/entry_page".to_owned()],
+                    matched_page: Some("neutral/entry_page".to_owned()),
+                    matched: true,
+                },
+            );
+        }
+        if admitted {
+            self.fact(
+                links.clone(),
+                TaskSemanticFact::PackageAdmitted {
+                    package_label: "neutral.package".to_owned(),
+                    task_label: "neutral.task".to_owned(),
+                    response_deadline_monotonic_ms: None,
+                },
+            );
+            self.fact(
+                links,
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Success,
+                    final_page: Some("neutral/page_done".to_owned()),
+                    executed_steps: Some(1),
+                    outcome: None,
+                    failure_severe: false,
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+            );
+        }
+        json!(request.transport())
     }
 
     /// A verified capture frame of the run; its frame.
@@ -671,17 +738,19 @@ impl Recorder {
 
 /// What the fake ledger answered.
 #[derive(Clone, Copy, Debug, Default)]
-struct Stats {
+pub(super) struct Stats {
     /// Records the queries examined (the ledger's index read).
-    examined: u64,
+    pub(super) examined: u64,
     /// The largest page answered, encoded.
     largest_page_bytes: usize,
     /// Queries answered `runtime_event_query_response_too_large`.
     refused_too_large: u64,
+    /// #422 IDLE-OV: QueryEvents pages asked for (each one writer command on the Runtime).
+    pub(super) pages: u64,
 }
 
 /// A Runtime on loopback that answers every connection from one ledger until dropped.
-struct FakeRuntime {
+pub(super) struct FakeRuntime {
     address: SocketAddr,
     stopping: Arc<AtomicBool>,
     stats: Arc<Mutex<Stats>>,
@@ -690,7 +759,19 @@ struct FakeRuntime {
 
 impl FakeRuntime {
     /// Listens on loopback and writes `runtime-info.json` under `root` naming it.
-    fn start(root: &Path, events: Vec<ProjectedEvent>) -> Self {
+    pub(super) fn start(root: &Path, events: Vec<ProjectedEvent>) -> Self {
+        Self::start_refusing(root, events, None)
+    }
+
+    /// #422 IDLE-OV: as `start`, but every page of a query naming the event type `refused` is
+    /// answered as the host answers a page the ledger did not read (its read budget stopped it
+    /// outside its selection): `failed`, `ledger_read_budget_exceeded` with `runtime_code`
+    /// `runtime_unavailable`.
+    pub(super) fn start_refusing(
+        root: &Path,
+        events: Vec<ProjectedEvent>,
+        refused: Option<EventType>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fake Runtime");
         let address = listener.local_addr().expect("fake Runtime address");
         let owner_epoch = *IdentifierIssuer::new()
@@ -713,7 +794,7 @@ impl FakeRuntime {
         .expect("write the Runtime info");
         let stopping = Arc::new(AtomicBool::new(false));
         let stats = Arc::new(Mutex::new(Stats::default()));
-        let ledger = Arc::new(Ledger::new(events));
+        let ledger = Arc::new(Ledger::new(events, refused));
         let acceptor = {
             let stopping = Arc::clone(&stopping);
             let stats = Arc::clone(&stats);
@@ -737,7 +818,7 @@ impl FakeRuntime {
         }
     }
 
-    fn stats(&self) -> Stats {
+    pub(super) fn stats(&self) -> Stats {
         *self.stats.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -772,6 +853,17 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger, stats:
                         .expect("fake status"),
                 },
             ),
+            RuntimeOperation::QueryEvents { query, .. } if ledger.refuses(query) => {
+                stats.lock().unwrap_or_else(PoisonError::into_inner).pages += 1;
+                RuntimeReceipt::failure(
+                    &request,
+                    RuntimeReceiptState::Failed,
+                    None,
+                    RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeUnavailable, false)
+                        .with_receipt_values(Outcome::relayed("ledger_read_budget_exceeded")),
+                )
+                .expect("fake failure receipt")
+            }
             RuntimeOperation::QueryEvents {
                 query,
                 profile,
@@ -837,17 +929,29 @@ struct Ledger {
     events: Vec<ProjectedEvent>,
     /// How many records each indexed value has, for picking the smallest index.
     counts: BTreeMap<String, u64>,
+    /// #422 IDLE-OV: the event type whose pages the fake refuses.
+    refused: Option<EventType>,
 }
 
 impl Ledger {
-    fn new(events: Vec<ProjectedEvent>) -> Self {
+    fn new(events: Vec<ProjectedEvent>, refused: Option<EventType>) -> Self {
         let mut counts = BTreeMap::new();
         for event in &events {
             for key in index_keys(event) {
                 *counts.entry(key).or_insert(0) += 1;
             }
         }
-        Self { events, counts }
+        Self {
+            events,
+            counts,
+            refused,
+        }
+    }
+
+    /// #422 IDLE-OV: whether the fake refuses `query`'s pages.
+    fn refuses(&self, query: &EventQuery) -> bool {
+        self.refused
+            .is_some_and(|refused| query.event_type == Some(refused))
     }
 
     /// One page of the records `query` selects after the request's cursor, cut to the response
@@ -867,8 +971,20 @@ impl Ledger {
         let after = request
             .cursor()
             .map_or(0, RuntimeEventQueryCursor::after_sequence);
-        let from = query.from_sequence.unwrap_or(0).max(after + 1);
+        let mut from = query.from_sequence.unwrap_or(0).max(after + 1);
         let through = query.to_sequence.unwrap_or(u64::MAX).min(snapshot);
+        // #422 LN-WS R3: a first page with a lower time bound starts at the window's first
+        // record (this ledger's times go forward), and holds none when no record is that late.
+        if request.cursor().is_none()
+            && let Some(since) = query.from_timestamp_unix_ms
+        {
+            from = from.max(
+                self.events
+                    .iter()
+                    .find(|event| event.timestamp_unix_ms >= since)
+                    .map_or(snapshot + 1, |event| event.sequence),
+            );
+        }
         // The ledger's index read: the records of the smallest index the query names, between
         // its sequence bounds.
         let named = named_keys(query);
@@ -898,6 +1014,7 @@ impl Ledger {
         matched.truncate(usize::from(request.limit()));
         let mut stats = stats.lock().unwrap_or_else(PoisonError::into_inner);
         stats.examined += examined;
+        stats.pages += 1;
         loop {
             let next_cursor = matched.last().filter(|_| has_more).map(|last| {
                 RuntimeEventQueryCursor::new(snapshot, last.sequence, query, profile)

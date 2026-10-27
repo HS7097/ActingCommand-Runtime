@@ -2338,11 +2338,31 @@ impl SqliteStorage {
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         self.verify_extent(connection)?;
-        // Every row's view memberships name the Lab view as of the snapshot.
-        let lab = read_lab_relations(connection, snapshot, &LabRelations::default())?;
+        // #422 IDLE-OV (R2): the Lab relations read every Lab anchor of the history, outside the
+        // page's selection, so a statement the budget interrupts there refuses the page. They
+        // are read only when the page needs them: before the selection for the Lab view, whose
+        // condition they are; otherwise (M1) at the first row the selection selects among the
+        // page's own rows that names a link a relation reads (the row's view memberships name
+        // the Lab view as of the snapshot), and when the budget cuts them off there the page
+        // ends just before that row (`LinkedRelations`). Any other selection reads nothing of
+        // them (`in_view` and a stored view's condition read them for the Lab view only), and a
+        // page without such a row (an empty page among them) never reads them.
+        let no_relations = LabRelations::default();
+        let lab_view = if query.view == Some(LedgerView::Lab) {
+            Some(read_lab_relations(connection, snapshot, &no_relations)?)
+        } else {
+            None
+        };
+        let mut linked = lab_view.is_none().then(|| LinkedRelations {
+            rows: usize::from(request.limit()),
+            after,
+            snapshot,
+            relations: None,
+        });
+        let selection_lab = lab_view.as_ref().unwrap_or(&no_relations);
         let view = query
             .view
-            .map(|view| ViewCondition::of(view, &lab))
+            .map(|view| ViewCondition::of(view, selection_lab))
             .transpose()?;
         let selection = HistorySelection::of(query);
         let selection_limit = usize::from(request.limit()) + 1;
@@ -2356,7 +2376,7 @@ impl SqliteStorage {
             (&selection, view.as_ref()),
             (after, snapshot),
             (selection_limit, request.cursor().is_none()),
-            &lab,
+            (selection_lab, linked.as_mut()),
             read,
         );
         if let Some(value) = observation {
@@ -2366,6 +2386,12 @@ impl SqliteStorage {
             value.selection_work = LedgerProjectViewCount::from_len(read.0.visited());
         }
         let (selected, budget_stop) = selected?;
+        let lab = match lab_view {
+            Some(lab) => lab,
+            None => linked
+                .and_then(|linked| linked.relations)
+                .unwrap_or(no_relations),
+        };
         if let Some(value) = observation {
             value.selected_sequences = LedgerProjectViewCount::from_len(selected.len());
             value.project_page.begin(Instant::now());
@@ -2416,13 +2442,19 @@ impl SqliteStorage {
     /// - R3: a first page (`limit.1`) with `from_timestamp_unix_ms` starts at the window's first
     ///   record (`time_start`) minus one; when the bound interrupts that lookup, the page starts
     ///   where it would have.
+    ///
+    /// #422 IDLE-OV (M1): `lab.1`, a page outside the Lab view, reads its Lab relations at the
+    /// first row selected among its own rows that names a request, a correlation or a run; when
+    /// the bound cuts them off there, the selection ends just before that row (`SpanRead::Stopped`
+    /// at the sequence before it), or is refused when no sequence after the page's cursor
+    /// precedes it.
     fn select_view_rows(
         &self,
         connection: &Connection,
         (selection, view): (&HistorySelection<'_>, Option<&ViewCondition>),
         (after, snapshot): (u64, u64),
         (limit, first_page): (usize, bool),
-        lab: &LabRelations,
+        (lab, mut linked): (&LabRelations, Option<&mut LinkedRelations>),
         (work, page_rows, scan_rows): (&ReadWork, usize, usize),
     ) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, Option<u64>)> {
         // LN-7 (#422): a page of no rows selects none; asking a statement for no rows would read
@@ -2460,7 +2492,7 @@ impl SqliteStorage {
                 (selection, view),
                 (cursor, end),
                 (limit, &mut selected),
-                lab,
+                (lab, linked.as_deref_mut()),
                 (work, page_rows),
             );
             work.exempt(false);
@@ -2476,14 +2508,16 @@ impl SqliteStorage {
     }
 
     /// #422 LN-WS (R2): the rows of one span of a view page, after `range.0` through `range.1`,
-    /// added to `page.1` until it holds `page.0`; at most `read.1` rows per statement.
+    /// added to `page.1` until it holds `page.0`; at most `read.1` rows per statement. #422
+    /// IDLE-OV (M1): `lab.1`'s relations are read when the span selects the page's first row that
+    /// needs them (`LinkedRelations::read_at`).
     fn select_span(
         &self,
         connection: &Connection,
         (selection, view): (&HistorySelection<'_>, Option<&ViewCondition>),
         (after, end): (u64, u64),
         (limit, selected): (usize, &mut Vec<LedgerEventMetadata>),
-        lab: &LabRelations,
+        (lab, mut linked): (&LabRelations, Option<&mut LinkedRelations>),
         (work, page_rows): (&ReadWork, usize),
     ) -> GlobalLedgerResult<SpanRead> {
         let query = selection.query;
@@ -2510,6 +2544,14 @@ impl SqliteStorage {
                 cursor = event.sequence();
                 let going_on = work.visit();
                 if selection.selects(&event) && in_view(query.view, &event, lab) {
+                    // M1: the page's first own row that names a request, a correlation or a run
+                    // reads the relations; a cut read ends the page before it.
+                    if let Some(linked) = linked.as_deref_mut()
+                        && linked.needs(selected.len(), &event)
+                        && let Some(stop) = linked.read_at(connection, work, event.sequence())?
+                    {
+                        return Ok(SpanRead::Stopped(stop));
+                    }
                     selected.push(event);
                     if selected.len() == limit {
                         return Ok(SpanRead::Full);
@@ -2650,6 +2692,59 @@ enum SpanRead {
     Full,
     /// The read stopped at its budget; every sequence through this one was examined.
     Stopped(u64),
+}
+
+/// #422 IDLE-OV (M1): the Lab relations of a view page outside the Lab view. They are read at
+/// the first row its selection selects among the page's own rows (`rows`, not its lookahead)
+/// that names a request, a correlation or a run, so a page reads them no later in its work than
+/// at that row, and a page without such a row never reads them (`relations` stays `None`).
+struct LinkedRelations {
+    /// The page's own rows (its `limit`).
+    rows: usize,
+    /// The page's cursor (0 on a first page).
+    after: u64,
+    snapshot: u64,
+    relations: Option<LabRelations>,
+}
+
+impl LinkedRelations {
+    /// Whether `event`, about to be the page's row after its `selected` rows, reads the
+    /// relations: none was read yet, it is one of the page's own rows and it names a link a
+    /// relation reads.
+    fn needs(&self, selected: usize, event: &LedgerEventMetadata) -> bool {
+        self.relations.is_none()
+            && selected < self.rows
+            && LabKeys::of(event.links()).names_a_relation_link()
+    }
+
+    /// Reads the relations at the selected row `sequence`. `Some(stop)` when the read's bound cut
+    /// them off: the page ends just before that row (`stop`, the sequence before it, through
+    /// which every sequence was examined) and answers incomplete with the rows before it. When
+    /// no sequence after the page's cursor precedes the row, the page could not go on past it,
+    /// and the cut is the page's refusal (`ledger_read_budget_exceeded`), as a page that read
+    /// its relations before its selection was refused when they were cut.
+    fn read_at(
+        &mut self,
+        connection: &Connection,
+        work: &ReadWork,
+        sequence: u64,
+    ) -> GlobalLedgerResult<Option<u64>> {
+        // A page's first span runs past the budget (`ReadWork::exempt`); its relations, a
+        // statement of their own, never do.
+        let exempt = work.is_exempt();
+        work.exempt(false);
+        let read = read_lab_relations(connection, self.snapshot, &LabRelations::default());
+        work.exempt(exempt);
+        let stop = sequence.saturating_sub(1);
+        match read {
+            Ok(relations) => {
+                self.relations = Some(relations);
+                Ok(None)
+            }
+            Err(error) if work.interrupted(&error) && stop > self.after => Ok(Some(stop)),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 /// #422 LN-WS (R3): the statement of a window's first record: the least sequence among every
