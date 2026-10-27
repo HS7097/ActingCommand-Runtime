@@ -30,7 +30,7 @@ use actingcommand_contract::{
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 /// The run window (24 h), after a history of the instance's own runs.
@@ -86,7 +86,8 @@ fn ledger(
     (instance, ledger.events, newest)
 }
 
-fn client(root: &Path) -> RuntimeClient {
+/// A CLI client of the fake Runtime under `root`, connected as `gate_411_a42` connects its own.
+fn connect_client(root: &Path) -> RuntimeClient {
     RuntimeClient::connect(RuntimeClientConfig::new(
         root,
         RuntimeChannel::Cli,
@@ -94,6 +95,15 @@ fn client(root: &Path) -> RuntimeClient {
         EventSource::Cli,
     ))
     .expect("connect to the fake Runtime")
+}
+
+/// A call budget already spent: the hour `unreached_deadline` grants, taken back, so the
+/// deadline is the instant the budget was granted and no read can start before it. It measures
+/// nothing; whatever time passes after it, the budget stays spent.
+fn spent_deadline() -> Instant {
+    unreached_deadline()
+        .checked_sub(Duration::from_secs(60 * 60))
+        .expect("the deadline unreached_deadline grants, less its hour")
 }
 
 /// One instance row's run members as the overview reads them until `deadline`: the row, its
@@ -147,7 +157,7 @@ fn idle_ov_i1_an_instance_without_a_run_in_a_long_window_answers_none_within_one
         let (instance, events, _) = ledger(window_records, false);
         let root = TempDir::new().expect("tempdir");
         let runtime = FakeRuntime::start(root.path(), events);
-        let client = client(root.path());
+        let client = connect_client(root.path());
         let before = runtime.stats().pages;
         let (row, warnings, incomplete) = run_row(&client, instance, unreached_deadline());
         let read = runtime.stats().pages - before;
@@ -187,7 +197,7 @@ fn idle_ov_i2_an_instance_with_a_recent_run_answers_it() {
     let newest = newest.expect("the instance's newest run in the window");
     let root = TempDir::new().expect("tempdir");
     let runtime = FakeRuntime::start(root.path(), events);
-    let client = client(root.path());
+    let client = connect_client(root.path());
     let (row, warnings, incomplete) = run_row(&client, instance, unreached_deadline());
     assert_eq!(row["run"]["request_id"], newest, "{row}");
     assert!(
@@ -210,7 +220,7 @@ fn idle_ov_i6_a_read_that_cannot_finish_keeps_run_incomplete_and_its_warning() {
     let (instance, events, _) = ledger(SHORT_WINDOW_RECORDS, false);
     let root = TempDir::new().expect("tempdir");
     let runtime = FakeRuntime::start_refusing(root.path(), events, Some(EventType::TaskRequested));
-    let client = client(root.path());
+    let client = connect_client(root.path());
     let (row, warnings, incomplete) = run_row(&client, instance, unreached_deadline());
     assert_eq!(row, json!({"run_incomplete": true}), "{row}");
     assert!(incomplete, "the overview is incomplete");
@@ -235,8 +245,8 @@ fn idle_ov_i6_a_read_that_cannot_finish_keeps_run_incomplete_and_its_warning() {
     let (instance, events, _) = ledger(SHORT_WINDOW_RECORDS, false);
     let root = TempDir::new().expect("tempdir");
     let runtime = FakeRuntime::start(root.path(), events);
-    let client = client(root.path());
-    let (row, warnings, incomplete) = run_row(&client, instance, Instant::now());
+    let client = connect_client(root.path());
+    let (row, warnings, incomplete) = run_row(&client, instance, spent_deadline());
     assert_eq!(row, json!({"run_incomplete": true}), "{row}");
     assert!(incomplete, "the overview is incomplete");
     assert_eq!(
