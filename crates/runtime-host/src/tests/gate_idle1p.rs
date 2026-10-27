@@ -40,9 +40,10 @@ use crate::codes::{HostCode, IdleCode, IdleLocation};
 use crate::idle_action::{IdleEnd, IdlePlan, IdlePlanner, IdleStep, IdleView, WakeWork};
 use crate::schedule_explanation::ScheduleExplanationTable;
 use actingcommand_contract::{
-    EmulatorInstanceAction, FactScalar, FactValue, InstanceStuckRecovery, RequestId,
-    RuntimeConfigManifest, RuntimeFactScope, RuntimeLifecyclePhase, RuntimePayload,
-    RuntimeSubscriptionRequest, SchedulingPauseReason, SubscriptionCursor,
+    EmulatorInstanceAction, FactScalar, FactValue, InstanceStuckRecovery,
+    MAX_RUNTIME_SUBSCRIPTION_WAIT_MS, RequestId, RuntimeConfigManifest, RuntimeFactScope,
+    RuntimeLifecyclePhase, RuntimePayload, RuntimeSubscriptionRequest, SchedulingPauseReason,
+    SubscriptionCursor,
 };
 use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_policy::{
@@ -676,8 +677,14 @@ fn key_records(host: &RuntimeHost, claim: RequestId) -> usize {
 }
 
 /// Waits until the claim's records say it held the key; each wait is a ledger subscription that
-/// answers as soon as the claim's next record is written, `WAIT` only bounding a broken run.
+/// answers as soon as the claim's next record is written. One subscription waits at most the
+/// contract's longest wait, so `WAIT`, which only bounds a broken run, allows that many
+/// consecutive empty answers.
 fn await_key(host: &RuntimeHost, claim: RequestId) {
+    let empty_answers = WAIT
+        .as_millis()
+        .div_ceil(u128::from(MAX_RUNTIME_SUBSCRIPTION_WAIT_MS));
+    let mut empty = 0;
     let mut after = 0;
     loop {
         let query = EventQuery {
@@ -689,7 +696,7 @@ fn await_key(host: &RuntimeHost, claim: RequestId) {
             query.clone(),
             ProjectionProfile::Forensic,
             SubscriptionCursor::default(),
-            u64::try_from(WAIT.as_millis()).expect("the wait"),
+            MAX_RUNTIME_SUBSCRIPTION_WAIT_MS,
             1,
         )
         .expect("subscription request");
@@ -703,7 +710,12 @@ fn await_key(host: &RuntimeHost, claim: RequestId) {
         let Some(RuntimeResult::EventBatch { batch }) = receipt.result() else {
             panic!("an event batch: {receipt:?}");
         };
-        assert!(!batch.timed_out(), "the startup claim's next record");
+        if batch.timed_out() {
+            empty += 1;
+            assert!(empty < empty_answers, "the startup claim's next record");
+            continue;
+        }
+        empty = 0;
         let next = host
             .query_persisted_events_for_test(query)
             .expect("the claim's records")
