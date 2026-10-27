@@ -403,6 +403,25 @@ impl<'h> Operation<'h> {
         self.write()
     }
 
+    /// INST-2 fix round 1 (review S2 L5): records S0's pauses and run-time instructions as the
+    /// close read them, just before `request-shutdown`: what another party changed during the
+    /// drains is what the start must restore.
+    pub(crate) fn record_s0_reads(
+        &mut self,
+        pauses: Value,
+        instructions: Value,
+    ) -> Result<(), Outcome> {
+        let s0 = self.journal.s0.get_or_insert(S0 {
+            head: None,
+            epoch: None,
+            pauses: None,
+            instructions: None,
+        });
+        s0.pauses = Some(pauses);
+        s0.instructions = Some(instructions);
+        self.write()
+    }
+
     /// Workflow #421 INST-2: every step from `from` on that has not begun is done without
     /// running, its evidence `{"skipped": why}` (the planned steps an automatic rollback
     /// replaces).

@@ -17501,7 +17501,7 @@
       "values": {},
       "review": "pending",
       "status": "active",
-      "since": "0.12.18",
+      "since": "0.12.19",
       "description": "A completed receipt of a StartReport request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #421 INST-2 adds the kind).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
@@ -17561,7 +17561,7 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.18",
+      "since": "0.12.19",
       "description": "Runtime contract validation refused a value: a StartReport answer of the wrong shape (an open whose sum is not the sum of its eight phases, a start time of 0 or a ready time before it, a list of more than 256 names, an empty name or a name twice, an instance alias that is not valid), or a receipt carrying it that is not completed (Workflow #421 INST-2).",
       "common_causes": "A Runtime defect, or a peer of another build.",
       "handling": "Report the defect with the receipt; the Runtime goes on."

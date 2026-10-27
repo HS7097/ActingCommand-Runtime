@@ -18,18 +18,23 @@
 //!   [--ack-guard <id>]... [--detach]` is one operation: the hold, the close, the update's steps,
 //!   the start and the post-start checks, and the release unless `install.hold_after_start`
 //!   keeps the hold. **Between the new start and the resume** (decision 74 A) a failed
-//!   fail-class check, or a start that ended, rolls the update back by itself: the new Runtime is
-//!   closed, the rollback gate toward the previous build is evaluated with this operation's S0;
-//!   when it passes the file steps are reversed, the previous build started and checked, the hold
-//!   released (when its checks passed) and the command ends refused `deploy_rolled_back`; when
-//!   the gate fails the new build and the hold stay and it ends `rollback_gate_failed`. After the
-//!   resume nothing rolls back by itself. `--detach` runs the same command again through the
-//!   watchdog's manual-run method and answers at once.
+//!   fail-class check, or a start that ended, rolls the update back by itself. The rollback's
+//!   steps are journalled before anything acts (fix round 1, review S2 H2): the new Runtime's
+//!   close, the reversal (whose first part is the rollback gate toward the previous build, with
+//!   this operation's S0), the previous build's start and checks, and the release of the hold
+//!   (when its checks passed); the command ends refused `deploy_rolled_back`. When the gate fails
+//!   the new build and the hold stay and it ends `rollback_gate_failed`. After the resume nothing
+//!   rolls back by itself. `--detach` runs the same command again through the watchdog's
+//!   manual-run method and answers at once.
 //!
+//! A stop or composite refused before it changed a file releases the hold it took (fix round 1,
+//! review S2 M4) and still ends refused; one that already closed the Runtime names `install
+//! start` in `next`. Every answer reports the runs its drain cut (`runs_not_continued`) and the
+//! idle wakes the Runtime derives again (`idle_wakes_rederived`), never silently (review S2 M6).
 //! Every step is journalled and resumable (`install resume`); nothing is killed or deleted.
 
 use super::guards;
-use super::hold::{self, HoldInputs, PauseIntent};
+use super::hold::{self, HoldInputs, HoldReport, PauseIntent, ReleaseEvidence, ReleaseIntent};
 use super::host::Host;
 use super::journal::{self, Opening, Operation, PlannedStep, Previous, RollbackRecord, StepKind};
 use super::journal::{StepState, state_invalid};
@@ -46,6 +51,7 @@ use crate::codes::{
     InstallCaveat, InstallGuard, InstallLocation, InstallRefusal, RollbackGatePart,
 };
 use crate::watchdog::decide::CLOCK_SLACK_MS;
+use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::{CauseRelation, Outcome};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -58,26 +64,56 @@ pub(crate) enum StepEnd {
     Ends(Outcome, Map<String, Value>),
 }
 
-/// The members of an answer whose hold stays: `next` names `release-hold` with its reason.
-fn hold_kept(paths: &Paths, reason: Option<&str>) -> Map<String, Value> {
+/// The members of an answer whose hold stays: `next` names `release-hold` with its reason, and
+/// `install start` when the Runtime is down (closed, or a start that failed: review S2 M4).
+fn hold_kept(
+    paths: &Paths,
+    reason: Option<&SchedulingPauseReason>,
+    runtime_down: bool,
+) -> Map<String, Value> {
     let mut members = Map::new();
-    if let Some(reason) = reason {
-        members.insert(
-            "next".to_owned(),
-            json!({"release_hold": ["install", "release-hold", "--root", paths.plain, "--reason", reason]}),
+    let mut next = Map::new();
+    if runtime_down {
+        next.insert(
+            "start".to_owned(),
+            json!(["install", "start", "--root", paths.plain]),
         );
-        members.insert("hold".to_owned(), json!({"reason": reason, "kept": true}));
+    }
+    if let Some(reason) = reason {
+        next.insert(
+            "release_hold".to_owned(),
+            json!([
+                "install",
+                "release-hold",
+                "--root",
+                paths.plain,
+                "--reason",
+                reason
+            ]),
+        );
+        members.insert(
+            "hold".to_owned(),
+            HoldReport {
+                reason,
+                kept: true,
+                release: None,
+            }
+            .value(),
+        );
+    }
+    if !next.is_empty() {
+        members.insert("next".to_owned(), Value::Object(next));
     }
     members
 }
 
-/// The hold's reason a journal names: its inputs' `hold`, else its pause step's.
-fn hold_reason(journal: &journal::Journal) -> Option<String> {
+/// The hold of a journal: its inputs' `hold`, else its pause step's reason.
+fn hold_of(journal: &journal::Journal) -> Option<SchedulingPauseReason> {
     journal
         .inputs
         .get("hold")
         .and_then(Value::as_str)
-        .map(str::to_owned)
+        .and_then(|given| SchedulingPauseReason::new(given).ok())
         .or_else(|| pause_intent(journal).map(|intent| intent.reason))
 }
 
@@ -131,12 +167,12 @@ pub(crate) fn step(
     notes: &mut Vec<Outcome>,
 ) -> Result<StepEnd, Outcome> {
     match operation.journal().steps[n - 1].kind {
-        StepKind::Pause => pause(operation, n, loaded),
+        StepKind::Pause => pause(operation, n, loaded, notes),
         StepKind::Close => close(operation, n, loaded, notes),
         StepKind::Start => start(operation, n, loaded, notes),
         StepKind::PostCheck => post_check(operation, n, loaded, notes),
-        StepKind::ReleaseHold => release_hold(operation, n, loaded, notes),
-        StepKind::ReverseFiles => reverse_files(operation, n),
+        StepKind::ReleaseHold => release_hold(operation, n, loaded),
+        StepKind::ReverseFiles => reverse_files(operation, n, loaded, notes),
         _ => Err(state_invalid(
             operation.journal().kind.location(),
             operation.paths().journal(operation.id()),
@@ -145,7 +181,12 @@ pub(crate) fn step(
     }
 }
 
-fn pause(operation: &mut Operation<'_>, n: usize, loaded: &Loaded) -> Result<StepEnd, Outcome> {
+fn pause(
+    operation: &mut Operation<'_>,
+    n: usize,
+    loaded: &Loaded,
+    notes: &mut Vec<Outcome>,
+) -> Result<StepEnd, Outcome> {
     let command = operation.journal().kind.location();
     let step = operation.journal().steps[n - 1].clone();
     let paths = operation.paths().clone();
@@ -165,14 +206,15 @@ fn pause(operation: &mut Operation<'_>, n: usize, loaded: &Loaded) -> Result<Ste
         .cloned();
     let drained = hold::drained_of(step.evidence.as_ref());
     operation.start(n)?;
-    let runtime = operation.host().runtime();
+    let host = operation.host();
     match hold::run_pause(
-        runtime,
+        host,
         &loaded.state_root,
         command,
         &intent,
         &s0_pauses,
         drained,
+        loaded.settings.stop_busy_wait_ms,
     ) {
         Ok(drained) => Ok(StepEnd::Done(Some(json!({
             "deferred": deferred,
@@ -181,11 +223,61 @@ fn pause(operation: &mut Operation<'_>, n: usize, loaded: &Loaded) -> Result<Ste
             "known": intent.known,
             "runs_stopped_at_checkpoint": hold::runs_cut(&drained),
         })))),
-        Err(refusal) => Ok(StepEnd::Ends(
-            refusal,
-            hold_kept(&paths, Some(&intent.reason)),
-        )),
+        Err(refusal) => {
+            // Nothing changed yet (review S2 M4): the instances this hold paused are released
+            // again, and the command still ends refused. A release that fails keeps the hold.
+            match hold::release(host.runtime(), &loaded.state_root, command, &intent.reason) {
+                Ok(released) => {
+                    let mut members = Map::new();
+                    members.insert(
+                        "hold".to_owned(),
+                        HoldReport {
+                            reason: &intent.reason,
+                            kept: false,
+                            release: Some(&json!({"resumed": released})),
+                        }
+                        .value(),
+                    );
+                    Ok(StepEnd::Ends(refusal, members))
+                }
+                Err(release_failure) => {
+                    notes.push(release_failure);
+                    Ok(StepEnd::Ends(
+                        refusal,
+                        hold_kept(&paths, Some(&intent.reason), false),
+                    ))
+                }
+            }
+        }
     }
+}
+
+/// The instructions and the other parties' pauses as the close reads them before
+/// `request-shutdown` (review S2 L5): S0 again, without the hold's own pauses.
+fn reread_s0(operation: &mut Operation<'_>, loaded: &Loaded) -> Result<(), Outcome> {
+    let runtime = operation.host().runtime();
+    let Ok(Some(mut seen)) = runtime.status(&loaded.state_root) else {
+        return Ok(());
+    };
+    let Ok(config) = runtime.config(&loaded.state_root) else {
+        return Ok(());
+    };
+    if let Some(intent) = pause_intent(operation.journal()) {
+        for instance in &mut seen.instances {
+            if intent.instances.contains(&instance.alias)
+                && instance
+                    .pause
+                    .as_ref()
+                    .is_some_and(|pause| pause.reason == intent.reason)
+            {
+                instance.pause = None;
+            }
+        }
+    }
+    operation.record_s0_reads(
+        hold::pauses_value(&seen),
+        hold::instructions_value(&config.instructions),
+    )
 }
 
 fn close(
@@ -196,13 +288,17 @@ fn close(
 ) -> Result<StepEnd, Outcome> {
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
-    let reason = hold_reason(operation.journal());
-    let wait_ms = operation.journal().steps[n - 1]
-        .intent
+    let reason = hold_of(operation.journal());
+    let intent = operation.journal().steps[n - 1].intent.clone();
+    let wait_ms = intent
         .get("shutdown_wait_ms")
         .and_then(Value::as_u64)
         .unwrap_or(loaded.settings.stop_shutdown_wait_ms);
+    let rollback = of_rollback(&intent);
     operation.start(n)?;
+    if !rollback {
+        reread_s0(operation, loaded)?;
+    }
     let host = operation.host();
     let (evidence, caveat) = match hold::run_close(
         host.runtime(),
@@ -212,11 +308,34 @@ fn close(
         wait_ms,
     ) {
         Ok(closed) => closed,
+        Err(refusal) if rollback => {
+            // The new Runtime does not stop: nothing is killed; the rollback ends here.
+            let failed = rollback_failed(operation.journal());
+            let refusal = super::refusal(command, InstallRefusal::PostCheckFailed)
+                .count(failed.len())
+                .joined(CauseRelation::CausedBy, refusal);
+            let mut members = hold_kept(&paths, reason.as_ref(), false);
+            members.insert("failed_checks".to_owned(), json!(failed));
+            return Ok(StepEnd::Ends(refusal, members));
+        }
         Err(refusal) => {
-            return Ok(StepEnd::Ends(refusal, hold_kept(&paths, reason.as_deref())));
+            return Ok(StepEnd::Ends(
+                refusal,
+                hold_kept(&paths, reason.as_ref(), false),
+            ));
         }
     };
     notes.extend(caveat);
+    if rollback {
+        // The rollback's close of the new Runtime: S0 stays the operation's own.
+        if let Err(refusal) = launch::refuse_running(host, &paths, &loaded.state_root, command) {
+            return Ok(StepEnd::Ends(
+                refusal,
+                hold_kept(&paths, reason.as_ref(), false),
+            ));
+        }
+        return Ok(StepEnd::Done(Some(evidence)));
+    }
     // S0's ledger head, read with the live build's reader now that the Runtime stopped.
     let head = match programs::ledger_head(
         host,
@@ -230,13 +349,19 @@ fn close(
                 super::refusal(command, InstallRefusal::LedgerHeadUnreadable)
                     .path(&loaded.state_root),
             );
-            return Ok(StepEnd::Ends(refusal, hold_kept(&paths, reason.as_deref())));
+            return Ok(StepEnd::Ends(
+                refusal,
+                hold_kept(&paths, reason.as_ref(), true),
+            ));
         }
     };
     operation.record_s0_head(head)?;
     // Nothing of the Runtime may still run before a file changes.
     if let Err(refusal) = launch::refuse_running(host, &paths, &loaded.state_root, command) {
-        return Ok(StepEnd::Ends(refusal, hold_kept(&paths, reason.as_deref())));
+        return Ok(StepEnd::Ends(
+            refusal,
+            hold_kept(&paths, reason.as_ref(), true),
+        ));
     }
     let mut evidence = evidence;
     evidence["head"] = json!(head);
@@ -252,7 +377,7 @@ fn start(
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
     let step = operation.journal().steps[n - 1].clone();
-    let reason = hold_reason(operation.journal());
+    let reason = hold_of(operation.journal());
     let commit = step
         .intent
         .get("commit")
@@ -281,7 +406,18 @@ fn start(
         return Ok(StepEnd::Done(Some(evidence)));
     }
     operation.start(n)?;
-    let acks = acks_of(operation.journal());
+    // `--ack-guard memory` of a stop or composite acknowledges the row before the stop only;
+    // the start's own guard is acknowledged only by `install start --ack-guard memory` (review
+    // S2 M2).
+    let held = operation
+        .journal()
+        .steps
+        .iter()
+        .any(|step| step.kind == StepKind::Pause);
+    let acks = acks_of(operation.journal())
+        .into_iter()
+        .filter(|ack| !held || ack != InstallGuard::Memory.as_str())
+        .collect::<Vec<_>>();
     let launched = {
         let mut progress = |value: &Value| operation.progress(n, value.clone());
         launch::start(host, &paths, loaded, command, &commit, &acks, &mut progress)
@@ -289,7 +425,10 @@ fn start(
     let launched = match launched {
         Ok(launched) => launched,
         Err(refusal) => {
-            return Ok(StepEnd::Ends(refusal, hold_kept(&paths, reason.as_deref())));
+            return Ok(StepEnd::Ends(
+                refusal,
+                hold_kept(&paths, reason.as_ref(), true),
+            ));
         }
     };
     if launched.stalled {
@@ -306,19 +445,12 @@ fn start(
     // A start left running at its deadline is the stall rule's: no rollback, nothing killed.
     if !launched.left_running && composite_update(operation.journal()) && !of_rollback(&step.intent)
     {
-        return begin_rollback(
-            operation,
-            n,
-            loaded,
-            vec!["ready".to_owned()],
-            evidence,
-            notes,
-        );
+        return begin_rollback(operation, n, loaded, vec!["ready".to_owned()], evidence);
     }
     let refusal = super::refusal(command, InstallRefusal::RuntimeStartFailed)
         .path(launched.log.as_path())
         .joined(CauseRelation::CausedBy, failure);
-    let mut members = hold_kept(&paths, reason.as_deref());
+    let mut members = hold_kept(&paths, reason.as_ref(), !launched.left_running);
     members.insert("start".to_owned(), evidence);
     Ok(StepEnd::Ends(refusal, members))
 }
@@ -349,10 +481,8 @@ fn post_check(
         .and_then(Value::as_str)
         .map(std::path::PathBuf::from)
         .unwrap_or_default();
-    let ready = started
-        .get("ready_ms")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "not_ready".to_owned());
+    let ready = started.get("ready_ms").and_then(Value::as_u64);
+    let started_epoch = started["ready"]["owner_epoch"].as_str();
     let hold = pause_intent(&journal);
     let state = state::load_state_or_default(&paths)?;
     let config_sha256 = postcheck::config_sha256(&paths.config());
@@ -367,11 +497,13 @@ fn post_check(
         &loaded.state_root,
         &postcheck::CheckInputs {
             ready,
+            started_epoch,
             log: &log,
             s0: journal.s0.as_ref(),
             hold: hold.as_ref(),
             config: &loaded.config,
             config_sha256: &config_sha256,
+            begun_config_sha256: journal.inputs.get("config_sha256").and_then(Value::as_str),
             state: &state,
             added_keys: &added,
         },
@@ -390,108 +522,50 @@ fn post_check(
         return Ok(StepEnd::Done(Some(evidence)));
     }
     if composite_update(&journal) {
-        return begin_rollback(operation, n, loaded, failed, evidence, notes);
+        return begin_rollback(operation, n, loaded, failed, evidence);
     }
     let refusal = super::refusal(command, InstallRefusal::PostCheckFailed).count(failed.len());
-    let mut members = hold_kept(&paths, hold_reason(&journal).as_deref());
+    let mut members = hold_kept(&paths, hold_of(&journal).as_ref(), false);
     members.insert("post_check".to_owned(), json!(postcheck::values(&rows)));
     members.insert("failed_checks".to_owned(), json!(failed));
     Ok(StepEnd::Ends(refusal, members))
 }
 
 /// The automatic rollback of a composite update, between the new start and the resume
-/// (decision 74 A): the new Runtime closed when it runs (nothing is killed: one that does not
-/// stop ends the command `post_check_failed`), the rollback gate toward the previous build with
-/// this operation's S0, and when it passes the rollback's steps planned after the current one
-/// (the current step done with `evidence` and the gate's rows). A gate that fails ends the
-/// command `rollback_gate_failed`: the new build and the hold stay, a forward fix only.
+/// (decision 74 A). Its steps are journalled here, before anything acts (review S2 H2: a crash
+/// from now on resumes the rollback and never judges the new build again): the new Runtime's
+/// close (nothing is killed), the reversal (the rollback gate toward the previous build first,
+/// with this operation's S0; a gate that fails ends the command `rollback_gate_failed` with the
+/// new build and the hold kept, a forward fix only), the previous build's start and checks, and
+/// the release of the hold. The current step is done with `evidence`.
 fn begin_rollback(
     operation: &mut Operation<'_>,
     n: usize,
     loaded: &Loaded,
     failed: Vec<String>,
     evidence: Value,
-    notes: &mut Vec<Outcome>,
 ) -> Result<StepEnd, Outcome> {
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
     let journal = operation.journal().clone();
-    let reason = hold_reason(&journal);
-    let host = operation.host();
-    let runtime = host.runtime();
-    let mut members = hold_kept(&paths, reason.as_deref());
-    members.insert("failed_checks".to_owned(), json!(failed));
-    members.insert("post_check".to_owned(), evidence.clone());
+    let reason = hold_of(&journal);
     let Some(previous) = journal.previous.live.clone() else {
         let refusal = super::refusal(command, InstallRefusal::PostCheckFailed).count(failed.len());
+        let mut members = hold_kept(&paths, reason.as_ref(), false);
+        members.insert("failed_checks".to_owned(), json!(failed));
+        members.insert("post_check".to_owned(), evidence);
         return Ok(StepEnd::Ends(refusal, members));
     };
-    // 1. The new Runtime closed, when it runs.
-    let running = match runtime.status(&loaded.state_root) {
-        Ok(running) => running.is_some(),
-        Err(cause) => {
-            let refusal = super::refusal(command, InstallRefusal::PostCheckFailed)
-                .count(failed.len())
-                .joined(CauseRelation::CausedBy, cause);
-            return Ok(StepEnd::Ends(refusal, members));
-        }
-    };
-    if running
-        && let Err(cause) = runtime.shutdown(
-            &paths.root,
-            &loaded.state_root,
-            loaded.settings.stop_shutdown_wait_ms,
-        )
-    {
-        let refusal = super::refusal(command, InstallRefusal::PostCheckFailed)
-            .count(failed.len())
-            .joined(CauseRelation::CausedBy, cause);
-        return Ok(StepEnd::Ends(refusal, members));
-    }
-    // 2. The rollback gate toward the previous build, with this operation's S0.
-    let planned = match plan::plan(
-        host,
-        &paths,
-        PlanInputs {
-            kind: PlanKind::Rollback,
-            commit: previous.clone(),
-            accept_ledger_one_way: false,
-            preview: false,
-            operation: command,
-        },
-    ) {
-        Ok(planned) => planned,
-        Err(refused) => {
-            let refusal = super::refusal(command, InstallRefusal::RollbackGateFailed)
-                .rollback_gate_parts([RollbackGatePart::InterfaceEdges])
-                .commit_sha(previous)
-                .joined(CauseRelation::CausedBy, refused.into_answer().outcome);
-            return Ok(StepEnd::Ends(refusal, members));
-        }
-    };
-    let gate = update::gate(host, &paths, &planned);
-    members.insert("gate".to_owned(), json!(gate.rows));
-    if let Some(refusal) = gate.refusal(&planned) {
-        return Ok(StepEnd::Ends(refusal, members));
-    }
-    notes.extend(
-        gate.with_notes(super::done(command))
-            .causes()
-            .iter()
-            .map(|link| link.outcome().clone()),
-    );
-    // 3. The rollback's steps.
-    operation.record_rollback(RollbackRecord {
-        started_at_unix_ms: host.now_unix_ms(),
-        to: previous.clone(),
-        failed,
-        reversed_at_unix_ms: None,
-    })?;
     let mut steps: Vec<PlannedStep> = vec![
+        (
+            StepKind::Close,
+            "runtime".to_owned(),
+            json!({"rollback": true, "shutdown_wait_ms": loaded.settings.stop_shutdown_wait_ms}),
+        ),
         (
             StepKind::ReverseFiles,
             "runtime".to_owned(),
-            json!({"to": previous}),
+            json!({"to": previous, "failed": failed}),
         ),
         (
             StepKind::Start,
@@ -508,29 +582,118 @@ fn begin_rollback(
         steps.push((
             StepKind::ReleaseHold,
             "runtime".to_owned(),
-            json!({"reason": reason, "rollback": true}),
+            ReleaseIntent::value(reason, true),
         ));
     }
     // The planned steps not begun (the new build's checks, the release) are replaced.
     operation.skip_planned(n + 1, "rollback")?;
     operation.append_steps(steps)?;
     let mut evidence = evidence;
-    evidence["rollback_gate"] = json!(gate.rows);
+    evidence["rollback"] = json!({"to": previous, "failed": failed});
     Ok(StepEnd::Done(Some(evidence)))
 }
 
-/// The reversal of the operation's file steps, as `install undo` reverses them (each displaced
-/// file kept), then the previous build verified in place.
-fn reverse_files(operation: &mut Operation<'_>, n: usize) -> Result<StepEnd, Outcome> {
+/// Why the automatic rollback began: its reversal step's `failed`.
+fn rollback_failed(journal: &journal::Journal) -> Vec<String> {
+    journal
+        .steps
+        .iter()
+        .find(|step| step.kind == StepKind::ReverseFiles)
+        .and_then(|step| step.intent.get("failed"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The reversal: the rollback gate toward the previous build first (once: its passing is
+/// journalled), then the operation's file steps reversed as `install undo` reverses them (each
+/// displaced file kept), then the previous build verified in place.
+fn reverse_files(
+    operation: &mut Operation<'_>,
+    n: usize,
+    loaded: &Loaded,
+    notes: &mut Vec<Outcome>,
+) -> Result<StepEnd, Outcome> {
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
-    let to = operation.journal().steps[n - 1]
+    let step = operation.journal().steps[n - 1].clone();
+    let to = step
         .intent
         .get("to")
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| state_invalid(command, paths.journal(operation.id()), None))?;
     operation.start(n)?;
+    let gate_passed = step
+        .evidence
+        .as_ref()
+        .and_then(|evidence| evidence.get("gate_passed"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !gate_passed {
+        let journal = operation.journal().clone();
+        let failed = rollback_failed(&journal);
+        let mut members = hold_kept(&paths, hold_of(&journal).as_ref(), true);
+        members.insert("failed_checks".to_owned(), json!(failed));
+        if let Some(checked) = journal
+            .steps
+            .iter()
+            .rev()
+            .find(|step| {
+                step.kind == StepKind::PostCheck
+                    && !of_rollback(&step.intent)
+                    && step
+                        .evidence
+                        .as_ref()
+                        .is_some_and(|e| e.get("skipped").is_none())
+            })
+            .and_then(|step| step.evidence.clone())
+        {
+            members.insert("post_check".to_owned(), checked);
+        }
+        let host = operation.host();
+        let planned = match plan::plan(
+            host,
+            &paths,
+            PlanInputs {
+                kind: PlanKind::Rollback,
+                commit: to.clone(),
+                accept_ledger_one_way: false,
+                preview: false,
+                operation: command,
+            },
+        ) {
+            Ok(planned) => planned,
+            Err(refused) => {
+                let refusal = super::refusal(command, InstallRefusal::RollbackGateFailed)
+                    .rollback_gate_parts([RollbackGatePart::InterfaceEdges])
+                    .commit_sha(to)
+                    .joined(CauseRelation::CausedBy, refused.into_answer().outcome);
+                return Ok(StepEnd::Ends(refusal, members));
+            }
+        };
+        let gate = update::gate(host, &paths, &planned);
+        members.insert("gate".to_owned(), json!(gate.rows));
+        if let Some(refusal) = gate.refusal(&planned) {
+            return Ok(StepEnd::Ends(refusal, members));
+        }
+        notes.extend(
+            gate.with_notes(super::done(command))
+                .causes()
+                .iter()
+                .map(|link| link.outcome().clone()),
+        );
+        operation.record_rollback(RollbackRecord {
+            started_at_unix_ms: host.now_unix_ms(),
+            to: to.clone(),
+            failed,
+            reversed_at_unix_ms: None,
+        })?;
+        operation.progress(n, json!({"gate_passed": true, "rollback_gate": gate.rows}))?;
+    }
     let ms2 = operation.host().now_unix_ms();
     let steps = operation.journal().steps.clone();
     let previous = operation.journal().previous.clone();
@@ -561,14 +724,21 @@ fn reverse_files(operation: &mut Operation<'_>, n: usize) -> Result<StepEnd, Out
         rollback.reversed_at_unix_ms = Some(operation.host().now_unix_ms());
         operation.record_rollback(rollback)?;
     }
-    Ok(StepEnd::Done(Some(json!({"to": to, "kept": kept}))))
+    let gate = operation.journal().steps[n - 1]
+        .evidence
+        .as_ref()
+        .and_then(|evidence| evidence.get("rollback_gate"))
+        .cloned();
+    Ok(StepEnd::Done(Some(
+        json!({"to": to, "kept": kept, "gate_passed": true, "rollback_gate": gate}),
+    )))
 }
 
 /// The deferred work a hold of `reason` recorded and how its drains ended: the pause step of
 /// this operation, else of the newest journalled operation whose hold has that reason.
 fn deferred_for(
     operation: &Operation<'_>,
-    reason: &str,
+    reason: &SchedulingPauseReason,
 ) -> (Option<Value>, BTreeMap<String, super::runtime::Drained>) {
     let of = |journal: &journal::Journal| {
         journal
@@ -576,7 +746,7 @@ fn deferred_for(
             .iter()
             .find(|step| {
                 step.kind == StepKind::Pause
-                    && PauseIntent::of(&step.intent).is_some_and(|intent| intent.reason == reason)
+                    && PauseIntent::of(&step.intent).is_some_and(|intent| &intent.reason == reason)
             })
             .map(|step| {
                 (
@@ -611,19 +781,13 @@ fn release_hold(
     operation: &mut Operation<'_>,
     n: usize,
     loaded: &Loaded,
-    notes: &mut Vec<Outcome>,
 ) -> Result<StepEnd, Outcome> {
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
-    let step = operation.journal().steps[n - 1].clone();
-    let reason = step
-        .intent
-        .get("reason")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| state_invalid(command, paths.journal(operation.id()), None))?;
+    let intent: ReleaseIntent = operation.intent(n)?;
+    let reason = intent.reason;
     // A rollback whose previous build's checks failed keeps the hold.
-    if of_rollback(&step.intent) {
+    if intent.rollback {
         let checks_failed = operation.journal().steps[..n - 1]
             .iter()
             .rev()
@@ -634,7 +798,13 @@ fn release_hold(
             .is_some_and(|failed| !failed.is_empty());
         if checks_failed {
             return Ok(StepEnd::Done(Some(
-                json!({"reason": reason, "skipped": "post_check_failed"}),
+                ReleaseEvidence {
+                    reason: &reason,
+                    skipped: Some("post_check_failed"),
+                    resumed: None,
+                    handed_back: None,
+                }
+                .value(),
             )));
         }
     }
@@ -643,7 +813,12 @@ fn release_hold(
     let runtime = host.runtime();
     let resumed = match hold::release(runtime, &loaded.state_root, command, &reason) {
         Ok(resumed) => resumed,
-        Err(refusal) => return Ok(StepEnd::Ends(refusal, hold_kept(&paths, Some(&reason)))),
+        Err(refusal) => {
+            return Ok(StepEnd::Ends(
+                refusal,
+                hold_kept(&paths, Some(&reason), false),
+            ));
+        }
     };
     let released_at = host.now_unix_ms();
     let (deferred, drained) = deferred_for(operation, &reason);
@@ -655,25 +830,89 @@ fn release_hold(
         plan_after.as_ref(),
         released_at,
     );
+    Ok(StepEnd::Done(Some(
+        ReleaseEvidence {
+            reason: &reason,
+            skipped: None,
+            resumed: Some(&resumed),
+            handed_back: Some(&handed_back),
+        }
+        .value(),
+    )))
+}
+
+/// Whether `notes` already carry the caveat `caveat`.
+fn has(notes: &[Outcome], caveat: InstallCaveat) -> bool {
+    notes
+        .iter()
+        .any(|note| note.value("install_caveat").and_then(Value::as_str) == Some(caveat.as_str()))
+}
+
+/// The caveats of a hold that an answer must carry (review S2 M6, decision 75's two gaps): the
+/// runs its drains stopped at a checkpoint (`runs_not_continued`), and the held instances whose
+/// owed idle wakes could not be read and are derived again by the Runtime
+/// (`idle_wakes_rederived`). Those of this operation's own pause step, else (a release of the
+/// hold) of the newest pause step with the released reason. Each is added once.
+fn hold_caveats(operation: &Operation<'_>, config: &Value, notes: &mut Vec<Outcome>) {
+    let journal = operation.journal();
+    let command = journal.kind.location();
+    let own = journal
+        .steps
+        .iter()
+        .find(|step| step.kind == StepKind::Pause && step.state == StepState::Done)
+        .map(|step| {
+            (
+                step.evidence
+                    .as_ref()
+                    .and_then(|evidence| evidence.get("deferred"))
+                    .cloned(),
+                hold::drained_of(step.evidence.as_ref()),
+                PauseIntent::of(&step.intent).map(|intent| intent.instances),
+            )
+        });
+    let (deferred, drained, held) = match own {
+        Some(found) => found,
+        None if journal.kind == OperationKind::ReleaseHold => {
+            let Some(reason) = hold_of(journal) else {
+                return;
+            };
+            let (deferred, drained) = deferred_for(operation, &reason);
+            let held = deferred
+                .as_ref()
+                .and_then(|deferred| deferred.get("instances"))
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| Some(row.get("alias")?.as_str()?.to_owned()))
+                        .collect()
+                });
+            (deferred, drained, held)
+        }
+        None => return,
+    };
     let cut = hold::runs_cut(&drained);
-    if cut > 0 {
+    if cut > 0 && !has(notes.as_slice(), InstallCaveat::RunsNotContinued) {
         notes.push(super::caveat(command, InstallCaveat::RunsNotContinued).count(cut));
     }
-    Ok(StepEnd::Done(Some(json!({
-        "reason": reason,
-        "resumed": resumed,
-        "handed_back": handed_back,
-    }))))
+    let waking = hold::idle_waking(config, &held.unwrap_or_default());
+    if waking > 0
+        && hold::idle_wakes_unread(deferred.as_ref())
+        && !has(notes.as_slice(), InstallCaveat::IdleWakesRederived)
+    {
+        notes.push(super::caveat(command, InstallCaveat::IdleWakesRederived).count(waking));
+    }
 }
 
 /// Ends `operation` refused: its result recorded and `current.json` retired; the answer carries
-/// `members` (what stays: the hold, the build).
+/// `members` (what stays: the hold, the build) and the hold's caveats.
 pub(crate) fn end(
     operation: Operation<'_>,
     refusal: Outcome,
     members: Map<String, Value>,
-    notes: &[Outcome],
+    mut notes: Vec<Outcome>,
+    loaded: &Loaded,
 ) -> Result<Answer, Outcome> {
+    hold_caveats(&operation, &loaded.config, &mut notes);
     // The operation's id on the family's own refusal; a fatal cause that tops it (the
     // fatal-link rule) keeps its own values.
     let refusal = if refusal.is(crate::codes::ActingctlCode::InstallCommandRefused) {
@@ -681,7 +920,7 @@ pub(crate) fn end(
     } else {
         refusal
     };
-    let refusal = plan::with_notes(refusal, notes);
+    let refusal = plan::with_notes(refusal, &notes);
     operation.finish(&refusal)?;
     Ok(Answer {
         members,
@@ -713,9 +952,11 @@ fn evidence_of(journal: &journal::Journal, kind: StepKind, rollback: bool) -> Ve
 /// done) with the operation's members, its caveats as `note` links.
 pub(crate) fn finish(
     operation: Operation<'_>,
-    notes: Vec<Outcome>,
+    mut notes: Vec<Outcome>,
     counts: FileCounts,
+    loaded: &Loaded,
 ) -> Result<Answer, Outcome> {
+    hold_caveats(&operation, &loaded.config, &mut notes);
     let journal = operation.journal().clone();
     let paths = operation.paths().clone();
     let command = journal.kind.location();
@@ -732,7 +973,7 @@ pub(crate) fn finish(
     let released = releases
         .iter()
         .any(|release| release.get("resumed").is_some());
-    let reason = hold_reason(&journal);
+    let reason = hold_of(&journal);
     let mut members = Map::new();
     let mut insert = |name: &str, value: Value| {
         members.insert(name.to_owned(), value);
@@ -843,11 +1084,16 @@ pub(crate) fn finish(
             OperationKind::Update | OperationKind::Rollback | OperationKind::Stop
         )
     {
-        members.extend(hold_kept(&paths, Some(reason)));
-    } else if let Some(release) = releases.last() {
+        members.extend(hold_kept(&paths, Some(reason), false));
+    } else if let (Some(reason), Some(release)) = (&reason, releases.last()) {
         members.insert(
             "hold".to_owned(),
-            json!({"reason": reason, "kept": false, "release": release}),
+            HoldReport {
+                reason,
+                kept: false,
+                release: Some(release),
+            }
+            .value(),
         );
     }
     let outcome = plan::with_notes(outcome, &notes);
@@ -892,7 +1138,7 @@ fn composite_steps(
             steps.push((
                 StepKind::ReleaseHold,
                 "runtime".to_owned(),
-                json!({"reason": hold.reason}),
+                ReleaseIntent::value(&hold.reason, false),
             ));
         }
     }
@@ -939,12 +1185,14 @@ fn hold_start(
     let held = hold::held_instances(&seen, &hold.reason);
     let now = host.now_unix_ms();
     let mut rows = vec![
-        guards::foreign_pauses(&seen, &hold.reason, &hold.known),
+        guards::foreign_pauses(&seen, Some(&hold.reason), &hold.known),
         guards::schedule_near(plan_seen.as_ref(), now, &held, &loaded.settings),
         guards::adb(host, paths, &loaded.config, &loaded.settings),
     ];
     if with_memory {
-        rows.push(guards::memory(host, &loaded.settings));
+        // Before the stop the running Runtime's working set counts: the stop releases it (review
+        // S2 M2).
+        rows.push(guards::memory_before_stop(host, paths, &loaded.settings));
     }
     if let Err(refusal) = guards::refuse(operation, &rows, acks) {
         return Ok(Err(
@@ -963,8 +1211,9 @@ fn hold_start(
 
 /// Opens a composite update or rollback (`update apply … --stop --hold …`): the hold's reads and
 /// guards from the running Runtime, then the operation with S0, the guards, the
-/// acknowledgments and the deferred record journalled. A running image that would change and may
-/// not be renamed refuses before anything else.
+/// acknowledgments, the configuration file's SHA-256 (what `config` is judged against) and the
+/// deferred record journalled. A running image that would change and may not be renamed refuses
+/// before anything else.
 pub(crate) fn open_composite<'h>(
     host: &'h dyn Host,
     paths: &Paths,
@@ -1003,6 +1252,7 @@ pub(crate) fn open_composite<'h>(
             "hold": hold.reason,
             "known_pauses": hold.known,
             "start": start,
+            "config_sha256": loaded.config_sha256,
         }),
         plan_id: Some(planned.id.clone()),
         plan: Some(planned.document.clone()),
@@ -1054,7 +1304,11 @@ pub(crate) fn stop_command(words: &[&str], host: &dyn Host) -> Result<Answer, Ou
     };
     let opening = Opening {
         kind: OperationKind::Stop,
-        inputs: json!({"hold": hold.reason, "known_pauses": hold.known}),
+        inputs: json!({
+            "hold": hold.reason,
+            "known_pauses": hold.known,
+            "config_sha256": loaded.config_sha256,
+        }),
         plan_id: None,
         plan: None,
         acknowledged: acks.iter().map(|ack| format!("guard:{ack}")).collect(),
@@ -1088,8 +1342,28 @@ pub(crate) fn stop_command(words: &[&str], host: &dyn Host) -> Result<Answer, Ou
     update::run(operation, &loaded)
 }
 
+/// Whether a start log (`actingd-<ms>.log`) newer than `since_unix_ms` lies in a log folder of
+/// `root`: a Runtime started since then (the watchdog, a reboot, another start).
+fn started_since(host: &dyn Host, root: &std::path::Path, since_unix_ms: u64) -> bool {
+    host.log_dirs(root).iter().any(|directory| {
+        std::fs::read_dir(directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.strip_prefix("actingd-")?.strip_suffix(".log"))
+                    .and_then(|ms| ms.parse::<u64>().ok())
+                    .is_some_and(|ms| ms > since_unix_ms)
+            })
+    })
+}
+
 /// The S0 and the hold of the newest journalled operation that stopped the Runtime: what a
-/// standalone start's post-start checks judge against.
+/// standalone start's post-start checks judge against; none when a Runtime started after that
+/// operation ended (review S2 L4: its S0 is no longer what this start restores).
 fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Option<Value>)> {
     for id in journal::operation_ids(paths)
         .unwrap_or_default()
@@ -1103,6 +1377,12 @@ fn last_stop(host: &dyn Host, paths: &Paths) -> Option<(String, journal::S0, Opt
         if let Some(s0) = &journal.s0
             && s0.epoch.is_some()
         {
+            if journal
+                .finished_at_unix_ms
+                .is_none_or(|finished| started_since(host, &paths.root, finished))
+            {
+                return None;
+            }
             let hold = journal
                 .steps
                 .iter()
@@ -1156,6 +1436,7 @@ pub(crate) fn start_command(words: &[&str], host: &dyn Host) -> Result<Answer, O
             "commit": live.commit,
             "s0_from": stopped.as_ref().map(|(id, _, _)| id),
             "hold_intent": stopped.as_ref().and_then(|(_, _, hold)| hold.clone()),
+            "config_sha256": loaded.config_sha256,
         }),
         plan_id: None,
         plan: None,
@@ -1192,10 +1473,8 @@ pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<An
     const RELEASE: InstallLocation = InstallLocation::ReleaseHold;
     let flags = Flags::parse(words, &["--root", "--reason"], &[])?;
     let paths = super::resolve_root(&flags)?;
-    let reason = flags.required("--reason")?;
-    if actingcommand_contract::validate_scheduling_pause_reason(reason).is_err() {
-        return Err(super::unusable("--reason"));
-    }
+    let reason = SchedulingPauseReason::new(flags.required("--reason")?)
+        .map_err(|_| super::unusable("--reason"))?;
     journal::refuse_unfinished(RELEASE, &paths)?;
     let loaded = plan::load(&paths, RELEASE)?;
     if host
@@ -1226,7 +1505,7 @@ pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<An
         vec![(
             StepKind::ReleaseHold,
             "runtime".to_owned(),
-            json!({"reason": reason}),
+            ReleaseIntent::value(&reason, false),
         )]
     })?;
     update::run(operation, &loaded)
@@ -1234,7 +1513,7 @@ pub(crate) fn release_hold_command(words: &[&str], host: &dyn Host) -> Result<An
 
 /// `install guards --root <root> --for stop|start [--hold <reason>] [--known-pause
 /// ALIAS=REASON]...`: the guards the command would evaluate now; nothing changes. A hot
-/// placement's guards come with INST-4.
+/// placement's guards come with INST-4. `count` is how many guards would refuse.
 pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     const GUARDS: InstallLocation = InstallLocation::GuardsReport;
     let flags = Flags::parse_lists(
@@ -1248,16 +1527,29 @@ pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, 
     let runtime = host.runtime();
     let rows = match flags.required("--for")? {
         "stop" => {
-            let hold = hold::parse_hold(&flags)?.unwrap_or(HoldInputs {
-                reason: String::new(),
-                known: BTreeMap::new(),
-            });
+            let hold = hold::parse_hold(&flags)?;
+            let known = hold
+                .as_ref()
+                .map(|hold| hold.known.clone())
+                .unwrap_or_default();
             let mut rows = Vec::new();
             match runtime.status(&loaded.state_root) {
                 Ok(Some(seen)) => {
-                    let held = hold::held_instances(&seen, &hold.reason);
+                    let held = match &hold {
+                        Some(hold) => hold::held_instances(&seen, &hold.reason),
+                        None => seen
+                            .instances
+                            .iter()
+                            .filter(|instance| instance.pause.is_none())
+                            .map(|instance| instance.alias.clone())
+                            .collect(),
+                    };
                     let plan = runtime.plan(&loaded.state_root);
-                    rows.push(guards::foreign_pauses(&seen, &hold.reason, &hold.known));
+                    rows.push(guards::foreign_pauses(
+                        &seen,
+                        hold.as_ref().map(|hold| &hold.reason),
+                        &known,
+                    ));
                     rows.push(guards::schedule_near(
                         plan.as_ref(),
                         host.now_unix_ms(),
@@ -1273,6 +1565,7 @@ pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, 
                             result: guards::GuardResult::NotEvaluated,
                             values: json!({"runtime": "not_running"}),
                             ackable: true,
+                            informational: guard == InstallGuard::ScheduleNear,
                         });
                     }
                 }
@@ -1290,11 +1583,12 @@ pub(crate) fn guards_command(words: &[&str], host: &dyn Host) -> Result<Answer, 
         ],
         _ => return Err(super::unusable("--for")),
     };
-    let failing = rows
-        .iter()
-        .filter(|row| row.result != guards::GuardResult::Pass)
-        .count();
-    Answer::new(super::done(GUARDS).count(failing)).with("guards", guards::values(&rows))
+    let failing = rows.iter().filter(|row| row.refuses()).count();
+    let done = plan::with_notes(
+        super::done(GUARDS).count(failing),
+        &plan::retired_caveats(GUARDS, &loaded.settings),
+    );
+    Answer::new(done).with("guards", guards::values(&rows))
 }
 
 /// `--detach`: the same command run again without it, through the watchdog's manual-run method,

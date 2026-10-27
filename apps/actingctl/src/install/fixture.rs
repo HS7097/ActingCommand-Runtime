@@ -12,6 +12,7 @@ use super::{Answer, execute};
 use crate::codes::ActingctlCode;
 use crate::watchdog::decide::LiveOwner;
 use crate::watchdog::start::{StartedProcess, StartedState, Target};
+use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -32,11 +33,12 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// The interfaces both manifests of a neutral build declare: `actingd-config` up to revision 17,
-/// whose check-config takes `--install-root` (INST-1b-F fix round 1).
+/// The interfaces both manifests of a neutral build declare: `actingd-config` up to revision 18
+/// (INST-2, v0.12.19), whose check-config takes `--install-root` (revision 17, INST-1b-F fix
+/// round 1).
 pub(super) fn speaks() -> Value {
     json!({
-        "actingd-config": [5, 17],
+        "actingd-config": [5, 18],
         "install-selection": [1, 1],
         "install-control": [0, 1],
         "ledger": [3, 4],
@@ -304,6 +306,12 @@ pub(super) struct FakeHost {
     /// command lines.
     pub(super) runtime: FakeRuntime,
     pub(super) memory_mb: Cell<u64>,
+    /// INST-2 fix round 1: the available memory of the next reads, one per read (then
+    /// `memory_mb`), and the running Runtime's working set.
+    pub(super) memory_reads: RefCell<VecDeque<u64>>,
+    pub(super) working_set_mb: Cell<Option<u64>>,
+    /// The reads a starting Runtime reports at each progress sample (none when empty).
+    pub(super) read_bytes: Cell<Option<u64>>,
     pub(super) detached: RefCell<Vec<Vec<String>>>,
     pub(super) crash_after: Cell<Option<usize>>,
     pub(super) crash_between_renames: Cell<Option<usize>>,
@@ -348,6 +356,9 @@ impl FakeHost {
         Self {
             runtime: FakeRuntime::new(Rc::clone(&clock)),
             memory_mb: Cell::new(64_000),
+            memory_reads: RefCell::new(VecDeque::new()),
+            working_set_mb: Cell::new(None),
+            read_bytes: Cell::new(None),
             detached: RefCell::new(Vec::new()),
             clock,
             work: work.to_path_buf(),
@@ -626,11 +637,19 @@ impl Host for FakeHost {
     }
 
     fn available_memory_mb(&self) -> Result<u64, Outcome> {
-        Ok(self.memory_mb.get())
+        Ok(self
+            .memory_reads
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or_else(|| self.memory_mb.get()))
     }
 
     fn runtime_read_bytes(&self, _root: &Path) -> Option<u64> {
-        None
+        self.read_bytes.get()
+    }
+
+    fn runtime_working_set_mb(&self, _root: &Path) -> Option<u64> {
+        self.working_set_mb.get()
     }
 
     fn detach(&self, arguments: &[String], _directory: &Path, _log: &Path) -> Result<u32, Outcome> {
@@ -683,6 +702,16 @@ pub(super) struct FakeRuntime {
     pub(super) unsupported: RefCell<Vec<String>>,
     /// The close does not complete (its wait passes; nothing is killed).
     pub(super) refuse_shutdown: Cell<bool>,
+    /// INST-2 fix round 1: by alias, the fake time until which the instance has a queued
+    /// request (its status shows one, and its pause is refused); every batch of pauses asked
+    /// at once; the next pauses that fail as the Runtime refusing them (by alias).
+    pub(super) queued_until: RefCell<BTreeMap<String, u64>>,
+    pub(super) batches: RefCell<Vec<Vec<String>>>,
+    pub(super) refuse_pause: RefCell<Vec<String>>,
+    /// The Runtime goes away right after it answered readiness (its process died).
+    pub(super) dies_after_ready: Cell<bool>,
+    /// The `StartReport` read fails (not as an older build's: the connection failed).
+    pub(super) report_fails: Cell<bool>,
     pub(super) calls: RefCell<Vec<String>>,
     /// The spawn under way: when, how it behaves and its build.
     pending: RefCell<Option<(u64, FakeStart, String)>>,
@@ -711,6 +740,11 @@ impl FakeRuntime {
             report_patch: RefCell::new(BTreeMap::new()),
             unsupported: RefCell::new(Vec::new()),
             refuse_shutdown: Cell::new(false),
+            queued_until: RefCell::new(BTreeMap::new()),
+            batches: RefCell::new(Vec::new()),
+            refuse_pause: RefCell::new(Vec::new()),
+            dies_after_ready: Cell::new(false),
+            report_fails: Cell::new(false),
             calls: RefCell::new(Vec::new()),
             pending: RefCell::new(None),
             revisions: Cell::new(0),
@@ -754,7 +788,7 @@ impl FakeRuntime {
             .find(|instance| instance.alias == alias)
         {
             instance.pause = Some(PauseSeen {
-                reason: reason.to_owned(),
+                reason: SchedulingPauseReason::new(reason).expect("a pause reason"),
                 revision,
             });
         }
@@ -767,7 +801,15 @@ impl FakeRuntime {
             .iter()
             .find(|instance| instance.alias == alias)
             .and_then(|instance| instance.pause.as_ref())
-            .map(|pause| pause.reason.clone())
+            .map(|pause| pause.reason.as_str().to_owned())
+    }
+
+    /// Whether `alias` has a queued request now, on the fake clock.
+    fn queued(&self, alias: &str) -> bool {
+        self.queued_until
+            .borrow()
+            .get(alias)
+            .is_some_and(|until| self.clock.get() < *until)
     }
 
     /// The `StartReport` answer of the running Runtime: every registered instance bound, the
@@ -831,12 +873,18 @@ impl RuntimeLink for FakeRuntime {
             return Ok(None);
         }
         let owner = self.owner.borrow().clone();
+        let mut instances = self.instances.borrow().clone();
+        for instance in &mut instances {
+            if self.queued(&instance.alias) {
+                instance.queued_requests = 1;
+            }
+        }
         Ok(Some(RuntimeSeen {
             owner_epoch: owner.epoch,
             pid: owner.pid,
             started_at_unix_ms: owner.started_at_unix_ms,
             global_pause: self.global_pause.borrow().clone(),
-            instances: self.instances.borrow().clone(),
+            instances,
         }))
     }
 
@@ -861,17 +909,52 @@ impl RuntimeLink for FakeRuntime {
         &self,
         _state_root: &Path,
         alias: &str,
-        reason: &str,
+        reason: &SchedulingPauseReason,
         _drain_timeout_ms: u64,
     ) -> Result<Drained, Outcome> {
         if !self.running.get() {
             return Err(refused());
         }
+        // A queued request fails the pause at once, as the Runtime's `TransferNotSafe` does.
+        if self.queued(alias) {
+            self.calls
+                .borrow_mut()
+                .push(format!("pause {alias} {reason} refused"));
+            return Err(refused());
+        }
+        let mut refuse = self.refuse_pause.borrow_mut();
+        if let Some(index) = refuse.iter().position(|known| known == alias) {
+            refuse.remove(index);
+            self.calls
+                .borrow_mut()
+                .push(format!("pause {alias} {reason} refused"));
+            return Err(refused());
+        }
+        drop(refuse);
         self.calls
             .borrow_mut()
             .push(format!("pause {alias} {reason}"));
-        self.pause_as(alias, reason);
+        self.pause_as(alias, reason.as_str());
         Ok(self.drains.borrow().get(alias).copied().unwrap_or_default())
+    }
+
+    fn pause_many(
+        &self,
+        state_root: &Path,
+        aliases: &[String],
+        reason: &SchedulingPauseReason,
+        drain_timeout_ms: u64,
+    ) -> Vec<(String, Result<Drained, Outcome>)> {
+        self.batches.borrow_mut().push(aliases.to_vec());
+        aliases
+            .iter()
+            .map(|alias| {
+                (
+                    alias.clone(),
+                    self.pause(state_root, alias, reason, drain_timeout_ms),
+                )
+            })
+            .collect()
     }
 
     fn resume(
@@ -906,11 +989,12 @@ impl RuntimeLink for FakeRuntime {
         Ok(Closed {
             wait: json!({"state": "completed"}),
             terminal: Some(("runtime_stopped".to_owned(), "neutral.log".to_owned())),
+            stopped: true,
         })
     }
 
     fn start_report(&self, _state_root: &Path) -> Result<Option<Value>, Outcome> {
-        if !self.running.get() {
+        if !self.running.get() || self.report_fails.get() {
             return Err(refused());
         }
         if self.unsupported.borrow().contains(&*self.build.borrow()) {
@@ -954,6 +1038,10 @@ impl RuntimeLink for FakeRuntime {
             return None;
         }
         let owner = self.owner.borrow().clone();
+        // Ready once, then gone (a Runtime that died after its readiness).
+        if self.dies_after_ready.replace(false) {
+            self.running.set(false);
+        }
         Some(LiveOwner {
             pid: owner.pid,
             owner_epoch: owner.epoch,

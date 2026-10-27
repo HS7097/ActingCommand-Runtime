@@ -500,14 +500,16 @@
     "lock_wait_ms": 60000,
     "stop": {
       "drain_timeout_ms": 300000,
-      "shutdown_wait_ms": 60000
+      "shutdown_wait_ms": 60000,
+      "busy_wait_ms": 300000
     },
     "start": {
       "ready_timeout_ms": 900000,
       "attempts": 2,
       "sample_interval_ms": 30000,
       "stall_after_ms": 720000,
-      "stall_read_bytes": 53687091200
+      "stall_read_bytes": 53687091200,
+      "memory_wait_ms": 120000
     },
     "hold_after_start": true,
     "hot": {

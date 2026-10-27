@@ -540,6 +540,12 @@ actingcommand_contract::outcome_vocabulary! {
         StartStalled => "start_stalled",
         StopTerminalUnconfirmed => "stop_terminal_unconfirmed",
         RunsNotContinued => "runs_not_continued",
+        // Workflow #421 INST-2 fix round 1 (review S2 M6; decision 75 of 10-27): the owed idle
+        // wakes of the held instances could not be read and are derived again by the Runtime;
+        // (decision 75, `actingd-config` revision 18) the configuration names a retired key of
+        // the `install` section, which has no effect.
+        IdleWakesRederived => "idle_wakes_rederived",
+        ConfigKeyRetired => "config_key_retired",
     }
 }
 
@@ -587,7 +593,10 @@ actingcommand_contract::outcome_vocabulary! {
     /// INST-2 evaluates them).
     pub enum InstallGuard: "install_guard" {
         Memory => "memory",
+        // Informational since Alice's decision 75 of 10-27: listed, never refused.
         ScheduleNear => "schedule_near",
+        // Retired with `install.guard.blocked_windows` (decision 75, `actingd-config` revision
+        // 18): kept registered, never evaluated.
         BlockedWindow => "blocked_window",
         ForeignPauses => "foreign_pauses",
         LadderHolding => "ladder_holding",

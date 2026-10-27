@@ -6,32 +6,45 @@
 //! owner, the pauses, the run-time instructions) is journalled; what the hold defers is recorded
 //! before the first pause (per instance its queued requests, the run in flight, the latest plan's
 //! selected decision, its due tasks and its wake); every instance S0 shows unpaused (and every
-//! one already paused with the hold's own reason) is paused with `--hold`, its run in flight let
-//! reach its end within `install.stop.drain_timeout_ms` and then its next checkpoint (the
+//! one already paused with the hold's own reason) is paused with `--hold`, all at once (fix
+//! round 1, review S2 M3: no instance keeps dispatching while another drains), its run in flight
+//! let reach its end within `install.stop.drain_timeout_ms` and then its next checkpoint (the
 //! Runtime's own drain: never cut mid-action, never killed), and how each drain ended is
-//! recorded; the status must then show exactly the expected pauses. Another party's pause is
-//! kept, and allowed only when `--known-pause` names it; a global pause refuses. The close is
-//! `request-shutdown` and its wait. The release resumes only the instances paused with exactly
-//! the hold's reason, each by the pause it saw, and hands the deferred work back: the Runtime
-//! evaluates the deferred dispatches again from its next cycle; nothing the installer recorded
-//! is sent again by the installer, so no operation already sent is replayed. A run the drain
-//! stopped at a checkpoint is not continued mid-run (its task is evaluated again from its
-//! start), and the owed idle wakes of a build without a read for them are not recorded: both
-//! are the follow-up's (#421 S2 report).
+//! recorded. A pause the Runtime refuses while the instance has queued requests or a lease (an
+//! operator's request waiting) is tried again once after they cleared, within
+//! `install.stop.busy_wait_ms` (review S2 M4). The status must then show the hold on every
+//! instance it took and, on every other instance, the pause S0 had or none (its owner lifted it
+//! meanwhile: review S2 L5). Another party's pause is kept, and allowed only when
+//! `--known-pause` names it; a global pause refuses. The close is `request-shutdown` and its
+//! wait. The release resumes only the instances paused with exactly the hold's reason, each by
+//! the pause it saw, and hands the deferred work back: the Runtime evaluates the deferred
+//! dispatches again from its next cycle; nothing the installer recorded is sent again by the
+//! installer, so no operation already sent is replayed. A run the drain stopped at a checkpoint
+//! is not continued mid-run (its task is evaluated again from its start: the caveat
+//! `runs_not_continued`), and the owed idle wakes of a build without a read for them are not
+//! recorded (the caveat `idle_wakes_rederived`): both are the follow-up's (#421 S2 report).
 
 use super::Flags;
+use super::host::Host;
 use super::journal::S0;
-use super::runtime::{ConfigSeen, Drained, PlanSeen, RuntimeLink, RuntimeSeen};
+use super::runtime::{ConfigSeen, Drained, PauseSeen, PlanSeen, RuntimeLink, RuntimeSeen};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
+use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::{CauseRelation, Outcome};
+use actingcommand_runtime_config::IdleAction;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// How often the hold reads the status while it waits for a busy instance (the readiness
+/// probe's period, fixed by the contract).
+const BUSY_POLL_MS: u64 = 500;
+
 /// The hold's inputs: its reason and the other parties' pauses the person named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HoldInputs {
-    pub(crate) reason: String,
+    pub(crate) reason: SchedulingPauseReason,
     pub(crate) known: BTreeMap<String, String>,
 }
 
@@ -40,7 +53,7 @@ pub(crate) struct HoldInputs {
 /// (`--known-pause` then is `actingctl_usage_invalid`, `required` `--hold`).
 pub(crate) fn parse_hold(flags: &Flags<'_>) -> Result<Option<HoldInputs>, Outcome> {
     let known_words = flags.list("--known-pause");
-    let Some(reason) = flags.value("--hold") else {
+    let Some(given) = flags.value("--hold") else {
         if known_words.is_empty() {
             return Ok(None);
         }
@@ -49,9 +62,7 @@ pub(crate) fn parse_hold(flags: &Flags<'_>) -> Result<Option<HoldInputs>, Outcom
             .err()
             .unwrap_or_else(|| super::unusable("--known-pause")));
     };
-    if actingcommand_contract::validate_scheduling_pause_reason(reason).is_err() {
-        return Err(super::unusable("--hold"));
-    }
+    let reason = SchedulingPauseReason::new(given).map_err(|_| super::unusable("--hold"))?;
     let mut known = BTreeMap::new();
     for word in known_words {
         let (alias, named) = word
@@ -59,28 +70,25 @@ pub(crate) fn parse_hold(flags: &Flags<'_>) -> Result<Option<HoldInputs>, Outcom
             .ok_or_else(|| super::unusable("--known-pause"))?;
         if actingcommand_contract::validate_instance_alias(alias).is_err()
             || actingcommand_contract::validate_scheduling_pause_reason(named).is_err()
-            || named == reason
+            || named == reason.as_str()
             || known.insert(alias.to_owned(), named.to_owned()).is_some()
         {
             return Err(super::unusable("--known-pause"));
         }
     }
-    Ok(Some(HoldInputs {
-        reason: reason.to_owned(),
-        known,
-    }))
+    Ok(Some(HoldInputs { reason, known }))
 }
 
 /// The instances the hold takes: those S0 shows unpaused, and those already paused with the
 /// hold's own reason (a hold a failed step kept), by alias.
-pub(crate) fn held_instances(seen: &RuntimeSeen, reason: &str) -> Vec<String> {
+pub(crate) fn held_instances(seen: &RuntimeSeen, hold: &SchedulingPauseReason) -> Vec<String> {
     seen.instances
         .iter()
         .filter(|instance| {
             instance
                 .pause
                 .as_ref()
-                .is_none_or(|pause| pause.reason == reason)
+                .is_none_or(|pause| &pause.reason == hold)
         })
         .map(|instance| instance.alias.clone())
         .collect()
@@ -98,26 +106,61 @@ pub(crate) fn s0_of(seen: &RuntimeSeen, config: &ConfigSeen) -> S0 {
     }
 }
 
+/// One pause as S0 records it: the instance (none for the global pause), its reason (a pause
+/// reason name) and its revision.
+#[derive(Serialize)]
+struct PauseRecord<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alias: Option<&'a str>,
+    reason: &'a SchedulingPauseReason,
+    revision: u64,
+}
+
+impl<'a> PauseRecord<'a> {
+    fn of(alias: Option<&'a str>, pause: &'a PauseSeen) -> Self {
+        Self {
+            alias,
+            reason: &pause.reason,
+            revision: pause.revision,
+        }
+    }
+}
+
+/// Every pause as S0 records it.
+#[derive(Serialize)]
+struct PausesRecord<'a> {
+    global: Option<PauseRecord<'a>>,
+    instances: Vec<PauseRecord<'a>>,
+}
+
+/// A record as JSON: these records hold only names and numbers, which always serialize.
+fn record_value(record: impl Serialize) -> Value {
+    serde_json::to_value(record).unwrap_or(Value::Null)
+}
+
 /// The pauses as S0 records them.
 pub(crate) fn pauses_value(seen: &RuntimeSeen) -> Value {
-    json!({
-        "global": seen.global_pause.as_ref().map(|pause| json!({
-            "reason": pause.reason,
-            "revision": pause.revision,
-        })),
-        "instances": seen
+    record_value(PausesRecord {
+        global: seen
+            .global_pause
+            .as_ref()
+            .map(|pause| PauseRecord::of(None, pause)),
+        instances: seen
             .instances
             .iter()
             .filter_map(|instance| {
-                let pause = instance.pause.as_ref()?;
-                Some(json!({
-                    "alias": instance.alias,
-                    "reason": pause.reason,
-                    "revision": pause.revision,
-                }))
+                Some(PauseRecord::of(
+                    Some(instance.alias.as_str()),
+                    instance.pause.as_ref()?,
+                ))
             })
-            .collect::<Vec<_>>(),
+            .collect(),
     })
+}
+
+/// An instance pause of another party as a guard lists it.
+pub(crate) fn foreign_pause_value(alias: &str, pause: &PauseSeen) -> Value {
+    record_value(PauseRecord::of(Some(alias), pause))
 }
 
 /// The instructions as S0 records them.
@@ -200,19 +243,45 @@ pub(crate) fn deferred_of(
     })
 }
 
-/// The pause step's intent.
-pub(crate) fn pause_intent(hold: &HoldInputs, held: &[String], drain_timeout_ms: u64) -> Value {
-    json!({
-        "reason": hold.reason,
-        "instances": held,
-        "known": hold.known,
-        "drain_timeout_ms": drain_timeout_ms,
-    })
+/// Whether a deferred record could not read the owed idle wakes.
+pub(crate) fn idle_wakes_unread(deferred: Option<&Value>) -> bool {
+    deferred
+        .and_then(|deferred| deferred.get("owed_idle_wakes_read"))
+        .and_then(Value::as_str)
+        == Some("not_available")
 }
 
-/// The pause step's intent, read back.
+/// How many of the `held` instances have an idle action other than `none` by the configuration
+/// document `config`: the instance's own `idle.action`, else the section's, else the shipped
+/// defaults file's (review S2 M6: their owed idle wakes are derived again, never silently).
+pub(crate) fn idle_waking(config: &Value, held: &[String]) -> usize {
+    let defaults =
+        serde_json::from_str::<Value>(actingcommand_runtime_config::SHIPPED_DEFAULTS).ok();
+    let action_of = |document: &Value| -> Option<String> {
+        Some(document.get("idle")?.get("action")?.as_str()?.to_owned())
+    };
+    let section = action_of(config).or_else(|| defaults.as_ref().and_then(action_of));
+    held.iter()
+        .filter(|alias| {
+            let own = config
+                .get("instances")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|instance| {
+                    instance.get("alias").and_then(Value::as_str) == Some(alias.as_str())
+                })
+                .and_then(action_of);
+            own.or_else(|| section.clone())
+                .is_some_and(|action| action != IdleAction::None.as_str())
+        })
+        .count()
+}
+
+/// The pause step's intent, written and read back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PauseIntent {
-    pub(crate) reason: String,
+    pub(crate) reason: SchedulingPauseReason,
     pub(crate) instances: Vec<String>,
     pub(crate) known: BTreeMap<String, String>,
     pub(crate) drain_timeout_ms: u64,
@@ -220,22 +289,68 @@ pub(crate) struct PauseIntent {
 
 impl PauseIntent {
     pub(crate) fn of(intent: &Value) -> Option<Self> {
-        Some(Self {
-            reason: intent.get("reason")?.as_str()?.to_owned(),
-            instances: intent
-                .get("instances")?
-                .as_array()?
-                .iter()
-                .map(|alias| alias.as_str().map(str::to_owned))
-                .collect::<Option<Vec<_>>>()?,
-            known: intent
-                .get("known")?
-                .as_object()?
-                .iter()
-                .map(|(alias, reason)| Some((alias.clone(), reason.as_str()?.to_owned())))
-                .collect::<Option<BTreeMap<_, _>>>()?,
-            drain_timeout_ms: intent.get("drain_timeout_ms")?.as_u64()?,
+        serde_json::from_value(intent.clone()).ok()
+    }
+}
+
+/// The pause step's intent.
+pub(crate) fn pause_intent(hold: &HoldInputs, held: &[String], drain_timeout_ms: u64) -> Value {
+    record_value(PauseIntent {
+        reason: hold.reason.clone(),
+        instances: held.to_vec(),
+        known: hold.known.clone(),
+        drain_timeout_ms,
+    })
+}
+
+/// A release step's intent: the hold's reason, and whether an automatic rollback planned it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ReleaseIntent {
+    pub(crate) reason: SchedulingPauseReason,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) rollback: bool,
+}
+
+impl ReleaseIntent {
+    pub(crate) fn value(reason: &SchedulingPauseReason, rollback: bool) -> Value {
+        record_value(Self {
+            reason: reason.clone(),
+            rollback,
         })
+    }
+}
+
+/// The hold as an answer reports it: its reason, whether it stays, and the release that lifted
+/// it.
+#[derive(Serialize)]
+pub(crate) struct HoldReport<'a> {
+    pub(crate) reason: &'a SchedulingPauseReason,
+    pub(crate) kept: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) release: Option<&'a Value>,
+}
+
+impl HoldReport<'_> {
+    pub(crate) fn value(&self) -> Value {
+        record_value(self)
+    }
+}
+
+/// A release step's evidence: the hold's reason and what the step did.
+#[derive(Serialize)]
+pub(crate) struct ReleaseEvidence<'a> {
+    pub(crate) reason: &'a SchedulingPauseReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) skipped: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) resumed: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) handed_back: Option<&'a Value>,
+}
+
+impl ReleaseEvidence<'_> {
+    pub(crate) fn value(&self) -> Value {
+        record_value(self)
     }
 }
 
@@ -245,41 +360,99 @@ pub(crate) fn stop_failed(operation: InstallLocation, cause: Outcome) -> Outcome
         .joined(CauseRelation::CausedBy, cause)
 }
 
-/// The pause step: every instance of the intent not yet paused with the hold's reason is
-/// paused and drained, how each drain ended recorded (`drained`, the earlier record kept when
-/// the step runs again); then the status must show exactly the expected pauses: the hold on
-/// every instance of the intent, every other pause as S0 had it. A Runtime that no longer runs
-/// keeps its persisted pauses: the step is then done as far as it got.
+/// Waits until the instance `alias` has no queued request and no lease, at most `wait_ms` on the
+/// host's clock; whether it cleared, and the queued requests it last showed.
+fn wait_not_busy(
+    host: &dyn Host,
+    state_root: &Path,
+    alias: &str,
+    wait_ms: u64,
+) -> Result<(bool, u32), Outcome> {
+    let runtime = host.runtime();
+    let deadline = host.now_unix_ms().saturating_add(wait_ms);
+    loop {
+        let seen = runtime.status(state_root)?;
+        let Some(instance) = seen.as_ref().and_then(|seen| seen.instance(alias)) else {
+            return Ok((false, 0));
+        };
+        if instance.queued_requests == 0 && !instance.lease_active {
+            return Ok((true, 0));
+        }
+        if host.now_unix_ms() >= deadline {
+            return Ok((false, instance.queued_requests));
+        }
+        host.pause_ms(BUSY_POLL_MS);
+    }
+}
+
+/// The pause step: every instance of the intent not yet paused with the hold's reason is paused,
+/// all at once, and drained, how each drain ended recorded (`drained`, the earlier record kept
+/// when the step runs again); a pause refused while its instance was busy is tried again once
+/// after the instance cleared within `busy_wait_ms`. Then the status must show the hold on every
+/// instance of the intent, and on every other instance the pause S0 had or none. A Runtime that
+/// no longer runs keeps its persisted pauses: the step is then done as far as it got.
 pub(crate) fn run_pause(
-    runtime: &dyn RuntimeLink,
+    host: &dyn Host,
     state_root: &Path,
     operation: InstallLocation,
     intent: &PauseIntent,
     s0_pauses: &BTreeMap<String, String>,
     mut drained: BTreeMap<String, Drained>,
+    busy_wait_ms: u64,
 ) -> Result<BTreeMap<String, Drained>, Outcome> {
+    let runtime = host.runtime();
     let Some(seen) = runtime
         .status(state_root)
         .map_err(|cause| stop_failed(operation, cause))?
     else {
         return Ok(drained);
     };
-    for alias in &intent.instances {
-        let already = seen
-            .instance(alias)
-            .and_then(|instance| instance.pause.as_ref())
-            .is_some_and(|pause| pause.reason == intent.reason);
-        if already {
-            continue;
+    let pending = intent
+        .instances
+        .iter()
+        .filter(|alias| {
+            !seen
+                .instance(alias)
+                .and_then(|instance| instance.pause.as_ref())
+                .is_some_and(|pause| pause.reason == intent.reason)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let refused_by = |alias: &str, cause: Outcome| {
+        super::refusal(operation, InstallRefusal::RuntimeStopFailed)
+            .alias(alias.to_owned())
+            .joined(CauseRelation::CausedBy, cause)
+    };
+    let answers = runtime.pause_many(
+        state_root,
+        &pending,
+        &intent.reason,
+        intent.drain_timeout_ms,
+    );
+    for (alias, answer) in answers {
+        let cause = match answer {
+            Ok(result) => {
+                drained.insert(alias, result);
+                continue;
+            }
+            Err(cause) => cause,
+        };
+        // A queued operator request or a held lease makes the Runtime refuse the pause (review S2
+        // M4): wait for them to clear, then pause it again once.
+        let (cleared, queued) = wait_not_busy(host, state_root, &alias, busy_wait_ms)
+            .map_err(|status| stop_failed(operation, status))?;
+        if !cleared {
+            let refusal = refused_by(&alias, cause);
+            return Err(if queued > 0 {
+                refusal.count(queued)
+            } else {
+                refusal
+            });
         }
         let result = runtime
-            .pause(state_root, alias, &intent.reason, intent.drain_timeout_ms)
-            .map_err(|cause| {
-                super::refusal(operation, InstallRefusal::RuntimeStopFailed)
-                    .alias(alias.clone())
-                    .joined(CauseRelation::CausedBy, cause)
-            })?;
-        drained.insert(alias.clone(), result);
+            .pause(state_root, &alias, &intent.reason, intent.drain_timeout_ms)
+            .map_err(|again| refused_by(&alias, again))?;
+        drained.insert(alias, result);
     }
     let seen = runtime
         .status(state_root)
@@ -289,12 +462,13 @@ pub(crate) fn run_pause(
         .instances
         .iter()
         .filter(|instance| {
-            let expected = if intent.instances.contains(&instance.alias) {
-                Some(intent.reason.as_str())
+            let actual = instance.pause.as_ref().map(|pause| pause.reason.as_str());
+            if intent.instances.contains(&instance.alias) {
+                actual != Some(intent.reason.as_str())
             } else {
-                s0_pauses.get(&instance.alias).map(String::as_str)
-            };
-            instance.pause.as_ref().map(|pause| pause.reason.as_str()) != expected
+                // Another party's pause as S0 had it, or none: its owner may lift it meanwhile.
+                actual.is_some() && actual != s0_pauses.get(&instance.alias).map(String::as_str)
+            }
         })
         .map(|instance| instance.alias.clone())
         .collect::<Vec<_>>();
@@ -347,8 +521,9 @@ pub(crate) fn runs_cut(drained: &BTreeMap<String, Drained>) -> u32 {
 
 /// The close step: `request-shutdown` and its wait within `wait_ms`, nothing killed; done
 /// already when no Runtime answers. Its evidence is what the wait observed and the closed
-/// start's terminal outcome; a terminal outcome that is not `runtime_stopped`, or none found, is
-/// the caveat `stop_terminal_unconfirmed` (the Runtime is gone all the same).
+/// start's terminal outcome; a terminal outcome that is not a stop (its category neither `info`
+/// nor `success`, as the watchdog judges it), or none found, is the caveat
+/// `stop_terminal_unconfirmed` (the Runtime is gone all the same).
 pub(crate) fn run_close(
     runtime: &dyn RuntimeLink,
     root: &Path,
@@ -366,7 +541,7 @@ pub(crate) fn run_close(
         .shutdown(root, state_root, wait_ms)
         .map_err(|cause| stop_failed(operation, cause))?;
     let caveat = match &closed.terminal {
-        Some((code, _)) if code == "runtime_stopped" => None,
+        Some(_) if closed.stopped => None,
         Some((_, log)) => {
             Some(super::caveat(operation, InstallCaveat::StopTerminalUnconfirmed).path(log))
         }
@@ -392,7 +567,7 @@ pub(crate) fn release(
     runtime: &dyn RuntimeLink,
     state_root: &Path,
     operation: InstallLocation,
-    reason: &str,
+    reason: &SchedulingPauseReason,
 ) -> Result<Vec<String>, Outcome> {
     let seen = runtime
         .status(state_root)
@@ -406,7 +581,7 @@ pub(crate) fn release(
         let Some(pause) = instance
             .pause
             .as_ref()
-            .filter(|pause| pause.reason == reason)
+            .filter(|pause| &pause.reason == reason)
         else {
             continue;
         };

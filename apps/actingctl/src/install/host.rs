@@ -113,6 +113,10 @@ pub(crate) trait Host {
     /// The bytes the `actingcommand-actingd.exe` under `root` has read so far (a start's
     /// progress sample); `None` when none runs or the count cannot be read.
     fn runtime_read_bytes(&self, root: &Path) -> Option<u64>;
+    /// INST-2 fix round 1 (review S2 M2): the working set, in MB, of the
+    /// `actingcommand-actingd.exe` under `root`, which a stop releases; `None` when none runs or
+    /// it cannot be read.
+    fn runtime_working_set_mb(&self, root: &Path) -> Option<u64>;
     /// Runs the running installer again with `arguments`, detached (`--detach`): through the
     /// watchdog's manual-run method (WMI `Win32_Process.Create`, hidden, no handle of the
     /// caller), in `directory`, its output appended to `log`; its process id.
@@ -235,94 +239,109 @@ impl Host for SystemHost {
     }
 
     fn runtime_read_bytes(&self, root: &Path) -> Option<u64> {
-        const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
-            $ProgressPreference = 'SilentlyContinue'\n\
-            $found = @(Get-CimInstance -ClassName Win32_Process -Filter \"Name='actingcommand-actingd.exe'\" | Where-Object { $_.ExecutablePath } | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath; read = [uint64]$_.ReadTransferCount } })\n\
-            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
-            [Console]::Out.Write((ConvertTo-Json -InputObject $found -Compress -Depth 3))\n";
-        let output = crate::watchdog::powershell::run(
-            SCRIPT,
-            &[],
-            PROBE_TIMEOUT,
-            ActingctlCode::ProcessProbeFailed,
-        )
-        .ok()?;
-        let value: Value = serde_json::from_str(output.trim()).ok()?;
-        let rows = match value {
-            Value::Array(rows) => rows,
-            Value::Null => Vec::new(),
-            row => vec![row],
-        };
-        let prefix = format!(
-            "{}\\",
-            super::files::plain(root)
-                .trim_end_matches('\\')
-                .to_lowercase()
-        );
-        rows.iter()
-            .filter(|row| {
-                row["path"]
-                    .as_str()
-                    .is_some_and(|path| path.to_lowercase().starts_with(&prefix))
-            })
-            .find_map(|row| row["read"].as_u64())
+        actingd_counter(root, "read")
+    }
+
+    fn runtime_working_set_mb(&self, root: &Path) -> Option<u64> {
+        actingd_counter(root, "ws").map(|bytes| bytes / (1024 * 1024))
     }
 
     fn detach(&self, arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome> {
-        const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
+        detach_with_wmi(arguments, directory, log)
+    }
+}
+
+/// One counter (`read`: the bytes read so far, `ws`: the working set in bytes) of the
+/// `actingcommand-actingd.exe` under `root`, by the watchdog's hidden CIM query; `None` when none
+/// runs or the query fails.
+fn actingd_counter(root: &Path, member: &str) -> Option<u64> {
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
+            $ProgressPreference = 'SilentlyContinue'\n\
+            $found = @(Get-CimInstance -ClassName Win32_Process -Filter \"Name='actingcommand-actingd.exe'\" | Where-Object { $_.ExecutablePath } | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath; read = [uint64]$_.ReadTransferCount; ws = [uint64]$_.WorkingSetSize } })\n\
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
+            [Console]::Out.Write((ConvertTo-Json -InputObject $found -Compress -Depth 3))\n";
+    let output = crate::watchdog::powershell::run(
+        SCRIPT,
+        &[],
+        PROBE_TIMEOUT,
+        ActingctlCode::ProcessProbeFailed,
+    )
+    .ok()?;
+    let value: Value = serde_json::from_str(output.trim()).ok()?;
+    let rows = match value {
+        Value::Array(rows) => rows,
+        Value::Null => Vec::new(),
+        row => vec![row],
+    };
+    let prefix = format!(
+        "{}\\",
+        super::files::plain(root)
+            .trim_end_matches('\\')
+            .to_lowercase()
+    );
+    rows.iter()
+        .filter(|row| {
+            row["path"]
+                .as_str()
+                .is_some_and(|path| path.to_lowercase().starts_with(&prefix))
+        })
+        .find_map(|row| row[member].as_u64())
+}
+
+/// `--detach`: the running installer again with `arguments`, through WMI `Win32_Process.Create`
+/// (hidden, no handle of the caller), in `directory`, its output appended to `log`.
+fn detach_with_wmi(arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome> {
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
             $ProgressPreference = 'SilentlyContinue'\n\
             $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; PriorityClass = [uint32]32 }\n\
             $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:AC_INSTALL_LINE; CurrentDirectory = $env:AC_INSTALL_DIR; ProcessStartupInformation = $startup }\n\
             [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
             [Console]::Out.Write((ConvertTo-Json -InputObject ([pscustomobject]@{ return_value = [int]$result.ReturnValue; pid = [uint32]$result.ProcessId }) -Compress))\n";
-        let program = std::env::current_exe().map_err(|error| {
-            super::files::os_failure(Path::new("actingctl.exe"), &error, IoOp::Open)
-        })?;
-        let program = super::files::plain(&program);
-        let log_text = super::files::plain(log);
-        let words = std::iter::once(program.as_str())
-            .chain(arguments.iter().map(String::as_str))
-            .chain(std::iter::once(log_text.as_str()));
-        for word in words {
-            if word.contains(CMD_UNSAFE) {
-                return Err(Outcome::new(ActingctlCode::WatchdogWmiPathUnsafe).path(word));
-            }
+    let program = std::env::current_exe().map_err(|error| {
+        super::files::os_failure(Path::new("actingctl.exe"), &error, IoOp::Open)
+    })?;
+    let program = super::files::plain(&program);
+    let log_text = super::files::plain(log);
+    let words = std::iter::once(program.as_str())
+        .chain(arguments.iter().map(String::as_str))
+        .chain(std::iter::once(log_text.as_str()));
+    for word in words {
+        if word.contains(CMD_UNSAFE) {
+            return Err(Outcome::new(ActingctlCode::WatchdogWmiPathUnsafe).path(word));
         }
-        let shell = std::env::var("ComSpec").unwrap_or_else(|_| {
-            let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
-            format!(r"{root}\System32\cmd.exe")
-        });
-        let quoted = arguments
-            .iter()
-            .map(|word| format!("\"{word}\""))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let line =
-            format!("\"{shell}\" /d /s /c \"\"{program}\" {quoted} 1>>\"{log_text}\" 2>&1\"");
-        let line = std::ffi::OsString::from(line);
-        let directory = directory.as_os_str();
-        let output = crate::watchdog::powershell::run(
-            SCRIPT,
-            &[
-                ("AC_INSTALL_LINE", line.as_os_str()),
-                ("AC_INSTALL_DIR", directory),
-            ],
-            PROBE_TIMEOUT,
-            ActingctlCode::WmiStartFailed,
-        )?;
-        let value: Value = serde_json::from_str(output.trim()).map_err(|error| {
-            Outcome::new(ActingctlCode::WmiStartFailed)
-                .caused_by(super::files::json_failure(&error))
-        })?;
-        match (value["return_value"].as_i64(), value["pid"].as_u64()) {
-            (Some(0), Some(pid)) if pid > 0 => {
-                u32::try_from(pid).map_err(|_| Outcome::new(ActingctlCode::WmiStartFailed).pid(pid))
-            }
-            (Some(return_value), _) => {
-                Err(Outcome::new(ActingctlCode::WmiStartFailed).return_value(return_value))
-            }
-            (None, _) => Err(Outcome::new(ActingctlCode::WmiStartFailed)),
+    }
+    let shell = std::env::var("ComSpec").unwrap_or_else(|_| {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
+        format!(r"{root}\System32\cmd.exe")
+    });
+    let quoted = arguments
+        .iter()
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let line = format!("\"{shell}\" /d /s /c \"\"{program}\" {quoted} 1>>\"{log_text}\" 2>&1\"");
+    let line = std::ffi::OsString::from(line);
+    let directory = directory.as_os_str();
+    let output = crate::watchdog::powershell::run(
+        SCRIPT,
+        &[
+            ("AC_INSTALL_LINE", line.as_os_str()),
+            ("AC_INSTALL_DIR", directory),
+        ],
+        PROBE_TIMEOUT,
+        ActingctlCode::WmiStartFailed,
+    )?;
+    let value: Value = serde_json::from_str(output.trim()).map_err(|error| {
+        Outcome::new(ActingctlCode::WmiStartFailed).caused_by(super::files::json_failure(&error))
+    })?;
+    match (value["return_value"].as_i64(), value["pid"].as_u64()) {
+        (Some(0), Some(pid)) if pid > 0 => {
+            u32::try_from(pid).map_err(|_| Outcome::new(ActingctlCode::WmiStartFailed).pid(pid))
         }
+        (Some(return_value), _) => {
+            Err(Outcome::new(ActingctlCode::WmiStartFailed).return_value(return_value))
+        }
+        (None, _) => Err(Outcome::new(ActingctlCode::WmiStartFailed)),
     }
 }
 

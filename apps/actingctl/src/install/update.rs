@@ -615,6 +615,11 @@ pub(crate) fn apply_command(
         operation,
     };
     if flags.switch("--detach") {
+        // The cheap refusals before detaching (review S2 L3): an unfinished operation, and a
+        // configuration or install section that cannot be read, answer here, not only in the
+        // detached log.
+        journal::refuse_unfinished(operation, &paths)?;
+        plan::load(&paths, operation)?;
         return super::deploy::detach(host, &paths, words, operation);
     }
     journal::refuse_unfinished(operation, &paths)?;
@@ -758,7 +763,13 @@ pub(crate) fn run(mut operation: Operation<'_>, loaded: &Loaded) -> Result<Answe
         .get("commit")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let mut notes = Vec::new();
+    // A retired key the configuration names (decision 75, revision 18); an update or rollback
+    // notes it with its plan.
+    let mut notes = if operation.journal().plan.is_none() {
+        plan::retired_caveats(command, settings)
+    } else {
+        Vec::new()
+    };
     let (mut replaced, mut added) = (0_usize, 0_usize);
     let mut n = 1;
     while n <= operation.journal().steps.len() {
@@ -795,7 +806,7 @@ pub(crate) fn run(mut operation: Operation<'_>, loaded: &Loaded) -> Result<Answe
                         .map_err(|cause| operation.interrupted(cause))?;
                 }
                 super::deploy::StepEnd::Ends(refusal, members) => {
-                    return super::deploy::end(operation, refusal, members, &notes);
+                    return super::deploy::end(operation, refusal, members, notes, loaded);
                 }
             }
             n += 1;
@@ -931,6 +942,7 @@ pub(crate) fn run(mut operation: Operation<'_>, loaded: &Loaded) -> Result<Answe
         operation,
         notes,
         super::deploy::FileCounts { replaced, added },
+        loaded,
     )
 }
 

@@ -12,7 +12,7 @@
 use crate::watchdog::decide::{LiveOwner, OwnerLock};
 use crate::watchdog::observe;
 use crate::watchdog::start::{self, StartedProcess, Target, TickSeams};
-use actingcommand_contract::outcome::{IoOp, Outcome};
+use actingcommand_contract::outcome::{Category, IoOp, Outcome};
 use actingcommand_contract::{
     CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, EventActor, EventSource, FactScalar,
     FactValue, OwnerEpoch, RuntimeResult, ScheduleCandidateEligibility, SchedulingPauseExpectation,
@@ -26,10 +26,11 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::time::Duration;
 
-/// One scheduling pause as a status read shows it.
+/// One scheduling pause as a status read shows it: its reason (a pause reason name, never a
+/// code) and its revision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PauseSeen {
-    pub(crate) reason: String,
+    pub(crate) reason: SchedulingPauseReason,
     pub(crate) revision: u64,
 }
 
@@ -103,11 +104,13 @@ pub(crate) struct Drained {
 }
 
 /// A formal close that completed: what its wait observed, and the terminal outcome of the
-/// closed start's log with the log, when one was found.
+/// closed start's log with the log, when one was found, with whether it is a stop (its category
+/// `info` or `success`, as the watchdog judges a terminal outcome by its category alone).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Closed {
     pub(crate) wait: Value,
     pub(crate) terminal: Option<(String, String)>,
+    pub(crate) stopped: bool,
 }
 
 /// What the root's Runtime is asked. Every method answers for the Runtime of `state_root`; a
@@ -125,9 +128,30 @@ pub(crate) trait RuntimeLink {
         &self,
         state_root: &Path,
         alias: &str,
-        reason: &str,
+        reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
     ) -> Result<Drained, Outcome>;
+    /// INST-2 fix round 1 (review S2 M3): pauses every instance of `aliases` with `reason` at
+    /// once, so no instance keeps dispatching while another drains; each answer by alias, in the
+    /// order given. The default pauses one after the other (the fake Runtime overrides it to
+    /// record the batch); the machine's Runtime pauses them in parallel.
+    fn pause_many(
+        &self,
+        state_root: &Path,
+        aliases: &[String],
+        reason: &SchedulingPauseReason,
+        drain_timeout_ms: u64,
+    ) -> Vec<(String, Result<Drained, Outcome>)> {
+        aliases
+            .iter()
+            .map(|alias| {
+                (
+                    alias.clone(),
+                    self.pause(state_root, alias, reason, drain_timeout_ms),
+                )
+            })
+            .collect()
+    }
     /// Lifts exactly the pause of `alias` the caller saw: in `owner_epoch` at `revision`.
     fn resume(
         &self,
@@ -190,7 +214,7 @@ impl RuntimeLink for SystemRuntime {
             pid: info.pid(),
             started_at_unix_ms: info.started_at_unix_ms(),
             global_pause: status.scheduling_pause().map(|pause| PauseSeen {
-                reason: pause.pause_reason.as_str().to_owned(),
+                reason: pause.pause_reason.clone(),
                 revision: pause.revision,
             }),
             instances: status
@@ -199,7 +223,7 @@ impl RuntimeLink for SystemRuntime {
                 .map(|instance| InstanceSeen {
                     alias: instance.instance_alias().to_owned(),
                     pause: instance.pause().map(|pause| PauseSeen {
-                        reason: pause.pause_reason.as_str().to_owned(),
+                        reason: pause.pause_reason.clone(),
                         revision: pause.revision,
                     }),
                     lease_active: instance.lease_active(),
@@ -275,22 +299,49 @@ impl RuntimeLink for SystemRuntime {
         })
     }
 
+    fn pause_many(
+        &self,
+        state_root: &Path,
+        aliases: &[String],
+        reason: &SchedulingPauseReason,
+        drain_timeout_ms: u64,
+    ) -> Vec<(String, Result<Drained, Outcome>)> {
+        // One connection and one pause per instance, all at once: each gate closes at once and
+        // the drains run side by side. A panic in one is the installer's own defect and is
+        // raised again (loud), never turned into a result.
+        std::thread::scope(|scope| {
+            let pending = aliases
+                .iter()
+                .map(|alias| {
+                    let handle = scope
+                        .spawn(move || self.pause(state_root, alias, reason, drain_timeout_ms));
+                    (alias.clone(), handle)
+                })
+                .collect::<Vec<_>>();
+            pending
+                .into_iter()
+                .map(|(alias, handle)| match handle.join() {
+                    Ok(result) => (alias, result),
+                    Err(panic) => std::panic::resume_unwind(panic),
+                })
+                .collect()
+        })
+    }
+
     fn pause(
         &self,
         state_root: &Path,
         alias: &str,
-        reason: &str,
+        reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
     ) -> Result<Drained, Outcome> {
-        // The installer checked the reason's form when it parsed `--hold`.
-        let reason = SchedulingPauseReason::new(reason).map_err(|_| super::unusable("--hold"))?;
         let client = connect(state_root)?;
         match client
             .pause_scheduling(
                 SchedulingPauseScope::Instance {
                     instance_alias: alias.to_owned(),
                 },
-                reason,
+                reason.clone(),
                 drain_timeout_ms,
             )
             .map_err(|error| error.outcome())?
@@ -345,9 +396,20 @@ impl RuntimeLink for SystemRuntime {
         .map_err(|error| error.outcome())?;
         let mut directories = vec![root.to_path_buf(), root.join("watchdog")];
         directories.extend(observe::console_log_directory());
-        let terminal = observe::terminal_after(&directories, since, Some(root))?
-            .map(|terminal| (terminal.outcome.code().as_str().to_owned(), terminal.log));
-        Ok(Closed { wait, terminal })
+        let terminal = observe::terminal_after(&directories, since, Some(root))?;
+        let stopped = terminal.as_ref().is_some_and(|terminal| {
+            matches!(
+                terminal.outcome.category(),
+                Category::Info | Category::Success
+            )
+        });
+        let terminal =
+            terminal.map(|terminal| (terminal.outcome.code().as_str().to_owned(), terminal.log));
+        Ok(Closed {
+            wait,
+            terminal,
+            stopped,
+        })
     }
 
     fn start_report(&self, state_root: &Path) -> Result<Option<Value>, Outcome> {

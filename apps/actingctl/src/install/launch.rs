@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! The installer's start (Workflow #421 INST-2; `contracts/install-cli.md`, "Formal stop, start
-//! and the hold"; #421 deploy design §4, §7): before every attempt the `memory` guard, then no
+//! and the hold"; #421 deploy design §4, §7): before every attempt the `memory` guard (read again
+//! every 500 ms until it passes within `install.start.memory_wait_ms`), then no
 //! live owner and no actingd under the root; `<root>\watchdog\run.lock` held, as `actingctl
 //! start` holds it; the watchdog's manual start with the log `<root>\watchdog\actingd-<ms>.log`;
 //! readiness every 500 ms until `install.start.ready_timeout_ms`; a progress sample (the log's
@@ -150,11 +151,24 @@ pub(crate) fn start(
         samples: Vec::new(),
         stalled: false,
     };
+    let memory_acked = acked.iter().any(|ack| ack == InstallGuard::Memory.as_str());
     for attempt in 1..=settings.start_attempts {
-        // The memory guard before every attempt.
-        let memory = guards::memory(host, settings);
-        let passes = memory.result == GuardResult::Pass
-            || acked.iter().any(|ack| ack == InstallGuard::Memory.as_str());
+        // The memory guard before every attempt, read again until it passes within
+        // `install.start.memory_wait_ms` (review S2 M2: the pages of a Runtime that just stopped
+        // are released over time), never refused at its first sample.
+        let waited_from = host.now_unix_ms();
+        let mut memory = guards::memory(host, settings);
+        while !memory_acked
+            && memory.result != GuardResult::Pass
+            && host.now_unix_ms().saturating_sub(waited_from) < settings.start_memory_wait_ms
+        {
+            host.pause_ms(READY_POLL_MS);
+            memory = guards::memory(host, settings);
+        }
+        if memory.result != GuardResult::Pass {
+            memory.values["waited_ms"] = json!(host.now_unix_ms().saturating_sub(waited_from));
+        }
+        let passes = memory.result == GuardResult::Pass || memory_acked;
         if !passes {
             if attempt == 1 {
                 return Err(super::refusal(operation, InstallRefusal::GuardFailed)

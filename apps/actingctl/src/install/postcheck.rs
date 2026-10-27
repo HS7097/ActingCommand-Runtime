@@ -7,11 +7,15 @@
 //! that does not (a rollback target before INST-2) is checked from its status, its
 //! configuration facts and its start log's `OUTCOME actingd:` lines, and what they cannot show
 //! is `not_evaluated`. A failed fail-class check is what an automatic rollback acts on;
-//! `not_evaluated` never is.
+//! `not_evaluated` never is. Fix round 1 (review S2 H2): a Runtime that is gone at check time
+//! fails `ready` (the owner the start made ready must still answer), and a `StartReport` read
+//! that fails for any other reason than an older build fails the fail-class checks it feeds;
+//! (review S2 H1) `config` is judged against the file as it was when the operation began, so an
+//! edit after the adopt is no failure.
 //!
 //! | id | judged | fail-class |
 //! |---|---|---|
-//! | `ready` | the start reached readiness | yes |
+//! | `ready` | the start reached readiness, and its owner still answers | yes |
 //! | `open` | the open's phases within the deadline, no `ledger_open_slow` | no |
 //! | `no_seeding` | a root that ran before loaded its tagged state, not seeded again | yes |
 //! | `bindings` | every configured instance bound | yes |
@@ -20,7 +24,7 @@
 //! | `instructions` | S0's run-time instructions, none dropped | yes |
 //! | `no_dispatch` | no dispatch on a held instance since the start | yes |
 //! | `new_keys` | each key the update adds `default`, or `explicit` where the file names it | yes |
-//! | `config` | the configuration's SHA-256 is the committed one | yes |
+//! | `config` | the configuration's SHA-256 is the one the operation began with | yes |
 //! | `indexes` | the open noted no incomplete derived index | no |
 //! | `one_way` | the one-way watch (INST S6, a later slice) | no |
 
@@ -30,7 +34,7 @@ use super::host::Host;
 use super::journal::S0;
 use super::runtime::{ConfigSeen, RuntimeSeen};
 use super::state::InstallState;
-use actingcommand_contract::outcome::OutcomeEnvelope;
+use actingcommand_contract::outcome::{Category, Outcome, OutcomeEnvelope};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -95,8 +99,10 @@ fn verdict(passes: bool) -> CheckResult {
 
 /// What the checks judge against.
 pub(crate) struct CheckInputs<'a> {
-    /// The start's own readiness (`ready_ms`), or its failure's code.
-    pub(crate) ready: Result<u64, String>,
+    /// The start's own readiness (`ready_ms`); `None` when it did not reach it.
+    pub(crate) ready: Option<u64>,
+    /// The owner epoch the start made ready, which must still answer.
+    pub(crate) started_epoch: Option<&'a str>,
     /// The start's log.
     pub(crate) log: &'a Path,
     /// S0 of the operation that stopped this Runtime, when there is one.
@@ -106,6 +112,8 @@ pub(crate) struct CheckInputs<'a> {
     /// The root's configuration document and the SHA-256 of the live file (`sha256:<hex>`).
     pub(crate) config: &'a Value,
     pub(crate) config_sha256: &'a str,
+    /// The SHA-256 of the configuration file when the operation began (its journal's inputs).
+    pub(crate) begun_config_sha256: Option<&'a str>,
     pub(crate) state: &'a InstallState,
     /// The configuration keys the update adds (absent from the previous defaults).
     pub(crate) added_keys: &'a [String],
@@ -139,7 +147,13 @@ fn logged_open(log: &Path) -> Option<LoggedOpen> {
             continue;
         };
         let outcome = envelope.into_outcome();
-        if outcome.code().as_str() == "ledger_open_slow" {
+        // The open's warning that it took long (`ledger_open_slow`, the Runtime host's): a
+        // warning with the open's elapsed time, its deadline and its event count.
+        let slow_warning = outcome.category() == Category::Warning
+            && ["elapsed_ms", "timeout_ms", "event_count"]
+                .iter()
+                .all(|key| outcome.value(key).is_some());
+        if slow_warning {
             if let Some(open) = open.as_mut() {
                 open.slow = true;
             }
@@ -185,7 +199,14 @@ pub(crate) fn evaluate(
     let config_seen: Result<ConfigSeen, String> = runtime
         .config(state_root)
         .map_err(|failure| failure.code().as_str().to_owned());
-    let report: Option<Value> = runtime.start_report(state_root).ok().flatten();
+    // The report of the start: `None` from a build that does not know the read (its client
+    // answered `runtime_operation_unsupported`); any other failure is kept (review S2 H2).
+    let report_read: Result<Option<Value>, Outcome> = runtime.start_report(state_root);
+    let report: Option<Value> = report_read.as_ref().ok().cloned().flatten();
+    let report_failed = report_read
+        .as_ref()
+        .err()
+        .map(|failure| json!({"start_report": crate::cli_line::warning(failure)}));
     let mut rows = Vec::new();
     let unread = |id: &'static str, fail_class: bool, why: &str| {
         check(
@@ -195,16 +216,48 @@ pub(crate) fn evaluate(
             json!({"why": why}),
         )
     };
+    // A fail-class check the report feeds, when the read failed: failed (never a vacuous pass).
+    let report_unread = |id: &'static str| {
+        report_failed
+            .as_ref()
+            .map(|values| check(id, true, CheckResult::Fail, values.clone()))
+    };
 
-    // ready
-    rows.push(match &inputs.ready {
-        Ok(ready_ms) => check(
+    // ready: the start reached readiness and the owner it made ready still answers (a Runtime
+    // that died after readiness fails here, review S2 H2).
+    rows.push(match (inputs.ready, &seen) {
+        (None, _) => check("ready", true, CheckResult::Fail, json!({"ready": false})),
+        (Some(ready_ms), Ok(Some(seen)))
+            if inputs
+                .started_epoch
+                .is_none_or(|epoch| epoch == seen.owner_epoch) =>
+        {
+            check(
+                "ready",
+                true,
+                CheckResult::Pass,
+                json!({"ready_ms": ready_ms, "owner_epoch": seen.owner_epoch}),
+            )
+        }
+        (Some(ready_ms), Ok(Some(seen))) => check(
             "ready",
             true,
-            CheckResult::Pass,
-            json!({"ready_ms": ready_ms}),
+            CheckResult::Fail,
+            json!({"ready_ms": ready_ms, "runtime": "restarted",
+                "started_epoch": inputs.started_epoch, "owner_epoch": seen.owner_epoch}),
         ),
-        Err(code) => check("ready", true, CheckResult::Fail, json!({"code": code})),
+        (Some(ready_ms), Ok(None)) => check(
+            "ready",
+            true,
+            CheckResult::Fail,
+            json!({"ready_ms": ready_ms, "runtime": "gone"}),
+        ),
+        (Some(ready_ms), Err(why)) => check(
+            "ready",
+            true,
+            CheckResult::Fail,
+            json!({"ready_ms": ready_ms, "runtime": "status_unreadable", "why": why}),
+        ),
     });
 
     // open
@@ -253,7 +306,8 @@ pub(crate) fn evaluate(
             CheckResult::Pass,
             json!({"tagged_state": report["tagged_state"], "earlier_runtime": false}),
         ),
-        (None, _) => unread("no_seeding", true, "start_report_unavailable"),
+        (None, _) => report_unread("no_seeding")
+            .unwrap_or_else(|| unread("no_seeding", true, "start_report_unavailable")),
     });
 
     // bindings
@@ -268,7 +322,7 @@ pub(crate) fn evaluate(
                 .map(str::to_owned)
                 .collect::<BTreeSet<_>>(),
         ),
-        (None, Ok(Some(seen))) => Some(
+        (None, Ok(Some(seen))) if report_failed.is_none() => Some(
             seen.instances
                 .iter()
                 .map(|instance| instance.alias.clone())
@@ -286,7 +340,8 @@ pub(crate) fn evaluate(
                 json!({"configured": configured, "missing": missing}),
             )
         }
-        None => unread("bindings", true, "status_unreadable"),
+        None => report_unread("bindings")
+            .unwrap_or_else(|| unread("bindings", true, "status_unreadable")),
     });
 
     // packs
@@ -317,7 +372,8 @@ pub(crate) fn evaluate(
                 json!({"registered": registered, "missing": missing}),
             )
         }
-        None => unread("packs", true, "start_report_unavailable"),
+        None => report_unread("packs")
+            .unwrap_or_else(|| unread("packs", true, "start_report_unavailable")),
     });
 
     // pauses
@@ -326,7 +382,7 @@ pub(crate) fn evaluate(
             let mut expected = hold::pause_reasons_of(pauses);
             if let Some(hold) = inputs.hold {
                 for alias in &hold.instances {
-                    expected.insert(alias.clone(), hold.reason.clone());
+                    expected.insert(alias.clone(), hold.reason.as_str().to_owned());
                 }
             }
             let actual = seen
@@ -335,12 +391,15 @@ pub(crate) fn evaluate(
                 .filter_map(|instance| {
                     Some((
                         instance.alias.clone(),
-                        instance.pause.as_ref()?.reason.clone(),
+                        instance.pause.as_ref()?.reason.as_str().to_owned(),
                     ))
                 })
                 .collect::<BTreeMap<_, _>>();
             let global_expected = pauses["global"]["reason"].as_str().map(str::to_owned);
-            let global_actual = seen.global_pause.as_ref().map(|pause| pause.reason.clone());
+            let global_actual = seen
+                .global_pause
+                .as_ref()
+                .map(|pause| pause.reason.as_str().to_owned());
             check(
                 "pauses",
                 true,
@@ -359,6 +418,9 @@ pub(crate) fn evaluate(
             inputs.s0.and_then(|s0| s0.instructions.as_ref()),
             &config_seen,
         ) {
+            (Some(_), Ok(_)) if report_failed.is_some() => {
+                report_unread("instructions").unwrap_or_else(|| unread("instructions", true, ""))
+            }
             (Some(recorded), Ok(config)) => {
                 let expected = hold::instructions_of(recorded);
                 let dropped = report
@@ -402,6 +464,9 @@ pub(crate) fn evaluate(
                 verdict(dispatched.is_empty()),
                 json!({"source": "start_report", "dispatched": dispatched}),
             )
+        }
+        (None, _) if report_failed.is_some() => {
+            report_unread("no_dispatch").unwrap_or_else(|| unread("no_dispatch", true, ""))
         }
         (None, Ok(Some(seen))) => {
             let busy = seen
@@ -454,15 +519,19 @@ pub(crate) fn evaluate(
         Err(code) => unread("new_keys", true, code.as_str()),
     });
 
-    // config
-    rows.push(match &inputs.state.config_sha256 {
-        Some(committed) => check(
+    // config: the file as it was when the operation began (review S2 H1: an edit after the
+    // adopt, a catalog switch or `install.hold_after_start`, is no failure; a change during the
+    // operation is). A `state.json` hash that differs is reported beside it, never failed.
+    let committed = inputs.state.config_sha256.as_deref();
+    rows.push(match inputs.begun_config_sha256 {
+        Some(begun) => check(
             "config",
             true,
-            verdict(committed == inputs.config_sha256),
-            json!({"committed": committed, "live": inputs.config_sha256}),
+            verdict(begun == inputs.config_sha256),
+            json!({"at_begin": begun, "live": inputs.config_sha256, "committed": committed,
+                "committed_differs": committed.is_some_and(|committed| committed != inputs.config_sha256)}),
         ),
-        None => unread("config", true, "not_committed"),
+        None => unread("config", true, "no_begin_hash"),
     });
 
     // indexes

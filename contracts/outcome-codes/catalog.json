@@ -6653,6 +6653,12 @@
         },
         "runs_not_continued": {
           "description": "The hold's drain stopped runs in flight at their next checkpoint after install.stop.drain_timeout_ms (count): they are not continued mid-run; after the release the Runtime evaluates their tasks again from their start (INST-2, Alice's decision 75 of 10-27; mid-run continuation is a later slice)."
+        },
+        "idle_wakes_rederived": {
+          "description": "The hold took instances whose idle action is not none (count), and the Runtime it stopped has no read of the idle wakes it owes them: they are not recorded, and the Runtime derives them again after the start (INST-2 fix round 1, Alice's decision 75 of 10-27; a read of the owed wakes is a later slice)."
+        },
+        "config_key_retired": {
+          "description": "The configuration names a retired key of the install section (config_key): it is accepted and has no effect (actingd-config revision 18; install.guard.blocked_windows, Alice's decision 75 of 10-27)."
         }
       }
     },
@@ -6739,10 +6745,10 @@
           "description": "Available physical memory at least install.guard.min_available_memory_mb."
         },
         "schedule_near": {
-          "description": "No affected instance due within install.guard.before_next_start_ms."
+          "description": "Informational (Alice's decision 75 of 10-27): what is due on a held instance within install.guard.before_next_start_ms, which the hold defers and records; it never refuses."
         },
         "blocked_window": {
-          "description": "Now lies in no configured blocked window."
+          "description": "Retired with install.guard.blocked_windows (actingd-config revision 18, decision 75 of 10-27): never evaluated."
         },
         "foreign_pauses": {
           "description": "No global pause and no unnamed pause of another party."
