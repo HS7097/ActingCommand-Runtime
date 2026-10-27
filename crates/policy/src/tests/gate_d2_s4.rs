@@ -25,9 +25,9 @@ use crate::{
     CompletedActivityWindow, DecisionReason, DecisionReasonChain, DispatchIntent, EvaluationFacts,
     EvaluationResources, EvaluationTime, FACT_REFRESH_OPERATION_ID, FACT_REFRESH_PROCEDURE_REF,
     FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, FactValue,
-    HostResourceSnapshot, InstanceHold, InstanceSnapshot, ObservedFact, PolicyEvaluation,
-    PolicyEvaluationError, SchedulingDecisionState, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, compile_catalog, evaluate_with_fact_refresh,
+    HostResourceSnapshot, IdleClosed, InstanceHold, InstanceSnapshot, ObservedFact,
+    PolicyEvaluation, PolicyEvaluationError, SchedulingDecisionState, TaskDecision,
+    TaskRuntimeSnapshot, TaskTerminalState, compile_catalog, evaluate_with_fact_refresh,
 };
 
 const ALPHA: &str = "task.alpha";
@@ -53,6 +53,9 @@ const TRIGGER_UNKNOWN: &str = "trigger_unknown";
 // #191 ps1).
 const HELD: &str = "dispatch_instance_held";
 const PAUSED: &str = "dispatch_paused_instance";
+// IDLE-1P (#405): the reason and gate of an instance the idle action closed, registered by
+// runtime-host.
+const IDLE: &str = "instance_idle_action";
 // A failure a navigation package's run ends with (the contract's registered code).
 const NAVIGATION_FAILED: &str = "navigation_arrival_failed";
 // The starting defaults of `scheduling.fact_refresh.*` (model §3.4).
@@ -614,6 +617,7 @@ fn inputs(readers: Vec<FactRefreshReader>) -> FactRefreshInputs {
         readers,
         instance_facts_loaded_at_unix_ms: Some(NOW - DAY_MS),
         instance_holds: BTreeMap::new(),
+        idle_closed: BTreeMap::new(),
     }
 }
 
@@ -1009,4 +1013,84 @@ fn chain_of<'a>(
         .iter()
         .find(|chain| chain.id == intent.reason_chain_id)
         .expect("the intent's reason chain")
+}
+
+// `inputs` with A closed by the idle action as the cycle starts (IDLE-1P), under the reason and
+// gate the host gives it.
+fn closed_a(mut inputs: FactRefreshInputs) -> FactRefreshInputs {
+    inputs.idle_closed.insert(
+        A.to_owned(),
+        IdleClosed {
+            gate: Code::relayed(IDLE).expect("a registered code"),
+            reason: DecisionReason {
+                outcome: Outcome::relayed(IDLE).alias(A).idle_action("close_app"),
+                detail: "closed by the idle action as the cycle starts".to_owned(),
+            },
+        },
+    );
+    inputs
+}
+
+// IDLE-1P (#405) L-5, the scheduler's part: A's game is closed by the idle action and task X reads
+// A's K through its trigger (as T25), so X is not due. A reading alone never wakes a closed game:
+// R_I is held back with no intent on A, its own decision ends with the idle reason and has no
+// wake, and X waits under `fact_refresh_pending` whose gate is `instance_idle_action`, with no
+// wake of the reading's. On the open A the same round dispatches R_I (T25).
+#[test]
+fn idle1p_l5_a_reading_no_due_candidate_needs_waits_on_a_closed_instance() {
+    let stale = fact(A, STOCK, 5, NOW - 2 * HOUR_MS, None);
+    let instance_stock = trigger_fact(json!({"kind": "instance", "instance_id": A}), STOCK);
+    let evaluation = evaluate(
+        &predicate_catalog(instance_stock),
+        &[instance(A, &[])],
+        vec![stale],
+        Vec::new(),
+        &closed_a(inputs(vec![reader(0, None)])),
+        NOW,
+    );
+    assert!(
+        intents_on(&evaluation, A).is_empty(),
+        "{:#?}",
+        evaluation.dispatch_intents
+    );
+    let refresh = refresh_decision(&evaluation, A).expect("R_I's decision");
+    assert_eq!(refresh.state, SchedulingDecisionState::Deferred);
+    assert_eq!(last_code(refresh), IDLE);
+    assert_eq!(refresh.next_wake_unix_ms, None);
+    let waiting = decision(&evaluation, X, A);
+    assert_eq!(waiting.state, SchedulingDecisionState::Deferred);
+    assert!(codes(waiting).contains(&TRIGGER_UNKNOWN));
+    assert_eq!(refresh_codes(waiting), [PENDING]);
+    assert_values(
+        coded(waiting, PENDING)[0],
+        &[
+            ("instance_id", json!(A)),
+            ("fact_key", json!(STOCK)),
+            ("unknown_reason", json!("fact_stale")),
+            ("package_id", json!(READER)),
+            ("gate_code", json!(IDLE)),
+        ],
+    );
+}
+
+// IDLE-1P (#405) L-6, the scheduler's part: on the closed A, candidate ALPHA is due (its trigger
+// true) and reads the expired K in its selection document (as T18): it needs the reading now, so
+// R_I is dispatched as on an open instance and ALPHA waits under `fact_refresh_pending` with no
+// gate. The idle check wakes A for ALPHA before R_I's dispatch is admitted
+// (runtime-host `gate_idle1p`).
+#[test]
+fn idle1p_l6_a_due_candidate_that_needs_the_reading_lets_it_run_on_a_closed_instance() {
+    let evaluation = evaluate_stock(&closed_a(inputs(vec![reader(0, None)])), Vec::new(), NOW);
+    assert_eq!(
+        refresh_intents_on(&evaluation, A),
+        1,
+        "{:#?}",
+        evaluation.dispatch_intents
+    );
+    let refresh = refresh_decision(&evaluation, A).expect("R_I's decision");
+    assert!(!codes(refresh).contains(&IDLE), "{:?}", codes(refresh));
+    let waiting = decision(&evaluation, ALPHA, A);
+    assert_eq!(refresh_codes(waiting), [PENDING]);
+    assert_values(coded(waiting, PENDING)[0], &pending(None, None, None));
+    assert!(has_intent(&evaluation, ALPHA, B), "B runs as usual");
 }

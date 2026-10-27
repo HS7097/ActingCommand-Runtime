@@ -48,8 +48,8 @@ pub use expected_runtime::{
 use fact_refresh::{AffectedCandidate, RefreshGate, RefreshKey};
 pub use fact_refresh::{
     FACT_REFRESH_EXPECTED_DURATION_MS, FACT_REFRESH_OPERATION_ID, FACT_REFRESH_PROCEDURE_REF,
-    FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, InstanceHold,
-    fact_refresh_task,
+    FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, IdleClosed,
+    InstanceHold, fact_refresh_task,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;

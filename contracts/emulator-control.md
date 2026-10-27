@@ -1174,7 +1174,8 @@ the configured starts; the watch ends with the host.
   due task minus `idle.stop_emulator_wake_lead_ms`, or at once for an earlier due task. The idle
   stop itself is the emulator-control Stop described above, on an emulator-control claim of the
   instance's key: the fence on the key, the retained session's close, the provider's Stop, the
-  endpoint back to pending.
+  endpoint back to pending. #405 IDLE-1P: the hold survives a restart (`host.idle_state`), and the
+  configured emulator start at daemon start leaves such an emulator stopped for its wake too.
 
 Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
 keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes

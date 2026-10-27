@@ -72,7 +72,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate on the instance waits for the instance's recognition maintenance package (package_id) to read a realistic key it read as unknown (fact_key, unknown_reason): the package is selected this round, or is held back for now by the gate gate_code (its minimum interval or failure backoff, an occupied, paused or unavailable instance, the host budget, a higher-ranked candidate, a Runtime admission gate), until next_eligible_unix_ms when known. failure_code is the code the package's latest run failed with, when it failed. The candidate is deferred, not failed.",
+      "description": "A candidate on the instance waits for the instance's recognition maintenance package (package_id) to read a realistic key it read as unknown (fact_key, unknown_reason): the package is selected this round, or is held back for now by the gate gate_code (its minimum interval or failure backoff, an occupied, paused or unavailable instance, the host budget, a higher-ranked candidate, a Runtime admission gate, or, #405 IDLE-1P, instance_idle_action: the Runtime's idle action closed the instance and no candidate that needs the reading is due, so the reading waits for the instance's next wake), until next_eligible_unix_ms when known. failure_code is the code the package's latest run failed with, when it failed. The candidate is deferred, not failed.",
       "common_causes": "The instance fact is missing or out of date and the package is running now, or must wait for its interval, its failure backoff or its turn on the instance.",
       "handling": "None: the candidate is evaluated again when the reading lands, the gate lifts or the instance's key returns."
     },

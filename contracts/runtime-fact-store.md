@@ -151,8 +151,8 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1�
    ([ledger-observer.md §11](ledger-observer.md#11-tags-and-the-index-table-ao-2-maintains-ao-5-rules-and-seeding-ao-6-loads)):
    the four settlement keys `task.*.last_duration_ms`, `.last_outcome`, `.failure_streak`,
    `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`,
-   `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides` and
-   `host.contained_settlement` (#411 A65). Keys under
+   `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`,
+   `host.contained_settlement` (#411 A65) and `host.idle_state` (#405 IDLE-1P). Keys under
    `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
    `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
    loaded: this start observes or replays them again, so the takeover invalidation of
@@ -593,6 +593,16 @@ the backend self-check facts (source `device-proxy` or `capture`).
   settles the runs of the epoch before its own. A value that is not the
   Runtime's integer or names no earlier start event fails the start with
   `contained_settlement_anchor_invalid`.
+- `host.idle_state` (#405 IDLE-1P, 0.12.20) — runtime scope, `record_list`,
+  no lifetime: the instances the idle action closed, or is closing, one row
+  per instance (`instance_alias`, `action` `close_app` or `stop_emulator`, and
+  `wake_at_unix_ms` when a wake is planned), recorded whenever that set or a
+  wake changes and again by the start that restores the idle planner from it
+  ([runtime-config.md](runtime-config.md), "The `idle` section"). A start of a
+  configuration that names an idle action records it even when no instance is
+  closed, so the next start knows. A value of another shape is
+  `invalid_runtime_state_fact` (operation `restore_idle_state`), recorded, and
+  the start goes on with every instance's state unknown (closed, never open).
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

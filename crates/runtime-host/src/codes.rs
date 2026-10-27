@@ -2928,6 +2928,9 @@ actingcommand_contract::outcome_locations! {
         /// One instance's wake: the configured emulator start and the startup package queued
         /// (`HostShared::queue_idle_wake`).
         Wake => "queue_idle_wake",
+        /// IDLE-1P (#405): the start's restore of the closed instances and their wakes from
+        /// `host.idle_state` (`HostShared::restore_idle_state`).
+        Restore => "restore_idle_state",
     }
 }
 // ---- IDLE-1: end ----

@@ -1332,6 +1332,7 @@ fn refresh() -> FactRefreshInputs {
         readers: Vec::new(),
         instance_facts_loaded_at_unix_ms: None,
         instance_holds: BTreeMap::new(),
+        idle_closed: BTreeMap::new(),
     }
 }
 

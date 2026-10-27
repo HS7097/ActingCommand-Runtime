@@ -10,9 +10,10 @@
 //!   are closed and its emulator is stopped).
 //! - `idle.min_gap_ms` (default 30 min): the action runs only when the scheduler's next due time
 //!   for the instance is at least this far away.
-//! - `idle.close_app_wake_lead_ms` (default 60 s) and `idle.stop_emulator_wake_lead_ms` (default
-//!   5 min: the emulator's boot and the startup package): how long before the next due time the
-//!   instance is brought back after each action.
+//! - `idle.close_app_wake_lead_ms` (default 5 min: a game's cold start through the startup
+//!   package, 80 to 141 s in production on 10-27; IDLE-1P, #405, was 60 s) and
+//!   `idle.stop_emulator_wake_lead_ms` (default 5 min: the emulator's boot and the startup
+//!   package): how long before the next due time the instance is brought back after each action.
 //!
 //! Each key is also per instance, `instance.<instance id>.idle.<member>` (in the file the
 //! `instances[]` entry's `idle` member), defaulting to the section's key of the same name. Every

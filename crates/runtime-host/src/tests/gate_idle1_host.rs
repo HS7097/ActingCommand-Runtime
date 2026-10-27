@@ -166,6 +166,7 @@ fn x_plan(due_now: bool) -> BTreeMap<String, IdlePlan> {
             evaluated_at_unix_ms: NOW_UNIX_MS,
             due_now,
             next_wake_unix_ms: (!due_now).then_some(NEXT_DUE_UNIX_MS),
+            reading_due_unix_ms: None,
         },
     )])
 }
@@ -178,6 +179,7 @@ fn x_plan_at(at: u64) -> BTreeMap<String, IdlePlan> {
             evaluated_at_unix_ms: at,
             due_now: false,
             next_wake_unix_ms: Some(NEXT_DUE_UNIX_MS),
+            reading_due_unix_ms: None,
         },
     )])
 }

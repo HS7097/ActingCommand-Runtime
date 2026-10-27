@@ -1187,7 +1187,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `history_scan_rows` | 65 536 | integer | sequences one history statement of a view page (its selection and its runs' recovery context) spans at most, so a page its budget stops has always gone on; `1024..=1048576` (#422 LN-WS) | LN-WS, 0.12.15 |
 | `frame_query_steps_per_second` | 500 000 | integer | SQLite virtual-machine steps a second the frame cleaner's statements take: a statement starts no earlier than the one before plus its steps at this rate; `1000..=100000000`, settable, read after each statement (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
 | `frame_query_chunk_frames` | 256 | integer | frames of one statement L or K of the frame cleaner; `1..=4096`, read at start (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
-| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
+| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement`, `host.idle_state` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
 - `settable` as fixed by AO-1: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys` and
@@ -1366,7 +1366,9 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   of the same revision is the evidence-frame rule's age ([runtime-config.md](runtime-config.md)).
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
-  [runtime-fact-store.md](runtime-fact-store.md));
+  [runtime-fact-store.md](runtime-fact-store.md)), and `host.idle_state` in #405 IDLE-1P (0.12.20;
+  the idle planner's closed instances, [runtime-config.md](runtime-config.md), "The `idle`
+  section");
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
   (#387) and `config.catalog` (MCP-9a) fall under the existing `config.` prefix.
 - These defaults are a starting point; AO-2's first round fills them from a real-machine copy.

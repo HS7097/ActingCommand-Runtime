@@ -2307,6 +2307,10 @@ impl RuntimeHost {
             host.scheduling_pause_restore =
                 shared.restore_scheduling_pauses(held_startup, previous_owner_epoch)?;
             shared.note_start_pauses(&host.scheduling_pause_restore)?;
+            // IDLE-1P (#405): the instances the idle action closed and their wakes, as the pauses
+            // are restored and before any instance is prepared; after an earlier start that kept
+            // none, every instance with an idle action counts as closed, never as open.
+            shared.restore_idle_state(previous_owner_epoch.is_some())?;
             // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.

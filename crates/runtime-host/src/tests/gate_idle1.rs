@@ -26,8 +26,9 @@
 //!   guard, the close's own claim, a queued claim) neither close it again nor drop its wake, which
 //!   comes once at next due minus the lead, also after a hold inside the last minimum gap and
 //!   while the instance is held.
-//! - A reading due on the closed app wakes it at once, and a reading due within the minimum gap
-//!   keeps it from closing again.
+//! - A task due on the closed app that waits for a reading wakes it at once (IDLE-1P: a reading
+//!   alone does not, `gate_idle1p`), and a task due within the minimum gap keeps it from closing
+//!   again.
 //! - A close whose stop was sent and failed owes the wake; one not performed is left as it is,
 //!   with no wake.
 
@@ -80,6 +81,7 @@ fn plan(at: u64, next_wake: Option<u64>) -> Option<IdlePlan> {
         evaluated_at_unix_ms: at,
         due_now: false,
         next_wake_unix_ms: next_wake,
+        reading_due_unix_ms: None,
     })
 }
 
@@ -89,6 +91,7 @@ fn due(at: u64) -> Option<IdlePlan> {
         evaluated_at_unix_ms: at,
         due_now: true,
         next_wake_unix_ms: None,
+        reading_due_unix_ms: None,
     })
 }
 
@@ -672,7 +675,9 @@ fn idle2_d_a_reading_due_on_the_closed_app_wakes_it_first_and_does_not_cycle() {
     close(&mut planner, next_due);
     planner.finished(NODE_A, IdleEnd::Done);
     let mut steps = Vec::new();
-    // T0 + 10 min: the evaluation selected a fact-refresh reading of the instance.
+    // T0 + 10 min: the evaluation selected a fact-refresh reading of the instance for a task that
+    // is due and waits for it (IDLE-1P: the due task wakes the instance; the reading alone would
+    // not).
     let reading = T0 + 10 * MINUTE;
     steps.extend(checked(&mut planner, free(), due(reading), reading));
     // The wake's claim, then the reading's queued claim, hold the instance.
@@ -689,7 +694,7 @@ fn idle2_d_a_reading_due_on_the_closed_app_wakes_it_first_and_does_not_cycle() {
     ] {
         steps.extend(checked(&mut planner, hold, plan(now, Some(next_due)), now));
     }
-    // Free, with the next reading due within the minimum gap: no close.
+    // Free, with the next task due within the minimum gap: no close.
     let settled = reading + 3 * MINUTE;
     steps.extend(checked(
         &mut planner,

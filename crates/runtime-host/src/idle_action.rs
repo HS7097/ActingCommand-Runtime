@@ -17,8 +17,9 @@
 //!   no keyless manual, Lab or ladder work), no scheduling pause holds it, its emulator runs (the
 //!   state both actions leave), it can be brought back (a startup package, and for
 //!   `stop_emulator` its configured emulator start), and the plan, made after the instance was
-//!   last seen in use, has no due task and no next wake closer than `idle.min_gap_ms`. It runs
-//!   once: the instance is `Acting` until the host reports the end ([`IdleEnd`]). Done, it is
+//!   last seen in use, has no due task or fact-refresh reading and none closer than
+//!   `idle.min_gap_ms`. It runs once: the instance is `Acting` until the host reports the end
+//!   ([`IdleEnd`]). Done, it is
 //!   `Idle` and owes its wake. Sent and failed with its result unknown (a `close_app` whose stop
 //!   request failed: the application may be closed), it is `Idle` and owes its wake all the
 //!   same. Not performed, it is `Failed`: it is left as it is, with no wake; only work on it
@@ -29,12 +30,17 @@
 //!   ([`IdleStep::Unsupported`], naming what is missing), not silently at every check.
 //! - **An owed wake survives everything until it is queued.** The wake is an `Idle` instance's
 //!   only exit. It comes:
-//!   - at its time: the next due time minus the action's wake lead, the earlier of the one
+//!   - at its time: the next due task's time minus the action's wake lead, the earlier of the one
 //!     planned at the action and the one every later plan gives;
-//!   - at once, when a plan shows a task of the instance due (a fact-refresh reading too: the
-//!     wake's claim is queued before the reading's dispatch is admitted, so the reading does not
-//!     meet a closed application);
+//!   - at once, when a plan shows a task of the instance due (a task that waits for a
+//!     fact-refresh reading too: the wake's claim is queued before the reading's dispatch is
+//!     admitted, so the reading does not meet a closed application);
 //!   - at once, when the action in effect is no longer the one taken (the switch).
+//!
+//!   IDLE-1P (#405): a fact-refresh reading alone neither wakes an idle instance nor sets its
+//!   wake: the scheduler holds a reading of a closed instance back until its next natural wake
+//!   unless a task that needs it is due (`fact_refresh_pending`, gate `instance_idle_action`), so
+//!   a status read never cold-starts a game.
 //!
 //!   Nothing in between cancels it: a claim, a queued request, a held admission guard (the
 //!   emulator watch's status read, a keyless observe), the action's own claim, a person's run or
@@ -44,10 +50,14 @@
 //! - **Never acted on again before the wake.** An `Idle` instance is never acted on. Work in
 //!   between neither strands it (the owed wake follows at its time) nor cycles it: after the
 //!   wake, the action runs again only once a plan made after the instance's last work shows a
-//!   gap of at least `idle.min_gap_ms`, so a gap has at most one action and one wake. A start
-//!   begins with every instance active (the planner keeps no memory across a start), so its
-//!   first check may act once more on an instance its action already left, which arms the wake
-//!   again.
+//!   gap of at least `idle.min_gap_ms`, so a gap has at most one action and one wake.
+//! - **A start keeps them** (IDLE-1P, #405; production 10-27: a restart at 17:32 forgot a game
+//!   closed since 14:35 and its 17:54 wake, and its 18:01 task met the closed game). The host
+//!   keeps the instances the action closed or is closing, each with its action and wake
+//!   ([`IdlePlanner::closed`], the runtime fact `host.idle_state`), and the next start restores
+//!   them as idle ([`IdlePlanner::restore`]): each owes its wake, which comes at once when its
+//!   time has passed or a plan shows a task due. An action in flight at the stop, and an instance
+//!   whose state the start does not know, are restored as closed too, never as open.
 
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
 use std::collections::BTreeMap;
@@ -120,14 +130,21 @@ impl IdleRequirement {
 pub(crate) struct IdlePlan {
     /// When the evaluation ran.
     pub(crate) evaluated_at_unix_ms: u64,
-    /// A task of the instance is due: selected, or due and waiting.
+    /// A task of the instance is due: selected, or due and waiting. The fact-refresh reading is
+    /// no task here (`reading_due_unix_ms`); a task that waits for it is.
     pub(crate) due_now: bool,
-    /// The instance's earliest wake in the evaluation; none: no task of the instance wakes.
+    /// The earliest wake of the instance's tasks in the evaluation; none: no task of the instance
+    /// wakes.
     pub(crate) next_wake_unix_ms: Option<u64>,
+    /// IDLE-1P (#405): when the instance's fact-refresh reading is due: the evaluation's time when
+    /// it is due now, otherwise its wake; none when no reading is planned. It keeps an active
+    /// instance from its action as a task does, but it never wakes an idle instance nor sets its
+    /// wake: a reading alone is no reason for a cold start.
+    pub(crate) reading_due_unix_ms: Option<u64>,
 }
 
 impl IdlePlan {
-    /// The instance's next due time in this plan: the evaluation's time when a task is due,
+    /// The instance's next due task in this plan: the evaluation's time when a task is due,
     /// otherwise its next wake.
     pub(crate) const fn next_due_unix_ms(&self) -> Option<u64> {
         if self.due_now {
@@ -136,6 +153,24 @@ impl IdlePlan {
             self.next_wake_unix_ms
         }
     }
+
+    /// What keeps an active instance from its action: its next due task or reading, the
+    /// earlier.
+    fn next_work_unix_ms(&self) -> Option<u64> {
+        match (self.next_due_unix_ms(), self.reading_due_unix_ms) {
+            (Some(task), Some(reading)) => Some(task.min(reading)),
+            (due, None) | (None, due) => due,
+        }
+    }
+}
+
+/// IDLE-1P (#405): an instance the idle action closed, or is closing, as the Runtime keeps it
+/// across a start (`host.idle_state`): the action taken and the wake in effect (none: no task
+/// wakes, or the first plan after a start gives it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeptIdle {
+    pub(crate) action: IdleAction,
+    pub(crate) wake_at_unix_ms: Option<u64>,
 }
 
 /// What a wake queues, in order.
@@ -226,11 +261,14 @@ struct InstanceIdle {
     unsupported: Option<IdleAction>,
 }
 
-/// The idle state of every instance, by alias (memory only: a start begins with every instance
-/// active).
+/// The idle state of every instance, by alias. IDLE-1P (#405): the host keeps the closed
+/// instances ([`Self::closed`]) and a start restores them ([`Self::restore`]); every other
+/// instance begins active.
 #[derive(Debug, Default)]
 pub(crate) struct IdlePlanner {
     instances: BTreeMap<String, InstanceIdle>,
+    /// IDLE-1P: the closed instances the host kept last; none before the first record.
+    kept: Option<BTreeMap<String, KeptIdle>>,
     /// When the lease sweep's idle check last ran (monotonic milliseconds).
     last_sweep_ms: Option<u64>,
     /// Test only: how many idle actions' workers ended, whatever their result.
@@ -344,6 +382,62 @@ impl IdlePlanner {
         })
     }
 
+    /// IDLE-1P (#405): the instances the idle action closed or is closing, by alias, each with
+    /// its action and its wake in effect: what the Runtime keeps across a start.
+    pub(crate) fn closed(&self) -> BTreeMap<String, KeptIdle> {
+        self.instances
+            .iter()
+            .filter_map(|(alias, entry)| match entry.phase {
+                Phase::Acting {
+                    action,
+                    wake_at_unix_ms,
+                }
+                | Phase::Idle {
+                    action,
+                    wake_at_unix_ms,
+                } => Some((
+                    alias.clone(),
+                    KeptIdle {
+                        action,
+                        wake_at_unix_ms,
+                    },
+                )),
+                Phase::Active | Phase::Failed => None,
+            })
+            .collect()
+    }
+
+    /// IDLE-1P: the closed instances when they differ from the ones the host kept last (all of
+    /// them before the first record); none when they do not.
+    pub(crate) fn unkept(&self) -> Option<BTreeMap<String, KeptIdle>> {
+        let closed = self.closed();
+        (self.kept.as_ref() != Some(&closed)).then_some(closed)
+    }
+
+    /// IDLE-1P: the host kept `closed`.
+    pub(crate) fn mark_kept(&mut self, closed: BTreeMap<String, KeptIdle>) {
+        self.kept = Some(closed);
+    }
+
+    /// IDLE-1P (#405): a start restores `alias` as idle after `kept.action`, owing its wake
+    /// `kept.wake_at_unix_ms` (none: the first plan that shows a task gives it). An action in
+    /// flight when the Runtime stopped, and an instance whose state the start does not know, are
+    /// restored so too: what is left on them is not known, so they count as closed, never as
+    /// open, and their wake brings them back through the startup package.
+    pub(crate) fn restore(&mut self, alias: &str, kept: KeptIdle) {
+        self.instances.insert(
+            alias.to_owned(),
+            InstanceIdle {
+                phase: Phase::Idle {
+                    action: kept.action,
+                    wake_at_unix_ms: kept.wake_at_unix_ms,
+                },
+                in_use_at_unix_ms: None,
+                unsupported: None,
+            },
+        );
+    }
+
     /// The wake in effect of an idle instance (the one planned at the action, or an earlier one a
     /// later plan gave); none when it is not idle or no wake is planned.
     #[cfg(test)]
@@ -386,13 +480,21 @@ fn decide(
         .in_use_at_unix_ms
         .is_some_and(|at| plan.evaluated_at_unix_ms < at)
         || plan.due_now
+        || plan
+            .reading_due_unix_ms
+            .is_some_and(|at| at <= plan.evaluated_at_unix_ms)
     {
         return None;
     }
-    let next_due_unix_ms = plan.next_wake_unix_ms;
-    if next_due_unix_ms.is_some_and(|due| due.saturating_sub(now_unix_ms) < config.min_gap_ms) {
+    // A task or a reading within the minimum gap keeps the instance as it is.
+    if plan
+        .next_work_unix_ms()
+        .is_some_and(|due| due.saturating_sub(now_unix_ms) < config.min_gap_ms)
+    {
         return None;
     }
+    // IDLE-1P: the wake is planned for the next task alone; a reading never sets it.
+    let next_due_unix_ms = plan.next_wake_unix_ms;
     let wake_at_unix_ms =
         next_due_unix_ms.map(|due| due.saturating_sub(config.wake_lead_ms(action)));
     entry.phase = Phase::Acting {
@@ -407,7 +509,9 @@ fn decide(
 }
 
 /// An idle instance's check, held or not: the wake, when it is due; `current_unix_ms` is the wake
-/// in effect. Otherwise the instance stays idle with the same wake or an earlier one.
+/// in effect. Otherwise the instance stays idle with the same wake or an earlier one. IDLE-1P: only
+/// the plan's tasks count here; its fact-refresh reading neither wakes the instance nor moves the
+/// wake.
 fn wake(
     entry: &mut InstanceIdle,
     config: &IdleConfig,

@@ -872,7 +872,7 @@ member; a file that names neither keeps its revision.
 |---|---|---|---|
 | `idle.action` | one of `none` (nothing ever happens), `close_app` (the game's application is stopped inside the emulator), `stop_emulator` (the instance's sessions are closed and its emulator is stopped) | `close_app` | yes |
 | `idle.min_gap_ms` | milliseconds `60000..=86400000`, the least time to the scheduler's next due task for the instance before the action runs | `1800000` | yes |
-| `idle.close_app_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose application was closed is brought back (the startup package) | `60000` | yes |
+| `idle.close_app_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose application was closed is brought back (the startup package); the default covers a game's cold start (80 to 141 s in production on 10-27; #405 IDLE-1P, it was `60000`) | `300000` | yes |
 | `idle.stop_emulator_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose emulator was stopped is brought back (the emulator's boot and the startup package) | `300000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
@@ -911,6 +911,32 @@ the first policy cycle or lease sweep. A failed close or stop is recorded and go
 decision point (`contain_failure`, #419), so it fails only that instance's action: the instance is
 left as it is, no wake follows, its next due task goes through the normal path, and only a failure
 that is the Runtime's as a whole latches it.
+
+Across a start (#405 IDLE-1P; on 10-27 a restart at 17:32 forgot a game closed since 14:35 and its
+17:54 wake, and its 18:01 task met the closed game): every change of the instances the action
+closed, or is closing, is recorded as the runtime fact `host.idle_state` (scope Runtime, a record
+list, one row per instance: `instance_alias`, `action`, and `wake_at_unix_ms` when a wake is
+planned; tagged in `ledger_observer.tag.workbench_patterns`, so a start loads it,
+[runtime-fact-store.md](runtime-fact-store.md)). A start restores them, as the scheduling pauses
+are restored and before any instance is prepared, and records them again: each comes back idle,
+owing its wake, which the start's first idle check queues when its time has passed or a plan shows
+a task due, so an instance restarted within its wake lead is brought back at once. An action in
+flight at the stop counts as done. After an earlier start that kept no record, or with a record of
+another shape (`invalid_runtime_state_fact`, operation `restore_idle_state`, recorded, and the start
+goes on), the start does not know what the action left: every instance whose action in effect
+could have run on it (its startup package, and for `stop_emulator` its emulator start) counts as
+closed, never as open, with no wake, and the first plan that shows a task gives its wake. The
+configured emulator start at daemon start leaves an emulator the action holds stopped to its wake.
+
+The scheduler's fact refresh on a closed instance (#405 IDLE-1P): its recognition maintenance
+package (R_I, [scheduling/README.md](scheduling/README.md)) is held back, past its own gates, until
+the instance's next natural wake unless a candidate it would read for is due (its trigger true): R_I's
+decision carries `instance_idle_action` and the waiting candidates `fact_refresh_pending` with
+`gate_code` `instance_idle_action` and no wake. The idle check reads the plan's tasks and its
+reading apart: a reading alone neither wakes an idle instance nor sets its wake (a task due that
+waits for a reading does), while on an active instance a reading due, or one within
+`idle.min_gap_ms`, keeps it from the action as a task does. The daily limit and the other gates of
+R_I are unchanged.
 
 ## The `display_safe_area` section (Workflow #392 DA-4b-D)
 

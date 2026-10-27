@@ -349,6 +349,7 @@ fn refresh_inputs(readers: Vec<FactRefreshReader>) -> FactRefreshInputs {
         readers,
         instance_facts_loaded_at_unix_ms: Some(NOW - DAY_MS),
         instance_holds: BTreeMap::new(),
+        idle_closed: BTreeMap::new(),
     }
 }
 

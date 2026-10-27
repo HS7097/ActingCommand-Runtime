@@ -64,6 +64,18 @@
 //!   - a `close_app` whose stop request failed (`application_control` or after it) may have
 //!     closed the application, so it is indeterminate: the instance owes its wake as after a
 //!     close that succeeded, and no `instance_idle_action` record says the action ran.
+//! - **Across a start** (IDLE-1P, #405; 10-27: a restart at 17:32 forgot a game closed since 14:35
+//!   and its 17:54 wake, and the 18:01 task met the closed game): every change of the closed
+//!   instances is recorded as the runtime fact `host.idle_state`, tagged so the next start loads
+//!   it, and the start restores the planner from it before any instance is prepared, as the
+//!   scheduling pauses are restored (`HostShared::restore_idle_state`). A closed instance whose
+//!   wake has come, or whose plan shows a task due, is woken at the start's first check; one the
+//!   start knows nothing about is restored as closed, never as open. The configured emulator
+//!   start at start leaves an emulator the action holds stopped to its wake.
+//! - **The scheduler's fact refresh** (IDLE-1P): the closed instances are an input of every
+//!   evaluation (`HostShared::idle_closed_for_policy`); a reading of one waits for its next wake
+//!   unless a task that needs it is due, and the plan the check reads keeps the reading apart
+//!   from the tasks, so a reading alone never wakes a closed game.
 
 use super::failure_scope::Contained;
 use super::host_claims::{HostClaimWork, HostKey};
@@ -72,9 +84,12 @@ use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
 use super::*;
 use crate::codes::{HostCode, IdleCode, IdleLocation};
-use crate::idle_action::{IdleEnd, IdlePlan, IdleRequirement, IdleStep, IdleView, WakeWork};
+use crate::idle_action::{
+    IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, KeptIdle, WakeWork,
+};
+use actingcommand_contract::EmulatorRunningState;
+use actingcommand_contract::codes::SanitizationCode;
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_contract::{EmulatorRunningState, RuntimeScheduleExplanation};
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_runtime_config::IdleAction;
 
@@ -83,6 +98,16 @@ const APPLICATIONS_FILE: &str = "applications.json";
 /// How often the lease sweep runs the idle check between policy cycles (a wake's timer). Every
 /// policy cycle runs it too.
 const IDLE_SWEEP_INTERVAL_MS: u64 = 1_000;
+/// IDLE-1P (#405): the runtime fact (scope Runtime, a record list, tagged so a start loads it)
+/// that keeps the instances the idle action closed or is closing: one row per instance,
+/// `instance_alias`, `action` (`close_app` or `stop_emulator`) and, when one is planned,
+/// `wake_at_unix_ms`. The idle planner's changes record it; a start restores the planner from it
+/// and records it again.
+const IDLE_STATE_FACT_KEY: &str = "host.idle_state";
+/// The members of a `host.idle_state` row.
+const KEPT_ALIAS: &str = "instance_alias";
+const KEPT_ACTION: &str = "action";
+const KEPT_WAKE: &str = "wake_at_unix_ms";
 
 /// One instance's idle action, run on its worker under its emulator-control claim.
 pub(super) struct PendingIdleAction {
@@ -97,29 +122,41 @@ pub(super) struct PendingIdleAction {
     causation_id: actingcommand_contract::IssuedCausationId,
 }
 
-/// The scheduler's plan for `alias` in the latest evaluation: a task is due when the evaluation
-/// selected one, or one is due and did not run with no later wake of its own (held by the
-/// instance's queue, blocked); a due task deferred to a later time (a budget, a random delay)
-/// is due at that wake. The next wake is the instance's earliest. An instance the evaluation
-/// decided nothing for has no due task and no wake; none before the first evaluated cycle.
-fn idle_plan(explanation: &RuntimeScheduleExplanation, alias: &str) -> Option<IdlePlan> {
-    let evaluated_at_unix_ms = explanation.evaluated_at_unix_ms?;
-    let entry = explanation
-        .instances
-        .iter()
-        .find(|entry| entry.instance_alias == alias);
-    Some(IdlePlan {
-        evaluated_at_unix_ms,
-        due_now: entry.is_some_and(|entry| {
-            entry.selected.is_some()
-                || (entry.not_running.task_id.is_some()
-                    && entry
-                        .not_running
-                        .next_wake_unix_ms
-                        .is_none_or(|wake| wake <= evaluated_at_unix_ms))
-        }),
-        next_wake_unix_ms: entry.and_then(|entry| entry.next_wake_unix_ms),
-    })
+/// IDLE-1P (#405): the closed instances a `host.idle_state` record keeps, by alias; none when the
+/// record is not of the shape this build writes (not the Runtime's own record list, a row without
+/// its alias, an action other than `close_app` or `stop_emulator`, a wake of another type).
+fn kept_idle(record: &RuntimeFactRecord) -> Option<BTreeMap<String, KeptIdle>> {
+    if record.source != OriginModule::Runtime {
+        return None;
+    }
+    let ContractFactValue::RecordList(rows) = &record.value else {
+        return None;
+    };
+    let mut kept = BTreeMap::new();
+    for row in rows {
+        let Some(FactScalar::String(alias)) = row.get(KEPT_ALIAS) else {
+            return None;
+        };
+        let Some(FactScalar::String(token)) = row.get(KEPT_ACTION) else {
+            return None;
+        };
+        let action = [IdleAction::CloseApp, IdleAction::StopEmulator]
+            .into_iter()
+            .find(|action| action.as_str() == token.as_str())?;
+        let wake_at_unix_ms = match row.get(KEPT_WAKE) {
+            None => None,
+            Some(FactScalar::TimestampMs(at)) => Some(*at),
+            Some(_) => return None,
+        };
+        kept.insert(
+            alias.clone(),
+            KeptIdle {
+                action,
+                wake_at_unix_ms,
+            },
+        );
+    }
+    Some(kept)
 }
 
 /// `instance_idle_action` for `alias` and `action` at `operation`.
@@ -221,18 +258,26 @@ impl HostShared {
         if configured.is_empty() {
             return Ok(());
         }
-        let explanation = {
+        // The scheduler's latest plan of each configured instance (IDLE-1P: its tasks and its
+        // fact-refresh reading apart).
+        let latest = {
+            let read = |policy: &crate::policy_host::PolicyHost| {
+                configured
+                    .iter()
+                    .map(|(_, alias, _, _)| (alias.clone(), policy.idle_plan(alias)))
+                    .collect::<BTreeMap<_, _>>()
+            };
             let policy = self.policy()?;
             if from_sweep {
                 match policy.try_lock() {
-                    Ok(policy) => policy.schedule_explanation(None, false),
+                    Ok(policy) => read(&*policy),
                     Err(TryLockError::WouldBlock) => return Ok(()),
                     Err(TryLockError::Poisoned(_)) => {
                         return Err(lock_poison_error(IdleLocation::Check));
                     }
                 }
             } else {
-                lock(policy, IdleLocation::Check)?.schedule_explanation(None, false)
+                read(&*lock(policy, IdleLocation::Check)?)
             }
         };
         let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
@@ -243,7 +288,7 @@ impl HostShared {
             }
             let view = self.idle_view(instance_id, emulator_on)?;
             let plan = plans.map_or_else(
-                || idle_plan(&explanation, &alias),
+                || latest.get(&alias).copied().flatten(),
                 |given| given.get(&alias).copied(),
             );
             let Some(step) = planner.check(&alias, &config, view, plan, now_unix_ms) else {
@@ -282,7 +327,180 @@ impl HostShared {
                 self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)?;
             }
         }
+        // IDLE-1P: the closed instances as this check leaves them, kept for the next start.
+        self.keep_idle_state(&mut planner)
+    }
+
+    /// IDLE-1P (#405): records `host.idle_state` when the planner's closed instances changed since
+    /// it was last recorded. The caller holds the planner, so the records follow its changes in
+    /// order.
+    fn keep_idle_state(&self, planner: &mut IdlePlanner) -> RuntimeHostResult<()> {
+        let Some(closed) = planner.unkept() else {
+            return Ok(());
+        };
+        self.record_idle_state(&closed)?;
+        planner.mark_kept(closed);
         Ok(())
+    }
+
+    /// `host.idle_state` with one row per instance of `closed`, observed strictly after the
+    /// previous record (a manual clock may not move between two).
+    fn record_idle_state(&self, closed: &BTreeMap<String, KeptIdle>) -> RuntimeHostResult<()> {
+        let rows = closed
+            .iter()
+            .map(|(alias, kept)| {
+                let mut row = BTreeMap::from([
+                    (KEPT_ALIAS.to_owned(), FactScalar::String(alias.clone())),
+                    (
+                        KEPT_ACTION.to_owned(),
+                        FactScalar::String(kept.action.as_str().to_owned()),
+                    ),
+                ]);
+                if let Some(at) = kept.wake_at_unix_ms {
+                    row.insert(KEPT_WAKE.to_owned(), FactScalar::TimestampMs(at));
+                }
+                row
+            })
+            .collect::<Vec<_>>();
+        let now = self.runtime_clock_sample()?.unix_ms;
+        let previous = lock(&self.runtime_facts, IdleLocation::Check)?
+            .get(&RuntimeFactScope::Runtime, IDLE_STATE_FACT_KEY)
+            .map(|record| record.observed_at_unix_ms);
+        self.record_runtime_fact_with_event(RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: IDLE_STATE_FACT_KEY.to_owned(),
+            value: ContractFactValue::RecordList(rows),
+            observed_at_unix_ms: previous
+                .map_or(now, |previous| now.max(previous.saturating_add(1))),
+            source: OriginModule::Runtime,
+            ttl_ms: None,
+        })
+        .map(|_| ())
+    }
+
+    /// IDLE-1P (#405): the instances the idle action closed or is closing, by alias, as the
+    /// scheduler's fact refresh reads them: the reason a held-back reading's decision carries is
+    /// `instance_idle_action` (`alias`, `idle_action`, the planned wake as `at_unix_ms` when there
+    /// is one), and its code is the gate the waiting candidates' `fact_refresh_pending` names.
+    pub(super) fn idle_closed_for_policy(
+        &self,
+    ) -> RuntimeHostResult<BTreeMap<String, actingcommand_policy::IdleClosed>> {
+        let closed = lock(&self.idle, IdleLocation::Check)?.closed();
+        Ok(closed
+            .into_iter()
+            .map(|(alias, kept)| {
+                let outcome = Outcome::new(IdleCode::Taken)
+                    .alias(alias.as_str())
+                    .idle_action(kept.action.as_str());
+                let outcome = match kept.wake_at_unix_ms {
+                    Some(at) => outcome.at_unix_ms(at),
+                    None => outcome,
+                };
+                let detail = format!(
+                    "the idle action {} closed instance {alias}; its reading waits for its wake",
+                    kept.action.as_str()
+                );
+                (
+                    alias,
+                    actingcommand_policy::IdleClosed {
+                        gate: IdleCode::Taken.code(),
+                        reason: actingcommand_policy::DecisionReason { outcome, detail },
+                    },
+                )
+            })
+            .collect())
+    }
+
+    /// IDLE-1P (#405): restores the idle planner at start, after the runtime facts and the
+    /// scheduling pauses and before any instance is prepared, as the pauses are restored:
+    /// - `host.idle_state` names the instances the idle action closed, or was closing, when the
+    ///   Runtime stopped: each registered physical instance the configuration names comes back
+    ///   idle after its action, owing its kept wake;
+    /// - without that record after an earlier start (the Runtime before did not keep it), or with
+    ///   a record this build does not read (`invalid_runtime_state_fact`, recorded, and the start
+    ///   goes on), the start does not know what the action left: every such instance whose action
+    ///   in effect could have run on it (not `none`, its startup package configured, and for
+    ///   `stop_emulator` its emulator start) comes back idle with no wake, closed rather than
+    ///   open, and the first plan that shows a task gives its wake;
+    /// - on the ledger's first start nothing was closed.
+    ///
+    /// The restored instances are then recorded again, which is the ledger's record of the
+    /// restore; a start whose configuration names no idle action and that finds no record keeps
+    /// nothing.
+    pub(super) fn restore_idle_state(&self, earlier_start: bool) -> RuntimeHostResult<()> {
+        let instances = lock(&self.registered_instances, IdleLocation::Restore)?
+            .values()
+            .filter(|instance| instance.provenance() == ExecutionBackendProvenance::PhysicalDevice)
+            .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
+            .collect::<Vec<_>>();
+        let startup_packages = self.startup_packages()?;
+        let emulator_starts = self.emulator_autostart()?;
+        // Each instance the configuration names, with its action in effect and whether that
+        // action could have run on it.
+        let mut configured = BTreeMap::new();
+        for (alias, instance_id) in instances {
+            if let Some(config) = self.idle_settings(instance_id)? {
+                let wakeable = startup_packages.contains_key(&instance_id)
+                    && (config.action != IdleAction::StopEmulator
+                        || emulator_starts
+                            .iter()
+                            .any(|(configured, _)| *configured == instance_id));
+                configured.insert(alias, (config.action, wakeable));
+            }
+        }
+        let recorded = lock(&self.runtime_facts, IdleLocation::Restore)?
+            .get(&RuntimeFactScope::Runtime, IDLE_STATE_FACT_KEY)
+            .cloned();
+        if configured.is_empty() && recorded.is_none() {
+            return Ok(());
+        }
+        let kept = match recorded {
+            Some(record) => {
+                let kept = kept_idle(&record);
+                if kept.is_none() {
+                    // Fail Loud: the record is not of this build's shape; the start goes on with
+                    // the instances' state unknown.
+                    let error = RuntimeHostError::request(
+                        SanitizationCode::InvalidRuntimeStateFact,
+                        IdleLocation::Restore,
+                        RuntimeErrorCode::InvalidRequest,
+                    );
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::OperationCleanup,
+                        RuntimeLifecycleFailure::Host(&error),
+                        self.events.system_links()?,
+                        None,
+                    )?;
+                }
+                kept
+            }
+            None if earlier_start => None,
+            None => Some(BTreeMap::new()),
+        };
+        let mut planner = lock(&self.idle, IdleLocation::Restore)?;
+        match kept {
+            Some(kept) => {
+                for (alias, kept) in kept {
+                    if configured.contains_key(&alias) {
+                        planner.restore(&alias, kept);
+                    }
+                }
+            }
+            None => {
+                for (alias, (action, wakeable)) in &configured {
+                    if *action != IdleAction::None && *wakeable {
+                        planner.restore(
+                            alias,
+                            KeptIdle {
+                                action: *action,
+                                wake_at_unix_ms: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        self.keep_idle_state(&mut planner)
     }
 
     /// What the instance shows to the idle check now. Read without waiting: a held admission
@@ -495,8 +713,9 @@ impl HostShared {
             || pending.action == IdleAction::None
             || self.fatal.is_shutdown_requested()
         {
-            lock(&self.idle, IdleLocation::Action)?.abandoned(alias);
-            return self.release_host_key(&key);
+            let kept = self.end_idle_action(|planner| planner.abandoned(alias));
+            let released = self.release_host_key(&key);
+            return kept.and(released);
         }
         let claim = key.request.clone();
         let validated = claim.validate().map_err(|_| {
@@ -532,10 +751,13 @@ impl HostShared {
             _ if stop_sent => IdleEnd::Indeterminate,
             _ => IdleEnd::NotPerformed,
         };
-        lock(&self.idle, IdleLocation::Action)?.finished(alias, end);
+        let kept = self.end_idle_action(|planner| planner.finished(alias, end));
         if let Some(key) = &held
             && let Err(error) = self.release_host_key(key)
         {
+            return self.contain_idle_failure(pending.instance_id, error, links);
+        }
+        if let Err(error) = kept {
             return self.contain_idle_failure(pending.instance_id, error, links);
         }
         let application_id = match ended {
@@ -557,6 +779,14 @@ impl HostShared {
             None => outcome,
         };
         self.record_idle(links, outcome)
+    }
+
+    /// IDLE-1P (#405): the planner learns how an action it asked for ended (`end`), and the
+    /// closed instances are kept again for the next start.
+    fn end_idle_action(&self, end: impl FnOnce(&mut IdlePlanner)) -> RuntimeHostResult<()> {
+        let mut planner = lock(&self.idle, IdleLocation::Action)?;
+        end(&mut planner);
+        self.keep_idle_state(&mut planner)
     }
 
     /// `close_app` on the claim's `key`: the declared application, the check that it is the

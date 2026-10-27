@@ -3,7 +3,8 @@
 // IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25: 「这是两个功能，也就是说一个功能下的两种选项，
 // 我们可以选择是关闭模拟器还是只关应用程序」): the `idle` section. Every expected value is the work order's:
 // `idle.action` `close_app` (one of `none`, `close_app`, `stop_emulator`), `idle.min_gap_ms`
-// 1 800 000, the wake leads 60 000 (`close_app`) and 300 000 (`stop_emulator`); each also per
+// 1 800 000, the wake leads 300 000 (`close_app`, IDLE-1P's default: a cold start; it was 60 000)
+// and 300 000 (`stop_emulator`); each also per
 // instance, defaulting to the section's; every key settable; each lead shorter than the gap; and
 // `stop_emulator` only on an instance whose emulator the Runtime starts. Neutral fixtures only.
 
@@ -84,7 +85,7 @@ fn refusal(failure: &ConfigFailure) -> (ConfigCode, &str, Option<ConfigValueProb
 const SECTION_DEFAULTS: IdleConfig = IdleConfig {
     action: IdleAction::CloseApp,
     min_gap_ms: 1_800_000,
-    close_app_wake_lead_ms: 60_000,
+    close_app_wake_lead_ms: 300_000,
     stop_emulator_wake_lead_ms: 300_000,
 };
 
@@ -104,7 +105,7 @@ fn idle1_c1_defaults_and_per_instance_keys() {
     for (key, value) in [
         (ACTION, FactScalar::String("close_app".to_owned())),
         (MIN_GAP_MS, FactScalar::DurationMs(1_800_000)),
-        (CLOSE_APP_WAKE_LEAD_MS, FactScalar::DurationMs(60_000)),
+        (CLOSE_APP_WAKE_LEAD_MS, FactScalar::DurationMs(300_000)),
         (STOP_EMULATOR_WAKE_LEAD_MS, FactScalar::DurationMs(300_000)),
     ] {
         let parameter = reported(key);
@@ -197,9 +198,14 @@ fn idle1_c2_bad_values_are_refused() {
         (invalid, ACTION, Some(ConfigValueProblem::WrongType))
     );
 
-    // A lead as long as the gap: the section's at start, an instance's in its own check.
+    // A lead as long as the gap: the section's at start, an instance's in its own check. IDLE-1P:
+    // the `close_app` lead names a value below the gap, since its default (300 000) is the gap.
     let section = from_file(
-        json!({"min_gap_ms": 300_000, "stop_emulator_wake_lead_ms": 300_000}),
+        json!({
+            "min_gap_ms": 300_000,
+            "close_app_wake_lead_ms": 60_000,
+            "stop_emulator_wake_lead_ms": 300_000
+        }),
         Value::Null,
     );
     let refused = section.check(&context()).expect_err("lead equals the gap");
@@ -274,4 +280,48 @@ fn idle1_c2_bad_values_are_refused() {
         refused.config_key(),
         instance_key(INSTANCE_B, ACTION).as_str()
     );
+}
+
+// IDLE-1P (#405) L-4: `idle.close_app_wake_lead_ms` defaults to 300 000, the run-time value
+// production sets on every instance (a game's cold start took 80 to 141 s on 10-27), for the
+// section and for every instance; an explicit value in the file (the section's, or an instance's
+// own) and an instruction win over the default.
+#[test]
+fn idle1p_l4_the_close_app_lead_defaults_to_a_cold_start_and_an_explicit_value_wins() {
+    let lead = |config: Result<IdleConfig, ConfigFailure>| {
+        config.map(|config| config.close_app_wake_lead_ms)
+    };
+    let defaults = from_file(json!({}), Value::Null);
+    defaults.check(&context()).expect("the defaults pass");
+    assert_eq!(lead(defaults.idle_section()), Ok(300_000));
+    assert_eq!(lead(defaults.idle(INSTANCE_A)), Ok(300_000));
+    assert_eq!(lead(defaults.idle(INSTANCE_B)), Ok(300_000));
+
+    // In the file: the section's value reaches B, A's own value is A's.
+    let explicit = from_file(
+        json!({"close_app_wake_lead_ms": 120_000}),
+        json!({"idle": {"close_app_wake_lead_ms": 90_000}}),
+    );
+    explicit.check(&context()).expect("the explicit leads pass");
+    assert_eq!(lead(explicit.idle_section()), Ok(120_000));
+    assert_eq!(lead(explicit.idle(INSTANCE_A)), Ok(90_000));
+    assert_eq!(lead(explicit.idle(INSTANCE_B)), Ok(120_000));
+
+    // Through instructions over the defaults: A's own and the section's.
+    let instructed = defaults
+        .apply(
+            &[
+                change(
+                    &instance_key(INSTANCE_A, CLOSE_APP_WAKE_LEAD_MS),
+                    json!(240_000),
+                ),
+                change(CLOSE_APP_WAKE_LEAD_MS, json!(180_000)),
+            ],
+            &stamp(),
+            &context(),
+        )
+        .expect("both leads are settable")
+        .config;
+    assert_eq!(lead(instructed.idle(INSTANCE_A)), Ok(240_000));
+    assert_eq!(lead(instructed.idle(INSTANCE_B)), Ok(180_000));
 }

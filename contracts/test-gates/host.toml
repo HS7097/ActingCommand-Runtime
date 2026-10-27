@@ -1925,7 +1925,7 @@ tests = [
 ]
 incident = ["#422 LN-3"]
 
-# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25; Workflow #386 comment 6393646823; contracts/runtime-config.md, "The `idle` section"): idle.action defaults to close_app (one of none, close_app, stop_emulator), idle.min_gap_ms to 1800000, idle.close_app_wake_lead_ms to 60000 and idle.stop_emulator_wake_lead_ms to 300000, all settable; each instance's idle keys default to the section's and an instance's own key overrides it for that instance only, from the file and through an instruction; an unknown action, a value out of range or of another type is refused where it enters; a wake lead not shorter than the gap (the section's or an instance's) is section_check at start and through an instruction; stop_emulator is refused on an instance whose emulator the Runtime does not start
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25; Workflow #386 comment 6393646823; contracts/runtime-config.md, "The `idle` section"): idle.action defaults to close_app (one of none, close_app, stop_emulator), idle.min_gap_ms to 1800000, idle.close_app_wake_lead_ms to 300000 (#405 IDLE-1P; 60000 before) and idle.stop_emulator_wake_lead_ms to 300000, all settable; each instance's idle keys default to the section's and an instance's own key overrides it for that instance only, from the file and through an instruction; an unknown action, a value out of range or of another type is refused where it enters; a wake lead not shorter than the gap (the section's or an instance's) is section_check at start and through an instruction; stop_emulator is refused on an instance whose emulator the Runtime does not start
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1948,7 +1948,7 @@ tests = [
 ]
 incident = ["#386 IDLE-1"]
 
-# IDLE-2 (the owed wake; root cause rd-1026/idle-wake/root-cause.md §Q3, §Q4; v0.12.13 in production on 10-26: close_app ran 57 times and the 17:54 and 18:54 wakes never queued): with the production keys (close_app, its wake lead 300000, idle.min_gap_ms 1800000) an idle instance keeps its wake through every hold, and the wake is its only exit: momentary holds (its admission guard held, its own claim, a queued claim) neither close it again nor drop the wake, which comes once at next due minus the lead, also after a hold inside the last minimum gap and while the instance is held; a reading due on the closed app wakes it at once, and a reading due within the minimum gap keeps it from closing again; a close whose stop request was sent and failed (IdleEnd::Indeterminate) owes the wake, and one not performed is left as it is with no wake; through the host, a check while the instance's admission guard is held leaves stop_emulator's wake in place: one run_idle_action, then at the wake queue_idle_wake and emulator_autostart_queued
+# IDLE-2 (the owed wake; root cause rd-1026/idle-wake/root-cause.md §Q3, §Q4; v0.12.13 in production on 10-26: close_app ran 57 times and the 17:54 and 18:54 wakes never queued): with the production keys (close_app, its wake lead 300000, idle.min_gap_ms 1800000) an idle instance keeps its wake through every hold, and the wake is its only exit: momentary holds (its admission guard held, its own claim, a queued claim) neither close it again nor drop the wake, which comes once at next due minus the lead, also after a hold inside the last minimum gap and while the instance is held; a task due on the closed app that waits for a reading wakes it at once (#405 IDLE-1P: a reading alone does not), and a task due within the minimum gap keeps it from closing again; a close whose stop request was sent and failed (IdleEnd::Indeterminate) owes the wake, and one not performed is left as it is with no wake; through the host, a check while the instance's admission guard is held leaves stop_emulator's wake in place: one run_idle_action, then at the wake queue_idle_wake and emulator_autostart_queued
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2394,3 +2394,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t7_the_first_unanswered_settlement_read_ends_the_ticks_reads",
 ]
 incident = ["#419 LN-WS-F"]
+
+# #405 IDLE-1P (brief rd-1027/brief-idle1p.md; production 10-27: a restart at 17:32 forgot a game closed since 14:35 and its 17:54 wake, and its 18:01 task met the closed game): through the host on a manual clock, an instance the idle action closed is kept as host.idle_state with its wake, and a restart restores it: it is not acted on again, and its wake fires at its time (L-1) or, restarted within the wake lead, at the start's first check before any plan (L-2); after an earlier start that kept no state the instance counts as closed, never as open: no action, and a wake at its next task minus the lead (L-3); idle.close_app_wake_lead_ms defaults to 300000 for the section and every instance, and an explicit value in the file or an instruction wins (L-4); from a recorded evaluation, a fact-refresh reading (selected, held back by the idle action, or by its own interval) with no due task neither wakes the closed instance nor moves its wake, which comes at the next task minus the lead (L-5), and a task that needs the reading, due now or within the lead, wakes it (L-6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_l1_a_restart_restores_the_closed_instance_and_its_wake_fires",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_l2_a_restart_within_the_wake_lead_wakes_the_instance_at_start",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_l3_an_unknown_state_at_start_is_not_treated_as_open",
+    "actingcommand-runtime-config::lib::idle1_tests::idle1p_l4_the_close_app_lead_defaults_to_a_cold_start_and_an_explicit_value_wins",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_l5_a_reading_with_no_due_task_does_not_wake_the_closed_instance",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_l6_a_reading_a_task_due_within_the_lead_needs_wakes_the_closed_instance",
+]
+incident = ["#405 IDLE-1P"]
