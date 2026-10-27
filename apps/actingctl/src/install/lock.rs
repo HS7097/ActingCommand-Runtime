@@ -9,7 +9,7 @@
 
 use super::files;
 use super::state::Paths;
-use crate::codes::{ActingctlCode, InstallRefusal};
+use crate::codes::{InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::thread;
@@ -25,13 +25,16 @@ pub(crate) struct WriterLock {
 
 impl WriterLock {
     /// Takes `install\writer.lock` exclusively, waiting up to `wait_ms` while another holds it;
-    /// `install_update_refused` (`writer_lock_failed`) past the wait or when the OS refuses.
-    pub(crate) fn take(paths: &Paths, wait_ms: u64) -> Result<Self, Outcome> {
+    /// the refusal `writer_lock_failed` of the command `operation` past the wait or when the OS
+    /// refuses.
+    pub(crate) fn take(
+        paths: &Paths,
+        wait_ms: u64,
+        operation: InstallLocation,
+    ) -> Result<Self, Outcome> {
         let path = paths.install().join("writer.lock");
         let failed = |cause: Option<Outcome>| {
-            let refusal = Outcome::new(ActingctlCode::InstallUpdateRefused)
-                .install_refusal(InstallRefusal::WriterLockFailed)
-                .path(&path);
+            let refusal = super::refusal(operation, InstallRefusal::WriterLockFailed).path(&path);
             match cause {
                 Some(cause) => refusal.caused_by(cause),
                 None => refusal,

@@ -803,8 +803,8 @@ installer of a single-location root (Alice 10-09: 「绝不硬编码」). acting
 section with the rest of the file (its rows are those of `config.parameters.install`) but never
 uses it. `actingctl install` reads it from the root's configuration file at every command,
 through this crate (`install::settings`), never from the configuration in effect, so no key is
-settable. `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds
-the section; a file that does not name it keeps its revision. The section and each of its
+settable. `actingd-config` revision 17 ([component-interfaces.md](component-interfaces.md), Runtime
+v0.12.18) adds the section; a file that does not name it keeps its revision. The section and each of its
 objects deny unknown members.
 
 | Key | Type | Default (`actingd.defaults.json`) | Read by |

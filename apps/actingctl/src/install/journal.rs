@@ -348,7 +348,7 @@ impl<'h> Operation<'h> {
             return Ok(undo.started_at_unix_ms);
         }
         if self.journal.finished() {
-            refuse_unfinished(&self.paths)?;
+            refuse_unfinished(InstallLocation::Undo, &self.paths)?;
             let current = Current {
                 operation_id: self.journal.operation_id.clone(),
                 kind: self.journal.kind,
@@ -357,8 +357,12 @@ impl<'h> Operation<'h> {
             let bytes =
                 serde_json::to_vec_pretty(&current).map_err(|error| files::json_failure(&error))?;
             if !files::create_new(&self.paths.current(), &bytes)? {
-                refuse_unfinished(&self.paths)?;
-                return Err(state_invalid(self.paths.current(), None));
+                refuse_unfinished(InstallLocation::Undo, &self.paths)?;
+                return Err(state_invalid(
+                    InstallLocation::Undo,
+                    self.paths.current(),
+                    None,
+                ));
             }
         }
         let now = self.host.now_unix_ms();

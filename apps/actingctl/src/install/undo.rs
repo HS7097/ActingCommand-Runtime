@@ -17,13 +17,16 @@ use super::plan::{self, PlanInputs, PlanKind};
 use super::state::{self, CurrentState, OperationKind, Paths};
 use super::update::{self, SwapIntent};
 use super::{Answer, Flags};
-use crate::codes::{ActingctlCode, InstallRefusal, RollbackGatePart};
+use crate::codes::{InstallLocation, InstallRefusal, RollbackGatePart};
 use crate::watchdog::decide::Journal as OwnerJournal;
 use crate::watchdog::observe;
 use actingcommand_contract::outcome::Outcome;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::Path;
+
+/// The command of every outcome here.
+const UNDO: InstallLocation = InstallLocation::Undo;
 
 /// The intent members the reversal reads; the others are ignored.
 #[derive(Debug, Deserialize)]
@@ -58,9 +61,13 @@ fn set_aside(path: &Path, marker: &str, ms: u64) -> Result<Option<String>, Outco
 }
 
 /// Whether an owner of the state root started after `since_unix_ms` (an epoch since the
-/// operation ended).
+/// operation ended); an owner journal that cannot be read refuses (`processes_unreadable`).
 fn owner_started_since(state_root: &Path, since_unix_ms: u64) -> Result<bool, Outcome> {
-    let (_, journal) = observe::owner_journal(state_root)?;
+    let (_, journal) = observe::owner_journal(state_root).map_err(|cause| {
+        super::refusal(UNDO, InstallRefusal::ProcessesUnreadable)
+            .path(state_root)
+            .caused_by(cause)
+    })?;
     Ok(match journal {
         OwnerJournal::Record { record, .. } => record.started_at_unix_ms > since_unix_ms,
         OwnerJournal::Absent | OwnerJournal::Unrecognised { .. } => false,
@@ -78,12 +85,12 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     match state::read_current(&paths) {
         CurrentState::Unfinished(current) if current.operation_id == operation_id => {}
         CurrentState::Unfinished(_) | CurrentState::Unreadable(_) => {
-            journal::refuse_unfinished(&paths)?;
+            journal::refuse_unfinished(UNDO, &paths)?;
             return Err(super::unusable("--operation"));
         }
         CurrentState::None => {}
     }
-    let mut operation = Operation::load(host, &paths, operation_id)?;
+    let mut operation = Operation::load(host, &paths, operation_id, UNDO)?;
     let kind = operation.journal().kind;
     let changes_program = matches!(kind, OperationKind::Update | OperationKind::Rollback);
     if operation.journal().finished() && operation.journal().undo.is_none() {
@@ -93,7 +100,7 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
             return Err(super::unusable("--operation"));
         }
         if changes_program {
-            let loaded = plan::load(&paths)?;
+            let loaded = plan::load(&paths, UNDO)?;
             let installed_here = loaded
                 .state
                 .live
@@ -110,8 +117,12 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         }
     }
     let _lock = if changes_program {
-        let loaded = plan::load(&paths)?;
-        Some(WriterLock::take(&paths, loaded.settings.lock_wait_ms)?)
+        let loaded = plan::load(&paths, UNDO)?;
+        Some(WriterLock::take(
+            &paths,
+            loaded.settings.lock_wait_ms,
+            UNDO,
+        )?)
     } else {
         None
     };
@@ -200,16 +211,19 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         match manifest::verify_build(&paths.root) {
             Ok(build) if build.commit == *previous_commit => {}
             _ => {
-                let cause = super::adopt::verify_live(&paths).err().unwrap_or_else(|| {
-                    plan::refused(InstallRefusal::LiveBuildInvalid).path(&paths.root)
-                });
+                let cause = super::adopt::verify_live(UNDO, &paths)
+                    .err()
+                    .unwrap_or_else(|| {
+                        super::refusal(UNDO, InstallRefusal::LiveBuildInvalid).path(&paths.root)
+                    });
                 return Err(operation.interrupted(cause));
             }
         }
     }
     let operation_id = operation.id().to_owned();
-    let outcome = Outcome::new(ActingctlCode::InstallOperationUndone)
-        .install_operation_id(operation_id.clone());
+    let outcome = super::done(UNDO)
+        .install_operation_id(operation_id.clone())
+        .installation_changed(true);
     operation.finish_undo(&outcome)?;
     Answer::new(outcome)
         .with("operation_id", operation_id)?
@@ -217,14 +231,15 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
 }
 
 /// The rollback gate toward the build before the operation, for the undo of a finished update
-/// or rollback after a Runtime owner started: its refusal, or `Ok` when it passes.
+/// or rollback after a Runtime owner started: its refusal (`rollback_gate_failed` of `install
+/// undo`), or `Ok` when it passes.
 fn refuse_by_gate(
     host: &dyn Host,
     paths: &Paths,
     journal: &journal::Journal,
 ) -> Result<(), Outcome> {
     let Some(previous) = journal.previous.live.clone() else {
-        return Err(Outcome::new(ActingctlCode::InstallRollbackRefused)
+        return Err(super::refusal(UNDO, InstallRefusal::RollbackGateFailed)
             .rollback_gate_parts([RollbackGatePart::InterfaceEdges]));
     };
     let inputs = PlanInputs {
@@ -232,6 +247,7 @@ fn refuse_by_gate(
         commit: previous,
         accept_ledger_one_way: false,
         preview: false,
+        operation: UNDO,
     };
     let planned = match plan::plan(host, paths, inputs) {
         Ok(planned) => planned,

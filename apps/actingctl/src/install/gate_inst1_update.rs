@@ -1,32 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #421 INST-1, test rows IT-5 to IT-12 of the frozen model INST-M v1.0 (§12, "Update
-// plan", "Update apply", "Rollback"). Every expected value comes from the model (§4.4, §5, §6.1
-// to §6.5, §7) and its contract (contracts/install-cli.md, "Update and rollback", "Interface
-// checks", "Safety", "Documents"):
+// plan", "Update apply", "Rollback") and IT-15, IT-16 of INST-1b-F (#421 deploy design §8 S1).
+// Every expected value comes from the model (§4.4, §5, §6.1 to §6.5, §7), the design (§1 item 3,
+// §4, §8) and their contract (contracts/install-cli.md, "Update and rollback", "Interface
+// checks", "Safety", "The rollback gate", "Documents", "Outcome codes"):
 // - IT-5: the interface edges refuse a ledger the target cannot read, a one-way ledger without
 //   `--accept-ledger-one-way` (planned and journalled with it), a placed bundle the target
-//   cannot run; an unknown declaration is a warning;
+//   cannot run; an unknown declaration is the caveat `pack_declaration_unknown`;
 // - IT-6: the plan refuses an A/B root, a running Runtime (`--preview` reports it), a held owner
 //   lock, a foreign `.part`, a running image other than actingctl.exe that would change, and a
 //   running adb.exe that would change;
-// - IT-7: apply with a stale plan id is `install_plan_changed` and changes nothing;
+// - IT-7: apply with a stale plan id refuses `plan_changed` and changes nothing;
 // - IT-8: apply swaps Tools before the Runtime, never touches an unchanged file, renames a
 //   running actingctl.exe aside while it stays open, keeps the old bytes as `.old-<ms>`,
 //   verifies every manifest file, records the state, and leaves extra live files;
 // - IT-9: after a stop at each step, `resume` reaches the uninterrupted tree and `undo` restores
 //   the old tree byte for byte with every displaced file kept;
 // - IT-10: the writer lock is held through every step, a second installer meets
-//   `install_operation_unfinished`, a watchdog tick meanwhile is `watchdog_installer_busy`, and
-//   after a stop with `current.json` present the tick is `watchdog_installer_unfinished` and
+//   `operation_unfinished`, a watchdog tick meanwhile is `watchdog_installer_busy`, and after a
+//   stop with `current.json` present the tick is `watchdog_installer_unfinished` and
 //   `actingctl start` refuses;
 // - IT-11: when the ledger ranges differ the target's verification runs before any swap, and a
-//   failing one refuses with nothing swapped;
-// - IT-12: the rollback gate refuses an unreadable page (with its sequence), an open estimate
-//   over the deadline minus the margin, the target's check-config refusal and a target without
-//   an open deadline; it passes otherwise, and is evaluated again at apply.
-// The machine is the fake host of `fixture.rs`; every root is a temporary folder with neutral
-// files.
+//   failing one refuses `ledger_verify_failed` with nothing swapped;
+// - IT-12: the rollback gate refuses an unreadable page (with its sequence), the target's own
+//   open over the deadline minus the margin, the target's check-config refusal and a target
+//   without an open deadline; it passes otherwise, and is evaluated again at apply;
+// - IT-15: the open-time part sums all eight phases of the target build's own last open on the
+//   root: an LN-8 open (the four complete-read phases 0, `index_ms` large) refuses a deadline
+//   below it; without an open of the target the newest open of another build is judged, with
+//   the caveat `open_time_from_other_build`;
+// - IT-16: `adopt` and `update plan` on a root holding a deploy kit's `.old-<stamp>` and
+//   `.rolledback-<stamp>` files: both pass, the files are extra, and `leftovers` lists them
+//   without an operation id.
+// The codes are the family's folded codes (ruling 54): `install_command_done`,
+// `install_caveat_noted` and `install_command_refused` with the command as `operation`, and
+// `install_operation_interrupted`. The machine is the fake host of `fixture.rs`; every root is a
+// temporary folder with neutral files.
 
 use super::fixture::{
     BuildSpec, C1, C2, FakeHost, code, live_root, run, sha256_hex, tree, word, write_json,
@@ -39,11 +49,51 @@ use actingcommand_contract::outcome::{Category, Outcome};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 use tempfile::TempDir;
+
+/// The tick's wall clock.
+const T0: u64 = 1_800_000_000_000;
+const HOUR_MS: u64 = 3_600_000;
+const DAY_MS: u64 = 24 * HOUR_MS;
+
+/// The answer's outcome value `key`, when it is a string.
+fn text<'a>(answer: &'a super::Answer, key: &str) -> Option<&'a str> {
+    answer.outcome.value(key).and_then(Value::as_str)
+}
+
+fn refusal(answer: &super::Answer) -> Option<&str> {
+    text(answer, "install_refusal")
+}
+
+/// Asserts `answer` is `install_command_done` of the command `operation`.
+fn assert_done(answer: &super::Answer, operation: &str) {
+    assert_eq!(code(answer), "install_command_done", "{answer:?}");
+    assert_eq!(text(answer, "operation"), Some(operation), "{answer:?}");
+}
+
+/// Asserts `answer` is `install_command_refused` of the command `operation` for `why`.
+fn assert_refused(answer: &super::Answer, operation: &str, why: &str) {
+    assert_eq!(code(answer), "install_command_refused", "{answer:?}");
+    assert_eq!(text(answer, "operation"), Some(operation), "{answer:?}");
+    assert_eq!(refusal(answer), Some(why), "{answer:?}");
+}
+
+/// The `install_caveat` of every `install_caveat_noted` link of the answer's outcome.
+fn caveats(answer: &super::Answer) -> Vec<String> {
+    answer
+        .outcome
+        .causes()
+        .iter()
+        .map(|link| link.outcome())
+        .filter(|link| link.code().as_str() == "install_caveat_noted")
+        .filter_map(|link| link.value("install_caveat").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect()
+}
 
 /// A root whose live build is `live` (adopted) and that keeps `target` (staged from its release
 /// folder as a local build).
@@ -56,7 +106,7 @@ fn prepared(
 ) -> PathBuf {
     let root = live_root(base, name, live);
     let adopted = run(host, &["adopt", "--root", word(&root)]);
-    assert_eq!(code(&adopted), "install_root_adopted", "{adopted:?}");
+    assert_done(&adopted, "install_adopt");
     let release = base.join(format!("{name}-release"));
     target.write_release(&release);
     let staged = run(
@@ -71,7 +121,7 @@ fn prepared(
             "--local-build",
         ],
     );
-    assert_eq!(code(&staged), "install_build_staged", "{staged:?}");
+    assert_done(&staged, "install_release_stage");
     root
 }
 
@@ -107,22 +157,6 @@ fn apply_update(
     ];
     words.extend_from_slice(extra);
     run(host, &words)
-}
-
-fn refusal(answer: &super::Answer) -> Option<&str> {
-    answer
-        .outcome
-        .value("install_refusal")
-        .and_then(Value::as_str)
-}
-
-fn link_codes(answer: &super::Answer) -> Vec<String> {
-    answer
-        .outcome
-        .causes()
-        .iter()
-        .map(|link| link.outcome().code().as_str().to_owned())
-        .collect()
 }
 
 /// The root's ordinary spelling, as the process probe names images.
@@ -199,12 +233,17 @@ fn journal_of(root: &Path, operation_id: &str) -> Value {
 }
 
 fn operation_id(answer: &super::Answer) -> String {
-    answer
-        .outcome
-        .value("install_operation_id")
-        .and_then(Value::as_str)
+    text(answer, "install_operation_id")
         .unwrap_or_else(|| panic!("an operation id: {answer:?}"))
         .to_owned()
+}
+
+/// The Unix milliseconds `op-<ms>` names.
+fn ms_of(operation_id: &str) -> u64 {
+    operation_id
+        .strip_prefix("op-")
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or_else(|| panic!("an operation id: {operation_id}"))
 }
 
 fn set_speaks(spec: &mut BuildSpec, interface: &str, range: Value) {
@@ -212,12 +251,24 @@ fn set_speaks(spec: &mut BuildSpec, interface: &str, range: Value) {
     spec.tools.speaks[interface] = range;
 }
 
+fn state_of(root: &Path) -> Value {
+    serde_json::from_slice(&fs::read(root.join("install").join("state.json")).expect("state.json"))
+        .expect("state JSON")
+}
+
 fn set_packs(root: &Path, packs: Value) {
-    let path = root.join("install").join("state.json");
-    let mut state: Value =
-        serde_json::from_slice(&fs::read(&path).expect("state.json")).expect("state JSON");
+    let mut state = state_of(root);
     state["packs"] = packs;
-    write_json(&path, &state);
+    write_json(&root.join("install").join("state.json"), &state);
+}
+
+/// Sets `ledger_observer.open_timeout_ms` in the root's configuration.
+fn set_open_timeout(root: &Path, timeout_ms: u64) {
+    let config = root.join("actingd.config.json");
+    let mut document: Value =
+        serde_json::from_slice(&fs::read(&config).expect("the configuration")).expect("JSON");
+    document["ledger_observer"] = json!({"open_timeout_ms": timeout_ms});
+    write_json(&config, &document);
 }
 
 // IT-5 (table): the update's interface edges.
@@ -232,18 +283,16 @@ fn inst1_it_5_the_update_plan_refuses_failed_edges_and_warns_an_unknown_declarat
     set_speaks(&mut narrower, "ledger", json!([3, 3]));
     let root = prepared(temp.path(), "narrower", &live, &narrower, &host);
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(code(&refused), "install_update_refused", "{refused:?}");
-    assert_eq!(refusal(&refused), Some("interface_edge"));
+    assert_refused(&refused, "install_update_plan", "interface_edge");
 
     // A one-way ledger: refused without the flag, planned and journalled with it.
     let mut one_way = BuildSpec::new(C2);
     set_speaks(&mut one_way, "ledger", json!([3, 5]));
     let root = prepared(temp.path(), "one-way", &live, &one_way, &host);
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(code(&refused), "install_update_refused", "{refused:?}");
-    assert_eq!(refusal(&refused), Some("interface_edge"));
+    assert_refused(&refused, "install_update_plan", "interface_edge");
     let planned = plan_update(&host, &root, C2, &["--accept-ledger-one-way"]);
-    assert_eq!(code(&planned), "install_update_planned", "{planned:?}");
+    assert_done(&planned, "install_update_plan");
     let applied = apply_update(
         &host,
         &root,
@@ -251,7 +300,7 @@ fn inst1_it_5_the_update_plan_refuses_failed_edges_and_warns_an_unknown_declarat
         &plan_id(&planned),
         &["--accept-ledger-one-way"],
     );
-    assert_eq!(code(&applied), "install_update_applied", "{applied:?}");
+    assert_done(&applied, "install_update_apply");
     let journal = journal_of(&root, &operation_id(&applied));
     assert_eq!(
         journal["acknowledged"],
@@ -267,19 +316,19 @@ fn inst1_it_5_the_update_plan_refuses_failed_edges_and_warns_an_unknown_declarat
             "package_range": [6, 6]}]),
     );
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(code(&refused), "install_update_refused", "{refused:?}");
-    assert_eq!(refusal(&refused), Some("interface_edge"));
+    assert_refused(&refused, "install_update_plan", "interface_edge");
 
-    // An unknown declaration is a warning; the plan stands.
+    // An unknown declaration is a caveat; the plan stands.
     set_packs(
         &root,
         json!([{"game": "neutral", "repository": null, "commit": null, "tag": null,
             "package_range": null}]),
     );
     let planned = plan_update(&host, &root, C2, &[]);
-    assert_eq!(code(&planned), "install_update_planned", "{planned:?}");
-    assert!(
-        link_codes(&planned).contains(&"install_pack_declaration_unknown".to_owned()),
+    assert_done(&planned, "install_update_plan");
+    assert_eq!(
+        caveats(&planned),
+        ["pack_declaration_unknown"],
         "{planned:?}"
     );
 }
@@ -296,11 +345,7 @@ fn inst1_it_6_the_update_plan_refuses_what_may_not_change() {
     let root = prepared(temp.path(), "ab", &live, &target, &host);
     fs::write(root.join("install").join("active.json"), b"{}").expect("a selection");
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(
-        code(&refused),
-        "install_layout_ab_unsupported",
-        "{refused:?}"
-    );
+    assert_refused(&refused, "install_update_plan", "layout_ab_unsupported");
 
     // A Runtime runs under the root; `--preview` reports it.
     let root = prepared(temp.path(), "running", &live, &target, &host);
@@ -311,19 +356,22 @@ fn inst1_it_6_the_update_plan_refuses_what_may_not_change() {
         false,
     )]);
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(refusal(&refused), Some("runtime_running"), "{refused:?}");
+    assert_refused(&refused, "install_update_plan", "runtime_running");
     let previewed = plan_update(&host, &root, C2, &["--preview"]);
-    assert_eq!(code(&previewed), "install_update_planned", "{previewed:?}");
+    assert_done(&previewed, "install_update_plan");
     assert_eq!(previewed.members["running"]["runtime"][0]["pid"], json!(41));
     host.processes.replace(Vec::new());
 
-    // The owner lock is held.
+    // The owner lock is held (a journal with a record, locked as a running Runtime locks it).
     let root = prepared(temp.path(), "owner", &live, &target, &host);
-    let owner = File::create(temp.path().join("owner-state").join("owner.lock"))
+    let mut owner = File::create(temp.path().join("owner-state").join("owner.lock"))
         .expect("the owner journal");
+    owner
+        .write_all(format!("{}\n", owner_record(true)).as_bytes())
+        .expect("write the owner journal");
     owner.lock().expect("hold the owner lock");
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(refusal(&refused), Some("owner_lock_held"), "{refused:?}");
+    assert_refused(&refused, "install_update_plan", "owner_lock_held");
     drop(owner);
 
     // A part another operation left.
@@ -335,18 +383,15 @@ fn inst1_it_6_the_update_plan_refuses_what_may_not_change() {
     )
     .expect("a foreign part");
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(code(&refused), "install_foreign_part", "{refused:?}");
+    assert_refused(&refused, "install_update_plan", "foreign_part");
 
     // A running image other than actingctl.exe that would change.
     let root = prepared(temp.path(), "ledger-reader", &live, &target, &host);
     host.processes
         .replace(vec![image(&root, "tools/actingledger.exe", 51, false)]);
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(
-        code(&refused),
-        "install_running_image_blocks",
-        "{refused:?}"
-    );
+    assert_refused(&refused, "install_update_plan", "running_image_blocks");
+    assert_eq!(refused.outcome.value("pid"), Some(&json!(51)));
     host.processes.replace(Vec::new());
 
     // A running adb.exe that would change.
@@ -364,11 +409,7 @@ fn inst1_it_6_the_update_plan_refuses_what_may_not_change() {
         false,
     )]);
     let refused = plan_update(&host, &root, C2, &[]);
-    assert_eq!(
-        code(&refused),
-        "install_running_image_blocks",
-        "{refused:?}"
-    );
+    assert_refused(&refused, "install_update_plan", "running_image_blocks");
     host.processes.replace(Vec::new());
 }
 
@@ -385,7 +426,7 @@ fn inst1_it_7_apply_with_a_stale_plan_changes_nothing() {
         &host,
     );
     let planned = plan_update(&host, &root, C2, &[]);
-    assert_eq!(code(&planned), "install_update_planned", "{planned:?}");
+    assert_done(&planned, "install_update_plan");
     // The configuration changes after the plan.
     let config = root.join("actingd.config.json");
     let mut document: Value =
@@ -398,7 +439,7 @@ fn inst1_it_7_apply_with_a_stale_plan_changes_nothing() {
         .count();
 
     let refused = apply_update(&host, &root, C2, &plan_id(&planned), &[]);
-    assert_eq!(code(&refused), "install_plan_changed", "{refused:?}");
+    assert_refused(&refused, "install_update_apply", "plan_changed");
     assert_eq!(program_tree(&root), before, "nothing changed");
     assert_eq!(
         fs::read_dir(root.join("install").join("operations"))
@@ -433,7 +474,7 @@ fn inst1_it_8_apply_swaps_tools_first_and_keeps_and_leaves_what_it_must() {
     let mut open = File::open(root.join("runtime").join("actingctl.exe")).expect("an open image");
 
     let planned = plan_update(&host, &root, C2, &[]);
-    assert_eq!(code(&planned), "install_update_planned", "{planned:?}");
+    assert_done(&planned, "install_update_plan");
     assert!(
         planned.members["extra"]
             .as_array()
@@ -442,9 +483,14 @@ fn inst1_it_8_apply_swaps_tools_first_and_keeps_and_leaves_what_it_must() {
         "{planned:?}"
     );
     let applied = apply_update(&host, &root, C2, &plan_id(&planned), &[]);
-    assert_eq!(code(&applied), "install_update_applied", "{applied:?}");
-    assert!(
-        link_codes(&applied).contains(&"install_mcp_clients_on_previous_build".to_owned()),
+    assert_done(&applied, "install_update_apply");
+    assert_eq!(
+        applied.outcome.value("installation_changed"),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        caveats(&applied),
+        ["mcp_clients_on_previous_build"],
         "{applied:?}"
     );
     assert_eq!(applied.members["running_renamed"][0]["pid"], json!(77));
@@ -525,10 +571,7 @@ fn inst1_it_8_apply_swaps_tools_first_and_keeps_and_leaves_what_it_must() {
             "{path} is the target's"
         );
     }
-    let state: Value = serde_json::from_slice(
-        &fs::read(root.join("install").join("state.json")).expect("state.json"),
-    )
-    .expect("state JSON");
+    let state = state_of(&root);
     assert_eq!(state["live"]["commit"], json!(C2), "{state}");
     assert_eq!(
         state["live"]["operation_id"],
@@ -555,7 +598,7 @@ fn inst1_it_9_resume_and_undo_after_a_stop_at_each_step() {
         &plan_id(&plan_update(&host, &whole, C2, &[])),
         &[],
     );
-    assert_eq!(code(&applied), "install_update_applied", "{applied:?}");
+    assert_done(&applied, "install_update_apply");
     let reference = normalised(&whole);
     let steps = journal_of(&whole, &operation_id(&applied))["steps"]
         .as_array()
@@ -579,6 +622,7 @@ fn inst1_it_9_resume_and_undo_after_a_stop_at_each_step() {
             "install_operation_interrupted",
             "{step}: {stopped:?}"
         );
+        assert_eq!(text(&stopped, "operation"), Some("install_update_apply"));
         let resumed = run(
             &host,
             &[
@@ -589,11 +633,7 @@ fn inst1_it_9_resume_and_undo_after_a_stop_at_each_step() {
                 operation_id(&stopped).as_str(),
             ],
         );
-        assert_eq!(
-            code(&resumed),
-            "install_operation_resumed",
-            "{step}: {resumed:?}"
-        );
+        assert_done(&resumed, "install_resume");
         assert_eq!(normalised(&root), reference, "{step}: the resumed tree");
 
         // Stopped after `step`, then undone.
@@ -620,11 +660,7 @@ fn inst1_it_9_resume_and_undo_after_a_stop_at_each_step() {
                 operation_id(&stopped).as_str(),
             ],
         );
-        assert_eq!(
-            code(&undone),
-            "install_operation_undone",
-            "{step}: {undone:?}"
-        );
+        assert_done(&undone, "install_undo");
         let after = program_tree(&root);
         for (path, bytes) in spec_tree(&live) {
             assert_eq!(
@@ -648,12 +684,13 @@ fn inst1_it_9_resume_and_undo_after_a_stop_at_each_step() {
     }
 }
 
-/// A machine for the watchdog tick: nothing runs under the root, and nothing may be started.
+/// A machine for the watchdog tick, booted a day before it: nothing runs under the root, and
+/// nothing may be started.
 struct Machine;
 
 impl TickSeams for Machine {
     fn now_unix_ms(&self) -> u64 {
-        1_800_000_000_000
+        T0
     }
 
     fn monotonic(&self) -> Duration {
@@ -665,7 +702,7 @@ impl TickSeams for Machine {
     fn host_probe(&self, _root_plain: &Path) -> Result<HostProbe, Outcome> {
         Ok(HostProbe {
             processes: Vec::new(),
-            boot_unix_ms: Some(1_700_000_000_000),
+            boot_unix_ms: Some(T0 - DAY_MS),
         })
     }
 
@@ -685,21 +722,29 @@ impl TickSeams for Machine {
     }
 }
 
-/// An owner journal whose last record is active: a Runtime that ended without a close, which
-/// the watchdog would start.
-fn crashed_owner(state_root: &Path) {
-    let record = json!({
+/// An owner journal record started an hour before the tick: `active` is a Runtime that ended
+/// without a close, which the watchdog would start.
+fn owner_record(active: bool) -> Value {
+    json!({
         "schema_version": "actingcommand.runtime-owner.v2",
         "revision": 1,
         "owner_epoch": "epoch_neutral",
         "pid": 100,
-        "started_at_unix_ms": 1_700_000_000_000_u64,
-        "active": true,
+        "started_at_unix_ms": T0 - HOUR_MS,
+        "active": active,
         "active_instances": [],
         "closed_at_unix_ms": null,
-        "resource_disposition": "in_use",
-    });
-    fs::write(state_root.join("owner.lock"), format!("{record}\n")).expect("the owner journal");
+        "resource_disposition": if active { "in_use" } else { "none" },
+    })
+}
+
+/// The owner journal of a Runtime that crashed.
+fn crashed_owner(state_root: &Path) {
+    fs::write(
+        state_root.join("owner.lock"),
+        format!("{}\n", owner_record(true)),
+    )
+    .expect("the owner journal");
 }
 
 // IT-10: the writer lock through every step, a second installer, a watchdog tick meanwhile, and
@@ -732,22 +777,24 @@ fn inst1_it_10_the_writer_lock_and_the_watchdog_stand_by_the_installer() {
                 step,
                 busy,
                 code(&other).to_owned(),
+                refusal(&other).map(str::to_owned),
                 tick.code().as_str().to_owned(),
             ));
         })));
     }
     let applied = apply_update(&host, &root, C2, &planned, &[]);
     host.on_step.replace(None);
-    assert_eq!(code(&applied), "install_update_applied", "{applied:?}");
+    assert_done(&applied, "install_update_apply");
     let seen = seen.borrow();
     let steps = journal_of(&root, &operation_id(&applied))["steps"]
         .as_array()
         .expect("steps")
         .len();
     assert_eq!(seen.len(), steps, "every step was observed");
-    for (step, busy, other, tick) in seen.iter() {
+    for (step, busy, other, why, tick) in seen.iter() {
         assert!(*busy, "step {step}: the writer lock is held");
-        assert_eq!(other, "install_operation_unfinished", "step {step}");
+        assert_eq!(other, "install_command_refused", "step {step}");
+        assert_eq!(why.as_deref(), Some("operation_unfinished"), "step {step}");
         assert_eq!(tick, "watchdog_installer_busy", "step {step}");
     }
 
@@ -775,6 +822,11 @@ fn inst1_it_10_the_writer_lock_and_the_watchdog_stand_by_the_installer() {
         "{tick}"
     );
     assert_eq!(tick.category(), Category::Warning);
+    assert_eq!(
+        tick.value("install_operation_id"),
+        Some(&json!(operation_id(&stopped))),
+        "{tick}"
+    );
     let start =
         crate::runtime_start::start_refusal_for_test(&root, &root.join("actingd.config.json"))
             .expect("actingctl start refuses");
@@ -803,8 +855,7 @@ fn inst1_it_11_the_ledger_verification_runs_before_any_swap() {
     host.programs.verify_exit.set(1);
     let refused = apply_update(&host, &root, C2, &planned, &[]);
     host.programs.verify_exit.set(0);
-    assert_eq!(code(&refused), "install_update_refused", "{refused:?}");
-    assert_eq!(refusal(&refused), Some("ledger_verify_failed"));
+    assert_refused(&refused, "install_update_apply", "ledger_verify_failed");
     assert_eq!(program_tree(&root), before, "nothing swapped");
     assert!(!root.join("install").join("current.json").exists());
 
@@ -813,7 +864,7 @@ fn inst1_it_11_the_ledger_verification_runs_before_any_swap() {
     let planned = plan_id(&plan_update(&host, &root, C2, &[]));
     host.log.borrow_mut().clear();
     let applied = apply_update(&host, &root, C2, &planned, &[]);
-    assert_eq!(code(&applied), "install_update_applied", "{applied:?}");
+    assert_done(&applied, "install_update_apply");
     let journal = journal_of(&root, &operation_id(&applied));
     let steps = journal["steps"].as_array().expect("steps");
     assert_eq!(steps[0]["kind"], json!("ledger_verify"), "{journal}");
@@ -834,28 +885,59 @@ fn inst1_it_11_the_ledger_verification_runs_before_any_swap() {
     assert!(verify < swap, "{log:?}");
 }
 
-/// A start log of the live build whose ledger open took `phase_ms` in each of its four phases
-/// over `event_count` events.
-fn start_log(root: &Path, phase_ms: u64, event_count: u64) {
+/// The eight phases of a ledger open, each `phase_ms`.
+fn even_phases(phase_ms: u64) -> [u64; 8] {
+    [phase_ms; 8]
+}
+
+/// A start log `actingd-<at_ms>.log` in the root (the fake host's log folder) whose ledger open
+/// reports `phases` (`sql_read_ms`, `verify_ms`, `material_ms`, `restore_ms`, `meta_ms`,
+/// `tail_ms`, `index_ms`, `import_ms`).
+fn start_log(root: &Path, at_ms: u64, phases: [u64; 8]) {
     let line = json!({
         "schema_version": "actingcommand.outcome.v1",
         "code": "ledger_opened",
         "category": "info",
         "values": {
-            "event_count": event_count, "artifact_count": 0, "artifact_bytes": 0,
-            "worker_count": 1, "sql_read_ms": phase_ms, "verify_ms": phase_ms,
-            "material_ms": phase_ms, "restore_ms": phase_ms, "timeout_ms": 600_000
+            "event_count": 4096, "artifact_count": 0, "artifact_bytes": 0, "worker_count": 1,
+            "sql_read_ms": phases[0], "verify_ms": phases[1], "material_ms": phases[2],
+            "restore_ms": phases[3], "meta_ms": phases[4], "tail_ms": phases[5],
+            "index_ms": phases[6], "import_ms": phases[7], "timeout_ms": 600_000
         }
     });
     fs::write(
-        root.join("actingd-1800000000999.log"),
+        root.join(format!("actingd-{at_ms}.log")),
         format!("INFO actingd: opened\nOUTCOME actingd: {line}\n"),
     )
     .expect("the start log");
 }
 
-/// A root updated from `live` to C2 (S0 = 100), keeping `live` for a rollback, with a start log.
-fn updated(temp: &TempDir, host: &FakeHost, name: &str, live: &BuildSpec) -> PathBuf {
+/// A start of the adopted build C1 on `root`, after the adopt and before the update: the
+/// target build's own open for a rollback to C1.
+fn own_start_log(root: &Path, phases: [u64; 8]) {
+    let state = state_of(root);
+    let adopted = state["builds"]
+        .as_array()
+        .expect("builds")
+        .iter()
+        .find(|build| build["origin"] == "adopted")
+        .and_then(|build| build["operation_id"].as_str())
+        .map(ms_of)
+        .expect("the adopt");
+    start_log(root, adopted + 1, phases);
+}
+
+/// A start of the live build C2 on `root`, after the update `applied` ended.
+fn live_start_log(root: &Path, applied: &str, phases: [u64; 8]) {
+    let finished = journal_of(root, applied)["finished_at_unix_ms"]
+        .as_u64()
+        .expect("the update's end");
+    start_log(root, finished + 1, phases);
+}
+
+/// A root updated from `live` to C2 (S0 = 100), keeping `live` for a rollback; the update's
+/// operation id.
+fn updated(temp: &TempDir, host: &FakeHost, name: &str, live: &BuildSpec) -> (PathBuf, String) {
     host.programs.ledger_head.set(100);
     let root = prepared(temp.path(), name, live, &BuildSpec::new(C2), host);
     let applied = apply_update(
@@ -865,16 +947,31 @@ fn updated(temp: &TempDir, host: &FakeHost, name: &str, live: &BuildSpec) -> Pat
         &plan_id(&plan_update(host, &root, C2, &[])),
         &[],
     );
-    assert_eq!(code(&applied), "install_update_applied", "{applied:?}");
+    assert_done(&applied, "install_update_apply");
     host.programs.ledger_head.set(150);
-    start_log(&root, 1_000, 100);
-    root
+    (root, operation_id(&applied))
 }
 
 fn plan_rollback(host: &FakeHost, root: &Path) -> super::Answer {
     run(
         host,
         &["rollback", "plan", "--root", word(root), "--to", C1],
+    )
+}
+
+fn apply_rollback(host: &FakeHost, root: &Path, plan: &str) -> super::Answer {
+    run(
+        host,
+        &[
+            "rollback",
+            "apply",
+            "--root",
+            word(root),
+            "--to",
+            C1,
+            "--plan",
+            plan,
+        ],
     )
 }
 
@@ -893,6 +990,17 @@ fn gate_parts(answer: &super::Answer) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The values of the gate row `part` of a rollback plan's result.
+fn gate_row<'a>(answer: &'a super::Answer, part: &str) -> &'a Value {
+    answer.members["gate"]
+        .as_array()
+        .expect("the gate rows")
+        .iter()
+        .find(|row| row["part"] == part)
+        .map(|row| &row["values"])
+        .unwrap_or_else(|| panic!("the gate row {part}: {answer:?}"))
+}
+
 // IT-12 (table): the rollback gate.
 #[test]
 fn inst1_it_12_the_rollback_gate_refuses_each_failed_part_and_passes_otherwise() {
@@ -901,32 +1009,31 @@ fn inst1_it_12_the_rollback_gate_refuses_each_failed_part_and_passes_otherwise()
     let live = BuildSpec::new(C1);
 
     // The target's reader refuses a page.
-    let root = updated(&temp, &host, "unreadable", &live);
+    let (root, _) = updated(&temp, &host, "unreadable", &live);
+    own_start_log(&root, even_phases(1_000));
     host.programs.unreadable.replace(Some((C1.to_owned(), 120)));
     let refused = plan_rollback(&host, &root);
     host.programs.unreadable.replace(None);
-    assert_eq!(
-        code(&refused),
-        "install_rollback_ledger_unreadable",
-        "{refused:?}"
-    );
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
+    assert_eq!(gate_parts(&refused), ["ledger_readability"]);
     assert_eq!(refused.outcome.value("ledger_sequence"), Some(&json!(101)));
 
-    // The open estimate exceeds the deadline minus the margin.
-    let root = updated(&temp, &host, "slow", &live);
-    start_log(&root, 300_000, 100);
+    // The target's own open exceeds the deadline (600 000 ms) minus the margin (20 000 ms).
+    let (root, _) = updated(&temp, &host, "slow", &live);
+    own_start_log(&root, even_phases(75_000));
     let refused = plan_rollback(&host, &root);
-    assert_eq!(code(&refused), "install_rollback_refused", "{refused:?}");
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
     assert_eq!(gate_parts(&refused), ["open_time"]);
 
     // The target's check-config refuses the configuration.
-    let root = updated(&temp, &host, "config", &live);
+    let (root, _) = updated(&temp, &host, "config", &live);
+    own_start_log(&root, even_phases(1_000));
     host.programs
         .refuse_check_config
         .replace(vec![C1.to_owned()]);
     let refused = plan_rollback(&host, &root);
     host.programs.refuse_check_config.replace(Vec::new());
-    assert_eq!(code(&refused), "install_rollback_refused", "{refused:?}");
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
     assert_eq!(gate_parts(&refused), ["config"]);
 
     // A target whose defaults name no open deadline (a build before v0.12.11).
@@ -936,57 +1043,160 @@ fn inst1_it_12_the_rollback_gate_refuses_each_failed_part_and_passes_otherwise()
             *bytes = b"{}".to_vec();
         }
     }
-    let root = updated(&temp, &host, "older", &older);
+    let (root, _) = updated(&temp, &host, "older", &older);
+    own_start_log(&root, even_phases(1_000));
     let refused = plan_rollback(&host, &root);
-    assert_eq!(code(&refused), "install_rollback_refused", "{refused:?}");
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
     assert_eq!(gate_parts(&refused), ["open_time"]);
 
     // Every part passes: planned, applied.
-    let root = updated(&temp, &host, "passing", &live);
+    let (root, _) = updated(&temp, &host, "passing", &live);
+    own_start_log(&root, even_phases(1_000));
     let planned = plan_rollback(&host, &root);
-    assert_eq!(code(&planned), "install_rollback_planned", "{planned:?}");
-    let applied = run(
-        &host,
-        &[
-            "rollback",
-            "apply",
-            "--root",
-            word(&root),
-            "--to",
-            C1,
-            "--plan",
-            plan_id(&planned).as_str(),
-        ],
-    );
-    assert_eq!(code(&applied), "install_rollback_applied", "{applied:?}");
+    assert_done(&planned, "install_rollback_plan");
+    assert!(caveats(&planned).is_empty(), "{planned:?}");
+    let applied = apply_rollback(&host, &root, &plan_id(&planned));
+    assert_done(&applied, "install_rollback_apply");
     for (path, bytes) in spec_tree(&live) {
         assert_eq!(fs::read(root.join(&path)).ok(), Some(bytes), "{path}");
     }
 
     // A failure between plan and apply refuses at apply, with nothing changed.
-    let root = updated(&temp, &host, "between", &live);
+    let (root, _) = updated(&temp, &host, "between", &live);
+    own_start_log(&root, even_phases(1_000));
     let planned = plan_rollback(&host, &root);
-    assert_eq!(code(&planned), "install_rollback_planned", "{planned:?}");
+    assert_done(&planned, "install_rollback_plan");
     let before = program_tree(&root);
     host.programs.unreadable.replace(Some((C1.to_owned(), 120)));
-    let refused = run(
-        &host,
-        &[
-            "rollback",
-            "apply",
-            "--root",
-            word(&root),
-            "--to",
-            C1,
-            "--plan",
-            plan_id(&planned).as_str(),
-        ],
-    );
+    let refused = apply_rollback(&host, &root, &plan_id(&planned));
     host.programs.unreadable.replace(None);
+    assert_refused(&refused, "install_rollback_apply", "rollback_gate_failed");
+    assert_eq!(refused.outcome.value("ledger_sequence"), Some(&json!(101)));
+    assert_eq!(program_tree(&root), before, "nothing changed");
+}
+
+// IT-15: the open-time part on an LN-8 open line. The four complete-read phases are 0 and
+// `index_ms` is large (the v0.12.16 open: 195 724 ms of 195 917 ms): the part sums all eight
+// phases of the target's own last open, unscaled, and refuses a deadline below it. Without an
+// open of the target on the root, the newest open of another build is judged, noted.
+#[test]
+fn inst1_it_15_the_open_time_part_sums_every_phase_of_the_target_builds_own_open() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let live = BuildSpec::new(C1);
+    let ln8 = [0, 0, 0, 0, 12, 150, 195_724, 31];
+    let sum = 195_917;
+
+    // The target's own LN-8 open against a deadline below it.
+    let (root, applied) = updated(&temp, &host, "below", &live);
+    own_start_log(&root, ln8);
+    // The live build's own open, newer and fast, is not the target's.
+    live_start_log(&root, &applied, even_phases(10));
+    set_open_timeout(&root, 180_000);
+    let refused = plan_rollback(&host, &root);
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
+    assert_eq!(gate_parts(&refused), ["open_time"]);
+    let open = gate_row(&refused, "open_time");
+    assert_eq!(open["estimate_ms"], json!(sum), "{open}");
+    assert_eq!(open["deadline_ms"], json!(180_000), "{open}");
+    assert_eq!(open["from_target_build"], json!(true), "{open}");
+    assert!(caveats(&refused).is_empty(), "{refused:?}");
+
+    // The same open within a deadline above it plus the margin passes.
+    set_open_timeout(&root, sum + 20_000);
+    let planned = plan_rollback(&host, &root);
+    assert_done(&planned, "install_rollback_plan");
+    assert_eq!(gate_row(&planned, "open_time")["estimate_ms"], json!(sum));
+
+    // No open of the target on the root: the live build's open is judged, noted.
+    let (root, applied) = updated(&temp, &host, "other", &live);
+    live_start_log(&root, &applied, ln8);
+    set_open_timeout(&root, 180_000);
+    let refused = plan_rollback(&host, &root);
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
+    assert_eq!(gate_parts(&refused), ["open_time"]);
+    let open = gate_row(&refused, "open_time");
+    assert_eq!(open["estimate_ms"], json!(sum), "{open}");
+    assert_eq!(open["from_target_build"], json!(false), "{open}");
     assert_eq!(
-        code(&refused),
-        "install_rollback_ledger_unreadable",
+        caveats(&refused),
+        ["open_time_from_other_build"],
         "{refused:?}"
     );
-    assert_eq!(program_tree(&root), before, "nothing changed");
+}
+
+// IT-16: a root holding a deploy kit's leftovers: `.old-<stamp>` and `.rolledback-<stamp>` files
+// whose stamps name no operation of the root.
+#[test]
+fn inst1_it_16_adopt_and_plan_tolerate_kit_leftovers_without_operation_ids() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let live = BuildSpec::new(C1);
+    let target = BuildSpec::new(C2);
+    let root = live_root(temp.path(), "root", &live);
+    let kit = [
+        "runtime/actingctl.exe.old-20261026-0832",
+        "runtime/actingcommand-actingd.exe.old-1761521460000",
+        "tools/actingledger.exe.rolledback-20261027083100",
+    ];
+    for relative in kit {
+        let path = relative
+            .split('/')
+            .fold(root.clone(), |path, part| path.join(part));
+        fs::write(&path, b"a kit's kept file").expect("a kit leftover");
+    }
+
+    let adopted = run(&host, &["adopt", "--root", word(&root)]);
+    assert_done(&adopted, "install_adopt");
+    assert_eq!(
+        program_tree(&root.join("install").join("builds").join(C1)),
+        spec_tree(&live),
+        "the kept build holds exactly the listed files"
+    );
+    let release = temp.path().join("root-release");
+    target.write_release(&release);
+    let staged = run(
+        &host,
+        &[
+            "release",
+            "stage",
+            "--root",
+            word(&root),
+            "--dir",
+            word(&release),
+            "--local-build",
+        ],
+    );
+    assert_done(&staged, "install_release_stage");
+
+    let planned = plan_update(&host, &root, C2, &[]);
+    assert_done(&planned, "install_update_plan");
+    let extra = planned.members["extra"].as_array().expect("extra");
+    for relative in kit {
+        assert!(extra.contains(&json!(relative)), "{relative}: {planned:?}");
+    }
+
+    let leftovers = run(&host, &["leftovers", "--root", word(&root)]);
+    assert_done(&leftovers, "install_leftovers");
+    let rows = leftovers.members["leftovers"].as_array().expect("rows");
+    for relative in kit {
+        let name = relative.rsplit('/').next().expect("a name");
+        let row = rows
+            .iter()
+            .find(|row| {
+                row["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(name))
+            })
+            .unwrap_or_else(|| panic!("{relative} is listed: {leftovers:?}"));
+        assert_eq!(row["operation_id"], Value::Null, "{row}");
+    }
+    // The installer's own kept files keep their operation.
+    assert!(
+        rows.iter().any(|row| row["path"]
+            .as_str()
+            .is_some_and(|path| path.contains("current.json.finished-"))
+            && row["operation_id"].is_string()),
+        "{leftovers:?}"
+    );
 }

@@ -229,7 +229,8 @@ actingctl install leftovers --root <root>
   (cold) and refuses `ledger_verify_failed` unless it exits 0 (the acsetup gate of
   [component-interfaces.md](component-interfaces.md), "Checks per operation").
 - **Running state.** An `actingcommand-actingd.exe` under the root (`runtime_running`) or a held
-  owner lock (`owner_lock_held`) refuses unless `--preview`. Images under the root that would be
+  owner lock (`owner_lock_held`) refuses unless `--preview`; a running state that cannot be read
+  (the process probe, the state root's owner journal) refuses `processes_unreadable`. Images under the root that would be
   replaced while running: `actingctl.exe` is renamed aside and keeps running (listed as
   `running_renamed`); `adb.exe` is never moved and any other image waits
   (`running_image_blocks`, `path`, `pid`). A `.part` of another operation under
@@ -292,7 +293,13 @@ build's operation). `--operation <id>` answers that journal. `--check-rollback` 
 whole gate toward the previous build.
 
 **Leftovers** (done, `count`) lists every kept file and folder with its
-operation id and size. It deletes nothing.
+operation id and size. It deletes nothing. The operation is the one whose journal records the
+item (an undo's `kept`, an abandoned part), the one a `current.json.finished-<ms>` names, or
+`op-<ms>` of the name's `<ms>` when the root keeps that journal. An item no journalled operation
+of the root made has `operation_id: null`: a deploy kit's `<file>.old-<stamp>` or
+`<file>.rolledback-<stamp>`, whatever its stamp. Such files are tolerated everywhere: `adopt`
+ignores them (they are not listed), and a plan lists them under `extra` and leaves them in place;
+only a `.part` refuses (`foreign_part`).
 
 ### `actingd check-config --install-root <root>` (INST-1)
 
@@ -464,9 +471,24 @@ evaluated at `rollback plan`, again at apply under the writer lock, and by `stat
 3. `open_time`: the target's open deadline is the configuration's
    `ledger_observer.open_timeout_ms` when the file names it, else the target's
    `actingd.defaults.json` value; a target whose defaults lack the key is a build before v0.12.11
-   and fails. The newest `ledger_opened` daemon line of the live build's starts (its
-   `sql_read_ms + verify_ms + material_ms + restore_ms`, scaled by the head over its
-   `event_count`) must be at most the deadline minus `install.rollback.open_margin_ms`.
+   and fails. The open time is that of the **target build's own** last ledger open on this root
+   (the open time depends on the build that will open): the sum of all eight phases its
+   `ledger_opened` daemon line reports (`sql_read_ms`, `verify_ms`, `material_ms`, `restore_ms`,
+   `meta_ms`, `tail_ms`, `index_ms`, `import_ms`; a phase a build before LN-8 does not report
+   counts 0), unscaled. It must be at most the deadline minus `install.rollback.open_margin_ms`.
+   The start logs (`actingd-<ms>.log` in the root, `<root>\watchdog\` and the console's log
+   folder; `<ms>` the start, else the log's modified time) are attributed to builds by the
+   operation journals: the build live on the root at `<ms>` is the one the newest journalled
+   change before it made live (an adopt's build from the adopt on, an update's or rollback's
+   previous build from its start and its target from its end, the previous build again from the
+   end of its undo); before the first journalled operation the journals name no build. The
+   newest attributed log of the target that holds an open line is judged; when there is none,
+   the newest open line of any start log is judged and the gate carries the caveat
+   `open_time_from_other_build` (`commit_sha` the target, `path` the log), a `note` link of the
+   command's result; no open line at all fails the part. The gate row lists `deadline_ms`,
+   `margin_ms`, `estimate_ms`, `log` and `from_target_build`. (Until INST-1b-F the part summed
+   only the four complete-read phases of the live build's newest open and scaled them by the head
+   over its `event_count`: since LN-8 those phases are 0 and the estimate was 0.)
 4. `config`: the live configuration passes the target's check-config (`--install-root
    <root>`); a key of a newer `actingd-config` revision fails here, so the person restores the
    configuration first.
@@ -559,7 +581,7 @@ command refuses and the watchdog stands aside (row 7a″). A `.part` of another 
 ## Configuration keys
 
 The section `install` of `actingd.config.json` ([runtime-config.md](runtime-config.md), "The
-`install` section"; `actingd-config` revision 11). actingd parses and validates it and otherwise
+`install` section"; `actingd-config` revision 17, Runtime v0.12.18). actingd parses and validates it and otherwise
 ignores it; `actingctl` reads it from the root's configuration file through
 `actingcommand-runtime-config`. Fixed by this contract, not tunable: the readiness probe period
 (500 ms), the 2 s clock slack, the layouts, schema names and file names, the ledger page of the
@@ -605,7 +627,8 @@ the fragment registers, names the command.
   instances stay paused), `instance_invalid`. Nothing changed, but what the reason says.
 - **`install_caveat`**: `release_unconfirmed`, `mcp_clients_on_previous_build`,
   `pack_declaration_unknown`, `post_check_mismatch`, `restart_required`,
-  `config_overridden_by_instruction`, `pack_restart_needed`, `pack_full_check_skipped`.
+  `config_overridden_by_instruction`, `pack_restart_needed`, `pack_full_check_skipped`,
+  `open_time_from_other_build` (INST-1b-F: the rollback gate judged another build's open).
 - **Keys**: `install_operation_id` (id), `plan_id` (id), `install_refusal` (vocabulary
   `install_refusal`), `install_caveat` (vocabulary `install_caveat`), `release_checks` (list of
   `release_check`), `rollback_gate_parts` (list of `rollback_gate_part`), `ledger_sequence`

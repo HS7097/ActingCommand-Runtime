@@ -15,7 +15,7 @@ use super::manifest::{self, Build, BuildProblem, Half, Speaks};
 use super::programs::{self, Checked};
 use super::state::{self, InstallState, PackEntry, Paths, StateProblem};
 use super::{Answer, refuse_ab};
-use crate::codes::{ActingctlCode, InstallRefusal};
+use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use crate::watchdog::decide::OwnerLock;
 use crate::watchdog::observe;
 use actingcommand_contract::outcome::{CauseRelation, Outcome};
@@ -41,6 +41,19 @@ pub(crate) enum PlanKind {
     Rollback,
 }
 
+impl PlanKind {
+    /// The command that plans (`apply` false) or applies a plan of this kind: the `operation`
+    /// of its outcomes.
+    pub(crate) fn location(self, apply: bool) -> InstallLocation {
+        match (self, apply) {
+            (Self::Update, false) => InstallLocation::UpdatePlan,
+            (Self::Update, true) => InstallLocation::UpdateApply,
+            (Self::Rollback, false) => InstallLocation::RollbackPlan,
+            (Self::Rollback, true) => InstallLocation::RollbackApply,
+        }
+    }
+}
+
 /// The inputs of a plan.
 #[derive(Debug, Clone)]
 pub(crate) struct PlanInputs {
@@ -48,6 +61,9 @@ pub(crate) struct PlanInputs {
     pub(crate) commit: String,
     pub(crate) accept_ledger_one_way: bool,
     pub(crate) preview: bool,
+    /// The command the plan is computed for (`update plan`, `rollback apply`, `status`,
+    /// `undo`, …): the `operation` of its refusals. Not part of the plan document.
+    pub(crate) operation: InstallLocation,
 }
 
 /// What one file of the target becomes.
@@ -133,13 +149,6 @@ pub(crate) struct Planned {
 }
 
 impl Planned {
-    /// Whether every edge passes (warnings allowed).
-    pub(crate) fn edges_pass(&self) -> bool {
-        self.edges
-            .iter()
-            .all(|edge| edge.result != EdgeResult::Fail)
-    }
-
     /// The files that change, in swap order (Tools first).
     pub(crate) fn changes(&self) -> impl Iterator<Item = &FileAction> {
         self.files.iter().filter(|file| file.action != Action::Same)
@@ -229,13 +238,14 @@ fn edge(interface: &'static str, check: &'static str, passes: bool, parties: Vec
 }
 
 /// The edges of an update or rollback (`contracts/install-cli.md`, "Interface checks"); the
-/// warnings of unknown pack declarations go to `warnings`.
+/// caveats of unknown pack declarations (of the command `operation`) go to `warnings`.
 fn interface_edges(
     installer: &Speaks,
     live: &Speaks,
     target: &Speaks,
     packs: &[PackEntry],
     accept_ledger_one_way: bool,
+    operation: InstallLocation,
     warnings: &mut Vec<Outcome>,
 ) -> Vec<Edge> {
     let get = |speaks: &Speaks, interface: &str| speaks.get(interface).copied();
@@ -299,7 +309,7 @@ fn interface_edges(
         let result = match (pack.package_range, next_package) {
             (None, _) => {
                 warnings.push(
-                    Outcome::new(ActingctlCode::InstallPackDeclarationUnknown)
+                    super::caveat(operation, InstallCaveat::PackDeclarationUnknown)
                         .game(pack.game.clone()),
                 );
                 EdgeResult::Warning
@@ -319,9 +329,10 @@ fn interface_edges(
 }
 
 /// The configuration keys that `C` names in the sections the configuration mechanism resolves
-/// and that the installer's key table does not know.
+/// and that the installer does not know: neither a row of its key table nor a member of its own
+/// defaults file (which holds every default of those sections, objects and lists included).
 fn unknown_keys(config: &Value) -> Vec<String> {
-    let known = actingcommand_runtime_config::mechanism_rows()
+    let mut known = actingcommand_runtime_config::mechanism_rows()
         .into_iter()
         .filter_map(|row| match (row.name, row.file_path) {
             (KeyName::Exact(name), FilePath::Key) => Some(name.to_owned()),
@@ -329,6 +340,13 @@ fn unknown_keys(config: &Value) -> Vec<String> {
             _ => None,
         })
         .collect::<BTreeSet<_>>();
+    let mut defaults = BTreeMap::new();
+    if let Ok(shipped) =
+        serde_json::from_str::<Value>(actingcommand_runtime_config::SHIPPED_DEFAULTS)
+    {
+        flatten(&shipped, "", &mut defaults);
+    }
+    known.extend(defaults.into_keys());
     let sections = known
         .iter()
         .filter_map(|path| path.split('.').next())
@@ -407,11 +425,6 @@ fn defaults_diff(live: &Value, target: &Value, config: &Value) -> Vec<Value> {
         .collect()
 }
 
-/// `install_update_refused` with `refusal`.
-pub(crate) fn refused(refusal: InstallRefusal) -> Outcome {
-    Outcome::new(ActingctlCode::InstallUpdateRefused).install_refusal(refusal)
-}
-
 /// A refusal of the plan: its outcome, with the plan's members when there are some.
 pub(crate) enum Refused {
     Outcome(Outcome),
@@ -442,25 +455,29 @@ pub(crate) struct Loaded {
     pub(crate) state_root: PathBuf,
 }
 
-/// Reads what every update, rollback and undo starts from; refuses a root that is not a
-/// single-location root adopted by this installer.
-pub(crate) fn load(paths: &Paths) -> Result<Loaded, Outcome> {
-    refuse_ab(paths)?;
+/// Reads what every update, rollback and undo starts from; refuses (as the command `operation`)
+/// a root that is not a single-location root adopted by this installer.
+pub(crate) fn load(paths: &Paths, operation: InstallLocation) -> Result<Loaded, Outcome> {
+    refuse_ab(operation, paths)?;
     if !paths.is_single_location() {
-        return Err(refused(InstallRefusal::NotSingleLocation).path(&paths.root));
+        return Err(super::refusal(operation, InstallRefusal::NotSingleLocation).path(&paths.root));
     }
     let state = match state::load_state(paths) {
         Ok(state) => state,
         Err(StateProblem::Missing) => {
-            return Err(refused(InstallRefusal::NotAdopted).path(paths.state()));
+            return Err(super::refusal(operation, InstallRefusal::NotAdopted).path(paths.state()));
         }
         Err(StateProblem::Invalid(cause)) => {
-            return Err(journal::state_invalid(paths.state(), Some(cause)));
+            return Err(journal::state_invalid(
+                operation,
+                paths.state(),
+                Some(cause),
+            ));
         }
     };
     let path = paths.config();
     let unreadable = |cause: Outcome| {
-        refused(InstallRefusal::ConfigUnreadable)
+        super::refusal(operation, InstallRefusal::ConfigUnreadable)
             .path(&path)
             .caused_by(cause)
     };
@@ -468,7 +485,7 @@ pub(crate) fn load(paths: &Paths) -> Result<Loaded, Outcome> {
     let config: Value = serde_json::from_slice(files::without_bom(&bytes))
         .map_err(|error| unreadable(files::json_failure(&error)))?;
     let settings = actingcommand_runtime_config::install::settings(&config).map_err(|failure| {
-        refused(InstallRefusal::InstallSectionInvalid)
+        super::refusal(operation, InstallRefusal::InstallSectionInvalid)
             .path(&path)
             .caused_by(failure.outcome())
     })?;
@@ -477,7 +494,7 @@ pub(crate) fn load(paths: &Paths) -> Result<Loaded, Outcome> {
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .filter(|root| root.is_absolute())
-        .ok_or_else(|| refused(InstallRefusal::ConfigUnreadable).path(&path))?;
+        .ok_or_else(|| super::refusal(operation, InstallRefusal::ConfigUnreadable).path(&path))?;
     Ok(Loaded {
         state,
         config,
@@ -487,33 +504,36 @@ pub(crate) fn load(paths: &Paths) -> Result<Loaded, Outcome> {
     })
 }
 
-/// The kept build `commit`, verified against its own manifests.
+/// The kept build `commit`, verified against its own manifests; the refusals are the command
+/// `operation`'s: `build_not_kept`, or `build_invalid` (with `count` and `files` when listed files
+/// differ).
 pub(crate) fn kept_build(
     paths: &Paths,
     state: &InstallState,
     commit: &str,
+    operation: InstallLocation,
 ) -> Result<Build, Outcome> {
     let base = paths.build(commit);
     if state.kept(commit).is_none() || !base.is_dir() {
-        return Err(refused(InstallRefusal::BuildNotKept)
+        return Err(super::refusal(operation, InstallRefusal::BuildNotKept)
             .commit_sha(commit.to_owned())
             .path(&base));
     }
-    match manifest::verify_build(&base) {
-        Ok(build) if build.commit == commit => Ok(build),
-        Ok(_) | Err(BuildProblem::Manifest(..) | BuildProblem::Commits) => {
-            Err(refused(InstallRefusal::BuildInvalid)
-                .commit_sha(commit.to_owned())
-                .path(&base))
-        }
-        Err(BuildProblem::Files(problems)) => Err(refused(InstallRefusal::BuildInvalid)
+    let invalid = || {
+        super::refusal(operation, InstallRefusal::BuildInvalid)
             .commit_sha(commit.to_owned())
             .path(&base)
-            .caused_by(
-                Outcome::new(ActingctlCode::InstallLiveBuildModified)
-                    .count(problems.len())
-                    .files(problems.iter().map(manifest::FileProblem::record)),
-            )),
+    };
+    match manifest::verify_build(&base) {
+        Ok(build) if build.commit == commit => Ok(build),
+        Ok(_) | Err(BuildProblem::Commits) => Err(invalid()),
+        Err(BuildProblem::Manifest(_, cause)) => Err(match cause {
+            Some(cause) => invalid().caused_by(cause),
+            None => invalid(),
+        }),
+        Err(BuildProblem::Files(problems)) => Err(invalid()
+            .count(problems.len())
+            .files(problems.iter().map(manifest::FileProblem::record))),
     }
 }
 
@@ -532,20 +552,21 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         })
         .into());
     }
+    let operation = inputs.operation;
     let Loaded {
         state,
         config,
         config_sha256,
         settings,
         state_root,
-    } = load(paths)?;
-    let live = verify_live(paths)?;
-    let target = kept_build(paths, &state, &inputs.commit)?;
-    let live_speaks = live
-        .speaks()
-        .ok_or_else(|| refused(InstallRefusal::LiveBuildInvalid).path(&paths.root))?;
+    } = load(paths, operation)?;
+    let live = verify_live(operation, paths)?;
+    let target = kept_build(paths, &state, &inputs.commit, operation)?;
+    let live_speaks = live.speaks().ok_or_else(|| {
+        super::refusal(operation, InstallRefusal::LiveBuildInvalid).path(&paths.root)
+    })?;
     let target_speaks = target.speaks().ok_or_else(|| {
-        refused(InstallRefusal::BuildInvalid)
+        super::refusal(operation, InstallRefusal::BuildInvalid)
             .commit_sha(inputs.commit.clone())
             .path(paths.build(&inputs.commit))
     })?;
@@ -557,6 +578,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         &target_speaks,
         &state.packs,
         inputs.accept_ledger_one_way,
+        operation,
         &mut warnings,
     );
     for (name, build) in [("Rp", &live), ("R*", &target)] {
@@ -609,13 +631,21 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         for (path, sha256) in listed {
             let sha256 = match sha256 {
                 Some(sha256) => sha256,
-                None => files::sha256_file(&join_relative(&target_dir, &path))
-                    .map(|(sha256, _)| sha256)
-                    .map_err(|_| {
-                        refused(InstallRefusal::BuildInvalid)
-                            .commit_sha(target.commit.clone())
-                            .path(&target_dir)
-                    })?,
+                None => {
+                    let manifest_path = join_relative(&target_dir, &path);
+                    files::sha256_file(&manifest_path)
+                        .map(|(sha256, _)| sha256)
+                        .map_err(|error| {
+                            super::refusal(operation, InstallRefusal::BuildInvalid)
+                                .commit_sha(target.commit.clone())
+                                .path(&target_dir)
+                                .caused_by(files::os_failure(
+                                    &manifest_path,
+                                    &error,
+                                    actingcommand_contract::outcome::IoOp::Read,
+                                ))
+                        })?
+                }
             };
             let live_file = join_relative(&live_dir, &path);
             let live_sha256 = match live_listed.get(&path.to_ascii_lowercase()) {
@@ -641,9 +671,16 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             .into_iter()
             .map(|path| path.to_ascii_lowercase())
             .collect::<BTreeSet<_>>();
-        for path in files::list_files(&live_dir)? {
+        let live_files = files::list_files(&live_dir).map_err(|cause| {
+            super::refusal(operation, InstallRefusal::LiveBuildInvalid)
+                .path(&live_dir)
+                .caused_by(cause)
+        })?;
+        for path in live_files {
+            // A part another operation (or a script) is staging; a kit's kept `.old-<stamp>` or
+            // `.rolledback-<stamp>` file is only an extra file.
             if path.ends_with(".part") {
-                return Err(Outcome::new(ActingctlCode::InstallForeignPart)
+                return Err(super::refusal(operation, InstallRefusal::ForeignPart)
                     .path(join_relative(&live_dir, &path))
                     .into());
             }
@@ -665,7 +702,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         Some(paths.root.as_path()),
     )
     .map_err(|cause| {
-        refused(InstallRefusal::CheckConfigUnanswered)
+        super::refusal(operation, InstallRefusal::CheckConfigUnanswered)
             .commit_sha(target.commit.clone())
             .caused_by(cause)
     })?;
@@ -691,10 +728,15 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
     ));
     let ledger_verify = live_speaks.get(LEDGER) != target_speaks.get(LEDGER);
     // The running state.
-    let images = host.processes_under(&paths.root).map_err(|cause| {
-        Refused::from(refused(InstallRefusal::ProcessesUnreadable).caused_by(cause))
-    })?;
-    let (owner_lock, _) = observe::owner_journal(&state_root)?;
+    let unreadable = |cause: Outcome| {
+        Refused::from(
+            super::refusal(operation, InstallRefusal::ProcessesUnreadable).caused_by(cause),
+        )
+    };
+    let images = host.processes_under(&paths.root).map_err(unreadable)?;
+    // The owner lock of the state root, as the watchdog reads it; a journal that cannot be read
+    // leaves the running state unknown.
+    let (owner_lock, _) = observe::owner_journal(&state_root).map_err(unreadable)?;
     let mut running = Running {
         owner_lock_held: owner_lock == OwnerLock::Locked,
         ..Running::default()
@@ -781,8 +823,9 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
 /// check-config refusal is the gate's (its part `config`).
 fn refuse(planned: Planned) -> Result<Planned, Refused> {
     let rollback = planned.inputs.kind == PlanKind::Rollback;
+    let operation = planned.inputs.operation;
     if !planned.target_check.passed() && !rollback {
-        let outcome = refused(InstallRefusal::ConfigRefusedByTarget)
+        let outcome = super::refusal(operation, InstallRefusal::ConfigRefusedByTarget)
             .commit_sha(planned.target.commit.clone())
             .caused_by(planned.target_check.received.clone());
         return Err(Refused::Answer(planned.answer(outcome)?));
@@ -795,22 +838,25 @@ fn refuse(planned: Planned) -> Result<Planned, Refused> {
         })
         .count();
     if failed > 0 {
-        let outcome = refused(InstallRefusal::InterfaceEdge)
+        let outcome = super::refusal(operation, InstallRefusal::InterfaceEdge)
             .commit_sha(planned.target.commit.clone())
             .count(failed);
         return Err(Refused::Answer(planned.answer(outcome)?));
     }
     if !planned.inputs.preview {
         if let Some(image) = planned.running.runtime.first() {
-            let outcome = refused(InstallRefusal::RuntimeRunning).path(&image.path);
+            let outcome = super::refusal(operation, InstallRefusal::RuntimeRunning)
+                .path(&image.path)
+                .pid(image.pid);
             return Err(Refused::Answer(planned.answer(outcome)?));
         }
         if planned.running.owner_lock_held {
-            let outcome = refused(InstallRefusal::OwnerLockHeld).path(&planned.state_root);
+            let outcome =
+                super::refusal(operation, InstallRefusal::OwnerLockHeld).path(&planned.state_root);
             return Err(Refused::Answer(planned.answer(outcome)?));
         }
         if let Some(image) = planned.running.blocked.first() {
-            let outcome = Outcome::new(ActingctlCode::InstallRunningImageBlocks)
+            let outcome = super::refusal(operation, InstallRefusal::RunningImageBlocks)
                 .path(&image.path)
                 .pid(image.pid);
             return Err(Refused::Answer(planned.answer(outcome)?));
@@ -819,17 +865,20 @@ fn refuse(planned: Planned) -> Result<Planned, Refused> {
     Ok(planned)
 }
 
-/// The plan's success outcome: `install_update_planned` or `install_rollback_planned`, with each
-/// warning as a `note` link.
+/// The plan's success outcome: `install_command_done` of the planning command with its
+/// `plan_id` and the target's `commit_sha`, each caveat a `note` link.
 pub(crate) fn planned_outcome(planned: &Planned) -> Outcome {
-    let code = match planned.inputs.kind {
-        PlanKind::Update => ActingctlCode::InstallUpdatePlanned,
-        PlanKind::Rollback => ActingctlCode::InstallRollbackPlanned,
-    };
-    planned.warnings.iter().fold(
-        Outcome::new(code)
+    with_notes(
+        super::done(planned.inputs.operation)
             .plan_id(planned.id.clone())
             .commit_sha(planned.target.commit.clone()),
-        |outcome, warning| outcome.link(CauseRelation::Note, warning.clone()),
+        &planned.warnings,
     )
+}
+
+/// `outcome` with each of `notes` as a `note` link.
+pub(crate) fn with_notes(outcome: Outcome, notes: &[Outcome]) -> Outcome {
+    notes.iter().fold(outcome, |outcome, note| {
+        outcome.link(CauseRelation::Note, note.clone())
+    })
 }

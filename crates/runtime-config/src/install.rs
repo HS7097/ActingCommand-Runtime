@@ -53,7 +53,7 @@ pub const GUARD_ADB_TIMEOUT_MS: &str = "install.guard.adb_timeout_ms";
 
 /// The section as the configuration file and the defaults file write it: every member may be
 /// left out and none is unknown (M387 §5.3).
-// Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+// Interface anchor `actingd-config` revision 17 (contracts/component-interfaces.md): a Runtime
 // before Workflow #421 INST-1 refuses a file that names the section, because the file denies
 // unknown members; a file that does not name it keeps its revision.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -132,7 +132,7 @@ const fn row(key: &'static str, value_type: ValueType, range: KeyRange) -> KeyRo
         // effect, so an instruction would change nothing it reads.
         settable: Settable::No(NotSettable::ReadAtAssembly),
         reader: "INST-1",
-        since: "0.12.12",
+        since: "0.12.18",
     }
 }
 

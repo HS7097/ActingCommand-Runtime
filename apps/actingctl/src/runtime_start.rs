@@ -444,7 +444,7 @@ pub(crate) fn start_refusal_for_test(root: &Path, config: &Path) -> Option<Outco
         root: root.to_path_buf(),
         config: Some(config.to_path_buf()),
         state_root: None,
-        ready_timeout: Duration::from_secs(1),
+        ready_timeout: None,
         wait_idle: Duration::ZERO,
     };
     let located = match Located::resolve(&arguments) {

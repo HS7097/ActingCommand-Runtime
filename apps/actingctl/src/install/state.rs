@@ -223,6 +223,8 @@ impl OperationKind {
         match self {
             Self::ReleaseStage => InstallLocation::ReleaseStage,
             Self::Adopt => InstallLocation::Adopt,
+            Self::Update => InstallLocation::UpdateApply,
+            Self::Rollback => InstallLocation::RollbackApply,
         }
     }
 }

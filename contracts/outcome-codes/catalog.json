@@ -6557,7 +6557,7 @@
           "description": "The state root's owner lock is held (a Runtime, ledger-maintenance or unlock-owner)."
         },
         "processes_unreadable": {
-          "description": "The processes under the root could not be read."
+          "description": "The running state could not be read: the processes under the root, or the owner journal of the configuration's state root."
         },
         "running_image_blocks": {
           "description": "A running process's image under the root would change and may not be renamed aside (path, pid): any image but actingctl.exe, and adb.exe always."
@@ -6626,6 +6626,9 @@
         },
         "pack_full_check_skipped": {
           "description": "No actinglab.exe under the root's tools\\, so a placed game root got the Runtime reader's check only (path; INST-4)."
+        },
+        "open_time_from_other_build": {
+          "description": "The rollback gate's open-time part found no ledger open of the target build on this root (the operation journals attribute each start log to the build live at its start), so it judged the newest open of another build (commit_sha the target, path the start log used)."
         }
       }
     },

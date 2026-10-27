@@ -36,7 +36,7 @@ mod update;
 mod fixture;
 #[cfg(test)]
 mod gate_inst1_release;
-// Test-only: Workflow #421 INST-1, test rows IT-5 to IT-12.
+// Test-only: Workflow #421 INST-1, test rows IT-5 to IT-12, IT-15 and IT-16.
 #[cfg(test)]
 mod gate_inst1_update;
 
@@ -45,7 +45,9 @@ pub(crate) use host::{Host, SystemHost};
 pub(crate) use state::unfinished_operation;
 
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem, InstallLocation, InstallRefusal};
+use crate::codes::{
+    ActingctlCode, ArgumentProblem, InstallCaveat, InstallLocation, InstallRefusal,
+};
 use actingcommand_contract::outcome::{Category, CauseRelation, Outcome};
 use journal::Operation;
 use plan::PlanKind;
@@ -237,6 +239,14 @@ pub(crate) fn refusal(operation: InstallLocation, refusal: InstallRefusal) -> Ou
     Outcome::new(ActingctlCode::InstallCommandRefused)
         .operation(operation)
         .install_refusal(refusal)
+}
+
+/// `install_caveat_noted` of the command `operation`, `caveat` saying what was left unchecked,
+/// pending or on the previous build.
+pub(crate) fn caveat(operation: InstallLocation, caveat: InstallCaveat) -> Outcome {
+    Outcome::new(ActingctlCode::InstallCaveatNoted)
+        .operation(operation)
+        .install_caveat(caveat)
 }
 
 /// `install_command_refused` (`layout_ab_unsupported`) for a root that holds acsetup's A/B

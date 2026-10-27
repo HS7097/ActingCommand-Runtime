@@ -516,6 +516,9 @@ actingcommand_contract::outcome_vocabulary! {
         ConfigOverriddenByInstruction => "config_overridden_by_instruction",
         PackRestartNeeded => "pack_restart_needed",
         PackFullCheckSkipped => "pack_full_check_skipped",
+        // Workflow #421 INST-1b-F (#421 deploy design §4, §8 S1): the rollback gate's open-time
+        // part found no open of the target build on this root and used another build's.
+        OpenTimeFromOtherBuild => "open_time_from_other_build",
     }
 }
 
