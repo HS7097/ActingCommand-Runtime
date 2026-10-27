@@ -135,8 +135,9 @@ fn connect_client(root: &Path) -> RuntimeClient {
 
 /// A call budget already spent: the hour `unreached_deadline` grants, taken back, so the
 /// deadline is the instant the budget was granted and no read can start before it. It measures
-/// nothing; whatever time passes after it, the budget stays spent.
-fn spent_deadline() -> Instant {
+/// nothing; whatever time passes after it, the budget stays spent. #422 OV-24K's gate
+/// (`gate_422_ov24k`) spends its budget with it too.
+pub(super) fn spent_deadline() -> Instant {
     unreached_deadline()
         .checked_sub(Duration::from_secs(60 * 60))
         .expect("the deadline unreached_deadline grants, less its hour")

@@ -29,6 +29,7 @@
 //! read.
 
 use super::super::jobs::Jobs;
+use super::super::protocol::Era;
 use super::super::run_evidence as tool;
 use super::super::runtime::RuntimeAccess;
 use super::super::tools::{self, ToolContext};
@@ -495,6 +496,7 @@ fn call_evidence(root: &Path, arguments: Value) -> Value {
         runtime: &runtime,
         cancelled: &cancelled,
         deadline: unreached_deadline(),
+        era: Era::Modern,
         session: 1,
         jobs: &jobs,
     };
