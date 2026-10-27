@@ -9,27 +9,112 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
-## v0.12.18（MCP 统一入口一节；本版其余内容随发版补全）
+## v0.12.18
 
-- **MCP 统一入口（#421 MCP-ENTRY）。** Tools 新增 `actingcommand-mcp-entry.exe`。部署时复制到
-  `<root>\mcp-entry\g1\`，四个客户端（Claude Code、Codex、Antigravity、DSH）都改为启动
-  `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier …`，
-  `--` 之后的参数原样传给 `<root>\runtime\actingctl.exe`，档位不变。
-  - **之后的更新不再需要重启客户端。** 入口在两次调用之间、只对核验完整的安装切到新的子进程：写锁空闲、
-    没有未完成的安装操作、文件哈希与清单一致（`actingctl mcp-entry plan`）。它会重放客户端的握手，并发出变更通知。
-  - **切换会等句柄。** 旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等，绝不切断。运行句柄就是 Runtime 的 request_id，不受影响。
-  - **进行中的请求不重发。** 子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`，先用
-    `ac_get_run` 或 `ac_overview` 查清结果；下一个请求交给新的子进程。
-- **第一次接入要重启一次客户端。** 各客户端拿到新工具表的方式：
-  - Claude Code 收到 `notifications/tools/list_changed` 后会自己重新拉取；
-  - Codex 要重新加载该服务；
-  - Antigravity 在 MCP 管理器里点 Refresh；
-  - DSH 通过插件生命周期重新加载，工具白名单的名字不变。
-- **配置片段和状态。** 片段用 `actingctl mcp-config --client … --entry --root <root>` 打印，不写任何客户端文件。
-  每个入口的状态写在 `<root>\mcp-entry\state\entry-<pid>.json`，用 `actingctl mcp-entry list --root <root>` 查看。
-  - **游标随子进程失效。** `ac_events` 等工具的 `next_cursor` 属于发出它的子进程，切换后答 `cursor_invalid`，从 `after_sequence` 重读即可。
-- **新配置键。** `install.mcp_entry.poll_ms`、`settle_ms`、`verify_timeout_ms`、`drain_max_ms`、`refused_retry_max_ms`（`actingd-config` 修订 17，只增不改）。
-  计划连续被拒时，入口下一次询问前的等待从 `settle_ms` 起逐次加倍，上限是 `refused_retry_max_ms`（默认 300000）。
+本版是 v0.12.17 之后合并的 3 个 PR（为可靠部署服务的功能，按 Alice 的规则编为 0.12.x）：部署改由产品自己的
+`actingctl install` 进行，有日志、写锁、带闸门的回退，什么都不删（INST-1b-F）；MCP 客户端都经一个稳定的入口
+连接，之后换版时入口在两次调用之间自动切到新版本，不用重启客户端，只有第一次改为经入口连接时要重启一次客户端
+（MCP-ENTRY）；资源池的容量和资源预测的比较值可以读事实（CF-5）。v0.12.17 已在本版之前发布。
+
+配置：`actingd-config` 升到 [5, 17]。revision 17 新增可选的 `install` 节：`actingctl install` 和 MCP 入口的可调
+参数。actingd 只解析和检查这一节、不使用它；`actingctl install` 和 `actingctl mcp-entry plan` 每次执行时从根目录
+的配置文件读取它，所以这些键都不能在运行中修改，改了配置文件之后从下一次命令起生效。这一节和其中每个对象都不接受
+未知成员；值超出范围是 `config_value_invalid`。各键（时间单位都是毫秒）：
+
+- `install.lock_wait_ms`：等待写锁 `install\writer.lock` 的时间，默认 60 000，范围 1 000 到 600 000。
+- `install.rollback.open_margin_ms`：回退闸门里目标构建打开账本的耗时要比时限少出的余量，默认 20 000，范围 0 到 600 000。
+- `install.child.check_config_timeout_ms`：安装器运行的每次 `actingd check-config` 的时限，默认 900 000，范围 10 000 到 3 600 000。
+- `install.child.ledger_read_timeout_ms`：每次 `actingledger` 读取（S0，回退闸门读取部分的每一页）的时限，默认 300 000，范围 10 000 到 3 600 000。
+- `install.child.ledger_verify_timeout_ms`：更新或回退时 `actingd ledger-maintenance verify` 的时限，默认 1 800 000，范围 60 000 到 86 400 000。
+- `install.mcp_entry.poll_ms`：MCP 入口多久看一次安装，默认 2 000，范围 100 到 60 000。
+- `install.mcp_entry.settle_ms`：安装的变化要保持多久不动，入口才询问计划，默认 10 000，范围 0 到 600 000。
+- `install.mcp_entry.verify_timeout_ms`：候选子进程的核验、计划和句柄计数的时限，默认 60 000，范围 1 000 到 600 000。
+- `install.mcp_entry.drain_max_ms`：切换等未完成的句柄多久之后在状态里说明（之后仍然等），默认 600 000，范围 0 到 86 400 000。
+- `install.mcp_entry.refused_retry_max_ms`：计划连续被拒时，入口下一次询问前的等待从 `settle_ms` 起逐次加倍，加倍到的上限，默认 300 000，范围 1 000 到 86 400 000。
+- 属于之后的切片（INST-2 的停、启、保持和守卫，INST-4 的热放置）的键：`install.stop.drain_timeout_ms`（默认 300 000，
+  范围 1 000 到 3 600 000）、`install.stop.shutdown_wait_ms`（60 000，10 000 到 600 000）、
+  `install.start.ready_timeout_ms`（900 000，60 000 到 3 600 000）、`install.start.attempts`（整数，2，1 到 5）、
+  `install.hold_after_start`（布尔，默认 true）、`install.hot.idle_wait_ms`（600 000，0 到 3 600 000）、
+  `install.guard.min_available_memory_mb`（整数，单位 MB，10 000，0 到 1 048 576）、`install.guard.before_next_start_ms`
+  （900 000，0 到 86 400 000）、`install.guard.blocked_windows`（时间窗列表，默认空，不内置任何时段）和
+  `install.guard.adb_timeout_ms`（15 000，1 000 到 60 000）。
+
+现有的配置都不需要修改：没有写 `install` 节的配置文件保持原来的 revision，Runtime 仍读 revision 5 到 16 的文件。
+v0.12.17 及更早的 Runtime 拒绝写了 `install` 节（任何 `install.*` 键）的配置文件，因为配置文件不接受未知成员；
+退回旧版本之前要先去掉这些键。同一 revision 带来 `actingd check-config --install-root <root>`，v0.12.17 及更早的
+构建以 `check_config_usage_invalid` 拒绝这个选项，所以 `actingctl install` 对这样的目标构建不带它运行 check-config。
+
+运行上的变化：
+
+- 命令行安装（INST-1b-F）：`actingctl install` 安装、更新和回退一个单一位置的根目录，每个改动都是一次操作，逐步写进
+  日志（`install\operations\`），改动 `runtime\`、`tools\` 和配置文件时独占写锁。
+  - `adopt`：在一个由脚本安装的根目录上第一次运行。按 `runtime\` 和 `tools\` 自己的清单核对每个文件，把清单列出的文件
+    和两份清单复制到根目录下留存（`install\builds\<提交>\`），写下当前构建、标准包登记和配置的 SHA-256。有文件与清单
+    不符时拒绝（`live_build_modified`）；同一构建再 adopt 一次什么都不改。
+  - `release verify` 和 `release stage`：核对发行版的两个 zip 和 `SHA256SUMS`（可以再核 release-facts、期望的 tag 和
+    提交）；`stage` 在核对通过后把这个构建留存到根目录下，供更新和回退使用。
+  - `update plan`（只读）：核对当前构建和目标构建、接口边，逐文件列出新增、替换和不变（清单之外的文件列为 `extra`、原样
+    留下），列出默认值的差异，分别运行目标和当前构建的 check-config，需要时安排账本校验；Runtime 在运行时拒绝，
+    `--preview` 只报告。`update apply` 带上计划 id，在写锁下重算计划（不同就以 `plan_changed` 拒绝），记下账本头 S0，
+    每个文件先复制成 `.part` 并核 SHA-256，再把被替换的文件改名为 `.old-<ms>`、新文件改名就位（先 `tools\` 后
+    `runtime\`），核对整棵树，最后记下新的当前构建。本版的 apply 要求 Runtime 已经停下，也不动配置（停、启和配置候选
+    属于之后的切片）。中途失败时操作保持未完成，根目录要先 `resume` 或 `undo` 才能正常运行。
+  - `rollback plan` 和 `rollback apply`：回到一个留存的构建，只恢复 `runtime\` 和 `tools\` 的程序文件，不动状态根、账本、
+    包、策略和配置文件。回退闸门在计划时评估一次，apply 时在写锁下第一个改动之前再评估一次，四部分都要通过：接口边；
+    目标构建自己的读取器能读完 S0 之后的每一页账本；目标构建在这个根目录上最近一次打开账本的耗时不超过打开时限减
+    `install.rollback.open_margin_ms`；当前的配置通过目标构建的 check-config（写了更新的 revision 才有的键，
+    例如 `install.*`，就在这里不通过，要先去掉）。闸门不通过就以 `rollback_gate_failed` 拒绝，只能向前修。**回退只
+    允许回到这次更新替换掉的那个构建**：要回到更早的构建，先回到它，再回退一次。
+  - `status`：报告布局、当前和留存的构建、包登记、配置、未完成的操作、最近完成的操作、遗留物数量和回退窗口里便宜的
+    部分；`status --check-rollback` 对上一个构建评估完整的回退闸门，不改任何东西。
+  - `resume` 继续一个未完成的操作（逐步核对磁盘上的状态，已完成的步骤不重做）；`undo` 撤销一个未完成的操作，或在
+    之后没有别的操作时撤销最近完成的那一个（撤销完成的更新或回退同样要过闸门）。
+  - **什么都不删。** 被替换的文件留作 `.old-<ms>`，撤销时挪开的文件也留下；`leftovers` 列出所有留下的文件和文件夹，
+    带所属操作 id 和大小，从不删除。
+  - 安装器运行的每个子程序都有时限（`install.child.*`）。到时限还在运行的子程序不会被杀，只报告它的 pid 和对应的键：
+    操作开始之前的读取以对应的结果拒绝、什么都不改；账本校验超时则操作以 `install_operation_interrupted` 结束、什么都
+    没换，留给 `resume`（再校验一次）或 `undo`。
+  - 看门狗行 7a″：`install\current.json` 记着一个未完成的更新或回退时，看门狗不启动 Runtime
+    （`watchdog_installer_unfinished`），`actingctl start` 和 `restart` 也拒绝；先 `resume` 或 `undo`。未完成的
+    `release stage` 和 `adopt` 不挡启动。
+  - `actingd check-config --install-root <root>`：按给定的安装根目录检查配置；安装器用它检查目标构建。
+- MCP 统一入口（MCP-ENTRY）：
+  - 位置：Tools 包新增 `actingcommand-mcp-entry.exe`，放在 `<root>\mcp-entry\g1\`。`g1` 是入口自己的代数，只有入口和
+    子进程之间的约定变化时才换一个新的 `g<N>` 目录，从不覆盖正在运行的入口。本版的 `install update` 还不放置入口：
+    部署时把 Tools 里的这个文件复制过去。
+  - 登记：`actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> [--tier …]` 打印各客户端的
+    配置片段，不写任何客户端文件。客户端改为启动 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client
+    <名字> -- mcp-serve --tier …`；`--` 之后的参数原样传给 `<root>\runtime\actingctl.exe`，档位和权限范围不变。第一次
+    改为经入口连接时要重启一次客户端。
+  - 何时切换：入口监视 `runtime\BUILD-MANIFEST.json` 和 `runtime\actingctl.exe`，变化保持 `settle_ms` 不动之后询问
+    `actingctl mcp-entry plan`。只有安装完整时才切换：写锁空闲、没有未完成的安装操作、已安装的文件与清单一致；否则
+    计划被拒，当前子进程继续服务。候选子进程先用客户端的握手核验，核验失败就记下、旧子进程继续服务。切换只发生在两次
+    调用之间；当前子进程还有进程内的句柄（结果还没读的后台任务、Lab 句柄、还在提交的运行）或还有调用在进行时，切换
+    推迟、绝不切断，超过 `drain_max_ms` 仍然等，并在状态里说明。运行的句柄就是 Runtime 的 request_id，不受切换影响。
+    v0.12.17 及更早的子进程不回答 `actingcommand/entryStatus`，没有调用在进行时算作没有句柄。
+  - 结果未知：调用进行中子进程结束时，这个调用答 `mcp_entry_outcome_unknown`，绝不重发；先用 `ac_get_run` 或
+    `ac_overview` 查清结果，下一个请求交给新的子进程。
+  - 各客户端怎样拿到新工具表：入口发 `notifications/tools/list_changed`（2026-07-28 协议的客户端在它订阅的流上收到同样
+    的通知）。支持自动更新工具表的客户端（Claude Code）自己重新拉取；Codex 要重新加载这个服务；Antigravity 在 MCP
+    管理器里点 Refresh；DSH 要重启这个服务（插件重新加载），工具白名单的名字不变。
+  - 游标：`ac_events` 等工具在切换前发出的 `next_cursor` 属于旧的子进程，切换后答 `cursor_invalid`，从 `after_sequence`
+    重读即可。
+  - 状态：每个入口写 `<root>\mcp-entry\state\entry-<pid>.json`（当前子进程和构建、上一次切换、推迟、候选失败、通知、
+    该客户端的刷新方式），`actingctl mcp-entry list --root <root> [--all]` 查看，pid 已不在的标 `stale`；状态文件从不删除。
+- 资源池容量读事实（CF-5）：资源池的 `capacity` 和 `resource_projection` 的 `value` 都可以写成 CF-4 的事实引用
+  `{"type": "fact", "fact_key": …, "offset": …}`，例如“预计数量 ≥ 读到的上限 − 20”，上限不再是常数。每次评估时，容量
+  是这个事实在资源池自己作用域里的整数加偏移量（要达到资源池的最低置信度、没有过期，且至少为 1）。读不到时资源池没有
+  值：这条 `resource_projection` 为未知，决定推迟（`trigger_unknown`），并请求刷新这个事实，不退回任何常数。读数高于
+  读到的容量时按读数算，不截断。比较值读不到时这个谓词为假（`fact_reference_unavailable`），和 `fact` 谓词一样。写
+  常数的规则和以前完全一样，序列化和哈希都不变。用到事实形式的 `schedule.json` 要在 `requires` 里写
+  `pool_fact_reference`（actingd 新增的常开子系统），否则以 `schedule_invalid` 拒绝；更早的 Runtime 在 `requires` 处
+  拒绝（`schedule_requires_missing`）。
+
+本版合并的 PR：
+
+- #1373 CF-5：资源池的容量和资源预测谓词的比较值可以读事实；新的常开子系统 `pool_fact_reference`。没有新键、新结果码。
+- #1321 INST-1b-F：`actingctl install` 的 adopt、release stage、update 和 rollback 的 plan/apply、resume、undo、status（含 `--check-rollback`）和 leftovers，写锁和日志，`actingd check-config --install-root`，`install` 节（`actingd-config` [5, 17]），看门狗行 7a″。没有新结果码。
+- #1374 MCP-ENTRY：稳定的 MCP 入口 `actingcommand-mcp-entry.exe`（Tools 包），`actingctl mcp-entry plan|list`，`mcp-config --entry`，`actingcommand/entryStatus`，五个 `install.mcp_entry.*` 键，三个新结果码 `mcp_entry_outcome_unknown`、`mcp_entry_child_unavailable` 和 `mcp_entry_usage_invalid`；切换只在两次调用之间，从不重发请求。
 
 ## v0.12.17
 
