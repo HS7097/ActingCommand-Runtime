@@ -255,7 +255,7 @@ impl HostShared {
         let frame_store = actingcommand_artifact_store::FrameStore::new(
             frame_retention::spill_root(self.artifacts.root(), frame_id)
                 .map_err(RuntimeHostError::artifact)?,
-            frame_retention::capture_frame_store_config(),
+            self.capture_frame_store_config(),
         )
         .map_err(RuntimeHostError::artifact)?;
         let memory = frame_store.memory_budget();
@@ -363,7 +363,7 @@ impl HostShared {
                 Arc::clone(&self.artifacts),
                 frame_store,
                 CapturePipelineConfig {
-                    frame_store: frame_retention::capture_frame_store_config(),
+                    frame_store: self.capture_frame_store_config(),
                     retention_class: RetentionClass::Adaptive,
                     redaction_state: ArtifactRedactionState::NotRequired,
                     ..CapturePipelineConfig::default()
@@ -745,12 +745,31 @@ impl HostShared {
     }
 }
 
+/// Workflow #386 SR-4a3 (frozen scheduling model v1.4.2 §5.2a rule 17, T17;
+/// `scheduling-blackout.md`, "Complete silence"): a due probe of an instance a blackout covers
+/// takes no frame and records nothing (no request, no failure); it stays due and is taken at the
+/// first tick after the blackout's end. Such probes are passed over before the tick's bound, so
+/// they never crowd out the probes of other instances.
 pub(super) fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     while !shared.fatal.is_shutdown_requested() {
         let now_unix_ms = unix_ms_now()?;
         let due = lock(shared.monitor_registry()?, HostLocation::ReadDueMonitors)?
-            .due(now_unix_ms, MAX_MONITOR_PROBES_PER_TICK)?;
+            .due(now_unix_ms, usize::MAX)?;
+        let mut audible = Vec::with_capacity(due.len().min(MAX_MONITOR_PROBES_PER_TICK));
         for probe in due {
+            if audible.len() == MAX_MONITOR_PROBES_PER_TICK {
+                break;
+            }
+            match shared.monitor_probe_silenced(&probe.instance_alias) {
+                Ok(true) => {}
+                Ok(false) => audible.push(probe),
+                Err(error) => {
+                    shared.fatal.mark(error.clone())?;
+                    return Err(error);
+                }
+            }
+        }
+        for probe in audible {
             if shared.fatal.is_shutdown_requested() {
                 return Ok(());
             }

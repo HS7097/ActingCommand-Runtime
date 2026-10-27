@@ -7,6 +7,7 @@ use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_F
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
+use crate::recovery_read::{LedgerPages, RECOVERY_PAGE_EVENTS};
 use crate::resource_adjustment::{
     AdjustmentPlan, ConfirmationInput, PlannedAdjustment, PlannedBase, PlannedPublication,
     PreRunRecord, ReadingFrameInput,
@@ -14,7 +15,7 @@ use crate::resource_adjustment::{
 use actingcommand_contract::codes::{
     ContractLocation, DeviceSelfCheckFailure, RuntimeErrorCode, SharedCode,
 };
-use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     CaptureBackendName, CaptureExtent, CaptureGeometryObservation, DesignatedEffectTally,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
@@ -36,6 +37,9 @@ const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str =
     SharedCode::ContainedTaskPostAdmissionOcrFailed.as_str();
 const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: HostLocation =
     HostLocation::SettlePreviousEpochContainedRuns;
+/// #411 A65 (R3): the runtime fact (Runtime scope, an integer) that names the start event
+/// sequence of the start that last completed the previous-epoch settlement of direct runs.
+pub(super) const CONTAINED_SETTLEMENT_FACT_KEY: &str = "host.contained_settlement";
 /// Workflow #369 Q-2: the longest a direct task run (CLI, console, MCP `ac_run_pack`) waits in
 /// its instance's queue before it is refused `lease_queue_expired`.
 const DIRECT_TASK_RUN_CLAIM_WAIT_MS: u64 = 60_000;
@@ -145,6 +149,12 @@ pub(crate) enum ContainedTaskCheckpointPoint {
     /// Workflow #369 E3 (#670 final review M-1): a failed scheduled run's lease end, after its
     /// terminal and before the admission guard is taken.
     FailedRunLeaseEnd,
+    /// #411 A64 (ruling C-43): a run's end work, after its execution ended and before the
+    /// diagnostic seal, the capture summary and the terminal.
+    EndWork,
+    /// #419 DIAG-RUN: a run's end work, after its diagnostic was sealed, failed or aborted, and
+    /// before the capture summary and the terminal.
+    DiagnosticEnded,
 }
 
 #[cfg(test)]
@@ -266,7 +276,8 @@ pub(super) struct JoinedReadingFrame {
 /// beyond `i64`, an expiry beyond `u64`). Workflow #390 READ-1: the key is the reading's own,
 /// so a mark's capacity is written under its `capacity_fact_key`, with the mark's detector and
 /// a snapshot of its own (`resource_reading_capacity_snapshot_id`): one observation per reading,
-/// as for two marks read on one frame.
+/// as for two marks read on one frame. SCH-M CF-2: a completion-time mark (`timestamp_ms`)
+/// writes the frame's capture time plus its countdown, in Unix ms, as a `timestamp_ms` value.
 fn resource_reading_fact_record(
     readings: &ContainedTaskResourceReadings,
     reading: &ResourceReadingValue,
@@ -275,14 +286,19 @@ fn resource_reading_fact_record(
     frame_text: &str,
 ) -> Option<FactRecord> {
     let declaration = &reading.declaration;
+    let value = if declaration.value.is_timestamp() {
+        ContractFactValue::TimestampMs(
+            observed_at_unix_ms.checked_add(reading.value.checked_mul(1_000)?)?,
+        )
+    } else {
+        ContractFactValue::Integer(i64::try_from(reading.value).ok()?)
+    };
     Some(FactRecord {
         scope: FactScope::Instance {
             instance_id: readings.instance_alias.clone(),
         },
         key: reading.fact_key.clone(),
-        content: FactContent::Inline {
-            value: ContractFactValue::Integer(i64::try_from(reading.value).ok()?),
-        },
+        content: FactContent::Inline { value },
         observed_at_unix_ms,
         expires_at_unix_ms: Some(observed_at_unix_ms.checked_add(declaration.valid_for_ms)?),
         ttl_policy: Some(actingcommand_contract::FactTtlPolicy {
@@ -505,6 +521,20 @@ pub(super) struct ContainedRunControl {
     paced_reduction: std::sync::OnceLock<Duration>,
     /// #411 B37 (A35-S1): set once when the run's committed terminal selected a `busy` mapping.
     busy_end: std::sync::OnceLock<BusyEnd>,
+    /// #411 A64 (ruling C-43): set once when the run reached its deadline and entered its end
+    /// phase.
+    end_phase: std::sync::OnceLock<RunEndPhase>,
+    /// #411 A64 (ruling C-43): whether a close of the instance's resources at a lease end in the
+    /// run's end phase met the lapsed lease and closed nothing (`LAPSED_CLOSE_*`).
+    lapsed_close: AtomicU8,
+}
+
+/// #411 A64 (ruling C-43): the end phase of a run that reached its deadline while it held its
+/// lease: the lease its end runs under and the Runtime-clock instant its end grace ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RunEndPhase {
+    pub(super) lease_id: LeaseId,
+    pub(super) until_monotonic_ms: u64,
 }
 
 /// #385 P-k (PERF v1.4.2 §5.3, §5.6 item 2): the factor segments of one contained run. Each
@@ -666,6 +696,12 @@ impl ContainedRunControl {
     const CLIENT_REQUESTED: u8 = 1;
     const DEADLINE_EXCEEDED: u8 = 2;
     const PAUSE_REQUESTED: u8 = 3;
+    /// #411 A64: no close in the run's end phase met its lapsed lease.
+    const LAPSED_CLOSE_NONE: u8 = 0;
+    /// #411 A64: a close met the lapsed lease and closed nothing; the session is still to close.
+    const LAPSED_CLOSE_OWED: u8 = 1;
+    /// #411 A64: the owed close was settled (`HostShared::close_lapsed_run_session_guarded`).
+    const LAPSED_CLOSE_SETTLED: u8 = 2;
 
     const fn new(request_id: RequestId, instance_id: InstanceId, client_cancellable: bool) -> Self {
         Self {
@@ -681,7 +717,51 @@ impl ContainedRunControl {
             host_package: std::sync::OnceLock::new(),
             paced_reduction: std::sync::OnceLock::new(),
             busy_end: std::sync::OnceLock::new(),
+            end_phase: std::sync::OnceLock::new(),
+            lapsed_close: AtomicU8::new(Self::LAPSED_CLOSE_NONE),
         }
+    }
+
+    /// #411 A64 (ruling C-43): notes the run's end phase, once; a second note keeps the first.
+    fn enter_end_phase(&self, phase: RunEndPhase) {
+        let _ = self.end_phase.set(phase);
+    }
+
+    /// #411 A64 (ruling C-43): the run's end phase, once it reached its deadline.
+    pub(super) fn end_phase(&self) -> Option<RunEndPhase> {
+        self.end_phase.get().copied()
+    }
+
+    /// #411 A64 (ruling C-43): notes that a close at a lease end in the run's end phase met the
+    /// lapsed lease and closed nothing. `true` only for the first such close of the run, whose
+    /// refusal alone is recorded.
+    pub(super) fn note_lapsed_close(&self) -> bool {
+        self.lapsed_close
+            .compare_exchange(
+                Self::LAPSED_CLOSE_NONE,
+                Self::LAPSED_CLOSE_OWED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// #411 A64 (ruling C-43): whether the session of a close that met the lapsed lease is still
+    /// to close.
+    pub(super) fn lapsed_close_owed(&self) -> bool {
+        self.lapsed_close.load(Ordering::Acquire) == Self::LAPSED_CLOSE_OWED
+    }
+
+    /// #411 A64 (ruling C-43): takes the owed close once; `false` when none is owed.
+    pub(super) fn take_lapsed_close(&self) -> bool {
+        self.lapsed_close
+            .compare_exchange(
+                Self::LAPSED_CLOSE_OWED,
+                Self::LAPSED_CLOSE_SETTLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
 
     /// #411 B37 (A35-S1): notes the run's busy end, once; a second note keeps the first.
@@ -955,7 +1035,7 @@ pub(super) struct PreparedPackageRun<'a> {
     task_request_message: RuntimeRequest,
     prepared: PreparedContainedTask,
     prerequisites: Vec<PreparedContainedTask>,
-    interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
+    standard_pack: super::standard_pack::RunStandardPack,
     task_id: IssuedTaskId,
     run_id: IssuedRunId,
     run_links: RuntimeRunLinks,
@@ -1198,6 +1278,17 @@ impl CaptureEvidenceAccumulator {
     }
 }
 
+/// #411 A64 (ruling C-43): whether the run's execution ended because the run reached its deadline.
+fn reached_deadline(
+    execution: &Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>>,
+) -> bool {
+    matches!(
+        execution,
+        Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
+            if failure.error.projection().code == RuntimeErrorCode::ContainedTaskDeadlineExceeded
+    )
+}
+
 /// #411 A34: the capture summary of a run that ends failed or cancelled. A capacity refusal that
 /// left it unfinished (the run's refused frame write, or a refused pin or summary write) does
 /// not keep the run from its terminal: the run commits its terminal without a summary and keeps
@@ -1263,7 +1354,20 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) diagnostic_frame: Option<IssuedFrameId>,
     geometry_session: Option<CaptureGeometrySessionRef>,
     geometry_frame: Option<TaskGeometryFrame>,
-    geometry_initial: Option<(CaptureExtent, CaptureGeometryObservation)>,
+    /// The frame extent and the display geometry the run's input prerequisite holds to: the
+    /// first frame's, and (Workflow #392 DA-2a, model 392 v1.2 §0.2 C2) each changed frame's once
+    /// its geometry was read again and its map rebuilt.
+    geometry_current: Option<(CaptureExtent, CaptureGeometryObservation)>,
+    /// Workflow #392 DA-2a: what the run's display map was last built on (the frame's size and
+    /// its producer's geometry), and that map; `None` before the first frame, and the map `None`
+    /// when the adapter could not build one (the kernel's frame gate then refuses the frame).
+    geometry_basis: Option<actingcommand_display_adapter::DisplayObservation>,
+    geometry_map: Option<actingcommand_display_adapter::DisplayMap>,
+    /// Workflow #392 DA-2a (model 392 v1.2 §4.1): the run's game's display declaration, read in
+    /// its preparation and fixed for the run, and the run's package base, which every layer of
+    /// the run shares.
+    display_layout: Option<actingcommand_contract::StandardPackDisplayLayout>,
+    display_base: Option<CaptureExtent>,
     geometry_deadline: Option<Instant>,
     geometry_rechecked: bool,
     input_step_action_id: Option<ActionId>,
@@ -1362,6 +1466,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     /// Test plan E-3 (EXEC-I3): the run's own clock.
     fn monotonic_now(&mut self) -> Instant {
         self.inner.monotonic_now()
+    }
+
+    /// Workflow #392 DA-2a: an entry recovery layer maps its frames under the run's declaration.
+    fn display_layout(&self) -> Option<&actingcommand_contract::StandardPackDisplayLayout> {
+        self.inner.display_layout()
     }
 
     /// Test plan E-3: the run's own waits.
@@ -1694,6 +1803,22 @@ fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
     }
 }
 
+/// Workflow #392 DA-2a (register §1.25 X8): what changed between the display the run's map was
+/// built on and the frame's: its size (the frame's, its display's or its crop), else its rotation,
+/// else its insets.
+fn display_change(
+    before: &actingcommand_display_adapter::DisplayObservation,
+    after: &actingcommand_display_adapter::DisplayObservation,
+) -> TaskGeometryRecheckTrigger {
+    if before.frame != after.frame || before.display != after.display || before.crop != after.crop {
+        TaskGeometryRecheckTrigger::ExtentChanged
+    } else if before.rotation != after.rotation {
+        TaskGeometryRecheckTrigger::RotationChanged
+    } else {
+        TaskGeometryRecheckTrigger::InsetsChanged
+    }
+}
+
 fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> RuntimeHostError {
     task_geometry_error(match conclusion {
         TaskGeometryConclusion::AspectMismatch { .. } => {
@@ -1703,6 +1828,58 @@ fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> Runtime
         TaskGeometryConclusion::Unavailable => HostCode::ContainedTaskGeometryUnavailable,
         TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable => {
             HostCode::ContainedTaskGeometryProducerBindingMismatch
+        }
+    })
+}
+
+/// ISO-2 (#419 R1, ISO-M rows A03, E07): a geometry read or check of the run's own capture
+/// producer that failed fatally with its resources confirmed (the emulator died between the
+/// run's capture and the read) fails only the run, as a task-geometry failure:
+/// `contained_task_geometry_unavailable`, caused by the read's failure. An unconfirmed close
+/// (its fence is the instance's) and a `Global` failure keep their fatality.
+fn geometry_read_failure(error: RuntimeHostError, instance_id: InstanceId) -> RuntimeHostError {
+    if !error.is_fatal()
+        || error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed)
+        || error.scope_at(Some(instance_id)) == crate::FailureScope::Global
+    {
+        return error;
+    }
+    task_geometry_error(HostCode::ContainedTaskGeometryUnavailable).with_caused_by(error.outcome())
+}
+
+/// Workflow #392 DA-4b-D: a declared safe area the frame cannot have, as `display_map_unresolved`
+/// at stage `display_map_build` with the frame's size and its `display_problem`: the file and the
+/// JSON pointer of a broken declaration, the two files of a repeated model, the setting whose model
+/// no file declares (and the directory), or the file of the model that has no form for the frame.
+fn safe_area_refusal(
+    refusal: crate::display_safe_area::SafeAreaRefusal,
+    model_key: &str,
+    width: u32,
+    height: u32,
+) -> RuntimeHostError {
+    use crate::display_safe_area::SafeAreaRefusal;
+    use actingcommand_display_adapter::{DisplayCode, DisplayLocation, DisplayProblem};
+    task_geometry_error(DisplayCode::MapUnresolved).with_outcome_values(|outcome| {
+        let outcome = outcome
+            .stage(DisplayLocation::MapBuild)
+            .frame_width(width)
+            .frame_height(height);
+        match refusal {
+            SafeAreaRefusal::DeclarationInvalid { path, json_pointer } => outcome
+                .display_problem(DisplayProblem::SafeAreaDeclarationInvalid)
+                .path(path)
+                .json_pointer(json_pointer),
+            SafeAreaRefusal::ModelRepeated { path, other_path } => outcome
+                .display_problem(DisplayProblem::SafeAreaModelRepeated)
+                .path(path)
+                .other_path(other_path),
+            SafeAreaRefusal::ModelUndeclared { directory } => outcome
+                .display_problem(DisplayProblem::SafeAreaModelUndeclared)
+                .config_key(model_key)
+                .path(directory),
+            SafeAreaRefusal::FormUndeclared { path } => outcome
+                .display_problem(DisplayProblem::SafeAreaFormUndeclared)
+                .path(path),
         }
     })
 }
@@ -1832,12 +2009,16 @@ impl RuntimeContainedTask<'_> {
             .map_err(|error| RuntimeHostError::execution(HostLocation::ObserveTaskGeometry, &error))
     }
 
+    /// Records one task geometry observation. Workflow #392 DA-2a (register §1.25 X7): a passed
+    /// observation names `display_map`, the map its frame was built under, when that map is not
+    /// the plain identity; the identity leaves the record as it was, byte for byte.
     fn record_task_geometry(
         &self,
         phase: TaskGeometryPhase,
         trigger: Option<TaskGeometryRecheckTrigger>,
         original_failure: Option<TaskGeometryFailure>,
         result: &RuntimeHostResult<CaptureGeometryObservation>,
+        display_map: Option<&actingcommand_display_adapter::DisplayMap>,
     ) -> Result<(TaskGeometryConclusion, PersistedEvent), RequestFailure> {
         if let Err(error) = result {
             // Preserve the original fatal/Unconfirmed boundary before attempting another fact.
@@ -1860,7 +2041,14 @@ impl RuntimeContainedTask<'_> {
                 UnconfirmedResources::Retained => {
                     return Err(RequestFailure::poison_without_terminal(error.clone()));
                 }
-                UnconfirmedResources::Confirmed if error.is_fatal() => {
+                // ISO-2 (#419, ISO-M rows A03, E07): a read of the run's own producer that
+                // failed fatally with its resources confirmed is recorded as the geometry
+                // observation below and fails only the run; a `Global` failure poisons.
+                UnconfirmedResources::Confirmed
+                    if error.is_fatal()
+                        && error.scope_at(Some(self.token.instance_id()))
+                            == crate::FailureScope::Global =>
+                {
                     return Err(RequestFailure::poison_without_terminal(error.clone()));
                 }
                 UnconfirmedResources::Confirmed => {}
@@ -1877,6 +2065,15 @@ impl RuntimeContainedTask<'_> {
             ),
             Err(_) => TaskGeometryConclusion::Unavailable,
         };
+        let display_map = display_map
+            .filter(|map| {
+                !map.is_plain_identity()
+                    && matches!(
+                        conclusion,
+                        TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable
+                    )
+            })
+            .map(actingcommand_display_adapter::DisplayMap::record);
         let mut links = self.links();
         if let Some(frame) = self.last_frame_id {
             links = links.with_frame_id(frame);
@@ -1908,7 +2105,7 @@ impl RuntimeContainedTask<'_> {
                             trigger,
                             original_failure,
                             unavailable: result.as_ref().err().map(task_geometry_failure_ref),
-                            display_map: None,
+                            display_map,
                         }),
                     },
                     AuditInput::new(),
@@ -1936,6 +2133,92 @@ impl RuntimeContainedTask<'_> {
                 })?;
         }
         Ok((conclusion, event))
+    }
+
+    /// Workflow #392 DA-4b-D (Alice's ruling 69 of 2026-10-26; `contracts/display-adapter.md`
+    /// section 9): the declared safe area of a frame. Only a run whose game's display declaration
+    /// measures the scale or the anchors on the safe area asks; a `screen` declaration, a run
+    /// without one and a frame without its producer's geometry are never touched. The insets are
+    /// stamped on the frame's own geometry (`safe_insets`), where the run's display map and the
+    /// kernel's frame gate read them, so a change of them is the map's `insets_changed` rebuild
+    /// (DA-2a's C2 path) from the next frame:
+    ///
+    /// - an instance that declares a device model (`instance.<id>.display_safe_area.model`, read
+    ///   at every frame) takes the insets its declaration file gives the frame's display size and
+    ///   rotation, from the directory as last read (`display_safe_area.check_interval_ms`); a
+    ///   broken directory, a model in two files or in none, or no form for the frame ends the run
+    ///   before any input, `display_map_unresolved` with its `display_problem`;
+    /// - an emulator that declares none needs no file: its insets are 0;
+    /// - a handset that declares none keeps no insets, and DA-2a's check ends the run
+    ///   `contained_task_geometry_unavailable` (`safe_area_unavailable`).
+    ///
+    /// The Runtime never reads the device's cutout and never guesses its model.
+    fn declare_safe_area(&self, frame: &mut Frame) -> Result<(), RequestFailure> {
+        let safe_area = actingcommand_contract::DisplayArea::SafeArea;
+        if !self
+            .display_layout
+            .as_ref()
+            .is_some_and(|layout| layout.scale.area == safe_area || layout.anchor_area == safe_area)
+        {
+            return Ok(());
+        }
+        let (width, height) = (frame.width, frame.height);
+        let CaptureGeometryObservation::Observed(geometry) = &mut frame.geometry else {
+            return Ok(());
+        };
+        let failure = |error: RuntimeHostError| task_geometry_request_failure(error, None);
+        let instance_id = self.token.instance_id();
+        let settings = self
+            .host
+            .display_safe_area_settings(instance_id)
+            .map_err(failure)?;
+        let Some(model) = settings.model.as_deref() else {
+            let handset = lock(
+                &self.host.registered_instances,
+                HostLocation::ReadPreparationInstance,
+            )
+            .map_err(failure)?
+            .get(&instance_id)
+            .and_then(RegisteredInstance::bound_adb_endpoint)
+            .and_then(ResolvedAdbEndpoint::handset)
+            .is_some();
+            if !handset {
+                geometry.safe_insets = Some(crate::display_safe_area::EMULATOR_INSETS);
+            }
+            return Ok(());
+        };
+        let rotation = match geometry.rotation {
+            actingcommand_contract::CaptureRotationObservation::Observed { rotation, .. } => {
+                Some(rotation)
+            }
+            actingcommand_contract::CaptureRotationObservation::NotProvidedBySource => None,
+        };
+        let now_ms = self.host.monotonic_ms().map_err(failure)?;
+        let insets = lock(
+            &self.host.display_safe_area,
+            HostLocation::ObserveTaskGeometry,
+        )
+        .map_err(failure)?
+        .insets(
+            &settings.directory,
+            now_ms,
+            settings.check_interval_ms,
+            model,
+            geometry.logical_display_extent,
+            rotation,
+        );
+        match insets {
+            Ok(insets) => {
+                geometry.safe_insets = Some(insets);
+                Ok(())
+            }
+            Err(refusal) => Err(failure(safe_area_refusal(
+                refusal,
+                &settings.model_key,
+                width,
+                height,
+            ))),
+        }
     }
 
     fn retain_task_geometry(
@@ -1988,19 +2271,63 @@ impl RuntimeContainedTask<'_> {
         if self.geometry_session.is_none() {
             self.geometry_session = Some(session);
         }
-        if self.geometry_initial.is_some() {
-            return Ok(());
-        }
+        // Workflow #392 DA-2a (model 392 v1.2 §0.2 C2, §6.6, §7): the run's display map holds
+        // while its frame's size and its producer's rotation, crop and insets hold. A frame that
+        // changes any of them reads the display's geometry again, records the change (`changed`,
+        // its trigger the first change of size, rotation or insets) and rebuilds the map; the run
+        // goes on.
+        let basis =
+            actingcommand_display_adapter::DisplayObservation::of_frame(extent, &frame.geometry);
+        let (phase, trigger) = match &self.geometry_basis {
+            None => (TaskGeometryPhase::Initial, None),
+            Some(current) if *current == basis => return Ok(()),
+            Some(current) => (
+                TaskGeometryPhase::Changed,
+                Some(display_change(current, &basis)),
+            ),
+        };
         // Workflow #392 DA-A: no frame is refused for its aspect ratio, so every first frame
         // reads its display's geometry.
         let result = self.read_task_geometry(true);
-        let (conclusion, event) =
-            self.record_task_geometry(TaskGeometryPhase::Initial, None, None, &result)?;
+        let map = self.display_base.map(|base| {
+            actingcommand_display_adapter::DisplayMap::build(
+                base,
+                basis,
+                self.display_layout
+                    .as_ref()
+                    .map(actingcommand_display_adapter::DisplayRule::from),
+            )
+        });
+        let (conclusion, event) = self.record_task_geometry(
+            phase,
+            trigger,
+            None,
+            &result,
+            map.as_ref().and_then(|map| map.as_ref().ok()),
+        )?;
         match (conclusion, result) {
             (
                 TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable,
                 Ok(value),
             ) => {
+                // Workflow #392 DA-2a (model 392 v1.2 §4.5): a declaration that measures on the
+                // safe area needs insets, which no capture backend reads before DA-4b.
+                if matches!(
+                    map,
+                    Some(Err(
+                        actingcommand_display_adapter::DisplayMapError::SafeAreaUnavailable
+                    ))
+                ) {
+                    return Err(task_geometry_request_failure(
+                        task_geometry_error(HostCode::ContainedTaskGeometryUnavailable)
+                            .with_outcome_values(|outcome| {
+                                outcome.display_problem(
+                                    actingcommand_display_adapter::DisplayProblem::SafeAreaUnavailable,
+                                )
+                            }),
+                        Some(&event),
+                    ));
+                }
                 if conclusion == TaskGeometryConclusion::Pass {
                     self.host
                         .publish_display_facts(
@@ -2012,10 +2339,15 @@ impl RuntimeContainedTask<'_> {
                         .map_err(|error| task_geometry_request_failure(error, Some(&event)))?;
                 }
                 // Only a confirmed GlobalLedger commit opens the input prerequisite.
-                self.geometry_initial = Some((extent, value));
+                self.geometry_current = Some((extent, value));
+                self.geometry_basis = Some(basis);
+                self.geometry_map = map.and_then(Result::ok);
                 Ok(())
             }
-            (_, Err(error)) => Err(task_geometry_request_failure(error, Some(&event))),
+            (_, Err(error)) => Err(task_geometry_request_failure(
+                geometry_read_failure(error, self.token.instance_id()),
+                Some(&event),
+            )),
             (conclusion, Ok(_)) => Err(task_geometry_request_failure(
                 task_geometry_conclusion_error(conclusion),
                 Some(&event),
@@ -2030,16 +2362,43 @@ impl RuntimeContainedTask<'_> {
                 None,
             )
         };
-        let (initial_extent, initial_observation) =
-            self.geometry_initial.as_ref().ok_or_else(failure)?;
+        // Workflow #392 DA-2a (model 392 v1.2 §0.2 C2): the current geometry is the last one the
+        // run's map was rebuilt on, so a frame of a changed size no longer fails here.
+        let (current_extent, current_observation) =
+            self.geometry_current.as_ref().ok_or_else(failure)?;
         let frame = self.geometry_frame.as_ref().ok_or_else(failure)?;
         let session = self.geometry_session.as_ref().ok_or_else(failure)?;
         if self.last_frame_id.map(|id| *id.transport()) != Some(frame.frame_id)
-            || frame.extent != *initial_extent
+            || frame.extent != *current_extent
         {
             return Err(failure());
         }
-        let conclusion = TaskGeometryObservation::assess(frame, initial_observation);
+        // Workflow #392 DA-2a: the input side maps nothing to the device frame before DA-3, so
+        // an input is made only on a frame whose map is the plain identity; under a pure scale the
+        // step sends nothing and the run ends.
+        let map = self.geometry_map.as_ref().ok_or_else(failure)?;
+        if !map.is_plain_identity() {
+            return Err(task_geometry_request_failure(
+                RuntimeHostError::request(
+                    actingcommand_display_adapter::DisplayCode::MapUnresolved,
+                    HostLocation::ValidateTaskGeometryInput,
+                    RuntimeErrorCode::BackendOperationFailed,
+                )
+                .with_outcome_values(|outcome| {
+                    outcome
+                        .display_problem(
+                            actingcommand_display_adapter::DisplayProblem::InputScaleUnsupported,
+                        )
+                        .stage(actingcommand_display_adapter::DisplayLocation::InputMap)
+                        .frame_width(map.frame().width())
+                        .frame_height(map.frame().height())
+                        .base_width(map.base().width())
+                        .base_height(map.base().height())
+                }),
+                None,
+            ));
+        }
+        let conclusion = TaskGeometryObservation::assess(frame, current_observation);
         if !matches!(
             (self.execution_provenance, conclusion),
             (
@@ -2060,7 +2419,13 @@ impl RuntimeContainedTask<'_> {
             .validate_capture_geometry_session(session, self.geometry_deadline.ok_or_else(failure)?)
             .map_err(|error| {
                 task_geometry_request_failure(
-                    RuntimeHostError::execution(HostLocation::ValidateTaskGeometryInput, &error),
+                    geometry_read_failure(
+                        RuntimeHostError::execution(
+                            HostLocation::ValidateTaskGeometryInput,
+                            &error,
+                        ),
+                        self.token.instance_id(),
+                    ),
                     None,
                 )
             })
@@ -2120,6 +2485,7 @@ impl RuntimeContainedTask<'_> {
             Some(trigger),
             Some(task_geometry_failure_ref(&primary)),
             &result,
+            None,
         ) {
             let observation_context = failure.error.lifecycle.as_ref();
             let mut preserved_primary = primary.clone();
@@ -3501,6 +3867,11 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
 
+    /// Workflow #392 DA-2a: the declaration the run's preparation read.
+    fn display_layout(&self) -> Option<&actingcommand_contract::StandardPackDisplayLayout> {
+        self.display_layout.as_ref()
+    }
+
     /// Test plan E-3 (EXEC-I3, test plan §3.10): every timer of the kernel reads the Runtime
     /// clock (`RuntimeHostConfig::with_runtime_clock`). A failed read is kept and ends the run
     /// at its next capture, input or record; until then the kernel sees the clock's origin.
@@ -3558,6 +3929,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// extra wait rounds in effect (0 under `observe`) and the pre-input wait
     /// `pre_input_wait_base_ms × (f − 1000) / 1000`, whose base is read only for a factor above
     /// 1000.
+    ///
+    /// PERF-B1 (Workflow #407 B1): and the `execution.capture` keys in effect, the ceiling of a
+    /// declared capture interval and the back-off of the step's waits for a page.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
@@ -3575,12 +3949,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } else {
                 0
             };
+        // PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, with the step.
+        let capture_cadence = self
+            .host
+            .capture_cadence()
+            .map_err(RequestFailure::poison_without_terminal)?;
         let now = self
             .pacing
             .reads_clock(effective.factor_milli)
             .then(|| self.monotonic_now());
         self.pacing.hand(effective.factor_milli, now);
-        Ok(effective.step_pacing(retries, pre_input_wait_base_ms))
+        Ok(effective
+            .step_pacing(retries, pre_input_wait_base_ms)
+            .with_capture_cadence(capture_cadence))
     }
 
     /// #385 P-k (PERF v1.4.2 §5.4 item 1, register P5): a wait of the run started one more
@@ -3800,7 +4181,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             self.run_id.transport(),
                         )
                         .map_err(online_observation::observation_artifact_failure)?,
-                        frame_retention::capture_frame_store_config(),
+                        self.host.capture_frame_store_config(),
                     )
                     .map_err(online_observation::observation_artifact_failure)?,
                 );
@@ -3884,8 +4265,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                             .take()
                                             .expect("capture memory owner prepared"),
                                         CapturePipelineConfig {
-                                            frame_store:
-                                                frame_retention::capture_frame_store_config(),
+                                            frame_store: self.host.capture_frame_store_config(),
                                             retention_class: RetentionClass::DebugFull,
                                             redaction_state: ArtifactRedactionState::NotRequired,
                                             ..CapturePipelineConfig::default()
@@ -4010,7 +4390,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     })();
                     self.task_timing
                         .finish_boundary(material_started, material.is_ok());
-                    let frame = material?;
+                    let mut frame = material?;
+                    self.declare_safe_area(&mut frame.frame)?;
                     self.retain_task_geometry(&frame, frame_id, geometry_session)?;
                     Ok(frame)
                 }
@@ -4051,7 +4432,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     // instance's capture self-check `failed` (above), and a scheduled run's
                     // failure goes to the recovery ladder by the configuration
                     // (`task_capture_backend`). Every other cause keeps its fatality: that is the
-                    // capture service as a whole.
+                    // capture service as a whole. ISO-2 (#419 R1, ISO-M rows A01, E11-E13): so
+                    // does the instance's own session that died (its thread panicked, ended or
+                    // lost its reply; its state lock poisoned), is being closed by another owner,
+                    // or no longer matches the instance's endpoint. The failure's close above
+                    // retired that session, and the next capture opens a fresh one.
                     if spelled(
                         error.code().as_str(),
                         &[
@@ -4059,6 +4444,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
                             SharedCode::CaptureBackendOperationFailed.code(),
                             SharedCode::CaptureFrameInvalid.code(),
+                            ExecutionKernelCode::ExecutionSessionPanicked.code(),
+                            ExecutionKernelCode::ExecutionSessionStatePoisoned.code(),
+                            ExecutionKernelCode::ExecutionSessionClosed.code(),
+                            ExecutionKernelCode::ExecutionSessionUnavailable.code(),
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                            ExecutionKernelCode::ExecutionSessionCloseInProgress.code(),
+                            ExecutionKernelCode::ExecutionInstanceIdentityMismatch.code(),
                         ],
                     ) {
                         // #316-P4: a physical instance's first capture probes the ADB baseline
@@ -4264,11 +4656,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .execution()?
             .resolve_input_frame(self.instance_alias, reference)
             .map(Some)
+            // ISO-2 (#419, ISO-M rows A05, E16): a resolve refused by the instance's session
+            // fails only this operation.
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                RequestFailure::frame_handoff(
                     HostLocation::ResolveCommittedInputFrame,
                     &error,
-                ))
+                    Some(self.token.instance_id()),
+                )
             })
     }
 
@@ -4531,11 +4926,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             FrameOwner::Lease,
                         )
                         .map(|_| ())
+                        // ISO-2 (#419, ISO-M row A05): a commit refused by the instance's
+                        // session fails only this run.
                         .map_err(|error| {
-                            RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                            RequestFailure::frame_handoff(
                                 HostLocation::CommitCaptureInputFrame,
                                 &error,
-                            ))
+                                Some(self.token.instance_id()),
+                            )
                         })
                 })();
                 self.task_timing.finish_boundary(observed, result.is_ok());
@@ -6118,9 +6516,10 @@ impl HostShared {
         )?;
         active_run.control.note_package_load(package_load);
         // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation;
-        // Workflow #373 NAV-5: with its navigation data, which replaces the return-home fallback.
-        let interrupts = self.prepare_run_interrupts(&prepared)?;
-        let navigated = super::navigation::navigation_applies(interrupts.as_deref());
+        // Workflow #373 NAV-5: with its navigation data, which replaces the return-home fallback;
+        // Workflow #392 DA-2a: with its game's display declaration.
+        let standard_pack = self.prepare_run_interrupts(&prepared)?;
+        let navigated = super::navigation::navigation_applies(standard_pack.interrupts.as_deref());
         let prerequisites =
             self.resolve_prerequisite_chain(instance_alias, &prepared, navigated, || {
                 self.package_material_deadline(active_run.control.deadline())
@@ -6187,7 +6586,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_request,
             token,
             task_id,
@@ -6424,8 +6823,9 @@ impl HostShared {
             self.resolve_prerequisite_chain(instance_alias, &prepared, false, || {
                 Ok(material_deadline)
             })?;
-        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
-        let interrupts = self.prepare_run_interrupts(&prepared)?;
+        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation
+        // (Workflow #392 DA-2a: with its game's display declaration).
+        let standard_pack = self.prepare_run_interrupts(&prepared)?;
         if pending.recovery_rung {
             let (capture, input) = prepared.recovery_entry_channels();
             if let Some(code) = self
@@ -6513,7 +6913,7 @@ impl HostShared {
             task_request_message,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_id,
             run_id,
             run_links,
@@ -6545,7 +6945,7 @@ impl HostShared {
             task_request_message,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_id,
             run_id,
             run_links,
@@ -6596,7 +6996,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             &task_request,
             token,
             task_id,
@@ -6793,7 +7193,7 @@ impl HostShared {
             .control
             .set_deadline(source_deadline)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let (prepared, prerequisites, package_load, interrupts) = match prepared {
+        let (prepared, prerequisites, package_load, standard_pack) = match prepared {
             Some(prepared) => prepared,
             None => self.prepare_scheduled_package(
                 context.decision_id(),
@@ -6893,7 +7293,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
-            interrupts,
+            standard_pack,
             task_request,
             token.clone(),
             context.issued_task_id(),
@@ -6926,7 +7326,7 @@ impl HostShared {
         connection_id: ConnectionId,
         prepared: PreparedContainedTask,
         prerequisites: Vec<PreparedContainedTask>,
-        interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
+        standard_pack: super::standard_pack::RunStandardPack,
         task_request: &ContainedTaskRequest,
         token: LeaseToken,
         task_id: IssuedTaskId,
@@ -7004,7 +7404,14 @@ impl HostShared {
             diagnostic_frame: None,
             geometry_session: None,
             geometry_frame: None,
-            geometry_initial: None,
+            geometry_current: None,
+            geometry_basis: None,
+            geometry_map: None,
+            display_layout: standard_pack.display_layout,
+            display_base: {
+                let (width, height) = prepared.resolution();
+                CaptureExtent::new(width, height)
+            },
             geometry_deadline: None,
             geometry_rechecked: false,
             input_step_action_id: None,
@@ -7024,7 +7431,7 @@ impl HostShared {
             step_index_offset: 0,
             executed_steps: Some(0),
             own_executed_steps: None,
-            interrupts,
+            interrupts: standard_pack.interrupts,
             interrupt_steps: 0,
             interrupt_configurations: 0,
             planned_steps,
@@ -7192,6 +7599,23 @@ impl HostShared {
         if let Some(reduction) = runtime.pacing.reduction {
             control.note_paced_reduction(reduction);
         }
+        // #411 A64 (ruling C-43): a run that reached its deadline enters its end phase before any
+        // of its end work; its end runs under the lease its end grace renewed (`end_token`).
+        let end_token = if reached_deadline(&execution) {
+            Some(self.enter_run_end_phase(request, &token, connection_id, &control)?)
+        } else {
+            None
+        };
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::EndWork,
+            ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
@@ -7214,6 +7638,16 @@ impl HostShared {
         } else {
             runtime.finish_diagnostic(&execution)
         };
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::DiagnosticEnded,
+            ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         if let Err(mut failure) = diagnostic_result {
             failure.error = Box::new(match &execution {
                 Err(ContainedTaskRunError::Task(error)) => {
@@ -7285,6 +7719,8 @@ impl HostShared {
             .collect::<Vec<_>>();
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
+        // #411 A64 (ruling C-43): the terminal and the lease end use the renewed token.
+        let token = end_token.unwrap_or(token);
         let outcome = match execution {
             Ok(outcome) => outcome,
             Err(
@@ -8777,68 +9213,168 @@ impl HostShared {
         )
     }
 
-    /// Workflow #338 R3 (#343-1): at start, settles the direct contained runs the previous
-    /// owner epoch first recorded and never terminated: `task.terminal_intent` and
-    /// `task.cancelled` (`contained_task_recovered_after_restart`) on the run's original links,
-    /// then a lease release when an actual grant has no terminal. The scan is bounded to the previous
-    /// epoch, the events between the last two `runtime.started` / `runtime.takeover` events
-    /// (the later one is this start's); older epochs are not reached. A run of the scheduler
-    /// chain (one with a `policy.dispatch_intent` on its run or request) keeps the policy dispatch
-    /// reconciliation, and a run of an instance this start did not register stays open. A run
-    /// settled once has its terminal and lies before the next start's previous epoch, so no
-    /// restart settles it again. Any failure fails the start.
+    /// Workflow #338 R3 (#343-1): at start, settles the direct contained runs first recorded
+    /// since the last start that completed this settlement and never terminated:
+    /// `task.terminal_intent` and `task.cancelled` (`contained_task_recovered_after_restart`) on
+    /// the run's original links, then a lease release when an actual grant has no terminal. A
+    /// run of the scheduler chain (one with a `policy.dispatch_intent` on its run or request)
+    /// keeps the policy dispatch reconciliation, and a run of an instance this start did not
+    /// register stays open. Any failure fails the start.
+    ///
+    /// #411 A65:
+    /// - R3: the scan begins after the start event of the last start that completed this
+    ///   settlement, which `host.contained_settlement` names; a start that failed after
+    ///   appending its own start event recorded no such fact, so the epochs before it are
+    ///   scanned again. Without the fact (an old ledger no start of this build settled, also
+    ///   when its first start of this build failed before it settled) one paged scan reads the
+    ///   task semantic events of the whole ledger, never only the last two starts' epoch
+    ///   (Codex's counterexample on #420), and the fact is then written. The scan ends before
+    ///   this start's start event (the last one). A run settled once has its terminal, so a
+    ///   later scan that reaches it again leaves it.
+    /// - R1: every read is a ledger page; a page the writer's read budget stopped is read again
+    ///   smaller ([`LedgerPages`]).
+    /// - R2: a ledger failure keeps the ledger's own failure as its cause.
     pub(super) fn settle_previous_epoch_contained_runs(&self) -> RuntimeHostResult<()> {
+        let through = self
+            .ledger
+            .latest_sequence()
+            .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?;
         let mut starts = Vec::new();
         for event_type in [EventType::RuntimeStarted, EventType::RuntimeTakeover] {
             starts.extend(
-                self.ledger
-                    .query(EventQuery {
+                LedgerPages::new(
+                    &self.ledger,
+                    EventQuery {
                         event_type: Some(event_type),
                         ..EventQuery::default()
-                    })
-                    .map_err(|_| ledger_error(PREVIOUS_EPOCH_SETTLEMENT_OPERATION))?
-                    .iter()
-                    .map(PersistedEvent::sequence),
+                    },
+                    0,
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+                .read_all()
+                .map_err(|error| {
+                    ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error)
+                })?
+                .iter()
+                .map(PersistedEvent::sequence),
             );
         }
-        starts.sort_unstable();
-        let [.., previous, current] = starts.as_slice() else {
+        let Some(current) = starts.into_iter().max() else {
             return Ok(());
         };
-        if current.saturating_sub(*previous) < 2 {
+        // Without the anchor the scan begins at the ledger's start (sequence 0 precedes every
+        // event), so no earlier start's own start event can hide an older epoch.
+        let previous = self.contained_settlement_anchor(current)?.unwrap_or(0);
+        if current.saturating_sub(previous) >= 2 {
+            self.settle_contained_runs_between(previous, current)?;
+        }
+        #[cfg(test)]
+        if self.contained_settlement_unrecorded_for_test {
             return Ok(());
         }
-        let events = self
-            .ledger
-            .query(EventQuery {
-                from_sequence: Some(previous + 1),
+        self.record_contained_settlement(current)
+    }
+
+    /// The direct contained runs whose first task semantic fact lies after the event at
+    /// `previous` (a start event, or 0 for the ledger's start) and before the start event at
+    /// `current`, settled in ledger order, the range read page by page.
+    fn settle_contained_runs_between(&self, previous: u64, current: u64) -> RuntimeHostResult<()> {
+        let mut pages = LedgerPages::new(
+            &self.ledger,
+            EventQuery {
+                from_sequence: Some(previous.saturating_add(1)),
                 to_sequence: Some(current - 1),
                 ..EventQuery::default()
-            })
-            .map_err(|_| ledger_error(PREVIOUS_EPOCH_SETTLEMENT_OPERATION))?;
+            },
+            previous,
+            current - 1,
+            RECOVERY_PAGE_EVENTS,
+        );
         let mut requests = BTreeSet::new();
-        for event in &events {
-            if !matches!(
-                event.payload(),
-                EventPayload::Task(TaskPayload::Semantic(_))
-            ) {
-                continue;
+        while let Some(page) = pages
+            .next_page()
+            .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?
+        {
+            for event in &page {
+                if !matches!(
+                    event.payload(),
+                    EventPayload::Task(TaskPayload::Semantic(_))
+                ) {
+                    continue;
+                }
+                let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
+                    .ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            HostCode::ContainedTaskIdentityMissing,
+                            PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                            RuntimeErrorCode::RuntimeHalted,
+                        )
+                    })?;
+                if !requests.insert(identity.request_id) {
+                    continue;
+                }
+                self.settle_previous_epoch_contained_run(event)
+                    .map_err(|failure| *failure.error)?;
             }
-            let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
-                .ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        HostCode::ContainedTaskIdentityMissing,
-                        PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                        RuntimeErrorCode::RuntimeHalted,
-                    )
-                })?;
-            if !requests.insert(identity.request_id) {
-                continue;
-            }
-            self.settle_previous_epoch_contained_run(event)
-                .map_err(|failure| *failure.error)?;
         }
         Ok(())
+    }
+
+    /// #411 A65 (R3): the start event sequence `host.contained_settlement` names, the start
+    /// that last completed this settlement; `None` without the fact. A fact that is not the
+    /// Runtime's integer, or names no start before `current`, is
+    /// `contained_settlement_anchor_invalid`.
+    fn contained_settlement_anchor(&self, current: u64) -> RuntimeHostResult<Option<u64>> {
+        let recorded = lock(&self.runtime_facts, PREVIOUS_EPOCH_SETTLEMENT_OPERATION)?
+            .get(&RuntimeFactScope::Runtime, CONTAINED_SETTLEMENT_FACT_KEY)
+            .cloned();
+        let Some(recorded) = recorded else {
+            return Ok(None);
+        };
+        let anchor = match &recorded.value {
+            ContractFactValue::Integer(anchor) if recorded.source == OriginModule::Runtime => {
+                u64::try_from(*anchor).ok()
+            }
+            _ => None,
+        };
+        anchor
+            .filter(|anchor| *anchor < current)
+            .map(Some)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::ContainedSettlementAnchorInvalid,
+                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+            })
+    }
+
+    /// #411 A65 (R3): records `host.contained_settlement`, the start event sequence of this
+    /// start (`current`), once its settlement has completed.
+    fn record_contained_settlement(&self, current: u64) -> RuntimeHostResult<()> {
+        let anchor = i64::try_from(current).map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::ContainedSettlementAnchorInvalid,
+                PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let now = self.clock.sample()?.unix_ms;
+        let previous = lock(&self.runtime_facts, PREVIOUS_EPOCH_SETTLEMENT_OPERATION)?
+            .get(&RuntimeFactScope::Runtime, CONTAINED_SETTLEMENT_FACT_KEY)
+            .map(|record| record.observed_at_unix_ms);
+        let observed_at_unix_ms =
+            previous.map_or(now, |previous| now.max(previous.saturating_add(1)));
+        self.record_runtime_fact_with_event(RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONTAINED_SETTLEMENT_FACT_KEY.to_owned(),
+            value: ContractFactValue::Integer(anchor),
+            observed_at_unix_ms,
+            source: OriginModule::Runtime,
+            ttl_ms: None,
+        })
+        .map(|_| ())
     }
 
     fn settle_previous_epoch_contained_run(
@@ -8858,34 +9394,34 @@ impl HostShared {
         let instance_id = *links.instance_id().ok_or_else(identity_missing)?;
         let task_id = *links.task_id().ok_or_else(identity_missing)?;
         let run_id = *links.run_id().ok_or_else(identity_missing)?;
-        let events = self
-            .ledger
-            .query(EventQuery {
-                request_id: Some(request_id),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                ))
-            })?;
+        // #411 A65: each read is paged on one index (R1) and keeps the ledger's cause (R2).
+        let read = |query: EventQuery| -> Result<Vec<PersistedEvent>, RequestFailure> {
+            self.ledger
+                .latest_sequence()
+                .and_then(|through| {
+                    LedgerPages::new(&self.ledger, query, 0, through, RECOVERY_PAGE_EVENTS)
+                        .read_all()
+                })
+                .map_err(|error| {
+                    RequestFailure::poison_without_terminal(ledger_error_caused_by(
+                        PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                        &error,
+                    ))
+                })
+        };
+        let events = read(EventQuery {
+            request_id: Some(request_id),
+            ..EventQuery::default()
+        })?;
         // The scheduler chain: the run of a policy dispatch keeps `reconcile_policy_dispatches`.
-        let policy_intents = self
-            .ledger
-            .query(EventQuery {
-                run_id: Some(run_id),
-                event_type: Some(EventType::PolicyDispatchIntent),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                ))
-            })?;
-        if !policy_intents.is_empty()
-            || events
-                .iter()
-                .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
+        let run_events = read(EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        })?;
+        if run_events
+            .iter()
+            .chain(&events)
+            .any(|event| event.event_type() == EventType::PolicyDispatchIntent)
         {
             return Ok(());
         }
@@ -8975,17 +9511,10 @@ impl HostShared {
         let Some(lease_id) = lease_id else {
             return Ok(());
         };
-        let lease_events = self
-            .ledger
-            .query(EventQuery {
-                lease_id: Some(lease_id),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                ))
-            })?;
+        let lease_events = read(EventQuery {
+            lease_id: Some(lease_id),
+            ..EventQuery::default()
+        })?;
         let granted = lease_events.iter().any(|event| {
             event.event_type() == EventType::LeaseGranted
                 && event.links().instance_id() == Some(&run_identity.instance_id)
@@ -9020,6 +9549,98 @@ impl HostShared {
                 ),
             )),
         }
+    }
+
+    /// #411 A64 (ruling C-43): a run that reached its deadline enters its end phase before any of
+    /// its end work (the diagnostic seal, the capture summary, the terminal, the close), when it
+    /// still holds its lease then (the lease is registered under the run's token). Its control
+    /// notes the phase first, under the scheduler's lock: the lease sweep then leaves the run's
+    /// lease to the run until the end grace (`host_claims.run_end_grace_ms`, the configuration in
+    /// effect) ends. Then the lease is renewed once to the end grace from now, with the renew
+    /// records of a Runtime-held lease, and the run's end uses the renewed token. A refused
+    /// renewal (the lease had lapsed before the end began, and the sweep had not ended it yet) is
+    /// recorded by the renewal and the end goes on under the old token: a lapsed lease then costs
+    /// the instance a fence, never the Runtime.
+    ///
+    /// A lease that had already ended when the run's end began (it lapsed during the run and the
+    /// sweep expired it) is not the end's to hold: the run enters no end phase, attempts no
+    /// renewal and ends as before C-43 (its terminal is refused and its settlement releases the
+    /// lease; #670 final review, test (g)). Any other refusal of the lease's position is left to
+    /// the terminal's own check, which ends the run with it as before. A failure that poisons (a
+    /// ledger failure) ends the run as before.
+    fn enter_run_end_phase(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        control: &ContainedRunControl,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let grace_ms = self
+            .run_end_grace_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let held = {
+            let scheduler = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?;
+            let held = scheduler.connection_for_token(token).is_ok();
+            if held {
+                control.enter_end_phase(RunEndPhase {
+                    lease_id: token.lease_id(),
+                    until_monotonic_ms: now.saturating_add(grace_ms),
+                });
+            }
+            held
+        };
+        if !held {
+            return Ok(token.clone());
+        }
+        match self.renew_held_lease(request, token, connection_id, grace_ms) {
+            Ok(renewed) => Ok(renewed),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => Err(failure),
+            Err(_) => Ok(token.clone()),
+        }
+    }
+
+    /// #411 A64 (ruling C-43): the control of the registered run whose end phase runs under
+    /// `lease_id`.
+    pub(super) fn run_end_control_of_lease(
+        &self,
+        lease_id: LeaseId,
+    ) -> RuntimeHostResult<Option<Arc<ContainedRunControl>>> {
+        Ok(
+            lock(&self.contained_runs, HostLocation::ReadActiveContainedRun)?
+                .values()
+                .find(|control| {
+                    control
+                        .end_phase()
+                        .is_some_and(|phase| phase.lease_id == lease_id)
+                })
+                .cloned(),
+        )
+    }
+
+    /// #411 A64 (ruling C-43): the end phase of the registered run whose end runs under
+    /// `lease_id`, when that run reached its deadline while it held the lease.
+    pub(super) fn run_end_phase_of_lease(
+        &self,
+        lease_id: LeaseId,
+    ) -> RuntimeHostResult<Option<RunEndPhase>> {
+        Ok(self
+            .run_end_control_of_lease(lease_id)?
+            .and_then(|control| control.end_phase()))
+    }
+
+    /// #411 A64 (ruling C-43): whether the lease sweep leaves the lapsed `token` to its run at
+    /// `now`: the run on it is in its end phase and its end grace has not ended.
+    pub(super) fn run_end_keeps_lease(
+        &self,
+        token: &LeaseToken,
+        now: u64,
+    ) -> RuntimeHostResult<bool> {
+        Ok(self
+            .run_end_phase_of_lease(token.lease_id())?
+            .is_some_and(|phase| now < phase.until_monotonic_ms))
     }
 
     fn begin_contained_run(
@@ -9195,14 +9816,40 @@ impl HostShared {
                 .with_run_id(draft.run_id);
             // The task's lease is still current when its terminal is written. Workflow #191 H: the
             // device session stays with the instance; the lease end closes one that must close.
-            let _task_connection = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?
-                .connection_for_token(token)
-                .map_err(|error| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                        HostLocation::ReadTaskLeaseConnection,
-                        &error,
-                    ))
-                })?;
+            // #411 A64 (ruling C-43): a run in its end phase whose lease the sweep expired after its
+            // end grace still commits its terminal, which carries `lease_expired` (naming the
+            // lease) beside the run's own failure; its instance is fenced once the terminal is
+            // committed (below), never the Runtime.
+            let end_phase = self
+                .run_end_phase_of_lease(token.lease_id())
+                .map_err(RequestFailure::poison_without_terminal)?;
+            let task_connection = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?
+                .connection_for_token(token);
+            let lapsed = match task_connection {
+                Ok(_) => None,
+                Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch)
+                    if end_phase.is_some() && !self.fatal.is_shutdown_requested() =>
+                {
+                    Some(
+                        RuntimeHostError::scheduler(
+                            HostLocation::ReadTaskLeaseConnection,
+                            &SchedulerError::LeaseExpired,
+                        )
+                        .naming_lease(token.lease_id()),
+                    )
+                }
+                Err(error) => {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::scheduler(HostLocation::ReadTaskLeaseConnection, &error),
+                    ));
+                }
+            };
+            if let Some(lapse) = &lapsed {
+                draft.failure = draft
+                    .failure
+                    .take()
+                    .map(|failure| failure.joined(CauseRelation::Related, lapse.outcome()));
+            }
             #[cfg(test)]
             self.consume_contained_task_checkpoint_for_test(
                 ContainedTaskCheckpointPoint::BeforeTerminalAppend,
@@ -9325,6 +9972,7 @@ impl HostShared {
                     draft.final_page.as_deref(),
                 )
             });
+            let fence_links = lapsed.as_ref().map(|_| links.clone());
             let terminal_event = self
                 .append_event_under_fact_gate(
                     severity,
@@ -9353,6 +10001,21 @@ impl HostShared {
             for event in &appended {
                 self.observe_pipeline_event(event)
                     .map_err(RequestFailure::poison_without_terminal)?;
+            }
+            // #411 A64 (ruling C-43): the lapsed lease of the run's end fences its instance (the
+            // Workflow #403 instance path); one already fenced by the sweep's expiry stays as it is.
+            if let (Some(mut lapse), Some(fence_links)) = (lapsed, fence_links) {
+                lapse.lifecycle.instance_id = Some(token.instance_id());
+                lapse.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
+                match self
+                    .settle_unconfirmed_resources(&lapse, Some(token.instance_id()), fence_links)
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    UnconfirmedResources::Fenced(_) => {}
+                    UnconfirmedResources::Confirmed | UnconfirmedResources::Retained => {
+                        return Err(RequestFailure::poison_without_terminal(lapse));
+                    }
+                }
             }
             if draft.outcome == TaskOutcome::Failure
                 && let Some(failure) = &draft.failure
@@ -9401,21 +10064,24 @@ impl HostShared {
         draft: &ContainedTaskTerminalDraft,
         links: &EventLinksDraft,
     ) -> Result<ContainedTaskTerminalCheck, RequestFailure> {
-        let chain_events = self
-            .ledger
-            .query(EventQuery {
+        // LN-5 (#422, LEAN-L §3.3): the run's chain is read from the store page by page at the
+        // head; a long run's records are never one command.
+        let chain_events = crate::recovery_read::read_through_head(
+            &self.ledger,
+            &EventQuery {
                 instance_id: Some(token.instance_id()),
                 correlation_id: Some(request.correlation_id()),
                 task_id: Some(*draft.task_id.transport()),
                 run_id: Some(*draft.run_id.transport()),
                 lease_id: Some(token.lease_id()),
                 ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    HostLocation::CheckContainedTaskTerminal,
-                ))
-            })?;
+            },
+        )
+        .map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error(
+                HostLocation::CheckContainedTaskTerminal,
+            ))
+        })?;
         let terminals = chain_events
             .iter()
             .filter_map(|event| match event.payload() {

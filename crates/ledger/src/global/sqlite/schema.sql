@@ -44,6 +44,13 @@ CREATE TABLE ledger_artifacts (
     retention_class TEXT NOT NULL, redaction_state TEXT NOT NULL,
     PRIMARY KEY (sequence, ordinal)
 ) STRICT;
+-- #422 LN-5 (LEAN-L §3.3): artifact identities by their index; an older database gets it at
+-- its first writer open (`CREATE INDEX IF NOT EXISTS`).
+CREATE INDEX ledger_artifacts_artifact ON ledger_artifacts(artifact_id, sequence);
+-- #422 LN-7c F6 (final-query §1.1): capture frames by ingestion time, a plain partial index (no
+-- `ledger_view_*` name, so an older build opens, writes and scrubs a database that has it); an
+-- older database gets it at its first writer open (`CREATE INDEX IF NOT EXISTS`).
+CREATE INDEX ledger_artifacts_created ON ledger_artifacts(created_at_unix_ms, sequence) WHERE kind = 'capture.frame';
 CREATE TABLE ledger_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version TEXT NOT NULL,
@@ -69,3 +76,22 @@ CREATE TABLE ledger_index (
     source_revision INTEGER,
     PRIMARY KEY (role, key)
 ) STRICT, WITHOUT ROWID;
+-- #422 LN-7c R (final-query.md §3): the frame index links of the provenance pointers a record
+-- carries only in its payload, written in the record's batch transaction, and the sequences whose
+-- records' links are all written (`from_sequence..=through_sequence`). An older database gets them
+-- at its first writer open (`IF NOT EXISTS`), which fills them. No `ledger_view_*` name.
+CREATE TABLE IF NOT EXISTS ledger_frame_refs (
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('frame', 'artifact', 'run')),
+    target_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    pointer TEXT NOT NULL CHECK (pointer IN ('summary_frame', 'summary_pin', 'published_artifact',
+        'published_frame', 'reading', 'before_frame', 'preserved_frame', 'read_confirmed')),
+    run_id TEXT,
+    PRIMARY KEY (target_kind, target_id, pointer, sequence)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS ledger_frame_refs_sequence ON ledger_frame_refs(sequence);
+CREATE TABLE IF NOT EXISTS ledger_frame_refs_extent (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    from_sequence INTEGER NOT NULL,
+    through_sequence INTEGER NOT NULL
+) STRICT;

@@ -14,6 +14,9 @@ pub(super) struct FakeState {
     // Workflow #392 DA-A: the frame and display extent of `physical_task_geometry`, 16x9 when
     // not set.
     physical_task_extent: std::sync::Mutex<Option<(u32, u32)>>,
+    // Workflow #392 DA-2a: the frame and display extent once the device took an input, when set
+    // (a display that changes its size during a run).
+    physical_task_extent_after_input: std::sync::Mutex<Option<(u32, u32)>>,
     adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
@@ -102,6 +105,15 @@ pub(super) struct FakeState {
     capture_floors: std::sync::Mutex<Vec<Option<actingcommand_device::CaptureFloor>>>,
     inputs_completed: std::sync::Mutex<Vec<(Instant, usize)>>,
     capture_error_after_input: std::sync::Mutex<Option<DeviceError>>,
+    // ISO-2 (#419): the next capture panics inside the instance's session thread, as a backend
+    // that panics on a dead emulator does (taken once).
+    panic_capture_once: AtomicBool,
+    // ISO-2 (#419): the geometry reads of the instance's captures so far; the read whose number
+    // is `geometry_error_on_read` returns `geometry_error` (taken once), as `wm size` does after
+    // the emulator died between a run's capture and its geometry read.
+    geometry_reads: AtomicUsize,
+    geometry_error_on_read: AtomicUsize,
+    geometry_error: std::sync::Mutex<Option<DeviceError>>,
     // Workflow #373 NAV-6: given a capture's number and the inputs so far, the pixels (index,
     // RGB) the capture shows over the frame the flags above give, such as an overlay.
     pixel_script: std::sync::Mutex<Option<PixelScript>>,
@@ -111,12 +123,21 @@ pub(super) struct FakeState {
 type PixelScript = Arc<dyn Fn(usize, usize) -> Vec<(usize, [u8; 3])> + Send + Sync>;
 
 impl FakeState {
-    /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A).
+    /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A); after an
+    /// input, the extent `physical_task_extent_after_input` gives, when set (Workflow #392 DA-2a).
     fn physical_task_extent(&self) -> (u32, u32) {
-        self.physical_task_extent
+        let changed = *self
+            .physical_task_extent_after_input
             .lock()
-            .expect("fake physical task extent")
-            .unwrap_or((16, 9))
+            .expect("fake physical task extent after input");
+        match changed {
+            Some(extent) if self.input_count.load(Ordering::Acquire) > 0 => extent,
+            _ => self
+                .physical_task_extent
+                .lock()
+                .expect("fake physical task extent")
+                .unwrap_or((16, 9)),
+        }
     }
 }
 
@@ -286,6 +307,9 @@ impl InputBackend for FakeBackend {
 
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
+        if self.state.panic_capture_once.swap(false, Ordering::AcqRel) {
+            panic!("injected capture panic inside the session thread");
+        }
         loop {
             let hold_after = self.state.capture_hold_after.load(Ordering::Acquire);
             if hold_after == 0 || self.state.capture_count.load(Ordering::Acquire) < hold_after {
@@ -455,6 +479,17 @@ impl CaptureBackend for FakeCapture {
             CaptureGeometryObservation, CaptureGeometrySource, CaptureGeometryUnknownReason,
             CaptureRotation, CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
         };
+        let read = self.state.geometry_reads.fetch_add(1, Ordering::AcqRel) + 1;
+        if read == self.state.geometry_error_on_read.load(Ordering::Acquire)
+            && let Some(error) = self
+                .state
+                .geometry_error
+                .lock()
+                .expect("geometry error")
+                .take()
+        {
+            return Err(error);
+        }
         if self.provenance == ExecutionBackendProvenance::FixtureSimulation {
             return Ok(CaptureGeometryObservation::NotApplicable(
                 CaptureGeometryNotApplicable::FixtureSimulation,

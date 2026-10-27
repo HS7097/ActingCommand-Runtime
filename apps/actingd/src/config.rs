@@ -106,6 +106,13 @@ pub(super) struct ActingdConfigFile {
     /// `false`); Lab operation evidence is never deduplicated.
     #[serde(default)]
     frame_retention_dedup_lab: Option<bool>,
+    /// #422 LN-7c Q (`crates/runtime-config`, `frame_retention`): the evidence-frame rule's age in
+    /// days (default 15, `1..=3650`, settable); the configuration mechanism checks and reports it
+    /// in `config.parameters.top_level`.
+    // Interface anchor `actingd-config` revision 16 (contracts/component-interfaces.md): a Runtime
+    // before LN-7c Q refuses a file that names it; a file that does not keeps its revision.
+    #[serde(default)]
+    frame_retention_evidence_max_age_days: Option<serde_json::Value>,
     /// Workflow #389 U-2 (model §4.1): the Lab's two options, option one (authoring) and option
     /// two (debugging); absent means not installed. Read and reported only until U-6
     /// (`crates/runtime-config`, `lab_module`); only the installer's Lab transaction writes them.
@@ -213,10 +220,42 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     emulator_control: Option<actingcommand_runtime_config::EmulatorControlFile>,
+    /// #411 A66: how long a start may take before the watchdog and `actingctl start` call it
+    /// `start_timeout` (`watchdog.start_window_ms`), optional; the defaults file holds the
+    /// default. actingd checks it and never uses it.
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+    // before #411 A66 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    watchdog: Option<actingcommand_runtime_config::watchdog::WatchdogFile>,
+    /// PERF-B1 (Workflow #407 B1): the kernel's keys (`execution.*`), so far its capture cadence:
+    /// the largest capture interval a package may declare and the back-off of a step's wait over
+    /// unchanged frames (`execution.capture.*`), each member optional; the defaults file holds
+    /// every default.
+    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+    // before PERF-B1 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    execution: Option<actingcommand_runtime_config::ExecutionFile>,
+    /// IDLE-1 (Alice's ruling 41): what the Runtime does with an instance that has no task soon
+    /// (`idle.*`), each member optional; the defaults file holds every default.
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
+    // before IDLE-1 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    idle: Option<actingcommand_runtime_config::IdleFile>,
+    /// Workflow #392 DA-4b-D (Alice's ruling 69): where the declared safe areas live and the
+    /// model every instance declares unless it names its own (`display_safe_area.*`), each member
+    /// optional; the defaults file holds every default.
+    // Interface anchor `actingd-config` revision 15 (contracts/component-interfaces.md): a Runtime
+    // before DA-4b-D refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    display_safe_area: Option<actingcommand_runtime_config::DisplaySafeAreaFile>,
     /// Workflow #421 INST-1: the waits, attempts, margins and guard values of `actingctl
     /// install` (`install.*`), each member optional; the defaults file holds every default.
     /// actingd checks the section and never uses it.
-    // Interface anchor `actingd-config` revision 11 (contracts/component-interfaces.md): a Runtime
+    // Interface anchor `actingd-config` revision 17 (contracts/component-interfaces.md): a Runtime
     // before Workflow #421 INST-1 refuses a file that names the section, because the file denies
     // unknown members; a file that does not name it keeps its revision.
     #[serde(default)]
@@ -237,6 +276,13 @@ pub(super) struct ActingdConfigFile {
     /// place of the running executable's (the adb, the default vision root).
     #[serde(skip)]
     install_root_override: Option<PathBuf>,
+}
+
+/// Workflow #375 R5c: the frame classes' dedup switches the file names, else their defaults
+/// (error windows on, Lab output off); a start and `ledger-maintenance` (#422 LN-7c V) read them
+/// alike.
+fn frame_retention_dedup(error: Option<bool>, lab: Option<bool>) -> (bool, bool) {
+    (error.unwrap_or(true), lab.unwrap_or(false))
 }
 
 /// Workflow #387 D1c: one instance's stuck-recovery settings from the rows the configuration
@@ -572,8 +618,17 @@ struct AgentDispatcherConfigFile {
 struct PolicyConfigFile {
     facts: EvaluationFacts,
     resources: EvaluationResources,
-    catalog: PolicyCatalogConfigFile,
+    /// ROUT-L RL-1b (frozen model v1.0 §3.3, §6.4; a dual source for one release): absent means
+    /// composer mode, in which the scheduler workbench composes the rules from the standard
+    /// packs of the games in use (`standard_packs.root` is then required), and
+    /// `catalog_approval_ids` and `procedure_manifest` are absent or empty.
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): an
+    // earlier Runtime refuses a file without it.
+    #[serde(default)]
+    catalog: Option<PolicyCatalogConfigFile>,
+    #[serde(default)]
     catalog_approval_ids: Vec<String>,
+    #[serde(default)]
     procedure_manifest: Vec<ProcedureBindingConfigFile>,
     /// Workflow #361 A: the explicit transition to another catalog id or to a generation that
     /// was active before; absent means the forward-only rule.
@@ -773,6 +828,18 @@ struct InstanceConfig {
     /// (`start_emulator_requires_discovery_binding`); absent is off.
     #[serde(default)]
     start_emulator: Option<bool>,
+    /// IDLE-1: the instance's own idle keys (`instance.<id>.idle.*`); a member it leaves out is
+    /// the `idle` section's.
+    // Interface anchor `actingd-config` revision 12: a Runtime before IDLE-1 refuses an entry
+    // that names it, because the entry denies unknown members.
+    #[serde(default)]
+    idle: Option<actingcommand_runtime_config::IdleFile>,
+    /// Workflow #392 DA-4b-D: the device model the instance declares
+    /// (`instance.<id>.display_safe_area.model`); left out, the `display_safe_area` section's.
+    // Interface anchor `actingd-config` revision 15: a Runtime before DA-4b-D refuses an entry
+    // that names it, because the entry denies unknown members.
+    #[serde(default)]
+    display_safe_area: Option<actingcommand_runtime_config::InstanceDisplaySafeAreaFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
@@ -988,7 +1055,8 @@ pub(super) fn validate_resource_packages(
 
 pub(super) struct PolicyBootstrap {
     pub(super) catalog_approval_ids: Vec<String>,
-    pub(super) catalog: CatalogSources,
+    /// ROUT-L RL-1b: `None` in composer mode, where the scheduler workbench composes the rules.
+    pub(super) catalog: Option<CatalogSources>,
     /// Workflow #361 A: the configured `replace` transition, if any.
     pub(super) catalog_transition: Option<CatalogTransitionRequest>,
     pub(super) scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
@@ -1138,10 +1206,15 @@ impl ActingdConfigFile {
         {
             return Err(ActingdCode::MaintenanceConfigInvalid.code());
         }
-        Ok(RuntimeHostConfig::new(
-            self.state_root,
-            self.secret_fingerprint_salt.as_bytes(),
-        ))
+        // #422 LN-7c V: `verify` checks the frame cleaner's statements with the file's switches.
+        let (dedup_error, dedup_lab) = frame_retention_dedup(
+            self.frame_retention_dedup_error,
+            self.frame_retention_dedup_lab,
+        );
+        Ok(
+            RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
+                .with_frame_retention_dedup(dedup_error, dedup_lab),
+        )
     }
 
     /// Workflow #378 A6a: [`Self::assemble`] with its refusal as an outcome: the code, with the
@@ -1315,6 +1388,20 @@ impl ActingdConfigFile {
                 actingcommand_runtime_config::START_EMULATOR.to_owned(),
                 serde_json::json!(instance.start_emulator),
             );
+            // IDLE-1: reported as `instance.<id>.idle.*`, each member the file leaves out the
+            // `idle` section's.
+            members.insert(
+                actingcommand_runtime_config::idle::SECTION.to_owned(),
+                serde_json::to_value(&instance.idle)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
+            // Workflow #392 DA-4b-D: reported as `instance.<id>.display_safe_area.model`; left
+            // out, the section's.
+            members.insert(
+                actingcommand_runtime_config::display_safe_area::SECTION.to_owned(),
+                serde_json::to_value(&instance.display_safe_area)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
             // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
             if let Some(device) = &instance.device {
                 members.insert(
@@ -1395,6 +1482,10 @@ impl ActingdConfigFile {
             policy.validate_instance_identities(&configured_aliases)?;
         }
         let policy_cadence = PolicyCadence::default();
+        let (dedup_error, dedup_lab) = frame_retention_dedup(
+            self.frame_retention_dedup_error,
+            self.frame_retention_dedup_lab,
+        );
         let agent_dispatcher_budget = self.agent_dispatcher.as_ref().map(|dispatcher| {
             (
                 dispatcher.max_attempts,
@@ -1407,10 +1498,7 @@ impl ActingdConfigFile {
                 .with_device_diagnostic_mode(self.device_diagnostic_mode.unwrap_or_default())
                 .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
                 .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or(true))
-                .with_frame_retention_dedup(
-                    self.frame_retention_dedup_error.unwrap_or(true),
-                    self.frame_retention_dedup_lab.unwrap_or(false),
-                )
+                .with_frame_retention_dedup(dedup_error, dedup_lab)
                 .with_bind_address(SocketAddr::new(
                     bind_host,
                     self.bind_port.unwrap_or_default(),
@@ -1434,6 +1522,7 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "ledger_observer": serde_json::to_value(&self.ledger_observer)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "frame_retention_evidence_max_age_days": self.frame_retention_evidence_max_age_days,
             "lab_module_authoring": self.lab_module_authoring,
             "lab_module_debugging": self.lab_module_debugging,
             "device_link": serde_json::to_value(&self.device_link)
@@ -1445,6 +1534,14 @@ impl ActingdConfigFile {
             "touch": serde_json::to_value(&self.touch)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "emulator_control": serde_json::to_value(&self.emulator_control)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "watchdog": serde_json::to_value(&self.watchdog)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "execution": serde_json::to_value(&self.execution)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "idle": serde_json::to_value(&self.idle)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "display_safe_area": serde_json::to_value(&self.display_safe_area)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "install": serde_json::to_value(&self.install)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
@@ -1461,6 +1558,20 @@ impl ActingdConfigFile {
                 }
             })
             .transpose()?;
+        // ROUT-L RL-1b (frozen model v1.0 §3.6): composer mode reads the rules from the
+        // standard packs, so it requires their root.
+        if policy
+            .as_ref()
+            .is_some_and(|policy| policy.catalog.is_none())
+            && standard_packs_root.is_none()
+        {
+            let failure = actingcommand_runtime_config::ConfigFailure::invalid_value(
+                actingcommand_runtime_config::STANDARD_PACKS_ROOT,
+                actingcommand_runtime_config::ConfigValueProblem::SectionCheck,
+            );
+            *refused = Some(failure.outcome());
+            return Err(failure.failure_code().code());
+        }
         // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
         // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections; P-c:
         // the `performance` section; #386 SR-1: `scheduling`; #389 U-2: the two Lab options;
@@ -1563,8 +1674,13 @@ impl ActingdConfigFile {
             // was cut before its first task event; the host tells them apart by these refs.
             host = host
                 .with_policy_inputs(policy.inputs)
-                .with_procedure_manifest(policy.procedure_manifest)
                 .with_scheduled_procedures(policy.scheduled_tasks.keys().cloned());
+            // ROUT-L RL-1b: without a configured catalog the scheduler workbench composes the
+            // rules and builds the manifest from the composition.
+            host = match policy.procedure_manifest {
+                Some(manifest) => host.with_procedure_manifest(manifest),
+                None => host.with_standard_pack_schedule(true),
+            };
             Some(PolicyBootstrap {
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
@@ -1661,9 +1777,12 @@ pub(super) fn env_overrides(
 
 struct PolicyAssembly {
     inputs: PolicyInputSnapshot,
-    procedure_manifest: ProcedureManifest,
+    /// ROUT-L RL-1b: `None` in composer mode, where the workbench builds the manifest from the
+    /// composition.
+    procedure_manifest: Option<ProcedureManifest>,
     catalog_approval_ids: Vec<String>,
-    catalog: CatalogSources,
+    /// ROUT-L RL-1b: `None` in composer mode.
+    catalog: Option<CatalogSources>,
     catalog_transition: Option<CatalogTransitionRequest>,
     scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
     scheduled_instance_scopes: Vec<(String, String)>,
@@ -1673,6 +1792,30 @@ struct PolicyAssembly {
 
 impl PolicyConfigFile {
     fn assemble(self, source_root: &Path) -> Result<PolicyAssembly, Code> {
+        let Some(configured_catalog) = self.catalog else {
+            // ROUT-L RL-1b (model §3.3, §3.5): composer mode names no catalog, no approval and
+            // no procedure binding; the scheduler workbench composes all three.
+            if !self.catalog_approval_ids.is_empty() {
+                return Err(ActingdCode::PolicyCatalogApprovalMismatch.code());
+            }
+            if !self.procedure_manifest.is_empty() {
+                return Err(ActingdCode::ProcedureManifestSizeInvalid.code());
+            }
+            if self.catalog_transition.is_some() {
+                return Err(ActingdCode::CatalogTransitionInvalid.code());
+            }
+            let monitor = self.monitor.unwrap_or_default().parameters()?;
+            return Ok(PolicyAssembly {
+                inputs: PolicyInputSnapshot::new(self.facts, self.resources),
+                procedure_manifest: None,
+                catalog_approval_ids: Vec::new(),
+                catalog: None,
+                catalog_transition: None,
+                scheduled_tasks: BTreeMap::new(),
+                scheduled_instance_scopes: Vec::new(),
+                monitor,
+            });
+        };
         if self.procedure_manifest.is_empty() || self.procedure_manifest.len() > MAX_TASKS {
             return Err(ActingdCode::ProcedureManifestSizeInvalid.code());
         }
@@ -1689,7 +1832,7 @@ impl PolicyConfigFile {
         }
         let procedure_manifest = ProcedureManifest::new(bindings)
             .map_err(|_| ActingdCode::ProcedureManifestInvalid.code())?;
-        let catalog = self.catalog.sources(source_root)?;
+        let catalog = configured_catalog.sources(source_root)?;
         let compiled =
             compile_catalog(&catalog).map_err(|_| SharedCode::PolicyCatalogCompileFailed.code())?;
         let configured_approvals = self
@@ -1769,9 +1912,9 @@ impl PolicyConfigFile {
             .collect();
         Ok(PolicyAssembly {
             inputs: PolicyInputSnapshot::new(self.facts, self.resources),
-            procedure_manifest,
+            procedure_manifest: Some(procedure_manifest),
             catalog_approval_ids: self.catalog_approval_ids,
-            catalog,
+            catalog: Some(catalog),
             catalog_transition,
             scheduled_tasks,
             scheduled_instance_scopes,
@@ -2629,7 +2772,9 @@ mod tests {
                     RuntimeErrorCode::BackendOpenFailed
                 }
             );
-            assert!(error.is_fatal());
+            // #411 A54 (ISO-1, #419): the Runtime did not latch, so the receipt does not say
+            // the host halted.
+            assert!(!error.is_fatal());
             let receipt_text = format!("{error:?} {error}");
             assert!(!receipt_text.contains(endpoint));
             assert!(!receipt_text.contains("failed to spawn adb"));

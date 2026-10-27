@@ -52,6 +52,8 @@ fn row(
         reasons_omitted: None,
         next_wake_unix_ms,
         since_unix_ms: EVALUATED_AT,
+        expected_runtime_ms: None,
+        expected_runtime_source: None,
     }
 }
 

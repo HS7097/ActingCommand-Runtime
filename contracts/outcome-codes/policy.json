@@ -2095,6 +2095,72 @@
       "description": "Scheduling decision reason (Workflow #411 B16 part 2, contracts/scheduling/README.md \"Task Reserves\"): the candidate is not admitted this round because running it would leave a pool below the reserve its catalog task declares (pool_id, reserve_at_least). amount_after is what the pool would hold after the run: the pool's projected amount less the task's declared consumption, and less the consumption that goes first when task_id names a task: a candidate of the same instance with a higher effective score this round, or a task dispatched on the instance since the pool's latest reading, which the reading does not show yet. Without amount_after the pool's amount is unknown, so the reserve cannot be shown to hold. The candidate is scored again at the next evaluation; a pool that regenerates wakes the evaluation at its next step.",
       "common_causes": "The pool holds too little for the task's declared consumption and its reserve; or two tasks that each fit alone do not fit together, and the one with the higher score runs first; or the pool has not been read since a task that consumes it was dispatched.",
       "handling": "None. The task runs when the pool holds enough, or after a reading taken since the other task ran shows enough; lower the reserve in the catalog if it is too high."
+    },
+    "dependency_already_served": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "predecessor_task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "Scheduling decision reason (SCH-M CF-1, contracts/scheduling/README.md \"Condition edges\"): a `dependency_completed` predicate with `since_own_run: true` is false. The predecessor's latest terminal state (predecessor_task_id) is one the predicate accepts, but this task (task_id) already served it: its latest run on the instance succeeded and was dispatched no earlier than the predecessor's latest dispatch. The edge is true again after the predecessor's next accepted terminal. When the predicate decides the trigger, the decision ends with trigger_false.",
+      "common_causes": "The successor already ran successfully after the predecessor's latest run.",
+      "handling": "None. The task becomes due after the predecessor's next run ends in an accepted state."
+    },
+    "fact_time_served": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "served_by_dispatch_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "Scheduling decision reason (SCH-M CF-1, contracts/scheduling/README.md \"Condition edges\"): a `fact_time_reached` predicate with `once_per_reading: true` is false because the time its fact holds was already served: this task's latest run on the instance succeeded and was dispatched (served_by_dispatch_unix_ms) at or after that time plus the predicate's offset_ms and at or after the reading's observation. It stays false, with no wake, until a reading observed after that dispatch gives a time; that reading's publication wakes the scheduler. When the predicate decides the trigger, the decision ends with trigger_false.",
+      "common_causes": "The task already ran after the time the latest reading gave; the work it serves shows no new time (for example a slot left empty shows no countdown).",
+      "handling": "None. A newer reading of the fact makes the task due again; a catalog that names a free-slot fact in an `any` covers an emptied slot."
+    },
+    "fact_reference_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.14",
+      "description": "Scheduling decision reason (#386 CF-4, contracts/scheduling/README.md \"Fact references\"): a `fact` predicate whose value is a fact reference ({type: fact, fact_key, offset}) is false because the referenced fact (fact_key) gives no integer in the predicate's scope. unknown_reason says why: fact_missing (no such fact), fact_low_confidence (confidence 0), fact_stale (observed longer ago than the predicate's max_age_ms), fact_expired (past its own expiry) or type_mismatch (it holds no integer). The predicate asks for no fact refresh and gives no wake; the referenced fact's next reading wakes the scheduler. When the predicate decides the trigger, the decision ends with trigger_false.",
+      "common_causes": "The package that reads the predicate's fact has not read the referenced fact (for example a capacity) yet, its reading is older than the predicate's max_age_ms, or it publishes the referenced fact with another value kind.",
+      "handling": "None. The task becomes due once a fresh integer reading of the referenced fact compares true; publish the referenced fact with the predicate's fact, or raise max_age_ms in the rules."
     }
   }
 }

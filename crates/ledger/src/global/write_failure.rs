@@ -11,7 +11,8 @@
 
 use super::storage::{DurableStorage, EventStore};
 use super::{
-    GlobalLedgerError, GlobalLedgerResult, LedgerCapturePolicy, Sha256SecretFingerprinter,
+    GlobalLedgerError, GlobalLedgerResult, LedgerCapturePolicy, LedgerScrubPolicy,
+    Sha256SecretFingerprinter,
 };
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
@@ -154,6 +155,20 @@ pub struct LedgerFailurePlan {
     read_budget: Option<Duration>,
     close_timeout: Option<Duration>,
     reply_timeout: Option<Duration>,
+    /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read
+    /// (`ledger_observer.history_page_rows`).
+    history_page_rows: Option<usize>,
+    /// #422 LN-WS (R1, R2): the in-statement bound of a read that serves a Runtime request
+    /// (`ledger_observer.read_check_vm_steps`) and the span of one history statement
+    /// (`ledger_observer.history_scan_rows`).
+    read_check_vm_steps: Option<u32>,
+    history_scan_rows: Option<usize>,
+    /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the start's ledger open
+    /// authenticates (`ledger_observer.open_verify_tail_records`).
+    open_verify_tail_records: Option<usize>,
+    /// LN-9 (#422, LEAN-L §6): the paced background scrub of the writer's chain
+    /// (`ledger_observer.scrub_*`); without one the writer has no scrub.
+    scrub: Option<LedgerScrubPolicy>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -168,6 +183,11 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("read_budget", &self.read_budget)
             .field("close_timeout", &self.close_timeout)
             .field("reply_timeout", &self.reply_timeout)
+            .field("history_page_rows", &self.history_page_rows)
+            .field("read_check_vm_steps", &self.read_check_vm_steps)
+            .field("history_scan_rows", &self.history_scan_rows)
+            .field("open_verify_tail_records", &self.open_verify_tail_records)
+            .field("scrub", &self.scrub)
             .finish()
     }
 }
@@ -201,6 +221,11 @@ impl LedgerFailurePlan {
             read_budget: None,
             close_timeout: None,
             reply_timeout: None,
+            history_page_rows: None,
+            read_check_vm_steps: None,
+            history_scan_rows: None,
+            open_verify_tail_records: None,
+            scrub: None,
         }
     }
 
@@ -225,8 +250,63 @@ impl LedgerFailurePlan {
         self
     }
 
+    /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read
+    /// (`ledger_observer.history_page_rows`).
+    pub fn with_history_page_rows(mut self, rows: usize) -> Self {
+        self.history_page_rows = Some(rows);
+        self
+    }
+
+    /// #422 LN-WS (R1): the SQLite virtual-machine steps between two looks at the clock of a
+    /// read that serves a Runtime request (`ledger_observer.read_check_vm_steps`).
+    pub fn with_read_check_vm_steps(mut self, steps: u32) -> Self {
+        self.read_check_vm_steps = Some(steps);
+        self
+    }
+
+    /// #422 LN-WS (R2): the sequences one history statement of a view page scans at most
+    /// (`ledger_observer.history_scan_rows`).
+    pub fn with_history_scan_rows(mut self, rows: usize) -> Self {
+        self.history_scan_rows = Some(rows);
+        self
+    }
+
+    /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the start's ledger open
+    /// authenticates (`ledger_observer.open_verify_tail_records`).
+    pub fn with_open_verify_tail_records(mut self, records: usize) -> Self {
+        self.open_verify_tail_records = Some(records);
+        self
+    }
+
+    /// LN-9 (#422, LEAN-L §6, Alice's ruling 57): the writer's paced background scrub
+    /// (`ledger_observer.scrub_rows_per_second`, `scrub_chunk_rows`, `scrub_pass_interval_ms`).
+    pub fn with_scrub(mut self, scrub: LedgerScrubPolicy) -> Self {
+        self.scrub = Some(scrub);
+        self
+    }
+
+    pub(super) fn scrub(&self) -> Option<&LedgerScrubPolicy> {
+        self.scrub.as_ref()
+    }
+
     pub(super) fn read_budget(&self) -> Option<Duration> {
         self.read_budget
+    }
+
+    pub(super) fn history_page_rows(&self) -> Option<usize> {
+        self.history_page_rows
+    }
+
+    pub(super) fn read_check_vm_steps(&self) -> Option<u32> {
+        self.read_check_vm_steps
+    }
+
+    pub(super) fn history_scan_rows(&self) -> Option<usize> {
+        self.history_scan_rows
+    }
+
+    pub(super) fn open_verify_tail_records(&self) -> Option<usize> {
+        self.open_verify_tail_records
     }
 
     pub(super) fn close_timeout(&self) -> Option<Duration> {
@@ -403,6 +483,32 @@ impl WriteFailureState {
 
     pub(crate) fn plan(&self) -> &LedgerFailurePlan {
         &self.plan
+    }
+
+    /// #422 LN-7c O (review F2): whether a dump an earlier run left is at this plan's dump path
+    /// or its fallback path, so that the open imports it (§9.4, `import_dumps`). A place whose
+    /// presence cannot be read fails as the import's own read of it would: `ledger_io` of
+    /// `import_ledger_dump`.
+    pub(crate) fn dump_present(&self) -> GlobalLedgerResult<bool> {
+        for path in [
+            Some(&self.plan.dump_path),
+            self.plan.fallback_dump_path.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let present = path.try_exists().map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::ImportLedgerDump.location(),
+                    &error,
+                )
+            })?;
+            if present {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn watch(&self) -> MutexGuard<'_, Watch> {
@@ -1204,7 +1310,7 @@ fn import_dump<B: DurableStorage>(
     let mut end = read.end;
     for (capture_seq, draft) in read.records {
         let captured_at = draft.timestamp_unix_ms();
-        if store.indexes.contains_event_id(draft.event_id()) {
+        if store.history().contains_event_id(draft.event_id())? {
             duplicates += 1;
             latest_verified_unix_ms = latest_verified_unix_ms.max(Some(captured_at));
             continue;
@@ -1303,11 +1409,10 @@ pub(super) fn append_tail_gap<B: DurableStorage>(
     store: &mut EventStore<B>,
 ) -> GlobalLedgerResult<()> {
     let now = unix_ms_now()?;
+    // LN-5 (#422, LEAN-L §3.2 step 3): the latest time through the store's time index.
     let gap_start = store
-        .events
-        .iter()
-        .map(PersistedEvent::timestamp_unix_ms)
-        .max()
+        .backend
+        .latest_timestamp()?
         .unwrap_or(now)
         .clamp(1, now);
     let draft = ledger_draft(

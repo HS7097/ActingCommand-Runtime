@@ -29,6 +29,7 @@ use super::{
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{RunFailureStage, RunOperationFailureDecision, RunOperationPolicy, RunStateMachine};
+use actingcommand_contract::TaskSchema;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -48,8 +49,8 @@ use std::time::{Duration, Instant};
 const MAX_WINDOW_MS: u64 = 60_000;
 /// How many consecutive frames a stability wait may ask for.
 const STABLE_FRAMES: RangeInclusive<u32> = 2..=32;
-/// The task schema that admits both declarations.
-const TASK_SCHEMA: &str = "0.9";
+/// The first task schema that admits both declarations.
+const TASK_SCHEMA: TaskSchema = TaskSchema::V0_9;
 
 /// An operation's observation window, as the package writes it.
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -154,7 +155,7 @@ pub(super) fn validate_operation(
     };
     if let Some(window) = operation.observation_window {
         let interval_ms = operation.effective_timing(control).interval.milliseconds;
-        let valid = schema_version == TASK_SCHEMA
+        let valid = TaskSchema::at_least(schema_version, TASK_SCHEMA)
             && (1..=MAX_WINDOW_MS).contains(&window.window_ms())
             && !operation.destination_pages()?.is_empty()
             && match window {
@@ -168,7 +169,7 @@ pub(super) fn validate_operation(
         }
     }
     if let Some(recheck) = operation.input_recheck {
-        let valid = schema_version == TASK_SCHEMA
+        let valid = TaskSchema::at_least(schema_version, TASK_SCHEMA)
             && operation.click.is_some()
             && operation.application.is_none()
             && operation.select.is_none()

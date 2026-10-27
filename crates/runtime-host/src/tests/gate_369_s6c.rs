@@ -3,11 +3,12 @@
 // Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; host gate 86): the configured emulator
 // start at daemon start as one claim per instance, tests (1) to (9) of the slice row, on the
 // scripted emulator (HOST-I1) and a scripted connectivity status; and the two items the merge
-// ledger left for S6c (wave 13 coordinator ruling 6): a routine claim under a restored pause waits
-// queued from the first moment (ledger :303, test (5)), and an emulator control whose provider
-// step fails cancels the queued startup claim, as a stop and a failed preparation do (ledger :529;
-// coordinator ruling on review #716, item 1). Every wait returns as soon as what it waits for is
-// read, reported or recorded; `GATE_WAIT` only bounds a broken run.
+// ledger left for S6c (wave 13 coordinator ruling 6): the claim under a restored pause (ledger
+// :303, test (5)), and an emulator control whose provider step fails cancels the queued startup
+// claim, as a stop and a failed preparation do (ledger :529; coordinator ruling on review #716,
+// item 1). emu-watch (Alice's ruling 35) adapts tests (5) and (6): a pause never holds or queues
+// the claim and never makes it yield. Every wait returns as soon as what it waits for is read,
+// reported or recorded; `GATE_WAIT` only bounds a broken run.
 
 use super::emulator_controller::EmulatorCall;
 use super::instance_workers::phases;
@@ -497,11 +498,11 @@ fn s6c_4_no_internet_for_600_s_refuses_the_start_with_the_failure_pair() {
     host.close().expect("close host");
 }
 
-// (5) Ledger :303: under a restored pause the claim waits queued as a gated entry from the first
-// moment (never granted on the free instance) and nothing starts; the resume grants it and the
-// emulator starts.
+// (5) Ledger :303, emu-watch (Alice's ruling 35): under a restored pause the claim is granted at
+// once on the free instance (never queued behind the pause) and starts the emulator; the pause
+// stays.
 #[test]
-fn s6c_5_under_a_restored_pause_the_claim_waits_queued_until_the_resume() {
+fn s6c_5_under_a_restored_pause_the_claim_is_granted_at_once_and_starts() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let instance = instance_id();
@@ -526,82 +527,70 @@ fn s6c_5_under_a_restored_pause_the_claim_waits_queued_until_the_resume() {
     let before = head(&host);
 
     assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
-    assert_eq!(
-        host.instance_claims_for_test(FIRST).expect("claims"),
-        (None, vec![ClaimKind::Autostart]),
-        "the claim waits gated from the first moment"
-    );
-    host.expire_due_leases_for_test().expect("sweep tick");
-    assert_eq!(
-        host.instance_claims_for_test(FIRST).expect("claims"),
-        (None, vec![ClaimKind::Autostart])
-    );
-    assert_eq!(instance_status(&host, FIRST).queued_request_count(), 1);
+    let lines = await_reports(&host, |lines| {
+        reported(lines, HostCode::EmulatorAutostartStarted) == 1
+    });
+    assert_eq!(reported(&lines, HostCode::EmulatorAutostartFailed), 0);
     let [claim] = claims_after(&host, instance, before)[..] else {
         panic!("one autostart claim");
     };
     let held = of_request(&host, claim);
-    assert_eq!(count(&held, EventType::SchedulerQueued), 1, "{held:#?}");
-    assert_eq!(count(&held, EventType::LeaseGranted), 0, "{held:#?}");
-    assert_eq!(starts(&calls), 0, "no Start under the pause");
-
-    assert_eq!(
-        resume(&host, SchedulingPauseScope::Global, 77).state(),
-        RuntimeReceiptState::Completed
-    );
-    let lines = await_reports(&host, |lines| {
-        reported(lines, HostCode::EmulatorAutostartStarted) == 1
-    });
-    assert_eq!(reported(&lines, HostCode::EmulatorAutostartYielded), 0);
-    assert_eq!(count(&of_request(&host, claim), EventType::LeaseGranted), 1);
-    assert_eq!(starts(&calls), 1);
+    assert_eq!(count(&held, EventType::SchedulerQueued), 0, "{held:#?}");
+    assert_eq!(count(&held, EventType::LeaseGranted), 1, "{held:#?}");
+    assert_eq!(starts(&calls), 1, "the Start under the pause");
+    let (paused, _) = host.scheduling_pauses_for_test().expect("pauses");
+    assert!(paused.is_some(), "the pause still holds the dispatches");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }
 
-// (6) A pause that arrives while the claim waits: the claim yields, queues again as a gated entry
-// and releases its key, so the pause completes; nothing starts.
+// (6) emu-watch (Alice's ruling 35): a pause that arrives while the claim waits for the network
+// does not make it yield: the claim keeps its key, and once internet access is reported it starts
+// the emulator under the pause.
 #[test]
-fn s6c_6_a_pause_during_the_wait_yields_and_the_pause_completes() {
+fn s6c_6_a_pause_during_the_wait_does_not_hold_the_start() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let instance = instance_id();
-    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::NoInternet);
-    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| config);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let (read, reads) = connectivity(
+        vec![NetworkConnectivity::NoInternet],
+        NetworkConnectivity::Internet,
+    );
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| {
+        config.with_runtime_clock(clock.clone())
+    });
     stop(&host, FIRST, 78);
     let calls = state.emulator.listen();
     let before = head(&host);
     assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
     assert_eq!(
-        host.instance_claims_for_test(FIRST).expect("claims").0,
-        Some(ClaimKind::Autostart)
+        reads.recv_timeout(GATE_WAIT).expect("the first read"),
+        NetworkConnectivity::NoInternet
     );
-
     let [claim] = claims_after(&host, instance, before)[..] else {
         panic!("one autostart claim");
     };
 
-    let paused = pause(&host, instance_scope(FIRST), 79);
+    let paused = pause(&host, SchedulingPauseScope::Global, 79);
     assert_eq!(paused.state(), RuntimeReceiptState::Completed, "{paused:?}");
+    clock.advance(5_000);
+    assert_eq!(
+        reads.recv_timeout(GATE_WAIT).expect("the next read"),
+        NetworkConnectivity::Internet
+    );
     let lines = await_reports(&host, |lines| {
-        reported(lines, HostCode::EmulatorAutostartYielded) == 1
+        reported(lines, HostCode::EmulatorAutostartStarted) == 1
     });
     assert_eq!(reported(&lines, HostCode::EmulatorAutostartFailed), 0);
-    assert_eq!(
-        host.instance_claims_for_test(FIRST).expect("claims"),
-        (None, vec![ClaimKind::Autostart]),
-        "the claim waits again as a gated entry"
-    );
     let claim = of_request(&host, claim);
-    assert_eq!(count(&claim, EventType::LeaseReleased), 1, "{claim:#?}");
-    assert!(
-        all_events(&host)
-            .iter()
-            .all(|event| event.sequence() <= before
-                || event.event_type() != EventType::CommandReceived),
-        "no command was received for the instance"
+    assert_eq!(count(&claim, EventType::LeaseGranted), 1, "{claim:#?}");
+    assert_eq!(
+        count(&claim, EventType::SchedulerQueued),
+        0,
+        "the claim never queued again: {claim:#?}"
     );
-    assert_eq!(starts(&calls), 0, "no Start under the pause");
+    assert_eq!(starts(&calls), 1, "the Start under the pause");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }

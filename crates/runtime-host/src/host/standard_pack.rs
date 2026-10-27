@@ -34,6 +34,18 @@
 //!   its server's edges and recovery chain beside its interrupt pages ([`RunNavigation`]); the
 //!   entry gate's full-match routing is `host/navigation.rs`. The feature package is admitted
 //!   once per run for both.
+//! - **Shared tables** (Workflow #357 DB-1, M-357a v1.1 §2.3, §2.4; register §1.65 TB2, TB3).
+//!   A game root's `tables/` directory makes the directory a game root as the root files do. At
+//!   startup every table of a sound game root is read only to report the refused ones (one more
+//!   `standard_pack_read` record each); nothing is kept. check-config lists each sound root's
+//!   tables with their row counts, problems and expired columns. The tables of a broken root are
+//!   neither read nor listed. A run reads no table before DB-2.
+//! - **Display declaration** (Workflow #392 DA-4, model 392 v1.2 §4.1). A game root's
+//!   `display-layout.json` is a root file like the others: read and recorded at startup (a
+//!   broken one only recorded), listed by check-config, and read in the preparation of a run of
+//!   its game, which a broken one refuses before any lease. Workflow #392 DA-2a: the run keeps
+//!   what its preparation read ([`RunStandardPack`]), and the display adapter maps every frame
+//!   of the run, its layers' included, under it.
 
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
 use super::navigation::{RunNavigation, run_navigation};
@@ -41,10 +53,11 @@ use super::*;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
     MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_PAGES_FILE, StandardPackInterrupts, StandardPackNavigation, StandardPackPages,
-    StandardPackRegistry, StandardPackRootBytes, StandardPackRootIssue, TaskEntryRecoveryRole,
-    TaskInterruptThen, read_standard_pack_root,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY,
+    StandardPackDisplayLayout, StandardPackInterrupts, StandardPackNavigation, StandardPackPages,
+    StandardPackRegistry, StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport,
+    TaskEntryRecoveryRole, TaskInterruptThen, read_standard_pack_root, read_standard_pack_tables,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -61,13 +74,20 @@ type Registered = (BTreeSet<(String, String)>, BTreeMap<String, String>);
 pub(super) struct StandardPackRoots {
     root: Option<PathBuf>,
     registered: Mutex<BTreeMap<String, Registered>>,
+    /// ROUT-L RL-1b: the scheduler workbench, present when the configuration names no catalog
+    /// (composer mode); `None` keeps the configured catalog path as it was.
+    pub(super) schedule: Option<super::standard_pack_schedule::StandardPackWorkbench>,
 }
 
 impl StandardPackRoots {
-    pub(super) fn new(root: Option<PathBuf>) -> Self {
+    pub(super) fn new(
+        root: Option<PathBuf>,
+        schedule: Option<super::standard_pack_schedule::StandardPackWorkbench>,
+    ) -> Self {
         Self {
             root,
             registered: Mutex::new(BTreeMap::new()),
+            schedule,
         }
     }
 
@@ -148,17 +168,19 @@ pub(crate) fn read_registries(root: Option<&Path>) -> Vec<(String, PathBuf, Stan
 }
 
 /// One game root as read: where it is, its registry and, when present, its page list, its
-/// shared interrupt pages and (Workflow #373 NAV-5) its navigation data.
+/// shared interrupt pages, (Workflow #373 NAV-5) its navigation data and (Workflow #392 DA-2a)
+/// its display declaration.
 pub(super) struct GameRoot {
     pub(super) directory: PathBuf,
     pub(super) registry: StandardPackRegistry,
     pages: Option<StandardPackPages>,
     interrupts: Option<StandardPackInterrupts>,
     navigation: Option<StandardPackNavigation>,
+    display_layout: Option<StandardPackDisplayLayout>,
 }
 
 /// Why a game root (or the root itself) cannot be used.
-enum RootFailure {
+pub(super) enum RootFailure {
     Invalid {
         path: PathBuf,
         issue: StandardPackRootIssue,
@@ -195,7 +217,7 @@ impl RootFailure {
         }
     }
 
-    fn outcome(&self, game: Option<&str>) -> Outcome {
+    pub(super) fn outcome(&self, game: Option<&str>) -> Outcome {
         self.values(
             game,
             Outcome::new(self.code()).operation(HostLocation::StandardPackRead),
@@ -216,7 +238,7 @@ impl RootFailure {
 }
 
 /// A root file's bytes; `None` when the file does not exist.
-fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure> {
+pub(super) fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -234,19 +256,36 @@ fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure> {
 /// refused; every file is checked as the contract crate checks it, and the packages the page
 /// list, the interrupts and the navigation data name must be packages of the registry. Workflow
 /// #373 NAV-T (§3.9): the check is the contract crate's [`read_standard_pack_root`], which the
-/// resource tools run too; the refused file is the issue's own.
+/// resource tools run too; the refused file is the issue's own. Workflow #392 DA-4: it checks
+/// `display-layout.json` too.
 fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, RootFailure> {
     let path_of = |file: &str| directory.join(file);
     let bundle = read_root_file(&path_of(STANDARD_PACK_BUNDLE_FILE))?;
     let pages = read_root_file(&path_of(STANDARD_PACK_PAGES_FILE))?;
     let interrupts = read_root_file(&path_of(STANDARD_PACK_INTERRUPTS_FILE))?;
     let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?;
+    let display_layout = read_root_file(&path_of(STANDARD_PACK_DISPLAY_LAYOUT_FILE))?;
+    // Workflow #357 DB-1 (M-357a v1.1 §2.1): `tables/` makes the directory a game root.
+    let tables_path = path_of(STANDARD_PACK_TABLES_DIRECTORY);
+    let tables = match fs::symlink_metadata(&tables_path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(RootFailure::Unreadable {
+                path: tables_path,
+                error,
+                op: IoOp::Metadata,
+            });
+        }
+    };
     let root = read_standard_pack_root(
         StandardPackRootBytes {
             bundle: bundle.as_deref(),
             pages: pages.as_deref(),
             interrupts: interrupts.as_deref(),
             navigation: navigation.as_deref(),
+            tables,
+            display_layout: display_layout.as_deref(),
         },
         game,
     )
@@ -260,6 +299,7 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
         pages: root.pages,
         interrupts: root.interrupts,
         navigation: root.navigation,
+        display_layout: root.display_layout,
     }))
 }
 
@@ -308,10 +348,17 @@ pub struct StandardPackGameReport {
     /// The registry's package count; `None` when the root is broken.
     pub pack_count: Option<usize>,
     /// The root files present (`bundle.json`, `pages.json`, `interrupts.json`, Workflow #373
-    /// NAV-5 `navigation.json`).
+    /// NAV-5 `navigation.json`, Workflow #392 DA-4 `display-layout.json`).
     pub root_files: Vec<&'static str>,
     /// `standard_pack_root_invalid` or `standard_pack_root_unreadable` when the root is broken.
     pub problem: Option<Outcome>,
+    /// Workflow #357 DB-1 (register §1.65 TB3): the tables of `tables/` in file name order,
+    /// empty without one; `None` when the root is broken (its tables are not read).
+    pub tables: Option<Vec<StandardPackTableReport>>,
+    /// Workflow #357 DB-1: `standard_pack_table_unreadable` when `tables/` itself cannot be
+    /// listed (then `tables` is empty); a note of check-config, not a report member.
+    #[serde(skip)]
+    pub tables_problem: Option<Outcome>,
 }
 
 impl StandardPacksReport {
@@ -323,10 +370,64 @@ impl StandardPacksReport {
                 .map(|problem| (game.game.as_str(), problem))
         })
     }
+
+    /// Workflow #357 DB-1 (register §1.65 TB3): check-config's notes of the tables of the sound
+    /// roots: each refused table's problem, a `tables/` that cannot be listed, and one
+    /// `standard_pack_table_column_expired` warning per expired column.
+    pub fn table_notes(&self) -> Vec<Outcome> {
+        let mut notes = Vec::new();
+        for game in &self.games {
+            notes.extend(game.tables_problem.iter().cloned());
+            for table in game.tables.iter().flatten() {
+                notes.extend(table.problem.iter().cloned());
+                for column in table.expired_columns.iter().flatten() {
+                    notes.push(
+                        Outcome::new(HostCode::StandardPackTableColumnExpired)
+                            .operation(HostLocation::StandardPackRead)
+                            .game(game.game.as_str())
+                            .path(&table.path)
+                            .table_column(column.as_str()),
+                    );
+                }
+            }
+        }
+        notes
+    }
+}
+
+/// Workflow #357 DB-1 (register §1.65 TB3): the tables of the sound game root `directory` at
+/// `now_unix_ms`, each refused one's problem located at `standard_pack_read`; a `tables/` that
+/// cannot be listed lists none and is the second member.
+fn inspect_tables(
+    directory: &Path,
+    game: &str,
+    now_unix_ms: u64,
+) -> (Vec<StandardPackTableReport>, Option<Outcome>) {
+    match read_standard_pack_tables(directory, game) {
+        Ok(files) => (
+            files
+                .iter()
+                .map(|file| {
+                    let mut report = StandardPackTableReport::of(file, now_unix_ms);
+                    report.problem = report
+                        .problem
+                        .map(|problem| problem.operation(HostLocation::StandardPackRead));
+                    report
+                })
+                .collect(),
+            None,
+        ),
+        Err(problem) => (
+            Vec::new(),
+            Some(problem.operation(HostLocation::StandardPackRead)),
+        ),
+    }
 }
 
 /// Workflow #373 NAV-6: reads every game root below `root` as startup does, for check-config.
-pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
+/// Workflow #357 DB-1: and the tables of each sound root, their column expiries judged at
+/// `now_unix_ms`.
+pub fn inspect_standard_packs(root: Option<&Path>, now_unix_ms: u64) -> StandardPacksReport {
     let Some(root) = root else {
         return StandardPacksReport {
             root: None,
@@ -352,25 +453,34 @@ pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
                 STANDARD_PACK_PAGES_FILE,
                 STANDARD_PACK_INTERRUPTS_FILE,
                 STANDARD_PACK_NAVIGATION_FILE,
+                STANDARD_PACK_DISPLAY_LAYOUT_FILE,
             ]
             .into_iter()
             .filter(|file| directory.join(file).is_file())
             .collect::<Vec<_>>();
             match read_game_root(&directory, &game) {
                 Ok(None) => None,
-                Ok(Some(read)) => Some(StandardPackGameReport {
-                    game,
-                    bundle_version: Some(read.registry.bundle_version()),
-                    pack_count: Some(read.registry.len()),
-                    root_files,
-                    problem: None,
-                }),
+                Ok(Some(read)) => {
+                    let (tables, tables_problem) =
+                        inspect_tables(&read.directory, &game, now_unix_ms);
+                    Some(StandardPackGameReport {
+                        game,
+                        bundle_version: Some(read.registry.bundle_version()),
+                        pack_count: Some(read.registry.len()),
+                        root_files,
+                        problem: None,
+                        tables: Some(tables),
+                        tables_problem,
+                    })
+                }
                 Err(failure) => Some(StandardPackGameReport {
                     problem: Some(failure.outcome(Some(&game))),
                     game,
                     bundle_version: None,
                     pack_count: None,
                     root_files,
+                    tables: None,
+                    tables_problem: None,
                 }),
             }
         })
@@ -420,6 +530,15 @@ struct RunInterrupt {
     max_per_run: u8,
 }
 
+/// What a run's preparation read of its game's standard-pack root, fixed for the whole run (§7):
+/// its shared interrupt pages and navigation data (Workflow #373 NAV-6, NAV-5) and (Workflow #392
+/// DA-2a, model 392 v1.2 §4.1) its game's display declaration. Nothing read is the default.
+#[derive(Default)]
+pub(super) struct RunStandardPack {
+    pub(super) interrupts: Option<Box<RunInterrupts>>,
+    pub(super) display_layout: Option<StandardPackDisplayLayout>,
+}
+
 /// Workflow #373 NAV-6: a run's shared interrupt pages, fixed at its preparation (§7), and what
 /// the run has done with them; Workflow #373 NAV-5: and its navigation data, read with them.
 pub(super) struct RunInterrupts {
@@ -458,8 +577,36 @@ impl HostShared {
         for (game, directory) in games {
             match read_game_root(&directory, &game) {
                 Ok(None) => {}
-                Ok(Some(read)) => self.note_standard_pack_registry(&game, &read.registry)?,
+                Ok(Some(read)) => {
+                    self.note_standard_pack_registry(&game, &read.registry)?;
+                    self.record_refused_standard_pack_tables(&game, &read.directory)?;
+                }
                 Err(failure) => self.record_standard_pack_read(failure.outcome(Some(&game)))?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #357 DB-1 (M-357a v1.1 §2.4; register §1.65 TB2): reads every table of the sound
+    /// game root `directory` at startup only to report the refused ones, one
+    /// `standard_pack_read` record each (`standard_pack_table_invalid` or
+    /// `standard_pack_table_unreadable`, also for a `tables/` that cannot be listed). Nothing is
+    /// kept; a refused table never fails its root or the start.
+    fn record_refused_standard_pack_tables(
+        &self,
+        game: &str,
+        directory: &Path,
+    ) -> RuntimeHostResult<()> {
+        let files = match read_standard_pack_tables(directory, game) {
+            Ok(files) => files,
+            Err(problem) => {
+                return self
+                    .record_standard_pack_read(problem.operation(HostLocation::StandardPackRead));
+            }
+        };
+        for file in files {
+            if let Err(problem) = file.read {
+                self.record_standard_pack_read(problem.operation(HostLocation::StandardPackRead))?;
             }
         }
         Ok(())
@@ -558,22 +705,30 @@ impl HostShared {
     }
 
     /// Workflow #373 NAV-6 (§7): the shared interrupt pages of a run of `prepared`, read in its
-    /// preparation. `None` (nothing read, nothing recorded) without a root, without the game's
+    /// preparation. None (nothing read, nothing recorded) without a root, without the game's
     /// directory, or when the game root holds no `interrupts.json` (Workflow #373 NAV-5: and no
-    /// `navigation.json`); also when the root names no feature package for the run's server, or
-    /// neither a handler for it nor navigation data the run's package can use. A broken root
-    /// refuses the run.
+    /// `navigation.json`; Workflow #392 DA-4: and no `display-layout.json`); also when the root
+    /// names no feature package for the run's server, or neither a handler for it nor navigation
+    /// data the run's package can use. A broken root refuses the run. Workflow #392 DA-4 (model
+    /// 392 v1.2 §4.1): a root that holds `display-layout.json` is read so, once, and a broken
+    /// declaration refuses the run before any lease; a declaration replaced in place is read by
+    /// the next run. Workflow #392 DA-2a: the declaration read is the run's
+    /// ([`RunStandardPack::display_layout`]), whether or not interrupts apply.
     pub(super) fn prepare_run_interrupts(
         &self,
         prepared: &PreparedContainedTask,
-    ) -> Result<Option<Box<RunInterrupts>>, RequestFailure> {
+    ) -> Result<RunStandardPack, RequestFailure> {
         let Some(root) = &self.standard_packs.root else {
-            return Ok(None);
+            return Ok(RunStandardPack::default());
         };
         let game = prepared.game();
         let directory = root.join(game);
         let mut marked = false;
-        for file in [STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE] {
+        for file in [
+            STANDARD_PACK_INTERRUPTS_FILE,
+            STANDARD_PACK_NAVIGATION_FILE,
+            STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+        ] {
             let marker = directory.join(file);
             match fs::symlink_metadata(&marker) {
                 Ok(_) => marked = true,
@@ -589,17 +744,21 @@ impl HostShared {
             }
         }
         if !marked {
-            return Ok(None);
+            return Ok(RunStandardPack::default());
         }
         let read = match read_game_root(&directory, game) {
             Ok(Some(read)) => read,
-            Ok(None) => return Ok(None),
+            Ok(None) => return Ok(RunStandardPack::default()),
             Err(failure) => return Err(failure.refusal(game)),
         };
         self.note_standard_pack_registry(game, &read.registry)
             .map_err(RequestFailure::poison_without_terminal)?;
+        let declared = |interrupts: Option<Box<RunInterrupts>>| RunStandardPack {
+            interrupts,
+            display_layout: read.display_layout.clone(),
+        };
         let Some(pages) = &read.pages else {
-            return Ok(None);
+            return Ok(declared(None));
         };
         let server = prepared.server();
         let for_server = |packages: &[String]| {
@@ -608,7 +767,7 @@ impl HostShared {
                 .and_then(|package_id| RegisteredPack::of(&read, package_id))
         };
         let Some(features) = for_server(&pages.features) else {
-            return Ok(None);
+            return Ok(declared(None));
         };
         let entries = read
             .interrupts
@@ -640,9 +799,9 @@ impl HostShared {
             .as_ref()
             .and_then(|navigation| run_navigation(&read, pages, navigation, prepared));
         if entries.is_empty() && navigation.is_none() {
-            return Ok(None);
+            return Ok(declared(None));
         }
-        Ok(Some(Box::new(RunInterrupts {
+        Ok(declared(Some(Box::new(RunInterrupts {
             identity: PackageIdentity::of(prepared),
             features,
             pages: pages.pages.iter().map(|page| page.id.clone()).collect(),
@@ -653,7 +812,7 @@ impl HostShared {
             total: 0,
             configured: BTreeSet::new(),
             navigation,
-        })))
+        }))))
     }
 }
 

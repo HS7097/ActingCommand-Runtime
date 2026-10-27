@@ -206,6 +206,28 @@ actingcommand_contract::outcome_codes! {
         /// is unknown, and `task_id`, the task whose consumption goes first).
         ResourceReserveInsufficient => "resource_reserve_insufficient": info / none,
         // ---- Workflow #411 B16 part 2: end ----
+        // ---- SCH-M CF-1 (condition edges, `contracts/scheduling/README.md`, "Condition
+        // edges"): begin ----
+        /// Info. A `dependency_completed` predicate with `since_own_run` is false: the
+        /// predecessor's latest terminal is accepted, but this task's latest run succeeded and
+        /// was dispatched no earlier than the predecessor's latest dispatch, so it already served
+        /// that terminal (keys `task_id` this task, `predecessor_task_id`).
+        DependencyAlreadyServed => "dependency_already_served": info / none,
+        /// Info. A `fact_time_reached` predicate with `once_per_reading` is false: the time its
+        /// fact holds was served by this task's latest run, which succeeded and was dispatched at
+        /// or after that time plus the offset and the reading's observation; no wake, the next
+        /// reading wakes the scheduler (keys `fact_key`, `served_by_dispatch_unix_ms`).
+        FactTimeServed => "fact_time_served": info / none,
+        // ---- SCH-M CF-1: end ----
+        // ---- #386 CF-4 (fact references, `contracts/scheduling/README.md`, "Fact
+        // references"): begin ----
+        /// Info. A `fact` predicate that compares its fact with another fact plus an offset is
+        /// false because the referenced fact gives no integer: it is missing, its confidence is
+        /// 0, it is older than the predicate's `max_age_ms`, it is past its own expiry, or it
+        /// holds no integer. No wake and no fact refresh (keys `fact_key` the referenced fact,
+        /// `unknown_reason`).
+        FactReferenceUnavailable => "fact_reference_unavailable": info / none,
+        // ---- #386 CF-4: end ----
     }
 }
 

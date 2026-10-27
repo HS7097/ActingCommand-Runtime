@@ -31,7 +31,7 @@
           "required": ["kind", "task_id", "outcome_key"],
           "properties": {
             "kind": { "const": "outcome" },
-            "task_id": { "$ref": "./common.schema.json#/$defs/identifier" },
+            "task_id": { "$ref": "./common.schema.json#/$defs/itemId" },
             "outcome_key": { "$ref": "./common.schema.json#/$defs/identifier" }
           },
           "additionalProperties": false
@@ -42,7 +42,7 @@
       "type": "object",
       "required": ["id", "scope", "capacity", "projection", "observation", "group_delay"],
       "properties": {
-        "id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "id": { "$ref": "./common.schema.json#/$defs/itemId" },
         "scope": { "$ref": "./common.schema.json#/$defs/scope" },
         "capacity": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "projection": {

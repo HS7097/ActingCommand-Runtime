@@ -1945,7 +1945,11 @@ pub enum RuntimeLifecyclePhase {
     /// handset held), `device_hold_lifted` (info; a hold lifted), `device_screen_woken` (info;
     /// the wake key lit the screen) or `device_state_unreadable` (error; a read failed or
     /// answered an unknown shape, once per failing streak of the sampling). No value names a
-    /// device serial: a handset is its label `handset:<alias>`.
+    /// device serial: a handset is its label `handset:<alias>`. emu-watch: the emulator watch's
+    /// observations of an emulator instance too, linked to its instance: `outcome` is
+    /// `emulator_watch_state_changed` (info), `emulator_state_read_failed` (warning, once per
+    /// failing streak), `emulator_autostart_queued` (info; the watch enqueued a restart) or
+    /// `emulator_watch_restart_exhausted` (warning); an emulator instance is its `alias`.
     DeviceStateObserved {
         outcome: Outcome,
     },
@@ -3458,6 +3462,12 @@ pub struct PolicyDispatchPayload {
     /// dispatch. Only a dispatch intent carries it; a drawn delay is not kept across a restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     random_delay: Option<PolicyRandomDelay>,
+    /// SCH-M ED-2 (coordinator ruling 10-24 14:1x after the freeze): the duration the dispatch
+    /// reserved, when it is not its task spec's declared `expected_duration_ms` (the expected
+    /// duration E of the pair, or a fact refresh's configured duration). Only a dispatch intent
+    /// carries it; recovery and replay reserve this value instead of the spec's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     admission: Option<Box<PolicyAdmissionRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3593,6 +3603,12 @@ impl PolicyDispatchPayload {
     /// Workflow #383 register X14: the random delay drawn for this dispatch intent.
     pub const fn random_delay(&self) -> Option<&PolicyRandomDelay> {
         self.random_delay.as_ref()
+    }
+
+    /// SCH-M ED-2: the duration this dispatch intent reserved, when it is not its task spec's
+    /// declared one.
+    pub const fn expected_duration_ms(&self) -> Option<u64> {
+        self.expected_duration_ms
     }
 
     pub fn fact_snapshot_id(&self) -> &str {
@@ -7239,6 +7255,8 @@ struct PolicyDispatchDraft {
     /// Workflow #405 D1 (register X14): set only by
     /// `PolicyPayloadDraft::dispatch_intent_with_random_delay`.
     random_delay: Option<PolicyRandomDelay>,
+    /// SCH-M ED-2: set only by `PolicyPayloadDraft::dispatch_intent_with`.
+    expected_duration_ms: Option<u64>,
     audit: AuditInput,
 }
 
@@ -7410,6 +7428,12 @@ impl PolicyDispatchDraft {
         if let Some(random_delay) = &self.random_delay {
             random_delay.validate()?;
         }
+        if self.expected_duration_ms == Some(0) {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidPolicyPayload,
+                "expected_duration_ms",
+            ));
+        }
         Ok(PolicyDispatchPayload {
             action: EventAction::PolicyDispatch,
             diagnostic_code: self.diagnostic_code,
@@ -7430,6 +7454,7 @@ impl PolicyDispatchDraft {
             urgency_milli: self.data.urgency_milli,
             priority_locked: false,
             random_delay: self.random_delay,
+            expected_duration_ms: self.expected_duration_ms,
             admission: self.admission,
             rejection: self.rejection,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -8462,6 +8487,15 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
             ));
         }
         delay.validate()?;
+    }
+    // SCH-M ED-2: only a dispatch intent carries the duration it reserved, never 0.
+    if let Some(expected) = value.expected_duration_ms
+        && (expected == 0 || !matches!(payload, PolicyPayload::DispatchIntent(_)))
+    {
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidPolicyPayload,
+            "expected_duration_ms",
+        ));
     }
     validate_policy_dispatch_fields(
         &PolicyDispatchEventData {
@@ -10946,19 +10980,35 @@ enum PolicyDraftKind {
     Completed(PolicyDispatchDraft),
     Execution(PolicyExecutionDraft),
     PlanningSignal(PolicyPlanningSignalDraft),
+    ControlState(Box<PolicyControlStateRecord>, AuditInput),
+    ActivityState(Box<PolicyActivityStateRecord>, AuditInput),
 }
 
 pub struct PolicyPayloadDraft(PolicyDraftKind);
 
 impl PolicyPayloadDraft {
     pub fn dispatch_intent(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
+        Self::dispatch_intent_with(data, None, None, audit)
+    }
+
+    /// SCH-M ED-2 (coordinator ruling 10-24 14:1x): the intent of a dispatch with its random
+    /// delay (Workflow #405 D1, register X14), when it was made under one, and the duration it
+    /// reserved, when that is not its task spec's declared `expected_duration_ms`; only an intent
+    /// carries either.
+    pub fn dispatch_intent_with(
+        data: PolicyDispatchEventData,
+        random_delay: Option<PolicyRandomDelay>,
+        expected_duration_ms: Option<u64>,
+        audit: AuditInput,
+    ) -> Self {
         Self(PolicyDraftKind::Intent(PolicyDispatchDraft {
             data,
             admission: None,
             rejection: None,
             diagnostic_code: None,
             effect_disposition: None,
-            random_delay: None,
+            random_delay,
+            expected_duration_ms,
             audit,
         }))
     }
@@ -10970,15 +11020,7 @@ impl PolicyPayloadDraft {
         random_delay: PolicyRandomDelay,
         audit: AuditInput,
     ) -> Self {
-        Self(PolicyDraftKind::Intent(PolicyDispatchDraft {
-            data,
-            admission: None,
-            rejection: None,
-            diagnostic_code: None,
-            effect_disposition: None,
-            random_delay: Some(random_delay),
-            audit,
-        }))
+        Self::dispatch_intent_with(data, Some(random_delay), None, audit)
     }
 
     pub fn dispatch_admitted(
@@ -10993,6 +11035,7 @@ impl PolicyPayloadDraft {
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
             random_delay: None,
+            expected_duration_ms: None,
             audit,
         }))
     }
@@ -11009,6 +11052,7 @@ impl PolicyPayloadDraft {
             diagnostic_code: Some(DiagnosticCode::PolicyRejected),
             effect_disposition: Some(effect_disposition),
             random_delay: None,
+            expected_duration_ms: None,
             audit,
         }))
     }
@@ -11025,6 +11069,7 @@ impl PolicyPayloadDraft {
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
             random_delay: None,
+            expected_duration_ms: None,
             audit,
         }))
     }
@@ -11042,6 +11087,7 @@ impl PolicyPayloadDraft {
             diagnostic_code: Some(DiagnosticCode::PolicyRejected),
             effect_disposition: Some(effect_disposition),
             random_delay: None,
+            expected_duration_ms: None,
             audit,
         }))
     }
@@ -11081,6 +11127,18 @@ impl PolicyPayloadDraft {
             data,
             audit,
         }))
+    }
+
+    /// Workflow #422 LN-3 (register L7): one dispatch pair's complete decision memory after a
+    /// change.
+    pub fn control_state_recorded(state: PolicyControlStateRecord, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::ControlState(Box::new(state), audit))
+    }
+
+    /// Workflow #422 LN-3 (register L14): one (instance, activity profile)'s complete activity
+    /// state after a change.
+    pub fn activity_state_recorded(state: PolicyActivityStateRecord, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::ActivityState(Box::new(state), audit))
     }
 }
 
@@ -11224,6 +11282,7 @@ impl ReleasePayloadDraft {
 
 enum AgentDraftKind {
     WakeRequested(AgentWakeDraft),
+    WakeObligation(AgentWakeDraft),
     SessionStarted(AgentSessionDraft),
     SessionResumed(AgentSessionDraft),
     ResponseRecorded(AgentSessionDraft),
@@ -11236,6 +11295,14 @@ pub struct AgentPayloadDraft(AgentDraftKind);
 impl AgentPayloadDraft {
     pub fn wake_requested(wake: AgentWakeData, audit: AuditInput) -> Self {
         Self(AgentDraftKind::WakeRequested(AgentWakeDraft {
+            wake,
+            audit,
+        }))
+    }
+
+    /// Workflow #422 LN-3 (register L8): the value record of one wake obligation.
+    pub fn wake_obligation_recorded(wake: AgentWakeData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::WakeObligation(AgentWakeDraft {
             wake,
             audit,
         }))
@@ -12108,6 +12175,15 @@ impl EventPayloadDraft {
                 PolicyDraftKind::PlanningSignal(detail) => {
                     PolicyPayload::PlanningSignalObserved(detail.sanitize(fingerprinter)?)
                 }
+                PolicyDraftKind::ControlState(state, audit) => PolicyPayload::ControlStateRecorded(
+                    PolicyControlStatePayload::new(*state, audit.sanitize(fingerprinter)?)?,
+                ),
+                PolicyDraftKind::ActivityState(state, audit) => {
+                    PolicyPayload::ActivityStateRecorded(PolicyActivityStatePayload::new(
+                        *state,
+                        audit.sanitize(fingerprinter)?,
+                    )?)
+                }
             }),
             Self::Catalog(value) => EventPayload::Catalog(match value.0 {
                 CatalogDraftKind::TransitionIntent(detail) => {
@@ -12148,6 +12224,12 @@ impl EventPayloadDraft {
             Self::Agent(value) => EventPayload::Agent(match value.0 {
                 AgentDraftKind::WakeRequested(detail) => {
                     AgentPayload::WakeRequested(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::WakeObligation(detail) => {
+                    AgentPayload::WakeObligationRecorded(AgentWakeObligationPayload::new(
+                        detail.wake,
+                        detail.audit.sanitize(fingerprinter)?,
+                    )?)
                 }
                 AgentDraftKind::SessionStarted(detail) => {
                     AgentPayload::SessionStarted(detail.sanitize(fingerprinter)?)

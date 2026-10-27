@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct StartupRecoveryTiming {
-    /// `InstanceFactStore::recover`, the whole-Ledger replay before the held point.
+    /// `InstanceFactStore::recover`, the tagged instance store load before the held point
+    /// (Workflow #422 LN-2; before it, the whole-Ledger replay).
     pub(crate) fact_store_ms: Option<u64>,
     pub(crate) monitor_registry_ms: Option<u64>,
     pub(crate) policy_host_ms: Option<u64>,

@@ -41,6 +41,8 @@ and `operation explain` keep their existing behavior.
 | `declaration-exclusions.json` (repository root only) | Resource tooling's `DeclarationExclusions::parse` (`actingcommand.declaration-exclusions.v1`, Workflow #396 TOOL-2); reported with family `declaration_exclusions` |
 | `interrupts.json` (repository root only) | The shared interrupt pages (`actingcommand.interrupts.v1`, Workflow #373 NAV-6): `parse_standard_pack_interrupts` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_interrupts` |
 | `navigation.json` (repository root only) | The edges and the recovery chain (`actingcommand.navigation.v1`, Workflow #373 NAV-5): `parse_standard_pack_navigation` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_navigation` |
+| `schedule.json` (repository root only) | The schedule rules (`actingcommand.schedule.v1`, ROUT-L RL-1a, RL-T): `parse_standard_pack_schedule`, the reader every composer runs ([standard-pack-schedule.md](standard-pack-schedule.md), "The file"); a refusal is `resource_declaration_invalid` whose details name `standard_pack_problem` and `json_pointer`; the packages its rules and `held` name, and the composition, are checked by `package bundle --schedule`; reported with family `standard_pack_schedule` |
+| `tables/<table_id>.json` (repository root's `tables/` only) | A shared table (`actingcommand.table.v1`, Workflow #357 DB-1, M-357a v1.1 §2): `parse_standard_pack_table`, the Runtime reader's own check (the table names its game itself), and `table_too_large` for the directory's 65th file or later by file name; reported with family `standard_pack_tables`. The binding and coverage checks of the family come with DB-2 |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
 A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
@@ -1299,3 +1301,32 @@ destination, and infers no click and no guard for a wait step; a wait step is no
   package waits there through an activity and ends busy only when the activity outlasts `max_ms`.
 - No code and no record are added: the step writes `StepStarted` and `StepFinished` and the
   frames their capture and recognition records.
+
+### Capture cadence
+
+PERF-B1 (Workflow #407 B1, [v012-register.md](v012-register.md) §1.177): how often a run captures
+while a step waits for a page. No new member, code or record; any task schema.
+
+- **A wait's own interval.** `control.capture_interval_ms` is the interval of every wait of the
+  package (50 ms when it declares none). A step's `expect_after.interval_ms` is the interval of
+  that step's one wait: the confirmation after its input, or a wait step's wait; a `linear_steps`
+  transition's `interval_ms` is that of its intermediate page's wait. The package's other steps
+  keep their own interval. A long wait declares a long interval on its own step, for example a
+  wait step on a page that shows an activity for many minutes:
+  `"expect_after": {"page_id": "page_b", "timeout_ms": 1800000, "interval_ms": 30000}`.
+- **The ceiling.** Admission takes a declared interval in `1..=1800000`. The run refuses one above
+  the configured ceiling `execution.capture.max_interval_ms` (default 60000,
+  [runtime-config.md](runtime-config.md), "The `execution` section") before its first capture,
+  with the code admission gives a broken interval: `contained_task_control_invalid` for
+  `capture_interval_ms` and `expect_after.interval_ms`, `contained_task_linear_invalid`
+  (`reason=transition_interval`) for a transition's.
+- **Back-off on a still screen.** While a step waits for a page (a page wait, a confirmation, a
+  wait step's wait, the waits of a `linear_steps` step), each frame that is unchanged from the
+  wait's frame before it by the Runtime's frame-change measure (#411 B12, the whole frame) doubles
+  the next pause, up to `execution.capture.idle_ceiling_ms` (default 5000) or the declared interval,
+  whichever is longer; the first changed frame returns it to the declared interval, and so does a
+  handled shared interrupt page. An interval declared above the idle ceiling is never changed.
+  The pause is still cut at the wait's remaining time and the task's deadline, so no wait passes
+  its own limit or the task's deadline; a page that appears during a long pause is seen at the
+  next frame. `execution.capture.backoff_enabled` (default `true`) switches it off. Entry
+  checks, observation windows, input rechecks, samples and a scan's settle keep their interval.

@@ -28,8 +28,31 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   §1.168 A35-5): revision 9 adds that release's configuration keys; revisions 5 to 8 are
 ///   still read, so [5, 9]. P0-LO (v0.12.11): revision 10 adds
 ///   `ledger_observer.open_timeout_ms` and `ledger_observer.open_warn_ratio_milli`; revisions 5
-///   to 9 are still read, so [5, 10]. Workflow #421 INST-1 (v0.12.12): revision 11 adds the
-///   `install` section; revisions 5 to 10 are still read, so [5, 11].
+///   to 9 are still read, so [5, 10]. #411 A64 (v0.12.12, ruling C-43): revision 11 adds
+///   `host_claims.run_end_grace_ms`, #411 A66 (same release) adds to it the `watchdog` section
+///   (`start_window_ms`), PERF-B1 (Workflow #407 B1, register §1.177, same release) the
+///   optional `execution` section, SCH-M ED-1 (register §1.178, same release) the
+///   expected-duration keys and emu-watch the emulator watch's `emulator_control` keys;
+///   revisions 5 to 10 are still read, so [5, 11]. IDLE-1 (v0.12.13, Alice's ruling 41):
+///   revision 12 adds the `idle` section and an instance entry's `idle` member; ROUT-L RL-1b
+///   (same release) adds to it the `standard_packs` keys `check_interval_ms` and
+///   `cached_generations`, and a `policy` section without `catalog` (composer mode), LN-5 (#422,
+///   same release) `ledger_observer.history_page_rows` and LN-TUNE (#422, same release)
+///   `ledger_observer.writer_reply_timeout_ms`; revisions 5 to 11 are still read, so [5, 12].
+///   LN-8 (#422, the release after v0.12.13): revision 13 adds
+///   `ledger_observer.open_verify_tail_records`, and LN-9 (#422, same release) the scrub's
+///   `ledger_observer` keys `scrub_rows_per_second`, `scrub_chunk_rows` and
+///   `scrub_pass_interval_ms`; revisions 5 to 12 are still read, so [5, 13]. LN-WS (#422,
+///   v0.12.15): revision 14 adds `ledger_observer.read_check_vm_steps` and
+///   `ledger_observer.history_scan_rows`; revisions 5 to 13 are still read, so [5, 14].
+///   Workflow #392 DA-4b-D (v0.12.16, Alice's ruling 69): revision 15 adds the `display_safe_area`
+///   section and an instance entry's `display_safe_area` member; revisions 5 to 14 are still read,
+///   so [5, 15]. #422 LN-7c Q (v0.12.17, Alice's ruling 70): revision 16 adds the top-level
+///   `frame_retention_evidence_max_age_days` and the `ledger_observer` keys
+///   `frame_query_steps_per_second` and `frame_query_chunk_frames`; revisions 5 to 15 are still
+///   read, so [5, 16]. Workflow #421 INST-1 (v0.12.18): revision 17 adds the `install` section
+///   (`actingctl install`'s waits, attempts, margins and guard values); revisions 5 to 16 are
+///   still read, so [5, 17].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -43,7 +66,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused.
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 11]),
+    ("actingd-config", [5, 17]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 4]),

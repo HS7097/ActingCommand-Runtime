@@ -3,10 +3,12 @@
 //! Test plan v2.2 §3.6 H-5 G14 (inventory-host key 38; Workflow #382 H-5 G14): when more than
 //! 16 frames are due, the frame cleaner (Workflow #375 R5d) cleans them in rounds of at most 16
 //! actions, over as many rounds as the sweep needs, and acts on each due frame once a sweep
-//! (`contracts/ledger-store.md`, "Frame cleaner"). Between rounds the cleaner re-reads its view.
-//! It records nothing, so the unchanged view still lists every frame it already removed or moved
+//! (`contracts/ledger-store.md`, "Frame cleaner"). Each round re-checks the frames it takes. It
+//! records nothing, so the unchanged answers still name every frame it already removed or moved
 //! as due. The 1 s round budget is wall-clock and no logic test asserts it (coordinator answer
-//! CD-25), so every assertion here holds however many frames a round reaches within it.
+//! CD-25), so every assertion here holds however many frames a round reaches within it. #422
+//! LN-7c Q: the answers come from the fake ledger query of `tests.rs` (adapted: the cleaner read
+//! the writer's frame view, which Q removed).
 
 use super::*;
 
@@ -91,15 +93,24 @@ struct Driven {
     warnings: Vec<FrameRetentionWarning>,
 }
 
-/// `maintain` at an unchanged head, without its ledger read: one sweep from the case's view,
-/// then rounds, deriving the queued actions again from the full, unchanged view between rounds,
-/// until a round returns the sweep's report. Bounded at 2 × N rounds so that a defect fails
-/// instead of hanging; not N, because a round whose budget is spent before its first action
-/// acts on no frame.
+/// `maintain` at an unchanged head, without its ledger: one pass over the case's answers, then
+/// rounds, each re-checking the frames it takes against the same, unchanged answers, until a
+/// round returns the pass's report. Bounded at 2 × N rounds so that a defect fails instead of
+/// hanging; not N, because a round whose budget is spent before its first action acts on no
+/// frame.
 fn drive(retention: &mut FrameRetention, due: &Due, case: &Case) -> Driven {
     let root = &due.root;
     let bound = 2 * due.count();
-    retention.begin_sweep(&root.view());
+    let mut answers = root.answers();
+    retention
+        .begin_pass(
+            &mut answers,
+            root.live(),
+            Vec::new(),
+            clock(NOW, 0),
+            SETTINGS,
+        )
+        .expect("a pass begins");
     let mut first_round_open = false;
     let mut acted = Vec::new();
     let mut warnings = Vec::new();
@@ -110,12 +121,24 @@ fn drive(retention: &mut FrameRetention, due: &Due, case: &Case) -> Driven {
             "case {}: the sweep is not complete after {bound} rounds",
             case.name
         );
-        let report = retention
-            .round(&root.path, &|| false, &mut |warning| {
-                warnings.push(warning.clone());
-                Ok(())
-            })
-            .expect("a round never fails on a file");
+        let report = match retention
+            .round(
+                &mut answers,
+                &root.path,
+                clock(NOW, 0),
+                SETTINGS,
+                &|| false,
+                &mut |warning| {
+                    warnings.push(warning.clone());
+                    Ok(())
+                },
+            )
+            .expect("a round never fails on a file")
+        {
+            Some(PassEnd::Completed(report)) => Some(report),
+            Some(PassEnd::Skipped) => panic!("the fake covers the ledger"),
+            None => None,
+        };
         let gone = (0..root.frames.len())
             .filter(|index| !root.object(*index).exists())
             .count();
@@ -132,7 +155,6 @@ fn drive(retention: &mut FrameRetention, due: &Due, case: &Case) -> Driven {
                 warnings,
             };
         }
-        retention.rederive(&root.view());
     }
 }
 
@@ -234,7 +256,7 @@ fn gate_a_sweep_over_several_rounds_acts_on_each_due_frame_once() {
             driven.warnings
         );
         assert!(
-            retention.sweep.is_none(),
+            retention.pass.is_none(),
             "case {name}: the sweep is complete"
         );
     }

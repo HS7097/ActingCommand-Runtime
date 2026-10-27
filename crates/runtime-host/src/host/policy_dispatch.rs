@@ -5,6 +5,7 @@ use super::scheduling_pause::{PauseOrigin, pause_row};
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
+use crate::codes::SchedulingRuleHostCode;
 use crate::policy_host::InstanceOccupancy;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
@@ -24,8 +25,12 @@ const DISPATCH_CONTENDED_RETRY_AFTER_MS: u64 = 1_000;
 /// Workflow #369 W-1: a dispatch refused because its instance is held, or because its admission
 /// guard stayed contended, is an Info record; every other refusal stays an Error.
 fn policy_rejection_severity(code: &str) -> EventSeverity {
+    // Workflow #386 SR-4a2: the blackout and day-boundary refusals are waits, of category info.
     if code == HostCode::DispatchInstanceHeld.as_str()
         || code == HostCode::DispatchInstanceContended.as_str()
+        || code == SchedulingRuleHostCode::BlackoutActive.as_str()
+        || code == SchedulingRuleHostCode::BlackoutApproaching.as_str()
+        || code == SchedulingRuleHostCode::PolicyDayBoundaryApproaching.as_str()
     {
         EventSeverity::Info
     } else {
@@ -796,7 +801,12 @@ impl HostShared {
             unix_ms: sample.unix_ms,
             monotonic_ms: sample.monotonic_ms,
         };
-        self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)
+        let cycle =
+            self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)?;
+        // IDLE-1: the idle check right after the evaluation and before actingd admits its
+        // dispatches, so a wake's claim holds an idle instance before a due dispatch reaches it.
+        self.check_idle_instances(false)?;
+        Ok(cycle)
     }
 
     #[cfg(test)]
@@ -833,6 +843,10 @@ impl HostShared {
         if trigger == PolicyTrigger::Reconciliation {
             self.reconcile_pending_policy_settlements()?;
         }
+        // ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench's check, at most once
+        // per `standard_packs.check_interval_ms`, before this cycle reads its manifest and
+        // catalog. Nothing in configured mode.
+        self.check_standard_pack_rules(observed_monotonic_ms)?;
         let _detection_gate = lock(
             &self.detection_write_gate,
             HostLocation::PlanPolicyDetection,
@@ -916,9 +930,16 @@ impl HostShared {
             self.random_delay_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
         // Workflow #411 B41: the page each instance rests on as this cycle starts.
         let chain_handover = self.chain_handover_inputs(&facts.instances)?;
-        let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays) = {
+        // Workflow #386 SR-4a2: the blackout keys in effect as this cycle starts.
+        let blackout_context =
+            self.blackout_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays, blackout_holds) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
+            // Workflow #386 SR-4a2 (position 4): the instances a blackout covers as this cycle
+            // starts, judged once for the evaluation and the fact refresh's recorder.
+            let blackout_holds =
+                policy.blackout_holds(&blackout_context, &facts.instances, time)?;
             let cycle = policy.evaluate(
                 &facts,
                 &controlled_resources,
@@ -942,6 +963,8 @@ impl HostShared {
                     remedy: &remedy_context,
                     random_delay: &random_delay_context,
                     chain_handover: &chain_handover,
+                    blackout: &blackout_context,
+                    blackout_holds: &blackout_holds,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -951,7 +974,13 @@ impl HostShared {
             };
             // Workflow #405 D1: the random delay each pending intent was dispatched under.
             let random_delays = policy.dispatch_random_delays(&cycle.pending_dispatch_intents);
-            (cycle, unknown, catalog_pool_scopes(&policy), random_delays)
+            (
+                cycle,
+                unknown,
+                catalog_pool_scopes(&policy),
+                random_delays,
+                blackout_holds,
+            )
         };
         attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(
@@ -986,7 +1015,8 @@ impl HostShared {
         // its waiting candidates to the fact refresh's transition recorder, which only produces
         // transitions: they stay in memory (the cycle's report), no decision reads them and
         // nothing is written to the ledger. An instance the closure's positions 1-2 held as the
-        // cycle started raised no demand, so its keys are not observed.
+        // cycle started raised no demand, so its keys are not observed; Workflow #386 SR-4a2:
+        // nor did one a blackout covered (position 4).
         if let Some(evaluation) = &cycle.evaluation {
             let overdue_ms = self.fact_refresh_overdue_ms()?;
             let held = |instance_alias: &str| {
@@ -996,6 +1026,7 @@ impl HostShared {
                     occupancy.get(instance_alias).copied(),
                 )
                 .is_some()
+                    || blackout_holds.contains_key(instance_alias)
             };
             let transitions = lock(
                 &self.fact_refresh_recorder,
@@ -1223,14 +1254,20 @@ impl HostShared {
             }
             base_facts.priority_offsets.push(offset);
         }
-        base_facts.tasks =
-            policy.task_runtime_snapshots(ledger_position, eligibility_as_of_unix_ms)?;
+        base_facts.tasks = policy.task_runtime_snapshots(
+            &self.ledger,
+            ledger_position,
+            eligibility_as_of_unix_ms,
+        )?;
         base_facts.tasks.retain(|state| {
             base_facts
                 .instances
                 .iter()
                 .any(|instance| instance.instance_id == state.instance_id)
         });
+        // SCH-M ED-2 (frozen model v1.0 §3.4 D-15): each pair's expected duration E from its
+        // instance's `health.run_duration` record at the projected position.
+        self.project_expected_runtimes(policy, fact_projection, &mut base_facts)?;
         let authoritative_outcomes = lock(
             &self.authoritative_policy_outcomes,
             HostLocation::ProjectPolicySchedulingOutcomes,
@@ -1428,12 +1465,36 @@ impl HostShared {
             }
         }
         let catalog = policy.active_loaded();
+        // ROUT-L RL-1b (RL-1a review, #386 6399836824 item 1; #419; model §3.6): under a composed
+        // generation a configured static pool reading names a pool of a game in use or none; a
+        // reading for a pool no composed game declares is left out (the workbench records it
+        // once per pool), so it never stops the evaluation of every instance. A configured
+        // catalog's readings are passed as they are.
+        let static_resources = match &catalog {
+            Some(catalog)
+                if catalog.generation().catalog_id()
+                    == actingcommand_policy::STANDARD_PACKS_CATALOG_ID =>
+            {
+                let mut resources = inputs.resources().clone();
+                resources.pools.retain(|reading| {
+                    catalog
+                        .compiled()
+                        .catalog()
+                        .pools
+                        .pools
+                        .iter()
+                        .any(|pool| pool.id == reading.pool_id)
+                });
+                resources
+            }
+            _ => inputs.resources().clone(),
+        };
         let mut unknown_offset_tasks = UnknownPriorityOffsetTasks::new();
         if let Some(catalog) = &catalog {
             validate_static_fact_pool_authority(
                 catalog.compiled(),
                 inputs.facts(),
-                inputs.resources(),
+                &static_resources,
                 operation,
             )?;
             // An offset for a task the catalog does not declare is still passed (the
@@ -1453,16 +1514,16 @@ impl HostShared {
         }
         let facts = fact_projection.overlay_policy_facts(
             &base_facts,
-            inputs.resources(),
+            &static_resources,
             ledger_position,
         )?;
         let resources = if let Some(catalog) = catalog {
             fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
                 self.fact_scope_instances(scope)
             })?;
-            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, inputs.resources())
+            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, &static_resources)
         } else {
-            inputs.resources().clone()
+            static_resources
         };
         let facts =
             fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
@@ -1586,12 +1647,17 @@ impl HostShared {
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
         let mut rejection = None;
         let result = (|| {
-            {
+            // SCH-M ED-2 (coordinator ruling 10-24 14:1x): the declared duration of the intent's
+            // task spec, which an intent record names its own duration against.
+            let declared_duration_ms = {
                 let policy = lock(self.policy()?, HostLocation::ValidatePolicyDispatch)?;
-                if let Some(replay) = policy.replay_admission(intent, reason_chain)? {
+                if let Some(replay) = policy.replay_admission(&self.ledger, intent, reason_chain)? {
                     return Ok(replay);
                 }
-            }
+                policy.declared_duration_ms(&intent.task_id)
+            };
+            // SCH-M ED-2: the configured declared duration of a fact refresh read.
+            let refresh_declared_ms = self.fact_refresh_settings()?.expected_duration_ms;
             let trusted = lock(
                 &self.trusted_policy_dispatches,
                 HostLocation::AuthorizeTrustedPolicyDispatch,
@@ -1611,6 +1677,17 @@ impl HostShared {
             } else {
                 None
             };
+            // Workflow #386 SR-4a2: the blackout keys in effect for the intent's instance, and the
+            // response deadline of the request it is admitted with (the evaluation's own rule
+            // when it is admitted without one).
+            let blackout_context = self.blackout_context(
+                &[intent.instance_id.as_str()],
+                HostLocation::AdmitPolicyDispatch,
+            )?;
+            let response_deadline_ms = task_request.map_or_else(
+                || crate::policy_host::evaluation_deadline_ms(intent),
+                ContainedTaskRequest::response_deadline_ms,
+            );
             if context.fact_ledger_position != trusted.intent.input_ledger_position
                 || context.fact_snapshot_id != trusted.intent.fact_snapshot_id
                 || context.fencing_owner_epoch != self.owner_epoch
@@ -1649,14 +1726,25 @@ impl HostShared {
                 &self.governance_write_gate,
                 HostLocation::ProjectPolicyApprovals,
             )?;
-            let approval_fact_ids =
+            // ROUT-L RL-1b (model §3.5): an intent of a composed generation names no approval,
+            // so its approval check passes without a projection.
+            let approval_fact_ids = if intent.approval_refs.is_empty() {
+                BTreeSet::new()
+            } else {
                 match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
                     Ok(projection) => projection.active_for_dispatch(intent),
+                    // #419 LN-WS-F (R1): an approval read the writer did not answer in time, or
+                    // stopped at its budget, fails only this admission, before its intent is
+                    // appended; the next evaluation derives the dispatch again. Any other failure
+                    // latches, as before.
                     Err(error) => {
-                        self.fatal.mark(error.clone())?;
+                        if !unanswered_ledger_read(&error) {
+                            self.fatal.mark(error.clone())?;
+                        }
                         return Err(error);
                     }
-                };
+                }
+            };
             let authoritative_context = PolicyAdmissionContext {
                 fact_ledger_position: trusted.intent.input_ledger_position,
                 fact_snapshot_id: trusted.intent.fact_snapshot_id.clone(),
@@ -1765,6 +1853,8 @@ impl HostShared {
             let resolved = self
                 .resolve_instance(&intent.instance_id)
                 .map_err(|failure| *failure.error)?;
+            let blackout_instance_id =
+                crate::failure_identity::identifier_text(&resolved.instance_id());
             let request_id = self
                 .events
                 .issuer()
@@ -1817,15 +1907,19 @@ impl HostShared {
             ));
             let data = policy_event_data(intent, reason_chain)?;
             // Workflow #405 D1 (register X14): the intent of a pair dispatched under a random
-            // delay records it; the admitted, rejected and completed records never do.
-            let intent_draft = match trusted.random_delay {
-                Some(random_delay) => PolicyPayloadDraft::dispatch_intent_with_random_delay(
-                    data.clone(),
-                    random_delay,
-                    AuditInput::new(),
-                ),
-                None => PolicyPayloadDraft::dispatch_intent(data.clone(), AuditInput::new()),
-            };
+            // delay records it; the admitted, rejected and completed records never do. SCH-M
+            // ED-2 (coordinator ruling 10-24 14:1x): an intent whose duration is not its task
+            // spec's declared one (its expected duration E, or a fact refresh's configured
+            // duration) records it, so recovery reserves it again.
+            let recorded_duration_ms = declared_duration_ms
+                .filter(|declared| *declared != intent.expected_duration_ms)
+                .map(|_| intent.expected_duration_ms);
+            let intent_draft = PolicyPayloadDraft::dispatch_intent_with(
+                data.clone(),
+                trusted.random_delay,
+                recorded_duration_ms,
+                AuditInput::new(),
+            );
             let event = self.events.draft(
                 EventSeverity::Info,
                 EventSource::Scheduler,
@@ -1891,6 +1985,18 @@ impl HostShared {
                     HostLocation::AdmitPolicyDispatch,
                 ));
             }
+            // SCH-M ED-2 (§3.4 D-15): the duration the admission's own projection gives the
+            // intent's pair, which the intent's must equal.
+            let admission_duration = crate::policy_host::AdmissionDuration {
+                expected_runtime_ms: current_facts
+                    .tasks
+                    .iter()
+                    .find(|state| {
+                        state.task_id == intent.task_id && state.instance_id == intent.instance_id
+                    })
+                    .and_then(|state| state.expected_runtime_ms),
+                refresh_declared_ms,
+            };
             let procedure_manifest = lock(
                 &self.procedure_manifest,
                 HostLocation::ValidateProcedureManifest,
@@ -1971,6 +2077,7 @@ impl HostShared {
                         context,
                         self.owner_epoch,
                         ledger_high_watermark,
+                        admission_duration,
                     ) {
                         Ok(catalog) => catalog,
                         Err(error) => {
@@ -1985,6 +2092,51 @@ impl HostShared {
                             };
                         }
                     };
+                    // Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals",
+                    // positions 4 and 7, and "Complete silence"): a blackout, the quiet before one
+                    // or the day boundary, judged again at this admission's own time, refuses at
+                    // Info with the code the evaluation would have deferred with (no lease, no
+                    // run). It comes after the intent's own checks and before the ceiling of its
+                    // facts' freshness: a catalog `maintenance` event is a timeline boundary, so
+                    // an intent evaluated before one is past that ceiling once the event starts,
+                    // and its crossing must still be refused `blackout_active`, as for every
+                    // source. Positions 4 and 7 also precede the remedy check (position 8a).
+                    if let Err(error) = self.monotonic_ms().and_then(|monotonic_ms| {
+                        policy.blackout_admission(
+                            &blackout_context,
+                            intent,
+                            &current_facts.instances,
+                            EvaluationTime {
+                                unix_ms: context.now_unix_ms,
+                                monotonic_ms,
+                            },
+                            response_deadline_ms,
+                            &blackout_instance_id,
+                        )
+                    }) {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                    // The intent's facts are still fresh at this admission's time
+                    // (`policy_facts_stale` otherwise), judged after the blackout re-check above.
+                    if let Err(error) = policy.validate_dispatch_freshness(intent, context) {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
                     // Workflow #411 B15 R4 (model-b15 §7.9): a remedy request or retry is
                     // admitted only while its round and layer are still open and unserved; else
                     // it is refused `policy_remedy_round_closed` (no lease, no run).
@@ -2195,6 +2347,9 @@ impl HostShared {
                     | CriticalExecutionError::OutcomeUndurable { .. },
                 ) => policy.refresh_dispatches(&self.ledger),
             };
+            // Workflow #422 LN-3: the admission's changes of the decision memory, as value
+            // records, still under the policy guard.
+            let applied = applied.and_then(|()| self.record_policy_values(&mut policy));
             let applied = match applied {
                 Ok(()) => Ok(()),
                 Err(error) => {
@@ -2581,15 +2736,18 @@ impl HostShared {
                     &admission,
                 ) {
                     Ok(Ok(())) => Ok(()),
-                    // Workflow #403: an unconfirmed close fenced the instance; the pause fails
-                    // with the fence's non-fatal failure.
-                    Ok(Err(close_error)) => Err(scheduling_pause_release_failure(
-                        self.retained_close_failure(
-                            HostLocation::ClosePausedInstanceSession,
-                            instance_id,
-                            &close_error,
-                        )?,
-                    )),
+                    // ISO-2 (#419, ISO-M rows D54, C32): a close whose resources were confirmed
+                    // is gone and its failure recorded; the pause holds. Workflow #403: an
+                    // unconfirmed close fenced the instance; the pause fails with the fence's
+                    // non-fatal failure.
+                    Ok(Err(close_error)) => match self.settle_retained_close_failure(
+                        HostLocation::ClosePausedInstanceSession,
+                        instance_id,
+                        &close_error,
+                    )? {
+                        None => Ok(()),
+                        Some(error) => Err(scheduling_pause_release_failure(error)),
+                    },
                     Err(error) => Err(scheduling_pause_release_failure(error)),
                 };
             }

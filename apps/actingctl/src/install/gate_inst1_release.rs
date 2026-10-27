@@ -5,14 +5,16 @@
 // (contracts/install-cli.md, "Release verify and stage", "Adopt", "Documents"):
 // - IT-1: `release verify` refuses each listed failure with it listed, two failures at once
 //   list both, and the release folder is left as it was;
-// - IT-2: without facts the result is the warning `install_release_verified_local`; `stage`
+// - IT-2: without facts the result is a warning, the caveat `release_unconfirmed`; `stage`
 //   refuses without facts or `--local-build`;
 // - IT-3: a second stage of a kept build is `unchanged`; a stage interrupted after its `.part`
 //   folder is finished by `resume` to the same bytes as an uninterrupted stage;
 // - IT-4: `adopt` keeps exactly the manifest files (`.old-*` ignored), refuses a changed live
-//   file with `install_live_build_modified`, and a second adopt is `unchanged`.
-// The machine is the fake host of `fixture.rs`; every root and release folder is a temporary
-// folder with neutral files.
+//   file (`live_build_modified`), and a second adopt is `unchanged`.
+// The codes are the family's folded codes (ruling 54, `contracts/install-cli.md`, "Outcome
+// codes"): `install_command_done`, `install_caveat_noted` and `install_command_refused`, each
+// with the command as `operation`. The machine is the fake host of `fixture.rs`; every root and
+// release folder is a temporary folder with neutral files.
 
 use super::fixture::{
     BuildSpec, C1, C2, FakeHost, TAG, code, live_root, run, sha256_hex, tree, word, write_json,
@@ -22,6 +24,11 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
+
+/// The answer's outcome value `key`, when it is a string.
+fn text<'a>(answer: &'a super::Answer, key: &str) -> Option<&'a str> {
+    answer.outcome.value(key).and_then(Value::as_str)
+}
 
 /// The checks a refusal lists, from its `release_checks` value.
 fn checks(answer: &super::Answer) -> Vec<String> {
@@ -64,18 +71,20 @@ fn release(
 fn inst1_it_1_release_verify_lists_every_failure_and_writes_nothing() {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
+    type BuildChange = Box<dyn Fn(&mut BuildSpec)>;
+    type FolderChange = Box<dyn Fn(&Path, &BuildSpec)>;
+    type FactsChange = Box<dyn Fn(&mut Value)>;
     type Row = (
         &'static str,
-        Box<dyn Fn(&mut BuildSpec)>,
-        Box<dyn Fn(&Path, &BuildSpec)>,
-        Box<dyn Fn(&mut Value)>,
+        BuildChange,
+        FolderChange,
+        FactsChange,
         Option<&'static str>,
         Vec<&'static str>,
     );
-    let none_build = || -> Box<dyn Fn(&mut BuildSpec)> { Box::new(|_: &mut BuildSpec| {}) };
-    let none_folder =
-        || -> Box<dyn Fn(&Path, &BuildSpec)> { Box::new(|_: &Path, _: &BuildSpec| {}) };
-    let none_facts = || -> Box<dyn Fn(&mut Value)> { Box::new(|_: &mut Value| {}) };
+    let none_build = || -> BuildChange { Box::new(|_: &mut BuildSpec| {}) };
+    let none_folder = || -> FolderChange { Box::new(|_: &Path, _: &BuildSpec| {}) };
+    let none_facts = || -> FactsChange { Box::new(|_: &mut Value| {}) };
     let rows: Vec<Row> = vec![
         (
             "zip_sha256_differs_from_sums",
@@ -212,10 +221,20 @@ fn inst1_it_1_release_verify_lists_every_failure_and_writes_nothing() {
         let answer = run(&host, &words);
         assert_eq!(
             code(&answer),
-            "install_release_refused",
+            "install_command_refused",
             "{name}: {answer:?}"
         );
         assert_eq!(answer.outcome.category(), Category::Error, "{name}");
+        assert_eq!(
+            text(&answer, "install_refusal"),
+            Some("release_check_failed"),
+            "{name}"
+        );
+        assert_eq!(
+            text(&answer, "operation"),
+            Some("install_release_verify"),
+            "{name}"
+        );
         let mut listed = checks(&answer);
         listed.sort();
         let mut expected = expected
@@ -239,7 +258,7 @@ fn inst1_it_1_release_verify_lists_every_failure_and_writes_nothing() {
     }
 }
 
-// IT-2: without facts `release verify` answers the warning `install_release_verified_local`;
+// IT-2: without facts `release verify` answers a warning, the caveat `release_unconfirmed`;
 // `release stage` refuses without facts or `--local-build`, and writes nothing under the root.
 #[test]
 fn inst1_it_2_without_facts_verify_warns_and_stage_needs_facts_or_local_build() {
@@ -250,12 +269,13 @@ fn inst1_it_2_without_facts_verify_warns_and_stage_needs_facts_or_local_build() 
     build.write_release(&dir);
 
     let verified = run(&host, &["release", "verify", "--dir", word(&dir)]);
-    assert_eq!(
-        code(&verified),
-        "install_release_verified_local",
-        "{verified:?}"
-    );
+    assert_eq!(code(&verified), "install_caveat_noted", "{verified:?}");
     assert_eq!(verified.outcome.category(), Category::Warning);
+    assert_eq!(
+        text(&verified, "install_caveat"),
+        Some("release_unconfirmed")
+    );
+    assert_eq!(text(&verified, "operation"), Some("install_release_verify"));
     assert_eq!(verified.outcome.value("commit_sha"), Some(&json!(C1)));
     assert_eq!(verified.members["commit"], json!(C1));
 
@@ -272,7 +292,12 @@ fn inst1_it_2_without_facts_verify_warns_and_stage_needs_facts_or_local_build() 
             word(&dir),
         ],
     );
-    assert_eq!(code(&refused), "install_release_refused", "{refused:?}");
+    assert_eq!(code(&refused), "install_command_refused", "{refused:?}");
+    assert_eq!(
+        text(&refused, "install_refusal"),
+        Some("release_check_failed")
+    );
+    assert_eq!(text(&refused, "operation"), Some("install_release_stage"));
     assert_eq!(checks(&refused), ["facts_missing"]);
     assert_eq!(tree(&root), before, "nothing is written under the root");
 
@@ -288,7 +313,8 @@ fn inst1_it_2_without_facts_verify_warns_and_stage_needs_facts_or_local_build() 
             "--local-build",
         ],
     );
-    assert_eq!(code(&staged), "install_build_staged", "{staged:?}");
+    assert_eq!(code(&staged), "install_command_done", "{staged:?}");
+    assert_eq!(text(&staged, "operation"), Some("install_release_stage"));
 }
 
 // IT-3: a second stage of a kept, verified build is `unchanged`; a stage stopped after its first
@@ -324,11 +350,20 @@ fn inst1_it_3_a_second_stage_is_unchanged_and_resume_finishes_an_interrupted_sta
     // Uninterrupted, then again.
     let whole = live_root(temp.path(), "whole", &BuildSpec::new(C2));
     let first = stage(&whole);
-    assert_eq!(code(&first), "install_build_staged", "{first:?}");
+    assert_eq!(code(&first), "install_command_done", "{first:?}");
+    assert_eq!(text(&first, "operation"), Some("install_release_stage"));
     assert_eq!(first.members["unchanged"], json!(false));
+    assert_eq!(
+        first.outcome.value("installation_changed"),
+        Some(&json!(true))
+    );
     let second = stage(&whole);
-    assert_eq!(code(&second), "install_build_staged", "{second:?}");
+    assert_eq!(code(&second), "install_command_done", "{second:?}");
     assert_eq!(second.members["unchanged"], json!(true));
+    assert_eq!(
+        second.outcome.value("installation_changed"),
+        Some(&json!(false))
+    );
     assert!(second.outcome.value("install_operation_id").is_none());
 
     // Interrupted after step 1 (extract), then resumed.
@@ -341,6 +376,10 @@ fn inst1_it_3_a_second_stage_is_unchanged_and_resume_finishes_an_interrupted_sta
         "{interrupted:?}"
     );
     assert_eq!(interrupted.outcome.category(), Category::Fatal);
+    assert_eq!(
+        text(&interrupted, "operation"),
+        Some("install_release_stage")
+    );
     let operation_id = interrupted
         .outcome
         .value("install_operation_id")
@@ -375,7 +414,8 @@ fn inst1_it_3_a_second_stage_is_unchanged_and_resume_finishes_an_interrupted_sta
             operation_id.as_str(),
         ],
     );
-    assert_eq!(code(&resumed), "install_operation_resumed", "{resumed:?}");
+    assert_eq!(code(&resumed), "install_command_done", "{resumed:?}");
+    assert_eq!(text(&resumed, "operation"), Some("install_resume"));
     assert!(!stopped.join("install").join("current.json").exists());
     assert_eq!(
         tree(&stopped.join("install").join("builds").join(C1)),
@@ -391,8 +431,8 @@ fn inst1_it_3_a_second_stage_is_unchanged_and_resume_finishes_an_interrupted_sta
 }
 
 // IT-4: `adopt` keeps exactly the listed files and both manifests (an `.old-*` beside them is
-// ignored); a listed live file that differs refuses `install_live_build_modified`; a second adopt
-// of the same live build is `unchanged`.
+// ignored); a listed live file that differs refuses `live_build_modified`; a second adopt of the
+// same live build is `unchanged`.
 #[test]
 fn inst1_it_4_adopt_keeps_the_listed_files_refuses_a_changed_one_and_is_idempotent() {
     let temp = TempDir::new().expect("tempdir");
@@ -406,8 +446,13 @@ fn inst1_it_4_adopt_keeps_the_listed_files_refuses_a_changed_one_and_is_idempote
     .expect("an older program file");
 
     let adopted = run(&host, &["adopt", "--root", word(&root)]);
-    assert_eq!(code(&adopted), "install_root_adopted", "{adopted:?}");
+    assert_eq!(code(&adopted), "install_command_done", "{adopted:?}");
+    assert_eq!(text(&adopted, "operation"), Some("install_adopt"));
     assert_eq!(adopted.members["unchanged"], json!(false));
+    assert_eq!(
+        adopted.outcome.value("installation_changed"),
+        Some(&json!(true))
+    );
     let kept = tree(&root.join("install").join("builds").join(C1));
     let mut expected = std::collections::BTreeMap::new();
     for (half, spec) in [("runtime", &build.runtime), ("tools", &build.tools)] {
@@ -430,8 +475,12 @@ fn inst1_it_4_adopt_keeps_the_listed_files_refuses_a_changed_one_and_is_idempote
     );
 
     let again = run(&host, &["adopt", "--root", word(&root)]);
-    assert_eq!(code(&again), "install_root_adopted", "{again:?}");
+    assert_eq!(code(&again), "install_command_done", "{again:?}");
     assert_eq!(again.members["unchanged"], json!(true));
+    assert_eq!(
+        again.outcome.value("installation_changed"),
+        Some(&json!(false))
+    );
 
     let changed = live_root(temp.path(), "changed", &build);
     fs::write(
@@ -440,7 +489,12 @@ fn inst1_it_4_adopt_keeps_the_listed_files_refuses_a_changed_one_and_is_idempote
     )
     .expect("change a live file");
     let refused = run(&host, &["adopt", "--root", word(&changed)]);
-    assert_eq!(code(&refused), "install_live_build_modified", "{refused:?}");
+    assert_eq!(code(&refused), "install_command_refused", "{refused:?}");
+    assert_eq!(
+        text(&refused, "install_refusal"),
+        Some("live_build_modified")
+    );
+    assert_eq!(text(&refused, "operation"), Some("install_adopt"));
     assert_eq!(refused.outcome.value("count"), Some(&json!(1)));
     assert!(!changed.join("install").exists(), "nothing is written");
 }

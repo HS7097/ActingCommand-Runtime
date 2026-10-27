@@ -6,9 +6,9 @@
 //! fixes the format; each section adds its rows in its own file (§5.1).
 
 use crate::{
-    device_link, device_state, emulator_control, existing, host_claims, install, instance,
-    lab_module, ledger_observer, performance, recovery_ladder, scheduling, standard_packs,
-    startup_discovery, touch,
+    device_link, device_state, display_safe_area, emulator_control, execution, existing,
+    frame_retention, host_claims, idle, install, instance, lab_module, ledger_observer,
+    performance, recovery_ladder, scheduling, standard_packs, startup_discovery, touch, watchdog,
 };
 
 /// The type of a key's value (§5.5 `type`). A decimal, a list and an object are reported in
@@ -158,10 +158,11 @@ pub fn assembly_rows() -> &'static [KeyRow] {
 
 /// The rows of the sections this crate resolves and renders (§5.1), one file each: their file
 /// layer, defaults file and section defaults. The section-level keys come before the
-/// per-instance section whose defaults they are.
-fn mechanism_sections() -> [&'static [KeyRow]; 17] {
+/// per-instance section whose defaults they are. A new section is one more line; nothing counts
+/// the sections by hand (Workflow #420 S6).
+fn mechanism_sections() -> Vec<&'static [KeyRow]> {
     let [monitor, responsiveness, pacing, calibration] = performance::sections();
-    [
+    vec![
         recovery_ladder::ROWS,
         host_claims::ROWS,
         standard_packs::ROWS,
@@ -177,6 +178,11 @@ fn mechanism_sections() -> [&'static [KeyRow]; 17] {
         startup_discovery::ROWS,
         touch::ROWS,
         emulator_control::ROWS,
+        watchdog::ROWS,
+        execution::ROWS,
+        idle::ROWS,
+        display_safe_area::ROWS,
+        frame_retention::ROWS,
         install::ROWS,
         instance::ROWS,
     ]
@@ -188,8 +194,10 @@ fn mechanism_sections() -> [&'static [KeyRow]; 17] {
 /// `ledger_observer` section (Workflow #383 AO-1), the two Lab options (Workflow #389 U-2), the
 /// `device_link` section (Workflow #398 RD-2), the `device_state` section (Workflow #398 RD-5b),
 /// the `startup_discovery` section (Workflow #390 DISC-1), the `touch` section (Workflow #406
-/// T12), the `emulator_control` section (#411 A50), the `install` section (Workflow #421 INST-1),
-/// then the per-instance section (D1b).
+/// T12), the `emulator_control` section (#411 A50), the `watchdog` section (#411 A66), the
+/// `execution` section (PERF-B1), the `idle` section (IDLE-1), the `display_safe_area` section
+/// (Workflow #392 DA-4b-D), the evidence-frame key (#422 LN-7c Q), the `install` section
+/// (Workflow #421 INST-1), then the per-instance section (D1b).
 pub fn mechanism_rows() -> Vec<KeyRow> {
     mechanism_sections()
         .into_iter()

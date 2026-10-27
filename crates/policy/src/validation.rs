@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 
 use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
-    ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
-    MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS,
-    MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES,
-    MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE,
-    MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS,
-    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK,
-    MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES,
-    MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES,
-    MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
-    MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES,
-    MetricRef, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PoolValuation,
-    PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
-    ScopeSelector, TaskSpec, TimelineDocument,
+    ClockSource, Comparison, EffectDirection, FactComparand, FactReference, FactValue, LoadProfile,
+    MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER,
+    MAX_CLOCK_DRIFT_MS, MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS,
+    MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS,
+    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS,
+    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE,
+    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
+    MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
+    MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
+    MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS,
+    MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec,
+    PoolValuation, PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION,
+    SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec, TimelineDocument,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -167,7 +167,9 @@ fn validate_descriptors(
                 descriptor,
             ));
         }
-        if catalog.approval_refs.is_empty() {
+        // ROUT-L RL-1a (model §3.5, R1): a V2 catalog may carry no approval; the standard-pack
+        // composer writes none. V1 keeps its rule.
+        if catalog.approval_refs.is_empty() && schema_version != SCHEDULING_SCHEMA_VERSION_V2 {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::ApprovalMissing,
                 "/catalog/approval_refs",
@@ -313,11 +315,15 @@ fn validate_tasks(
     descriptor: Option<(&str, u64)>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
-    if bundle.tasks.tasks.is_empty() || bundle.tasks.tasks.len() > MAX_TASKS {
+    // ROUT-L RL-1a (model §3.6): a V2 catalog may hold no task, the composition of standard
+    // packs without rules. V1 keeps its rule.
+    let v2 = map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2);
+    let minimum = usize::from(!v2);
+    if bundle.tasks.tasks.len() < minimum || bundle.tasks.tasks.len() > MAX_TASKS {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LimitExceeded,
             "/tasks",
-            format!("task count must be between 1 and {MAX_TASKS}"),
+            format!("task count must be between {minimum} and {MAX_TASKS}"),
             descriptor,
         ));
     }
@@ -325,7 +331,7 @@ fn validate_tasks(
     let mut ids = HashSet::new();
     for (index, task) in bundle.tasks.tasks.iter().enumerate() {
         let path = format!("/tasks/{index}");
-        validate_identifier(
+        validate_item_identifier(
             map,
             &format!("{path}/id"),
             &task.id,
@@ -454,10 +460,17 @@ fn validate_continuations(
     descriptor: Option<(&str, u64)>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
-    let mut claimed = HashSet::new();
+    // ROUT-L RL-1a (model §3.2 step 3): the standard-pack composer's copies of one rule on two
+    // or more instances each continue the rule's own id, so an id may be claimed by several tasks
+    // when each is scoped to another instance; any other second claim is a split.
+    let mut claimed = HashMap::<&str, Vec<Option<&str>>>::new();
     for (index, task) in bundle.tasks.tasks.iter().enumerate() {
         let Some(continued) = &task.continues_from else {
             continue;
+        };
+        let instance = match &task.scope {
+            ScopeSelector::Instance { instance_id } => Some(instance_id.as_str()),
+            ScopeSelector::Server { .. } | ScopeSelector::Game { .. } => None,
         };
         let path = format!("/tasks/{index}/continues_from");
         if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
@@ -487,7 +500,7 @@ fn validate_continuations(
                 ))
             } else if !listed.insert(id.as_str()) {
                 Some(format!("continued task id `{id}` is listed twice"))
-            } else if !claimed.insert(id.as_str()) {
+            } else if !claim(&mut claimed, id, instance) {
                 Some(format!("continued task id `{id}` is claimed by two tasks"))
             } else {
                 None
@@ -501,6 +514,27 @@ fn validate_continuations(
                 ));
             }
         }
+    }
+}
+
+/// Records a claim of the continued id `id` by a task scoped to `instance` (`None` for a server or
+/// game scope): `false` when a task scoped to the same instance, or either claim not scoped to an
+/// instance, claimed it before.
+fn claim<'a>(
+    claimed: &mut HashMap<&'a str, Vec<Option<&'a str>>>,
+    id: &'a str,
+    instance: Option<&'a str>,
+) -> bool {
+    let claimants = claimed.entry(id).or_default();
+    let free = instance.is_some()
+        && claimants
+            .iter()
+            .all(|claimant| claimant.is_some() && *claimant != instance);
+    if free || claimants.is_empty() {
+        claimants.push(instance);
+        true
+    } else {
+        false
     }
 }
 
@@ -904,7 +938,7 @@ fn validate_predicate_node(
                     descriptor,
                 ));
             }
-            validate_identifier(
+            validate_item_identifier(
                 map,
                 &format!("{path}/event_id"),
                 event_id,
@@ -963,7 +997,28 @@ fn validate_predicate_node(
                 descriptor,
                 diagnostics,
             );
-            validate_comparison_value(*comparison, value, path, map, descriptor, diagnostics);
+            match value {
+                FactComparand::Value(value) => {
+                    validate_comparison_value(
+                        *comparison,
+                        value,
+                        path,
+                        map,
+                        descriptor,
+                        diagnostics,
+                    );
+                }
+                FactComparand::Fact(reference) => {
+                    validate_fact_reference(
+                        *comparison,
+                        reference,
+                        path,
+                        map,
+                        descriptor,
+                        diagnostics,
+                    );
+                }
+            }
             if max_age_ms.is_some_and(|value| value == 0 || value > MAX_FACT_MAX_AGE_MS) {
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::LimitExceeded,
@@ -1024,6 +1079,7 @@ fn validate_predicate_node(
             fact_key,
             offset_ms,
             max_age_ms,
+            ..
         } => {
             if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
                 diagnostics.push(map.diagnostic(
@@ -1070,7 +1126,20 @@ fn validate_predicate_node(
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
+            since_own_run,
         } => {
+            // SCH-M CF-1: the edge member is V2 only; a V1 document that writes it, with either
+            // value, is refused at the member.
+            if since_own_run.is_some()
+                && map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)
+            {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::UnknownField,
+                    format!("{path}/since_own_run"),
+                    "dependency_completed since_own_run requires actingcommand.scheduling.v2",
+                    descriptor,
+                ));
+            }
             if !task_ids.contains(task_id.as_str()) {
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::DanglingReference,
@@ -1115,13 +1184,15 @@ fn validate_predicate_node(
     }
 }
 
+/// Two `fact` equalities on one fact with two different typed values (#386 CF-4: a fact
+/// reference's value is known only at evaluation, so it conflicts with nothing here).
 fn has_conflicting_equalities(predicates: &[PredicateSpec]) -> bool {
     for (index, left) in predicates.iter().enumerate() {
         let PredicateSpec::Fact {
             scope: left_scope,
             fact_key: left_key,
             comparison: Comparison::Eq,
-            value: left_value,
+            value: FactComparand::Value(left_value),
             ..
         } = left
         else {
@@ -1132,7 +1203,7 @@ fn has_conflicting_equalities(predicates: &[PredicateSpec]) -> bool {
                 scope: right_scope,
                 fact_key: right_key,
                 comparison: Comparison::Eq,
-                value: right_value,
+                value: FactComparand::Value(right_value),
                 ..
             } = right
                 && left_scope == right_scope
@@ -1210,6 +1281,63 @@ fn validate_comparison_value(
                 descriptor,
             ));
         }
+    }
+}
+
+/// #386 CF-4: a fact reference is V2 only (a V1 document is refused as `unknown_field` at
+/// `value/type`); it names a bounded identifier, an offset within the canonical integers and no
+/// scope (a reference always reads the predicate's own scope, so a `scope` member is refused as
+/// a cross-scope reference at `value/scope`); and it compares integers, so `contains` is
+/// uncomputable.
+fn validate_fact_reference(
+    comparison: Comparison,
+    reference: &FactReference,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{path}/value/type"),
+            "a fact reference requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if reference.scope.is_some() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{path}/value/scope"),
+            "a fact reference reads a fact of the predicate's own scope and names no scope",
+            descriptor,
+        ));
+    }
+    validate_identifier(
+        map,
+        &format!("{path}/value/fact_key"),
+        &reference.fact_key,
+        descriptor,
+        diagnostics,
+    );
+    if !(MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER).contains(&reference.offset) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/value/offset"),
+            format!(
+                "a fact reference offset must be within {MIN_CANONICAL_INTEGER}..={MAX_CANONICAL_INTEGER}"
+            ),
+            descriptor,
+        ));
+    }
+    if comparison == Comparison::Contains {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PredicateUncomputable,
+            format!("{path}/comparison"),
+            "a fact reference compares integers; contains is uncomputable",
+            descriptor,
+        ));
     }
 }
 
@@ -1420,7 +1548,7 @@ fn validate_pools(
     let mut ids = HashSet::new();
     for (index, pool) in bundle.pools.pools.iter().enumerate() {
         let path = format!("/pools/{index}");
-        validate_identifier(
+        validate_item_identifier(
             map,
             &format!("{path}/id"),
             &pool.id,
@@ -1599,7 +1727,7 @@ fn validate_activity(
     let mut ids = HashSet::new();
     for (index, profile) in bundle.activity.profiles.iter().enumerate() {
         let path = format!("/profiles/{index}");
-        validate_identifier(
+        validate_item_identifier(
             map,
             &format!("{path}/id"),
             &profile.id,
@@ -1849,7 +1977,7 @@ fn validate_timeline(
             )),
             (_, None) => {}
         }
-        validate_identifier(
+        validate_item_identifier(
             map,
             &format!("{path}/id"),
             &event.id,
@@ -1971,6 +2099,34 @@ fn validate_identifier(
             format!("`{value}` is not a valid bounded identifier"),
             descriptor,
         ));
+    }
+}
+
+/// The id of a task, pool, activity profile or timeline event, and a reference to an event. ROUT-L
+/// RL-1a (model §3.2 step 3): in V2 it may also be an instance copy's id `<id>@<alias>`, an
+/// identifier, `@` and the copy's instance alias without whitespace, all of it at most 128 bytes
+/// (the id bound every reader of a task id keeps). V1 keeps the identifier rule.
+fn validate_item_identifier(
+    map: &SourceMap,
+    path: &str,
+    value: &str,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let copy = map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2)
+        && value.len() <= MAX_ID_BYTES
+        && value.split_once('@').is_some_and(|(base, alias)| {
+            !base.is_empty()
+                && base
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| is_identifier_byte(index, byte))
+                && !alias.is_empty()
+                && actingcommand_contract::validate_instance_alias(alias).is_ok()
+                && !alias.chars().any(char::is_whitespace)
+        });
+    if !copy {
+        validate_identifier(map, path, value, descriptor, diagnostics);
     }
 }
 

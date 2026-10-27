@@ -18,6 +18,14 @@
 // #385 P-k2 (exec key 92): every answer may also carry scripted extra wait rounds and a pre-input
 // wait (`with_step_extras`; without them none); it counts the extra rounds the kernel starts and
 // keeps, in order, the frames' recognitions, the pauses, the effect intents and the inputs.
+//
+// PERF-B1: every answer may also carry a capture cadence
+// (`with_capture_cadence`; without one the kernel's unconfigured cadence), and it counts the
+// frames it showed after each number of inputs.
+//
+// Workflow #392 DA-2a: a frame may carry the geometry its producer recorded (`with_geometry`;
+// without one a fixture's), and the runtime may answer a game's display declaration
+// (`with_display_layout`; without one none).
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -48,6 +56,7 @@ pub(crate) struct ScriptedFrame {
     height: u32,
     pixels: Vec<u8>,
     latency: Duration,
+    geometry: Option<actingcommand_contract::CaptureGeometryObservation>,
 }
 
 impl ScriptedFrame {
@@ -63,6 +72,18 @@ impl ScriptedFrame {
             height,
             pixels: pixels.concat(),
             latency: Duration::ZERO,
+            geometry: None,
+        }
+    }
+
+    // The same frame, its producer having recorded `geometry` with it (Workflow #392 DA-2a).
+    pub(crate) fn with_geometry(
+        self,
+        geometry: actingcommand_contract::CaptureGeometryObservation,
+    ) -> Self {
+        Self {
+            geometry: Some(geometry),
+            ..self
         }
     }
 
@@ -72,14 +93,18 @@ impl ScriptedFrame {
     }
 
     fn frame(&self) -> Frame {
-        Frame::from_pixels(
+        let mut frame = Frame::from_pixels(
             self.width,
             self.height,
             self.pixels.clone(),
             PixelFormat::Rgb8,
             CaptureBackendName::FixtureSimulation,
         )
-        .expect("scripted frame")
+        .expect("scripted frame");
+        if let Some(geometry) = &self.geometry {
+            frame.geometry = geometry.clone();
+        }
+        frame
     }
 }
 
@@ -93,6 +118,7 @@ pub(crate) struct ScriptedRuntime {
     pauses: Vec<Duration>,
     extra_wait_rounds: u32,
     pre_input_wait: Duration,
+    capture_cadence: Option<CaptureCadence>,
     extra_rounds_started: u32,
     events: Vec<ScriptedEvent>,
     base: Instant,
@@ -100,6 +126,7 @@ pub(crate) struct ScriptedRuntime {
     captures: usize,
     inputs: Vec<InputAction>,
     traces: Vec<ContainedTaskTrace>,
+    display_layout: Option<StandardPackDisplayLayout>,
 }
 
 impl ScriptedRuntime {
@@ -118,6 +145,7 @@ impl ScriptedRuntime {
             pauses: Vec::new(),
             extra_wait_rounds: 0,
             pre_input_wait: Duration::ZERO,
+            capture_cadence: None,
             extra_rounds_started: 0,
             events: Vec::new(),
             base: Instant::now() + CLOCK_LEAD,
@@ -125,6 +153,16 @@ impl ScriptedRuntime {
             captures: 0,
             inputs: Vec::new(),
             traces: Vec::new(),
+            display_layout: None,
+        }
+    }
+
+    // The same device, its run under the game's display declaration `layout` (Workflow #392
+    // DA-2a).
+    pub(crate) fn with_display_layout(self, layout: StandardPackDisplayLayout) -> Self {
+        Self {
+            display_layout: Some(layout),
+            ..self
         }
     }
 
@@ -157,9 +195,23 @@ impl ScriptedRuntime {
         }
     }
 
+    // The same device, whose every `step_pacing()` answer also hands the capture cadence
+    // `cadence` (PERF-B1).
+    pub(crate) fn with_capture_cadence(self, cadence: CaptureCadence) -> Self {
+        Self {
+            capture_cadence: Some(cadence),
+            ..self
+        }
+    }
+
     // Every pause the kernel asked for, in order.
     pub(crate) fn pauses(&self) -> &[Duration] {
         &self.pauses
+    }
+
+    // How many frames the device showed after `inputs` inputs (PERF-B1).
+    pub(crate) fn captures_after(&self, inputs: usize) -> usize {
+        self.shown[inputs]
     }
 
     // How many extra wait rounds the kernel started (#385 P-k2).
@@ -202,6 +254,10 @@ impl ContainedTaskRuntime for ScriptedRuntime {
         Ok(scripted.frame().into())
     }
 
+    fn display_layout(&self) -> Option<&StandardPackDisplayLayout> {
+        self.display_layout.as_ref()
+    }
+
     fn input(
         &mut self,
         action: InputAction,
@@ -240,6 +296,10 @@ impl ContainedTaskRuntime for ScriptedRuntime {
         self.step_pacings += 1;
         let pacing = match factor {
             Some(factor_milli) => pacing.with_factor_milli(factor_milli),
+            None => pacing,
+        };
+        let pacing = match self.capture_cadence {
+            Some(cadence) => pacing.with_capture_cadence(cadence),
             None => pacing,
         };
         Ok(pacing

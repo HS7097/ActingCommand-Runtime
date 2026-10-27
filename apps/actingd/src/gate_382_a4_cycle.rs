@@ -636,7 +636,7 @@ fn start(
         .expect("the in-process Runtime starts");
     let policy = PolicyBootstrap {
         catalog_approval_ids: vec![APPROVAL.to_owned()],
-        catalog: catalog(instances.len() > 1),
+        catalog: Some(catalog(instances.len() > 1)),
         catalog_transition: None,
         scheduled_tasks: instances
             .iter()
@@ -669,7 +669,7 @@ fn start(
 fn activate(host: &RuntimeHost, policy: &PolicyBootstrap) {
     let plan = host
         .plan_policy_catalog_transition(
-            &policy.catalog,
+            policy.catalog.as_ref().expect("a configured catalog"),
             policy.catalog_transition.as_ref(),
             &policy.catalog_approval_ids,
         )

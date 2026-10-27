@@ -5,16 +5,16 @@ use crate::codes::{LedgerCode, LedgerLocation};
 use crate::{PersistedEvent, fact::LedgerEventRead};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, DiagnosticCode, EventId,
-    EventPayload, EventQuery, EventSource, EventType, FrameId, InstanceId, LeaseId, LedgerView,
-    OriginModule, PolicyPayload, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, DiagnosticCode,
+    EventLinks, EventPayload, EventQuery, EventSource, EventType, FrameId, InstanceId, LeaseId,
+    LedgerView, OriginModule, PolicyPayload, ProjectedEvent, ProjectionPayload, ProjectionProfile,
     RecognitionId, RequestId, RunId, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
     TaskId, TaskOutcome, TaskPayload, TaskSemanticFact,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 mod views;
-pub(super) use views::{PageSelection, page_bounds};
+pub(super) use views::{PageContext, PageSelection, page_bounds, project_selected};
 
 /// The closed Lab link paths are shared by the in-memory and SQLite selectors.
 #[derive(Clone, Copy)]
@@ -32,9 +32,32 @@ pub(super) const LAB_RELATIONS: [(LabAxis, bool); 4] = [
     (LabAxis::Correlation, true),
 ];
 
+/// Whether `event` is a Lab anchor: a Lab record or a Lab request.
+pub(super) fn is_lab_anchor<E: LedgerEventRead>(event: &E) -> bool {
+    event.origin().source() == LAB_ANCHOR_SOURCE || event.event_type() == LAB_ANCHOR_TYPE
+}
+
+/// LN-5 (#422, LEAN-L §3.3): the links a Lab relation reads of a record (`LAB_RELATIONS`): its
+/// request, its correlation and its run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct LabKeys {
+    pub(super) request: Option<RequestId>,
+    pub(super) correlation: Option<CorrelationId>,
+    pub(super) run: Option<RunId>,
+}
+
+impl LabKeys {
+    pub(super) fn of(links: &EventLinks) -> Self {
+        Self {
+            request: links.request_id().copied(),
+            correlation: links.correlation_id().copied(),
+            run: links.run_id().copied(),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct EventIndexes {
-    event_ids: BTreeMap<EventId, usize>,
     event_types: BTreeMap<usize, BTreeSet<usize>>,
     origin_modules: BTreeMap<OriginModule, BTreeSet<usize>>,
     diagnostic_codes: BTreeMap<DiagnosticCode, BTreeSet<usize>>,
@@ -87,23 +110,7 @@ impl EventIndexes {
         indexes
     }
 
-    pub(super) fn contains_event_id(&self, event_id: &EventId) -> bool {
-        self.event_ids.contains_key(event_id)
-    }
-
-    /// Workflow #383 AO-2: the position of a record in the store's memory, by its event id.
-    pub(super) fn position_of(&self, event_id: &EventId) -> Option<usize> {
-        self.event_ids.get(event_id).copied()
-    }
-
-    /// Ledger revision 4 (register §1.153 LR-3, LR-7): the positions of a run's records in the
-    /// store's memory, in record order.
-    pub(super) fn run_positions(&self, run_id: &RunId) -> impl Iterator<Item = usize> + '_ {
-        self.run_ids.get(run_id).into_iter().flatten().copied()
-    }
-
     pub(super) fn insert<E: LedgerEventRead>(&mut self, event: &E, position: usize) {
-        self.event_ids.insert(*event.event_id(), position);
         self.event_types
             .entry(event_type_index(event.event_type()))
             .or_default()
@@ -129,7 +136,7 @@ impl EventIndexes {
         insert_link(&mut self.action_ids, links.action_id(), position);
         insert_link(&mut self.recognition_ids, links.recognition_id(), position);
         let sequence = event.sequence();
-        if event.origin().source() == LAB_ANCHOR_SOURCE || event.event_type() == LAB_ANCHOR_TYPE {
+        if is_lab_anchor(event) {
             if let Some(request) = links.request_id()
                 && !self.lab_requests.contains_key(request)
             {
@@ -194,17 +201,6 @@ impl EventIndexes {
         self.query_with_observer(events, query, &mut || true).events
     }
 
-    /// #411 A51 (R2): [`Self::query`] that stops when `work`'s budget is spent; `None` then.
-    pub(super) fn query_within<E: LedgerEventRead>(
-        &self,
-        events: &[E],
-        query: &EventQuery,
-        work: &super::read_work::ReadWork,
-    ) -> Option<Vec<E>> {
-        let scan = self.query_with_observer(events, query, &mut || work.visit());
-        scan.stopped_at.is_none().then_some(scan.events)
-    }
-
     /// Every candidate is decided before `observe_candidate` may stop the scan (#411 A51).
     fn query_with_observer<E: LedgerEventRead>(
         &self,
@@ -249,27 +245,6 @@ impl EventIndexes {
             &mut || true,
         )
         .events
-    }
-
-    /// #411 A51 (R2): [`Self::query_page`] that stops when `work`'s budget is spent; `None`
-    /// then.
-    pub(super) fn query_page_within<E: LedgerEventRead>(
-        &self,
-        events: &[E],
-        query: &EventQuery,
-        (after_sequence, through_sequence): (u64, u64),
-        page_events: usize,
-        work: &super::read_work::ReadWork,
-    ) -> Option<Vec<E>> {
-        let scan = self.query_page_with_observer(
-            events,
-            query,
-            after_sequence,
-            through_sequence,
-            page_events,
-            &mut || work.visit(),
-        );
-        scan.stopped_at.is_none().then_some(scan.events)
     }
 
     /// The candidates in sequence order up to `through_sequence`, until `page_events` match.
@@ -409,35 +384,35 @@ impl EventIndexes {
                     event.severity(),
                     event.origin().source(),
                     // Only the Lab view reads the relation (#411 A51).
-                    view == LedgerView::Lab && self.lab_related(event, snapshot),
+                    view == LedgerView::Lab
+                        && self.lab_related(&LabKeys::of(event.links()), snapshot),
                 )
             })
     }
 
-    /// Whether a Lab anchor at or before `snapshot` relates to `event` through `LAB_RELATIONS`.
-    /// #411 A51 (R1): each relation is one lookup of a per-link-group fact kept at insert (the
-    /// first anchor of a request or a correlation, and per run the position from which one of
-    /// its requests or correlations has an anchor), never a walk over the anchors or a run's
-    /// links.
-    pub(super) fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
-        let links = event.links();
+    /// Whether a Lab anchor at or before `snapshot` relates to a record with `keys` through
+    /// `LAB_RELATIONS`. #411 A51 (R1): each relation is one lookup of a per-link-group fact kept
+    /// at insert (the first anchor of a request or a correlation, and per run the position from
+    /// which one of its requests or correlations has an anchor), never a walk over the anchors or
+    /// a run's links.
+    pub(super) fn lab_related(&self, keys: &LabKeys, snapshot: u64) -> bool {
         let within =
             |sequence: Option<&u64>| sequence.is_some_and(|sequence| *sequence <= snapshot);
         LAB_RELATIONS
             .into_iter()
             .any(|(axis, via_run)| match (axis, via_run) {
-                (LabAxis::Request, false) => links
-                    .request_id()
-                    .is_some_and(|request| within(self.lab_requests.get(request))),
-                (LabAxis::Correlation, false) => links
-                    .correlation_id()
-                    .is_some_and(|correlation| within(self.lab_correlations.get(correlation))),
-                (LabAxis::Request, true) => links
-                    .run_id()
-                    .is_some_and(|run| within(self.run_request_lab.get(run))),
-                (LabAxis::Correlation, true) => links
-                    .run_id()
-                    .is_some_and(|run| within(self.run_correlation_lab.get(run))),
+                (LabAxis::Request, false) => keys
+                    .request
+                    .is_some_and(|request| within(self.lab_requests.get(&request))),
+                (LabAxis::Correlation, false) => keys
+                    .correlation
+                    .is_some_and(|correlation| within(self.lab_correlations.get(&correlation))),
+                (LabAxis::Request, true) => keys
+                    .run
+                    .is_some_and(|run| within(self.run_request_lab.get(&run))),
+                (LabAxis::Correlation, true) => keys
+                    .run
+                    .is_some_and(|run| within(self.run_correlation_lab.get(&run))),
             })
     }
 }

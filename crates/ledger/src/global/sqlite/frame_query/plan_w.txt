@@ -1,0 +1,27 @@
+MATERIALIZE cand
+  MATERIALIZE st
+    SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+    SCALAR SUBQUERY 1
+      SEARCH sx USING COVERING INDEX ledger_view_index_type_v1 (event_type=?)
+    SCALAR SUBQUERY 2
+      SEARCH sy USING COVERING INDEX ledger_view_index_type_v1 (event_type=?)
+  SCAN st
+  SEARCH a USING INDEX ledger_artifacts_created (created_at_unix_ms>?)
+  USE TEMP B-TREE FOR GROUP BY
+SCAN c
+LIST SUBQUERY 7
+  MATERIALIZE term
+    SCAN st
+    SEARCH te USING INDEX ledger_view_index_type_v1 (event_type=? AND sequence>?)
+    SEARCH tl USING INTEGER PRIMARY KEY (rowid=?)
+    USE TEMP B-TREE FOR DISTINCT
+  SCAN term
+  CREATE BLOOM FILTER
+CORRELATED SCALAR SUBQUERY 9
+  SEARCH dl USING COVERING INDEX ledger_links_run (run_id=?)
+  SEARCH de USING INTEGER PRIMARY KEY (rowid=?)
+SCAN st
+CORRELATED SCALAR SUBQUERY 8
+  SEARCH fl USING COVERING INDEX ledger_links_run (run_id=?)
+CORRELATED SCALAR SUBQUERY 6
+  SEARCH il USING INDEX ledger_links_run (run_id=?)

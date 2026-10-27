@@ -236,14 +236,24 @@ impl RuntimeDatabase {
     /// Only for the check-config catalog preview and the offline `actingledger events` and
     /// `export --performance` range opening (Workflow #411 A4), which authenticate every row
     /// they read, and the start's ledger format probe, which reads only the format
-    /// (`user_version` and the ledger table count, Workflow #378 A3); startup and
-    /// `ledger-maintenance verify` open through `open_existing`, which still runs the check.
+    /// (`user_version` and the ledger table count, Workflow #378 A3); `ledger-maintenance
+    /// verify` opens through `open_existing`, which still runs the check, and the start through
+    /// `open_existing_for_start` (LN-8).
     pub fn open_existing_unchecked(root: &Path) -> RuntimeDatabaseResult<Self> {
         Self::open_existing_storage(root, true, false)
     }
 
-    /// The one body of `open_existing` and `open_existing_unchecked`. A read-write open
-    /// always runs the whole-file check.
+    /// LN-8 (#422, LEAN-L §3.2 step 1): the Runtime start's open of its existing storage,
+    /// read-write, with every check of `open_existing(root, false)` except the whole-file
+    /// `PRAGMA quick_check(1)`, whose time grows with the file. The start reads and authenticates
+    /// only what it uses (the ledger's keyed meta row, its newest records and its indexes);
+    /// `ledger-maintenance verify` keeps the whole-file check.
+    pub fn open_existing_for_start(root: &Path) -> RuntimeDatabaseResult<Self> {
+        Self::open_existing_storage(root, false, false)
+    }
+
+    /// The one body of `open_existing`, `open_existing_unchecked` and
+    /// `open_existing_for_start`; `whole_file_check` runs `quick_check(1)`.
     fn open_existing_storage(
         root: &Path,
         read_only: bool,
@@ -329,7 +339,7 @@ impl RuntimeDatabase {
                     )
                 })?;
         }
-        if whole_file_check || !read_only {
+        if whole_file_check {
             let integrity: String = connection
                 .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
                 .map_err(|error| {
@@ -420,6 +430,23 @@ impl RuntimeDatabase {
             ));
         }
         Ok(connection)
+    }
+
+    /// #422 LN-9 (LEAN-L §6): the whole-file `PRAGMA quick_check(1)` on a caller's connection to
+    /// this file (the Ledger scrub's own, at the end of each pass), outside any transaction. A
+    /// file that does not check is `state_database_corrupt`, as the check of `open_existing`
+    /// reports it; a failed statement is `database_maintenance_sql_failed`; both of `operation`.
+    pub fn quick_check(connection: &Connection, operation: Location) -> RuntimeDatabaseResult<()> {
+        let integrity: String = connection
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+            .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
+        if integrity != "ok" {
+            return Err(failure(
+                DatabaseCode::StateDatabaseCorrupt.code(),
+                operation,
+            ));
+        }
+        Ok(())
     }
 
     /// Error readback must not wait behind another owner of the connection.

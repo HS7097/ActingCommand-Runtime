@@ -16,10 +16,10 @@
 //! page that passes decides which operation runs next.
 
 use super::{
-    ApplicationEffectSupport, ContainedTaskBoundaryTiming, ContainedTaskError,
+    ApplicationEffectSupport, CaptureBackoff, ContainedTaskBoundaryTiming, ContainedTaskError,
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
     ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, ExtraRounds, InputRecheck,
-    MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock,
+    MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock,
     PageCandidates, PageObservation, PostAdmissionOcrCollector, PreparedContainedTask,
     RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
     budget_elapsed_since, budget_now, budget_observation_now, pace_pause, paced_step,
@@ -28,6 +28,7 @@ use super::{
 };
 use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
+use actingcommand_contract::TaskSchema;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
@@ -549,7 +550,9 @@ impl TaskProgram {
                 },
             )
         };
-        if self.schema_version != "0.9" || control.schema_version != PHASED_CONTROL_SCHEMA {
+        if !self.schema_at_least(TaskSchema::V0_9)
+            || control.schema_version != PHASED_CONTROL_SCHEMA
+        {
             return Err(invalid("schema_version", None));
         }
         if self.phases.is_some() || control.phases.is_some() {
@@ -671,8 +674,10 @@ impl TaskProgram {
                     if timeout_ms.is_some_and(|value| value == 0 || value > MAX_TASK_TIMEOUT_MS) {
                         return Err(invalid("transition_timeout", Some(operation)));
                     }
+                    // PERF-B1 (R2): bounded as the control's interval is; the run checks the
+                    // ceiling in effect.
                     if interval_ms
-                        .is_some_and(|value| value == 0 || value > MAX_CAPTURE_INTERVAL_MS)
+                        .is_some_and(|value| value == 0 || value > MAX_DECLARED_INTERVAL_MS)
                     {
                         return Err(invalid("transition_interval", Some(operation)));
                     }
@@ -1690,6 +1695,8 @@ impl PreparedContainedTask {
         // `budget` from where the last one ended; a skip target already seen stays seen.
         let mut rounds = ExtraRounds::of(run.pacing);
         let mut round_end: Option<Instant> = None;
+        // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
+        let mut backoff = CaptureBackoff::new(interval, run.pacing);
         let wait_end = |started: Instant, seen: Option<Instant>, round_end: Option<Instant>| {
             let end = seen.map_or(started + budget, |first| first + settle + budget);
             round_end.map_or(end, |round_end| end.max(round_end))
@@ -1723,6 +1730,7 @@ impl PreparedContainedTask {
                     started = budget_now(runtime, pace);
                     seen = None;
                     round_end = None;
+                    backoff.reset();
                     continue;
                 }
             };
@@ -1754,11 +1762,15 @@ impl PreparedContainedTask {
                         Some(_) => {}
                         None => seen = Some(captured),
                     }
+                    // PERF-B1 (R3): the skip target while it settles.
+                    backoff.frame(&observation.scene)?;
                 }
                 // Workflow #373 NAV-6 (§6.1 point 3): nothing passed on the frame; it is offered
                 // to the shared interrupt pages, and the wait (its settle included) is paused
                 // while one is handled.
                 Err(scene) => {
+                    // PERF-B1 (R3).
+                    backoff.frame(&scene)?;
                     if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
                         let paused = pace.budget_span(paused);
                         started += paused;
@@ -1768,6 +1780,7 @@ impl PreparedContainedTask {
                         if let Some(end) = &mut round_end {
                             *end += paused;
                         }
+                        backoff.reset();
                         continue;
                     }
                 }
@@ -1794,7 +1807,9 @@ impl PreparedContainedTask {
                 .and_then(|first| first.checked_add(settle))
                 .and_then(|end| end.checked_duration_since(now))
                 .filter(|left| !left.is_zero());
-            let sleep = interval
+            // PERF-B1 (R3): the back-off's pause, cut at the wait's and the task's time left.
+            let sleep = backoff
+                .interval()
                 .min(limit.saturating_sub(elapsed))
                 .min(deadline.saturating_duration_since(now));
             let boundary = purpose.boundary();
@@ -1900,6 +1915,8 @@ impl PreparedContainedTask {
         let mut window_started = budget_observation_now(runtime, pace);
         // Whether the window has seen a frame on which no awaited page passed.
         let mut missed = false;
+        // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
+        let mut backoff = CaptureBackoff::new(interval, run.pacing);
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
@@ -1944,6 +1961,7 @@ impl PreparedContainedTask {
                     started = budget_now(runtime, pace);
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
+                    backoff.reset();
                     continue;
                 }
             };
@@ -1963,6 +1981,8 @@ impl PreparedContainedTask {
                 Err(scene) => scene,
             };
             missed = true;
+            // PERF-B1 (R3).
+            backoff.frame(&scene)?;
             // Workflow #373 NAV-6 (§6.1 point 3): a frame on which no awaited page passed is
             // offered to the shared interrupt pages; the wait's budget is paused while one is
             // handled.
@@ -1970,6 +1990,7 @@ impl PreparedContainedTask {
                 let paused = pace.budget_span(paused);
                 started += paused;
                 window_started += paused;
+                backoff.reset();
                 continue;
             }
             let now = budget_now(runtime, pace);
@@ -1986,10 +2007,12 @@ impl PreparedContainedTask {
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
             let now = pace.budget(wait_started);
+            // PERF-B1 (R3): the back-off's pause, cut at the wait's and the task's time left.
             pace_pause(
                 runtime,
                 pace,
-                interval
+                backoff
+                    .interval()
                     .min(budget.saturating_sub(now.saturating_duration_since(started)))
                     .min(deadline.saturating_duration_since(now)),
             );

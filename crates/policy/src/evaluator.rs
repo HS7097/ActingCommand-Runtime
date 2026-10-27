@@ -21,17 +21,30 @@ use crate::codes::{
 use crate::remedy::ProviderView;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
-    ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
-    FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ManualOffset,
-    MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PredicateSpec, PrioritySelection,
-    RemedyPlan, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec, TaskTerminalState,
-    TimelineEvent,
+    ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactComparand,
+    FactReference, FactScalar, FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES,
+    ManualOffset, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PredicateSpec,
+    PrioritySelection, RemedyPlan, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec,
+    TaskTerminalState, TimelineEvent,
 };
 
+// Workflow #386 SR-4a1 (SCH-M §3.2 D-1, D-6): the pure blackout and day-boundary judgements.
+mod blackout;
 mod chain_handover;
+// SCH-M ED-1 (Workflow #405; SCH-M §3.4 D-12): the expected duration E.
+mod expected_runtime;
 mod fact_refresh;
 
+pub use blackout::{
+    Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
+    day_boundary_fit, next_blackout_start,
+};
 pub use chain_handover::{ChainEntryHolds, ChainHandoverInputs, RestingPage};
+pub(crate) use expected_runtime::snapshot_expected_runtime;
+pub use expected_runtime::{
+    ExpectedRuntime, ExpectedRuntimeSettings, ExpectedRuntimeSource, MAX_EXPECTED_RUNTIME_RUNS,
+    expected_runtime,
+};
 use fact_refresh::{AffectedCandidate, RefreshGate, RefreshKey};
 pub use fact_refresh::{
     FACT_REFRESH_EXPECTED_DURATION_MS, FACT_REFRESH_OPERATION_ID, FACT_REFRESH_PROCEDURE_REF,
@@ -111,6 +124,14 @@ pub struct TaskRuntimeSnapshot {
     /// Consecutive failed runs since the last success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_streak: Option<u16>,
+    /// SCH-M ED-1 (§3.4 D-12, D-15): the expected duration E of the pair, from the instance's
+    /// samples of the task's package (`expected_runtime`); absent, the declared value applies.
+    /// It replaces the declared value as the dispatch's duration and as the cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_runtime_ms: Option<u64>,
+    /// SCH-M ED-1: how many samples E is the mean of; absent with `expected_runtime_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_runtime_runs: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2284,6 +2305,9 @@ struct PlacementCandidate {
     value_milli: Option<u32>,
     /// The last settled run's duration for this task on this instance.
     last_duration_ms: Option<u64>,
+    /// SCH-M ED-1: the pair's expected duration E, when its snapshot carries one; then
+    /// `expected_duration_ms` is E and the cost is E.
+    expected_runtime_ms: Option<u64>,
     tie_breaker: u64,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
@@ -2420,7 +2444,8 @@ fn build_candidate(
         host_id: instance.host_id.clone(),
         operation_id: task.entrypoint.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
-        expected_duration_ms: task.expected_duration_ms,
+        expected_duration_ms: snapshot_expected_runtime(task, task_state)
+            .unwrap_or(task.expected_duration_ms),
         yield_points: task.yield_points.clone(),
         load_profile,
         load,
@@ -2432,6 +2457,7 @@ fn build_candidate(
         promoted: false,
         value_milli: task.value_milli,
         last_duration_ms: task_state.and_then(|state| state.last_duration_ms),
+        expected_runtime_ms: snapshot_expected_runtime(task, task_state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms,
         activity_profile_id: activity_profile.id.clone(),
@@ -2524,10 +2550,14 @@ fn candidate_utility(
             cost_unknown: false,
         });
     };
-    let cost_ms = candidate
-        .last_duration_ms
-        .filter(|duration| *duration > 0)
-        .unwrap_or(candidate.expected_duration_ms);
+    // SCH-M ED-1 (D-15): E when the pair's snapshot carries one; otherwise, as before, the last
+    // settled run's duration, else the declared value.
+    let cost_ms = candidate.expected_runtime_ms.unwrap_or_else(|| {
+        candidate
+            .last_duration_ms
+            .filter(|duration| *duration > 0)
+            .unwrap_or(candidate.expected_duration_ms)
+    });
     if cost_ms == 0 {
         return Ok(CandidateUtility {
             utility_milli: 0,
@@ -4263,16 +4293,58 @@ fn evaluate_predicate(
                 }));
             }
             // Workflow #355 D12: an observed kind the predicate does not compare makes this
-            // predicate Unknown; it no longer fails the whole evaluation.
-            if fact_kind(&observation.value) != fact_kind(value) {
+            // predicate Unknown; it no longer fails the whole evaluation. #386 CF-4: a fact
+            // reference compares integers, so the fact must hold one.
+            let kind_matches = match value {
+                FactComparand::Value(value) => fact_kind(&observation.value) == fact_kind(value),
+                FactComparand::Fact(_) => matches!(observation.value, FactValue::Integer(_)),
+            };
+            if !kind_matches {
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: scope.clone(),
                     fact_key: fact_key.clone(),
                     reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             }
+            let (truth, fresh_until) = match value {
+                FactComparand::Value(value) => (
+                    compare_fact_values(&observation.value, *comparison, value)?,
+                    fresh_until,
+                ),
+                // #386 CF-4: the referenced fact obeys the predicate's `max_age_ms` and its own
+                // expiry; one that gives no integer makes the predicate false, with its reason
+                // and no wake: its next reading wakes the scheduler, and no refresh is asked for.
+                FactComparand::Fact(reference) => {
+                    match referenced_integer(facts, scope, reference, *max_age_ms, time)? {
+                        Ok(referenced) => (
+                            compare_with_reference(
+                                &observation.value,
+                                *comparison,
+                                referenced.value,
+                                reference.offset,
+                            )?,
+                            min_wake(fresh_until, referenced.fresh_until),
+                        ),
+                        Err(problem) => {
+                            reasons.push(reason_with(
+                                Outcome::new(PolicyCode::FactReferenceUnavailable)
+                                    .fact_key(reference.fact_key.as_str())
+                                    .unknown_reason(UnknownReasonToken(problem)),
+                                format!(
+                                    "fact '{}:{fact_key}' compares with '{}' plus {}, which gives no integer: {}",
+                                    scope_key(scope),
+                                    reference.fact_key,
+                                    reference.offset,
+                                    unknown_token(problem)
+                                ),
+                            ));
+                            return Ok(PredicateEvaluation::known(false, None));
+                        }
+                    }
+                }
+            };
             Ok(PredicateEvaluation {
-                truth: if compare_fact_values(&observation.value, *comparison, value)? {
+                truth: if truth {
                     PredicateTruth::True
                 } else {
                     PredicateTruth::False
@@ -4397,8 +4469,13 @@ fn evaluate_predicate(
             fact_key,
             offset_ms,
             max_age_ms,
+            once_per_reading,
         } => {
-            let (at, fresh_until) = match fact_time(facts, scope, fact_key, *max_age_ms, time)? {
+            let FactTimeReading {
+                at,
+                fresh_until,
+                observed_at,
+            } = match fact_time(facts, scope, fact_key, *max_age_ms, time)? {
                 Ok(reading) => reading,
                 Err(problem) => {
                     reasons.push(reason_with(
@@ -4415,6 +4492,22 @@ fn evaluate_predicate(
             };
             // Signed, without overflow; a target before the epoch counts as 0.
             let target = at.saturating_add_signed(*offset_ms);
+            // SCH-M CF-1: a time this task's latest successful run already served is false
+            // until a newer reading, with no wake: the next reading wakes the scheduler.
+            if *once_per_reading == Some(true)
+                && let Some(served_by) = reading_served_by(task_state, target, observed_at)
+            {
+                reasons.push(reason_with(
+                    Outcome::new(PolicyCode::FactTimeServed)
+                        .fact_key(fact_key.as_str())
+                        .served_by_dispatch_unix_ms(served_by),
+                    format!(
+                        "fact '{}:{fact_key}' holds {at}, observed at {observed_at}; the run dispatched at {served_by} served it",
+                        scope_key(scope)
+                    ),
+                ));
+                return Ok(PredicateEvaluation::known(false, None));
+            }
             let freshness_wake = fresh_until
                 .and_then(|expiration| expiration.checked_add(1))
                 .filter(|expiration| *expiration > time.unix_ms);
@@ -4440,6 +4533,7 @@ fn evaluate_predicate(
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
+            since_own_run,
         } => {
             let state = facts.tasks.iter().find(|state| {
                 state.task_id == *task_id
@@ -4453,10 +4547,29 @@ fn evaluate_predicate(
                     reason: "dependency_state_missing".to_owned(),
                 }));
             };
-            Ok(PredicateEvaluation::known(
-                terminal_states.contains(&terminal_state),
-                None,
-            ))
+            if !terminal_states.contains(&terminal_state) {
+                return Ok(PredicateEvaluation::known(false, None));
+            }
+            // SCH-M CF-1: an edge is served once this task ran successfully since the
+            // predecessor's latest dispatch; a failed own run leaves it due.
+            if *since_own_run == Some(true)
+                && let (Some(own), Some(predecessor)) = (task_state, state)
+                && dependency_served(own, predecessor)
+            {
+                reasons.push(reason_with(
+                    Outcome::new(PolicyCode::DependencyAlreadyServed)
+                        .task_id(own.task_id.as_str())
+                        .predecessor_task_id(task_id.as_str()),
+                    format!(
+                        "task '{}' ran successfully at {:?}, since the latest dispatch of '{task_id}' at {:?}",
+                        own.task_id,
+                        own.last_dispatched_unix_ms,
+                        predecessor.last_dispatched_unix_ms
+                    ),
+                ));
+                return Ok(PredicateEvaluation::known(false, None));
+            }
+            Ok(PredicateEvaluation::known(true, None))
         }
         PredicateSpec::Outcome {
             task_id,
@@ -4740,6 +4853,42 @@ fn compare_ordered(
     }
 }
 
+/// Workflow #405 W1: a fact's usable time: the time it holds (`at`), the end of its freshness
+/// and (SCH-M CF-1) when the reading was observed.
+struct FactTimeReading {
+    at: u64,
+    fresh_until: Option<u64>,
+    observed_at: u64,
+}
+
+/// SCH-M CF-1 (`once_per_reading`): the dispatch of this task's latest run when that run
+/// succeeded and was dispatched at or after max(`target`, `observed_at`), so it served the
+/// reading's time.
+fn reading_served_by(
+    task_state: Option<&TaskRuntimeSnapshot>,
+    target: u64,
+    observed_at: u64,
+) -> Option<u64> {
+    task_state
+        .filter(|state| state.terminal_state == Some(TaskTerminalState::Succeeded))
+        .and_then(|state| state.last_dispatched_unix_ms)
+        .filter(|dispatched| *dispatched >= target.max(observed_at))
+}
+
+/// SCH-M CF-1 (`since_own_run`): whether this task's latest run served the predecessor's
+/// latest terminal. It did when it was dispatched, not before the predecessor's latest
+/// dispatch, and succeeded; a task with no admitted dispatch, one dispatched before the
+/// predecessor's latest dispatch, or one whose latest run did not succeed has not.
+fn dependency_served(own: &TaskRuntimeSnapshot, predecessor: &TaskRuntimeSnapshot) -> bool {
+    let Some(own_dispatched) = own.last_dispatched_unix_ms else {
+        return false;
+    };
+    let dispatched_before = predecessor
+        .last_dispatched_unix_ms
+        .is_some_and(|predecessor_dispatched| own_dispatched < predecessor_dispatched);
+    !dispatched_before && own.terminal_state == Some(TaskTerminalState::Succeeded)
+}
+
 /// Workflow #405 W1: the time the fact at (`scope`, `fact_key`) holds and the end of its
 /// freshness, read with `fact`'s rules (missing, confidence 0, `max_age_ms`, its own expiry), or
 /// why it gives no time.
@@ -4749,7 +4898,7 @@ fn fact_time(
     fact_key: &str,
     max_age_ms: Option<u64>,
     time: EvaluationTime,
-) -> PolicyEvaluationResult<Result<(u64, Option<u64>), FactTimeProblem>> {
+) -> PolicyEvaluationResult<Result<FactTimeReading, FactTimeProblem>> {
     let Some(observation) = facts
         .facts
         .iter()
@@ -4790,7 +4939,99 @@ fn fact_time(
     let FactValue::TimestampMs(at) = &observation.value else {
         return Ok(Err(FactTimeProblem::NotATime));
     };
-    Ok(Ok((*at, fresh_until)))
+    Ok(Ok(FactTimeReading {
+        at: *at,
+        fresh_until,
+        observed_at: observation.observed_at_unix_ms,
+    }))
+}
+
+/// #386 CF-4: the integer the fact a reference names holds, and the end of its freshness.
+struct ReferencedInteger {
+    value: i64,
+    fresh_until: Option<u64>,
+}
+
+/// #386 CF-4: the fact `reference` names, in the predicate's `scope`, read with `fact`'s rules
+/// (missing, confidence 0, the predicate's `max_age_ms`, its own expiry) and holding an integer;
+/// or why it gives none, as an `unknown_reason` token.
+fn referenced_integer(
+    facts: &EvaluationFacts,
+    scope: &ScopeSelector,
+    reference: &FactReference,
+    max_age_ms: Option<u64>,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<Result<ReferencedInteger, UnknownReason>> {
+    let Some(observation) = facts
+        .facts
+        .iter()
+        .find(|fact| fact.scope == *scope && fact.fact_key == reference.fact_key)
+    else {
+        return Ok(Err(UnknownReason::FactMissing));
+    };
+    if observation.confidence_milli == 0 {
+        return Ok(Err(UnknownReason::FactLowConfidence));
+    }
+    let max_age_expiration = max_age_ms
+        .map(|max_age| {
+            observation
+                .observed_at_unix_ms
+                .checked_add(max_age)
+                .ok_or_else(|| {
+                    PolicyEvaluationError::overflow(format!(
+                        "fact '{}:{}' expiration overflowed",
+                        scope_key(scope),
+                        reference.fact_key
+                    ))
+                })
+        })
+        .transpose()?;
+    let fresh_until = min_wake(max_age_expiration, observation.expires_at_unix_ms);
+    if fresh_until.is_some_and(|expiration| time.unix_ms > expiration) {
+        return Ok(Err(
+            if observation
+                .expires_at_unix_ms
+                .is_some_and(|expiration| time.unix_ms > expiration)
+            {
+                UnknownReason::FactExpired
+            } else {
+                UnknownReason::FactStale
+            },
+        ));
+    }
+    let FactValue::Integer(value) = observation.value else {
+        return Ok(Err(UnknownReason::TypeMismatch));
+    };
+    Ok(Ok(ReferencedInteger { value, fresh_until }))
+}
+
+/// #386 CF-4: the integer `actual` compared with `referenced + offset`; the sum is taken in
+/// `i128`, so it never overflows.
+fn compare_with_reference(
+    actual: &FactValue,
+    comparison: Comparison,
+    referenced: i64,
+    offset: i64,
+) -> PolicyEvaluationResult<bool> {
+    let FactValue::Integer(actual) = actual else {
+        return Err(PolicyEvaluationError::type_mismatch(format!(
+            "a fact reference compares integers, got {}",
+            fact_kind(actual)
+        )));
+    };
+    let actual = i128::from(*actual);
+    let expected = i128::from(referenced) + i128::from(offset);
+    match comparison {
+        Comparison::Eq => Ok(actual == expected),
+        Comparison::NotEq => Ok(actual != expected),
+        Comparison::LessThan
+        | Comparison::LessThanOrEqual
+        | Comparison::GreaterThan
+        | Comparison::GreaterThanOrEqual => compare_ordered(actual, comparison, expected),
+        Comparison::Contains => Err(PolicyEvaluationError::type_mismatch(
+            "contains is invalid for a fact reference",
+        )),
+    }
 }
 
 fn fact_kind(value: &FactValue) -> &'static str {
@@ -6812,6 +7053,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             },
             TaskRuntimeSnapshot {
                 task_id: "fixture.observe-secondary".to_owned(),
@@ -6822,6 +7065,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             },
         ];
         let result =
@@ -7437,6 +7682,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             });
             let result = evaluate(
                 &catalog,
@@ -7527,6 +7774,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         });
         assert_eq!(
             evaluate(&unmapped, &unmapped_facts, &base_resources(), time, 9)
@@ -7901,6 +8150,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         });
 
         let result = evaluate(
@@ -7970,6 +8221,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         });
 
         let result = evaluate(
@@ -8040,6 +8293,7 @@ pub(crate) mod tests {
         let dependency = PredicateSpec::DependencyCompleted {
             task_id: "fixture.head".to_owned(),
             terminal_states: vec![TaskTerminalState::Succeeded],
+            since_own_run: None,
         };
         let two_slots = daily(&[360, 1140]);
         let one_slot = daily(&[390]);
@@ -8150,6 +8404,8 @@ pub(crate) mod tests {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             };
             let time = EvaluationTime {
                 unix_ms: now,
@@ -8204,6 +8460,8 @@ pub(crate) mod tests {
             completed_window: None,
             last_duration_ms: None,
             failure_streak: None,
+            expected_runtime_ms: None,
+            expected_runtime_runs: None,
         }
     }
 

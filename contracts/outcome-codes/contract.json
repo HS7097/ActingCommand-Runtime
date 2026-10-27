@@ -17237,6 +17237,28 @@
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
+    "standard_pack_package_unclassified": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "package_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A package of a standard-pack game root's bundle is neither maintenance-role by the root files, named by a rule of the root's schedule.json, nor held (ROUT-L RL-1a, contracts/standard-pack-schedule.md). It is not scheduled; the rest of the game is. The policy composer finds it; check-config, the Runtime and actinglab standard-pack check report it once per game, package and schedule.json.",
+      "common_causes": "A package was added to the bundle without a rule or a held entry, or its rule was removed.",
+      "handling": "Add a rule that names the package, or a held entry with its reason, to the game root's schedule.json."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -17258,7 +17280,45 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack root file (bundle.json, pages.json or interrupts.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime.",
+      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "standard_pack_table_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "standard_pack_problem": "required",
+        "json_pointer": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A table file of a standard-pack game root's tables directory (actingcommand.table.v1) breaks its shape or a limit, or is the root's 65th table or later by file name (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs list it with the table, and actinglab resource validate shares the same check. A refused table never breaks its game root or stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "standard_pack_table_unreadable": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "game": "optional",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A table file of a standard-pack game root's tables directory, or that directory itself, could not be read; the OS error is the cause (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs report it. Shared because actingctl packs reports it beside the Runtime.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

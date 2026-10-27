@@ -5,15 +5,24 @@
 //!
 //! An instance configured with `start_emulator` (S6a; off unless the configuration names it, and
 //! allowed only on a discovery-bound instance) whose emulator is stopped when the daemon starts
-//! (its endpoint is pending) gets one autostart claim (`ClaimKind::Autostart`, a routine claim
-//! with no deadline that never preempts). actingd enqueues the claims once, after policy
+//! (its endpoint is pending) gets one autostart claim (`ClaimKind::Autostart`, a Runtime-internal
+//! claim with no deadline that never preempts). actingd enqueues the claims once, after policy
 //! initialization and before `runtime_ready`; the enqueue does not block. Every claim is visible:
-//! a holder from the enqueue, or a gated entry while a scheduling pause holds the instance or the
-//! global gate (a restored pause included). A gated entry is no waiting work (Workflow #411 A3):
-//! it refuses neither `request-shutdown` nor `restart`, an accepted shutdown disconnects it
-//! (`lease.queue_disconnected`) with no report line, and the next start enqueues it again under
-//! the restored pause. The claim takes neither the bound-endpoint check nor the
-//! performance-control gate and is granted with drain capacity (Q-2a).
+//! a holder from the enqueue, or a queued entry behind another holder. emu-watch (Alice's ruling
+//! 35, #414 option 3): a scheduling pause, the instance's own or the global one (a restored one
+//! included), never holds or queues the claim and never makes it yield; the pause holds only the
+//! instance's dispatches and its startup package (below). The claim takes neither the
+//! bound-endpoint check nor the performance-control gate and is granted with drain capacity
+//! (Q-2a).
+//!
+//! emu-watch: the emulator watch (`emulator_watch`) requests the same claim, marked `watch`, for a
+//! configured instance whose emulator it found stopped. Its hold is the same, except that it
+//! does not ask whether the binding is pending (an emulator that stopped behind the Runtime's
+//! back is still bound): with the turn, just before the Start, it reads the emulator status once
+//! (`MuMuManager info`, the read that never starts anything) and ends as
+//! `emulator_autostart_skipped` when the emulator process runs, or as `emulator_autostart_failed`
+//! (the read's failure its cause) when the read fails; it never stops or restarts a running
+//! emulator.
 //!
 //! Once granted, the claim runs on its instance's worker and holds the key throughout. It reads
 //! the operating system's connectivity status (`actingcommand_host_metrics`, P3; the Runtime
@@ -22,14 +31,26 @@
 //! time refuses the start with `emulator_autostart_network_unready`. It then waits for the start
 //! turn, which the claims of one daemon start take one at a time in configuration order. The
 //! wait ticks every 500 ms; at each tick it renews the key to 120 s whenever less than 30 s is
-//! left (B1, review M-4), and ends the claim on a drain or a shutdown, yields to a pause (it
-//! queues again as a gated entry and releases), yields to an operator emulator control waiting
-//! on the instance (superseded: a release and a report line, no failure pair), and ends without
-//! action on an instance that already runs. The Start is H-4's start path on the claim's own
-//! key; its `command.received` is written only then, so a claim that yields leaves no open
-//! command. A passing preparation hands the key to the startup package through the gate, a
-//! failing one to the ladder it admitted. Every outcome is one report line, which actingd writes
-//! as a daemon line; a failed write never stops the daemon.
+//! left (B1, review M-4), and ends the claim on a drain or a shutdown, yields to an operator
+//! emulator control waiting on the instance (superseded: a release and a report line, no failure
+//! pair), and ends without action on an instance that already runs. The Start is H-4's start path
+//! on the claim's own key; its `command.received` is written only then, so a claim that yields
+//! leaves no open command. A passing preparation hands the key to the startup package through the
+//! gate, a failing one to the ladder it admitted; emu-watch: under a scheduling pause the startup
+//! package's claim waits queued as a gated entry and runs after the resume (the configured start
+//! does not withhold it as an operator's start does, `startup_package_withheld`). Every outcome
+//! is one report line, which actingd writes as a daemon line; a failed write never stops the
+//! daemon.
+//!
+//! Workflow #386 SR-4a3 (frozen scheduling model v1.4.2 C-3, T46; `scheduling-blackout.md`,
+//! "Complete silence"): inside a blackout of its instance the claim gets no key and starts no
+//! emulator. The routine gate holds it (`ClaimGate::Silenced`) as a queued entry, whether the
+//! daemon start, a watchdog start's daemon start, the emulator watch or IDLE-1's wake asked for
+//! it, so an emulator the watch found stopped stays stopped and its restart is counted once
+//! (the watch requests no second claim while one waits). Its wait is bounded: the lease sweep's
+//! pump grants it at the first tick after the blackout's end, and the startup package follows
+//! as after every configured start. A claim granted before a blackout that then covers its
+//! instance holds without its Start until the end.
 
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
@@ -157,6 +178,10 @@ pub(super) struct PendingAutostart {
     pub(super) instance_alias: String,
     /// The instance's place in the configuration, its place in the start turn.
     position: usize,
+    /// emu-watch: the emulator watch requested the claim for an emulator it found stopped; the
+    /// claim reads the emulator status just before its Start instead of asking whether the
+    /// binding is pending.
+    watch: bool,
 }
 
 /// Binds the configured aliases to registered physical instances at startup, in configuration
@@ -194,12 +219,13 @@ pub(super) fn resolve_emulator_autostart(
 enum HoldEnd {
     /// A drain or a shutdown.
     Interrupted,
-    /// A scheduling pause holds the instance or the global gate: the claim queues again.
-    Yielded,
     /// An operator emulator control waits on the instance.
     Superseded,
     /// The instance already runs.
     Running,
+    /// emu-watch: the watch's claim could not read the emulator status before its Start: the
+    /// read's failure.
+    Unread(Box<Outcome>),
     /// A renewal was refused (`lease_expired`, `lease_missing`).
     RenewalRefused(Box<RequestFailure>),
 }
@@ -243,6 +269,7 @@ impl HostShared {
                         instance_id,
                         instance_alias,
                         position,
+                        watch: false,
                     },
                 )
                 .collect::<Vec<_>>()
@@ -276,8 +303,44 @@ impl HostShared {
         self.emulator_autostart_reports.clone()
     }
 
-    fn report_emulator_autostart(&self, line: Outcome) -> RuntimeHostResult<()> {
+    /// One report line (emu-watch: the watch's lines too).
+    pub(super) fn report_emulator_autostart(&self, line: Outcome) -> RuntimeHostResult<()> {
         self.emulator_autostart_reports.push(line)
+    }
+
+    /// emu-watch (R3): one autostart claim, marked `watch`, for the configured instance at
+    /// `position` whose emulator the watch found stopped; it does not block. It contends for the
+    /// start turn from before its request, as a daemon start's claim does. A claim the queue
+    /// refuses is recorded by the queue and reported (`emulator_autostart_failed`); only a failure
+    /// the Runtime does not survive is returned.
+    pub(super) fn request_watch_autostart(
+        &self,
+        position: usize,
+        instance_id: InstanceId,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let claim = PendingAutostart {
+            instance_id,
+            instance_alias: instance_alias.to_owned(),
+            position,
+            watch: true,
+        };
+        self.autostart_turn(|turn| turn.enter(claim.position))?;
+        match self.request_autostart_claim(&claim) {
+            Ok(true) => Ok(()),
+            Ok(false) => self.autostart_turn(|turn| turn.withdraw(claim.position)),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err(*failure.error)
+            }
+            Err(failure) => {
+                self.autostart_turn(|turn| turn.withdraw(claim.position))?;
+                self.report_emulator_autostart(
+                    Outcome::new(HostCode::EmulatorAutostartFailed)
+                        .alias(instance_alias)
+                        .caused_by(failure.error.outcome()),
+                )
+            }
+        }
     }
 
     fn autostart_turn<T>(
@@ -410,12 +473,21 @@ impl HostShared {
                     };
                 }
             }
+            // Workflow #386 SR-4a3: a claim granted before a blackout that now covers its
+            // instance does not start the emulator inside it, and leaves the turn to the others:
+            // it holds on, renewing its key, until the blackout's end.
             if matches!(network, NetworkWait::Ready)
+                && self
+                    .blackout_covering(pending.instance_id, &pending.instance_alias)?
+                    .is_none()
                 && self.autostart_turn(|turn| turn.take(pending.position))?
             {
-                // The final checks just before the Start (P3: the pause is checked again right
-                // before the emulator is driven).
+                // The final checks just before the Start; emu-watch: the watch's claim reads the
+                // emulator status once more.
                 if let Some(end) = self.autostart_hold_ends(pending, &mut key)? {
+                    return self.end_autostart_hold(pending, &key, end);
+                }
+                if let Some(end) = self.watch_start_unneeded(pending)? {
                     return self.end_autostart_hold(pending, &key, end);
                 }
                 return self.drive_autostart(pending, key);
@@ -425,7 +497,9 @@ impl HostShared {
     }
 
     /// The checks of every tick, in order: a drain or a shutdown; the renewal; an operator
-    /// emulator control waiting on the instance; a pause; an instance that already runs.
+    /// emulator control waiting on the instance; an instance that already runs (a daemon start's
+    /// claim: its binding is no longer pending). emu-watch: a scheduling pause is no check: it
+    /// never holds the emulator start.
     fn autostart_hold_ends(
         &self,
         pending: &PendingAutostart,
@@ -452,8 +526,8 @@ impl HostShared {
         if superseded {
             return Ok(Some(HoldEnd::Superseded));
         }
-        if self.routine_gate(pending.instance_id)? == ClaimGate::RoutineHeld {
-            return Ok(Some(HoldEnd::Yielded));
+        if pending.watch {
+            return Ok(None);
         }
         let running = lock(
             &self.registered_instances,
@@ -464,8 +538,8 @@ impl HostShared {
         Ok(running.then_some(HoldEnd::Running))
     }
 
-    /// Ends a hold before its Start: the key is released (after the claim queued again, for a
-    /// pause), and one report line says why. A refused renewal is the start's refusal pair.
+    /// Ends a hold before its Start: the key is released, and one report line says why. A
+    /// refused renewal is the start's refusal pair.
     fn end_autostart_hold(
         &self,
         pending: &PendingAutostart,
@@ -479,15 +553,9 @@ impl HostShared {
             }
             HoldEnd::Superseded => Outcome::new(HostCode::EmulatorAutostartSuperseded).alias(alias),
             HoldEnd::Running => Outcome::new(HostCode::EmulatorAutostartSkipped).alias(alias),
-            HoldEnd::Yielded => match self.request_autostart_claim(pending) {
-                Ok(_) => Outcome::new(HostCode::EmulatorAutostartYielded).alias(alias),
-                Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
-                    return Err(*failure.error);
-                }
-                Err(failure) => Outcome::new(HostCode::EmulatorAutostartFailed)
-                    .alias(alias)
-                    .caused_by(failure.error.outcome()),
-            },
+            HoldEnd::Unread(cause) => Outcome::new(HostCode::EmulatorAutostartFailed)
+                .alias(alias)
+                .caused_by(*cause),
             HoldEnd::RenewalRefused(refused) => {
                 let code = refused.error.projection().code;
                 let mut error =
@@ -603,6 +671,34 @@ impl HostShared {
                 .caused_by(failure.error.outcome()),
         };
         self.report_emulator_autostart(line)
+    }
+
+    /// emu-watch: before the Start of the watch's claim, the emulator status read once
+    /// (`MuMuManager info`, bounded; it never starts anything): `Running` when the emulator
+    /// process runs (a person or an operator control started it meanwhile), `Unread` when the
+    /// read fails, `None` (the Start goes on) when the emulator is stopped. A daemon start's claim
+    /// reads nothing here.
+    fn watch_start_unneeded(
+        &self,
+        pending: &PendingAutostart,
+    ) -> RuntimeHostResult<Option<HoldEnd>> {
+        if !pending.watch {
+            return Ok(None);
+        }
+        match self
+            .execution()?
+            .read_emulator_instance_state(&pending.instance_alias)
+        {
+            Ok(state) if state.process_started => Ok(Some(HoldEnd::Running)),
+            Ok(_) => Ok(None),
+            Err(error) => Ok(Some(HoldEnd::Unread(Box::new(
+                self.emulator_watch_read_failure(
+                    &pending.instance_alias,
+                    HostLocation::RunEmulatorAutostart,
+                    error.to_string(),
+                ),
+            )))),
+        }
     }
 
     /// P3: the operating system's connectivity status, read once (a test build may script it).

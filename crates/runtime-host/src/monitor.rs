@@ -12,7 +12,7 @@ use actingcommand_contract::{
     RuntimeMonitorJournalSource, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
     RuntimeMonitorState, RuntimeStateFact,
 };
-use actingcommand_ledger::{GlobalLedger, PersistedEvent};
+use actingcommand_ledger::{GlobalLedger, LedgerIndexRole, PersistedEvent};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,6 +22,10 @@ use std::path::Path;
 
 pub(crate) const MONITOR_FILE_NAME: &str = "monitor.journal";
 const MONITOR_SCHEMA_VERSION: &str = "actingcommand.runtime-monitor.v1";
+/// Workflow #422 LN-4: the `state` keys of the registry (`contracts/ledger-observer.md` §11.1):
+/// the import, and each alias's latest applied change (or the import that brought it).
+const MONITOR_IMPORT_KEY: &str = "monitor_import";
+const MONITOR_KEY_PREFIX: &str = "monitor/";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +34,15 @@ struct MonitorRecord {
     revision: u64,
     monitors: Vec<RuntimeMonitorInstanceStatus>,
 }
+
+/// Workflow #422 LN-4, tests: what a registry holds (`MonitorRegistry::state_for_test`).
+#[cfg(test)]
+pub(crate) type MonitorStateForTest = (
+    u64,
+    Option<RuntimeMonitorImport>,
+    BTreeMap<String, RuntimeMonitorInstanceStatus>,
+    BTreeMap<String, u64>,
+);
 
 pub(crate) struct MonitorUpdate {
     pub(crate) changed: bool,
@@ -62,7 +75,35 @@ impl MonitorRegistry {
         ledger: &GlobalLedger,
         events: &RuntimeEvents,
     ) -> RuntimeHostResult<Self> {
-        match Self::recover(state_root, allowed_aliases, owner_epoch, ledger, events) {
+        let recovered = Self::recover(state_root, allowed_aliases, owner_epoch, ledger, events);
+        Self::restored(recovered, ledger, events)
+    }
+
+    /// Workflow #422 LN-4 (LEAN-L model §1.2 H-c, §3.2 step 5): the start's load from the tagged
+    /// records instead of the replay of every Runtime record. The `monitor_import` row names the
+    /// import; each `monitor/<alias>` row names the alias's latest applied change, or the import
+    /// that brought it. The import is applied first, then each alias's change; the registry's
+    /// revision is the largest the records carry. The journal file is checked against the import
+    /// as the replay checks it. A failure is recorded as the replay's is.
+    pub(crate) fn load(
+        state_root: &Path,
+        allowed_aliases: impl IntoIterator<Item = String>,
+        owner_epoch: OwnerEpoch,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+    ) -> RuntimeHostResult<Self> {
+        let loaded = Self::load_tagged(state_root, allowed_aliases, owner_epoch, ledger);
+        Self::restored(loaded, ledger, events)
+    }
+
+    /// The error of a failed restore, recorded as a fatal `runtime.failed` unless the ledger
+    /// itself failed.
+    fn restored(
+        restored: RuntimeHostResult<Self>,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+    ) -> RuntimeHostResult<Self> {
+        match restored {
             Ok(registry) => Ok(registry),
             Err(error) => {
                 if error.projection().code != RuntimeErrorCode::LedgerFailure {
@@ -98,12 +139,10 @@ impl MonitorRegistry {
         }
     }
 
-    fn recover(
-        state_root: &Path,
+    /// An empty registry of `allowed_aliases`.
+    fn empty(
         allowed_aliases: impl IntoIterator<Item = String>,
         owner_epoch: OwnerEpoch,
-        ledger: &GlobalLedger,
-        events: &RuntimeEvents,
     ) -> RuntimeHostResult<Self> {
         let allowed_aliases = allowed_aliases.into_iter().collect::<BTreeSet<_>>();
         if allowed_aliases.len() > MAX_RUNTIME_OBSERVED_INSTANCES {
@@ -112,7 +151,7 @@ impl MonitorRegistry {
                 HostLocation::OpenMonitorRegistry,
             ));
         }
-        let mut registry = Self {
+        Ok(Self {
             owner_epoch,
             revision: 0,
             last_sequence: 0,
@@ -120,32 +159,183 @@ impl MonitorRegistry {
             monitors: BTreeMap::new(),
             configuration_versions: BTreeMap::new(),
             allowed_aliases,
-        };
-        let through = ledger
-            .latest_sequence()
-            .map_err(|_| monitor_ledger_error(HostLocation::ReadMonitorRegistry))?;
-        let mut after = 0;
-        while after < through {
-            let page = ledger
-                .query_page(
-                    EventQuery {
-                        origin_module: Some(OriginModule::Runtime),
-                        ..EventQuery::default()
-                    },
-                    after,
-                    through,
-                    128,
-                )
-                .map_err(|_| monitor_ledger_error(HostLocation::ReadMonitorRegistry))?;
-            if page.is_empty() {
-                break;
-            }
-            for event in page {
-                after = event.sequence();
-                registry.apply(&event)?;
+        })
+    }
+
+    fn load_tagged(
+        state_root: &Path,
+        allowed_aliases: impl IntoIterator<Item = String>,
+        owner_epoch: OwnerEpoch,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<Self> {
+        let mut registry = Self::empty(allowed_aliases, owner_epoch)?;
+        let rows = crate::tagged_state::index_records(
+            ledger,
+            LedgerIndexRole::State,
+            &[MONITOR_IMPORT_KEY, MONITOR_KEY_PREFIX],
+        )?;
+        let import = rows
+            .records
+            .iter()
+            .find(|record| record.key == MONITOR_IMPORT_KEY)
+            .ok_or_else(|| invalid_monitor_record(HostLocation::OpenMonitorRegistry))?;
+        registry.apply(&import.event)?;
+        for record in &rows.records {
+            match record.event.payload().runtime_state() {
+                // The import's own rows: its aliases are applied with it.
+                Some(RuntimeStateFact::MonitorImported { .. })
+                    if record.event.sequence() == import.event.sequence() => {}
+                Some(RuntimeStateFact::MonitorChanged { change, .. }) if change.applied => {
+                    registry.load_change(&record.event, change)?;
+                }
+                _ => return Err(invalid_monitor_record(HostLocation::ReplayMonitorEvent)),
             }
         }
+        registry.last_sequence = rows.through_sequence;
+        registry.check_import_source(state_root)?;
+        Ok(registry)
+    }
+
+    /// Workflow #422 LN-4: one alias's latest applied change, loaded with the checks the replay
+    /// gives a record.
+    fn load_change(
+        &mut self,
+        event: &PersistedEvent,
+        change: &RuntimeMonitorChange,
+    ) -> RuntimeHostResult<()> {
+        if event.origin().module() != OriginModule::Runtime
+            || event.origin().source() != EventSource::Runtime
+            || event.origin().actor() != EventActor::Runtime
+        {
+            return Err(invalid_monitor_record(HostLocation::ReplayMonitorEvent));
+        }
+        change
+            .validate()
+            .map_err(|_| invalid_monitor_record(HostLocation::ReplayMonitorEvent))?;
+        let alias = change.status.instance_alias();
+        self.require_allowed(alias)?;
+        if change.status.policy().is_some() {
+            self.monitors
+                .insert(alias.to_owned(), change.status.clone());
+        } else {
+            self.monitors.remove(alias);
+        }
+        self.configuration_versions
+            .insert(alias.to_owned(), change.configuration_version);
+        self.revision = self.revision.max(change.revision);
+        Ok(())
+    }
+
+    /// The import must still match the journal file it was read from.
+    fn check_import_source(&self, state_root: &Path) -> RuntimeHostResult<()> {
+        let original = read_legacy_snapshot(state_root, &self.allowed_aliases)?;
+        if self.imported.as_ref() != Some(&original) {
+            return Err(monitor_error(
+                HostCode::MonitorImportSourceConflict,
+                HostLocation::OpenMonitorRegistry,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Workflow #422 LN-4 (LEAN-L model §3.6; `contracts/ledger-observer.md` §11.6): seeds the
+    /// registry's tagged records once, on a start without the marker. An import the index already
+    /// names came with the index rules, and so did every change after it: nothing is written.
+    /// Otherwise the import is recorded again (the same import changes nothing when replayed),
+    /// then one applied change with the complete state of every alias whose state moved since the
+    /// import, so each alias's row names a record that carries its state. Returns the records
+    /// written.
+    pub(crate) fn seed(
+        &mut self,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+    ) -> RuntimeHostResult<usize> {
+        let tagged = crate::tagged_state::index_records(
+            ledger,
+            LedgerIndexRole::State,
+            &[MONITOR_IMPORT_KEY],
+        )?;
+        if !tagged.records.is_empty() {
+            return Ok(0);
+        }
+        let import = self
+            .imported
+            .clone()
+            .ok_or_else(|| invalid_monitor_record(HostLocation::ImportMonitorRegistry))?;
+        let fact = RuntimeStateFact::MonitorImported {
+            owner_epoch: self.owner_epoch,
+            import: import.clone(),
+        };
+        let event = append_runtime_state(
+            ledger,
+            events,
+            EventAction::RuntimeAction,
+            EffectDisposition::NotPerformed,
+            fact,
+            HostLocation::ImportMonitorRegistry,
+        )?;
+        self.apply(&event)?;
+        let mut written = 1;
+        for alias in self.allowed_aliases.clone() {
+            let status = self.instance_status(&alias)?;
+            let version = self.configuration_version(&alias);
+            let unchanged = match import
+                .instances
+                .iter()
+                .find(|imported| imported.instance_alias() == alias)
+            {
+                Some(imported) => *imported == status && version == import.revision,
+                None => status.policy().is_none() && version == 0,
+            };
+            if unchanged {
+                continue;
+            }
+            let (kind, action) = if status.policy().is_some() {
+                (
+                    RuntimeMonitorChangeKind::Configure,
+                    EventAction::MonitorConfigure,
+                )
+            } else {
+                (RuntimeMonitorChangeKind::Clear, EventAction::MonitorClear)
+            };
+            let update = self.update(kind, status, true, None, None)?;
+            let event = append_runtime_state(
+                ledger,
+                events,
+                action,
+                EffectDisposition::Performed,
+                update.fact,
+                HostLocation::PrepareMonitorUpdate,
+            )?;
+            self.apply(&event)?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
+    /// Workflow #422 LN-4, tests: the revision, the import, the configured aliases and the
+    /// configuration versions.
+    #[cfg(test)]
+    pub(crate) fn state_for_test(&self) -> MonitorStateForTest {
+        (
+            self.revision,
+            self.imported.clone(),
+            self.monitors.clone(),
+            self.configuration_versions.clone(),
+        )
+    }
+
+    fn recover(
+        state_root: &Path,
+        allowed_aliases: impl IntoIterator<Item = String>,
+        owner_epoch: OwnerEpoch,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+    ) -> RuntimeHostResult<Self> {
+        let mut registry = Self::empty(allowed_aliases, owner_epoch)?;
+        registry.replay_runtime_records(ledger)?;
         let original = read_legacy_snapshot(state_root, &registry.allowed_aliases)?;
+
         if let Some(imported) = &registry.imported {
             if imported != &original {
                 return Err(monitor_error(
@@ -177,6 +367,53 @@ impl MonitorRegistry {
             registry.apply(&event)?;
         }
         Ok(registry)
+    }
+
+    /// Applies every Runtime record of the ledger, in pages through one position.
+    fn replay_runtime_records(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
+        let through = ledger
+            .latest_sequence()
+            .map_err(|_| monitor_ledger_error(HostLocation::ReadMonitorRegistry))?;
+        let mut after = 0;
+        while after < through {
+            let page = ledger
+                .query_page(
+                    EventQuery {
+                        origin_module: Some(OriginModule::Runtime),
+                        ..EventQuery::default()
+                    },
+                    after,
+                    through,
+                    128,
+                )
+                .map_err(|_| monitor_ledger_error(HostLocation::ReadMonitorRegistry))?;
+            if page.is_empty() {
+                break;
+            }
+            for event in page {
+                after = event.sequence();
+                self.apply(&event)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #422 LN-4, tests: the registry today's replay of every Runtime record rebuilds,
+    /// without its import step: the reference a loaded registry is compared with.
+    #[cfg(test)]
+    pub(crate) fn replayed_for_test(
+        allowed_aliases: impl IntoIterator<Item = String>,
+        owner_epoch: OwnerEpoch,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<Self> {
+        let mut registry = Self::empty(allowed_aliases, owner_epoch)?;
+        registry.replay_runtime_records(ledger)?;
+        Ok(registry)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn aliases_for_test(&self) -> Vec<String> {
+        self.allowed_aliases.iter().cloned().collect()
     }
 
     pub(crate) fn prepare_configure(
@@ -421,6 +658,12 @@ impl MonitorRegistry {
             .map_err(|_| invalid_monitor_record(HostLocation::ReplayMonitorEvent))?;
         match fact {
             RuntimeStateFact::MonitorImported { import, .. } => {
+                // Workflow #422 LN-4 (§11.6): the seeding records the import again so the index
+                // names it; the same import changes nothing.
+                if self.imported.as_ref() == Some(import) {
+                    self.last_sequence = event.sequence();
+                    return Ok(());
+                }
                 if self.imported.is_some() || self.revision != 0 {
                     return Err(monitor_error(
                         HostCode::MonitorImportConflict,
@@ -618,6 +861,28 @@ fn validate_record(
 
 fn monitor_error(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
+}
+
+/// Workflow #422 LN-4: appends one registry record as the Runtime's own validated command.
+fn append_runtime_state(
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    action: EventAction,
+    effect: EffectDisposition,
+    fact: RuntimeStateFact,
+    operation: HostLocation,
+) -> RuntimeHostResult<PersistedEvent> {
+    let draft = events.draft(
+        EventSeverity::Info,
+        EventSource::Runtime,
+        OriginModule::Runtime,
+        EventActor::Runtime,
+        events.system_links()?,
+        CommandPayloadDraft::validated_runtime_state(action, effect, fact, AuditInput::new()),
+    )?;
+    ledger
+        .append(events.sanitize(draft)?)
+        .map_err(|_| monitor_ledger_error(operation))
 }
 
 fn monitor_ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
@@ -1107,6 +1372,145 @@ mod tests {
             !root.path().join(MONITOR_FILE_NAME).exists(),
             "absent source remains absent after import and updates"
         );
+        ledger.close().unwrap();
+    }
+
+    /// Workflow #422 LN-3: the sequence of the record the index row `monitor/<alias>` names.
+    fn monitor_row(database: &RuntimeDatabase, alias: &str) -> Option<u64> {
+        let connection = database
+            .connection(actingcommand_ledger::LedgerLocation::LedgerIndexRows.location())
+            .expect("database connection");
+        let mut statement = connection
+            .prepare("SELECT sequence FROM ledger_index WHERE role='state' AND key=?1")
+            .expect("index read");
+        let mut rows = statement
+            .query_map([format!("monitor/{alias}")], |row| row.get::<_, i64>(0))
+            .expect("index rows");
+        // The ledger's ordered integer encoding.
+        rows.next()
+            .map(|row| (row.expect("an index row") as u64) ^ (1_u64 << 63))
+    }
+
+    // Workflow #422 LN-3, test row 1 for the monitor registry (LEAN-L §3.6; `ledger-observer.md`
+    // §11.1): every change of an alias's monitor state writes one record with the alias's
+    // complete state, and the index row `monitor/<alias>` names the latest: the import for each
+    // alias it brings, then each applied change. A change that was not applied changed no state
+    // and leaves the row where it was; an alias that never changed has no row.
+    #[test]
+    fn ln3_a_the_monitor_row_names_the_latest_change_of_each_alias() {
+        let root = TempDir::new().unwrap();
+        let events = RuntimeEvents::new(
+            b"monitor-specification-salt",
+            Arc::new(crate::SystemRuntimeClock::new()),
+        )
+        .unwrap();
+        let owner_epoch = *events.issuer().mint_owner_epoch().unwrap().transport();
+        let imported = RuntimeMonitorInstanceStatus::configured(
+            "node.a",
+            RuntimeMonitorPolicy::new(2_000, "campaign", false).unwrap(),
+            RuntimeMonitorState::scheduled(5).unwrap(),
+        )
+        .unwrap();
+        let mut journal = serde_json::to_vec(&MonitorRecord {
+            schema_version: MONITOR_SCHEMA_VERSION.to_owned(),
+            revision: 1,
+            monitors: vec![imported.clone()],
+        })
+        .unwrap();
+        journal.push(b'\n');
+        std::fs::write(root.path().join(MONITOR_FILE_NAME), &journal).unwrap();
+        let database = Arc::new(
+            RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
+                root.path(),
+                b"monitor-specification-salt",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
+            .unwrap(),
+        );
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(root.path(), "monitor-ln3"),
+            Arc::clone(&database),
+        )
+        .unwrap();
+        let mut registry = MonitorRegistry::open(
+            root.path(),
+            ["node.a".to_owned(), "node.b".to_owned()],
+            owner_epoch,
+            &ledger,
+            &events,
+        )
+        .unwrap();
+        let import = ledger
+            .query(EventQuery::default())
+            .unwrap()
+            .into_iter()
+            .find(|event| {
+                matches!(
+                    event.payload().runtime_state(),
+                    Some(RuntimeStateFact::MonitorImported { import, .. })
+                        if import.instances == vec![imported.clone()]
+                )
+            })
+            .expect("the import record");
+
+        let policy = RuntimeMonitorPolicy::new(1_000, "home", false).unwrap();
+        let mut rows = BTreeMap::from([("node.a", Some(import.sequence())), ("node.b", None)]);
+        for (alias, row) in &rows {
+            assert_eq!(monitor_row(&database, alias), *row, "{alias}");
+        }
+        for (alias, clear, applied) in [
+            ("node.b", false, true),
+            ("node.b", false, false),
+            ("node.a", true, true),
+            ("node.a", true, false),
+        ] {
+            let update = if clear {
+                registry.prepare_clear(alias).unwrap()
+            } else {
+                registry
+                    .prepare_configure(alias, policy.clone(), 10)
+                    .unwrap()
+            };
+            assert_eq!(update.changed, applied, "{alias}");
+            let RuntimeStateFact::MonitorChanged { change, .. } = &update.fact else {
+                panic!("a monitor change");
+            };
+            let status = change.status.clone();
+            let draft = events
+                .draft(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    events.system_links().unwrap(),
+                    CommandPayloadDraft::validated_runtime_state(
+                        if clear {
+                            EventAction::MonitorClear
+                        } else {
+                            EventAction::MonitorConfigure
+                        },
+                        if applied {
+                            EffectDisposition::Performed
+                        } else {
+                            EffectDisposition::NotPerformed
+                        },
+                        update.fact,
+                        AuditInput::new(),
+                    ),
+                )
+                .unwrap();
+            let event = ledger.append(events.sanitize(draft).unwrap()).unwrap();
+            registry.apply(&event).unwrap();
+            // The record carries the alias's complete state after the change.
+            assert_eq!(status, registry.instance_status(alias).unwrap(), "{alias}");
+            if applied {
+                rows.insert(alias, Some(event.sequence()));
+            }
+            for (alias, row) in &rows {
+                assert_eq!(monitor_row(&database, alias), *row, "{alias}");
+            }
+        }
         ledger.close().unwrap();
     }
 }

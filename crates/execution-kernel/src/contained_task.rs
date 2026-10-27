@@ -22,15 +22,19 @@ use actingcommand_contract::{
     SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
     SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
-    TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
+    TaskPhaseEvidence, TaskSchema, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
     TaskTimingStage, validate_resource_adjustments, validate_resource_readings,
 };
 // #411 A20: a phased route's refusal names the refused member.
 use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
+// Workflow #392 DA-2a: the run's display declaration, the frame gate's scale frame.
+use actingcommand_contract::StandardPackDisplayLayout;
+use display_gate::{FramePixels, ScaleFrame};
 // #411 A44: each candidate page's verdict (ledger revision 4, register §1.153 LR-8).
 use actingcommand_contract::{
     RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
 };
+use capture_cadence::{CaptureBackoff, MAX_DECLARED_INTERVAL_MS};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
 use still_wait::StillUnrecognised;
@@ -70,6 +74,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 // Workflow #390 EXEC-1: ordered candidate operations on one page.
 mod candidates;
+// PERF-B1 (Workflow #407 B1): a wait's capture cadence.
+mod capture_cadence;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
 // #412 Lab B-3 S1: one declared operation run as the kernel runs it.
@@ -242,6 +248,17 @@ mod gate_406_t3;
 // #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
 #[cfg(test)]
 mod gate_411_lab_rp;
+// PERF-B1 (Workflow #407 B1): a wait's own capture interval, the configured
+// ceiling of a declared interval, and the back-off on unchanged frames.
+#[cfg(test)]
+mod gate_407_b1;
+// Workflow #392 DA-2a: the display adapter's frame gate.
+mod display_gate;
+// Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity
+// test): the gate at the six capture entries.
+#[cfg(test)]
+mod gate_392_da2a;
+pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
 pub use readings::{
@@ -269,7 +286,9 @@ const DEFAULT_STEP_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_MAX_STEPS: u32 = 100;
 const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
 const MAX_STEP_TIMEOUT_MS: u64 = 60_000;
-const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
+/// The longest post-input delay an operation may declare. PERF-B1 moved the capture interval's
+/// bound, which this one shared, to the configuration (`execution.capture`); this one is unchanged.
+const MAX_POST_DELAY_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
 const MAX_PREREQUISITE_PACKAGE_ID_BYTES: usize = 256;
 const PREREQUISITE_ENTRY_UNMATCHED: Code =
@@ -2292,10 +2311,14 @@ pub struct StepPacing {
     /// kernel waits exactly this long, on the budget clock like any wait, and recognizes nothing
     /// again after it. Zero (the default) is no pause.
     pub pre_input_wait: Duration,
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect for the step
+    /// ([`Self::with_capture_cadence`]); [`CaptureCadence::UNCONFIGURED`] by default.
+    pub capture_cadence: CaptureCadence,
 }
 
 impl Default for StepPacing {
-    /// No observe-only retry, factor 1000, no extra round and no pre-input wait.
+    /// No observe-only retry, factor 1000, no extra round, no pre-input wait and the unconfigured
+    /// capture cadence.
     fn default() -> Self {
         Self::new(0)
     }
@@ -2303,13 +2326,22 @@ impl Default for StepPacing {
 
 impl StepPacing {
     /// `sample_timeout_retries` observe-only retries at the factor 1000, without an extra round
-    /// or a pre-input wait.
+    /// or a pre-input wait, at the unconfigured capture cadence.
     pub const fn new(sample_timeout_retries: u32) -> Self {
         Self {
             sample_timeout_retries,
             factor_milli: actingcommand_contract::MIN_PACING_FACTOR_MILLI,
             extra_wait_rounds: 0,
             pre_input_wait: Duration::ZERO,
+            capture_cadence: CaptureCadence::UNCONFIGURED,
+        }
+    }
+
+    /// PERF-B1: the same pacing with the capture cadence `capture_cadence`.
+    pub const fn with_capture_cadence(self, capture_cadence: CaptureCadence) -> Self {
+        Self {
+            capture_cadence,
+            ..self
         }
     }
 
@@ -2396,6 +2428,15 @@ pub trait ContainedTaskRuntime {
     }
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error>;
+
+    /// Workflow #392 DA-2a (model 392 v1.2 §4.1, §12.1 row DA-2a): the display declaration of the
+    /// run's game (`display-layout.json`), read once in the run's preparation and fixed for the
+    /// whole run. Every frame of the run, its layers' frames included, passes the display
+    /// adapter's frame gate under it. A runtime without a standard-pack root answers `None`; only
+    /// the identity and a pure scale then map.
+    fn display_layout(&self) -> Option<&StandardPackDisplayLayout> {
+        None
+    }
 
     fn committed_input_frame(
         &mut self,
@@ -3534,6 +3575,8 @@ impl PreparedContainedTask {
         let pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): no capture of a package that declares an interval above the ceiling.
+        self.check_declared_intervals(pacing)?;
         let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut started = budget_now(runtime, pace);
         let budget = Duration::from_millis(
@@ -3667,6 +3710,8 @@ impl PreparedContainedTask {
         let pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): no capture of a package that declares an interval above the ceiling.
+        self.check_declared_intervals(pacing)?;
         // #385 P-k (performance model v1.4.2 §5.3): the check's window is budget time.
         let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
@@ -3772,6 +3817,8 @@ impl PreparedContainedTask {
         let pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): no capture of a package that declares an interval above the ceiling.
+        self.check_declared_intervals(pacing)?;
         let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
         let mut rounds = ExtraRounds::of(pacing);
@@ -3927,7 +3974,10 @@ impl PreparedContainedTask {
         let frame = runtime
             .capture()
             .map_err(ContainedTaskRunError::operation::<R>)?;
-        self.control.resolution.validate_frame(&frame)?;
+        let scale = self
+            .control
+            .resolution
+            .validate_frame(&frame, runtime.display_layout())?;
         runtime
             .record(ContainedTaskTrace::CaptureCompleted {
                 width: frame.width,
@@ -3945,9 +3995,16 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let scene = scene_from_frame(&frame)?;
+        let scene = scale.scene()?;
         let [page] = pages else {
-            return self.recognize_entry_set_frame(runtime, &frame, scene, pages, candidate_pages);
+            return self.recognize_entry_set_frame(
+                runtime,
+                &frame,
+                &scale,
+                scene,
+                pages,
+                candidate_pages,
+            );
         };
         let page = *page;
         let result = self.detector.evaluate_page(&self.evaluator, &scene, page);
@@ -3973,7 +4030,7 @@ impl PreparedContainedTask {
                 .with_ppocr_diagnostics(error.ppocr_diagnostics())
             })?;
         let matched = evaluation.matched;
-        let targets = recognized_targets(&self.evaluator, &evaluation)?;
+        let targets = scale.device_targets(recognized_targets(&self.evaluator, &evaluation)?)?;
         let candidate_scores =
             recognition_candidate_scores(std::slice::from_ref(&evaluation), &candidate_pages);
         runtime
@@ -3999,6 +4056,7 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         frame: &Frame,
+        scale: &ScaleFrame<'_>,
         scene: Scene,
         pages: &[&str],
         candidate_pages: Vec<String>,
@@ -4046,12 +4104,12 @@ impl PreparedContainedTask {
             .into());
         }
         let page = matched_pages.into_iter().next();
-        let targets = recognized_page_targets(
+        let targets = scale.device_targets(recognized_page_targets(
             &self.evaluator,
             &evaluations,
             page.as_deref(),
             &candidate_pages,
-        )?;
+        )?)?;
         let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
         runtime
             .record(ContainedTaskTrace::RecognitionCompleted {
@@ -4159,14 +4217,17 @@ impl PreparedContainedTask {
         let frame = runtime
             .capture()
             .map_err(ContainedTaskRunError::operation::<R>)?;
-        self.control.resolution.validate_frame(&frame)?;
+        let scale = self
+            .control
+            .resolution
+            .validate_frame(&frame, runtime.display_layout())?;
         runtime
             .record(ContainedTaskTrace::CaptureCompleted {
                 width: frame.width,
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(scene_from_frame(&frame)?)
+        Ok(scale.scene()?)
     }
 
     /// Workflow #373 NAV-6: this package's page ids.
@@ -4453,6 +4514,9 @@ impl PreparedContainedTask {
         let mut pacing = runtime
             .step_pacing()
             .map_err(ContainedTaskRunError::operation::<R>)?;
+        // PERF-B1 (R2): the run captures nothing of a package that declares a capture interval
+        // above the ceiling in effect at its start.
+        self.check_declared_intervals(pacing)?;
         observation_timing =
             observation_timing.with_pace(paced_step(runtime, observation_timing.pace(), pacing)?);
         if self.control.execution_mode == linear::LINEAR_STEPS {
@@ -6278,6 +6342,8 @@ impl PreparedContainedTask {
         // #385 P-k (§5.4 item 1): a wait that ran out of its window starts the step's extra
         // rounds, one window each, before it fails.
         let mut rounds = ExtraRounds::of(retries.0);
+        // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
+        let mut backoff = CaptureBackoff::new(interval, retries.0);
         let mut retries = SampleRetries::new(retries.0, retries.1);
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
@@ -6326,6 +6392,7 @@ impl PreparedContainedTask {
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
                     still.observation_failed();
+                    backoff.reset();
                     continue;
                 }
             };
@@ -6347,6 +6414,8 @@ impl PreparedContainedTask {
             missed = true;
             // #411 A43b: the frame gave no page of the package.
             still.frame(runtime, &scene)?;
+            // PERF-B1 (R3): compared with the wait's frame before it.
+            backoff.frame(&scene)?;
             // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame is
             // offered to the shared interrupt pages before the wait goes on, its budget paused
             // while one is handled.
@@ -6355,6 +6424,7 @@ impl PreparedContainedTask {
                 started += paused;
                 window_started += paused;
                 still.interrupted();
+                backoff.reset();
                 continue;
             }
             let now = budget_now(runtime, pace);
@@ -6373,9 +6443,12 @@ impl PreparedContainedTask {
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
             let now = pace.budget(wait_started);
+            // PERF-B1 (R3): the back-off's pause, cut at the wait's and the task's time left.
             still.pause(
                 runtime,
-                interval.min(limit.saturating_sub(now.saturating_duration_since(started))),
+                backoff
+                    .interval()
+                    .min(limit.saturating_sub(now.saturating_duration_since(started))),
                 task_deadline.saturating_duration_since(now),
             );
             let wait_ended = runtime.monotonic_now();
@@ -6665,6 +6738,9 @@ impl PreparedContainedTask {
                 .min(timing.deadline());
             let mut sample_scenes = Vec::new();
             let mut sample_geometry: Option<Option<InputFrameContext>> = None;
+            // Workflow #392 DA-2a (model 392 v1.2 §5.1, C11): the map of the observation's first
+            // frame, which every later frame of it must keep.
+            let mut sample_map: Option<actingcommand_display_adapter::DisplayMap> = None;
             if sampled {
                 // Workflow #386 SR-1 (scheduling model §2.2): whether the runtime samples is its
                 // own answer; the checkpoint only answers cancellation.
@@ -6704,7 +6780,10 @@ impl PreparedContainedTask {
                     let sample = runtime
                         .capture()
                         .map_err(ContainedTaskRunError::operation::<R>)?;
-                    self.control.resolution.validate_frame(&sample)?;
+                    let sample_scale = self
+                        .control
+                        .resolution
+                        .validate_frame(&sample, runtime.display_layout())?;
                     runtime
                         .record(ContainedTaskTrace::CaptureCompleted {
                             width: sample.width,
@@ -6727,7 +6806,17 @@ impl PreparedContainedTask {
                     } else {
                         sample_geometry = Some(geometry);
                     }
-                    sample_scenes.push(scene_from_frame(&sample)?);
+                    match sample_map {
+                        Some(first) if first != *sample_scale.map() => {
+                            return Err(ContainedTaskError::new(
+                                ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
+                            )
+                            .into());
+                        }
+                        Some(_) => {}
+                        None => sample_map = Some(*sample_scale.map()),
+                    }
+                    sample_scenes.push(sample_scale.scene()?);
                     let interval =
                         Duration::from_millis(self.evaluator.target_sample_interval_ms());
                     if interval
@@ -6775,13 +6864,18 @@ impl PreparedContainedTask {
             let frame = runtime
                 .capture()
                 .map_err(ContainedTaskRunError::operation::<R>)?;
-            self.control.resolution.validate_frame(&frame)?;
+            let scale = self
+                .control
+                .resolution
+                .validate_frame(&frame, runtime.display_layout())?;
+            // Workflow #392 DA-2a: the stability region is cut from the scale frame, in base
+            // pixels.
             let stability_sample = self
                 .control
                 .stability_termination
                 .as_ref()
                 .filter(|_| feeds_collectors)
-                .map(|declaration| stability_sample(&frame, declaration))
+                .map(|declaration| stability_sample(&scale, declaration))
                 .transpose()?;
             runtime
                 .record(ContainedTaskTrace::CaptureCompleted {
@@ -6789,7 +6883,7 @@ impl PreparedContainedTask {
                     height: frame.height,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            let scene = scene_from_frame(&frame)?;
+            let scene = scale.scene()?;
             let input_context = match frame.input_reference {
                 Some(reference) => runtime
                     .committed_input_frame(reference)
@@ -6799,6 +6893,7 @@ impl PreparedContainedTask {
             if sample_geometry
                 .as_ref()
                 .is_some_and(|prior| !sample_geometry_matches(prior, &input_context))
+                || sample_map.is_some_and(|first| first != *scale.map())
             {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
@@ -6989,12 +7084,12 @@ impl PreparedContainedTask {
                 .into());
             }
             let page = matched_pages.into_iter().next();
-            let targets = recognized_page_targets(
+            let targets = scale.device_targets(recognized_page_targets(
                 &self.evaluator,
                 &evaluations,
                 page.as_deref(),
                 &candidate_pages,
-            )?;
+            )?)?;
             let candidate_scores = recognition_candidate_scores(&evaluations, &candidate_pages);
             runtime
                 .record(ContainedTaskTrace::RecognitionCompleted {
@@ -7096,6 +7191,7 @@ impl PreparedContainedTask {
                 frame_started,
                 sample_scenes,
                 sampling: sampled.then_some((timing, sample_deadline)),
+                display_map: *scale.map(),
             }))
         })();
         let capture_ended = runtime.monotonic_now();
@@ -7150,6 +7246,8 @@ impl PreparedContainedTask {
         // #411 A43b: whether the latest two frames are still and neither is a destination, and
         // the part of the window counted unpaced.
         let mut still = StillUnrecognised::new(pace);
+        // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
+        let mut backoff = CaptureBackoff::new(interval, pacing);
         // #411 B36/B19 (A35-S3): the page the wait holds on, when the operation declares one (a
         // wait step's own page, the confirmation's wait page), and the budget instant of the
         // wait's latest frame.
@@ -7196,6 +7294,7 @@ impl PreparedContainedTask {
                     window_started = budget_observation_now(runtime, pace);
                     missed = false;
                     still.observation_failed();
+                    backoff.reset();
                     continue;
                 }
             };
@@ -7300,6 +7399,9 @@ impl PreparedContainedTask {
                             )
                         }
                     };
+                    // PERF-B1 (R3): every frame that does not end the wait, the page it holds on
+                    // included, is compared with the wait's frame before it.
+                    backoff.frame(&observation.scene)?;
                     last_frame_page = Some(observation.page_label.clone());
                     last_observation = Some(observation);
                     (paused, unconfirmed)
@@ -7308,6 +7410,8 @@ impl PreparedContainedTask {
                     last_frame_page = None;
                     // #411 A43b: the frame gave no page.
                     still.frame(runtime, &scene)?;
+                    // PERF-B1 (R3).
+                    backoff.frame(&scene)?;
                     (self.offer_shared_interrupt(runtime, &scene)?, true)
                 }
             };
@@ -7319,6 +7423,7 @@ impl PreparedContainedTask {
                 started += paused;
                 window_started += paused;
                 still.interrupted();
+                backoff.reset();
                 // #411 B36/B19 (A35-S3): a handled interrupt pauses a wait step's clock too.
                 if let Some(held) = held.as_mut() {
                     held.interrupted(paused);
@@ -7344,9 +7449,10 @@ impl PreparedContainedTask {
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
             let now = pace.budget(wait_started);
+            // PERF-B1 (R3): the back-off's pause, cut at the wait's and the task's time left.
             still.pause(
                 runtime,
-                interval.min(remaining),
+                backoff.interval().min(remaining),
                 task_deadline.saturating_duration_since(now),
             );
             let wait_ended = runtime.monotonic_now();
@@ -7430,6 +7536,9 @@ struct PageObservation {
     frame_started: Instant,
     sample_scenes: Vec<Scene>,
     sampling: Option<(ContainedTaskTimingContext, Instant)>,
+    /// Workflow #392 DA-2a: the display map of this observation's frame (its scene is that map's
+    /// scale frame).
+    display_map: actingcommand_display_adapter::DisplayMap,
 }
 
 fn sample_geometry_matches(
@@ -7499,11 +7608,14 @@ struct StabilityFrameSample {
 /// `contained_task_frame_invalid`. A region that is empty, overflows or does not lie inside the
 /// frame is the control declaration's: the frame passed the task resolution check before this
 /// call, and admission refuses the same region against that resolution with
-/// `contained_task_control_invalid`.
-fn stability_sample(
-    frame: &Frame,
+/// `contained_task_control_invalid`. Workflow #392 DA-2a: a run cuts it from the frame's scale
+/// frame (the display adapter's frame gate), whose pixels are base pixels, so the frame here is
+/// that scale frame or, in a test, a delivered frame of the package's size.
+fn stability_sample<'a>(
+    frame: impl Into<FramePixels<'a>>,
     declaration: &StabilityTerminationDeclaration,
 ) -> Result<StabilityFrameSample, ContainedTaskError> {
+    let frame = frame.into();
     let frame_invalid =
         || ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code());
     let region_invalid =
@@ -7798,7 +7910,9 @@ impl TaskControl {
             ));
         }
         self.resolution.validate()?;
-        validate_bounded(self.capture_interval_ms, MAX_CAPTURE_INTERVAL_MS)?;
+        // PERF-B1 (R2): admission bounds the interval by the largest ceiling the configuration
+        // may set; the run checks the ceiling in effect (`check_declared_intervals`).
+        validate_bounded(self.capture_interval_ms, MAX_DECLARED_INTERVAL_MS)?;
         validate_bounded(self.timeout_ms, MAX_TASK_TIMEOUT_MS)?;
         validate_bounded(self.step_timeout_ms, MAX_STEP_TIMEOUT_MS)?;
         if self
@@ -7876,15 +7990,8 @@ impl Resolution {
         }
     }
 
-    fn validate_frame(&self, frame: &Frame) -> Result<(), ContainedTaskError> {
-        if frame.width == self.width && frame.height == self.height {
-            Ok(())
-        } else {
-            Err(ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskFrameResolutionMismatch.code(),
-            ))
-        }
-    }
+    // Workflow #392 DA-2a: `validate_frame`, the display adapter's frame gate, is in
+    // `contained_task/display_gate.rs`.
 
     fn validate_point(&self, x: i32, y: i32) -> Result<(), ContainedTaskError> {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
@@ -7936,23 +8043,36 @@ struct TaskProgram {
 }
 
 impl TaskProgram {
+    /// Workflow #392 DA-5a: the task schema the program's `schema_version` names, if any.
+    fn schema(&self) -> Option<TaskSchema> {
+        TaskSchema::of(self.schema_version.as_str())
+    }
+
+    /// Workflow #392 DA-5a: whether the program's `schema_version` names `minimum` or a later
+    /// task schema.
+    fn schema_at_least(&self, minimum: TaskSchema) -> bool {
+        TaskSchema::at_least(self.schema_version.as_str(), minimum)
+    }
+
     fn validate(
         &self,
         control: &TaskControl,
         bundle: &LoadedBundle,
         detector: &PageDetector,
     ) -> Result<(), ContainedTaskError> {
-        let schema_valid = match self.schema_version.as_str() {
-            "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
-            "0.7" => self.post_admission_ocr.as_ref().is_some_and(|value| {
+        let schema_valid = match self.schema() {
+            Some(TaskSchema::V0_3 | TaskSchema::V0_4 | TaskSchema::V0_5 | TaskSchema::V0_6) => {
+                self.post_admission_ocr.is_none()
+            }
+            Some(TaskSchema::V0_7) => self.post_admission_ocr.as_ref().is_some_and(|value| {
                 serde_json::from_value::<PostAdmissionOcrDeclaration>(value.clone()).is_ok()
             }),
-            "0.8" => self.post_admission_ocr.as_ref().is_some_and(|value| {
+            Some(TaskSchema::V0_8) => self.post_admission_ocr.as_ref().is_some_and(|value| {
                 serde_json::from_value::<OcrFieldsDeclaration>(value.clone()).is_ok()
             }),
-            "0.9" => self.post_admission_ocr.is_none(),
-            _ => false,
-        } && (self.schema_version == "0.9"
+            Some(TaskSchema::V0_9) => self.post_admission_ocr.is_none(),
+            None => false,
+        } && (self.schema_at_least(TaskSchema::V0_9)
             || !matches!(self.entry_page, Some(EntryPageDeclaration::Set(_))));
         if !schema_valid
             || self.task_id != control.entry_task_id
@@ -7979,7 +8099,7 @@ impl TaskProgram {
                     reason,
                 )
             };
-            if !matches!(self.schema_version.as_str(), "0.8" | "0.9") {
+            if !self.schema_at_least(TaskSchema::V0_8) {
                 return Err(invalid("schema_version_unsupported"));
             }
             if self.scheduling_outcome.is_none() {
@@ -7996,7 +8116,7 @@ impl TaskProgram {
                     reason,
                 )
             };
-            if !matches!(self.schema_version.as_str(), "0.8" | "0.9") {
+            if !self.schema_at_least(TaskSchema::V0_8) {
                 return Err(invalid("schema_version_unsupported"));
             }
             if self.scheduling_outcome.is_none() {
@@ -8014,9 +8134,10 @@ impl TaskProgram {
             )
             .map_err(|code| invalid(code.as_str()))?;
         }
-        if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
+        if self.schema_at_least(TaskSchema::V0_9)
+            != (control.schema_version == PHASED_CONTROL_SCHEMA)
             || self.phases != control.phases
-            || (self.phases.is_some() && self.schema_version != "0.9")
+            || (self.phases.is_some() && !self.schema_at_least(TaskSchema::V0_9))
         {
             return Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
@@ -8079,7 +8200,8 @@ impl TaskProgram {
                         .count()
                         != 1
                 })
-                || (declaration.designated_effects().is_some() && self.schema_version != "0.9")
+                || (declaration.designated_effects().is_some()
+                    && !self.schema_at_least(TaskSchema::V0_9))
             {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
@@ -8481,12 +8603,14 @@ impl TaskProgram {
     }
 
     fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
-        let valid = match self.schema_version.as_str() {
-            "0.3" | "0.4" | "0.5" | "0.6" => self.timeout_ms.is_none(),
-            "0.7" | "0.8" | "0.9" => self
+        let valid = match self.schema() {
+            Some(TaskSchema::V0_3 | TaskSchema::V0_4 | TaskSchema::V0_5 | TaskSchema::V0_6) => {
+                self.timeout_ms.is_none()
+            }
+            Some(TaskSchema::V0_7 | TaskSchema::V0_8 | TaskSchema::V0_9) => self
                 .timeout_ms
                 .is_none_or(|timeout_ms| control.timeout_ms == Some(timeout_ms)),
-            _ => false,
+            None => false,
         };
         if valid {
             Ok(())
@@ -8498,12 +8622,16 @@ impl TaskProgram {
     }
 
     fn validate_task_max_steps(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
-        let valid = match self.schema_version.as_str() {
-            "0.3" | "0.4" | "0.5" | "0.6" => self.max_steps.is_none(),
-            "0.7" | "0.8" | "0.9" => self.max_steps.is_none_or(|max_steps| {
-                (1..=MAX_STEPS).contains(&max_steps) && control.max_steps == Some(max_steps)
-            }),
-            _ => false,
+        let valid = match self.schema() {
+            Some(TaskSchema::V0_3 | TaskSchema::V0_4 | TaskSchema::V0_5 | TaskSchema::V0_6) => {
+                self.max_steps.is_none()
+            }
+            Some(TaskSchema::V0_7 | TaskSchema::V0_8 | TaskSchema::V0_9) => {
+                self.max_steps.is_none_or(|max_steps| {
+                    (1..=MAX_STEPS).contains(&max_steps) && control.max_steps == Some(max_steps)
+                })
+            }
+            None => false,
         };
         if valid {
             Ok(())
@@ -9887,7 +10015,8 @@ impl TaskOperationExpectation {
                 ExecutionKernelCode::ContainedTaskControlInvalid.code(),
             ));
         }
-        validate_bounded(self.interval_ms, MAX_CAPTURE_INTERVAL_MS)
+        // PERF-B1 (R1, R2): the step's own wait interval, bounded as the control's is.
+        validate_bounded(self.interval_ms, MAX_DECLARED_INTERVAL_MS)
     }
 }
 
@@ -10094,7 +10223,7 @@ impl TaskOperation {
         )?;
         if self
             .post_delay_ms
-            .is_some_and(|value| value == 0 || value > MAX_CAPTURE_INTERVAL_MS)
+            .is_some_and(|value| value == 0 || value > MAX_POST_DELAY_MS)
         {
             return Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
@@ -10605,7 +10734,7 @@ impl TaskClick {
                 }
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                if !matches!(schema_version, "0.7" | "0.8" | "0.9")
+                if !TaskSchema::at_least(schema_version, TaskSchema::V0_7)
                     || self.x.is_some()
                     || self.y.is_some()
                     || self.width.is_some()
@@ -11882,11 +12011,22 @@ impl ClickRect {
 }
 
 fn scene_from_frame(frame: &Frame) -> Result<Scene, ContainedTaskError> {
-    let format = match frame.pixel_format {
+    scene_from_pixels(frame.width, frame.height, &frame.pixels, frame.pixel_format)
+}
+
+/// Workflow #392 DA-2a: the scene of `width` x `height` pixels of `format`, a delivered frame's
+/// or a scale frame's.
+fn scene_from_pixels(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    format: PixelFormat,
+) -> Result<Scene, ContainedTaskError> {
+    let format = match format {
         PixelFormat::Rgb8 => ScenePixelFormat::Rgb8,
         PixelFormat::Rgba8 => ScenePixelFormat::Rgba8,
     };
-    Scene::from_pixels(frame.width, frame.height, &frame.pixels, format)
+    Scene::from_pixels(width, height, pixels, format)
         .map_err(|_| ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code()))
 }
 
@@ -15137,6 +15277,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         let mut runtime = ScriptedRuntime::new("home");
         let (outcome, target) = task.program.operations[0]
@@ -15231,6 +15372,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         assert!(
             task.evaluator
@@ -15273,6 +15415,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         let mut runtime = ScriptedRuntime::new("terminal");
         let (outcome, target) = task.program.operations[0]
@@ -15311,6 +15454,7 @@ mod retry_wiring_tests {
             stability_sample: None,
             captured_at: SystemTime::UNIX_EPOCH,
             frame_started: Instant::now(),
+            display_map: display_gate::identity_for_test(2, 1),
         };
         let mut runtime = ScriptedRuntime::new("home");
         let Err(ContainedTaskRunError::Task(error)) = task.program.operations[0].guard_outcome(
@@ -15801,7 +15945,7 @@ mod retry_wiring_tests {
             .validate(&task_control, TaskOperationDefaults::default(), "0.6")
             .expect("omitted post delay preserves existing admission");
 
-        for invalid in [0, MAX_CAPTURE_INTERVAL_MS + 1, u64::MAX] {
+        for invalid in [0, MAX_POST_DELAY_MS + 1, u64::MAX] {
             let mut operation = operation(json!({}), None);
             operation.post_delay_ms = Some(invalid);
             assert_eq!(

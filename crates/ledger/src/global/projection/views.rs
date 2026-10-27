@@ -4,7 +4,7 @@ use super::*;
 use actingcommand_contract::{
     EventSeverity, InputPayload, LedgerEventPosition, LedgerFailureResolution, LedgerPageLimit,
     LedgerReadScope, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery, RecognitionPayload,
-    RecognitionVerdict, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RecognitionVerdict, RunId, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest,
 };
 
@@ -69,9 +69,6 @@ impl EventIndexes {
         scope: LedgerReadScope,
         selection: PageSelection<'_>,
     ) -> Result<RuntimeEventQueryPage, GlobalLedgerError> {
-        let invalid = |code| {
-            GlobalLedgerError::request(code, LedgerLocation::ProjectLedgerViewPage.location())
-        };
         let latest = selection.through_sequence;
         let (snapshot, after) = page_bounds(query, profile, request, latest)?;
         if events.last().map_or(0, E::sequence) != latest {
@@ -83,7 +80,7 @@ impl EventIndexes {
         // #411 A51 (R2): the last candidate a budgeted selection decided before its budget ran
         // out.
         let mut budget_stop = None;
-        let mut selected = if let Some(sequences) = selection.sequences {
+        let selected = if let Some(sequences) = selection.sequences {
             let mut previous = after;
             let mut selected = Vec::with_capacity(sequences.len());
             for sequence in sequences {
@@ -123,189 +120,245 @@ impl EventIndexes {
             budget_stop = scan.stopped_at;
             scan.events
         };
-        let count_limited = selected.len() > usize::from(request.limit());
-        let scanned_through = if count_limited {
-            selected.pop().expect("lookahead exists").sequence()
-        } else {
-            budget_stop.unwrap_or(snapshot)
-        };
-        let budget_limited = !count_limited && budget_stop.is_some();
-        let mut rows: Vec<_> = selected
-            .iter()
-            .map(|event| {
-                let mut row = project_at(event, profile, snapshot);
-                if let Some(retention) = selection.retention {
-                    row.artifact_evictions = retention.observations(event, snapshot);
-                }
-                row.views = LedgerView::memberships(
-                    event.event_type(),
-                    event.severity(),
-                    event.origin().source(),
-                    self.lab_related(event, snapshot),
-                );
-                row
-            })
-            .collect();
-        let mut groups = self.run_recovery(events, &rows, snapshot, scope.read_complete);
-        let mut byte_limited = false;
-        loop {
-            let has_more = count_limited || byte_limited || budget_limited;
-            // A page cut by its count or its bytes goes on after its last row; one cut only by
-            // the work budget goes on after the last candidate its read decided (#411 A51).
-            let continues_after = if count_limited || byte_limited {
-                Some(
-                    rows.last()
-                        .ok_or_else(|| {
-                            invalid(SharedCode::RuntimeEventQueryResponseTooLarge.code())
-                        })?
-                        .sequence,
-                )
-            } else if budget_limited {
-                Some(scanned_through)
-            } else {
-                None
-            };
-            let cursor = continues_after
-                .map(|after| {
-                    RuntimeEventQueryCursor::new(snapshot, after, query, profile)
-                        .map_err(|error| invalid(error.code()))
-                })
-                .transpose()?;
-            let mut limits = Vec::new();
-            if count_limited {
-                limits.push(LedgerPageLimit::EventCount);
-            }
-            if byte_limited {
-                limits.push(LedgerPageLimit::ResponseBytes);
-            }
-            if !scope.read_complete {
-                limits.push(LedgerPageLimit::SourceIncomplete);
-            }
-            if budget_limited {
-                limits.push(LedgerPageLimit::ReadBudget);
-            }
-            let page = RuntimeEventQueryPage::projected(
-                rows.clone(),
-                snapshot,
-                request.limit(),
-                has_more,
-                cursor,
-                LedgerReadScope {
-                    scanned_through_position: scanned_through,
-                    read_complete: scope.read_complete && !budget_limited,
-                    limits,
-                    ..scope.clone()
-                },
-                groups.clone(),
-            );
-            match page {
-                Ok(page) => return Ok(page),
-                Err(error)
-                    if error.code().as_str()
-                        == SharedCode::RuntimeEventQueryResponseTooLarge.as_str()
-                        && rows.len() > 1 =>
-                {
-                    rows.pop();
-                    groups.retain(|group| {
-                        rows.iter()
-                            .any(|row| row.links.run_id() == Some(&group.run_id))
-                    });
-                    byte_limited = true;
-                }
-                Err(error) => return Err(invalid(error.code())),
-            }
-        }
-    }
-
-    fn run_recovery<E: LedgerEventRead>(
-        &self,
-        events: &[E],
-        rows: &[ProjectedEvent],
-        snapshot: u64,
-        complete: bool,
-    ) -> Vec<LedgerRunRecovery> {
-        let runs: BTreeSet<_> = rows
-            .iter()
-            .filter_map(|row| row.links.run_id().copied())
-            .collect();
-        runs.into_iter()
-            .filter_map(|run| {
-                let positions = self.run_ids.get(&run)?;
-                let context: Vec<_> = positions
-                    .iter()
+        let lab_related = |keys: &LabKeys| self.lab_related(keys, snapshot);
+        let mut run_context = |run: &RunId| -> Result<(Vec<E>, bool), GlobalLedgerError> {
+            Ok((
+                self.run_ids
+                    .get(run)
+                    .into_iter()
+                    .flatten()
                     .map(|position| &events[*position])
                     .take_while(|event| event.sequence() <= snapshot)
                     .take(MAX_RECOVERY_CONTEXT_EVENTS + 1)
-                    .collect();
-                let context_limited = context.len() > MAX_RECOVERY_CONTEXT_EVENTS;
-                let context = &context[..context.len().min(MAX_RECOVERY_CONTEXT_EVENTS)];
-                let failures: Vec<_> = context
-                    .iter()
-                    .copied()
-                    .filter(|event| {
-                        event.severity() >= EventSeverity::Warning || failure_kind(*event).is_some()
-                    })
-                    .collect();
-                if failures.is_empty() && !context_limited && complete {
-                    return None;
-                }
-                let mut group = LedgerRunRecovery {
-                    run_id: run,
-                    state: LedgerRecoveryState::Unresolved,
-                    evidence: Vec::new(),
-                    gaps: Vec::new(),
-                };
-                if !complete {
-                    group.gaps.push(LedgerRecoveryGap::SourceIncomplete);
-                }
-                if context_limited {
-                    group.gaps.push(LedgerRecoveryGap::ContextLimit);
-                }
-                for failure in failures {
-                    let kind = failure_kind(failure);
-                    let related = kind.is_some() && has_recovery_relation(failure);
-                    if !related && !group.gaps.contains(&LedgerRecoveryGap::MissingRelation) {
-                        group.gaps.push(LedgerRecoveryGap::MissingRelation);
-                    }
-                    let success = related
-                        .then(|| {
-                            context.iter().copied().find(|candidate| {
-                                candidate.sequence() > failure.sequence()
-                                    && same_recovery_relation(failure, candidate)
-                                    && success_kind(*candidate) == kind
-                            })
-                        })
-                        .flatten();
-                    if let Some(success) = success {
-                        let conflicting = context.iter().copied().any(|candidate| {
-                            candidate.sequence() > success.sequence()
-                                && same_recovery_relation(failure, candidate)
-                                && failure_kind(candidate) == kind
-                        });
-                        if conflicting
-                            && !group.gaps.contains(&LedgerRecoveryGap::ConflictingOutcome)
-                        {
-                            group.gaps.push(LedgerRecoveryGap::ConflictingOutcome);
-                        }
-                    }
-                    group.evidence.push(LedgerFailureResolution {
-                        failure: position(failure),
-                        success: success.map(position),
-                    });
-                }
-                group.state = if !group.gaps.is_empty() {
-                    LedgerRecoveryState::Unknown
-                } else if !group.evidence.is_empty()
-                    && group.evidence.iter().all(|item| item.success.is_some())
-                {
-                    LedgerRecoveryState::Recovered
-                } else {
-                    LedgerRecoveryState::Unresolved
-                };
-                Some(group)
-            })
-            .collect()
+                    .cloned()
+                    .collect(),
+                false,
+            ))
+        };
+        project_selected(
+            selected,
+            budget_stop,
+            query,
+            profile,
+            request,
+            scope,
+            snapshot,
+            PageContext {
+                lab_related: &lab_related,
+                run_context: &mut run_context,
+                retention: selection.retention,
+            },
+        )
     }
+}
+
+/// #422 LN-WS: the records of one run at or before a page's snapshot, and whether the read's budget cut
+/// them short.
+pub(in crate::global) type RunContextRecords<E> = Result<(Vec<E>, bool), GlobalLedgerError>;
+
+/// LN-6 (#422, LEAN-L §3.3): what a page reads besides its selected records: whether a record
+/// with given links relates to a Lab anchor at the page's snapshot, the records of one run at or
+/// before the snapshot (at most `MAX_RECOVERY_CONTEXT_EVENTS + 1` of them, in ledger order) and
+/// the eviction proofs of the records' artifacts. #422 LN-WS: a run's records come with whether
+/// the read's budget cut them short; the run's context is then limited.
+pub(in crate::global) struct PageContext<'a, E> {
+    pub lab_related: &'a dyn Fn(&LabKeys) -> bool,
+    pub run_context: &'a mut dyn FnMut(&RunId) -> RunContextRecords<E>,
+    pub retention: Option<&'a crate::global::retention::RetentionIndex>,
+}
+
+/// One page of `selected` (in ledger order, with one record of lookahead when the page is cut
+/// by its count) at `snapshot`. `budget_stop` is the last candidate a budgeted selection decided
+/// before its budget ran out (#411 A51). The in-memory indexes and the SQLite store share it.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::global) fn project_selected<E: LedgerEventRead>(
+    mut selected: Vec<E>,
+    budget_stop: Option<u64>,
+    query: &EventQuery,
+    profile: ProjectionProfile,
+    request: &RuntimeEventQueryPageRequest,
+    scope: LedgerReadScope,
+    snapshot: u64,
+    context: PageContext<'_, E>,
+) -> Result<RuntimeEventQueryPage, GlobalLedgerError> {
+    let invalid =
+        |code| GlobalLedgerError::request(code, LedgerLocation::ProjectLedgerViewPage.location());
+    let count_limited = selected.len() > usize::from(request.limit());
+    let scanned_through = if count_limited {
+        selected.pop().expect("lookahead exists").sequence()
+    } else {
+        budget_stop.unwrap_or(snapshot)
+    };
+    let budget_limited = !count_limited && budget_stop.is_some();
+    let mut rows: Vec<_> = selected
+        .iter()
+        .map(|event| {
+            let mut row = project_at(event, profile, snapshot);
+            if let Some(retention) = context.retention {
+                row.artifact_evictions = retention.observations(event, snapshot);
+            }
+            row.views = LedgerView::memberships(
+                event.event_type(),
+                event.severity(),
+                event.origin().source(),
+                (context.lab_related)(&LabKeys::of(event.links())),
+            );
+            row
+        })
+        .collect();
+    let mut groups = run_recovery(&rows, snapshot, scope.read_complete, context.run_context)?;
+    let mut byte_limited = false;
+    loop {
+        let has_more = count_limited || byte_limited || budget_limited;
+        // A page cut by its count or its bytes goes on after its last row; one cut only by
+        // the work budget goes on after the last candidate its read decided (#411 A51).
+        let continues_after = if count_limited || byte_limited {
+            Some(
+                rows.last()
+                    .ok_or_else(|| invalid(SharedCode::RuntimeEventQueryResponseTooLarge.code()))?
+                    .sequence,
+            )
+        } else if budget_limited {
+            Some(scanned_through)
+        } else {
+            None
+        };
+        let cursor = continues_after
+            .map(|after| {
+                RuntimeEventQueryCursor::new(snapshot, after, query, profile)
+                    .map_err(|error| invalid(error.code()))
+            })
+            .transpose()?;
+        let mut limits = Vec::new();
+        if count_limited {
+            limits.push(LedgerPageLimit::EventCount);
+        }
+        if byte_limited {
+            limits.push(LedgerPageLimit::ResponseBytes);
+        }
+        if !scope.read_complete {
+            limits.push(LedgerPageLimit::SourceIncomplete);
+        }
+        if budget_limited {
+            limits.push(LedgerPageLimit::ReadBudget);
+        }
+        let page = RuntimeEventQueryPage::projected(
+            rows.clone(),
+            snapshot,
+            request.limit(),
+            has_more,
+            cursor,
+            LedgerReadScope {
+                scanned_through_position: scanned_through,
+                read_complete: scope.read_complete && !budget_limited,
+                limits,
+                ..scope.clone()
+            },
+            groups.clone(),
+        );
+        match page {
+            Ok(page) => return Ok(page),
+            Err(error)
+                if error.code().as_str()
+                    == SharedCode::RuntimeEventQueryResponseTooLarge.as_str()
+                    && rows.len() > 1 =>
+            {
+                rows.pop();
+                groups.retain(|group| {
+                    rows.iter()
+                        .any(|row| row.links.run_id() == Some(&group.run_id))
+                });
+                byte_limited = true;
+            }
+            Err(error) => return Err(invalid(error.code())),
+        }
+    }
+}
+
+fn run_recovery<E: LedgerEventRead>(
+    rows: &[ProjectedEvent],
+    snapshot: u64,
+    complete: bool,
+    run_context: &mut dyn FnMut(&RunId) -> RunContextRecords<E>,
+) -> Result<Vec<LedgerRunRecovery>, GlobalLedgerError> {
+    let runs: BTreeSet<_> = rows
+        .iter()
+        .filter_map(|row| row.links.run_id().copied())
+        .collect();
+    let mut groups = Vec::new();
+    for run in runs {
+        let (context, cut_short) = run_context(&run)?;
+        let context: Vec<_> = context
+            .into_iter()
+            .take_while(|event| event.sequence() <= snapshot)
+            .take(MAX_RECOVERY_CONTEXT_EVENTS + 1)
+            .collect();
+        // #422 LN-WS: a context the read's budget cut short is limited as one the bound cut.
+        let context_limited = cut_short || context.len() > MAX_RECOVERY_CONTEXT_EVENTS;
+        let context = &context[..context.len().min(MAX_RECOVERY_CONTEXT_EVENTS)];
+        let failures: Vec<_> = context
+            .iter()
+            .filter(|event| {
+                event.severity() >= EventSeverity::Warning || failure_kind(*event).is_some()
+            })
+            .collect();
+        if failures.is_empty() && !context_limited && complete {
+            continue;
+        }
+        let mut group = LedgerRunRecovery {
+            run_id: run,
+            state: LedgerRecoveryState::Unresolved,
+            evidence: Vec::new(),
+            gaps: Vec::new(),
+        };
+        if !complete {
+            group.gaps.push(LedgerRecoveryGap::SourceIncomplete);
+        }
+        if context_limited {
+            group.gaps.push(LedgerRecoveryGap::ContextLimit);
+        }
+        for failure in failures {
+            let kind = failure_kind(failure);
+            let related = kind.is_some() && has_recovery_relation(failure);
+            if !related && !group.gaps.contains(&LedgerRecoveryGap::MissingRelation) {
+                group.gaps.push(LedgerRecoveryGap::MissingRelation);
+            }
+            let success = related
+                .then(|| {
+                    context.iter().find(|candidate| {
+                        candidate.sequence() > failure.sequence()
+                            && same_recovery_relation(failure, *candidate)
+                            && success_kind(*candidate) == kind
+                    })
+                })
+                .flatten();
+            if let Some(success) = success {
+                let conflicting = context.iter().any(|candidate| {
+                    candidate.sequence() > success.sequence()
+                        && same_recovery_relation(failure, candidate)
+                        && failure_kind(candidate) == kind
+                });
+                if conflicting && !group.gaps.contains(&LedgerRecoveryGap::ConflictingOutcome) {
+                    group.gaps.push(LedgerRecoveryGap::ConflictingOutcome);
+                }
+            }
+            group.evidence.push(LedgerFailureResolution {
+                failure: position(failure),
+                success: success.map(position),
+            });
+        }
+        group.state = if !group.gaps.is_empty() {
+            LedgerRecoveryState::Unknown
+        } else if !group.evidence.is_empty()
+            && group.evidence.iter().all(|item| item.success.is_some())
+        {
+            LedgerRecoveryState::Recovered
+        } else {
+            LedgerRecoveryState::Unresolved
+        };
+        groups.push(group);
+    }
+    Ok(groups)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

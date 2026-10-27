@@ -1,0 +1,91 @@
+name: Lean scale
+
+# LN-1 (Workflow #422, LEAN-L model §7.2): the scale harness. It writes a synthetic ledger of each
+# history size (10,000 and 1,000,000 records by default) into a fresh state root, starts the
+# Runtime host on it three times (two seeding starts, then the steady one), each start in a child
+# process of its own, and reports the time to ready, the ledger open's phases, the recovery steps
+# with the whole-ledger-query counter, and private bytes at ready and 10 s later
+# (crates/runtime-host/src/tests/lean_scale.rs).
+#
+# LN-8 (#422) makes it a gate: after writing its report, the harness fails when the run misses a
+# target of model §7.1 (A1 time to ready and open and recovery time, A2 memory, A3 start reads),
+# and the summary lists every target with what was measured. ci.yml's `gate` does not need this
+# job, so it holds no merge by itself. The 1M case takes a long time and the Actions budget is
+# $20 a month (ruling 10-19), so it never runs by itself: run it on demand (Actions -> Lean scale
+# -> Run workflow, on the branch to measure), or add the label `lean-scale` to a pull request,
+# which runs it once on that pull request. It builds in release, as production does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sizes:
+        description: History sizes in records, comma separated
+        required: false
+        default: '10000,1000000'
+  # Only the `lean-scale` label starts a run; any other label leaves the job skipped.
+  pull_request:
+    types: [labeled]
+
+# One group per dispatch, and per pull request and label; nothing is cancelled, so adding another
+# label never stops a measurement.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.label.name || 'dispatch' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scale:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'lean-scale' }}
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      ACTINGCOMMAND_LEAN_SCALE_SIZES: ${{ inputs.sizes || '10000,1000000' }}
+      ACTINGCOMMAND_LEAN_SCALE_SETTLE_MS: '10000'
+    steps:
+      - uses: actions/checkout@v4
+      # Restores the third-party dependency cache of the host tests; this job saves none.
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: heavy
+      - name: Build the harness (release)
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked --release -p actingcommand-runtime-host --features actingcommand-runtime-host/fixture-backends --lib --no-run
+          if ($LASTEXITCODE -ne 0) {
+            throw "the harness build failed with exit code $LASTEXITCODE"
+          }
+      - name: Scale harness
+        id: harness
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $report = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'lean-scale')
+          $env:ACTINGCOMMAND_LEAN_SCALE_REPORT_DIR = $report.FullName
+          cargo test --locked --release -p actingcommand-runtime-host --features actingcommand-runtime-host/fixture-backends --lib -- --ignored --exact tests::lean_scale::lean_scale_reports_start_measures --nocapture 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $report.FullName 'lean-scale.log')
+          if ($LASTEXITCODE -ne 0) {
+            throw "the scale harness failed with exit code $LASTEXITCODE"
+          }
+      - name: Summary
+        if: ${{ !cancelled() && (steps.harness.outcome == 'success' || steps.harness.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $summary = Join-Path $env:RUNNER_TEMP 'lean-scale/lean-scale-report.md'
+          if (-not (Test-Path -LiteralPath $summary)) {
+            'The scale harness wrote no report; its log and the child outputs are in the lean-scale-report artifact.' |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            throw "lean-scale-report.md is missing"
+          }
+          Get-Content -LiteralPath $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Upload report
+        if: ${{ !cancelled() && (steps.harness.outcome == 'success' || steps.harness.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lean-scale-report-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/lean-scale/
+          if-no-files-found: error

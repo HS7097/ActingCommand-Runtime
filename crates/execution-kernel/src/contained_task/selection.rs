@@ -35,8 +35,7 @@ use super::{
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
     ContainedTaskTrace, PageObservation, PointDraw, PreparedContainedTask, Resolution,
     RunParameters, SampleRetries, TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram,
-    TouchChoice, drawn_tap, safe_task_local_path, sample_budget_insufficient, scene_from_frame,
-    step_point_draw,
+    TouchChoice, drawn_tap, safe_task_local_path, sample_budget_insufficient, step_point_draw,
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
@@ -1130,9 +1129,12 @@ impl PreparedContainedTask {
             let frame = self
                 .capture_frame(runtime, None, None, timing, None, Some(deadline))?
                 .ok_or_else(|| ContainedTaskError::new(SELECTION_PAGE_CHANGED))?;
+            // Workflow #392 DA-2a (model 392 v1.2 §5.1, C11): a sample under another display map
+            // than the first frame's is a changed geometry, though their scale frames match.
             if !crate::page_anchor_matches(&self.control.game, &frame.page_label, &operation.from)
                 || frame.scene.width() != first.scene.width()
                 || frame.scene.height() != first.scene.height()
+                || frame.display_map != first.display_map
                 || match (&frame.input_context, &first.input_context) {
                     (Some(current), Some(first)) => !current.same_geometry(first),
                     (None, None) => false,
@@ -2015,8 +2017,12 @@ pub(super) fn dry_run_select_with_facts(
             format!("operation={operation_id} is not a select step"),
         )
     })?;
-    task.control.resolution.validate_frame(frame)?;
-    let scene = scene_from_frame(frame)?;
+    // Workflow #392 DA-2a: the Lab's dry run passes the frame gate without a declaration.
+    let scene = task
+        .control
+        .resolution
+        .validate_frame(frame, None)?
+        .scene()?;
     let evaluations = task
         .detector
         .evaluate_all(&task.evaluator, &scene)
@@ -2084,6 +2090,7 @@ pub(super) fn dry_run_select_with_facts(
 
 #[cfg(test)]
 mod tests {
+    use super::super::scene_from_frame;
     use super::*;
     use actingcommand_contract::CandidateRect;
     use actingcommand_recognition_pack::{AssetResolver, RecognitionPackResult};

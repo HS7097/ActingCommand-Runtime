@@ -2,11 +2,14 @@
 
 #[cfg(test)]
 use super::GlobalLedgerConfig;
+use super::history::{HistorySelection, LabRelations};
 use super::index::{IndexPolicy, IndexRows};
+#[cfg(test)]
+use super::projection::EventIndexes;
+use super::retention::RetentionIndex;
 use super::{
     CommitStatistics, GlobalLedgerError, GlobalLedgerResult, LedgerAppendObservation,
     LedgerProjectViewObservation, Sha256SecretFingerprinter, is_identifier,
-    projection::EventIndexes,
 };
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
@@ -16,13 +19,14 @@ use crate::fact::StoredEventRecord;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinks,
-    EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventSeverity, EventSource,
-    EventType, IdentifierIssuer, IssuedActionId, LeasePayload, LedgerPayload, LedgerPayloadDraft,
-    LedgerSource, OriginModule, OwnerEpoch, PolicyDispatchEventData, PolicyDispatchPayload,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPayload, PolicyPayloadDraft, RecoveryReason, SanitizedEventDraft,
-    ScheduledPolicyRecoveryContinuation, Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact,
-    record_severity, scheduled_failure_class, scheduled_failure_code_str,
+    EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventQuery, EventSeverity,
+    EventSource, EventType, IdentifierIssuer, IssuedActionId, LeasePayload, LedgerPayload,
+    LedgerPayloadDraft, LedgerSource, OriginModule, OwnerEpoch, PolicyDispatchEventData,
+    PolicyDispatchPayload, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPayload, PolicyPayloadDraft, RecoveryReason,
+    SanitizedEventDraft, ScheduledPolicyRecoveryContinuation, Sensitivity, TaskOutcome,
+    TaskPayload, TaskSemanticFact, record_severity, scheduled_failure_class,
+    scheduled_failure_code_str,
 };
 #[cfg(test)]
 use actingcommand_contract::{
@@ -166,22 +170,96 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
 pub(super) trait DurableStorage: Send + 'static {
     fn material_root(&self) -> &Path;
 
+    /// LN-5 (#422, LEAN-L §3.3): the sequence of the last committed record (0 when none is).
+    fn head(&self) -> u64;
+
     fn resolve_artifact(
         &self,
-        _selection: &super::LedgerArtifactSelection,
-        _deadline: Instant,
-    ) -> Option<GlobalLedgerResult<super::ResolvedLedgerArtifact>> {
+        selection: &super::LedgerArtifactSelection,
+        deadline: Instant,
+        retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact>;
+
+    /// LN-6 (#422, LEAN-L §3.3): one view page, its rows selected within `read.0`'s budget and
+    /// read `read.1` (`ledger_observer.history_page_rows`) rows at a time, each history statement
+    /// spanning at most `read.2` sequences (`ledger_observer.history_scan_rows`, #422 LN-WS);
+    /// `retention`'s eviction proofs annotate them.
+    fn project_view_page(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
+        read: (&super::read_work::ReadWork, usize, usize),
+        retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>;
+
+    /// LN-5 (§3.3): one page of the committed records `selection` selects with a sequence in
+    /// `range.0 < sequence <= range.1`, in ledger order: at most `rows` of them, each read and
+    /// authenticated on its own, its artifacts with the availability `retention`'s eviction
+    /// proofs give them. Fewer than `rows` records means the selection ends within the range.
+    /// The store may return records that the query's conditions without an index do not match;
+    /// the reader checks each one (`HistorySelection::selects`).
+    fn history_page(
+        &self,
+        selection: &HistorySelection<'_>,
+        range: (u64, u64),
+        rows: usize,
+        retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
+
+    /// #422 LN-WS (R1): [`Self::history_page`] of a read that `work` bounds: `None` when the
+    /// bound of its statements stopped it (a medium without statements reads the page whole).
+    fn history_page_within(
+        &self,
+        selection: &HistorySelection<'_>,
+        range: (u64, u64),
+        rows: usize,
+        retention: &RetentionIndex,
+        _work: &super::read_work::ReadWork,
+    ) -> GlobalLedgerResult<Option<Vec<PersistedEvent>>> {
+        self.history_page(selection, range, rows, retention)
+            .map(Some)
+    }
+
+    /// LN-5 (§3.4): the sequence of the committed record with `event_id`, by its unique index.
+    fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>>;
+
+    /// LN-5 (§3.3): the Lab relations of the committed records through `through`, `seed`'s
+    /// anchors (those of the records a batch has staged) counted as anchors too, with `seed`'s
+    /// runs besides.
+    fn lab_relations(&self, through: u64, seed: &LabRelations) -> GlobalLedgerResult<LabRelations>;
+
+    /// LN-5 (§3.2 step 3): the latest time of a committed record (#411 A24: the maximum, not
+    /// the last record's), through the time index.
+    fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>>;
+
+    /// LN-7 (#422, LEAN-L §3.5): the closure scopes of the committed records with a sequence in
+    /// `range.0..=range.1` (`history::scope_extents`), grouped through the link index, so a start
+    /// knows the scopes of the epochs whose closes it may write without reading their records.
+    fn scope_extents(
+        &self,
+        range: (u64, u64),
+    ) -> GlobalLedgerResult<Vec<super::history::ScopeExtent>>;
+
+    /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 step 1): the `ledger_index` rows
+    /// of `role` whose key starts with one of `prefixes`, each with the hash of the ledger row its
+    /// sequence names; `None` for a store that keeps no index.
+    fn index_rows(
+        &self,
+        _role: super::index_read::LedgerIndexRole,
+        _prefixes: &[String],
+    ) -> Option<GlobalLedgerResult<Vec<super::index_read::StoredIndexRow>>> {
         None
     }
 
-    fn project_view_page(
+    /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.5): the index table's `state` rows
+    /// whose key starts with one of `prefixes`, each with the stored hash of the record its
+    /// sequence names; `None` for a store that keeps no index.
+    fn state_index_rows(
         &self,
-        _query: &actingcommand_contract::EventQuery,
-        _profile: actingcommand_contract::ProjectionProfile,
-        _request: &actingcommand_contract::RuntimeEventQueryPageRequest,
-        _observation: &mut Option<LedgerProjectViewObservation>,
-        _work: &super::read_work::ReadWork,
-    ) -> Option<GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>> {
+        _prefixes: &[String],
+    ) -> Option<GlobalLedgerResult<Vec<super::tagged::StateIndexRow>>> {
         None
     }
 
@@ -300,14 +378,24 @@ pub(super) enum ReadBack {
     Absent,
 }
 
-/// Shared typed semantics and committed snapshot, owned by the existing writer.
+/// Shared typed semantics, owned by the existing writer. LN-5 (#422, LEAN-L): the history is
+/// read from the store on demand; the writer keeps no list or index of its records.
 pub(super) struct EventStore<B> {
     pub(super) commit_statistics: Arc<CommitStatistics>,
     pub(super) backend: B,
     pub(super) next_sequence: u64,
-    pub(super) events: Vec<PersistedEvent>,
-    pub(super) indexes: EventIndexes,
-    pub(super) retention: super::retention::RetentionIndex,
+    /// LN-5 (§3.4): the records the flush has staged since its last commit, in sequence order;
+    /// empty outside a flush. A refused batch drops them, with nothing to rebuild.
+    pub(super) staged: Vec<PersistedEvent>,
+    /// LN-5 (§3.3): `ledger_observer.history_page_rows`, the rows of one page of a history read.
+    pub(super) history_page_rows: usize,
+    /// #422 LN-WS (R2): `ledger_observer.history_scan_rows`, the sequences one history statement
+    /// of a view page spans at most.
+    pub(super) history_scan_rows: usize,
+    /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
+    #[cfg(test)]
+    pub(super) history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
+    pub(super) retention: RetentionIndex,
     pub(super) recovering_retention: bool,
     /// Workflow #383 AO-1: the running Runtime's write-failure state; `None` for an offline
     /// writer, whose failed write is not tried again (`contracts/ledger-observer.md` §6).
@@ -334,6 +422,9 @@ pub(super) struct SegmentStorage {
     active_index: u64,
     active_bytes: u64,
     active_file: File,
+    /// The test-only segment medium keeps its records in memory: they are its read path.
+    events: Vec<PersistedEvent>,
+    indexes: EventIndexes,
 }
 
 #[cfg(test)]
@@ -408,7 +499,7 @@ impl SegmentStore {
                     return Err(error);
                 }
             };
-        let retention = super::retention::RetentionIndex::from_events(&events)?;
+        let retention = RetentionIndex::from_events(&events)?;
         let recovering_retention = retention.has_pending();
         let mut store = Self {
             commit_statistics,
@@ -422,12 +513,17 @@ impl SegmentStore {
                 active_index,
                 active_bytes,
                 active_file,
+                indexes: EventIndexes::from_events(&events),
+                events,
             },
             next_sequence,
-            indexes: EventIndexes::from_events(&events),
+            staged: Vec::new(),
+            history_page_rows: config.history_page_rows,
+            history_scan_rows: config.history_scan_rows,
+            #[cfg(test)]
+            history_rows_read: config.history_rows_read.clone(),
             retention,
             recovering_retention,
-            events,
             write_failure: None,
             index_policy: config.capture_policy.index_policy(),
             revisions: BTreeMap::new(),
@@ -460,33 +556,46 @@ impl SegmentStore {
 }
 
 impl<B: DurableStorage> EventStore<B> {
+    /// LN-7 (#422, LEAN-L §3.5): the writer of a verified store. Its retention state is read by
+    /// type and by index (`open_retention`), not from the open's read of every record. #422 LN-7c
+    /// Q: no frame is read and the live frame store is not listed.
+    /// LN-8d (#422): its reads stop at `deadline`, the open's, and read pages of `page_rows`
+    /// rows (`ledger_observer.history_page_rows`, as every later history read does).
+    /// #422 LN-7c O: `dump_present`, a dump the open imports after this, makes it read every owner
+    /// record.
     pub(super) fn recovered(
         mut backend: B,
         next_sequence: u64,
-        events: Vec<PersistedEvent>,
+        deadline: Option<std::time::Instant>,
+        page_rows: usize,
+        dump_present: bool,
     ) -> GlobalLedgerResult<Self> {
-        let commit_statistics =
-            match CommitStatistics::new(events.last().map_or(0, PersistedEvent::sequence)) {
-                Ok(statistics) => Arc::new(statistics),
-                Err(error) => {
-                    backend.close()?;
-                    return Err(error);
-                }
-            };
-        let retention = super::retention::RetentionIndex::from_events(&events)?;
-        let recovering_retention = retention.has_pending();
-        Ok(Self {
+        let commit_statistics = match CommitStatistics::new(backend.head()) {
+            Ok(statistics) => Arc::new(statistics),
+            Err(error) => {
+                backend.close()?;
+                return Err(error);
+            }
+        };
+        let mut store = Self {
             commit_statistics,
             backend,
             next_sequence,
-            indexes: EventIndexes::from_events(&events),
-            retention,
-            recovering_retention,
-            events,
+            staged: Vec::new(),
+            history_page_rows: page_rows,
+            history_scan_rows: super::history::DEFAULT_HISTORY_SCAN_ROWS,
+            #[cfg(test)]
+            history_rows_read: None,
+            retention: RetentionIndex::default(),
+            recovering_retention: false,
             write_failure: None,
             index_policy: IndexPolicy::default(),
             revisions: BTreeMap::new(),
-        })
+        };
+        if let Err(error) = store.open_retention(dump_present, deadline) {
+            return Err(error.with_close_result(store.backend.close()));
+        }
+        Ok(store)
     }
 
     /// Workflow #383 AO-1, AO-2: the running Runtime's writer: the index policy, the
@@ -514,6 +623,13 @@ impl<B: DurableStorage> EventStore<B> {
         config: &super::GlobalLedgerConfig,
     ) -> GlobalLedgerResult<bool> {
         self.index_policy = config.capture_policy.index_policy();
+        self.history_page_rows = config.history_page_rows;
+        // #422 LN-WS (R2): the span of a view page's history statement.
+        self.history_scan_rows = config.history_scan_rows;
+        #[cfg(test)]
+        {
+            self.history_rows_read = config.history_rows_read.clone();
+        }
         self.write_failure = config.write_failure.clone();
         match self.write_failure.clone() {
             Some(state) => super::write_failure::import_dumps(self, &state),
@@ -563,14 +679,15 @@ impl<B: DurableStorage> EventStore<B> {
         event: PersistedEvent,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let following_sequence = increment_sequence(self.next_sequence)?;
-        if self.indexes.contains_event_id(event.event_id()) {
+        if self.history().contains_event_id(event.event_id())? {
             return Err(GlobalLedgerError::request(
                 LedgerCode::DuplicateEventId.code(),
                 LedgerLocation::ImportLedgerDump.location(),
             ));
         }
+        self.load_retention_sources(&event)?;
         self.retention
-            .validate(&event, &self.events, &self.indexes, false, true)?;
+            .validate(&event, &self.history(), false, true)?;
         let write_sync_ns = self.persist_retried(&event, None)?;
         self.publish_committed(event, following_sequence, write_sync_ns)
     }
@@ -614,7 +731,7 @@ impl<B: DurableStorage> EventStore<B> {
     /// Ledger revision 4 (Workflow #411 B train, register §1.153 LR-3, LR-7): a task fact bound
     /// to its run's earlier facts is admitted only after them (`TaskSemanticFact::validate_in_run`
     /// over the run's records this store holds, staged ones included). Other records are not
-    /// looked at.
+    /// looked at. LN-5: the run's records are read through the `run_id` link index.
     fn validate_run_rules(&self, draft: &SanitizedEventDraft) -> GlobalLedgerResult<()> {
         let EventPayload::Task(TaskPayload::Semantic(semantic)) = draft.payload() else {
             return Ok(());
@@ -622,16 +739,17 @@ impl<B: DurableStorage> EventStore<B> {
         if !semantic.fact().has_run_rules() {
             return Ok(());
         }
-        let earlier = draft
-            .links()
-            .run_id()
-            .into_iter()
-            .flat_map(|run_id| self.indexes.run_positions(run_id))
-            .filter_map(|position| self.events.get(position))
-            .filter_map(|event| match event.payload() {
-                EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
-                _ => None,
-            });
+        let run_events = match draft.links().run_id() {
+            Some(run_id) => self.lookup(&EventQuery {
+                run_id: Some(*run_id),
+                ..EventQuery::default()
+            })?,
+            None => Vec::new(),
+        };
+        let earlier = run_events.iter().filter_map(|event| match event.payload() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+            _ => None,
+        });
         semantic.fact().validate_in_run(earlier).map_err(|error| {
             GlobalLedgerError::request(error.code(), LedgerLocation::AppendEvent.location())
         })
@@ -654,120 +772,186 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         let first_new_sequence = self.next_sequence;
+        // LN-5 (#422, LEAN-L §3.4): the decision's dispatch and execution records, read once by
+        // their payload's decision through the event type index; the records this continuation
+        // appends join them.
+        let mut decision = self.decision_records(&execution.decision_id)?;
         // Workflow #385 P-k (register P6): a settlement the live run already recorded on its
         // budget time keeps its wall and budget time, which the policy's projection does not
         // carry; the recovered draft is then that record again.
-        let elapsed = self.recorded_execution_elapsed(&execution.decision_id);
+        let elapsed = recorded_execution_elapsed(&decision, &execution.decision_id);
         let execution_draft = scheduled_policy_execution_recovery_draft(&execution, elapsed)?;
-        self.append_recovered_policy_execution(execution_draft)?;
+        let recorded = self.append_recovered_policy_execution(execution_draft, &decision)?;
+        let mut appended = Vec::new();
+        if recorded.sequence() >= first_new_sequence {
+            decision.push(recorded.clone());
+            appended.push(recorded);
+        }
         let completion_draft =
-            self.scheduled_policy_completion_recovery_draft(&execution.decision_id)?;
-        let completion = self.append_recovered_policy_completion(completion_draft)?;
-        let appended = self
-            .events
-            .iter()
-            .filter(|event| event.sequence() >= first_new_sequence)
-            .cloned()
-            .collect();
+            scheduled_policy_completion_recovery_draft(&decision, &execution.decision_id)?;
+        let completion = self.append_recovered_policy_completion(completion_draft, &decision)?;
+        if completion.sequence() >= first_new_sequence {
+            appended.push(completion.clone());
+        }
         Ok((completion, appended))
     }
 
-    /// Workflow #385 P-k (register P6): the wall and budget time of the one execution record of
-    /// `decision_id` that carries them; `None` without one (the settlement compared wall time).
-    fn recorded_execution_elapsed(&self, decision_id: &str) -> Option<(u64, u64)> {
-        let mut recorded = self
-            .events
-            .iter()
-            .filter_map(|event| match event.payload() {
-                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
-                    if payload.decision_id() == decision_id =>
-                {
-                    Some(payload)
-                }
-                _ => None,
-            });
-        let first = recorded.next()?;
-        if recorded.next().is_some() {
-            return None;
-        }
-        first.wall_elapsed_ms().zip(first.budget_elapsed_ms())
+    /// LN-5 (§3.4): the policy dispatch and execution records of `decision_id`, in ledger order.
+    fn decision_records(&self, decision_id: &str) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let query = EventQuery {
+            event_types: vec![
+                EventType::PolicyDispatchIntent,
+                EventType::PolicyDispatchAdmitted,
+                EventType::PolicyExecutionRecorded,
+                EventType::PolicyDispatchCompleted,
+            ],
+            ..EventQuery::default()
+        };
+        self.history().select(&HistorySelection {
+            query: &query,
+            decision_id: Some(decision_id),
+            links: None,
+        })
     }
 
-    fn scheduled_policy_completion_recovery_draft(
+    /// LN-5 (§3.4): the records of `run_id` of `event_types`, in ledger order; none without a
+    /// run (the callers' chains require one).
+    fn run_records(
         &self,
-        decision_id: &str,
-    ) -> GlobalLedgerResult<SanitizedEventDraft> {
-        let intents = self
-            .events
-            .iter()
-            .filter_map(|event| match event.payload() {
-                EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
-                    if payload.decision_id() == decision_id =>
-                {
-                    Some(payload)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let [intent] = intents.as_slice() else {
-            return Err(GlobalLedgerError::settlement_refusal(
-                LedgerCode::ScheduledRecoveryIntentNotUnique.code(),
-                LedgerLocation::BuildPolicyCompletionRecovery.location(),
-            ));
+        run_id: Option<&actingcommand_contract::RunId>,
+        event_types: &[EventType],
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let Some(run_id) = run_id else {
+            return Ok(Vec::new());
         };
-        let admissions = self
-            .events
-            .iter()
-            .filter_map(|event| match event.payload() {
-                EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
-                    if payload.decision_id() == decision_id =>
-                {
-                    Some(payload)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let [admission] = admissions.as_slice() else {
-            return Err(GlobalLedgerError::settlement_refusal(
-                LedgerCode::ScheduledRecoveryAdmissionNotUnique.code(),
-                LedgerLocation::BuildPolicyCompletionRecovery.location(),
-            ));
-        };
-        let Some(admission) = admission.admission() else {
-            return Err(GlobalLedgerError::settlement_refusal(
-                LedgerCode::ScheduledRecoveryPayloadConflict.code(),
-                LedgerLocation::BuildPolicyCompletionRecovery.location(),
-            ));
-        };
-        let executions = self
-            .events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.payload(),
-                    EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
-                        if payload.decision_id() == decision_id
-                )
-            })
-            .collect::<Vec<_>>();
-        let [execution] = executions.as_slice() else {
-            return Err(GlobalLedgerError::settlement_refusal(
-                LedgerCode::ScheduledRecoveryExecutionNotUnique.code(),
-                LedgerLocation::BuildPolicyCompletionRecovery.location(),
-            ));
-        };
-        scheduled_policy_recovery_draft(
-            execution.timestamp_unix_ms(),
-            EventSeverity::Info,
-            PolicyPayloadDraft::dispatch_completed(
-                dispatch_event_data(intent),
-                admission.clone(),
-                AuditInput::new(),
-            )
-            .into(),
-        )
+        self.lookup(&EventQuery {
+            event_types: event_types.to_vec(),
+            run_id: Some(*run_id),
+            ..EventQuery::default()
+        })
     }
 
+    /// LN-5 (§3.4): the records that may end the lease of `granted` without a run-linked
+    /// release (`unique_lease_end`): the lease transfers on its instance and its lease's
+    /// expiries and releases, in ledger order.
+    fn lease_end_candidates(
+        &self,
+        granted: &EventLinks,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let Some(lease_id) = granted.lease_id() else {
+            return Ok(Vec::new());
+        };
+        let mut events = self.lookup(&EventQuery {
+            event_type: Some(EventType::LeaseTransferred),
+            instance_id: granted.instance_id().copied(),
+            ..EventQuery::default()
+        })?;
+        events.extend(self.lookup(&EventQuery {
+            event_types: vec![EventType::LeaseExpired, EventType::LeaseReleased],
+            lease_id: Some(*lease_id),
+            ..EventQuery::default()
+        })?);
+        events.sort_by_key(PersistedEvent::sequence);
+        events.dedup_by_key(|event| event.sequence());
+        Ok(events)
+    }
+}
+
+/// Workflow #385 P-k (register P6): the wall and budget time of the one execution record of
+/// `decision_id` among `decision` that carries them; `None` without one (the settlement compared
+/// wall time).
+fn recorded_execution_elapsed(
+    decision: &[PersistedEvent],
+    decision_id: &str,
+) -> Option<(u64, u64)> {
+    let mut recorded = decision.iter().filter_map(|event| match event.payload() {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+            if payload.decision_id() == decision_id =>
+        {
+            Some(payload)
+        }
+        _ => None,
+    });
+    let first = recorded.next()?;
+    if recorded.next().is_some() {
+        return None;
+    }
+    first.wall_elapsed_ms().zip(first.budget_elapsed_ms())
+}
+
+fn scheduled_policy_completion_recovery_draft(
+    decision: &[PersistedEvent],
+    decision_id: &str,
+) -> GlobalLedgerResult<SanitizedEventDraft> {
+    let intents = decision
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                if payload.decision_id() == decision_id =>
+            {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [intent] = intents.as_slice() else {
+        return Err(GlobalLedgerError::settlement_refusal(
+            LedgerCode::ScheduledRecoveryIntentNotUnique.code(),
+            LedgerLocation::BuildPolicyCompletionRecovery.location(),
+        ));
+    };
+    let admissions = decision
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
+                if payload.decision_id() == decision_id =>
+            {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [admission] = admissions.as_slice() else {
+        return Err(GlobalLedgerError::settlement_refusal(
+            LedgerCode::ScheduledRecoveryAdmissionNotUnique.code(),
+            LedgerLocation::BuildPolicyCompletionRecovery.location(),
+        ));
+    };
+    let Some(admission) = admission.admission() else {
+        return Err(GlobalLedgerError::settlement_refusal(
+            LedgerCode::ScheduledRecoveryPayloadConflict.code(),
+            LedgerLocation::BuildPolicyCompletionRecovery.location(),
+        ));
+    };
+    let executions = decision
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                    if payload.decision_id() == decision_id
+            )
+        })
+        .collect::<Vec<_>>();
+    let [execution] = executions.as_slice() else {
+        return Err(GlobalLedgerError::settlement_refusal(
+            LedgerCode::ScheduledRecoveryExecutionNotUnique.code(),
+            LedgerLocation::BuildPolicyCompletionRecovery.location(),
+        ));
+    };
+    scheduled_policy_recovery_draft(
+        execution.timestamp_unix_ms(),
+        EventSeverity::Info,
+        PolicyPayloadDraft::dispatch_completed(
+            dispatch_event_data(intent),
+            admission.clone(),
+            AuditInput::new(),
+        )
+        .into(),
+    )
+}
+
+impl<B: DurableStorage> EventStore<B> {
     fn append_with_event_id(
         &mut self,
         draft: SanitizedEventDraft,
@@ -806,6 +990,7 @@ impl<B: DurableStorage> EventStore<B> {
     fn append_recovered_policy_completion(
         &mut self,
         draft: SanitizedEventDraft,
+        decision: &[PersistedEvent],
     ) -> GlobalLedgerResult<PersistedEvent> {
         // Ledger revision 3 (Workflow #378 A3): a record's severity is its category (model
         // section 8.1), so the completion is checked against the rule, not a fixed value.
@@ -830,8 +1015,7 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         };
 
-        let intents = self
-            .events
+        let intents = decision
             .iter()
             .filter_map(|event| match event.payload() {
                 EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
@@ -848,8 +1032,7 @@ impl<B: DurableStorage> EventStore<B> {
                 LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
-        let admissions = self
-            .events
+        let admissions = decision
             .iter()
             .filter_map(|event| match event.payload() {
                 EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
@@ -866,8 +1049,7 @@ impl<B: DurableStorage> EventStore<B> {
                 LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
-        let executions = self
-            .events
+        let executions = decision
             .iter()
             .filter(|event| {
                 matches!(
@@ -891,8 +1073,7 @@ impl<B: DurableStorage> EventStore<B> {
                 LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
-        let completions = self
-            .events
+        let completions = decision
             .iter()
             .filter(|event| {
                 matches!(
@@ -930,8 +1111,8 @@ impl<B: DurableStorage> EventStore<B> {
         }
 
         let lease_grants = self
-            .events
-            .iter()
+            .run_records(intent_fact.links().run_id(), &[EventType::LeaseGranted])?
+            .into_iter()
             .filter(|event| {
                 event.event_type() == EventType::LeaseGranted
                     && intent_fact.sequence() < event.sequence()
@@ -953,8 +1134,8 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         let releases = self
-            .events
-            .iter()
+            .run_records(lease_granted.links().run_id(), &[EventType::LeaseReleased])?
+            .into_iter()
             .filter(|event| {
                 event.event_type() == EventType::LeaseReleased
                     && same_task_run_chain(event.links(), lease_granted.links())
@@ -964,13 +1145,18 @@ impl<B: DurableStorage> EventStore<B> {
         // whose lease a transfer handed on, that expired (or both, one end), or that was
         // released without run links has no run-linked release; that end ends its lease
         // (`unique_lease_end`), whether the run is settled from its terminal or interrupted.
+        let lease_ends = if releases.is_empty() {
+            self.lease_end_candidates(lease_granted.links())?
+        } else {
+            Vec::new()
+        };
         let handed_on = if releases.is_empty() {
-            unique_lease_end(&self.events, lease_granted.links())
+            unique_lease_end(&lease_ends, lease_granted.links())
         } else {
             None
         };
         let release = match (releases.as_slice(), handed_on) {
-            ([release], _) => *release,
+            ([release], _) => release,
             ([], Some((end, _))) => end,
             _ => {
                 return Err(GlobalLedgerError::settlement_refusal(
@@ -1025,6 +1211,7 @@ impl<B: DurableStorage> EventStore<B> {
     fn append_recovered_policy_execution(
         &mut self,
         draft: SanitizedEventDraft,
+        decision: &[PersistedEvent],
     ) -> GlobalLedgerResult<PersistedEvent> {
         if draft.event_type() != EventType::PolicyExecutionRecorded
             || draft.origin().source() != EventSource::Scheduler
@@ -1055,8 +1242,7 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
 
-        let intents = self
-            .events
+        let intents = decision
             .iter()
             .filter_map(|event| match event.payload() {
                 EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
@@ -1073,8 +1259,7 @@ impl<B: DurableStorage> EventStore<B> {
                 ContractLocation::RecoverPolicyExecution.location(),
             ));
         };
-        let admissions = self
-            .events
+        let admissions = decision
             .iter()
             .filter_map(|event| match event.payload() {
                 EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
@@ -1103,8 +1288,7 @@ impl<B: DurableStorage> EventStore<B> {
                 ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
-        let existing_executions = self
-            .events
+        let existing_executions = decision
             .iter()
             .filter(|event| {
                 matches!(
@@ -1124,8 +1308,7 @@ impl<B: DurableStorage> EventStore<B> {
                 ));
             }
         };
-        let completion_count = self
-            .events
+        let completion_count = decision
             .iter()
             .filter(|event| {
                 matches!(
@@ -1143,8 +1326,8 @@ impl<B: DurableStorage> EventStore<B> {
         }
 
         let lease_grants = self
-            .events
-            .iter()
+            .run_records(intent_fact.links().run_id(), &[EventType::LeaseGranted])?
+            .into_iter()
             .filter(|event| {
                 event.event_type() == EventType::LeaseGranted
                     && same_chain_with_required_lease(intent_fact.links(), event.links())
@@ -1159,8 +1342,8 @@ impl<B: DurableStorage> EventStore<B> {
         let recovered_links = lease_granted.links();
 
         let releases = self
-            .events
-            .iter()
+            .run_records(recovered_links.run_id(), &[EventType::LeaseReleased])?
+            .into_iter()
             .filter(|event| {
                 event.event_type() == EventType::LeaseReleased
                     && same_task_run_chain(event.links(), recovered_links)
@@ -1171,13 +1354,18 @@ impl<B: DurableStorage> EventStore<B> {
         // released without run links, before any run-linked release, has that end as its lease
         // end (`unique_lease_end`); no release is written for a lease that already ended. With
         // a terminal the run is settled from it, otherwise as interrupted from that end.
+        let lease_ends = if releases.is_empty() {
+            self.lease_end_candidates(recovered_links)?
+        } else {
+            Vec::new()
+        };
         let handed_on = if releases.is_empty() {
-            unique_lease_end(&self.events, recovered_links)
+            unique_lease_end(&lease_ends, recovered_links)
         } else {
             None
         };
         let release = match (releases.as_slice(), handed_on) {
-            ([release], _) => *release,
+            ([release], _) => release,
             ([], Some((end, _))) => end,
             _ => {
                 return Err(GlobalLedgerError::settlement_refusal(
@@ -1205,8 +1393,15 @@ impl<B: DurableStorage> EventStore<B> {
         }
 
         let terminals = self
-            .events
-            .iter()
+            .run_records(
+                recovered_links.run_id(),
+                &[
+                    EventType::TaskCompleted,
+                    EventType::TaskFailed,
+                    EventType::TaskCancelled,
+                ],
+            )?
+            .into_iter()
             .filter(|event| {
                 matches!(
                     event.event_type(),
@@ -1215,6 +1410,37 @@ impl<B: DurableStorage> EventStore<B> {
                     && event.links().run_id() == recovered_links.run_id()
             })
             .collect::<Vec<_>>();
+        // The run's effect and input records: a run with one is never settled as interrupted.
+        let run_effects = self
+            .run_records(
+                recovered_links.run_id(),
+                &[
+                    EventType::TaskEffectIntent,
+                    EventType::TaskEffectCompleted,
+                    EventType::InputIntent,
+                    EventType::InputCommitted,
+                    EventType::InputFailed,
+                ],
+            )?
+            .into_iter()
+            .any(|event| {
+                event.links().task_id() == recovered_links.task_id()
+                    && event.links().run_id() == recovered_links.run_id()
+                    && matches!(
+                        event.event_type(),
+                        EventType::TaskEffectIntent
+                            | EventType::TaskEffectCompleted
+                            | EventType::InputIntent
+                            | EventType::InputCommitted
+                            | EventType::InputFailed
+                    )
+            });
+        // The run's requests a recovered settlement is measured from
+        // (`matching_scheduled_task_requests`).
+        let run_requests = self.run_records(
+            recovered_links.run_id(),
+            &[EventType::LabRequest, EventType::CommandReceived],
+        )?;
         if terminals.len() > 1 {
             return Err(GlobalLedgerError::settlement_refusal(
                 LedgerCode::ScheduledExecutionRecoveryTerminalNotUnique.code(),
@@ -1236,7 +1462,7 @@ impl<B: DurableStorage> EventStore<B> {
         let source_fact = match terminals.as_slice() {
             _ if recovered_interruption => release,
             [] => release,
-            [terminal] => *terminal,
+            [terminal] => terminal,
             _ => {
                 return Err(GlobalLedgerError::settlement_refusal(
                     LedgerCode::ScheduledExecutionRecoveryTerminalNotUnique.code(),
@@ -1308,18 +1534,7 @@ impl<B: DurableStorage> EventStore<B> {
                 EventType::LeaseReleased => {
                     same_task_run_chain(source_fact.links(), recovered_links)
                         && terminals.is_empty()
-                        && !self.events.iter().any(|event| {
-                            event.links().task_id() == recovered_links.task_id()
-                                && event.links().run_id() == recovered_links.run_id()
-                                && matches!(
-                                    event.event_type(),
-                                    EventType::TaskEffectIntent
-                                        | EventType::TaskEffectCompleted
-                                        | EventType::InputIntent
-                                        | EventType::InputCommitted
-                                        | EventType::InputFailed
-                                )
-                        })
+                        && !run_effects
                         && matches!(
                             execution.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
@@ -1364,7 +1579,7 @@ impl<B: DurableStorage> EventStore<B> {
                     ));
                 };
                 let task_requests =
-                    matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
+                    matching_scheduled_task_requests(&run_requests, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
                     return Err(GlobalLedgerError::settlement_refusal(
                         LedgerCode::ScheduledExecutionRecoveryTaskRequestNotUnique.code(),
@@ -1380,7 +1595,7 @@ impl<B: DurableStorage> EventStore<B> {
                             ContractLocation::RecoverPolicyExecution.location(),
                         )
                     })?;
-                if *terminal != source_fact
+                if terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminal_lease_end_valid(source_fact, true)
                     || source_fact.severity()
@@ -1457,7 +1672,7 @@ impl<B: DurableStorage> EventStore<B> {
                 let failure_code = scheduled_failure_code_str(failure_outcome);
                 let class = scheduled_failure_class(failure_outcome.code(), *failure_severe);
                 let task_requests =
-                    matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
+                    matching_scheduled_task_requests(&run_requests, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
                     return Err(GlobalLedgerError::settlement_refusal(
                         LedgerCode::ScheduledExecutionRecoveryTaskRequestNotUnique.code(),
@@ -1473,7 +1688,7 @@ impl<B: DurableStorage> EventStore<B> {
                             ContractLocation::RecoverPolicyExecution.location(),
                         )
                     })?;
-                if *terminal != source_fact
+                if terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminal_lease_end_valid(source_fact, true)
                     || !(admission_fact.sequence() < task_request.sequence()
@@ -1499,18 +1714,7 @@ impl<B: DurableStorage> EventStore<B> {
                     || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminals.is_empty()
                     || source_fact.timestamp_unix_ms() != execution.observed_at_unix_ms()
-                    || self.events.iter().any(|event| {
-                        event.links().task_id() == recovered_links.task_id()
-                            && event.links().run_id() == recovered_links.run_id()
-                            && matches!(
-                                event.event_type(),
-                                EventType::TaskEffectIntent
-                                    | EventType::TaskEffectCompleted
-                                    | EventType::InputIntent
-                                    | EventType::InputCommitted
-                                    | EventType::InputFailed
-                            )
-                    })
+                    || run_effects
                     || !matches!(
                         execution.policy_result(),
                         PolicyExecutionOutcome::Failed { failure }
@@ -1567,11 +1771,15 @@ impl<B: DurableStorage> EventStore<B> {
         self.persist_retention_checked_observed(event, false, observation)
     }
 
+    /// LN-7 (#422, LEAN-L §3.5): what the record names that the writer no longer holds is loaded
+    /// again from the store first (`load_retention_sources`), so its identity checks read the
+    /// artifact's first reference through the `artifact_id` index.
     pub(super) fn validate_retention_admission(
-        &self,
+        &mut self,
         event: &PersistedEvent,
         guarded: bool,
     ) -> GlobalLedgerResult<()> {
+        self.load_retention_sources(event)?;
         if self.recovering_retention
             && event.event_type() != EventType::LedgerRecovered
             && !(guarded && event.event_type() == EventType::ArtifactEvictionOutcome)
@@ -1582,7 +1790,7 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         self.retention
-            .validate(event, &self.events, &self.indexes, guarded, true)
+            .validate(event, &self.history(), guarded, true)
     }
 
     pub(super) fn persist_retention_checked(
@@ -1600,7 +1808,7 @@ impl<B: DurableStorage> EventStore<B> {
         observation: &mut Option<LedgerAppendObservation>,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let following_sequence = increment_sequence(self.next_sequence)?;
-        if self.indexes.contains_event_id(event.event_id()) {
+        if self.history().contains_event_id(event.event_id())? {
             return Err(GlobalLedgerError::request(
                 LedgerCode::DuplicateEventId.code(),
                 LedgerLocation::AppendEvent.location(),
@@ -1626,62 +1834,42 @@ impl<B: DurableStorage> EventStore<B> {
     ) -> GlobalLedgerResult<PersistedEvent> {
         self.next_sequence = following_sequence;
         self.retention.apply(&event);
-        self.indexes.insert(&event, self.events.len());
-        self.events.push(event.clone());
         self.commit_statistics
             .record_success(event.sequence(), write_sync_ns)?;
         Ok(event)
     }
 
-    pub(super) fn query(&self, query: &actingcommand_contract::EventQuery) -> Vec<PersistedEvent> {
-        let mut events = self.indexes.query(&self.events, query);
-        for event in &mut events {
-            self.retention.annotate_event(event);
-        }
-        events
-    }
-
-    /// #411 A51 (R2): [`Self::query`] within `work`'s budget; `ledger_read_budget_exceeded` of
-    /// `operation` when it ran out.
+    /// #411 A51 (R2): every event `query` selects, within `work`'s budget;
+    /// `ledger_read_budget_exceeded` of `operation` when it ran out. LN-5: read from the store.
     pub(super) fn query_within(
         &self,
-        query: &actingcommand_contract::EventQuery,
+        query: &EventQuery,
         work: &super::read_work::ReadWork,
         operation: actingcommand_contract::outcome::Location,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        let mut events = self
-            .indexes
-            .query_within(&self.events, query, work)
-            .ok_or_else(|| super::read_work::ReadWork::exceeded(operation))?;
-        for event in &mut events {
-            self.retention.annotate_event(event);
-        }
-        Ok(events)
+        let head = self.latest_sequence();
+        self.read_history(query, (0, head), None, head, work)?
+            .ok_or_else(|| super::read_work::ReadWork::exceeded(operation))
     }
 
     /// #411 A51 (R2): one page of the events `query` selects after `range.0` through `range.1`,
     /// at most `page_events`, within `work`'s budget; `ledger_read_budget_exceeded` of
-    /// `operation` when it ran out.
+    /// `operation` when it ran out. LN-5: read from the store.
     pub(super) fn query_page_within(
         &self,
-        query: &actingcommand_contract::EventQuery,
+        query: &EventQuery,
         range: (u64, u64),
         page_events: usize,
         work: &super::read_work::ReadWork,
         operation: actingcommand_contract::outcome::Location,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        let mut events = self
-            .indexes
-            .query_page_within(&self.events, query, range, page_events, work)
-            .ok_or_else(|| super::read_work::ReadWork::exceeded(operation))?;
-        for event in &mut events {
-            self.retention.annotate_event(event);
-        }
-        Ok(events)
+        self.read_history(query, range, Some(page_events), range.1, work)?
+            .ok_or_else(|| super::read_work::ReadWork::exceeded(operation))
     }
 
+    /// LN-5: the sequence of the last committed record, the store's head.
     pub(super) fn latest_sequence(&self) -> u64 {
-        self.events.last().map_or(0, PersistedEvent::sequence)
+        self.backend.head()
     }
 
     pub(super) fn resolve_artifact(
@@ -1689,17 +1877,8 @@ impl<B: DurableStorage> EventStore<B> {
         selection: &super::LedgerArtifactSelection,
         deadline: Instant,
     ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
-        if let Some(resolved) = self.backend.resolve_artifact(selection, deadline) {
-            return resolved;
-        }
-        super::evidence::resolve_artifact_from_events(
-            &self.events,
-            selection,
-            self.latest_sequence(),
-            true,
-            deadline,
-            Some(&self.retention),
-        )
+        self.backend
+            .resolve_artifact(selection, deadline, &self.retention)
     }
 
     pub(super) fn project_view_page(
@@ -1721,61 +1900,34 @@ impl<B: DurableStorage> EventStore<B> {
         observation: &mut Option<LedgerProjectViewObservation>,
         work: &super::read_work::ReadWork,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
-        if let Some(page) =
-            self.backend
-                .project_view_page(query, profile, request, observation, work)
-        {
-            return page;
-        }
-        *observation = None;
-        self.indexes.project_view_page(
-            &self.events,
+        self.backend.project_view_page(
             query,
             profile,
             request,
-            actingcommand_contract::LedgerReadScope {
-                source: actingcommand_contract::LedgerReadSource::Runtime,
-                material_read: actingcommand_contract::LedgerMaterialReadState::NotRequested,
-                scanned_through_position: self.latest_sequence(),
-                read_complete: true,
-                limits: Vec::new(),
-            },
-            super::projection::PageSelection {
-                through_sequence: self.latest_sequence(),
-                sequences: None,
-                retention: Some(&self.retention),
-                work: Some(work),
-            },
+            observation,
+            (work, self.history_page_rows, self.history_scan_rows),
+            &self.retention,
         )
     }
 
     /// The events after `range.0` through `range.1`, at most `page_events`, for a
     /// subscription's replay; #411 A51 (R2): within `work`'s budget,
-    /// `ledger_read_budget_exceeded` of `operation` when it ran out.
+    /// `ledger_read_budget_exceeded` of `operation` when it ran out. LN-5: read from the store.
     pub(super) fn replay_page_within(
         &self,
-        (after_sequence, through_sequence): (u64, u64),
+        range: (u64, u64),
         page_events: usize,
         work: &super::read_work::ReadWork,
         operation: actingcommand_contract::outcome::Location,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        let start = self
-            .events
-            .partition_point(|event| event.sequence() <= after_sequence);
-        let mut events = Vec::new();
-        for event in self.events[start..]
-            .iter()
-            .take_while(|event| event.sequence() <= through_sequence)
-            .take(page_events)
-        {
-            if !work.visit() {
-                return Err(super::read_work::ReadWork::exceeded(operation));
-            }
-            let mut event = event.clone();
-            self.retention.annotate_event(&mut event);
-            events.push(event);
-        }
-        Ok(events)
+        self.read_history(
+            &EventQuery::default(),
+            range,
+            Some(page_events),
+            range.1,
+            work,
+        )?
+        .ok_or_else(|| super::read_work::ReadWork::exceeded(operation))
     }
 
     pub(super) fn close(mut self) -> GlobalLedgerResult<()> {
@@ -1844,6 +1996,106 @@ impl DurableStorage for SegmentStorage {
         &self.root
     }
 
+    fn head(&self) -> u64 {
+        self.events.last().map_or(0, PersistedEvent::sequence)
+    }
+
+    fn resolve_artifact(
+        &self,
+        selection: &super::LedgerArtifactSelection,
+        deadline: Instant,
+        retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
+        super::evidence::resolve_artifact_from_events(
+            &self.events,
+            selection,
+            self.head(),
+            true,
+            deadline,
+            Some(retention),
+        )
+    }
+
+    fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
+        (work, _, _): (&super::read_work::ReadWork, usize, usize),
+        retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
+        *observation = None;
+        self.indexes.project_view_page(
+            &self.events,
+            query,
+            profile,
+            request,
+            actingcommand_contract::LedgerReadScope {
+                source: actingcommand_contract::LedgerReadSource::Runtime,
+                material_read: actingcommand_contract::LedgerMaterialReadState::NotRequested,
+                scanned_through_position: self.head(),
+                read_complete: true,
+                limits: Vec::new(),
+            },
+            super::projection::PageSelection {
+                through_sequence: self.head(),
+                sequences: None,
+                retention: Some(retention),
+                work: Some(work),
+            },
+        )
+    }
+
+    fn history_page(
+        &self,
+        selection: &HistorySelection<'_>,
+        (after, through): (u64, u64),
+        rows: usize,
+        _retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        Ok(self
+            .events
+            .iter()
+            .filter(|event| event.sequence() > after && event.sequence() <= through)
+            .filter(|event| selection.selects(*event))
+            .take(rows)
+            .cloned()
+            .collect())
+    }
+
+    fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>> {
+        Ok(self
+            .events
+            .iter()
+            .find(|event| event.event_id() == event_id)
+            .map(PersistedEvent::sequence))
+    }
+
+    fn lab_relations(&self, through: u64, seed: &LabRelations) -> GlobalLedgerResult<LabRelations> {
+        let mut relations = seed.clone();
+        relations.add_anchors(&self.events, through);
+        relations.add_runs(&self.events, through);
+        Ok(relations)
+    }
+
+    fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>> {
+        Ok(self
+            .events
+            .iter()
+            .map(PersistedEvent::timestamp_unix_ms)
+            .max())
+    }
+
+    fn scope_extents(
+        &self,
+        (from, through): (u64, u64),
+    ) -> GlobalLedgerResult<Vec<super::history::ScopeExtent>> {
+        Ok(super::history::scope_extents(self.events.iter().filter(
+            |event| (from..=through).contains(&event.sequence()),
+        )))
+    }
+
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
         let mut bytes = serde_json::to_vec(&StoredLine {
             line_type: LINE_TYPE.to_string(),
@@ -1869,6 +2121,8 @@ impl DurableStorage for SegmentStorage {
             .checked_duration_since(write_started)
             .and_then(|value| u64::try_from(value.as_nanos()).ok());
         self.active_bytes = self.active_bytes.saturating_add(bytes.len() as u64);
+        self.indexes.insert(event, self.events.len());
+        self.events.push(event.clone());
         Ok(write_sync_ns)
     }
 

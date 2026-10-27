@@ -57,6 +57,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("package bundle", ["offline"], "available"),
         // Workflow #373 NAV-T: the bundle's cross-check of an installed game root; reads only.
         command_cap("standard-pack check", ["offline", "read_only"], "available"),
+        // ROUT-L RL-1a: composes the schedule rules of bound games into a new directory.
+        command_cap("standard-pack compose", ["offline"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         command_cap("ledger show", ["offline", "read_only"], "retired"),
@@ -663,7 +665,8 @@ pub(crate) fn schema_capabilities() -> Value {
         "cli_envelope": {"supported": [actingcommand_contract::CLI_SCHEMA_VERSION]},
         "legacy_task": {"supported": ["0.1"]},
         "task_operation": {
-            "supported": ["0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"],
+            "supported": actingcommand_contract::TaskSchema::ALL
+                .map(actingcommand_contract::TaskSchema::as_str),
             "validation": "version_specific_fields_required"
         },
         "recognition_pack": {"supported": ["0.1", "0.3", "0.4", "0.5", "0.6", "0.7"]},

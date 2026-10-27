@@ -402,7 +402,12 @@ actingcommand_contract::outcome_locations! {
         EncodeLedgerQuery => "encode_ledger_query",
         EncodeMigrationIdentity => "encode_migration_identity",
         EncodeSourceMaterial => "encode_source_material",
+        /// #422 LN-7c R: the writer open's fill of the frame index (its gap and backfill).
+        BuildLedgerFrameRefs => "build_ledger_frame_refs",
         FinishArtifactEviction => "finish_artifact_eviction",
+        /// #422 LN-7c Q: the writer keeps the objects of the live frames only, at a cleaner pass
+        /// start.
+        FrameRetentionLiveObjects => "frame_retention_live_objects",
         FrameRetentionView => "frame_retention_view",
         FreezeSegmentImportSource => "freeze_segment_import_source",
         /// Workflow #383 AO-1: importing a dump at the start, before any new record.
@@ -431,6 +436,8 @@ actingcommand_contract::outcome_locations! {
         LedgerAttemptWatch => "ledger_attempt_watch",
         /// Workflow #383 AO-1: writing one record with its retries.
         LedgerWriteRetry => "ledger_write_retry",
+        /// #422 LN-9: the paced background scrub of the whole chain on its own connection.
+        LedgerScrub => "ledger_scrub",
         ListSegments => "list_segments",
         LocateReadOnlyCorruptTail => "locate_read_only_corrupt_tail",
         LockWriterWithoutMetadataWrite => "lock_writer_without_metadata_write",
@@ -465,6 +472,9 @@ actingcommand_contract::outcome_locations! {
         ProjectSqliteRecord => "project_sqlite_record",
         QueryEventPage => "query_event_page",
         QueryEvents => "query_events",
+        /// #422 LN-7c Q: the frame cleaner's ledger query (statements W, L and K, a moved frame's
+        /// owner point, a frame's verified row) on its own read-only connection.
+        QueryFrameRetention => "query_frame_retention",
         QueryLedgerView => "query_ledger_view",
         QueryReadOnlyEventPage => "query_read_only_event_page",
         QuerySqliteRows => "query_sqlite_rows",
@@ -567,8 +577,13 @@ actingcommand_contract::outcome_locations! {
         VerifyCutoverPrefix => "verify_cutover_prefix",
         VerifyDatabaseFormat => "verify_database_format",
         VerifyEmptyLedgerFormat => "verify_empty_ledger_format",
+        /// #422 LN-7c V: `ledger-maintenance verify`'s check of the frame cleaner's statements
+        /// against the full view.
+        VerifyFrameQuery => "verify_frame_query",
         VerifyImportQuarantine => "verify_import_quarantine",
         VerifyImportTransaction => "verify_import_transaction",
+        /// #422 LN-7c R: the scrub's and `ledger-maintenance verify`'s check of the frame index.
+        VerifyLedgerFrameRefs => "verify_ledger_frame_refs",
         VerifyLedgerPrefix => "verify_ledger_prefix",
         VerifyLedgerViews => "verify_ledger_views",
         VerifyRecoveryEvent => "verify_recovery_event",
@@ -581,6 +596,8 @@ actingcommand_contract::outcome_locations! {
         VerifyTransactionEvent => "verify_transaction_event",
         /// Workflow #383 AO-1: writing the dump file and stopping fatally.
         WriteLedgerDump => "write_ledger_dump",
+        /// #422 LN-7c R: writing a batch's frame index rows and extent in its transaction.
+        WriteLedgerFrameRefs => "write_ledger_frame_refs",
         WriteWriterMetadata => "write_writer_metadata",
     }
 }

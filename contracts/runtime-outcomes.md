@@ -97,8 +97,8 @@ Between Runtime modules outcomes always travel full.
 |---|---|
 | `contracts/outcome-codes/catalog.json` | the header: `schema_version` `actingcommand.outcome-codes.v1`, `keys`, `vocabularies`, `domains`, `fragments` |
 | `contracts/outcome-codes/<owner>.json` | one owner's `codes` and `locations` (`{owner, codes, locations}`) |
-| `contracts/outcome-codes.json` | the merged file every reader uses, generated; never edited by hand |
-| `contracts/outcome-codes/released/<version>.json` | per-release snapshot, written by the release PR (`0.12.0.json` first, #378 A8b) |
+| (merged catalog, not committed) | the header and every fragment merged into one document, the one every reader uses: the contract crate's `build.rs` generates it into its `OUT_DIR` and embeds it, and `outcome-guard merge` prints the same text (Workflow #420 S2) |
+| `contracts/outcome-codes/released/<version>.json` | per-release release file in the compact form, written by the release PR with `ci/outcome_release.py` (`0.12.0.json` first, #378 A8b; compact since #420 S3) |
 
 - **`fragments`** maps each owner to its workspace member (`"runtime-host": "crates/runtime-host"`).
   Every workspace member has exactly one owner; an owner's fragment file exists once it
@@ -145,31 +145,30 @@ Between Runtime modules outcomes always travel full.
   condition decided from the declarations alone is row 3, one that needs the screen is row 4.
   A receipt or projection code takes the class of the outcome it projects: `recognition_failed`
   is `pack_logic_mismatch`, `capture_failed` is `environment_fault`.
-- **Release snapshot**: `{schema_version: "actingcommand.outcome-codes.release.v1", release,
-  codes: {name: {category, ladder_class, review, status, values: {key: {type, required}}}},
-  locations: {name: {review, status}}}`. It holds every code and location of the catalog at
-  the commit the release tags, retired ones included, in name order; `type` is the key's type in
-  the key table and `required` whether the entry requires the key. The release PR writes it for
-  `X.Y.Z` and nothing edits it afterwards; G9 holds every later catalog to its settled entries,
-  and G10 stops a release whose snapshot is missing. A release candidate `X.Y.Z-rc.N` has no
-  snapshot of its own.
+- **Release files** (compact since Workflow #420 S3): `{schema_version:
+  "actingcommand.outcome-codes.release.v2", release, codes: {name: {category, ladder_class,
+  review, status, values: {key: {type, required}}}}, locations: {name: {review, status}}}`, one
+  entry per line, in name order. An entry's signature is these members; `type` is the key's type
+  in the key table and `required` whether the entry requires the key. A release file holds only
+  the entries its release binds, the settled and the retired ones, and of those only the ones
+  whose signature no earlier release file holds; a release that changed none has a file with
+  empty `codes` and `locations`. Together the release files hold every signature any release
+  bound, so G9 checking each file is G9 checking each release's full snapshot. The release PR
+  writes `X.Y.Z.json` with `py -3 -I -B ci/outcome_release.py X.Y.Z`, from the header and the
+  fragments, and nothing edits it afterwards; G9 holds every later catalog to the signatures,
+  and G10 stops a release whose file is missing. A release candidate `X.Y.Z-rc.N` has no file
+  of its own.
 
-### Regenerating the merged file
+### The merged catalog is generated, not committed (Workflow #420 S2)
 
-Never run the merge locally, and never merge the file by hand.
-
-1. Push the fragment change. CI's `Outcome catalog merge` step runs `outcome-guard merge` after
-   every test step, whenever the Test step ran (pass or fail; G9 fails on the first push by
-   design), and uploads `contracts/outcome-codes.json` as the artifact `outcome-codes-<sha>` of
-   the pushed head.
-2. Download it into an empty temporary folder,
-   `gh run download <run-id> -n outcome-codes-<sha> -D <empty temp dir>` (the artifact holds a
-   bare `outcome-codes.json`), copy that file over `contracts/outcome-codes.json`, commit it
-   unchanged and push again; G9 then passes.
-3. A pull request's CI checks out GitHub's merge of the head into `main`, and `main` requires
-   branches to be up to date. After every rebase or merge from `main`, and on any conflict in
-   this file, keep both sides' entries in the fragments and the header, then repeat steps 1
-   and 2.
+A code change edits only the header and the owner fragments; nothing regenerates, downloads or
+commits a merged file. The contract crate's `build.rs` merges the fragments with the guard's own
+loader (`tools/outcome-guard/src/catalog.rs`) into its `OUT_DIR` at every build, and a header or
+fragment that does not load fails the build with every error. So a pull request that changes
+codes is green on its first push, and two pull requests that change different fragments never
+meet in one file. After a rebase or merge from `main`, keep both sides' entries in the fragments
+and the header. `contracts/outcome-codes.json` is no longer tracked: a branch that still carries
+it deletes it when it merges `main` (accept the deletion) and keeps only its fragment changes.
 
 ### Reading the catalog: `actingledger codes`
 
@@ -183,7 +182,8 @@ lists the codes in name order, or only the code `--code` names.
 | `--markdown` | the line ``Outcome catalog SHA-256 `<hex>`.``, an empty line, then a table of the same columns, the code in backticks and a pipe in a cell escaped with a backslash |
 | `--json` | one line `{schema_version: "actingcommand.actingledger.codes.v1", catalog_sha256, codes: {name: entry}}`, each entry as the catalog holds it |
 
-`catalog_sha256` is the SHA-256 of the embedded `contracts/outcome-codes.json`, the content half
+`catalog_sha256` is the SHA-256 of the embedded merged catalog (the text `outcome-guard merge`
+prints for the same fragments), the content half
 of the catalog's version; the Runtime release is the other half and lives only in the release
 tag, so no binary prints it. A code the catalog does not list is `outcome_code_unknown`, and a
 catalog that does not parse, has no codes table or holds an entry without one of the row's text
@@ -211,8 +211,8 @@ scanned. An unparsable registry macro fails G1.
 | G6 | persisted prose fields in contract types | A3 |
 | G7 | `outcome_keys!` differs from the catalog `keys`; a vocabulary enum (`outcome_vocabulary!` or a `source` enum) differs from its catalog vocabulary | A1 |
 | G8 | an entry since 0.12.0 that breaks `^[a-z][a-z0-9]*(_[a-z0-9]+)+$` (3-64 bytes); a prefix outside its owners; a reserved prefix | A1 |
-| G9 | the merged file is not the merge of the fragments; a released settled entry missing or changed (category, ladder class, key types, required set); a released retired entry active again | A1; ladder class #387 D1a |
-| G10 | a settled entry without text (`description`, and for a code `common_causes` and `handling`, empty or `TBD`); at a release `X.Y.Z`, no `released/X.Y.Z.json`, or, from v0.13.0 on, a pending entry (a final of the 0.12 series may carry pending entries; coordinator decision of 2026-10-19) | A8b; boundary v0.13.0 (2026-10-19) |
+| G9 | the header and fragments do not parse or merge (a spelling registered twice included); a released settled entry missing or changed (category, ladder class, key types, required set); a released retired entry active again. Read from the fragments and the compact release files only: no merged file is committed or compared (#420 S2, S3) | A1; ladder class #387 D1a; #420 S2 |
+| G10 | a settled entry without text (`description`, and for a code `common_causes` and `handling`, empty or `TBD`); at a release `X.Y.Z`, no release file `released/X.Y.Z.json`, or, from v0.13.0 on, a pending entry (a final of the 0.12 series may carry pending entries; coordinator decision of 2026-10-19) | A8b; boundary v0.13.0 (2026-10-19) |
 
 Loading the catalog, which every check does first, refuses a code entry without a
 `ladder_class`, with a class that is not a token of the vocabulary `ladder_class`, or a
@@ -259,6 +259,102 @@ the slice that removes it.
   crate never writes to stderr itself.
 - `catalog()` returns the embedded merged file; `catalog_json()` parses it once and shares the
   parsed document with every reader.
+
+## Failure scope (Workflow #419, ISO-M; Runtime 0.12.12)
+
+Alice (#419): one emulator's fault must not stop the whole ActingCommand. Every failure the
+Runtime host meets has exactly one **scope**, and only a `Global` failure may stop the Runtime.
+The frozen model is `rd-1024/iso-design/model.md` (ISO-M) §5 and §6; ISO-1 builds the
+mechanism, and the later ISO slices move their paths onto it.
+
+| Scope | Means | At a boundary |
+|---|---|---|
+| `Global` | the Runtime as a whole cannot run normally | latches the Runtime (its fatal state; actingd then closes) |
+| `Instance(i)` | the failure originates in, or concerns only, instance `i` | fences `i` (Workflow #403: one `runtime.failed` record of `instance_resources_fenced` caused by the failure when it is newly fenced, its policy availability withheld, then the ladder or a person); the work ends with the fence's non-fatal failure; every other instance goes on |
+| `Operation` | one request or operation failed and its instance is sound | only that operation fails, with its own code |
+
+**The scope rule** (`RuntimeHostError::scope_at`; R0.1-R0.4):
+- The constructor carries the scope, and the wrappers (`into_fatal`, the request poisons,
+  `with_caused_by`) keep it. `instance_fault(code, operation, runtime_code, instance)` builds a
+  failure that leaves its instance's state unknown: it is severe for its own work (a fatal
+  projection) and `Instance` of that instance. `instance_scoped()` tags an existing failure as
+  one instance's; without an instance of its own it takes the boundary's.
+- A failure tagged as one instance's stays `Global` when its code is on the Global list below,
+  or when neither it nor its boundary names an instance.
+- An **untagged** failure is `Global` when it is fatal and `Operation` otherwise. This is the
+  fail-safe default: a path no slice has classified keeps halting as before.
+- A failure joined with a `Global` failure (B7, `with_complete_failure`) is `Global`.
+- `halts_runtime()` is `scope() == Global`. `is_fatal()` and the projection's `fatal` say only
+  how severe the failure is for the work that met it (`failure_severe`, the ladder).
+
+**One decision point** (`contain_failure(error, boundary_instance)` in
+`crates/runtime-host/src/host/failure_scope.rs`; R0.5-R0.7): `Global` latches, `Instance` fences,
+`Operation` fails the operation. A fence that fails (its ledger record) latches the fence's
+failure, and an `Instance` failure that no registered instance owns latches as itself:
+containment never fails silently.
+
+**The five boundaries** that call it (R0.5):
+
+| Boundary | Where | Since |
+|---|---|---|
+| the request door, also the direct run's boundary: a failure that would poison the Runtime is contained against the request's instance (its lease token's, else the registered instance of its alias) | `host/requests.rs`, `process_request_at_door` | ISO-1 |
+| the scheduled run and the host package run | `host.rs`, `startup_package.rs` | ISO-2 |
+| the instance worker | `host/host_claims.rs` | ISO-3 |
+| each per-instance step of a shared loop | the sweep, pump, fence and monitor loops | ISO-4a |
+| actingd's policy driver, per intent (through `halts_runtime()`) | `apps/actingd/src/main.rs` | ISO-6 |
+
+**Receipts** (#411 A54, §5.4): a denied or failed receipt says `host_halted: true` only when the
+Runtime latched (it holds a fatal state when the receipt is written); how severe the failure
+was for its request does not make it say so. A failure that latched nothing (a read-only
+observe whose capture failed, an IPC input or safe reset whose backend failed, a contained
+`Instance` failure) answers `host_halted: false`, with its own `runtime_code`. On a host that
+latched, a receipt is as before. A direct contained run's failed receipt keeps its failure's
+severity as `host_halted`: the client reads it to know whether the run kept its OCR fields
+report, which the host aborts for a fatal failure. Since ISO-2 a capture of the instance's dead
+session (ISO-M row A01) and a failed geometry read (A03) fail the run non-fatally; a fatal
+input failure (E02) keeps its severity and latches nothing.
+
+**Device and kernel failures** (ISO-2, Runtime 0.12.13; R1, R2): a failure of the execution
+kernel (the device, its session, its capture and input backends) concerns only the session's
+instance: `RuntimeHostError::execution` tags it `Instance`, of the instance it names, else of
+its boundary's, and keeps the kernel's code and severity. A kernel code on the Global list below
+(the session registry, an OS thread) stays `Global`. So:
+- a scheduled run, a host package run (a startup package, a ladder rung), a handset's link
+  step and an emulator control whose failure would stop the Runtime fence that instance
+  instead, and fail with the fence's non-fatal failure; actingd's driver goes on with the
+  other instances;
+- a run's capture that met its instance's dead, closing or changed session fails only the run,
+  as a capture failure (the failure's close retired the session, and the next capture opens a
+  fresh one); a geometry read that failed with its resources confirmed fails the run as
+  `contained_task_geometry_unavailable`; a frame commit or resolve the session refused fails
+  only its run, observe or Lab operation;
+- every fatal failure of the instance's own application command fences the instance (#411 A46,
+  widened to every kernel code);
+- a retained session's close before an emulator control, a pause or a handset's link loss, and
+  a session close at a lease end, that failed with its resources confirmed holds nothing: its
+  failure is recorded and the work goes on. An unconfirmed close fences the instance (#403).
+
+**A lock of one instance alone** that guards no data (its admission guard, its queue-order lock;
+R8) is taken through `lock_instance`: when a panic left it poisoned, the poison is cleared and
+the work fails with `instance_lock_poisoned` (error, ladder class `none`), an `Instance` failure
+of that instance. A poisoned lock that every instance shares stays `Global`
+(`runtime_state_poisoned`).
+
+**The closed Global list** (`GLOBAL_CODES`; R0.3), 146 codes in ten families, plus every catalog
+code of category `fatal` (family `CatalogFatal`):
+
+| Family | Codes | List |
+|---|---|---|
+| ledger: write, commit, integrity, format, dump, a failed append, the fact store out of step | 32 | `ledger_failure`, `agent_ledger_failure`, `monitor_ledger_failure`, `catalog_failure_fact_undurable`, `release_failure_fact_undurable`, `runtime_fact_store_desync`, `fact_store_sync_failed`, `fact_store_recovery_failed`, `runtime_fact_replay_failed`, `ledger_migration_required`, `ledger_write_failed`, `ledger_insert_incomplete`, `ledger_io`, `ledger_sqlite_failed`, `critical_event_not_durable`, `deferred_append_unconfirmed`, `writer_unavailable`, `writer_panicked`, `corrupt_ledger_record`, `corrupt_segment`, `ledger_record_mismatch`, `ledger_meta_mismatch`, `duplicate_event_id`, `state_database_corrupt` (#422 LN-9: what a full verification and the ledger's scrub find), `ledger_index_mismatch`, `ledger_tag_index_mismatch`, `sequence_discontinuity`, `sequence_exhausted`, `ledger_format_unsupported`, `ledger_format_marker_mismatch`, `ledger_dump_failed`, `ledger_dump_unsupported` |
+| configuration: actingd configuration, effective configuration, catalog, approvals | 36 | `invalid_runtime_host_config`, `invalid_runtime_config_manifest`, `agent_dispatcher_config_missing`, `policy_inputs_unconfigured`, `procedure_manifest_unconfigured`, `performance_config_invalid`, `performance_control_config_invalid`, `config_read_failed`, `config_decode_failed`, `effective_configuration_too_large`, `agent_dispatcher_config_invalid`, `invalid_capacity_thresholds`, `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`, `host_config_value_type_invalid`, `catalog_compile_failed`, `catalog_manifest_invalid`, `catalog_pointer_invalid`, `catalog_generation_invalid`, `catalog_plan_generation_mismatch`, `catalog_migration_source_missing`, `catalog_state_create_failed`, `policy_catalog_mismatch`, `policy_catalog_approval_conflict`, `policy_catalog_unavailable`, `policy_catalog_compile_failed`, `policy_catalog_approval_invalid`, `approval_replay_conflict`, `approval_replay_payload_mismatch`, `approval_projection_query_failed`, `approval_projection_position_invalid`, `approval_projection_capacity_exceeded`, `approval_projection_order_invalid`, `approval_projection_origin_invalid`, `approval_projection_payload_mismatch`, `approval_projection_record_invalid` |
+| the owner lock and the owner journal I/O | 15 | `owner_lock_failed`, `owner_file_open_failed`, `owner_file_missing`, `owner_write_failed`, `owner_sync_failed`, `owner_record_encode_failed`, `owner_revision_overflow`, `owner_epoch_issue_failed`, `owner_compaction_cleanup_failed`, `owner_compaction_rewrite_failed`, `owner_compaction_side_read_failed`, `owner_compaction_stage_failed`, `owner_unlock_failed`, `owner_seek_failed`, `owner_compaction_unrecoverable` |
+| identifier issuance | 14 | `runtime_identifier_issue_failed`, `event_issuer_failed`, `event_id_issue_failed`, `action_id_issue_failed`, `policy_identifier_issue_failed`, `monitor_probe_id_issue_failed`, `run_id_issue_failed`, `task_id_issue_failed`, `agent_wake_issue_failed`, `readonly_capability_issue_failed`, `lab_projection_id_issue_failed`, `lab_frame_id_issue_failed`, `lab_recognition_id_issue_failed`, `observation_recognition_id_issue_failed` |
+| an invalid or regressed clock | 9 | `system_clock_invalid`, `system_clock_overflow`, `monotonic_clock_regressed`, `monotonic_clock_overflow`, `policy_admission_clock_regressed`, `policy_admission_clock_overflow`, `policy_dispatch_clock_regressed`, `policy_execution_clock_regressed`, `clock_before_epoch` |
+| a poisoned lock every instance shares; the kernel session registry | 7 | `runtime_state_poisoned`, `fatal_state_poisoned`, `capacity_projection_poisoned`, `deferred_replies_poisoned`, `execution_kernel_state_poisoned`, `execution_kernel_closed`, `execution_session_generation_exhausted` |
+| the process: IPC listener, OS threads, state root, runtime information file | 21 | `runtime_bind_failed`, `runtime_listener_address_failed`, `runtime_listener_config_failed`, `runtime_socket_mode_failed`, `runtime_accept_failed`, `runtime_accept_spawn_failed`, `runtime_connection_spawn_failed`, `runtime_sweeper_spawn_failed`, `runtime_monitor_spawn_failed`, `runtime_performance_spawn_failed`, `runtime_pack_admission_spawn_failed`, `instance_worker_spawn_failed`, `execution_session_spawn_failed`, `runtime_thread_panicked`, `state_root_create_failed`, `state_root_inspect_failed`, `runtime_info_invalid`, `runtime_info_create_failed`, `runtime_info_write_failed`, `runtime_info_publish_failed`, `runtime_info_replace_failed` |
+| the scheduler's cross-instance invariants | 6 | `invalid_scheduler_config`, `invalid_connection_id`, `identifier_issuance_failed`, `lease_expiry_overflow`, `lease_queue_sequence_overflow`, `lease_step_sequence_overflow` |
+| the shared policy projection out of step with the ledger | 2 | `policy_admission_event_invalid`, `policy_state_ledger_incomplete` |
+| the installer's transitions | 4 | `runtime_component_not_prepared`, `runtime_component_already_prepared`, `install_abort_state_invalid`, `install_release_state_invalid` |
 
 ## Open items
 

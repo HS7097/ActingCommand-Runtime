@@ -7,14 +7,21 @@
 //! package id, its path and its role only (option 丙: no package digest). `ac_packs`
 //! (`mcp/packs.rs`) answers the same document through [`read`]. Workflow #378 A5: the CLI line
 //! also carries `outcome` (`package_bindings_reported`, or the refusal alone), each warning is
-//! `{outcome}`, and a refusal is its outcome.
+//! `{outcome}`, and a refusal is its outcome. Workflow #357 DB-1 (register §1.65 TB4): when the
+//! configuration sets `standard_packs.root`, the answer also lists the tables of each sound game
+//! root, as check-config does (`standard_packs.games[].tables`).
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::instance_selector::SelectorMiss;
-use actingcommand_contract::InstalledProcess;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use actingcommand_contract::{
+    InstalledProcess, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRootBytes, StandardPackTableReport,
+    read_standard_pack_root, read_standard_pack_tables,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::ffi::{OsStr, OsString};
@@ -23,6 +30,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const COMMAND: &str = "packs";
 const USAGE: &str = "usage: actingctl packs [--root <install root>] [--instance <alias|instance_id|adb port>] [--role procedure|startup|resource_package]";
@@ -74,6 +82,10 @@ pub(crate) struct Packs {
     source: Source,
     instances: Vec<InstanceRow>,
     installation: Vec<InstallationRow>,
+    /// Workflow #357 DB-1 (register §1.65 TB4): present when the configuration sets
+    /// `standard_packs.root`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    standard_packs: Option<StandardPacksRow>,
 }
 
 #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
@@ -110,6 +122,21 @@ struct PackRow {
     package_id: Option<String>,
     path: String,
     readable: bool,
+}
+
+/// Workflow #357 DB-1 (register §1.65 TB4): the configured standard-pack root and, per sound
+/// game root, its tables as check-config lists them. Per game, not per instance: neither
+/// `instance` nor `role` narrows it.
+#[derive(Serialize)]
+struct StandardPacksRow {
+    root: String,
+    games: Vec<StandardPackGameRow>,
+}
+
+#[derive(Serialize)]
+struct StandardPackGameRow {
+    game: String,
+    tables: Vec<StandardPackTableReport>,
 }
 
 /// A binding of the installation. `readable` is present exactly when `path` is.
@@ -197,6 +224,14 @@ struct ConfigFile {
     instances: Vec<InstanceEntry>,
     #[serde(default)]
     policy: Option<PolicySection>,
+    /// Workflow #357 DB-1: the standard-pack root (Workflow #373 NAV-6).
+    #[serde(default)]
+    standard_packs: Option<StandardPacksSection>,
+}
+
+#[derive(Deserialize)]
+struct StandardPacksSection {
+    root: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -250,6 +285,26 @@ pub(crate) fn read(
     config: &Path,
     query: &Query<'_>,
 ) -> Result<Answer, PacksError> {
+    read_answer(installation, config, query, false)
+}
+
+/// Workflow #357 DB-1 (register §1.65 TB4): [`read`] for `actingctl packs` and `ac_packs`, which
+/// also list the tables of the configured standard-pack root (`standard_packs`). Only these two
+/// read the tables: other readers of the bindings (the overview) do not.
+pub(crate) fn read_with_tables(
+    installation: Option<&InstalledProcess>,
+    config: &Path,
+    query: &Query<'_>,
+) -> Result<Answer, PacksError> {
+    read_answer(installation, config, query, true)
+}
+
+fn read_answer(
+    installation: Option<&InstalledProcess>,
+    config: &Path,
+    query: &Query<'_>,
+    tables: bool,
+) -> Result<Answer, PacksError> {
     let unreadable = |path: &Path, cause: Outcome| {
         PacksError(
             Outcome::new(SharedCode::ConfigReadFailed)
@@ -291,6 +346,10 @@ pub(crate) fn read(
         .map(|instance| rows.instance(instance))
         .collect();
     let installation = rows.installation(&file);
+    let standard_packs = match &file.standard_packs {
+        Some(section) if tables => Some(rows.standard_packs(&section.root, system_unix_ms()?)),
+        _ => None,
+    };
     Ok(Answer {
         packs: Packs {
             source: Source {
@@ -299,9 +358,19 @@ pub(crate) fn read(
             },
             instances,
             installation,
+            standard_packs,
         },
         warnings: rows.warnings,
     })
+}
+
+/// The system clock in Unix milliseconds; a clock before 1970 is `system_clock_invalid`.
+fn system_unix_ms() -> Result<u64, PacksError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        .ok_or_else(|| PacksError(Outcome::new(SharedCode::SystemClockInvalid)))
 }
 
 /// The configured instance a selector names by alias, instance_id or ADB port; else
@@ -452,6 +521,96 @@ impl Rows {
         }
         rows
     }
+
+    /// Workflow #357 DB-1 (register §1.65 TB3, TB4): the tables of every sound game root below
+    /// the configured standard-pack root, read as the Runtime's startup and check-config read
+    /// them, their column expiries judged at `now_unix_ms`. A broken game root's tables are not
+    /// read and the root is not listed (check-config and the Runtime's start report it); a root
+    /// that cannot be listed is the warning `package_binding_unreadable`, and a `tables/` that
+    /// cannot be listed is the warning `standard_pack_table_unreadable`.
+    fn standard_packs(&mut self, configured: &Path, now_unix_ms: u64) -> StandardPacksRow {
+        let root = self.resolve(configured);
+        let mut games = Vec::new();
+        match game_directories(&root) {
+            Some(directories) => {
+                for (game, directory) in directories {
+                    if !sound_game_root(&directory, &game) {
+                        continue;
+                    }
+                    let tables = match read_standard_pack_tables(&directory, &game) {
+                        Ok(files) => files
+                            .iter()
+                            .map(|file| StandardPackTableReport::of(file, now_unix_ms))
+                            .collect(),
+                        Err(problem) => {
+                            self.warn(problem);
+                            Vec::new()
+                        }
+                    };
+                    games.push(StandardPackGameRow { game, tables });
+                }
+            }
+            None => self.unreadable(&root, None),
+        }
+        StandardPacksRow {
+            root: root.display().to_string(),
+            games,
+        }
+    }
+}
+
+/// The game directories below a standard-pack root, by name; `None` when the root cannot be
+/// listed.
+fn game_directories(root: &Path) -> Option<Vec<(String, PathBuf)>> {
+    let mut games = Vec::new();
+    for entry in fs::read_dir(root).ok()? {
+        let entry = entry.ok()?;
+        let kind = entry.file_type().ok()?;
+        let name = entry.file_name();
+        if kind.is_dir()
+            && let Some(name) = name.to_str()
+        {
+            games.push((name.to_owned(), entry.path()));
+        }
+    }
+    games.sort();
+    Some(games)
+}
+
+/// Whether `directory` is a sound game root of `game` as the Runtime reads it (the contract's
+/// [`read_standard_pack_root`] over its root files, and `tables/` making it one): a root that
+/// is broken or whose root files cannot be read is not.
+fn sound_game_root(directory: &Path, game: &str) -> bool {
+    let read = |file: &str| match fs::read(directory.join(file)) {
+        Ok(bytes) => Some(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(None),
+        Err(_) => None,
+    };
+    // Workflow #392 DA-4: `display-layout.json` is checked as the Runtime checks it.
+    let (Some(bundle), Some(pages), Some(interrupts), Some(navigation), Some(display_layout)) = (
+        read(STANDARD_PACK_BUNDLE_FILE),
+        read(STANDARD_PACK_PAGES_FILE),
+        read(STANDARD_PACK_INTERRUPTS_FILE),
+        read(STANDARD_PACK_NAVIGATION_FILE),
+        read(STANDARD_PACK_DISPLAY_LAYOUT_FILE),
+    ) else {
+        return false;
+    };
+    let tables = fs::symlink_metadata(directory.join(STANDARD_PACK_TABLES_DIRECTORY)).is_ok();
+    matches!(
+        read_standard_pack_root(
+            StandardPackRootBytes {
+                bundle: bundle.as_deref(),
+                pages: pages.as_deref(),
+                interrupts: interrupts.as_deref(),
+                navigation: navigation.as_deref(),
+                tables,
+                display_layout: display_layout.as_deref(),
+            },
+            game,
+        ),
+        Ok(Some(_))
+    )
 }
 
 enum PathKind {
@@ -569,7 +728,7 @@ fn parse(arguments: &[OsString]) -> Result<Flags, PacksError> {
 fn run(arguments: &[OsString]) -> Result<Map<String, Value>, PacksError> {
     let flags = parse(arguments)?;
     let (installation, config) = selected_config(flags.root.as_deref())?;
-    let answer = read(
+    let answer = read_with_tables(
         installation.as_ref(),
         &config,
         &Query {

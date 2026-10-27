@@ -64,6 +64,15 @@ for its next occurrence (`../README.md`, "Clock Sources"). `missed` under a
 `type_mismatch`, and a V1 document that names it is refused as an unknown
 member. A clock without `missed` serializes, and hashes, exactly as before.
 
+ROUT-L RL-1a ([../../standard-pack-schedule.md](../../standard-pack-schedule.md)): a V2 catalog
+may carry an empty `approval_refs` and an empty task list (the standard-pack composition, which
+has no approval, and a composition without rules); V1 keeps its rules. A V2 task, pool, activity
+profile or timeline event id, and a reference to one, may also be the id `<identifier>@<alias>` of
+an instance copy the composer makes (schema `itemId`: an identifier, `@`, and an instance alias
+without whitespace or a control character, at most 128 bytes in all). One continued id may be
+claimed by several tasks when each is scoped to a different instance (the copies of one rule);
+any other second claim stays a split.
+
 A task may carry `continues_from` (Workflow #372 K5), V2 only: 1 to 8 task
 ids of an earlier catalog that this task continues, each by the rule of a task
 id. Under the active catalog the task accounts as itself and these ids
@@ -108,3 +117,34 @@ has come, false with its reason before that or when the fact gives no time
 the member. A V1 document that names the kind is refused as an unknown field at
 the predicate's `kind`. A catalog without it serializes, and hashes, exactly as
 before.
+
+Two edge members (SCH-M CF-1), V2 only, each an optional boolean
+(`../README.md`, "Condition edges"):
+- `dependency_completed` may carry `since_own_run`. With `true` the predicate
+  is an edge: true once per new accepted terminal of the predecessor, until
+  this task has run successfully since the predecessor's latest dispatch
+  (`dependency_already_served` while it has). With `false`, or without the
+  member, it reads the predecessor's latest terminal state as before.
+- `fact_time_reached` may carry `once_per_reading`. With `true` a reached time
+  is served once: after this task's latest run succeeded and was dispatched at
+  or after `T + N` and the reading's observation, the predicate is false
+  (`fact_time_served`) until a newer reading. With `false`, or without the
+  member, it is true from `T + N` on as before.
+
+A V1 document that writes `since_own_run`, with either value, is refused as an
+unknown field at the member; `fact_time_reached` is V2 only as a whole. A
+catalog without either member serializes, and hashes, exactly as before.
+
+A `fact` predicate's `value` may be a fact reference (#386 CF-4), V2 only:
+`{"type": "fact", "fact_key": B, "offset": N}` (`../README.md`, "Fact
+references"; schema `factReference`). The predicate then compares the integer
+its fact holds with the integer the fact B of its own scope holds plus N; both
+facts obey its `max_age_ms`, and a B that gives no integer makes it false with
+`fact_reference_unavailable`. All three members are required. N is a signed
+integer within the canonical integers, otherwise `limit_exceeded` at
+`value/offset`; B follows `fact_key`'s rules (`type_mismatch` at
+`value/fact_key`); `contains` is `predicate_uncomputable` at `comparison`; a
+reference that names a `scope` is refused as an unknown field at `value/scope`
+(it always reads the predicate's scope). A V1 document that writes one is
+refused as an unknown field at `value/type`. A catalog whose `fact` predicates
+hold typed values serializes, and hashes, exactly as before.

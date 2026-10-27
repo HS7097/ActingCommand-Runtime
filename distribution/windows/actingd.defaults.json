@@ -114,7 +114,8 @@
     }
   },
   "host_claims": {
-    "renewal_slack_ms": 1000
+    "renewal_slack_ms": 1000,
+    "run_end_grace_ms": 120000
   },
   "performance": {
     "monitor": {
@@ -313,7 +314,8 @@
       "host": [],
       "quiet_margin_ms": 60000,
       "hard_quiet_ms": 0,
-      "stop_in_flight_at_start": true
+      "stop_in_flight_at_start": true,
+      "quiet_horizon": "deadline"
     },
     "feature_lock": {
       "locked_valid_for_ms": 86400000,
@@ -333,7 +335,8 @@
       "daily_limit": 96,
       "failure_backoff_ms": 600000,
       "max_consecutive_failures": 3,
-      "recognition_join_timeout_ms": 10000
+      "recognition_join_timeout_ms": 10000,
+      "expected_duration_ms": 60000
     },
     "suspension": {
       "lift_check_min_interval_ms": 60000
@@ -347,6 +350,14 @@
       "enabled": true,
       "max_per_round": 2,
       "choices": []
+    },
+    "day_boundary": {
+      "quiet": true
+    },
+    "expected_runtime": {
+      "enabled": true,
+      "runs": 5,
+      "margin_ms": 300000
     }
   },
   "ledger_observer": {
@@ -375,6 +386,16 @@
     "close_timeout_ms": 60000,
     "open_timeout_ms": 600000,
     "open_warn_ratio_milli": 500,
+    "history_page_rows": 256,
+    "writer_reply_timeout_ms": 10000,
+    "open_verify_tail_records": 4096,
+    "scrub_rows_per_second": 625,
+    "scrub_chunk_rows": 256,
+    "scrub_pass_interval_ms": 2400000,
+    "read_check_vm_steps": 10000,
+    "history_scan_rows": 65536,
+    "frame_query_steps_per_second": 500000,
+    "frame_query_chunk_frames": 256,
     "tag": {
       "workbench_patterns": [
         "task.*.last_duration_ms",
@@ -386,7 +407,8 @@
         "host.install_transition.pauses",
         "host.perf_baseline.*",
         "host.perf_calibration.*",
-        "host.config_overrides"
+        "host.config_overrides",
+        "host.contained_settlement"
       ],
       "reobserve_prefixes": [
         "device.",
@@ -402,6 +424,7 @@
       ]
     }
   },
+  "frame_retention_evidence_max_age_days": 15,
   "lab_module_authoring": false,
   "lab_module_debugging": false,
   "device_link": {
@@ -442,7 +465,36 @@
     }
   },
   "emulator_control": {
-    "restart_exit_wait_ms": 60000
+    "restart_exit_wait_ms": 60000,
+    "watch_enabled": true,
+    "watch_interval_ms": 60000,
+    "restart_attempts": 3,
+    "restart_window_ms": 1800000
+  },
+  "standard_packs": {
+    "check_interval_ms": 60000,
+    "cached_generations": 1
+  },
+  "watchdog": {
+    "start_window_ms": 900000
+  },
+  "execution": {
+    "capture": {
+      "max_interval_ms": 60000,
+      "backoff_enabled": true,
+      "idle_ceiling_ms": 5000
+    }
+  },
+  "idle": {
+    "action": "close_app",
+    "min_gap_ms": 1800000,
+    "close_app_wake_lead_ms": 60000,
+    "stop_emulator_wake_lead_ms": 300000
+  },
+  "display_safe_area": {
+    "directory": "display-safe-area",
+    "check_interval_ms": 1000,
+    "model": ""
   },
   "install": {
     "lock_wait_ms": 60000,

@@ -7,7 +7,19 @@
 //! batches and request ring with AO-2; the tag lists with AO-2 and AO-5; the probes' periods,
 //! sample size, lag threshold and gap window with AO-8. P0-LO (`actingd-config` revision 10) adds
 //! the deadline of the start's ledger open and the share of it above which the open writes the
-//! warning `ledger_open_slow`; both are read when the ledger opens.
+//! warning `ledger_open_slow`; both are read when the ledger opens. LN-5 (#422, LEAN-L,
+//! `actingd-config` revision 12, v0.12.13) adds the rows of one page of a history read, read when
+//! the ledger opens. LN-TUNE (#422, `actingd-config` revision 12) adds how long a caller waits for
+//! one reply of the ledger writer, read when the ledger opens. LN-8 (#422, `actingd-config`
+//! revision 13) adds how many of the newest records the start's ledger open authenticates, read
+//! when the ledger opens. LN-9 (#422, `actingd-config` revision 13) adds the pace and the limits
+//! of the ledger's background scrub: its rows per second (settable, read after each chunk), the
+//! rows of one chunk and the least time between two passes (both read when the ledger opens).
+//! LN-WS (#422, `actingd-config` revision 14) adds how often a read that serves a Runtime request
+//! looks at its budget inside a SQLite statement and how many sequences one history statement of
+//! a view page spans (both read when the ledger opens). LN-7c Q (#422, `actingd-config` revision
+//! 16) adds the pace and the chunk of the frame cleaner's ledger queries: their SQLite steps per
+//! second (settable, read after each chunk) and the live frames of one statement (read at start).
 //!
 //! The section is read whole and checked whole (M387 §5.3): the tiers rise strictly within
 //! `(0, 1]`, the hysteresis lies within `(0, 1)` so each release line is below its activation
@@ -78,17 +90,89 @@ pub const OPEN_TIMEOUT_MS: &str = "ledger_observer.open_timeout_ms";
 /// P0-LO: the share of `open_timeout_ms`, in thousandths, above which the open's measured time
 /// writes the warning `ledger_open_slow`.
 pub const OPEN_WARN_RATIO_MILLI: &str = "ledger_observer.open_warn_ratio_milli";
+/// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; the ledger reads its
+/// history from the store a page at a time.
+pub const HISTORY_PAGE_ROWS: &str = "ledger_observer.history_page_rows";
+/// #422 LN-TUNE: how long a caller waits for one reply of the ledger writer, in milliseconds
+/// (10 000 by default; until LN-TUNE the ledger's constant). A read's budget stays below it, so
+/// a read stops before its caller stops waiting for it.
+pub const WRITER_REPLY_TIMEOUT_MS: &str = "ledger_observer.writer_reply_timeout_ms";
+/// LN-8 (#422, LEAN-L §3.2 step 2, §3.7): how many of the newest records the start's ledger open
+/// reads and authenticates; older records are authenticated when they are read, and by
+/// `ledger-maintenance verify`.
+pub const OPEN_VERIFY_TAIL_RECORDS: &str = "ledger_observer.open_verify_tail_records";
+/// #422 LN-9 (LEAN-L §3.7, §6; Alice's ruling 57): the rows per second the ledger's background
+/// scrub reads and authenticates (625 by default: about 40 minutes a pass at 1.5 million records).
+/// Settable: the scrub reads the rate in effect before each chunk.
+pub const SCRUB_ROWS_PER_SECOND: &str = "ledger_observer.scrub_rows_per_second";
+/// #422 LN-9: the rows of one scrub chunk, each chunk in a read transaction of its own.
+pub const SCRUB_CHUNK_ROWS: &str = "ledger_observer.scrub_chunk_rows";
+/// #422 LN-9: the least time from the start of one scrub pass to the start of the next, in
+/// milliseconds; the first pass starts when the ledger opens.
+pub const SCRUB_PASS_INTERVAL_MS: &str = "ledger_observer.scrub_pass_interval_ms";
+/// #422 LN-WS (R1; the stop of 2026-10-26 19:12:43): the SQLite virtual-machine steps between
+/// two looks at the clock of a read that serves a Runtime request (a view page, a subscription's
+/// replay); its budget then holds inside a statement too.
+pub const READ_CHECK_VM_STEPS: &str = "ledger_observer.read_check_vm_steps";
+/// #422 LN-WS (R2): the sequences one history statement of a view page spans at most, so a page
+/// that its budget stops has always gone on.
+pub const HISTORY_SCAN_ROWS: &str = "ledger_observer.history_scan_rows";
+/// #422 LN-7c Q (final-query §1.5): the SQLite virtual-machine steps per second of the frame
+/// cleaner's ledger queries (500 000 by default, about 5% of one core while a pass runs). A chunk
+/// starts no earlier than the one before plus its steps at this rate. Settable: the cleaner reads
+/// the rate after each chunk.
+pub const FRAME_QUERY_STEPS_PER_SECOND: &str = "ledger_observer.frame_query_steps_per_second";
+/// #422 LN-7c Q (final-query §1.2): the live frames of one statement L of the frame cleaner, read
+/// when the Runtime starts.
+pub const FRAME_QUERY_CHUNK_FRAMES: &str = "ledger_observer.frame_query_chunk_frames";
 
-/// #411 A51: how long a caller waits for one reply of the ledger writer (the ledger's
-/// `GlobalLedger::REPLY_TIMEOUT`, 10 s). A read's budget stays below it, so a read stops before
-/// its caller stops waiting for it.
-pub const WRITER_REPLY_TIMEOUT_MS: i64 = 10_000;
-
-/// #411 A51: `read_budget_ms` lies below the writer's reply limit.
-const READ_BUDGET_RANGE: KeyRange = KeyRange::Integer {
-    min: 1,
-    max: WRITER_REPLY_TIMEOUT_MS - 1,
+/// #422 LN-7c Q: the frame queries' pace lies within 1 000 and 100 000 000 steps a second.
+const FRAME_QUERY_STEPS_PER_SECOND_RANGE: KeyRange = KeyRange::Integer {
+    min: 1_000,
+    max: 100_000_000,
 };
+
+/// #422 LN-7c Q: a statement L asks about one frame at least and 4 096 at most.
+const FRAME_QUERY_CHUNK_FRAMES_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 4_096 };
+
+/// #422 LN-WS: a read looks at its clock every 100 steps at the most often, every million at the
+/// least.
+const READ_CHECK_VM_STEPS_RANGE: KeyRange = KeyRange::Integer {
+    min: 100,
+    max: 1_000_000,
+};
+
+/// #422 LN-WS: a history statement spans 1 024 sequences at least and 1 048 576 at most.
+const HISTORY_SCAN_ROWS_RANGE: KeyRange = KeyRange::Integer {
+    min: 1_024,
+    max: 1_048_576,
+};
+
+/// #422 LN-9 (LEAN-L §3.7): the scrub's rate lies within 1 and 100 000 rows a second.
+const SCRUB_ROWS_PER_SECOND_RANGE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: 100_000,
+};
+
+/// #422 LN-9: a scrub chunk holds one row at least and 4 096 at most, as a history page does.
+const SCRUB_CHUNK_ROWS_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 4_096 };
+
+/// #422 LN-9: a pass starts at most once a minute and at least once a day.
+const SCRUB_PASS_INTERVAL_RANGE: KeyRange = KeyRange::Integer {
+    min: 60_000,
+    max: 86_400_000,
+};
+
+/// #422 LN-TUNE: the writer's reply limit lies within 1 s and the 600 s the maintenance limits
+/// accept.
+const WRITER_REPLY_TIMEOUT_RANGE: KeyRange = KeyRange::Integer {
+    min: 1_000,
+    max: 600_000,
+};
+
+/// #411 A51: `read_budget_ms` lies below the writer's default reply limit; the section check
+/// keeps it below the reply limit in effect too (`writer_reply_timeout_ms`, #422 LN-TUNE).
+const READ_BUDGET_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 9_999 };
 
 /// P0-LO: the open's deadline lies within 10 s and the 600 s the maintenance limits accept.
 const OPEN_TIMEOUT_RANGE: KeyRange = KeyRange::Integer {
@@ -100,6 +184,15 @@ const OPEN_TIMEOUT_RANGE: KeyRange = KeyRange::Integer {
 const OPEN_WARN_RATIO_RANGE: KeyRange = KeyRange::Integer {
     min: 100,
     max: 1_000,
+};
+
+/// LN-5: a history page holds one row at least and 4096 at most.
+const HISTORY_PAGE_ROWS_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 4_096 };
+
+/// LN-8 (LEAN-L §3.7): the open authenticates one record at least and a million at most.
+const OPEN_VERIFY_TAIL_RECORDS_RANGE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: 1_000_000,
 };
 
 /// The largest attempt count a configuration may name: the write path counts in `u32`.
@@ -158,6 +251,43 @@ pub struct LedgerObserverFile {
     open_timeout_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     open_warn_ratio_milli: Option<Value>,
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
+    // before LN-5 refuses a file that names it, because the section denies unknown members; a
+    // file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_page_rows: Option<Value>,
+    // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
+    // before LN-TUNE refuses a file that names it, because the section denies unknown members; a
+    // file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writer_reply_timeout_ms: Option<Value>,
+    // Interface anchor `actingd-config` revision 13 (contracts/component-interfaces.md): a Runtime
+    // before LN-8 refuses a file that names it, because the section denies unknown members; a
+    // file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_verify_tail_records: Option<Value>,
+    // LN-9 joins revision 13: a Runtime before LN-9 refuses a file that names one, because the
+    // section denies unknown members; a file that names none keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scrub_rows_per_second: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scrub_chunk_rows: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scrub_pass_interval_ms: Option<Value>,
+    // Interface anchor `actingd-config` revision 14 (contracts/component-interfaces.md): a Runtime
+    // before LN-WS refuses a file that names one, because the section denies unknown members; a
+    // file that names none keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read_check_vm_steps: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_scan_rows: Option<Value>,
+    // Interface anchor `actingd-config` revision 16 (contracts/component-interfaces.md): a Runtime
+    // before LN-7c Q refuses a file that names one, because the section denies unknown members; a
+    // file that names none keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_query_steps_per_second: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_query_chunk_frames: Option<Value>,
 }
 
 /// The `buffer` member: the capture queue's tiers.
@@ -375,6 +505,106 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "P0-LO",
         since: "0.12.11",
     },
+    // LN-5: read when the ledger opens, as the writer's other limits are.
+    KeyRow {
+        name: KeyName::Exact(HISTORY_PAGE_ROWS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: HISTORY_PAGE_ROWS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-5",
+        since: "0.12.13",
+    },
+    // #422 LN-TUNE: read when the ledger opens, as the writer's other limits are.
+    row_since(
+        WRITER_REPLY_TIMEOUT_MS,
+        WRITER_REPLY_TIMEOUT_RANGE,
+        "LN-TUNE",
+        "0.12.13",
+    ),
+    // #422 LN-8: read when the ledger opens; it bounds that open.
+    KeyRow {
+        name: KeyName::Exact(OPEN_VERIFY_TAIL_RECORDS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: OPEN_VERIFY_TAIL_RECORDS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-8",
+        since: "0.12.14",
+    },
+    // #422 LN-9: the rate is read before each chunk (settable); the chunk's rows and the pass
+    // interval when the ledger opens, as the writer's other limits are.
+    KeyRow {
+        name: KeyName::Exact(SCRUB_ROWS_PER_SECOND),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: SCRUB_ROWS_PER_SECOND_RANGE,
+        default: DefaultSource::File,
+        settable: WHEN_USED,
+        reader: "LN-9",
+        since: "0.12.14",
+    },
+    KeyRow {
+        name: KeyName::Exact(SCRUB_CHUNK_ROWS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: SCRUB_CHUNK_ROWS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-9",
+        since: "0.12.14",
+    },
+    row_since(
+        SCRUB_PASS_INTERVAL_MS,
+        SCRUB_PASS_INTERVAL_RANGE,
+        "LN-9",
+        "0.12.14",
+    ),
+    // #422 LN-WS: read when the ledger opens, as the writer's other limits are.
+    KeyRow {
+        name: KeyName::Exact(READ_CHECK_VM_STEPS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: READ_CHECK_VM_STEPS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-WS",
+        since: "0.12.15",
+    },
+    KeyRow {
+        name: KeyName::Exact(HISTORY_SCAN_ROWS),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: HISTORY_SCAN_ROWS_RANGE,
+        default: DefaultSource::File,
+        settable: AT_OPEN,
+        reader: "LN-WS",
+        since: "0.12.15",
+    },
+    // #422 LN-7c Q: the frame cleaner reads its pace after each chunk (settable) and its chunk
+    // when the Runtime starts.
+    KeyRow {
+        name: KeyName::Exact(FRAME_QUERY_STEPS_PER_SECOND),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: FRAME_QUERY_STEPS_PER_SECOND_RANGE,
+        default: DefaultSource::File,
+        settable: WHEN_USED,
+        reader: "LN-7c Q",
+        since: "0.12.17",
+    },
+    KeyRow {
+        name: KeyName::Exact(FRAME_QUERY_CHUNK_FRAMES),
+        file_path: FilePath::Key,
+        value_type: ValueType::Integer,
+        range: FRAME_QUERY_CHUNK_FRAMES_RANGE,
+        default: DefaultSource::File,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "LN-7c Q",
+        since: "0.12.17",
+    },
 ];
 
 /// A milliseconds key read when the ledger opens, with the release that added its row.
@@ -434,6 +664,27 @@ pub struct LedgerObserverConfig {
     /// P0-LO: an open whose measured time exceeds `open_timeout_ms` × this / 1000 writes
     /// `ledger_open_slow`.
     pub open_warn_ratio_milli: u64,
+    /// LN-5 (#422): the rows of one page of a history read.
+    pub history_page_rows: u64,
+    /// #422 LN-TUNE: how long a caller waits for one reply of the ledger writer.
+    pub writer_reply_timeout_ms: u64,
+    /// #422 LN-8: how many of the newest records the start's ledger open authenticates.
+    pub open_verify_tail_records: u64,
+    /// #422 LN-9: the rows per second of the ledger's background scrub.
+    pub scrub_rows_per_second: u64,
+    /// #422 LN-9: the rows of one scrub chunk.
+    pub scrub_chunk_rows: u64,
+    /// #422 LN-9: the least time from the start of one scrub pass to the start of the next.
+    pub scrub_pass_interval_ms: u64,
+    /// #422 LN-WS: the SQLite virtual-machine steps between two looks at the clock of a read that
+    /// serves a Runtime request.
+    pub read_check_vm_steps: u64,
+    /// #422 LN-WS: the sequences one history statement of a view page spans at most.
+    pub history_scan_rows: u64,
+    /// #422 LN-7c Q: the SQLite steps per second of the frame cleaner's ledger queries.
+    pub frame_query_steps_per_second: u64,
+    /// #422 LN-7c Q: the live frames of one statement L of the frame cleaner.
+    pub frame_query_chunk_frames: u64,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -561,12 +812,11 @@ impl LedgerObserverConfig {
                 ConfigValueProblem::SectionCheck,
             ));
         }
-        // #411 A51: a read stops before its caller stops waiting for it, and the close waits
-        // longer than one read.
+        // #411 A51: a read stops before its caller stops waiting for it (#422 LN-TUNE: the
+        // reply limit in effect), and the close waits longer than one read.
+        let writer_reply_timeout_ms = reader.duration(WRITER_REPLY_TIMEOUT_MS)?;
         let read_budget_ms = reader.duration(READ_BUDGET_MS)?;
-        if read_budget_ms == 0
-            || i64::try_from(read_budget_ms).unwrap_or(i64::MAX) >= WRITER_REPLY_TIMEOUT_MS
-        {
+        if read_budget_ms == 0 || read_budget_ms >= writer_reply_timeout_ms {
             return Err(invalid(READ_BUDGET_MS, ConfigValueProblem::SectionCheck));
         }
         let close_timeout_ms = reader.duration(CLOSE_TIMEOUT_MS)?;
@@ -596,6 +846,16 @@ impl LedgerObserverConfig {
             close_timeout_ms,
             open_timeout_ms: reader.duration(OPEN_TIMEOUT_MS)?,
             open_warn_ratio_milli: reader.count(OPEN_WARN_RATIO_MILLI)?,
+            history_page_rows: reader.count(HISTORY_PAGE_ROWS)?,
+            writer_reply_timeout_ms,
+            open_verify_tail_records: reader.count(OPEN_VERIFY_TAIL_RECORDS)?,
+            scrub_rows_per_second: reader.count(SCRUB_ROWS_PER_SECOND)?,
+            scrub_chunk_rows: reader.count(SCRUB_CHUNK_ROWS)?,
+            scrub_pass_interval_ms: reader.duration(SCRUB_PASS_INTERVAL_MS)?,
+            read_check_vm_steps: reader.count(READ_CHECK_VM_STEPS)?,
+            history_scan_rows: reader.count(HISTORY_SCAN_ROWS)?,
+            frame_query_steps_per_second: reader.count(FRAME_QUERY_STEPS_PER_SECOND)?,
+            frame_query_chunk_frames: reader.count(FRAME_QUERY_CHUNK_FRAMES)?,
         })
     }
 }

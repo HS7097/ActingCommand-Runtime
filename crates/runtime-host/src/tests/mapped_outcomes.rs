@@ -773,6 +773,9 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
+    // Workflow #386 SR-4a2: the follow-up is evaluated at the run's wall-clock terminal on a
+    // window open all day, so both starts turn the instance's day boundary off
+    // (`day_boundary_off`).
     let host = RuntimeHost::start(
         config(&root)
             .with_policy_inputs(PolicyInputSnapshot::new(
@@ -782,7 +785,8 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
             .with_procedure_manifest(procedure_manifest_with_primary(
                 &package,
                 vec!["after_observation".to_owned()],
-            )),
+            ))
+            .with_config_manifest(day_boundary_off_manifest(&runtime_instance_id)),
         Arc::new(
             FakeProvider::one(
                 POLICY_INSTANCE_ALIAS,
@@ -920,7 +924,8 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
             .with_procedure_manifest(procedure_manifest_with_primary(
                 &package,
                 vec!["after_observation".to_owned()],
-            )),
+            ))
+            .with_config_manifest(day_boundary_off_manifest(&runtime_instance_id)),
         Arc::new(
             FakeProvider::one(
                 POLICY_INSTANCE_ALIAS,

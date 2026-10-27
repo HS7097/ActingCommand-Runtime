@@ -8,22 +8,30 @@
 //! Workflow #385 P-c adds `performance`; Workflow #386 SR-1 adds `scheduling`; Workflow #383
 //! AO-1 adds `ledger_observer`; Workflow #398 RD-2 adds `device_link`; Workflow #398 RD-5b adds
 //! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
-//! `touch`; #411 A50 adds `emulator_control`; Workflow #421 INST-1 adds `install`).
+//! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
+//! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
+//! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`; #422 LN-7c Q adds
+//! `frame_retention_evidence_max_age_days`; Workflow #421 INST-1 adds `install`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
+use crate::display_safe_area::DisplaySafeAreaFile;
 use crate::emulator_control::EmulatorControlFile;
+use crate::execution::ExecutionFile;
 use crate::host_claims::HostClaimsFile;
+use crate::idle::IdleFile;
 use crate::install::InstallFile;
 use crate::ledger_observer::LedgerObserverFile;
 use crate::performance::PerformanceFile;
 use crate::recovery_ladder::RecoveryLadderFile;
 use crate::resolve::member;
 use crate::scheduling::SchedulingFile;
+use crate::standard_packs::StandardPacksDefaultsFile;
 use crate::startup_discovery::StartupDiscoveryFile;
 use crate::table::find_row;
 use crate::touch::TouchFile;
 use crate::value::parse_value;
+use crate::watchdog::WatchdogFile;
 use actingcommand_contract::FactScalar;
 use serde::Deserialize;
 use serde_json::Value;
@@ -66,6 +74,24 @@ pub struct DefaultsFile {
     /// #411 A50.
     #[serde(default)]
     pub emulator_control: Option<EmulatorControlFile>,
+    /// #411 A66.
+    #[serde(default)]
+    pub watchdog: Option<WatchdogFile>,
+    /// PERF-B1 (Workflow #407 B1).
+    #[serde(default)]
+    pub execution: Option<ExecutionFile>,
+    /// IDLE-1.
+    #[serde(default)]
+    pub idle: Option<IdleFile>,
+    /// ROUT-L RL-1b: `check_interval_ms` and `cached_generations` (no root).
+    #[serde(default)]
+    pub standard_packs: Option<StandardPacksDefaultsFile>,
+    /// Workflow #392 DA-4b-D.
+    #[serde(default)]
+    pub display_safe_area: Option<DisplaySafeAreaFile>,
+    /// #422 LN-7c Q: the evidence-frame rule's age, 15 days.
+    #[serde(default)]
+    pub frame_retention_evidence_max_age_days: Option<Value>,
     /// Workflow #421 INST-1.
     #[serde(default)]
     pub install: Option<InstallFile>,

@@ -19,6 +19,11 @@ use std::collections::BTreeSet;
 /// The most day entries a decision-memory record holds (register L7).
 pub const MAX_POLICY_CONTROL_STATE_DAYS: usize = 32;
 
+/// Workflow #422 LN-4 (register §1.184 LN4-7): the most dispatches a decision-memory record names,
+/// twice a remedy journal's runs (Workflow #411 B15, at most 64), which leaves room for the open
+/// dispatches beside them.
+pub const MAX_POLICY_CONTROL_STATE_DISPATCHES: usize = 128;
+
 /// A revisioned source whose changes the ledger records (ledger observer §8.3; vocabulary
 /// `ledger_source`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -411,12 +416,17 @@ pub struct PolicyFailureStreakRecord {
 }
 
 /// The normal admission that opened a dispatch pair's retry round (register L7).
+/// Workflow #422 LN-4 (register §1.184 LN4-2): `opened` is the round's place in the order the
+/// rounds were opened (Workflow #372 K5), so a task reads the latest round of its accounting
+/// group after a restart from the records alone; absent in LN-3's records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRetryRoundRecord {
     pub admission: PolicyAdmissionRecord,
     pub until_unix_ms: u64,
     pub expected_duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened: Option<u64>,
 }
 
 /// A dispatch pair's dispatch clock (register L7): when its last dispatch was admitted.
@@ -424,6 +434,22 @@ pub struct PolicyRetryRoundRecord {
 #[serde(deny_unknown_fields)]
 pub struct PolicyDispatchClockRecord {
     pub admitted_at_unix_ms: u64,
+}
+
+/// Workflow #422 LN-4 (register §1.184 LN4-7): one dispatch the policy host's journal keeps for a
+/// dispatch pair, by the sequences of its records, so a start reads it by point reads: its intent,
+/// its admission (absent while it is an intent), its completion (absent while it is open) and,
+/// once completed, `failures`, the pair's consecutive failed runs through it (0 after a success).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyJournalDispatchRecord {
+    pub intent_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admitted_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failures: Option<u64>,
 }
 
 /// The rerun a dispatch pair is owed after condition terminations (register L7; Workflow #386
@@ -459,6 +485,19 @@ pub struct PolicyControlStateRecord {
     pub dispatch_clock: Option<PolicyDispatchClockRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition_reruns: Option<PolicyConditionReruns>,
+    /// Workflow #422 LN-4 (register §1.184 LN4-2): the place of the pair's latest settlement
+    /// that set or cleared its failure state (a success, or a failure no condition settled) in
+    /// the order of all such settlements (Workflow #372 K5), so a task reads the failure state of
+    /// its accounting group's latest such run after a restart from the records alone; absent
+    /// while the pair has none, and in LN-3's records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_settled: Option<u64>,
+    /// Workflow #422 LN-4 (register §1.184 LN4-7; coordinator ruling 10-26): the dispatches of
+    /// the pair the journal keeps resident, in intent order: the open ones, the latest completed
+    /// one with the pair's consecutive-failure count, and for a task of the remedy journal its
+    /// latest runs. Empty while the pair has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dispatches: Vec<PolicyJournalDispatchRecord>,
 }
 
 impl PolicyControlStateRecord {
@@ -494,9 +533,33 @@ impl PolicyControlStateRecord {
         }
         if let Some(round) = &self.retry_round {
             validate_policy_admission(&round.admission)?;
-            if round.until_unix_ms == 0 {
+            if round.until_unix_ms == 0 || round.opened == Some(0) {
                 return Err(invalid_policy_record("retry_round"));
             }
+        }
+        if self.failure_settled == Some(0) {
+            return Err(invalid_policy_record("failure_settled"));
+        }
+        if self.dispatches.len() > MAX_POLICY_CONTROL_STATE_DISPATCHES
+            || self
+                .dispatches
+                .windows(2)
+                .any(|pair| pair[0].intent_sequence >= pair[1].intent_sequence)
+            || self.dispatches.iter().any(|dispatch| {
+                dispatch.intent_sequence == 0
+                    || dispatch
+                        .admitted_sequence
+                        .is_some_and(|admitted| admitted <= dispatch.intent_sequence)
+                    || match (dispatch.admitted_sequence, dispatch.completed_sequence) {
+                        (_, None) => dispatch.failures.is_some(),
+                        (None, Some(_)) => true,
+                        (Some(admitted), Some(completed)) => {
+                            completed <= admitted || dispatch.failures.is_none()
+                        }
+                    }
+            })
+        {
+            return Err(invalid_policy_record("dispatches"));
         }
         if self
             .dispatch_clock
@@ -554,6 +617,20 @@ pub struct PolicyControlStatePayload {
 }
 
 impl PolicyControlStatePayload {
+    /// Workflow #422 LN-3: the value record of one dispatch pair's complete decision memory.
+    pub(super) fn new(
+        state: PolicyControlStateRecord,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::PolicyControlState,
+            state: Box::new(state),
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub fn state(&self) -> &PolicyControlStateRecord {
         &self.state
     }
@@ -576,6 +653,21 @@ pub struct PolicyActivityStatePayload {
 }
 
 impl PolicyActivityStatePayload {
+    /// Workflow #422 LN-3: the value record of one (instance, activity profile)'s complete
+    /// activity state.
+    pub(super) fn new(
+        state: PolicyActivityStateRecord,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::PolicyControlState,
+            state: Box::new(state),
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub fn state(&self) -> &PolicyActivityStateRecord {
         &self.state
     }
@@ -636,6 +728,20 @@ pub struct AgentWakeObligationPayload {
 }
 
 impl AgentWakeObligationPayload {
+    /// Workflow #422 LN-3: the value record of one wake obligation.
+    pub(super) fn new(
+        wake: AgentWakeData,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::AgentWake,
+            wake,
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub const fn wake(&self) -> &AgentWakeData {
         &self.wake
     }

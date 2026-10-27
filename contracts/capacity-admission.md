@@ -131,6 +131,31 @@ permit the resident payload to be replaced by its original artifact reference.
 Reads verify that reference and the retained original PNG length and hash.
 Already published frames release resident memory without another write.
 
+A frame store's memory budget is the sampled available and total memory less
+`os_reserve_bytes` (2 GiB), capped by `max_mem_bytes`. #411 A67 (0.12.12): a sample
+that leaves a budget below the floor after the reserve, zero or not, no longer fails
+the open (with `frame_store_usage` or on its watermarks); the store opens, and
+refreshes its budget, on `floor_mem_bytes` (default 256 MiB, never above
+`max_mem_bytes`), whose watermarks and flush workspace validate, and holds the
+warning `frame_store_budget_floor_applied` (`memory_total_bytes`,
+`memory_available_bytes`, `memory_reserve_bytes`, `memory_floor_bytes`) while its
+budget stands on the floor. A sample that leaves at least the floor is used as
+before.
+
+#411 A67-R (0.12.13): the Runtime records that warning when the budget of its
+capture frame stores enters the floor, at the start (the daemon-start preparation's
+open) or at a refresh (a later open, a frame's budget refresh or an admission's
+limit): its daemon lines in actingd's log (the developer line
+`WARN actingd: frame_store_budget_floor_applied` with the four values, then its
+`OUTCOME actingd:` envelope), then one Warning `runtime.failed` with system links
+whose outcome is the warning (detail `frame_store` /
+`frame_store` / `artifact_store` / `frame_store`). All capture frame stores share
+one floor watch (`BudgetFloorWatch`): a budget that stays on the floor records
+nothing more; one that leaves it and comes back is recorded again. The start
+records an entry before it goes on; later entries are recorded by the lease
+sweep's next tick. A failed record is fatal to the Runtime, as the sweep's other
+ledger records are.
+
 The original memory budget admits the live frame/copy, PNG workspace and material
 verification buffer before allocation or publication. Host copies run inside one
 synchronous pipeline operation: a fresh budget is sampled before the copy, and

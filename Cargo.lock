@@ -29,6 +29,7 @@ dependencies = [
  "actingcommand-pack-containment",
  "actingcommand-runtime-client",
  "actingcommand-runtime-config",
+ "actingcommand-runtime-database",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
  "serde",
@@ -137,11 +138,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-display-adapter"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+]
+
+[[package]]
 name = "actingcommand-execution-kernel"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-display-adapter",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",
  "actingcommand-recognition",
@@ -373,6 +382,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-display-adapter",
  "actingcommand-execution-kernel",
  "actingcommand-host-metrics",
  "actingcommand-ledger",

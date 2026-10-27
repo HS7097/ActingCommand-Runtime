@@ -175,6 +175,19 @@ impl RuntimeDaemonReporter for DaemonReporter {
     fn step_skipped(&self, outcome: &Outcome) {
         write_stderr(&developer_line(outcome, None));
     }
+
+    /// #411 A67-R: a warning the host records while it runs (`frame_store_budget_floor_applied`
+    /// with its four values) is its daemon lines, as the start's `ledger_open_slow` is.
+    fn warning_recorded(&self, outcome: &Outcome) {
+        write_stderr(&daemon_lines(outcome, None));
+    }
+
+    /// #422 LN-7c R: the ledger scrub's non-fatal finding about its derived frame index is one
+    /// developer line, written once: `ERROR actingd: ledger_index_mismatch operation=<operation>
+    /// <what and where>; phase=scrub; extent=untrusted`. Nothing is latched.
+    fn ledger_index_finding(&self, outcome: &Outcome, developer: &str) {
+        write_stderr(&developer_line(outcome, Some(developer)));
+    }
 }
 
 /// The developer-line level of a category (model section 7.4): `INFO` for a success or an info.
@@ -662,10 +675,13 @@ fn serve(host: RuntimeHost, policy: Option<PolicyBootstrap>) -> Result<(), Actin
     };
     // Workflow #369 S6c (model-369-queue H-5): the configured emulator starts are enqueued once,
     // after policy initialization and before `runtime_ready`; nothing waits for them here.
+    // emu-watch (Alice's ruling 35): then the emulator watch starts; its lines are report lines
+    // too.
     if let Err(error) = host
         .enqueue_emulator_autostart()
         .map_err(ActingdError::runtime)
         .and_then(|_| write_autostart_reports(&host.emulator_autostart_reports()))
+        .and_then(|()| host.start_emulator_watch().map_err(ActingdError::runtime))
     {
         let recorded =
             error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
@@ -710,6 +726,12 @@ fn initialize_policy(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
 ) -> Result<PolicyCycleExecution, ActingdError> {
+    // ROUT-L RL-1b (frozen model v1.0 §3.3, §3.5): in composer mode the first cycle's workbench
+    // check composes the standard packs' rules and activates them; nothing is planned, approved
+    // or transcribed.
+    let Some(catalog) = policy.catalog.as_ref() else {
+        return execute_policy_cycle(host, policy, PolicyTrigger::Recovery);
+    };
     // Workflow #361 C2: plan and check everything first; the catalog pointer moves only after
     // every check passed, so a refused configuration leaves no catalog event behind. The plan
     // reads the host's complete ledger-verified approval projection (Workflow #191 D2), builds
@@ -718,7 +740,7 @@ fn initialize_policy(
     // the planned catalog supersedes (Workflow #330 H2, #361 A).
     let plan = host
         .plan_policy_catalog_transition(
-            &policy.catalog,
+            catalog,
             policy.catalog_transition.as_ref(),
             &policy.catalog_approval_ids,
         )
@@ -853,9 +875,18 @@ fn execute_policy_cycle_with(
         let refresh_request = host
             .fact_refresh_request(intent)
             .map_err(ActingdError::runtime)?;
+        // ROUT-L RL-1b (model §3.4): a composed procedure runs its package as the game's registry
+        // places it when it is dispatched, on the instance's own backend.
+        let composed_request = if scheduled_task.is_none() && refresh_request.is_none() {
+            host.standard_pack_request(&intent.procedure_ref)
+                .map_err(ActingdError::runtime)?
+        } else {
+            None
+        };
         let scheduled_request = scheduled_task
             .map(|task| &task.request)
-            .or(refresh_request.as_ref());
+            .or(refresh_request.as_ref())
+            .or(composed_request.as_ref());
         let admission_context = PolicyAdmissionContext {
             fact_ledger_position: intent.input_ledger_position,
             fact_snapshot_id: intent.fact_snapshot_id.clone(),
@@ -2609,19 +2640,41 @@ mod tests {
         ])
         .expect("procedure manifest");
         let now = system_unix_ms().expect("system clock");
+        // Workflow #386 SR-4a2 (SCH-M §3.2 D-6): the Recovery cycle runs at the wall clock on
+        // the resident catalog's window open all day, so the instance's day boundary is off; with
+        // it on, the shipped default, its 60 s run evaluated in the day's last minute would wait
+        // for the next window.
+        let mut parameters = vec![actingcommand_contract::ConfigParameter {
+            key: actingcommand_runtime_config::instance_key(
+                serde_json::to_value(instance_id)
+                    .expect("instance id JSON")
+                    .as_str()
+                    .expect("instance id text"),
+                actingcommand_runtime_config::scheduling::DAY_BOUNDARY_QUIET,
+            ),
+            value: actingcommand_contract::FactScalar::Boolean(false),
+            source: actingcommand_contract::ConfigParameterSource::Explicit,
+            settable: false,
+        }];
+        actingcommand_runtime_config::annotate_settable(&mut parameters)
+            .expect("the day-boundary key is in the key table");
         let host = RuntimeHost::start(
             RuntimeHostConfig::new(root.path(), b"0123456789abcdef")
                 .with_policy_inputs(PolicyInputSnapshot::new(
                     resident_test_facts(),
                     resident_test_resources(now),
                 ))
-                .with_procedure_manifest(manifest),
+                .with_procedure_manifest(manifest)
+                .with_config_manifest(actingcommand_contract::RuntimeConfigManifest {
+                    subsystems: Vec::new(),
+                    parameters,
+                }),
             provider,
         )
         .expect("start formal-provider runtime");
         let policy = PolicyBootstrap {
             catalog_approval_ids: vec!["approval:fixture-a".to_string()],
-            catalog,
+            catalog: Some(catalog),
             catalog_transition: None,
             scheduled_tasks: BTreeMap::from([(
                 "procedure.observe".to_string(),

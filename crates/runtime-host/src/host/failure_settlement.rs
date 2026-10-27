@@ -21,7 +21,7 @@
 //! start suspends the bound packages it refuses so (`crate::pack_admission`).
 
 use super::contained_task::{PackageLoad, RefusedPackage, prepare_measured_naming_refusal};
-use super::policy_outcome::policy_dispatch_intent;
+use super::policy_outcome::{SettlementRead, policy_dispatch_intent};
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
@@ -70,12 +70,12 @@ struct ScheduledMain {
 }
 
 /// A scheduled run's admitted package, its prerequisite chain, its load and (Workflow #373
-/// NAV-6, NAV-5) its standard-pack data.
+/// NAV-6, NAV-5; Workflow #392 DA-2a) its standard-pack data.
 pub(super) type PreparedScheduledPackage = (
     PreparedContainedTask,
     Vec<PreparedContainedTask>,
     PackageLoad,
-    Option<Box<super::standard_pack::RunInterrupts>>,
+    super::standard_pack::RunStandardPack,
 );
 
 /// Two error frames compared (§12.5); `Unavailable` names why they could not be.
@@ -146,15 +146,16 @@ impl HostShared {
                 return Err(failure);
             }
         };
+        // SCH-M ED-2: the package the expected duration of the tasks bound here reads.
         self.pack_admission
-            .learn(task_request.package_path(), prepared.package_label())?;
+            .learn_prepared(task_request.package_path(), prepared.package_label())?;
         // A broken game root refuses the run as before, after its main package is recorded.
-        let interrupts = self.prepare_run_interrupts(&prepared);
-        let navigated = interrupts
-            .as_ref()
-            .is_ok_and(|interrupts| super::navigation::navigation_applies(interrupts.as_deref()));
+        let standard_pack = self.prepare_run_interrupts(&prepared);
+        let navigated = standard_pack.as_ref().is_ok_and(|standard_pack| {
+            super::navigation::navigation_applies(standard_pack.interrupts.as_deref())
+        });
         let mut layers = Vec::new();
-        let chain = match &interrupts {
+        let chain = match &standard_pack {
             Ok(_) => self.resolve_prerequisite_chain_recorded(
                 instance_alias,
                 &prepared,
@@ -179,8 +180,8 @@ impl HostShared {
         .entry(decision_id.to_owned())
         .or_default()
         .main = Some(main);
-        let interrupts = interrupts?;
-        Ok((prepared, chain?, package_load, interrupts))
+        let standard_pack = standard_pack?;
+        Ok((prepared, chain?, package_load, standard_pack))
     }
 
     /// Workflow #386 SR-3 (§2.4 item 2): suspends the task package a scheduled run's preparation
@@ -226,6 +227,23 @@ impl HostShared {
             }
         }
         Ok(())
+    }
+
+    /// SCH-M ED-2 (§3.4 D-13): the `package_id` of the main package a scheduled run's
+    /// preparation admitted, while its resolution is held (until its execution record is
+    /// written); `None` for a run whose preparation admitted none, and for a dispatch no
+    /// scheduled path ran.
+    pub(super) fn scheduled_main_package(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<String>> {
+        Ok(lock(
+            &self.scheduled_resolutions,
+            HostLocation::ReadScheduledResolution,
+        )?
+        .get(decision_id)
+        .and_then(|resolution| resolution.main.as_ref())
+        .map(|main| main.package_id.clone()))
     }
 
     /// Drops a decision's resolution once its execution record is written.
@@ -325,9 +343,10 @@ impl HostShared {
         let Some(main) = resolution.main else {
             return Ok(failed(None));
         };
+        // LN-5 (#422, LEAN-L §3.3): each of the run's selections is read from the store page by
+        // page at the head.
         let query = |query: EventQuery| {
-            self.ledger
-                .query(query)
+            crate::recovery_read::read_through_head(&self.ledger, &query)
                 .map_err(|_| ledger_error(HostLocation::ReadFailureIdentityRows))
         };
         let (rows, scope, operation) = if main.resolved {
@@ -457,9 +476,18 @@ impl HostShared {
             .ledger
             .latest_sequence()
             .map_err(|_| ledger_error(HostLocation::CompareFailureFrames))?;
+        // #419 LN-WS-F (R2): the previous dispatch's intent from the sequence the dispatch
+        // journal holds, while it holds that dispatch.
+        let intent_sequence = lock(self.policy()?, HostLocation::CompareFailureFrames)?
+            .dispatch_intent_sequence(previous_decision);
+        // A read the writer does not answer stays fatal here, as before: the failure settlement is
+        // not among the reads #419 LN-WS-F makes tolerant. Its failure keeps the ledger's own code,
+        // values and operation as its cause (fix round 1, review L2).
         let previous_run = policy_dispatch_intent(
             &self.ledger,
+            SettlementRead::Fatal,
             previous_decision,
+            intent_sequence,
             through,
             HostLocation::CompareFailureFrames,
         )?
@@ -467,9 +495,9 @@ impl HostShared {
         .run_id()
         .copied();
         let previous = match previous_run {
+            // LN-5 (#422, LEAN-L §3.3): the run's captures are read page by page at the head.
             Some(run_id) => locate_error_frame(run_id, |query: EventQuery| {
-                self.ledger
-                    .query(query)
+                crate::recovery_read::read_through_head(&self.ledger, &query)
                     .map_err(|_| ledger_error(HostLocation::CompareFailureFrames))
             })?,
             None => None,

@@ -32,6 +32,11 @@ pub struct StandardPackRootFiles {
     pub pages: Option<PathBuf>,
     pub interrupts: Option<PathBuf>,
     pub navigation: Option<PathBuf>,
+    /// ROUT-L RL-1a (`--schedule`): the game's schedule rules, `schedule.json`.
+    pub schedule: Option<PathBuf>,
+    /// Workflow #392 DA-4 (`--display-layout`): the game's display declaration,
+    /// `display-layout.json` (model 392 v1.2 §4.1).
+    pub display_layout: Option<PathBuf>,
 }
 
 /// Workflow #373 NAV-T: `actinglab standard-pack check --root <game root>`, an installed game

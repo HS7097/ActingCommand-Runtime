@@ -343,9 +343,11 @@ fn a51_t2_a_read_stopped_by_its_budget_answers_an_incomplete_page_that_continues
             .collect(),
     );
     let head = ledger.latest_sequence().expect("head");
-    // No record is a warning: the Errors view has to look at every record.
+    // No record names the fact key, which has no column (LN-6: a view's condition selects
+    // through the store's indexes): the read has to look at every record.
     let query = EventQuery {
-        view: Some(LedgerView::Errors),
+        view: Some(LedgerView::Changes),
+        fact_key: Some("backend.ready".to_owned()),
         ..EventQuery::default()
     };
     let request = RuntimeEventQueryPageRequest::new(PAGE_LIMIT, None).expect("first page");
@@ -380,7 +382,7 @@ fn a51_t2_a_read_stopped_by_its_budget_answers_an_incomplete_page_that_continues
         "{scope:?}"
     );
     assert!(scope.scanned_through_position < head, "{scope:?}");
-    assert!(first.events().is_empty(), "no record is a warning");
+    assert!(first.events().is_empty(), "no record names the fact key");
     assert!(first.has_more());
     let cursor = first.next_cursor().expect("a page that continues").clone();
     assert_eq!(cursor.after_sequence(), scope.scanned_through_position);

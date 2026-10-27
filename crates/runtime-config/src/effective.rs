@@ -9,20 +9,24 @@ use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
+use crate::display_safe_area::DisplaySafeAreaConfig;
+use crate::execution::CaptureCadenceConfig;
+use crate::idle::IdleConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
-    FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
+    BlackoutEntry, ExpectedRuntimeConfig, FactRefreshConfig, PackAdmissionConfig, RandomDelay,
+    RemedyConfig, SchedulingConfig,
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, emulator_control, host_claims, instance, ledger_observer,
-    performance, recovery_ladder, scheduling, startup_discovery, touch,
+    device_link, device_state, display_safe_area, emulator_control, execution, host_claims, idle,
+    instance, ledger_observer, performance, recovery_ladder, scheduling, startup_discovery, touch,
 };
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
     ConfiguredSetting, FactScalar, RuntimeConfigManifest, config_parameter_section,
@@ -89,12 +93,12 @@ pub struct ConfigFailure {
     config_key: String,
     problem: Option<ConfigValueProblem>,
     range: Option<(i64, i64)>,
-    /// Workflow #386 SR-1: the member of a host blackout entry that breaks a rule (a JSON
-    /// pointer into the configuration file) and the entry's id when it has a usable one, the
-    /// values of `blackout_config_invalid`. This member and `pointer` are rarely set, so both are
-    /// boxed: that keeps the failure well under clippy's `result_large_err` size (80 of 128
-    /// bytes on 64-bit).
-    blackout: Option<Box<(String, Option<String>)>>,
+    /// Workflow #386 SR-1: the member of a blackout entry that breaks a rule (a JSON pointer into
+    /// the configuration file), the entry's id when it has a usable one and (Workflow #386
+    /// SR-4a1) the list it is in, the values of `blackout_config_invalid`. This member and
+    /// `pointer` are rarely set, so both are boxed: that keeps the failure well under clippy's
+    /// `result_large_err` size (80 of 128 bytes on 64-bit).
+    blackout: Option<Box<(String, Option<String>, BlackoutSource)>>,
     /// Workflow #411 B15 R3: the JSON pointer, into the refused key's value, of the remedy choice
     /// row (and member) that breaks a rule. Not an outcome value: `config_value_invalid` declares
     /// no pointer key.
@@ -126,16 +130,18 @@ impl ConfigFailure {
         self.pointer.as_deref()
     }
 
-    /// Workflow #386 SR-1: `blackout_config_invalid` for the host blackout entry member at
-    /// `field` of the key `config_key` (`scheduling.blackout.host`), with the entry's id when it
-    /// has a usable one.
+    /// Workflow #386 SR-1: `blackout_config_invalid` for the blackout entry member at `field` of
+    /// the key `config_key` (`scheduling.blackout.host`, or Workflow #386 SR-4a1 an instance's
+    /// `instance.<instance id>.scheduling.blackout`), with the entry's id when it has a usable
+    /// one and the list it is in.
     pub fn blackout(
         config_key: impl Into<String>,
         field: impl Into<String>,
         blackout_id: Option<String>,
+        source: BlackoutSource,
     ) -> Self {
         Self {
-            blackout: Some(Box::new((field.into(), blackout_id))),
+            blackout: Some(Box::new((field.into(), blackout_id, source))),
             ..Self::new(ConfigCode::BlackoutConfigInvalid, config_key)
         }
     }
@@ -193,23 +199,30 @@ impl ConfigFailure {
         self.problem
     }
 
-    /// Workflow #386 SR-1: the member pointer of a host blackout entry that breaks a rule.
+    /// Workflow #386 SR-1: the member pointer of a blackout entry that breaks a rule.
     pub fn field(&self) -> Option<&str> {
-        self.blackout.as_deref().map(|(field, _)| field.as_str())
+        self.blackout.as_deref().map(|(field, _, _)| field.as_str())
     }
 
-    /// Workflow #386 SR-1: the id of a host blackout entry that breaks a rule, when it has one.
+    /// Workflow #386 SR-1: the id of a blackout entry that breaks a rule, when it has one.
     pub fn blackout_id(&self) -> Option<&str> {
-        self.blackout.as_deref().and_then(|(_, id)| id.as_deref())
+        self.blackout
+            .as_deref()
+            .and_then(|(_, id, _)| id.as_deref())
+    }
+
+    /// Workflow #386 SR-4a1: the list of a blackout entry that breaks a rule.
+    pub fn blackout_source(&self) -> Option<BlackoutSource> {
+        self.blackout.as_deref().map(|(_, _, source)| *source)
     }
 
     /// `outcome` with this failure's values: `config_key`, `config_value_problem` when the value
     /// is refused and, for a bounded key, `range_min` and `range_max`; for
-    /// `blackout_config_invalid` (Workflow #386 SR-1) `field` and `blackout_id` instead, the keys
-    /// that code declares.
+    /// `blackout_config_invalid` (Workflow #386 SR-1) `field`, `blackout_id` and (SR-4a1)
+    /// `blackout_source` instead, the keys that code declares.
     pub fn with_values(&self, outcome: Outcome) -> Outcome {
-        if let Some((field, blackout_id)) = self.blackout.as_deref() {
-            let outcome = outcome.field(field.clone());
+        if let Some((field, blackout_id, source)) = self.blackout.as_deref() {
+            let outcome = outcome.field(field.clone()).blackout_source(*source);
             return match blackout_id {
                 Some(blackout_id) => outcome.blackout_id(blackout_id.clone()),
                 None => outcome,
@@ -411,15 +424,32 @@ impl EffectiveConfig {
         Ok(ladder)
     }
 
+    /// #422 LN-7c Q: `frame_retention_evidence_max_age_days` in effect, in days; the frame cleaner
+    /// reads it at each pass start.
+    pub fn frame_retention_evidence_max_age_days(&self) -> Result<u64, ConfigFailure> {
+        crate::frame_retention::evidence_max_age_days(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, in milliseconds.
     pub fn renewal_slack_ms(&self) -> Result<u64, ConfigFailure> {
         host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, in milliseconds.
+    pub fn run_end_grace_ms(&self) -> Result<u64, ConfigFailure> {
+        host_claims::run_end_grace_ms(&|key: &str| self.value_or_shipped(key))
     }
 
     /// #411 A50: `emulator_control.restart_exit_wait_ms` in effect, in milliseconds: how long a
     /// restart waits for its old VM to exit before it launches.
     pub fn restart_exit_wait_ms(&self) -> Result<u64, ConfigFailure> {
         emulator_control::restart_exit_wait_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// emu-watch: the emulator watch's keys of the `emulator_control` section in effect
+    /// (`watch_enabled`, `watch_interval_ms`, `restart_attempts`, `restart_window_ms`).
+    pub fn emulator_watch(&self) -> Result<emulator_control::EmulatorWatchConfig, ConfigFailure> {
+        emulator_control::EmulatorWatchConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
     /// Workflow #385 P-c: the `performance` section in effect, checked whole (PERF §4.1,
@@ -476,6 +506,12 @@ impl EffectiveConfig {
         TouchConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, the kernel's capture
+    /// cadence, which the host hands the kernel with each step's pacing.
+    pub fn capture_cadence(&self) -> Result<CaptureCadenceConfig, ConfigFailure> {
+        CaptureCadenceConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -501,6 +537,15 @@ impl EffectiveConfig {
         scheduling::lift_check_min_interval_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// ROUT-L RL-1b (frozen model v1.0 §3.8): `standard_packs.check_interval_ms` and
+    /// `standard_packs.cached_generations` in effect, read at each check of the scheduler
+    /// workbench.
+    pub fn standard_pack_workbench(
+        &self,
+    ) -> Result<crate::StandardPackWorkbenchConfig, ConfigFailure> {
+        crate::standard_packs::workbench(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-3: the `scheduling.pack_admission` keys in effect (the admission check of
     /// `check-config` and of the background after start, and the suspend codes).
     pub fn pack_admission(&self) -> Result<PackAdmissionConfig, ConfigFailure> {
@@ -514,6 +559,88 @@ impl EffectiveConfig {
     /// a whole).
     pub fn remedy(&self, instance_id: &str) -> Result<RemedyConfig, ConfigFailure> {
         scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the own blackout entries of the instance whose
+    /// registry id is `instance_id`, from `instance.<instance_id>.scheduling.blackout` in effect;
+    /// none when the configuration carries no list for it.
+    pub fn instance_blackouts(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<BlackoutEntry>, ConfigFailure> {
+        scheduling::instance_blackouts(
+            &|key: &str| self.value(key).cloned(),
+            instance_id,
+            self.instance_index(instance_id),
+        )
+    }
+
+    /// Workflow #386 SR-4a1 (SCH-M §3.2 D-6): the day-boundary switch in effect for the instance
+    /// whose registry id is `instance_id`: `instance.<instance_id>.scheduling.day_boundary.quiet`
+    /// when the configuration carries it, otherwise `scheduling.day_boundary.quiet`.
+    pub fn day_boundary_quiet(&self, instance_id: &str) -> Result<bool, ConfigFailure> {
+        scheduling::day_boundary_quiet(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// Workflow #386 SR-4a1: the position of the instance whose registry id is `instance_id`
+    /// among the instances the configuration names, in the order of their first key: the order of
+    /// the file's `instances` (the file layer renders each instance's keys together, in that
+    /// order). An instance the configuration does not name takes the next position.
+    fn instance_index(&self, instance_id: &str) -> usize {
+        let mut seen: Vec<&str> = Vec::new();
+        for instance in self
+            .settings
+            .iter()
+            .filter_map(|setting| setting.instance.as_deref())
+        {
+            if instance == instance_id {
+                return seen.len();
+            }
+            if !seen.contains(&instance) {
+                seen.push(instance);
+            }
+        }
+        seen.len()
+    }
+
+    /// SCH-M ED-1 (§3.4 "Configuration"): the expected-duration keys in effect for the instance
+    /// whose registry id is `instance_id`: each of `enabled`, `runs` and `margin_ms` the instance's
+    /// own `instance.<instance_id>.scheduling.expected_runtime.<member>` when the configuration
+    /// carries it, otherwise the section's `scheduling.expected_runtime.<member>`.
+    pub fn expected_runtime(
+        &self,
+        instance_id: &str,
+    ) -> Result<ExpectedRuntimeConfig, ConfigFailure> {
+        scheduling::instance_expected_runtime(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// IDLE-1: the `idle` section in effect, checked whole.
+    pub fn idle_section(&self) -> Result<IdleConfig, ConfigFailure> {
+        idle::section(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// IDLE-1: the idle keys in effect for the instance whose registry id is `instance_id`: each
+    /// of `action`, `min_gap_ms`, `close_app_wake_lead_ms` and `stop_emulator_wake_lead_ms` the
+    /// instance's own `instance.<instance_id>.idle.<member>` when the configuration carries it,
+    /// otherwise the section's `idle.<member>`; checked whole (each wake lead below the gap).
+    pub fn idle(&self, instance_id: &str) -> Result<IdleConfig, ConfigFailure> {
+        idle::instance_idle(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// Workflow #392 DA-4b-D: the `display_safe_area` section in effect, checked whole.
+    pub fn display_safe_area_section(&self) -> Result<DisplaySafeAreaConfig, ConfigFailure> {
+        display_safe_area::section(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #392 DA-4b-D: the `display_safe_area` keys in effect for the instance whose
+    /// registry id is `instance_id`: the directory and the check interval, and the model of the
+    /// instance's own `instance.<instance_id>.display_safe_area.model` when the configuration
+    /// carries it, otherwise the section's `display_safe_area.model`; checked whole.
+    pub fn display_safe_area(
+        &self,
+        instance_id: &str,
+    ) -> Result<DisplaySafeAreaConfig, ConfigFailure> {
+        display_safe_area::instance(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
     /// Workflow #405 D1: the random delay in effect for the instance whose registry id is
@@ -639,6 +766,7 @@ impl EffectiveConfig {
         }
         if sections.contains(host_claims::SECTION) {
             self.renewal_slack_ms()?;
+            self.run_end_grace_ms()?;
         }
         if sections.contains(performance::SECTION) {
             self.check_performance()?;
@@ -663,6 +791,16 @@ impl EffectiveConfig {
         }
         if sections.contains(emulator_control::SECTION) {
             self.restart_exit_wait_ms()?;
+            self.emulator_watch()?;
+        }
+        if sections.contains(execution::SECTION) {
+            self.capture_cadence()?;
+        }
+        if sections.contains(idle::SECTION) {
+            self.idle_section()?;
+        }
+        if sections.contains(display_safe_area::SECTION) {
+            self.display_safe_area_section()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());
@@ -673,7 +811,9 @@ impl EffectiveConfig {
             .filter_map(|setting| setting.instance.as_deref())
             .collect::<BTreeSet<_>>();
         for instance in instances {
-            instance::check_instance(instance, |key| self.value(key).cloned())?;
+            instance::check_instance(instance, self.instance_index(instance), |key| {
+                self.value(key).cloned()
+            })?;
         }
         Ok(())
     }

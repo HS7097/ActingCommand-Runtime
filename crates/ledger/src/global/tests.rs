@@ -2075,6 +2075,7 @@ mod subscription {
             last_delivered_sequence: 0,
             replay_through_sequence: 0,
             replay_page_events: 1,
+            reply_timeout: GlobalLedger::REPLY_TIMEOUT,
             live,
             terminal,
             terminal_error: None,
@@ -2679,6 +2680,8 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         .expect("capture queue"),
     );
     let ledger = GlobalLedger {
+        // LN-5 (#422): the default rows of one page of a history read.
+        history_page_rows: super::history::DEFAULT_HISTORY_PAGE_ROWS,
         sender: Some(sender),
         writer: Some(writer),
         commit_statistics: Arc::new(CommitStatistics::new(0).expect("statistics")),
@@ -2691,6 +2694,12 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         close_timeout: None,
         clock: super::write_failure::process_clock(),
         writer_work: Arc::new(super::WriterWork::default()),
+        // LN-9 (#422): a writer without a failure plan has no scrub.
+        scrub: None,
+        // LN-7c Q (#422): a hand-built writer has no frame query database; the check interval
+        // is `ledger_observer.read_check_vm_steps`'s default.
+        frame_query_database: None,
+        read_check_vm_steps: super::read_work::DEFAULT_READ_CHECK_VM_STEPS,
     };
     let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();
@@ -2919,3 +2928,53 @@ mod gate_0121_a4;
 // its position.
 #[path = "tests/gate_411_a24.rs"]
 mod gate_411_a24;
+// LN-5 (#422, LEAN-L): the writer's reads and its append checks read the history from the store.
+#[path = "tests/gate_ln5.rs"]
+mod gate_ln5;
+// LN-6 (#422, LEAN-L): the Runtime's view pages and artifact resolution read the store.
+#[path = "tests/gate_ln6.rs"]
+mod gate_ln6;
+// #422 LN-TUNE: a paged history read reads and authenticates each row once.
+#[path = "tests/gate_ln_tune.rs"]
+mod gate_ln_tune;
+// LN-7 (#422, LEAN-L §3.5): an old artifact's identity is read through its index. #422 LN-7c Q:
+// the frame cleaner's query decides the live frames of A6's case fixture as the full view does
+// (T-eq).
+#[path = "tests/gate_ln7.rs"]
+mod gate_ln7;
+// LN-8 (#422, LEAN-L §3.2 step 2, §6): the writer open authenticates the meta row, the end of the
+// rows and the newest records only; damage in that tail is refused at open, damage in an older row
+// by its read and by `ledger-maintenance verify`.
+#[path = "tests/gate_ln8.rs"]
+mod gate_ln8;
+// #422 LN-8d: on a history whose live frames span it, the open's SQLite work per record it reads
+// does not grow with the history, and the open's deadline stops its retention read.
+#[path = "tests/gate_ln8d.rs"]
+mod gate_ln8d;
+// #422 LN-9: the paced background scrub finds old damage within one pass, keeps its rate and
+// never holds the writer.
+#[path = "tests/gate_ln9.rs"]
+mod gate_ln9;
+// #422 LN-7c R: the frame index of payload-only pointers, written with each batch, filled at the
+// open (gap and backfill) and checked by the scrub.
+#[path = "tests/gate_ln7c_r.rs"]
+mod gate_ln7c_r;
+// #422 LN-WS: no read can make a write fail: a request's read stops inside a statement at its
+// budget, its history statements are bounded spans from the window's first record, and an append
+// behind it commits.
+#[path = "tests/gate_ln_ws.rs"]
+mod gate_ln_ws;
+// #422 LN-7c O: the open reads the owner records of the two latest owner epochs (and of the older
+// owners a start may still close) and keeps the owner state, the frame cleaner's decisions and the
+// startup closes of the read of every owner record; a dump present at the open makes it read every
+// owner record.
+#[path = "tests/gate_ln7c_o.rs"]
+mod gate_ln7c_o;
+// #422 LN-7c Q: the frame cleaner by ledger query: T-eq on a production-shaped history, the
+// evidence-frame rule (T-evidence), the open that reads no frame (T-open) and the stop (T-pace).
+#[path = "tests/gate_ln7c_q.rs"]
+mod gate_ln7c_q;
+// #422 LN-7c V: `ledger-maintenance verify` checks the frame cleaner's statements against the full
+// view: a matching root reports nothing, a consistently wrong frame index row is reported.
+#[path = "tests/gate_ln7c_v.rs"]
+mod gate_ln7c_v;

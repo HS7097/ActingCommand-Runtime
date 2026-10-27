@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::facts::FactPublicationPurpose;
+use super::failure_scope::Contained;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::ipc::{FrameRead, FrameStart, read_started_frame, wait_frame_start, write_frame};
@@ -110,7 +111,7 @@ impl HostShared {
                 request,
                 RuntimeReceiptState::Failed,
                 None,
-                error.receipt_outcome(),
+                error.receipt_outcome_latched(true),
             );
         }
         let validated = match request.validate() {
@@ -122,7 +123,9 @@ impl HostShared {
                         request,
                         failure.state,
                         failure.terminal,
-                        failure.error.receipt_outcome(),
+                        failure
+                            .error
+                            .receipt_outcome_latched(self.fatal.current()?.is_some()),
                     );
                 }
                 // Workflow #378 A4 (model section 7.2, L3): the denied receipt carries its
@@ -167,8 +170,24 @@ impl HostShared {
         match dispatched {
             Ok(success) => success.into_receipt(request),
             Err(mut failure) => {
+                // ISO-M (#419) R0.5: the request door, also the direct run's boundary. A failure
+                // that would stop the Runtime goes to the one decision point, against the instance
+                // the request is bound to: only a `Global` failure latches; an `Instance` one
+                // fences that instance and the request fails with the fence's failure.
                 if failure.poison_runtime {
-                    self.fatal.mark((*failure.error).clone())?;
+                    let boundary_instance = self.request_instance(request.operation())?;
+                    let links = validated.event_links(None, None, None);
+                    match self.contain_failure(
+                        (*failure.error).clone(),
+                        boundary_instance,
+                        links,
+                    )? {
+                        Contained::Latched(error) => *failure.error = error,
+                        Contained::Fenced(error) | Contained::Failed(error) => {
+                            *failure.error = error;
+                            failure.poison_runtime = false;
+                        }
+                    }
                 }
                 #[cfg(test)]
                 {
@@ -178,7 +197,23 @@ impl HostShared {
                     )?
                     .insert(request.request_id(), failure.error.outcome());
                 }
-                let outcome = failure.error.receipt_outcome();
+                // #411 A54: `host_halted` is true only when the Runtime latched, not because the
+                // failure was severe for this request. A direct contained run's receipt keeps its
+                // failure's severity: the client reads it to know whether the run kept its fields
+                // report, which the host aborts for a fatal failure. ISO-2: a capture of its
+                // instance's dead session (ISO-M row A01) and a failed geometry read (A03) fail
+                // the run non-fatally; a fatal input failure (E02) keeps its severity and
+                // latches nothing.
+                let outcome = if matches!(
+                    request.operation(),
+                    RuntimeOperation::RunContainedTask { .. }
+                ) {
+                    failure.error.receipt_outcome()
+                } else {
+                    failure
+                        .error
+                        .receipt_outcome_latched(self.fatal.current()?.is_some())
+                };
                 if let Some(rejection) = failure.error.resource_declaration().cloned() {
                     let rejected = if let Some(event) =
                         failure.error.lifecycle.resource_declaration_event
@@ -776,6 +811,31 @@ impl RequestFailure {
 
     pub(super) fn poison_without_terminal(error: RuntimeHostError) -> Self {
         Self::poison(error, None)
+    }
+
+    /// ISO-2 (#419 R1; ISO-M rows A05, E14, E15, E16): the kernel refused a frame commit or
+    /// resolve on the instance's own session (`RuntimeHostError::instance_operation`). Only the
+    /// operation fails, non-fatal, with the kernel's code (a run's as its task failure); a
+    /// refusal that keeps its severity poisons as before, and its boundary contains it.
+    pub(super) fn frame_handoff(
+        operation: HostLocation,
+        error: &ExecutionKernelError,
+        instance: Option<InstanceId>,
+    ) -> Self {
+        let error = RuntimeHostError::instance_operation(operation, error, instance);
+        if error.is_fatal() {
+            return Self::poison_without_terminal(error);
+        }
+        Self {
+            state: RuntimeReceiptState::Failed,
+            terminal: None,
+            task_failure: Some(TaskFailureEvidence {
+                outcome: error.outcome(),
+                severe: false,
+            }),
+            error: Box::new(error),
+            poison_runtime: false,
+        }
     }
 
     pub(super) fn replace_with_poison(self, error: RuntimeHostError) -> Self {

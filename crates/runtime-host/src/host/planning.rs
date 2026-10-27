@@ -7,44 +7,60 @@ use crate::codes::HostLocation;
 use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, SharedCode};
 use actingcommand_contract::outcome::{Location, Outcome};
 
-/// Every `ArtifactVerified` reference read so far, in ledger order (Workflow #317 item C).
-/// The first read after start reads every verified event; each later read starts after the
-/// last verified event already seen.
-#[derive(Default)]
-pub(super) struct VerifiedArtifactIndex {
-    through: u64,
-    references: Vec<(u64, ProjectedArtifactReference)>,
-}
-
 impl HostShared {
-    /// Brings the verified artifact index up to the ledger tail and hands `read` every
-    /// verified reference with its event sequence, in ledger order.
+    /// #419 LN-WS-F (R2): for each of `references`, the sequence of the first `artifact.verified`
+    /// record that carries it ([`verified_reference_sequences`]), through the ledger's latest
+    /// position at the call.
+    fn verified_sequences(
+        &self,
+        operation: impl Into<Location>,
+        references: &[ProjectedArtifactReference],
+    ) -> RuntimeHostResult<Vec<Option<u64>>> {
+        #[cfg(test)]
+        let _around = super::around_read_for_test(&AROUND_VERIFIED_READ);
+        verified_reference_sequences(&self.ledger, references, operation)
+    }
+
+    /// Hands `read` every verified artifact reference with its event sequence, in ledger order.
+    /// Workflow #422 LN-2: read on demand, by the `artifact.verified` type index in pages through
+    /// the ledger's latest position at the call; nothing stays resident. #419 LN-WS-F: only the
+    /// strategic report lookup by its content (`find_strategic_report`, rare) reads this way.
     fn read_verified_artifacts<T>(
         &self,
         operation: impl Into<Location>,
         read: impl FnOnce(&[(u64, ProjectedArtifactReference)]) -> T,
     ) -> RuntimeHostResult<T> {
         let operation: Location = operation.into();
-        let mut index = lock(&self.verified_artifacts, operation)?;
-        let events = self
+        // #411 A51 (R3): a read the writer did not answer in time fails only the request.
+        let through = self
             .ledger
-            .query(EventQuery {
-                event_type: Some(EventType::ArtifactVerified),
-                from_sequence: (index.through != 0).then_some(index.through + 1),
-                ..EventQuery::default()
-            })
-            // #411 A51 (R3): a read the writer did not answer in time fails only the request.
+            .latest_sequence()
             .map_err(|error| ledger_read_error(&error, operation))?;
-        for event in &events {
-            index.references.extend(
-                event
-                    .artifacts()
-                    .iter()
-                    .map(|artifact| (event.sequence(), artifact.project(true))),
-            );
-            index.through = event.sequence();
+        let mut pages = crate::recovery_read::LedgerPages::new(
+            &self.ledger,
+            EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            },
+            0,
+            through,
+            self.ledger.history_page_events(),
+        );
+        let mut references = Vec::new();
+        while let Some(page) = pages
+            .next_page()
+            .map_err(|error| ledger_read_error(&error, operation))?
+        {
+            for event in &page {
+                references.extend(
+                    event
+                        .artifacts()
+                        .iter()
+                        .map(|artifact| (event.sequence(), artifact.project(true))),
+                );
+            }
         }
-        Ok(read(&index.references))
+        Ok(read(&references))
     }
 
     pub(super) fn record_policy_planning_signal(
@@ -374,13 +390,31 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         let _gate = lock(&self.proposal_write_gate, ContractLocation::PromoteProposal)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // ROUT-L RL-1b (model §3.5): in composer mode the scheduler workbench is the only writer
+        // of the active generation, so no proposal is promoted.
+        if self.standard_packs.schedule.is_some() {
+            return Err(proposal_request_failure(RuntimeHostError::request(
+                HostCode::ProposalPromotionInvalid,
+                ContractLocation::PromoteProposal,
+                RuntimeErrorCode::InvalidRequest,
+            )));
+        }
         self.verify_proposal_reports(proposal)?;
         let (prepared, current) = {
             let policy = lock(self.policy()?, HostLocation::PrepareProposalPromotion)?;
             let base = policy
                 .load_generation(proposal.base_catalog_hash())
                 .map_err(proposal_request_failure)?;
-            let prepared = prepare_proposal(base.generation(), base.sources(), proposal)
+            // ROUT-L RL-1b (model §3.5): a composed generation keeps no source documents, and
+            // only the scheduler workbench writes the active generation in composer mode.
+            let sources = base.sources().ok_or_else(|| {
+                proposal_request_failure(RuntimeHostError::request(
+                    HostCode::ProposalBaseCatalogUnavailable,
+                    ContractLocation::PromoteProposal,
+                    RuntimeErrorCode::InvalidRequest,
+                ))
+            })?;
+            let prepared = prepare_proposal(base.generation(), sources, proposal)
                 .map_err(proposal_request_failure)?;
             (prepared, policy.active_generation())
         };
@@ -414,8 +448,10 @@ impl HostShared {
                 HostLocation::RecoverProposalApprovals,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+            // #419 LN-WS-F (R1): an approval read the writer did not answer fails only this
+            // request.
             ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
-                .map_err(RequestFailure::poison_without_terminal)?
+                .map_err(unanswered_or_poison)?
         };
         let mut approval_fact_ids = approvals.active_for_plan(
             preview.proposal_id(),
@@ -486,17 +522,11 @@ impl HostShared {
 
     fn verify_proposal_reports(&self, proposal: &CatalogProposal) -> Result<(), RequestFailure> {
         let verified = self
-            .read_verified_artifacts(HostLocation::VerifyProposalReports, |verified| {
-                proposal
-                    .report_refs()
-                    .iter()
-                    .map(|reference| proposal_report_is_verified(verified, reference))
-                    .collect::<Vec<_>>()
-            })
+            .verified_sequences(HostLocation::VerifyProposalReports, proposal.report_refs())
             // #411 A51 (R3): only a fatal failure poisons the Runtime.
             .map_err(request_failure)?;
         for (reference, verified) in proposal.report_refs().iter().zip(verified) {
-            if !verified {
+            if verified.is_none() {
                 return Err(proposal_request_failure(RuntimeHostError::request(
                     HostCode::ProposalReportUnverified,
                     HostLocation::VerifyProposalReports,
@@ -606,12 +636,19 @@ impl HostShared {
             })?;
             let (report_reference, prepared_artifact) =
                 self.prepare_or_reuse_strategic_report(&bytes)?;
-            let proposal =
-                build_strategy_proposal(&projection, loaded.sources(), report_reference.clone())?;
+            // ROUT-L RL-1b (model §3.5): a composed generation keeps no source documents, so the
+            // report proposes no catalog change; the scheduler workbench writes the rules.
+            let proposal = match loaded.sources() {
+                Some(sources) => {
+                    build_strategy_proposal(&projection, sources, report_reference.clone())?
+                }
+                None => None,
+            };
             let preview = proposal
                 .as_ref()
-                .map(|proposal| {
-                    prepare_proposal(loaded.generation(), loaded.sources(), proposal)
+                .zip(loaded.sources())
+                .map(|(proposal, sources)| {
+                    prepare_proposal(loaded.generation(), sources, proposal)
                         .and_then(|prepared| prepared.into_ready().map(|(preview, _)| preview))
                 })
                 .transpose()?;
@@ -697,12 +734,7 @@ impl HostShared {
         evidence: &[ProjectedArtifactReference],
     ) -> RuntimeHostResult<()> {
         let verified_sequences =
-            self.read_verified_artifacts(HostLocation::VerifyStrategicEvidence, |verified| {
-                evidence
-                    .iter()
-                    .map(|reference| proposal_report_verified_sequence(verified, reference))
-                    .collect::<Vec<_>>()
-            })?;
+            self.verified_sequences(HostLocation::VerifyStrategicEvidence, evidence)?;
         let mut pointers = Vec::with_capacity(evidence.len());
         for (reference, verified_sequence) in evidence.iter().zip(verified_sequences) {
             reference.validate().map_err(|_| {
@@ -938,11 +970,61 @@ fn proposal_request_failure(error: RuntimeHostError) -> RequestFailure {
     }
 }
 
-fn proposal_report_is_verified(
-    verified: &[(u64, ProjectedArtifactReference)],
-    reference: &ProjectedArtifactReference,
-) -> bool {
-    proposal_report_verified_sequence(verified, reference).is_some()
+/// #419 LN-WS-F (R2): for each of `references`, in order, the sequence of the first
+/// `artifact.verified` record, in ledger order through the ledger's latest position, that carries
+/// an artifact equal to it, or `None`. Only the records that carry one of the references'
+/// artifacts are read, by the `artifact_id` index (`GlobalLedger::artifact_records`), never the
+/// type's history: an equal artifact has the reference's own identifier, so the answer is the one
+/// every `artifact.verified` record of the history gives. #411 A51 (R3): a read the writer did not
+/// answer in time, or stopped at its budget, fails only the request with the ledger's code; any
+/// other read failure is the fatal `ledger_failure` of `operation` with the ledger's own failure
+/// as its cause.
+pub(crate) fn verified_reference_sequences(
+    ledger: &GlobalLedger,
+    references: &[ProjectedArtifactReference],
+    operation: impl Into<Location>,
+) -> RuntimeHostResult<Vec<Option<u64>>> {
+    let operation: Location = operation.into();
+    if references.is_empty() {
+        return Ok(Vec::new());
+    }
+    let read_error = |error: &actingcommand_ledger::GlobalLedgerError| {
+        tolerant_ledger_read_error(error, operation, || ledger_error(operation))
+    };
+    let through = ledger
+        .latest_sequence()
+        .map_err(|error| read_error(&error))?;
+    let artifacts = references
+        .iter()
+        .map(|reference| reference.artifact_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let records = ledger
+        .artifact_records(artifacts, through)
+        .map_err(|error| read_error(&error))?;
+    let mut verified = Vec::new();
+    for event in records
+        .iter()
+        .filter(|event| event.event_type() == EventType::ArtifactVerified)
+    {
+        verified.extend(
+            event
+                .artifacts()
+                .iter()
+                .map(|artifact| (event.sequence(), artifact.project(true))),
+        );
+    }
+    Ok(references
+        .iter()
+        .map(|reference| proposal_report_verified_sequence(&verified, reference))
+        .collect())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #419 LN-WS-F, tests: the hook around the next bounded verified read of a proposal's
+    /// reports or a strategic report's evidence on this thread.
+    pub(crate) static AROUND_VERIFIED_READ: super::AroundReadForTest =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn proposal_report_verified_sequence(

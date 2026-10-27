@@ -12,8 +12,9 @@ Runtime's facts about itself live in the separate runtime fact store
 
 Every change is one ledger event under the `fact_write_gate`: `fact.published`
 carries one observation (1–256 records of one scope and one
-`source_snapshot_id`), `fact.invalidated` drops one record. The store recovers
-at startup by replaying every event, afterwards synchronizes incrementally from
+`source_snapshot_id`), `fact.invalidated` drops one record. The store loads
+at startup from the ledger's tagged state (Workflow #422 LN-2; "Start load" below),
+afterwards synchronizes incrementally from
 `last_sequence + 1`, and can replay history at an exact ledger position
 (`at_position`; position 0 or one beyond the latest sequence is refused).
 `docs/live-fact-pools.md` describes the adapter publication path and the
@@ -70,6 +71,12 @@ AO-3 implements the entry, the revisions and the gate order; AO-6 the start load
   the ledger; `latest_observed`, tombstones and the input boundary are derived from the same
   records. Tombstones stay in the store (at most 256). History at a ledger position
   (`at_position`) remains for forensics only.
+  - **As built by LN-2** (Workflow #422, register §1.183): the load equals the replay of every
+    event in its active records (with their sequence, event id, scope instances and
+    publisher), `latest_observed`, input boundaries, the latest tombstone of each key without an
+    active record, pending invalidations (a fact whose trigger came before the stop but whose
+    `fact.invalidated` was not written) and position. A tombstone older than its key's latest
+    record is no longer in memory; the State document's tombstone still refuses the snapshot.
 - The projection below reads the store at the evaluation's revision pair instead of a
   `ledger_position` (AO-4; the `input_ledger_position` member of the dispatch intent follows
   [the v0.12.0 plan](v012-register.md)).
@@ -459,10 +466,10 @@ calls the existing `publish_facts`.
 ## Display facts
 
 Workflow #392 DA-A (model 392 v1.1, sections 8.1 and 12.1): a device instance's display is
-recorded, never checked. No frame is refused for its aspect ratio; a contained task's frame
-must still equal its package's resolution (`contained_task_frame_resolution_mismatch`), and its
-aspect ratio must still match the logical display it was captured from
-(`contained_task_geometry_frame_display_mismatch`).
+recorded, never checked. No frame is refused for its aspect ratio; its aspect ratio must still
+match the logical display it was captured from (`contained_task_geometry_frame_display_mismatch`),
+and (Workflow #392 DA-2a) the display adapter must be able to map it onto its package
+([display-adapter.md](display-adapter.md) section 8; `display_map_unresolved`).
 
 | Key | Value |
 | --- | --- |
@@ -472,7 +479,9 @@ aspect ratio must still match the logical display it was captured from
 | `display.aspect` | `record_list`, one row `{ "width": <integer>, "height": <integer> }`: the frame reduced by the greatest common divisor of its width and height (2340x1080 is 13:6) |
 
 **When.** The host writes the four keys when a contained task's first frame passes its task
-geometry (`task.geometry_observed` with conclusion `pass`), for an instance bound to a device:
+geometry (`task.geometry_observed` with conclusion `pass`), and (Workflow #392 DA-2a) again when a
+later frame of the run changed its size, rotation or insets and its geometry, read again
+(`changed`), passes, for an instance bound to a device:
 physical provenance and a device endpoint, the instances whose connection is self-checked
 ("Backend self-check availability" above). A fixture simulation and a provider without a device
 endpoint record nothing.
@@ -544,14 +553,15 @@ instances is booked once.
 | run parameters (overlay) | `session.dispatch.parameter.<name>` | — | 0: an overlay of a run's snapshots, never stored ("Run parameters" below) | #411 B15 R5 | 0 |
 | feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
 | instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
+| run-duration samples | `health.run_duration` | instance | 1 (one record of at most 256 package rows; "Run duration facts" below) | SCH-M ED-2 | 3 |
 | instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
 | display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | instance | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) | 12 |
 | selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
 
-- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 6 + 0 + 6 + 9 + 12 = **98 + *O***, well
-  under 256.
+- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 6 + 0 + 6 + 3 + 9 + 12 = **101 + *O***,
+  well under 256.
 - **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 10 + 10
-  + 15 + 20 = **134 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances
+  + 5 + 15 + 20 = **139 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances
   bound to a device; the reading keys of new packages are the variable that matters.
 - DA-4's display keys (`display.logical_extent`, `display.safe_area.reported`,
   `display.safe_area.declared`, `display.map`; register §1.25 X10) have no writer on main and are
@@ -745,6 +755,63 @@ this store it is a tagged record that the start loads from the ledger (Workflow 
 
 **Codes.** `session_remedy_choices_invalid` (runtime-host); the remedy codes the record decides are
 in [remedies.md](remedies.md); none of them triggers the recovery ladder.
+
+## Run duration facts (SCH-M ED-2)
+
+SCH-M frozen model v1.0 §3.4 (D-13, D-14; Alice 10-22: 「每个任务执行所需的时间可以动态的从账本读，
+近5次该任务包的平均时间加5分钟」; ruling 39 R6.2, R6.3). An instance's latest durations of its
+successful scheduled runs, per task package, from which the evaluation reads the expected duration
+E ([scheduling/README.md](scheduling/README.md), "Settlement Feedback And Eligibility Age").
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `health.run_duration` | `record_list`, one row `{ "package_id": <string>, "n": <integer>, "d1": <duration_ms>, …, "dn": <duration_ms>, "at": <timestamp_ms> }` per task package, `d1` the newest duration and `at` the terminal time of the run that added it | `instance` only |
+
+- **Samples.** Only the settlement that records a successful scheduled policy run's execution
+  (`PolicyExecutionOutcome::Succeeded { runtime_ms }`) adds one, `runtime_ms`, as the newest
+  sample of the package its scheduled path admitted (the package's `package_id`; the fact
+  refresh's reads add theirs to the recognition maintenance package's row). A failed run, a run a
+  condition ended, a direct run, a Lab operation and a dispatch no scheduled path prepared (its
+  package unknown) add none; a replayed settlement adds none again. Tasks that share a package
+  share its row. Package version, content hash and Runtime version are not part of a row: a
+  package update and a Runtime upgrade keep it (R6.2).
+- **Rows.** A row keeps the newest `n` samples, `n` at most the instance's
+  `scheduling.expected_runtime.runs` when the row was last written (a lowered value takes effect
+  at once for E, which reads the newest `runs`; a raised one fills as runs accumulate). At most 256
+  rows: a new package's row beyond them drops the row with the oldest `at` (the smallest
+  `package_id` among equals, never the row being written) and records `run_duration_row_dropped`
+  (warning; `instance_id`, `package_id`). A stored row the write cannot read is dropped and
+  reported the same way (`package_id` when it can be read). That package's E falls back to its
+  declared duration until it has runs again.
+- **Write.** The settlement reads the instance's active record, updates the row and publishes the
+  instance's whole record in one `fact.published` (purpose `RunDuration`, origin and actor
+  `runtime`, `source_detector` `runtime.run-duration`, `source_snapshot_id`
+  `run_duration:<sha256 of alias, observation time and value>`, the same digest as
+  `resource_bundle_hash`, confidence 1000, no expiry, no `invalidate_on`). Its observation time is
+  max(the run's terminal time, the previous record's observation + 1). A refusal of the store (a
+  full store, for one) is recorded as `run_duration_row_dropped` with the run's package and the
+  refusal as its `caused_by` link, and the settlement goes on; a fatal failure halts as any other.
+  With `scheduling.expected_runtime.enabled` false for the instance nothing is written.
+- **Reserved key.** Only that settlement writes the key: a `PublishFact` / `PublishFacts` of it from
+  any client, and any other publication path of the Runtime, is refused before the fact write
+  gate as the non-fatal request error `run_duration_key_reserved` (`fact_key`), with nothing
+  appended.
+- **Load.** The record is an ordinary tagged record of this store: the start loads it from the
+  tag index with every other record ("Accept first, revisions and tagged load", LN-2), before the
+  first evaluation. Nothing is kept outside the ledger.
+- **Projection.** The record is never an ordinary fact of an evaluation or of a forward
+  projection, and no catalog predicate observes it. Every authoritative projection consumes it
+  instead: for each instance whose switch is on, each catalog task that applies to it and whose
+  procedure's binding locates a package a scheduled run's preparation admitted in this process
+  (its `package_id`; never the package admission after start, so a package's E applies from the
+  evaluation after its first preparation since the start and never changes between an evaluation
+  and its admission), and the instance's fact refresh with its bound recognition maintenance
+  package (read at the start), a pair whose package has samples gets
+  `TaskRuntimeSnapshot.expected_runtime_ms` and `.expected_runtime_runs` (a snapshot is created for
+  a pair that has none yet). The values enter the evaluation input and so its
+  `combined_policy_snapshot_id`; a sample that changes a pair's E refuses an intent evaluated
+  before it as `policy_facts_stale`. With no sample, with the switch off, or with the package's id
+  not read yet, the members are absent and the input is today's, byte for byte.
 
 ## Run parameters (`session.dispatch.`, never stored)
 

@@ -24,9 +24,13 @@ mcp = []
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+# #422 LN-7c Q: `evidence confirm-read` counts the evidence frames a confirmation covers with the
+# frame cleaner's statements, read-only (`evidence_covers`).
+actingcommand-ledger = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
-# Workflow #421 INST-1: `actingctl install` reads the `install` section and the key table from
-# actingd's configuration file.
+# #411 A66: the watchdog and `actingctl start` read `watchdog.start_window_ms` from actingd's
+# configuration through the key table and the defaults file. Workflow #421 INST-1: `actingctl
+# install` reads the `install` section and the key table from the same file.
 actingcommand-runtime-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -35,11 +39,12 @@ sha2 = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
-actingcommand-ledger = { workspace = true }
 actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 # Workflow #381 A: the held-start preparation checkpoints and the writer stall gate.
 actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }
+# #422 LN-7c C: the gate reads the closed root's frame index rows.
+actingcommand-runtime-database = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 tempfile = "3"

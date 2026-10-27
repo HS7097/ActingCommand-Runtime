@@ -13,7 +13,7 @@ use actingcommand_contract::outcome::Category;
 fn use_lock(root: &Root, index: usize) -> PathBuf {
     root.path.join("artifact-use-locks").join(format!(
         "{}.lock",
-        crate::failure_identity::identifier_text(&root.frames[index].reference.artifact_id)
+        crate::failure_identity::identifier_text(&root.id(index))
     ))
 }
 
@@ -34,7 +34,7 @@ fn e3_t2_a_removed_or_moved_frame_takes_its_use_lock_with_it() {
     let removed_lock = published_lock(&root, removed);
     let moved_lock = published_lock(&root, moved);
     let mut retention = cleaner();
-    let (report, warnings) = sweep(&mut retention, &root.path, &root.view());
+    let (report, warnings) = sweep(&mut retention, &root, &mut root.answers());
     let report = report.expect("first sweep");
     assert_eq!((report.deleted, report.moved, report.failed), (1, 1, 0));
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -67,7 +67,7 @@ fn e3_t2_a_use_lock_that_cannot_be_deleted_is_reported_and_the_sweep_goes_on() {
         .open(&held_lock)
         .expect("holder");
     let mut retention = cleaner();
-    let (report, warnings) = sweep(&mut retention, &root.path, &root.view());
+    let (report, warnings) = sweep(&mut retention, &root, &mut root.answers());
     // The sweep is unaffected: both frames are removed and nothing failed.
     let report = report.expect("first sweep");
     assert_eq!((report.frames, report.deleted, report.failed), (2, 2, 0));
@@ -78,10 +78,7 @@ fn e3_t2_a_use_lock_that_cannot_be_deleted_is_reported_and_the_sweep_goes_on() {
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     let warning = &warnings[0];
     assert_eq!(warning.code, HostCode::FrameRetentionLockRemoveFailed);
-    assert_eq!(
-        warning.artifact_id,
-        Some(root.frames[held].reference.artifact_id)
-    );
+    assert_eq!(warning.artifact_id, Some(root.id(held)));
     assert!(warning.os_error.is_some(), "{warning:?}");
     let outcome = warning.outcome();
     assert_eq!(

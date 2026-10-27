@@ -27,10 +27,12 @@ implements production persistence and close; `SegmentStorage` remains inside
 Ledger's test compilation. The common writer still
 owns query/projection/subscription and scheduling outcome orchestration.
 
-SQLite restores typed events and rebuilds the existing `EventIndexes`. All
-query/page/replay behavior uses that verified committed memory snapshot. SQL
-failures occur at open, append or the explicit read-only snapshot boundary and
-propagate as fatal errors. Duplicate EventId ingress retains its nonfatal
+SQLite restores typed events and verifies them at open. #422 LN-5: the writer
+keeps no copy of them; every query, page and replay reads the store a page of
+`ledger_observer.history_page_rows` rows at a time, each row authenticated on its
+own, and the checks an append makes are indexed lookups of the store and of its
+staged batch. SQL failures occur at open, append, a read or the explicit read-only
+snapshot boundary and propagate as fatal errors. Duplicate EventId ingress retains its nonfatal
 Request result and consumes no sequence.
 
 The Ledger-owned [schema](../crates/ledger/src/global/sqlite/schema.sql) contains
@@ -43,6 +45,12 @@ closed, including an interrupted first initialization whose completeness cannot
 be established. Existing tables are read and verified. The canonical `StoredEventRecord` determines every
 indexed event/link value and ordered artifact row. Only sequence and EventId are
 event identities with unique constraints; run/task/lease values span many facts.
+The index `ledger_artifacts_artifact` (artifact id, sequence) selects an artifact's
+rows (#422 LN-5); a database without it gets it at its first writer open.
+The partial index `ledger_artifacts_created` (creation time, sequence; capture frames only)
+selects capture frames by ingestion time for the frame cleaner's queries (#422 LN-7c F6); a
+database without it gets it at its first writer open too. Neither is a `ledger_view_*` object,
+so a build without them opens, writes and scrubs a database that has them.
 
 An Immediate append transaction checks the current head/next metadata, inserts
 the complete event/relations/artifacts, updates head/next/hash/keyed metadata and

@@ -22,7 +22,7 @@ use actingcommand_contract::{
 use actingcommand_policy::{PolicyEvaluation, SchedulingDecisionState, TaskDecision};
 use actingcommand_runtime_config::instance_key;
 use actingcommand_runtime_config::scheduling::{
-    RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS,
+    DAY_BOUNDARY_QUIET, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS,
 };
 use serde_json::{Value, json};
 
@@ -127,6 +127,10 @@ fn delay_manifest(
         own(RANDOM_DELAY_ENABLED, FactScalar::Boolean(enabled)),
         own(RANDOM_DELAY_MIN_MS, FactScalar::DurationMs(min_ms)),
         own(RANDOM_DELAY_MAX_MS, FactScalar::DurationMs(max_ms)),
+        // Workflow #386 SR-4a2: these scenarios pin the random delay alone; with the day boundary
+        // on (SCH-M D-6, the shipped default) a 1 min run in the window's last minute would wait
+        // for the next window and the cut would end at the window's end minus that minute.
+        own(DAY_BOUNDARY_QUIET, FactScalar::Boolean(false)),
     ];
     actingcommand_runtime_config::annotate_settable(&mut parameters)
         .expect("every key is in the key table");

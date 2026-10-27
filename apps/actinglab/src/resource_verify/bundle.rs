@@ -42,8 +42,15 @@ const INTERFACES_SCHEMA: &str = "actingcommand.component-interfaces.v1";
 const INTERFACES_FILE: &str = "interfaces.json";
 /// The `package` revision the zip's `interfaces.json` declares, as `bundle.ps1` writes it.
 const PACKAGE_REVISION: u32 = 3;
-/// The standard-pack root files `package bundle` lays beside `bundle.json`.
-const ROOT_FILES: [&str; 3] = ["pages.json", "interrupts.json", "navigation.json"];
+/// The standard-pack root files `package bundle` lays beside `bundle.json` (ROUT-L RL-1a:
+/// `schedule.json` too; Workflow #392 DA-4: `display-layout.json` too).
+const ROOT_FILES: [&str; 5] = [
+    "pages.json",
+    "interrupts.json",
+    "navigation.json",
+    "schedule.json",
+    "display-layout.json",
+];
 const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
 
 /// What the bundle step reads.
@@ -142,6 +149,8 @@ fn lay_out(
             pages: root_file("pages.json"),
             interrupts: root_file("interrupts.json"),
             navigation: root_file("navigation.json"),
+            schedule: root_file("schedule.json"),
+            display_layout: root_file("display-layout.json"),
         },
     })
     .map_err(|error| lab_failure(&error))?;

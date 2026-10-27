@@ -46,6 +46,10 @@ mod gate_e4;
 #[cfg(test)]
 mod gate_412_b3_s0_restore;
 
+// #386 CF-4: standard-pack check reads a fact reference only under its `requires` entry.
+#[cfg(test)]
+mod gate_386_cf4;
+
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;
@@ -53,6 +57,8 @@ mod package_validate;
 mod resource_convert;
 mod resource_restore;
 mod standard_pack_check;
+// ROUT-L RL-1a: `schedule.json` in `package bundle`, `standard-pack check` and `compose`.
+mod standard_pack_schedule;
 
 pub use api::*;
 pub use authoring::*;
@@ -77,3 +83,6 @@ pub use resource_convert::{
 };
 pub use resource_restore::*;
 pub use standard_pack_check::check_standard_pack_root;
+pub use standard_pack_schedule::{
+    StandardPackComposeRequest, StandardPackComposeResponse, compose_standard_packs,
+};

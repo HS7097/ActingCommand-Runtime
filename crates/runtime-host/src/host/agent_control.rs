@@ -2,9 +2,10 @@
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
-use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types_after};
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::outcome::Location;
+use actingcommand_ledger::LedgerIndexRole;
 
 impl HostShared {
     pub(super) fn expire_agent_sessions(&self) -> RuntimeHostResult<()> {
@@ -171,7 +172,12 @@ impl HostShared {
             &self.agent_dispatcher,
             ContractLocation::RecordAgentResponse,
         )?
-        .prepare_response(request.request_id(), response, observed_at_unix_ms)
+        .prepare_response(
+            &self.ledger,
+            request.request_id(),
+            response,
+            observed_at_unix_ms,
+        )
         .map_err(agent_request_failure)?;
         let (data, payload, severity) = match preparation {
             AgentResponsePreparation::Replay(status) => {
@@ -250,20 +256,47 @@ pub(super) fn reconcile_agent_wakes(
     instances: &BTreeMap<InstanceId, RegisteredInstance>,
     config: &AgentDispatcherConfig,
 ) -> RuntimeHostResult<()> {
-    // Workflow #381 R4a: the planning signals through one position, in bounded pages.
-    let sources = ledger
+    // Workflow #422 LN-4: a wake is appended right after its planning signal, so a signal can
+    // lack its wake only when the previous epoch stopped between the two. The start record of
+    // this epoch comes after this step, so the `last_start` row names the previous epoch's: the
+    // signals after it are read, each checked against the wakes recorded after it (the dispatcher
+    // keeps no ended wake), in bounded pages through one position (Workflow #381 R4a).
+    let previous_start =
+        crate::tagged_state::index_records(ledger, LedgerIndexRole::Lifecycle, &["last_start"])?
+            .records
+            .first()
+            .map_or(0, |record| record.event.sequence());
+    let (sources, woken) = ledger
         .latest_sequence()
         .and_then(|through| {
-            read_event_types(
+            let sources = read_event_types_after(
                 ledger,
                 &[EventType::PolicyPlanningSignalObserved],
+                previous_start,
                 through,
                 RECOVERY_PAGE_EVENTS,
-            )
+            )?;
+            let woken = read_event_types_after(
+                ledger,
+                &[EventType::AgentWakeRequested],
+                previous_start,
+                through,
+                RECOVERY_PAGE_EVENTS,
+            )?;
+            Ok((sources, woken))
         })
         .map_err(|_| ledger_error(HostLocation::QueryAgentWakeSources))?;
+    let woken = woken
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Agent(actingcommand_contract::AgentPayload::WakeRequested(payload)) => {
+                payload.wake().trigger_event_id()
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     for source in sources {
-        if state.has_wake_for_trigger(source.event_id()) {
+        if state.has_wake_for_trigger(source.event_id()) || woken.contains(source.event_id()) {
             continue;
         }
         let EventPayload::Policy(actingcommand_contract::PolicyPayload::PlanningSignalObserved(
@@ -349,6 +382,19 @@ pub(super) fn append_agent_wake(
         .append(events.sanitize(draft)?)
         .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
     state.apply_event(&persisted, None)?;
+    // Workflow #422 LN-3 (register L8, `contracts/ledger-observer.md` §11.3): the obligation's
+    // value record, the one the index's `wake/<wake id>` row names.
+    let obligation = events.draft(
+        EventSeverity::Info,
+        EventSource::Scheduler,
+        OriginModule::AgentDispatcher,
+        EventActor::Runtime,
+        events.system_links()?,
+        AgentPayloadDraft::wake_obligation_recorded(issued.data().clone(), AuditInput::new()),
+    )?;
+    ledger
+        .append(events.sanitize(obligation)?)
+        .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
     Ok(persisted)
 }
 

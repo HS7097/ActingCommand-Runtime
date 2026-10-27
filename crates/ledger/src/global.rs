@@ -17,7 +17,7 @@ mod retention;
 pub use retention::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming,
+    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, OwnerReadFull, live_frame_ids,
 };
 mod sqlite;
 mod storage;
@@ -28,17 +28,42 @@ mod write_failure;
 // (`contracts/ledger-observer.md` §2.1, §7, §8, §11).
 mod capture;
 mod flush;
+// LN-5 (#422, LEAN-L): the history is read from the store on demand.
+mod history;
+// #422 LN-7c C: what an evidence read confirmation names.
+pub use history::LedgerEvidenceTarget;
 mod index;
+// Workflow #422 LN-4: the start's checked read of the index table (§11.5).
+mod index_read;
+pub use index::instance_fact_state_key;
+pub use index_read::{LedgerIndexRecord, LedgerIndexRecords, LedgerIndexRole};
 // #411 A51 (R2): the work budget of one read on the writer thread.
 mod read_work;
+// Workflow #422 LN-2: the tagged state a start loads (`contracts/ledger-observer.md` §11.5).
+mod tagged;
 pub use capture::{
     DEFAULT_TAG_WORKBENCH_PATTERNS, LedgerCaptureHandle, LedgerCapturePolicy, LedgerCaptureStatus,
 };
+pub use tagged::{LedgerTaggedRecord, LedgerTaggedState};
 // The capture queue's tiers are the shared watermark arithmetic (§7.1).
 pub use actingcommand_artifact_store::WatermarkRatios;
 pub use migration::*;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use sqlite::after_release_baseline_head_for_test;
+// LN-1 (Workflow #422): the synthetic ledger's batch commit, for `crate::synthetic`.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) use sqlite::synthetic::{AppendedBatch, SyntheticAppender};
+// LN-9 (#422, LEAN-L §6): the paced background scrub of the Runtime's writer.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use sqlite::scrub::SteppingScrubClock;
+pub use sqlite::scrub::{LedgerScrubClock, LedgerScrubPolicy, LedgerScrubStop};
+// #422 LN-7c Q (final-query §1): the frame cleaner's ledger query.
+pub use sqlite::frame_query::{
+    EvidenceCovers, EvidenceTarget, FrameConfirmation, FrameQuery, FrameQueryAction,
+    FrameQueryCheck, FrameQueryCheckSettings, FrameQueryFrame, FrameQueryOutcome,
+    FrameQuerySettings, FrameQueryStop, FrameWaits, KeptFrameAnswer, LiveFrameAnswer,
+    evidence_covers,
+};
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
@@ -89,6 +114,9 @@ use std::time::{Duration, Instant};
 use storage::SegmentStore;
 use store::LedgerStore;
 
+/// #422 LN-TUNE: the default of `ledger_observer.writer_reply_timeout_ms`, for a ledger opened
+/// without a failure plan that names one (an offline reader, a test). The Runtime's writer takes
+/// the configured value through its plan.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// #411 A51 (R4): how often a close with a bound looks at the writer and at the clock.
 const CLOSE_POLL: Duration = Duration::from_millis(10);
@@ -760,6 +788,16 @@ impl GlobalLedgerError {
         self
     }
 
+    /// #422 LN-7c V: this failure's outcome with the values its code declares (`outcome`, of
+    /// this failure's code and operation).
+    pub(crate) fn with_outcome(
+        mut self,
+        outcome: actingcommand_contract::outcome::Outcome,
+    ) -> Self {
+        self.values = Some(Box::new(outcome));
+        self
+    }
+
     /// #411 A51 (R4): `ledger_close_timeout`. The close waited `timeout` on the writer's clock
     /// for the writer to answer its `Shutdown` and end; the writer was still in `work` (the
     /// operation of the command in progress and how long it had run). Terminal: the writer is
@@ -878,6 +916,25 @@ pub struct GlobalLedgerConfig {
     /// are measured on (the failure plan's clock, the process's monotonic clock unless a test
     /// drives its own).
     clock: LedgerMonotonicClock,
+    /// LN-5 (#422, LEAN-L §3.3, §3.7): the rows of one page of a history read
+    /// (`ledger_observer.history_page_rows`).
+    history_page_rows: usize,
+    /// #422 LN-WS (R1): the SQLite virtual-machine steps between two looks at the clock of a
+    /// read that serves a Runtime request (`ledger_observer.read_check_vm_steps`).
+    read_check_vm_steps: u32,
+    /// #422 LN-WS (R2): the sequences one history statement of a view page scans at most
+    /// (`ledger_observer.history_scan_rows`).
+    history_scan_rows: usize,
+    /// LN-8 (#422, LEAN-L §3.2 step 2, §3.7): how many of the newest records the formal writer
+    /// open authenticates (`ledger_observer.open_verify_tail_records`).
+    open_verify_tail_records: usize,
+    /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
+    #[cfg(test)]
+    history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// LN-9 (#422, LEAN-L §6): the paced background scrub (the failure plan's) and the database it
+    /// reads on its own connection (the formal writer's); the writer has a scrub with both.
+    scrub: Option<LedgerScrubPolicy>,
+    scrub_database: Option<Arc<actingcommand_runtime_database::RuntimeDatabase>>,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -899,6 +956,11 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("capture_policy", &self.capture_policy)
             .field("read_budget", &self.read_budget)
             .field("close_timeout", &self.close_timeout)
+            .field("history_page_rows", &self.history_page_rows)
+            .field("read_check_vm_steps", &self.read_check_vm_steps)
+            .field("history_scan_rows", &self.history_scan_rows)
+            .field("open_verify_tail_records", &self.open_verify_tail_records)
+            .field("scrub", &self.scrub)
             .finish()
     }
 }
@@ -918,6 +980,14 @@ impl GlobalLedgerConfig {
             read_budget: None,
             close_timeout: None,
             clock: write_failure::process_clock(),
+            history_page_rows: history::DEFAULT_HISTORY_PAGE_ROWS,
+            read_check_vm_steps: read_work::DEFAULT_READ_CHECK_VM_STEPS,
+            history_scan_rows: history::DEFAULT_HISTORY_SCAN_ROWS,
+            open_verify_tail_records: sqlite::DEFAULT_OPEN_VERIFY_TAIL_RECORDS,
+            #[cfg(test)]
+            history_rows_read: None,
+            scrub: None,
+            scrub_database: None,
         }
     }
 
@@ -933,6 +1003,18 @@ impl GlobalLedgerConfig {
         self.capture_policy = plan.capture_policy().clone();
         self.read_budget = plan.read_budget().or(self.read_budget);
         self.close_timeout = plan.close_timeout().or(self.close_timeout);
+        self.history_page_rows = plan.history_page_rows().unwrap_or(self.history_page_rows);
+        // #422 LN-WS: the in-statement bound of a request's read and the span of a history
+        // statement.
+        self.read_check_vm_steps = plan
+            .read_check_vm_steps()
+            .unwrap_or(self.read_check_vm_steps);
+        self.history_scan_rows = plan.history_scan_rows().unwrap_or(self.history_scan_rows);
+        self.open_verify_tail_records = plan
+            .open_verify_tail_records()
+            .unwrap_or(self.open_verify_tail_records);
+        // LN-9 (#422): and the writer's scrub.
+        self.scrub = plan.scrub().cloned();
         self.clock = plan.clock();
         if let Some(timeout) = plan.reply_timeout() {
             self.reply_timeout = timeout;
@@ -961,9 +1043,61 @@ impl GlobalLedgerConfig {
         self
     }
 
+    /// LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read, `1..=4096`
+    /// (`ledger_observer.history_page_rows`; 256 unless set).
+    pub fn with_history_page_rows(mut self, rows: usize) -> Self {
+        self.history_page_rows = rows;
+        self
+    }
+
+    /// #422 LN-WS (R1): the SQLite virtual-machine steps between two looks at the clock of a
+    /// read that serves a Runtime request (`ledger_observer.read_check_vm_steps`; 10 000 unless
+    /// set).
+    pub fn with_read_check_vm_steps(mut self, steps: u32) -> Self {
+        self.read_check_vm_steps = steps;
+        self
+    }
+
+    /// #422 LN-WS (R2): the sequences one history statement of a view page scans at most
+    /// (`ledger_observer.history_scan_rows`; 65 536 unless set).
+    pub fn with_history_scan_rows(mut self, rows: usize) -> Self {
+        self.history_scan_rows = rows;
+        self
+    }
+
+    /// LN-8 (#422, LEAN-L §3.7): how many of the newest records the formal writer open
+    /// authenticates, `1..=1000000` (`ledger_observer.open_verify_tail_records`; 4096 unless
+    /// set).
+    pub fn with_open_verify_tail_records(mut self, records: usize) -> Self {
+        self.open_verify_tail_records = records;
+        self
+    }
+
+    /// LN-9 (#422, LEAN-L §6): the database the writer's scrub reads on its own connection (the
+    /// formal writer's, `LedgerMaintenance::open_writer_timed`).
+    pub(super) fn with_scrub_database(
+        mut self,
+        database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
+    ) -> Self {
+        self.scrub_database = Some(database);
+        self
+    }
+
+    /// #422 LN-TUNE, tests: `counter` counts the rows the store reads and authenticates for
+    /// the writer's history reads.
+    #[cfg(test)]
+    pub(crate) fn with_history_rows_read(
+        mut self,
+        counter: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
+        self.history_rows_read = Some(counter);
+        self
+    }
+
     /// Workflow #383 AO-1: how long a caller waits for one writer reply
-    /// ([`GlobalLedger::REPLY_TIMEOUT`] unless set); a wait that runs out is the error
-    /// `writer_response_timeout`.
+    /// ([`GlobalLedger::REPLY_TIMEOUT`] unless set; the Runtime sets
+    /// `ledger_observer.writer_reply_timeout_ms` through its failure plan, #422 LN-TUNE); a wait
+    /// that runs out is the error `writer_response_timeout`.
     pub fn with_reply_timeout(mut self, timeout: Duration) -> Self {
         self.reply_timeout = timeout;
         self
@@ -1021,6 +1155,26 @@ impl GlobalLedgerConfig {
             return Err(GlobalLedgerError::fatal(
                 LedgerCode::InvalidLedgerConfig.code(),
                 LedgerLocation::ValidateSubscriptionCapacity.location(),
+            ));
+        }
+        // LN-5: a history page holds at least one row and at most the key's bound; LN-8: so does
+        // the open's tail.
+        if !(1..=history::MAX_HISTORY_PAGE_ROWS).contains(&self.history_page_rows)
+            || !(1..=sqlite::MAX_OPEN_VERIFY_TAIL_RECORDS).contains(&self.open_verify_tail_records)
+        {
+            return Err(GlobalLedgerError::fatal(
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ConfigureLedgerWritePolicy.location(),
+            ));
+        }
+        // #422 LN-WS: a request's read looks at its clock at least every million SQLite steps,
+        // and a history statement spans one sequence at least.
+        if !(1..=read_work::MAX_READ_CHECK_VM_STEPS).contains(&self.read_check_vm_steps)
+            || !(1..=history::MAX_HISTORY_SCAN_ROWS).contains(&self.history_scan_rows)
+        {
+            return Err(GlobalLedgerError::fatal(
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ConfigureLedgerWritePolicy.location(),
             ));
         }
         // #411 A51: a read stops before a caller stops waiting for it, and the close waits
@@ -1147,13 +1301,13 @@ enum WriterCommand {
         after: Option<actingcommand_contract::ArtifactId>,
         response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
     },
-    /// Workflow #375 R5d: the frame cleaner's read. Its writer command kind stays
-    /// `RetentionCandidates`, the cleaner's retention read, so task timing records keep their
-    /// closed set of command kinds.
-    FrameRetentionView {
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-        response: SyncSender<GlobalLedgerResult<FrameRetentionView>>,
+    /// #422 LN-7c Q (final-query §2): at a frame cleaner pass start, the writer keeps of the
+    /// capture frame objects only those of the frames present in the live frame store. Its writer
+    /// command kind is `RetentionCandidates`, the cleaner's retention command, so task timing
+    /// records keep their closed set of command kinds.
+    RetainLiveFrames {
+        live: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        response: SyncSender<GlobalLedgerResult<()>>,
     },
     AdmitArtifactEviction {
         guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
@@ -1188,6 +1342,27 @@ enum WriterCommand {
         page_events: usize,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
     },
+    /// Workflow #422 LN-2: the tagged state under the key prefixes. Its writer command kind is
+    /// `Query`, so task timing records keep their closed set of command kinds.
+    TaggedState {
+        prefixes: Vec<String>,
+        response: SyncSender<GlobalLedgerResult<LedgerTaggedState>>,
+    },
+    /// #422 LN-7c C: whether the capture frame or the run an evidence read confirmation names is
+    /// in the ledger. Its writer command kind is `Query`, so task timing records keep their
+    /// closed set of command kinds.
+    EvidenceTarget {
+        target: LedgerEvidenceTarget,
+        response: SyncSender<GlobalLedgerResult<bool>>,
+    },
+    /// #419 LN-WS-F (R2): the records through `through_sequence` that carry one of `artifacts`,
+    /// by the `artifact_id` index. Its writer command kind is `Query`, so task timing records
+    /// keep their closed set of command kinds.
+    ArtifactRecords {
+        artifacts: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through_sequence: u64,
+        response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
     ProjectViewPage {
         query: EventQuery,
         profile: ProjectionProfile,
@@ -1202,6 +1377,13 @@ enum WriterCommand {
     },
     LatestSequence {
         response: SyncSender<GlobalLedgerResult<u64>>,
+    },
+    /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5): the checked records of the
+    /// index rows of `role` whose key starts with one of `prefixes`.
+    IndexRecords {
+        role: LedgerIndexRole,
+        prefixes: Vec<String>,
+        response: SyncSender<GlobalLedgerResult<LedgerIndexRecords>>,
     },
     Subscribe {
         cursor: SubscriptionCursor,
@@ -1312,6 +1494,8 @@ impl DeferredSummary {
 }
 
 pub struct GlobalLedger {
+    /// LN-5 (#422): the rows of one page of a history read (`history_page_rows`).
+    history_page_rows: usize,
     sender: Option<SyncSender<WriterCommand>>,
     writer: Option<JoinHandle<GlobalLedgerResult<()>>>,
     commit_statistics: Arc<CommitStatistics>,
@@ -1331,6 +1515,13 @@ pub struct GlobalLedger {
     clock: LedgerMonotonicClock,
     /// #411 A51 (R4): what the writer is doing now, for a close that waits too long.
     writer_work: Arc<WriterWork>,
+    /// LN-9 (#422, LEAN-L §6): the paced background scrub; only the Runtime's writer has one.
+    scrub: Option<sqlite::scrub::ScrubThread>,
+    /// #422 LN-7c Q: the database the frame cleaner's queries read on their own connection (a
+    /// formal writer's), and how often a query looks at its stop inside a statement
+    /// (`ledger_observer.read_check_vm_steps`).
+    frame_query_database: Option<Arc<actingcommand_runtime_database::RuntimeDatabase>>,
+    read_check_vm_steps: u32,
 }
 
 /// #411 A51 (R4): the operation of the writer's command in progress (or of its flush) and when
@@ -1362,6 +1553,9 @@ impl WriterWork {
 struct WriterContext {
     clock: LedgerMonotonicClock,
     read_budget: Option<Duration>,
+    /// #422 LN-WS (R1): how often a request's read looks at the clock inside its statements
+    /// (`ledger_observer.read_check_vm_steps`).
+    read_check_vm_steps: u32,
     work: Arc<WriterWork>,
 }
 
@@ -1469,7 +1663,7 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
         WriterCommand::RetentionCandidates { response, .. } => {
             let _ = response.send(Err(refused));
         }
-        WriterCommand::FrameRetentionView { response, .. } => {
+        WriterCommand::RetainLiveFrames { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::AdmitArtifactEviction { response, .. } => {
@@ -1487,6 +1681,15 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
         WriterCommand::QueryPage { response, .. } => {
             let _ = response.send(Err(refused));
         }
+        WriterCommand::TaggedState { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::EvidenceTarget { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ArtifactRecords { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
         WriterCommand::ProjectViewPage { response, .. } => {
             let _ = response.send((Err(refused), None));
         }
@@ -1494,6 +1697,9 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
             let _ = response.send(Err(refused));
         }
         WriterCommand::LatestSequence { response } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::IndexRecords { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::Subscribe { response, .. } => {
@@ -1677,6 +1883,9 @@ pub struct LedgerSubscription {
     last_delivered_sequence: u64,
     replay_through_sequence: u64,
     replay_page_events: usize,
+    /// #422 LN-TUNE: how long a replay page waits for the writer's reply, the ledger's
+    /// (`ledger_observer.writer_reply_timeout_ms`).
+    reply_timeout: Duration,
     live: Receiver<PersistedEvent>,
     terminal: Receiver<GlobalLedgerError>,
     terminal_error: Option<GlobalLedgerError>,
@@ -1742,7 +1951,7 @@ impl LedgerSubscription {
         let page = match receive_response(
             receiver,
             LedgerLocation::ReplaySubscription.location(),
-            COMMAND_TIMEOUT,
+            self.reply_timeout,
         ) {
             Ok(Ok(page)) => page,
             Ok(Err(error)) | Err(error) => {
@@ -1852,8 +2061,16 @@ impl fmt::Debug for GlobalLedger {
 }
 
 impl GlobalLedger {
-    /// Wait bound of one writer reply; boundaries confirming deferred appends reuse it.
+    /// The default wait bound of one writer reply (`ledger_observer.writer_reply_timeout_ms`,
+    /// 10 s); a writer opened with a plan that names one waits [`Self::reply_timeout`].
     pub const REPLY_TIMEOUT: Duration = COMMAND_TIMEOUT;
+
+    /// #422 LN-TUNE: the wait bound of one writer reply this ledger uses
+    /// (`ledger_observer.writer_reply_timeout_ms` for the Runtime's writer); boundaries
+    /// confirming deferred appends reuse it.
+    pub fn reply_timeout(&self) -> Duration {
+        self.reply_timeout
+    }
 
     /// Does not enqueue a writer command or wait for an I/O lock.
     pub fn sample_commit_statistics(&self) -> GlobalLedgerResult<GlobalLedgerCommitObservation> {
@@ -1867,6 +2084,61 @@ impl GlobalLedger {
     /// window. Does not enqueue a writer command.
     pub fn take_writer_peak(&self) -> LedgerWriterPeak {
         self.commit_statistics.take_writer_peak()
+    }
+
+    /// LN-5 (#422, LEAN-L §3.3): the events of one page of a paged history read: the configured
+    /// `ledger_observer.history_page_rows`, at most a query page's limit (1024). Does not
+    /// enqueue a writer command.
+    pub fn history_page_events(&self) -> usize {
+        self.history_page_rows.min(MAX_QUERY_PAGE_EVENTS)
+    }
+
+    /// LN-9 (#422, LEAN-L §6.3): what the background scrub found, once it found it: the failure
+    /// a full verification gives for the same damage, with its code and operation (or the failure
+    /// that stopped the scrub), fatal. The Runtime's host latches it as a Global failure. `None`
+    /// while the scrub finds nothing, and for a ledger without a scrub. Does not enqueue a writer
+    /// command.
+    pub fn scrub_finding(&self) -> Option<GlobalLedgerError> {
+        self.scrub
+            .as_ref()
+            .and_then(sqlite::scrub::ScrubThread::finding)
+    }
+
+    /// #422 LN-7c R (`contracts/ledger-observer.md` §11.7): what the background scrub found wrong
+    /// with the derived frame index (`ledger_index_mismatch` of `verify_ledger_frame_refs`, with
+    /// what and where in its detail), once it found it. Non-fatal: the host does not latch it,
+    /// the Runtime keeps running, and the scrub marked the extent untrusted so that the next
+    /// writer open rebuilds the index. Does not enqueue a writer command.
+    pub fn scrub_frame_refs_finding(&self) -> Option<GlobalLedgerError> {
+        self.scrub
+            .as_ref()
+            .and_then(sqlite::scrub::ScrubThread::frame_refs_finding)
+    }
+
+    /// LN-9: the scrub's rate from its next chunk on (`ledger_observer.scrub_rows_per_second`,
+    /// settable), `1..=100000`; any other value is `invalid_ledger_config`. A ledger without a
+    /// scrub has no rate to change.
+    pub fn set_scrub_rows_per_second(&self, rows_per_second: u64) -> GlobalLedgerResult<()> {
+        if !sqlite::scrub::valid_rate(rows_per_second) {
+            return Err(sqlite::scrub::invalid_config());
+        }
+        if let Some(scrub) = &self.scrub {
+            scrub.set_rows_per_second(rows_per_second);
+        }
+        Ok(())
+    }
+
+    /// #422 LN-7c Q (final-query §1.2): a frame query on its own read-only connection to this
+    /// writer's database, which `stop` interrupts within a statement. Only a formal writer has
+    /// one; any other answers `writer_unavailable` (not fatal). Does not enqueue a writer command.
+    pub fn frame_query(&self, stop: FrameQueryStop) -> GlobalLedgerResult<FrameQuery> {
+        let database = self.frame_query_database.as_ref().ok_or_else(|| {
+            GlobalLedgerError::request(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryFrameRetention.location(),
+            )
+        })?;
+        FrameQuery::open(Arc::clone(database), stop, self.read_check_vm_steps)
     }
 
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
@@ -1954,6 +2226,12 @@ impl GlobalLedger {
         let capacity = config.ingress_capacity;
         let subscription_capacity = config.subscription_capacity;
         let reply_timeout = config.reply_timeout;
+        let history_page_rows = config.history_page_rows;
+        // LN-9 (#422): the writer's scrub, with the database it reads.
+        let scrub = config.scrub.clone().zip(config.scrub_database.clone());
+        // #422 LN-7c Q: a formal writer's frame queries read the same database.
+        let frame_query_database = config.scrub_database.clone();
+        let read_check_vm_steps = config.read_check_vm_steps;
         let failure = config.write_failure.clone();
         // #411 A51: the read budget and the close bound, on the writer's clock.
         let close_timeout = config.close_timeout;
@@ -1962,6 +2240,7 @@ impl GlobalLedger {
         let context = WriterContext {
             clock: Arc::clone(&config.clock),
             read_budget: config.read_budget,
+            read_check_vm_steps: config.read_check_vm_steps,
             work: Arc::clone(&writer_work),
         };
         let (sender, receiver) = mpsc::sync_channel(capacity);
@@ -2054,7 +2333,29 @@ impl GlobalLedger {
                         });
                     }
                 };
+                // LN-9 (#422, LEAN-L §6): the scrub starts once the writer runs; it reads on its
+                // own connection and stops first at the close.
+                let scrub = match scrub
+                    .map(|(policy, database)| sqlite::scrub::ScrubThread::start(database, policy))
+                    .transpose()
+                {
+                    Ok(scrub) => scrub,
+                    Err(error) => {
+                        let probe = probe.map_or(Ok(()), WriteProbe::finish);
+                        drop(sender);
+                        queue.disconnect();
+                        let closed = writer.join().unwrap_or_else(|_| {
+                            Err(GlobalLedgerError::fatal(
+                                LedgerCode::WriterPanicked.code(),
+                                LedgerLocation::JoinWriter.location(),
+                            ))
+                        });
+                        let spill = spill.map_or(Ok(()), capture::SpillThread::finish);
+                        return Err(error.with_close_result(probe.and(closed).and(spill)));
+                    }
+                };
                 Ok(Self {
+                    history_page_rows,
                     sender: Some(sender),
                     writer: Some(writer),
                     commit_statistics,
@@ -2066,6 +2367,9 @@ impl GlobalLedger {
                     close_timeout,
                     clock,
                     writer_work,
+                    scrub,
+                    frame_query_database,
+                    read_check_vm_steps,
                 })
             }
             Err(mpsc::SendError(store)) => {
@@ -2395,6 +2699,93 @@ impl GlobalLedger {
         )?
     }
 
+    /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.5 steps 1–3): the tagged keys whose
+    /// `state` row key starts with one of `prefixes`, each with its latest record, read by the
+    /// index row's sequence and checked against the row; a row that disagrees with its record is
+    /// the fatal `ledger_tag_index_mismatch`. The read is index rows plus as many point reads,
+    /// whatever the ledger's length.
+    pub fn tagged_state(&self, prefixes: &[&str]) -> GlobalLedgerResult<LedgerTaggedState> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::LedgerIndexRows.location(),
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::TaggedState {
+                prefixes: prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
+                response,
+            },
+            LedgerLocation::LedgerIndexRows.location(),
+        )?;
+        receive_response(
+            receiver,
+            LedgerLocation::LedgerIndexRows.location(),
+            self.reply_timeout,
+        )?
+    }
+
+    /// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): whether the ledger holds the capture
+    /// frame an evidence read confirmation names (its `artifact.verified` record of a
+    /// `capture.frame` artifact, by the `artifact_id` index), or for a run at least one such
+    /// record linked to it (by the run's link index). Read on the writer's queue, a page at a
+    /// time within the read budget; a read the budget stopped is `ledger_read_budget_exceeded`.
+    pub fn evidence_target_known(&self, target: LedgerEvidenceTarget) -> GlobalLedgerResult<bool> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryEvents.location(),
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::EvidenceTarget { target, response },
+            LedgerLocation::QueryEvents.location(),
+        )?;
+        receive_response(
+            receiver,
+            LedgerLocation::QueryEvents.location(),
+            self.reply_timeout,
+        )?
+    }
+
+    /// #419 LN-WS-F (R2): the records through `through_sequence` that carry one of `artifacts`, in
+    /// ledger order, selected by the `artifact_id` index of `ledger_artifacts`: the read follows
+    /// those artifacts' records (an artifact's `artifact.created` and `artifact.verified`, say),
+    /// never the history of their event types. Read on the writer's queue, a page at a time
+    /// within the read budget; a read the budget stopped is `ledger_read_budget_exceeded`. No
+    /// artifact reads no record.
+    pub fn artifact_records(
+        &self,
+        artifacts: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through_sequence: u64,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryEvents.location(),
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::ArtifactRecords {
+                artifacts,
+                through_sequence,
+                response,
+            },
+            LedgerLocation::QueryEvents.location(),
+        )?;
+        receive_response(
+            receiver,
+            LedgerLocation::QueryEvents.location(),
+            self.reply_timeout,
+        )?
+    }
+
     pub fn project_view_page(
         &self,
         query: EventQuery,
@@ -2540,6 +2931,7 @@ impl GlobalLedger {
             last_delivered_sequence: cursor.after_sequence,
             replay_through_sequence: registration.replay_through_sequence,
             replay_page_events: options.replay_page_events,
+            reply_timeout: self.reply_timeout,
             live: registration.live,
             terminal: registration.terminal,
             terminal_error: None,
@@ -2620,6 +3012,11 @@ impl GlobalLedger {
     }
 
     fn shutdown(&mut self) -> GlobalLedgerResult<()> {
+        // LN-9 (#422): the scrub stops first, within one chunk, so it never holds the close.
+        let scrub = self
+            .scrub
+            .take()
+            .map_or(Ok(()), sqlite::scrub::ScrubThread::finish);
         // Workflow #383 AO-2 (§8.2): from here the close record is the epoch's last record; the
         // segment edges the close drain crosses are not reported after it.
         self.queue.begin_close();
@@ -2633,7 +3030,7 @@ impl GlobalLedger {
             .map_or(Ok(()), capture::SpillThread::finish);
         self.queue.disconnect();
         self.queue.close();
-        writer.and(probe).and(spill)
+        writer.and(probe).and(spill).and(scrub)
     }
 
     fn shutdown_writer(&mut self) -> GlobalLedgerResult<()> {
@@ -2650,15 +3047,15 @@ impl GlobalLedger {
         };
         // Deferred appends are confirmed before the writer is asked to stop: a failed reply
         // fails the close with that error and a still-pending reply is fatal, never dropped.
-        let deferred_result = self.confirm_deferred(COMMAND_TIMEOUT).and_then(|summary| {
-            match summary.failed.into_iter().next() {
+        let deferred_result = self
+            .confirm_deferred(self.reply_timeout)
+            .and_then(|summary| match summary.failed.into_iter().next() {
                 Some(first) => Err(first),
                 None if summary.pending > 0 => {
                     Err(self.deferred_unconfirmed(LedgerLocation::ShutdownWriter.location()))
                 }
                 None => Ok(()),
-            }
-        });
+            });
         // Workflow #383 AO-2 (§8.2): the writer drains the capture queue, the dump segment
         // first, before it closes the ledger; the drain takes as long as the queue holds, so the
         // reply is awaited without the reply limit (a stalled attempt is the probe's to stop).
@@ -2907,7 +3304,9 @@ fn command_operation(command: &WriterCommand) -> Location {
         }
         WriterCommand::ResolveArtifact { .. } => LedgerLocation::ResolveLedgerArtifact.location(),
         WriterCommand::RetentionCandidates { .. } => LedgerLocation::RetentionCandidates.location(),
-        WriterCommand::FrameRetentionView { .. } => LedgerLocation::FrameRetentionView.location(),
+        WriterCommand::RetainLiveFrames { .. } => {
+            LedgerLocation::FrameRetentionLiveObjects.location()
+        }
         WriterCommand::AdmitArtifactEviction { .. } => {
             LedgerLocation::AdmitArtifactEviction.location()
         }
@@ -2923,6 +3322,11 @@ fn command_operation(command: &WriterCommand) -> Location {
         }
         WriterCommand::Query { .. } => LedgerLocation::QueryEvents.location(),
         WriterCommand::QueryPage { .. } => LedgerLocation::QueryEventPage.location(),
+        WriterCommand::IndexRecords { .. } => LedgerLocation::LedgerIndexRows.location(),
+        WriterCommand::TaggedState { .. } => LedgerLocation::LedgerIndexRows.location(),
+        WriterCommand::EvidenceTarget { .. } | WriterCommand::ArtifactRecords { .. } => {
+            LedgerLocation::QueryEvents.location()
+        }
         WriterCommand::ProjectViewPage { .. } => LedgerLocation::ProjectLedgerViewPage.location(),
         WriterCommand::ProjectSchedulingOutcomes { .. } => {
             LedgerLocation::ProjectSchedulingOutcomes.location()
@@ -2946,9 +3350,12 @@ const fn is_read_command(command: &WriterCommand) -> bool {
         command,
         WriterCommand::ResolveArtifact { .. }
             | WriterCommand::RetentionCandidates { .. }
-            | WriterCommand::FrameRetentionView { .. }
             | WriterCommand::Query { .. }
             | WriterCommand::QueryPage { .. }
+            | WriterCommand::IndexRecords { .. }
+            | WriterCommand::TaggedState { .. }
+            | WriterCommand::EvidenceTarget { .. }
+            | WriterCommand::ArtifactRecords { .. }
             | WriterCommand::ProjectViewPage { .. }
             | WriterCommand::ProjectSchedulingOutcomes { .. }
             | WriterCommand::LatestSequence { .. }
@@ -3010,8 +3417,7 @@ fn writer_commands<S: LedgerStore>(
         let mut whole_ledger_query = false;
         let kind = match &command {
             WriterCommand::ResolveArtifact { .. } => LedgerWriterCommandKind::ResolveArtifact,
-            WriterCommand::RetentionCandidates { .. }
-            | WriterCommand::FrameRetentionView { .. } => {
+            WriterCommand::RetentionCandidates { .. } | WriterCommand::RetainLiveFrames { .. } => {
                 LedgerWriterCommandKind::RetentionCandidates
             }
             WriterCommand::ReleaseLabPin { .. } => LedgerWriterCommandKind::ReleaseLabPin,
@@ -3031,8 +3437,16 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::ReconcileScheduledPolicySettlement { .. } => {
                 LedgerWriterCommandKind::ReconcileScheduledPolicySettlement
             }
-            WriterCommand::Query { .. } => LedgerWriterCommandKind::Query,
+            // #422 LN-7c C: the evidence target read is a read too; #419 LN-WS-F: so is the read
+            // of an artifact set's records.
+            WriterCommand::Query { .. }
+            | WriterCommand::TaggedState { .. }
+            | WriterCommand::EvidenceTarget { .. }
+            | WriterCommand::ArtifactRecords { .. } => LedgerWriterCommandKind::Query,
             WriterCommand::QueryPage { .. } => LedgerWriterCommandKind::QueryPage,
+            // Workflow #422 LN-4: the index read is a read; the set of command kinds that task
+            // timing records name stays closed.
+            WriterCommand::IndexRecords { .. } => LedgerWriterCommandKind::Query,
             WriterCommand::ProjectViewPage { .. } => LedgerWriterCommandKind::ProjectViewPage,
             WriterCommand::ProjectSchedulingOutcomes { .. } => {
                 LedgerWriterCommandKind::ProjectSchedulingOutcomes
@@ -3062,10 +3476,32 @@ fn writer_commands<S: LedgerStore>(
         let started_ms = (context.clock)();
         context.work.enter(command_operation(&command), started_ms);
         let work = read_work::ReadWork::started(&context.clock, started_ms, context.read_budget);
+        // #422 LN-WS (R1): a read that serves a Runtime request (a view page, a subscription's
+        // replay page) is bounded inside its SQLite statements too. The Runtime's own reads keep
+        // their bound between rows: the policy driver ends on any cycle error, and their reads
+        // are index-bounded.
+        // #422 LN-7c C: so is the evidence target read of a client's confirmation.
+        let work = if matches!(
+            command,
+            WriterCommand::ProjectViewPage { .. }
+                | WriterCommand::ReplayPage { .. }
+                | WriterCommand::EvidenceTarget { .. }
+        ) {
+            work.within_statements(context.read_check_vm_steps)
+        } else {
+            work
+        };
         #[cfg(any(test, feature = "test-hooks"))]
         if is_read_command(&command) {
             crate::read_hold::hold_reads_of(&hook_root);
         }
+        // #422 LN-WS, tests: the statements this read reads with, while a recorder is armed.
+        #[cfg(any(test, feature = "test-hooks"))]
+        let recording = if is_read_command(&command) {
+            crate::writer_statements::start(&hook_root)
+        } else {
+            None
+        };
         let command_succeeded;
         match command {
             WriterCommand::ResolveArtifact {
@@ -3141,22 +3577,10 @@ fn writer_commands<S: LedgerStore>(
                 }
                 command_observation.replied(response.send(result).is_ok());
             }
-            WriterCommand::FrameRetentionView {
-                now_unix_ms,
-                switches,
-                response,
-            } => {
-                let result = store.frame_retention_view(now_unix_ms, switches, &work);
-                command_succeeded = result.is_ok();
-                if let Err(error) = &result
-                    && error.terminal()
-                {
-                    let error = error.clone();
-                    command_observation.replied(response.send(result).is_ok());
-                    notify_terminal_failure(&mut subscribers, error.clone());
-                    return Err(error);
-                }
-                command_observation.replied(response.send(result).is_ok());
+            WriterCommand::RetainLiveFrames { live, response } => {
+                store.retain_live_objects(&live);
+                command_succeeded = true;
+                command_observation.replied(response.send(Ok(())).is_ok());
             }
             WriterCommand::AdmitArtifactEviction { guard, response } => {
                 match store.admit_artifact_eviction(*guard) {
@@ -3215,12 +3639,9 @@ fn writer_commands<S: LedgerStore>(
                 command_succeeded = true;
             }
             WriterCommand::CommittedSequence { event_id, response } => {
-                command_succeeded = true;
-                command_observation.replied(
-                    response
-                        .send(Ok(store.committed_sequence(&event_id)))
-                        .is_ok(),
-                );
+                let result = store.committed_sequence(&event_id);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
             }
             WriterCommand::ReconcileScheduledPolicySettlement {
                 execution,
@@ -3245,14 +3666,28 @@ fn writer_commands<S: LedgerStore>(
                 if let Err(error) = result {
                     // A settlement refusal is not terminal (#670 safety net); an execution
                     // appended before its completion was refused stays, and reaches the
-                    // subscribers.
-                    for event in store.query(&EventQuery {
-                        from_sequence: Some(before.saturating_add(1)),
-                        ..EventQuery::default()
-                    }) {
-                        deliver_live_event(&mut subscribers, &event);
+                    // subscribers. LN-5: read back from the store; a failed read ends the writer.
+                    let appended = store.query_within(
+                        &EventQuery {
+                            from_sequence: Some(before.saturating_add(1)),
+                            ..EventQuery::default()
+                        },
+                        &read_work::ReadWork::unbounded(),
+                        LedgerLocation::ReconcileScheduledPolicySettlement.location(),
+                    );
+                    match appended {
+                        Ok(appended) => {
+                            for event in &appended {
+                                deliver_live_event(&mut subscribers, event);
+                            }
+                            command_observation.replied(response.send(Err(error)).is_ok());
+                        }
+                        Err(read_error) => {
+                            notify_terminal_failure(&mut subscribers, read_error.clone());
+                            let _ = response.send(Err(read_error.clone()));
+                            return Err(read_error);
+                        }
                     }
-                    command_observation.replied(response.send(Err(error)).is_ok());
                 }
             }
             WriterCommand::Query { query, response } => {
@@ -3286,6 +3721,48 @@ fn writer_commands<S: LedgerStore>(
                         LedgerLocation::QueryEventPage.location(),
                     ))
                 };
+                read_events = result.as_ref().map_or(0, Vec::len);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::IndexRecords {
+                role,
+                prefixes,
+                response,
+            } => {
+                let result = store.index_records(role, &prefixes, &work);
+                read_events = result.as_ref().map_or(0, |read| read.records.len());
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::TaggedState { prefixes, response } => {
+                let result = store.tagged_state(&prefixes, &work);
+                read_events = result.as_ref().map_or(0, |state| state.records.len());
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::EvidenceTarget { target, response } => {
+                let result = store
+                    .evidence_target_known(&target, &work)
+                    .and_then(|known| {
+                        known.ok_or_else(|| {
+                            read_work::ReadWork::exceeded(LedgerLocation::QueryEvents.location())
+                        })
+                    });
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::ArtifactRecords {
+                artifacts,
+                through_sequence,
+                response,
+            } => {
+                let result = store.artifact_records(
+                    &artifacts,
+                    through_sequence,
+                    &work,
+                    LedgerLocation::QueryEvents.location(),
+                );
                 read_events = result.as_ref().map_or(0, Vec::len);
                 command_succeeded = result.is_ok();
                 command_observation.replied(response.send(result).is_ok());
@@ -3554,6 +4031,13 @@ fn writer_commands<S: LedgerStore>(
             finished.saturating_duration_since(started),
             read_events,
             whole_ledger_query,
+        );
+        #[cfg(any(test, feature = "test-hooks"))]
+        crate::writer_statements::finish(
+            recording,
+            kind,
+            finished.saturating_duration_since(started),
+            work.bound_callbacks(),
         );
         previous_writer_work = command_observation;
         context.work.leave();

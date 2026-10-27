@@ -3546,6 +3546,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_settlement_anchor_invalid": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "The start's settlement of the direct contained runs of earlier epochs (#411 A65) read the runtime fact host.contained_settlement, which names the start event of the last start that completed this settlement, and found no integer the Runtime recorded, or a start event at or after this start's own. The start fails; the fact comes back at every start.",
+      "common_causes": "A ledger whose runtime facts were changed outside the Runtime, or a ledger written by another program.",
+      "handling": "TBD"
+    },
     "contained_task_active_identity_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -3902,7 +3922,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry input prerequisite missing.",
+      "description": "The Runtime host reports contained task geometry input prerequisite missing: the frame an input follows has no passed task geometry of its own. Workflow #392 DA-2a (model 392 v1.2 §0.2 C2): a frame whose size changed during the run is no longer this code; the host reads its geometry again, records the change and rebuilds the display map.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -3957,12 +3977,13 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "display_problem": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry unavailable.",
+      "description": "The Runtime host reports contained task geometry unavailable. Workflow #392 DA-2a: with display_problem safe_area_unavailable, the game's display declaration measures on the safe area and the frame's geometry has no insets; Workflow #392 DA-4b-D (Alice's ruling 69): no backend reads a cutout, an emulator's insets are 0 and a device model's come from its declaration file, so this is a handset that declares no device model; the run ends before any input.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8149,6 +8170,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "instance_lock_poisoned": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A lock of one instance alone that guards no data (its admission guard or its queue-order lock) was left poisoned by a panic (ISO-M #419, R8). Its poison is cleared, the work that met it fails, and the boundary of that work fences the instance; every other instance keeps dispatching and executing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "instance_not_running": {
       "category": "error",
       "ladder_class": "none",
@@ -8216,6 +8257,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "alias": "optional",
+        "application_id": "optional",
+        "game": "optional",
+        "server": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -8225,9 +8270,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports invalid application identity.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Runtime host reports invalid application identity. IDLE-1: an idle close_app found no application id for the instance's game and server in the game's standard pack root applications.json (servers.<server>.application_id; the root, the file or the member is missing or unreadable), or one that is not the instance's assigned application (application_id the declared one); the action fails for this instance only, which is left as it is. The detail says which.",
+      "common_causes": "No standard_packs.root is configured, the game's root holds no applications.json, or the instance's configured application_id differs from the one its game's root declares.",
+      "handling": "Install the game's standard pack root with its applications.json, or make the instance's application_id the one it declares; or set the instance's idle.action to none."
     },
     "invalid_capacity_sample_target": {
       "category": "error",
@@ -9988,6 +10033,10 @@
         "verify_ms": "required",
         "material_ms": "required",
         "restore_ms": "required",
+        "meta_ms": "optional",
+        "tail_ms": "optional",
+        "index_ms": "optional",
+        "import_ms": "optional",
         "timeout_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
@@ -9998,7 +10047,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start opened its ledger: the open's measures as values (events read, artifacts and their bytes checked, worker threads, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line before runtime_ready.",
+      "description": "The start opened its ledger: the open's measures as values (events read, artifacts and their bytes checked, worker threads, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line before runtime_ready. Since #422 LN-8 the open reads only the keyed meta row, the end of the stored rows, its newest records (ledger_observer.open_verify_tail_records) and its indexes: event_count is the records it authenticated, its phases are meta_ms, tail_ms, index_ms and import_ms, and sql_read_ms, verify_ms and restore_ms are 0.",
       "common_causes": "Every start.",
       "handling": "None; long times point at a large ledger or a slow volume."
     },
@@ -10017,6 +10066,10 @@
         "verify_ms": "required",
         "material_ms": "required",
         "restore_ms": "required",
+        "meta_ms": "optional",
+        "tail_ms": "optional",
+        "index_ms": "optional",
+        "import_ms": "optional",
         "timeout_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
@@ -10027,7 +10080,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure.",
+      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure. A verify read's phases are sql_read_ms, verify_ms and restore_ms; a start's open's are meta_ms, tail_ms, index_ms and import_ms (#422 LN-8).",
       "common_causes": "A ledger open or verify that failed partway.",
       "handling": "None by itself; handle the failure it is attached to."
     },
@@ -10050,7 +10103,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.11",
-      "description": "The start's ledger open succeeded but took longer than ledger_observer.open_warn_ratio_milli thousandths of its deadline ledger_observer.open_timeout_ms (P0-LO): elapsed_ms is the open's measured time, the sum of the phases ledger_opened reports (SQL read, verify, material and restore), timeout_ms the deadline and event_count the events read. actingd writes it as a daemon line right after ledger_opened, at most once per start.",
+      "description": "The start's ledger open succeeded but took longer than ledger_observer.open_warn_ratio_milli thousandths of its deadline ledger_observer.open_timeout_ms (P0-LO): elapsed_ms is the open's measured time, the sum of the phases ledger_opened reports (SQL read, verify, material and restore; since #422 LN-8 meta, tail, index and import), timeout_ms the deadline and event_count the events read. actingd writes it as a daemon line right after ledger_opened, at most once per start.",
       "common_causes": "A ledger that has grown large, a slow volume, or a start while the machine is busy (for example several emulators starting at boot).",
       "handling": "TBD"
     },
@@ -13298,6 +13351,27 @@
       "description": "The Runtime host reports policy pool binding invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "policy_pool_reading_unused": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "ROUT-L RL-1b: the scheduler workbench composes the rules, and policy.resources.pools gives a reading for a pool that no composed game declares. The reading is left out of every evaluation, so the other instances are scheduled as before; recorded once per pool.",
+      "common_causes": "A game's schedule.json that declared the pool was removed or changed, or its instances are no longer configured, while the configuration still gives the pool's reading.",
+      "handling": "Remove the reading from policy.resources.pools, or restore the pool in the game's schedule.json."
     },
     "policy_reason_chain_mismatch": {
       "category": "error",
@@ -17495,7 +17569,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports runtime monitor spawn failed.",
+      "description": "A Runtime monitor thread could not be spawned: the monitor probe at the host's start, or the emulator watch (emu-watch, operation emulator_watch) that actingd starts after the configured emulator starts are enqueued. The Runtime halts; a restart may succeed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20410,6 +20484,7 @@
       "values": {
         "instance_id": "required",
         "blackout_id": "required",
+        "blackout_source": "required",
         "next_eligible_unix_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
@@ -20420,7 +20495,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate on the instance is deferred because a blackout (blackout_id: a catalog maintenance event or a host blackout entry) is active; it wakes at the blackout's end (next_eligible_unix_ms). Admission refuses an intent that crossed into the blackout with the same code.",
+      "description": "A candidate on the instance is deferred because a blackout (blackout_id: a catalog maintenance event, a host blackout entry or an entry of the instance's own list; blackout_source: which of the three) is active; it wakes at the blackout's end (next_eligible_unix_ms), the end of the union of the overlapping or adjacent intervals. Admission refuses an intent that crossed into the blackout with the same code.",
       "common_causes": "A configured maintenance or reset period, or a host blackout such as a planned machine restart.",
       "handling": "Nothing to repair."
     },
@@ -20433,6 +20508,7 @@
       "values": {
         "instance_id": "required",
         "blackout_id": "required",
+        "blackout_source": "required",
         "blackout_start_unix_ms": "required",
         "required_ms": "required",
         "operation": "optional",
@@ -20444,9 +20520,33 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate is deferred because its response deadline (required_ms) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms); it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually.",
+      "description": "A candidate is deferred because its horizon (required_ms: its response deadline, or its expected duration under scheduling.blackout.quiet_horizon expected) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms; blackout_id and blackout_source name the entry that covers the start), or because the hard quiet before that start (scheduling.blackout.hard_quiet_ms) has begun; it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually. Admission refuses an intent that no longer fits with the same code.",
       "common_causes": "A blackout starts soon.",
       "handling": "Nothing to repair."
+    },
+    "policy_day_boundary_approaching": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "window_end_unix_ms": "required",
+        "required_ms": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "A Runtime-started policy run on an instance whose scheduling.day_boundary.quiet is true in effect would not end, by its expected duration (required_ms), before the end of the activity window it would be admitted in (window_end_unix_ms; in a bookkeeping-day profile the game's reset); it is deferred and wakes at the start of the profile's next window (next_eligible_unix_ms). Shorter work still runs up to the window's end. Admission refuses an intent that no longer fits with the same code (SCH-M D-6, Workflow #386 SR-4a2).",
+      "common_causes": "A long task became due shortly before the end of its activity window.",
+      "handling": "Nothing to repair. To let such runs start anyway, set scheduling.day_boundary.quiet (or the instance's own key) to false."
     },
     "blackout_run_stopped": {
       "category": "error",
@@ -20547,6 +20647,10 @@
         "count": "required",
         "added_package_ids": "optional",
         "removed_package_ids": "optional",
+        "schedule_sha256": "optional",
+        "rules": "optional",
+        "held": "optional",
+        "unclassified": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -20556,7 +20660,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack game root's registry (package id to package directory, from bundle.json) was read at startup, or a run's preparation read a registry that differs from the one read before (Workflow #373 NAV-6): count is its number of packages; the added and removed package ids are listed, at most 64 each with their totals.",
+      "description": "A standard-pack game root's registry (package id to package directory, from bundle.json) was read at startup, or a run's preparation read a registry that differs from the one read before (Workflow #373 NAV-6): count is its number of packages; the added and removed package ids are listed, at most 64 each with their totals. ROUT-L RL-1b: when the scheduler workbench composed a changed schedule.json of a game in use, the record also carries schedule_sha256 and the game's rules, held and unclassified package counts.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20579,6 +20683,25 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A standard-pack game directory or root file, or the root directory itself (then without game), could not be read (an I/O failure other than a root file's absence; the OS error is the cause). Recorded at startup; a run that needs the root is refused in preparation (Workflow #373 NAV-6). A broken root never stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "standard_pack_table_column_expired": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "table_column": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A column of a standard-pack table declares valid_until_unix_s and that second has passed, so every cell of the column reads null (Workflow #357 DB-1, M-357a v1.1). A note of check-config, one per expired column.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21618,6 +21741,10 @@
       "uncertain": false,
       "values": {
         "count": "required",
+        "alias": "optional",
+        "attempts": "optional",
+        "limit_count": "optional",
+        "idle_action": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -21627,7 +21754,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line.",
+      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line. emu-watch (Alice's ruling 35, R3): the emulator watch found a configured instance's emulator stopped, its key free and no autostart or emulator control claim waiting, and enqueued one autostart claim for it, paused or not: count is 1, alias the instance, attempts this restart's place among the watch's restarts of the instance within emulator_control.restart_window_ms, limit_count emulator_control.restart_attempts; also a device_state_observed record under the instance. The claim's Start and its result follow as every configured start's. IDLE-1: the wake of an instance whose idle action stopped its emulator enqueued the same claim (count 1, alias the instance, idle_action stop_emulator).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21797,9 +21924,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A scheduling pause holds the instance or the global gate: the autostart claim queues again as a gated entry and releases its key; the resume grants it again (Workflow #369 S6c, H-5). A report line.",
+      "retired_in": "0.12.12",
+      "description": "Retired (emu-watch, Alice's ruling 35: a scheduling pause never holds the emulator start). A scheduling pause holds the instance or the global gate: the autostart claim queues again as a gated entry and releases its key; the resume grants it again (Workflow #369 S6c, H-5). A report line.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21820,7 +21948,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). A report line.",
+      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). emu-watch: for the emulator watch's claim, the status read just before its Start found the emulator process running. A report line.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22177,6 +22305,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "alias": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -22186,7 +22315,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.9",
-      "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links.",
+      "description": "A self-check's emulator status read (MuMuManager info, #411 A48) failed, so the self-check went on from the Runtime's own state of the instance: an instance bound to an ADB port opened its backends as before, and one whose binding is pending was reported instance_not_running. The read's failure text is the caused_by link. Recorded once per self-check as a connection-preparation runtime.failed record at stage read_instance_state under the self-check's links. emu-watch: also a status read of the emulator watch that failed (operation emulator_watch, alias the instance): the instance's reading stays as it was and no restart is requested at that poll; recorded once per failing streak as a device_state_observed record under the instance and the same report line. And the cause of emulator_autostart_failed when the watch's autostart claim could not read the status just before its Start (operation run_emulator_autostart).",
       "common_causes": "MuMuManager did not answer within its bound or printed an answer of an unknown shape.",
       "handling": "TBD"
     },
@@ -22216,6 +22345,145 @@
       "description": "A restart (an operator's emulator restart, or the stuck-recovery ladder's emulator-restart rung) launches only after the old VM has exited (#411 A50). Its Stop's readiness wait had expired, so it read the emulator status as a self-check does (MuMuManager info: the bounded read after the Stop's failure, then one read every 500 ms on the Runtime clock) for at most emulator_control.restart_exit_wait_ms, and every read that answered still showed the emulator process running. The restart fails and launches nothing, so the new instance never comes up on another ADB port beside the old one. elapsed_ms is the time waited, timeout_ms the bound in effect, config_key the bound's key; process_started, android_started and adb_port_present are the last read that answered. The Stop's failure (emulator_control_wait_timeout) is the caused_by link. Recorded as the request's command.rejected and runtime.failed under the restart's links (the ladder's rung fails with this code).",
       "common_causes": "The emulator's VM process stays alive after its shutdown (it is still stopping, or its manager lost track of it) and keeps the instance's ADB port.",
       "handling": "Wait until the old emulator process has exited, or end it, then restart again; raise emulator_control.restart_exit_wait_ms when the emulator needs longer to stop."
+    },
+    "emulator_watch_state_changed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "process_started": "required",
+        "android_started": "required",
+        "adb_port_present": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A poll of the emulator watch (emu-watch, Alice's ruling 35) read the instance's emulator in another running state than the Runtime held (on: the process runs with Android and an ADB port; off otherwise; or the Runtime held no reading): the instance's emulator_state takes the reading. The status read's process_started, android_started and adb_port_present. A device_state_observed record under the instance and the same report line, which actingd writes as a daemon line.",
+      "common_causes": "The emulator stopped or crashed behind the Runtime's back, or a person started it outside the Runtime; the first reading after the Runtime's start.",
+      "handling": "None needed. A configured instance (start_emulator) found stopped is started again by the watch within its bound; any other instance is only recorded."
+    },
+    "emulator_watch_restart_exhausted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "attempts": "required",
+        "limit_count": "required",
+        "retry_after_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A poll of the emulator watch (emu-watch, R3) found the configured instance's emulator stopped, but the watch already started it emulator_control.restart_attempts times (limit_count; attempts in the window) within emulator_control.restart_window_ms: it starts it no more until the oldest of those restarts leaves the window (retry_after_ms) or a person's emulator control of the instance clears the count. Once per streak; a device_state_observed record under the instance and the same report line.",
+      "common_causes": "The emulator stops again soon after each start, or its Start keeps failing.",
+      "handling": "Look at the instance's emulator and the failures of the watch's starts (emulator_autostart_failed and their causes). Start it by hand with actingctl emulator start (or ac_emulator), which also clears the count, or wait for the window to pass."
+    },
+    "instance_idle_action": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "idle_action": "required",
+        "next_occurrence_unix_ms": "optional",
+        "at_unix_ms": "optional",
+        "application_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): an instance with no task soon. With operation run_idle_action, its idle action ran: close_app stopped the game's application inside the emulator (application_id, the one the game's standard pack root applications.json declares for the instance's server, which is the instance's assigned application), or stop_emulator closed the instance's sessions and stopped its emulator through the emulator-control path. It ran only with no lease, no queued request and no keyless work on the instance, no scheduling pause holding it, its emulator running and the scheduler's next due time for it (next_occurrence_unix_ms, absent when the latest evaluation gave none) at least idle.min_gap_ms away. With operation queue_idle_wake, the instance's wake was queued: at_unix_ms or earlier when a due task arrived earlier (the startup package; after stop_emulator the configured emulator start first, whose emulator_autostart_queued record follows). at_unix_ms is the planned wake (the next due time minus the action's wake lead), absent when none was planned. idle_action names the action. A device_state_observed record under the instance and the same report line.",
+      "common_causes": "The instance has no task within idle.min_gap_ms, or its wake is due.",
+      "handling": "None needed. Set idle.action (or instance.<id>.idle.action) to none to keep the instance running, or to close_app or stop_emulator to choose the action; idle.min_gap_ms and the wake leads set when it acts and when it comes back."
+    },
+    "instance_idle_action_unsupported": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "idle_action": "required",
+        "member": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "IDLE-1 (Fail Loud): the instance's idle action in effect (idle_action, close_app or stop_emulator) cannot work, because the instance cannot be brought back after it: member names what its instances[] entry lacks, startup_package (either action: the wake runs the startup package) or start_emulator (stop_emulator: the wake starts the emulator through the configured start). The action never runs on the instance and the instance keeps running. Reported once per action in effect, at the first idle check that finds it (operation check_idle_instances), which after a start is the first policy cycle or lease sweep; an instruction that sets another action that cannot work reports it again. A device_state_observed record under the instance and the same report line.",
+      "common_causes": "The instance's entry configures no startup_package while idle.action is close_app (the default) or stop_emulator.",
+      "handling": "Configure the instance's startup_package (and, for stop_emulator, start_emulator), or set instance.<id>.idle.action to none."
+    },
+    "run_duration_key_reserved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "SCH-M ED-2 (contracts/instance-fact-store.md, Run duration facts): a publication named health.run_duration (fact_key), the instance store record of the run-duration samples, which only the Runtime writes at the settlement of a successful scheduled run. A client's PublishFact or PublishFacts, and any other publication path of the Runtime, is refused before the fact write gate and nothing is appended. Not fatal.",
+      "common_causes": "A script that copies or restores an instance's facts, run-duration samples included.",
+      "handling": "Leave the key out: the samples come only from the instance's successful scheduled runs; to stop using them, set scheduling.expected_runtime.enabled to false."
+    },
+    "run_duration_row_dropped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "SCH-M ED-2 (Fail Loud): a row of the instance's health.run_duration record (instance_id, the instance alias) was dropped, or a run's sample was not recorded: a new package's row beyond the 256-row bound dropped the row with the oldest at (package_id that row's); the write dropped a stored row it could not read (package_id when it could be read); or the store refused the record's publication (package_id the run's, the refusal as the caused_by link). That package's next expected duration is its declared one until it has runs again. One runtime.failed record with system links (operation record_run_duration_sample) and the same line in the daemon's log.",
+      "common_causes": "More than 256 task packages ran on one instance; or the instance fact store is full (fact_store_capacity_exceeded as the cause).",
+      "handling": "None for the bound: the oldest package gets its samples again from its next runs. For a refusal, read the cause; a full store is booked in the capacity ledger of contracts/instance-fact-store.md."
     }
   },
   "locations": {
@@ -29116,6 +29384,54 @@
       "status": "active",
       "since": "0.12.4",
       "description": "A Runtime host operation or stage: check that no input reached the instance while a keyless online Lab observation took the frames its package's target consensus needs (#411 Lab L5)."
+    },
+    "emulator_watch": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.12",
+      "description": "A Runtime host operation: the emulator watch (emu-watch, Alice's ruling 35): its start, which actingd asks for after the configured emulator starts are enqueued, its polls (the emulator status read of every discovery-bound instance and the restarts it requests) and its end with the host."
+    },
+    "check_idle_instances": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A Runtime host operation: the idle check (IDLE-1) of every registered physical instance, at every policy cycle and every lease sweep: whether an instance's idle action runs, an idle instance's wake is queued, or an action that cannot work is reported (instance_idle_action_unsupported)."
+    },
+    "run_idle_action": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A Runtime host operation: one instance's idle action (IDLE-1) on its emulator-control claim: close_app stops the game's application, stop_emulator closes the instance's sessions and stops its emulator."
+    },
+    "queue_idle_wake": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.13",
+      "description": "A Runtime host operation: one idle instance's wake (IDLE-1): the configured emulator start (after stop_emulator) and the startup package queued."
+    },
+    "record_run_duration_sample": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "A Runtime host operation (SCH-M ED-2): one successful scheduled run's duration written as the newest sample of its package's row in its instance's health.run_duration record, at the settlement that recorded its execution, and the record published."
+    },
+    "project_expected_runtime": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "A Runtime host operation (SCH-M ED-2): the expected duration E of each evaluated (task, instance) pair projected from its instance's health.run_duration record into the evaluation's task states."
     }
   }
 }

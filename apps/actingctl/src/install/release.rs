@@ -12,7 +12,9 @@ use super::manifest::{self, Half, Speaks};
 use super::state::{self, BuildOrigin, KeptBuild, OperationKind};
 use super::{Answer, Flags, Host};
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem, InstallRefusal, ReleaseCheck};
+use crate::codes::{
+    ActingctlCode, ArgumentProblem, InstallCaveat, InstallLocation, InstallRefusal, ReleaseCheck,
+};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use serde::{Deserialize, Serialize};
@@ -64,13 +66,17 @@ pub(crate) struct ReleaseAsset {
     pub(crate) digest: String,
 }
 
-/// One failed check, with the file it concerns and the digests when they apply.
+/// One failed check, with the file it concerns, the digests when they apply and the reader's
+/// own failure when there is one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Failure {
     pub(crate) check: ReleaseCheck,
     pub(crate) file: Option<String>,
     pub(crate) expected_sha256: Option<String>,
     pub(crate) actual_sha256: Option<String>,
+    /// The failure that made the check fail (a zip reader's or the OS's), kept as a link of the
+    /// refusal.
+    pub(crate) cause: Option<Outcome>,
 }
 
 impl Failure {
@@ -80,7 +86,13 @@ impl Failure {
             file: None,
             expected_sha256: None,
             actual_sha256: None,
+            cause: None,
         }
+    }
+
+    fn cause(mut self, cause: Outcome) -> Self {
+        self.cause = Some(cause);
+        self
     }
 
     fn file(mut self, file: impl Into<String>) -> Self {
@@ -107,14 +119,20 @@ struct FailureRow<'a> {
     actual_sha256: Option<&'a str>,
 }
 
-/// `install_release_refused` with every failed check (`release_checks`, once each in order) and
+/// The refusal `release_check_failed` of the command `operation` with every failed check
+/// (`release_checks`, once each in order), each check's own failure as a `caused_by` link, and
 /// the result's `failures`.
-fn refused(failures: &[Failure]) -> Result<Answer, Outcome> {
+fn refused(operation: InstallLocation, failures: &[Failure]) -> Result<Answer, Outcome> {
     let mut checks = Vec::new();
     for failure in failures {
         if !checks.contains(&failure.check) {
             checks.push(failure.check);
         }
+    }
+    let mut outcome =
+        super::refusal(operation, InstallRefusal::ReleaseCheckFailed).release_checks(checks);
+    for cause in failures.iter().filter_map(|failure| failure.cause.clone()) {
+        outcome = outcome.caused_by(cause);
     }
     let rows = failures
         .iter()
@@ -125,8 +143,7 @@ fn refused(failures: &[Failure]) -> Result<Answer, Outcome> {
             actual_sha256: failure.actual_sha256.as_deref(),
         })
         .collect::<Vec<_>>();
-    Answer::new(Outcome::new(ActingctlCode::InstallReleaseRefused).release_checks(checks))
-        .with("failures", rows)
+    Answer::new(outcome).with("failures", rows)
 }
 
 /// The release folder's two zips, found by name.
@@ -520,7 +537,7 @@ pub(crate) fn verify(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
         mut failures,
     } = precheck(&inputs)?;
     let Some(located) = located else {
-        return refused(&failures);
+        return refused(InstallLocation::ReleaseVerify, &failures);
     };
     let mut ms = host.now_unix_ms();
     let work = loop {
@@ -536,10 +553,12 @@ pub(crate) fn verify(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
     for half in [Half::Runtime, Half::Tools] {
         match extract(located.zip(half), &work.join(half.dir())) {
             Ok(()) => {}
-            Err(Extracted::Unreadable(_)) => {
+            Err(Extracted::Unreadable(cause)) => {
                 extracted = false;
                 failures.push(
-                    Failure::new(ReleaseCheck::ZipUnreadable).file(file_name(located.zip(half))),
+                    Failure::new(ReleaseCheck::ZipUnreadable)
+                        .file(file_name(located.zip(half)))
+                        .cause(cause),
                 );
             }
             Err(Extracted::Failed(cause)) => return Err(cause),
@@ -552,13 +571,16 @@ pub(crate) fn verify(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
         None
     };
     let Some(verified) = verified.filter(|_| failures.is_empty()) else {
-        return refused(&failures);
+        return refused(InstallLocation::ReleaseVerify, &failures);
     };
+    // Without facts the result is the caveat `release_unconfirmed` itself: a warning.
     let outcome = match &located.facts {
-        Some(facts) => Outcome::new(ActingctlCode::InstallReleaseVerified)
+        Some(facts) => super::done(InstallLocation::ReleaseVerify)
             .commit_sha(located.commit.clone())
             .tag(facts.tag.clone()),
-        None => Outcome::new(ActingctlCode::InstallReleaseVerifiedLocal)
+        None => Outcome::new(ActingctlCode::InstallCaveatNoted)
+            .operation(InstallLocation::ReleaseVerify)
+            .install_caveat(InstallCaveat::ReleaseUnconfirmed)
             .commit_sha(located.commit.clone()),
     };
     let release = VerifiedRelease::of(&located, &verified);
@@ -615,7 +637,7 @@ pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
     )?;
     let inputs = inputs(&flags)?;
     let paths = super::resolve_root(&flags)?;
-    super::refuse_ab(&paths)?;
+    super::refuse_ab(InstallLocation::ReleaseStage, &paths)?;
     let Prechecked {
         located,
         mut failures,
@@ -624,22 +646,28 @@ pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
         failures.insert(0, Failure::new(ReleaseCheck::FactsMissing));
     }
     let Some(located) = located else {
-        return refused(&failures);
+        return refused(InstallLocation::ReleaseStage, &failures);
     };
     if !failures.is_empty() {
-        return refused(&failures);
+        return refused(InstallLocation::ReleaseStage, &failures);
     }
-    journal::refuse_unfinished(&paths)?;
+    journal::refuse_unfinished(InstallLocation::ReleaseStage, &paths)?;
     let build = paths.build(&located.commit);
     if build.exists() {
         match manifest::verify_build(&build) {
             Ok(kept) if kept.commit == located.commit => {
-                let state = state::load_state_or_default(&paths)
-                    .map_err(|cause| journal::state_invalid(paths.state(), Some(cause)))?;
+                let state = state::load_state_or_default(&paths).map_err(|cause| {
+                    journal::state_invalid(
+                        InstallLocation::ReleaseStage,
+                        paths.state(),
+                        Some(cause),
+                    )
+                })?;
                 if state.kept(&located.commit).is_some() {
                     return Answer::new(
-                        Outcome::new(ActingctlCode::InstallBuildStaged)
-                            .commit_sha(located.commit.clone()),
+                        super::done(InstallLocation::ReleaseStage)
+                            .commit_sha(located.commit.clone())
+                            .installation_changed(false),
                     )
                     .with("commit", located.commit.as_str())?
                     .with("unchanged", true)?
@@ -647,15 +675,18 @@ pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
                 }
             }
             _ => {
-                return Err(Outcome::new(ActingctlCode::InstallUpdateRefused)
-                    .install_refusal(InstallRefusal::BuildInvalid)
-                    .commit_sha(located.commit.clone())
-                    .path(&build));
+                return Err(super::refusal(
+                    InstallLocation::ReleaseStage,
+                    InstallRefusal::BuildInvalid,
+                )
+                .commit_sha(located.commit.clone())
+                .path(&build));
             }
         }
     }
-    let previous = state::load_state_or_default(&paths)
-        .map_err(|cause| journal::state_invalid(paths.state(), Some(cause)))?;
+    let previous = state::load_state_or_default(&paths).map_err(|cause| {
+        journal::state_invalid(InstallLocation::ReleaseStage, paths.state(), Some(cause))
+    })?;
     let opening = Opening {
         kind: OperationKind::ReleaseStage,
         inputs: serde_json::to_value(&inputs).map_err(|error| files::json_failure(&error))?,
@@ -686,7 +717,7 @@ pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
     let located = match located {
         Some(located) if failures.is_empty() => located,
         _ => {
-            let refusal = refused(&failures)?;
+            let refusal = refused(InstallLocation::ReleaseStage, &failures)?;
             return Err(operation.interrupted(refusal.outcome));
         }
     };
@@ -716,9 +747,10 @@ fn run(
             for half in [Half::Runtime, Half::Tools] {
                 match extract(located.zip(half), &part.join(half.dir())) {
                     Ok(()) => {}
-                    Err(Extracted::Unreadable(_)) => failures.push(
+                    Err(Extracted::Unreadable(cause)) => failures.push(
                         Failure::new(ReleaseCheck::ZipUnreadable)
-                            .file(file_name(located.zip(half))),
+                            .file(file_name(located.zip(half)))
+                            .cause(cause),
                     ),
                     Err(Extracted::Failed(cause)) => return Err(operation.interrupted(cause)),
                 }
@@ -798,9 +830,10 @@ fn run(
             .map_err(|cause| operation.interrupted(cause))?;
     }
     let operation_id = operation.id().to_owned();
-    let outcome = Outcome::new(ActingctlCode::InstallBuildStaged)
+    let outcome = super::done(InstallLocation::ReleaseStage)
         .commit_sha(located.commit.clone())
-        .install_operation_id(operation_id.clone());
+        .install_operation_id(operation_id.clone())
+        .installation_changed(true);
     operation.finish(&outcome)?;
     Answer::new(outcome)
         .with("commit", located.commit.as_str())?
@@ -817,7 +850,7 @@ fn abandon(
     part: &Path,
     failures: &[Failure],
 ) -> Result<Answer, Outcome> {
-    let answer = refused(failures)?;
+    let answer = refused(InstallLocation::ReleaseStage, failures)?;
     if part.exists() {
         let name = file_name(part);
         let base = name.split(".new-").next().unwrap_or(&name).to_owned();

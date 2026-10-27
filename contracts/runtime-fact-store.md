@@ -151,7 +151,8 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1�
    ([ledger-observer.md §11](ledger-observer.md#11-tags-and-the-index-table-ao-2-maintains-ao-5-rules-and-seeding-ao-6-loads)):
    the four settlement keys `task.*.last_duration_ms`, `.last_outcome`, `.failure_streak`,
    `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`,
-   `host.perf_baseline.*`, `host.perf_calibration.*` and `host.config_overrides`. Keys under
+   `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides` and
+   `host.contained_settlement` (#411 A65). Keys under
    `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
    `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
    loaded: this start observes or replays them again, so the takeover invalidation of
@@ -581,6 +582,17 @@ the backend self-check facts (source `device-proxy` or `capture`).
   `set_in_owner_epoch`, `restored_from_owner_epoch`), recorded before every
   pause or resume changes the gate and again by the start that restores them
   (`contracts/scheduling-pause.md`, "Persistence, no expiry").
+- `host.contained_settlement` (#411 A65, 0.12.12) — runtime scope, `integer`,
+  no lifetime: the ledger sequence of the start event (`runtime.started` or
+  `runtime.takeover`) of the last start that completed the settlement of
+  direct contained runs left open by earlier epochs. Each start records it
+  once that settlement has completed, with its own start event, and the next
+  start settles the open direct runs first recorded after the start event it
+  names, so a start that failed after appending its own start event leaves
+  the earlier epochs' runs to the next start. Without the fact a start
+  settles the runs of the epoch before its own. A value that is not the
+  Runtime's integer or names no earlier start event fails the start with
+  `contained_settlement_anchor_invalid`.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

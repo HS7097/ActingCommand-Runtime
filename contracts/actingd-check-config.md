@@ -324,6 +324,42 @@ The members of `report`:
       `config_subsystem_discovery_unbound`).
     - `runtime_fact_snapshot`: always on (`config_subsystem_always_on`); it
       rides the performance monitor thread.
+    - `condition_edges` (SCH-M CF-1): always on (`config_subsystem_always_on`).
+      The Runtime reads the catalog edge members `since_own_run` and
+      `once_per_reading` ([scheduling/README.md](scheduling/README.md),
+      "Condition edges"); the catalog generator writes them only for a Runtime
+      that names this row.
+    - `resource_reading_time` (SCH-M CF-2): always on
+      (`config_subsystem_always_on`). The Runtime admits completion-time
+      reading marks (`timestamp_ms`) and publishes their times
+      ([resource-readings.md](resource-readings.md), "Completion times");
+      a pack that declares one is placed only on a Runtime that names this
+      row.
+    - `standard_pack_schedule` (ROUT-L RL-1b): always on
+      (`config_subsystem_always_on`). The scheduler workbench composes the
+      standard packs' `schedule.json` when the `policy` section names no
+      `catalog` ([standard-pack-schedule.md](standard-pack-schedule.md), "The
+      scheduler workbench (RL-1b)"); a `schedule.json` that requires it is
+      composed only by a Runtime that names this row.
+    - `fact_reference` (#386 CF-4): always on (`config_subsystem_always_on`).
+      The Runtime reads a `fact` predicate whose value is another fact of its
+      scope plus an offset ([scheduling/README.md](scheduling/README.md),
+      "Fact references"); a `schedule.json` whose rule writes one requires it,
+      so it is composed only by a Runtime that names this row.
+    - `expected_runtime` (SCH-M ED-2): always on
+      (`config_subsystem_always_on`). The Runtime keeps the run-duration
+      samples (`health.run_duration`) and dispatches by the expected duration
+      E ([scheduling/README.md](scheduling/README.md), "Settlement Feedback And
+      Eligibility Age"); the catalog generator emits catalog v35 only for a
+      Runtime that names this row.
+    - `scheduling_blackout` (Workflow #386 SR-4a2): always on
+      (`config_subsystem_always_on`), with `count` the number of entries of
+      `scheduling.blackout.host`. The policy reads blackouts of all three
+      sources (the host list, each instance's own list and catalog
+      `maintenance` events) and the day-boundary fit
+      ([scheduling-blackout.md](scheduling-blackout.md), "Order of the
+      deferrals"); a catalog generator emits `maintenance` events only for a
+      Runtime that names this row.
     - `env_overrides`: on only when `allow_env_overrides` is `true`
       (`config_subsystem_configured`, `config_subsystem_configured_off` or
       `config_subsystem_flag_absent`). When the flag is off, the outcome
@@ -423,6 +459,15 @@ The members of `report`:
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
+- `standard_pack_schedule` is present when the configuration has a `policy`
+  section (ROUT-L RL-1b): `{ composer_mode, games, rules, pools, profiles,
+  events, unclassified, problems, left_out }`, the composition the scheduler
+  workbench would make for the configured instances from the game roots below
+  `standard_packs.root`, in either mode; `composer_mode` is `true` when the
+  `policy` section names no `catalog`. Each refused `schedule.json`
+  (`standard_pack_root_invalid`) is in `problems` and is also a note of
+  `check_config_passed`; a game in use whose game root is broken is in
+  `left_out` (its problem is `standard_packs`'s).
 
 What the check noted is not a member of `report`: each is one `note` link of
 `check_config_passed` (Workflow #378 A6a; v1's `warnings` strings and
@@ -723,7 +768,27 @@ package admitted, and reports `standard_packs`:
 
 `root_files` lists the root files present: `bundle.json`, `pages.json`,
 `interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, which is checked
-against `pages.json` and the registry as a run's preparation checks it.
+against `pages.json` and the registry as a run's preparation checks it, and
+(Workflow #392 DA-4) `display-layout.json`, the game's display declaration,
+checked as a run's preparation checks it (`package-reference.md`, "Standard
+package root").
+
+Workflow #357 DB-1 (model M-357a v1.1 §2.3; `v012-register.md` §1.65 TB3): each
+sound game root also lists `tables`, its `tables/` files in file name order as
+the Runtime's startup reads them (`package-reference.md`, "Standard package
+root", "Tables"), each `{table_id, path, row_count?, problem?, expired_columns?}`:
+`row_count` when the table is read; `problem` (`standard_pack_table_invalid` or
+`standard_pack_table_unreadable`) when it is refused; `expired_columns` when a
+column's `valid_until_unix_s` has passed on the system clock. `tables` is empty
+without a `tables/` directory and `null` for a broken root, whose tables are not
+read. Each refused table adds its problem as a `note` link, each expired column
+one `standard_pack_table_column_expired` (warning; `game`, `path`,
+`table_column`), and a `tables/` that cannot be listed its
+`standard_pack_table_unreadable`; the outcome stays `check_config_passed`:
+
+```json
+{"game":"neutral","bundle_version":4,"pack_count":1,"root_files":["bundle.json"],"problem":null,"tables":[{"table_id":"unit_scores","path":"D:/runtime/packages/neutral/tables/unit_scores.json","row_count":3,"expired_columns":["secondary_milli"]},{"table_id":"unit_ranks","path":"D:/runtime/packages/neutral/tables/unit_ranks.json","problem":{"code":"standard_pack_table_invalid","category":"error","values":{"operation":"standard_pack_read","game":"neutral","path":"D:/runtime/packages/neutral/tables/unit_ranks.json","standard_pack_problem":"table_row_duplicate","json_pointer":"/rows/1"}}}]}
+```
 A directory that holds none of the root files is not a game root and is not
 listed. A broken game root is listed with its `problem` and adds that problem as
 one `note` link of the outcome; the outcome stays `check_config_passed`, because

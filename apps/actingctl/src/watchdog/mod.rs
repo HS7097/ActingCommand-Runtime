@@ -61,6 +61,21 @@ pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--fr
 pub(crate) const REPORT_SCHEMA: &str = "actingcommand.watchdog.report.v2";
 const RUN_LOCK: &str = "run.lock";
 
+/// #411 A66: how long a waiter for the watchdog's run lock waits: the start window of the
+/// installation at `root` and `RUN_LOCK_MARGIN_MS` for the tick's probes. A root that no longer
+/// resolves to an installation (an `uninstall` of a broken root) waits the defaults file's
+/// window, the one a configuration that does not name the key gets.
+fn run_lock_wait(root: &Path) -> Duration {
+    let start_window_ms = observe::Installation::resolve(root)
+        .map(|installation| installation.start_window_ms)
+        .or_else(|_| actingcommand_runtime_config::watchdog::start_window_ms(&Value::Null))
+        .unwrap_or_else(|_| {
+            u64::try_from(actingcommand_runtime_config::watchdog::START_WINDOW_MAX_MS)
+                .unwrap_or(u64::MAX)
+        });
+    Duration::from_millis(start_window_ms.saturating_add(decide::RUN_LOCK_MARGIN_MS))
+}
+
 /// `code` for `path`, caused by the error the OS raised for `op` (`foreign_os_error`).
 pub(crate) fn io_failure(
     code: ActingctlCode,
@@ -287,6 +302,7 @@ impl Tick {
             &installation.state_root,
             &log_directories(&installation.root, watchdog_dir),
             Some(installation.root.as_path()),
+            installation.start_window_ms,
         )?;
         let live = (observed.lock == OwnerLock::Locked)
             .then(|| observe::live_owner(&installation.state_root, None));
@@ -310,6 +326,7 @@ impl Tick {
             journal: self.journal.clone(),
             terminal: self.terminal.clone(),
             earlier_terminal: self.earlier_terminal.clone(),
+            start_window_ms: self.installation.start_window_ms,
         }
     }
 
@@ -728,7 +745,11 @@ fn tick_once(
             // An open start that came up late is named by its epoch from now on.
             for start in state.starts.iter_mut().filter(|start| {
                 start.owner_epoch.is_none()
-                    && decide::started_by_watchdog(owner, std::slice::from_ref(&**start))
+                    && decide::started_by_watchdog(
+                        owner,
+                        std::slice::from_ref(&**start),
+                        tick.installation.start_window_ms,
+                    )
             }) {
                 start.owner_epoch = Some(owner.owner_epoch.clone());
                 start.actingd_pid = Some(owner.pid);
@@ -986,7 +1007,11 @@ fn report(tick: &Tick, decision: &Decision, state: &WatchdogState, directory: &P
             "pid": owner.pid,
             "owner_epoch": owner.owner_epoch,
             "started_at_unix_ms": owner.started_at_unix_ms,
-            "started_by_watchdog": decide::started_by_watchdog(owner, &state.starts),
+            "started_by_watchdog": decide::started_by_watchdog(
+                owner,
+                &state.starts,
+                tick.installation.start_window_ms,
+            ),
         }),
         Some(Err(failure)) => json!({ "error": envelope(failure) }),
         None => Value::Null,
@@ -1328,12 +1353,10 @@ fn uninstall(root: &Path) -> Report {
         }
     }
     let directory = root_plain.join("watchdog");
-    // The task is gone; a tick that still holds run.lock is waited for, up to its own limit.
+    // The task is gone; a tick that still holds run.lock is waited for, up to its own limit: the
+    // start window and the tick's probes (#411 A66).
     let tick_in_progress = if directory.is_dir() {
-        match hold_run_lock(
-            &directory,
-            Duration::from_millis(decide::READY_TIMEOUT_MS + 20_000),
-        ) {
+        match hold_run_lock(&directory, run_lock_wait(root)) {
             Ok(_) => false,
             Err(failure) if failure.is(ActingctlCode::WatchdogRunInProgress) => true,
             Err(failure) => return Report::new(failure),

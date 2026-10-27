@@ -153,7 +153,14 @@ mod gate_369_s6c;
 // Workflow #369 S6c review low (b): a failed resume or self-check preparation with no ladder
 // releases the queued startup claim.
 mod gate_369_s6clow;
+// emu-watch (Alice's ruling 35): a pause never holds the emulator start; the Runtime polls its
+// emulators and starts a configured one it finds stopped, within a bound.
 mod gate_372k2;
+mod gate_emu_watch;
+// IDLE-1 (Alice's ruling 41): the idle planner on a manual clock.
+mod gate_idle1;
+// IDLE-1 (#419): a failed idle stop is contained to its instance and the Runtime goes on.
+mod gate_idle1_host;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
@@ -169,6 +176,9 @@ mod gate_373_nav5;
 mod gate_411_b37_entry;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
+// Workflow #357 DB-1: the shared tables of a standard-pack game root at startup and in
+// check-config's report.
+mod gate_357_db1;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
@@ -220,6 +230,12 @@ mod gate_386_sr2a;
 // Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
 // admission refuses with a suspend code.
 mod gate_386_sr3;
+// Workflow #386 SR-4a2 (SCH-M §3.2, §6 row SR-4a2): the policy's blackout positions 4 and 7, the
+// day boundary, the admission re-check and the random delay's cut.
+mod gate_386_sr4a2;
+// Workflow #386 SR-4a3, test rows T17, T17b, T17c and T46: complete silence at the ladder, the
+// startup package, the emulator autostart and the monitor probe; client runs pass.
+mod gate_386_sr4a3;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).
@@ -264,6 +280,16 @@ mod gate_390_drill1;
 // Runtime last read it, with the reading's time.
 mod gate_390_nine1;
 mod gate_392_daa;
+// Workflow #392 DA-4: a game root's display declaration at startup and in a run's preparation.
+mod gate_392_da4;
+// Workflow #392 DA-5a: the identity test of the ordered task schema check.
+mod gate_392_da5a;
+// Workflow #392 DA-2a: the run's display map, its rebuild on a changed frame and the input
+// prerequisite under a pure scale.
+mod gate_392_da2a;
+// Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe area, its live changes and its
+// refusals.
+mod gate_392_da4bd;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.
@@ -283,6 +309,9 @@ mod gate_411_a35_s5;
 // Workflow #405 D1 (host key 122), register §1.135: once an instance has its random delay
 // enabled, every task the scheduler dispatches there first waits a random time.
 mod gate_405_d1;
+// SCH-M CF-2: a countdown mark publishes its frame time plus the countdown as a timestamp_ms
+// fact, and fact_time_reached turns true at that instant.
+mod gate_405_cf2;
 // #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
 // prerequisite layer is judged on its own recognition.
 mod gate_411_a23;
@@ -300,6 +329,17 @@ mod gate_411_a45;
 mod gate_411_a46;
 // #411 A47: a ladder whose application stop fails keeps its key and climbs to its next rung.
 mod gate_411_a47;
+// #411 A64: a run's resource close that meets its lapsed lease fences only its instance; the
+// Runtime, the run's own terminal and the other instances go on.
+mod gate_411_a64;
+// ISO-1 (#419, ISO-M): the failure scope core: the scope classification, `contain_failure` at a
+// boundary (fence, fail, latch, a failed fence latches) and the receipt's `host_halted` (A54).
+mod gate_419_iso1;
+// ISO-2 (#419, ISO-M): a device or kernel failure of one instance stays with that instance: the
+// scheduled and host package run boundaries, the session, geometry and frame failures, the
+// widened A46 fence and the retained-session closes of the emulator rung, the autostart, an
+// operator's restart, a pause, a handset and a lease end.
+mod gate_419_iso2;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;
@@ -355,21 +395,61 @@ mod gate_406_t3;
 // #412 Lab B-3 S2 (host keys 152 to 155), register §1.162: the host runs one declared operation
 // over the Lab lease and writes its LR-10 records.
 mod gate_412_b3_s2;
+// LN-2 (Workflow #422, LEAN-L model §3.2 step 5): the instance fact store loads from the tagged
+// `state` rows, equal to the whole-ledger replay; a doctored row stops the load.
+mod gate_422_ln2;
+// LN-3 (Workflow #422, LEAN-L model §3.6): each change of the decision memory and each wake
+// obligation writes one value record with the complete state, and its `state` row names it.
+mod gate_422_ln3;
+// LN-4 (Workflow #422, LEAN-L model §3.2, §3.6): the decision memory, the agent dispatcher and the
+// monitor registry load from their tagged records; a start without the marker seeds them once.
+mod gate_422_ln4;
+// LN-8c (Workflow #422, LEAN-L model §7.1 A3): the start's runtime-fact recovery reads its record
+// events in bounded pages and rebuilds the store one read of them rebuilds.
+mod gate_422_ln8c;
+// #422 LN-TUNE: a second start reads no planning history before the planning checkpoint.
+mod gate_ln_tune;
+// #422 LN-9: a finding of the ledger's scrub stops the Runtime as a Global failure.
+mod gate_ln9;
+// #422 LN-WS: the incident's reads answer while an append commits behind them, and an append the
+// writer does not answer in time fails naming the ledger's code.
+mod gate_ln_ws;
+// #419 DIAG-RUN: a task diagnostic's read the writer does not answer in time fails only its run;
+// a fatal ledger failure of that read still stops the Runtime.
+mod gate_diag_run;
+// #419 LN-WS-F: the reconciliation's and the proposals' recurring ledger reads stay bounded, and
+// one the writer does not answer in time fails only its own settlement step or request; a live
+// settlement's read after its commit stays fatal (fix round 1).
+mod gate_ln_ws_f;
 
 mod gate_epoch_close;
+// #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
+// read, and of the epochs before a start that failed after appending its start event.
+mod gate_411_a65;
+// #411 A67-R: a start whose memory sample leaves no frame budget after the OS reserve goes on, and
+// records the floor warning once in the daemon's log and once in the ledger.
+mod gate_411_a67r;
 // #71 FLK-07, slice HARNESS-DIAG (host key 168): a receipt the test client cannot read names the
 // fatal the Runtime under test latched and its shutdown flag.
 mod gate_411_harness_diag;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
+// SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2): the run-duration samples of the instance store
+// record `health.run_duration` and the expected duration E in the evaluation and its admission.
+mod gate_ed2;
 // Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's
 // not-run explanation in the policy host's memory and its read.
 mod gate_mcp19a;
 mod gate_p0;
+// ROUT-L RL-1b (frozen model v1.0 §6.1 row RL-1b, §7.1 A2-A6, A8, A9): the scheduler workbench.
+mod gate_rl1b;
 mod home_entry;
 mod input;
 mod input_failure;
 mod instance_workers;
+// LN-1 (Workflow #422, LEAN-L model §7.2): the scale harness on the synthetic ledger; from LN-8 on
+// it gates the model's targets (§7.1 A1 to A3).
+mod lean_scale;
 mod lease_fencing;
 mod lease_queue;
 mod lifecycle;

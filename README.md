@@ -133,7 +133,7 @@ The authoring side is removable: `crates/lab` has exactly one consumer, `apps/ac
 
 **Offline reads** are served by `actingledger`, which opens only a read-only evidence snapshot and never writes. Its subcommands are `open`, `events`, `chain --req <request-id>`, `tail`, `repairs`, `export` (optionally with `--performance` / `--stability` / `--task-evidence`), `views` (one page of the ledger's terminal views, the same page the runtime serves), `material --request <json>` (one verified range of one committed artifact), `signatures`, `frames` (a read-only list of the stored frames), `facts --at <sequence>` (the runtime fact store replayed at one ledger position), `replay` and `codes` (the outcome codes of the catalog the build embeds). Except for bare `export`, which prints a human-readable multi-line text report, every report is single-line JSON; when evidence has gaps the report is printed first and the tool then exits nonzero with `signature_replay_incomplete`, `stability_export_incomplete`, `task_evidence_export_incomplete`, `ledger_view_source_incomplete` or, for `facts`, `runtime_facts_not_available` / the failure code.
 
-**Result codes.** The registered codes live in fragments under `contracts/outcome-codes/`, one per owning package or program (26, from `contract`, `ledger` and `runtime-host` to `actingctl`, `actingd`, `actinglab` and `actingledger`), beside the shared keys and vocabularies in `catalog.json`; `outcome-guard merge` merges them into the code catalog `contracts/outcome-codes.json`. Receipts, ledger records, `actingctl`, `actingd`, the watchdog and MCP tool errors carry these codes as outcomes, and `actingctl codes`, `actingledger codes` and MCP `ac_outcome_code` look a code up. Each release carries a snapshot `contracts/outcome-codes/released/<version>.json` (v0.12.10: 3,766 codes, 172 of them settled, and 1,647 locations), and a release build stops when its snapshot is missing. The guard still exempts the Lab's `apps/actinglab` and `crates/lab`.
+**Result codes.** The registered codes live in fragments under `contracts/outcome-codes/`, one per owning package or program (26, from `contract`, `ledger` and `runtime-host` to `actingctl`, `actingd`, `actinglab` and `actingledger`), beside the shared keys and vocabularies in `catalog.json`; the build merges them into the code catalog it embeds (`outcome-guard merge` prints the same text; the merged file is not committed). Receipts, ledger records, `actingctl`, `actingd`, the watchdog and MCP tool errors carry these codes as outcomes, and `actingctl codes`, `actingledger codes` and MCP `ac_outcome_code` look a code up. Each release carries a snapshot `contracts/outcome-codes/released/<version>.json` (v0.12.10: 3,766 codes, 172 of them settled, and 1,647 locations), and a release build stops when its snapshot is missing. The guard still exempts the Lab's `apps/actinglab` and `crates/lab`.
 
 ## Invariants and guards
 
@@ -147,7 +147,7 @@ There are four workflows in total: three CI workflows and the on-demand `release
 
 ## Workspace members
 
-The workspace declares 31 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
+The workspace declares 32 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
 ### apps (5)
 
@@ -159,13 +159,14 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
-### crates (23)
+### crates (24)
 
 | Path | Package | Responsibility |
 | --- | --- | --- |
 | crates/actingcommand-contract | actingcommand-contract | Contract definitions for the protocol, device and engine boundaries; no target logic |
 | crates/artifact-store | actingcommand-artifact-store | Artifact bytes, hashes, retention metadata, frame buffers and evidence archives |
 | crates/device | actingcommand-device | Device-layer primitives; input selected through an explicit backend chain |
+| crates/display-adapter | actingcommand-display-adapter | Pure integer mapping between a package's base coordinates, the scale frame and the device frame: nine-grid anchors, rounding, rotation and crop; no I/O, no backend |
 | crates/execution-kernel | actingcommand-execution-kernel | Daemon-owned execution sessions and pure task/probe decision planning |
 | crates/host-metrics | actingcommand-host-metrics | Safe boundary for platform performance counters (windows-sys only under cfg(windows)) |
 | crates/lab | actingcommand-lab | Optional authoring and debugging adapter layer; production still builds and runs without it |
@@ -198,7 +199,7 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
 | tools/actinglab-architecture | actingcommand-actinglab-architecture | lib | Source-derived architecture guards; development only, linked into no runtime binary |
-| tools/outcome-guard | actingcommand-outcome-guard | lib + bin `outcome-guard` | `outcome-guard merge` merges the result-code fragments under `contracts/outcome-codes/` into `contracts/outcome-codes.json`; development only, run by CI |
+| tools/outcome-guard | actingcommand-outcome-guard | lib + bin `outcome-guard` | `outcome-guard merge` prints the merged result-code catalog of the fragments under `contracts/outcome-codes/` (the build embeds the same text; nothing commits it); `outcome-guard release` is the release gate G10; development only |
 
 ## Device and recognition
 
@@ -210,7 +211,7 @@ A press inside a box is drawn around the box's center (a normal distribution who
 
 Recognition targets come in eight kinds: Template, Color, ClickOnly, Ocr, Nn, ColorDigest (`contracts/color-digest.md`), Composite (a named all-of / any-of check over 2–8 other targets) and ValueTest (a comparison of read values). Template matching is CPU image matching with an explicit 5-second timeout and a two-stage coarse-match/refine structure; a timeout failure reports which stage it occurred in. Production OCR and NN run in the in-process engine behind the `vision-ffi` boundary; each target names its model folder and content (`contracts/vision-model-folders.md`), and the host-side adapter enforces that identity: `model_ref` must be a bounded logical identifier containing no `/`, `\` or `:` (host paths are not accepted), and `model_sha256` must be exactly 64 lowercase hexadecimal characters. Models are loaded on first use from `<vision root>\models\<model_ref>\`. Page projection is a side-effect-free projection of the resolved facts of a single frame, schema `actingcommand.page-projection.v1`, capped at 64 entries / 32 KiB, with entries keyed by role (Navigate / PageOp / ControlPoint), task ID, resource ID and page, each entry carrying a Safety classification that defaults to Dangerous; OCR field declarations under operation schema `0.8` go through `post_admission_ocr.mode = fields_v1`, field declarations cannot be mixed with the older truth-set declarations, and this contract contains no target-proprietary value (`contracts/ocr-fields.md`, `contracts/page-projection.md`).
 
-A pack's coordinates are in the resolution it declares (today's standard packs use 1280×720); a frame of another size fails the task explicitly with `contained_task_frame_resolution_mismatch` (`contracts/linear-steps.md`). The first frame of a contained task on a device records the instance's display as facts (`display.frame_extent`, `display.rotation`, `display.orientation`, `display.aspect`); no frame is refused for its own aspect ratio, only for an aspect ratio that differs from the display it was captured from (`contained_task_geometry_frame_display_mismatch`).
+A pack's coordinates are in the resolution it declares (today's standard packs use 1280×720). Every frame passes the display adapter's frame gate (`contracts/display-adapter.md`): a frame of the pack's size is used as it is, a larger frame of the same ratio is scaled down to it for recognition, and any other frame fails the task explicitly with `display_map_unresolved`; until the input side maps (Workflow #392 DA-3) a scaled frame takes no input. The first frame of a contained task on a device records the instance's display as facts (`display.frame_extent`, `display.rotation`, `display.orientation`, `display.aspect`); no frame is refused for its own aspect ratio, only for an aspect ratio that differs from the display it was captured from (`contained_task_geometry_frame_display_mismatch`).
 
 ## MCP server
 
@@ -344,7 +345,7 @@ actingctl resume --state-root <state-root> --instance <alias>
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance import  --config runtime.json --backup frozen-backup
-actingcommand-actingd ledger-maintenance verify  --config runtime.json
+actingcommand-actingd ledger-maintenance verify  --config runtime.json [--frame-query]     # --frame-query (opt-in): also checks the frame cleaner's queries against the full frame view; it rebuilds the whole retention index inside verify's deadline, so it can run out of time on a large ledger. Never ignored: refused (maintenance_arguments_invalid) on a root that is not formal (Segment, candidate) and with any other operation
 actingcommand-actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target <restore-dir> [--artifact-root <dir>]
 
 # Side-effect-free configuration check (same load/assemble/validate as startup; touches nothing under state_root)

@@ -1,8 +1,9 @@
 # Gate map, apps fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
-# Keys are the ids of rd-1009/tests/inventory-apps.md. One `[[gate]]` row per key with exactly
-# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
-# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
-# appended to; a row leaves only when its feature retires.
+# Each `[[gate]]` row has `coverage` ("Y", or "P" = tested only on the cfg(test) Segment
+# backend), `tests` (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when
+# none). A new row carries no `key`: its tests name it (Workflow #420 S6). Rows from before #420
+# keep their `key`, an id of rd-1009/tests/inventory-apps.md, as history. Rows are only appended
+# to; a row leaves only when its feature retires.
 
 # Invalid configuration fails before any side effect
 [[gate]]
@@ -582,7 +583,8 @@ tests = [
 incident = ["#381 B", "#382 A-4"]
 
 # Tick orchestration on the APPS-I3 seams: a start that answers is started, one whose process exits
-# first is start_failed exited_during_startup, one that never answers is start_timeout after 180 s,
+# first is start_failed exited_during_startup, one that never answers is start_timeout after its
+# start window (#411 A66: watchdog.start_window_ms, 900 s by default; it was 180 s),
 # a held writer lock is installer_busy; the pending start record is on disk before the spawn, the
 # free writer lock is held shared through the start, and the result and last_tick are saved at the
 # tick's end (Workflow #382 A-4, test plan v2.2 A-4 G12)
@@ -592,7 +594,7 @@ coverage = "Y"
 tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end",
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup",
-    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window",
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
@@ -859,3 +861,13 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_412_b3_s2::b3_s2_t2_7_ac_lab_do_passes_operation_and_refuses_its_conflicts_before_the_child",
 ]
 incident = ["#412 B-3"]
+
+# #422 LN-7c C (v0.12.16; rd-1026/ln7c/final-query.md §4 and §7 row C; Alice's ruling 70): MCP ac_evidence_confirm_read records one client.action with the agent's origin (agent, adapter) and actingctl evidence confirm-read one with the command line's (cli, cli), after its identity card actingctl in the same correlation, for a frame (control evidence_read_frame) and for a run (evidence_read_run), each with its frame index row ('artifact' or 'run', id, 'read_confirmed') at the record's sequence; an artifact or a run the ledger does not hold is refused on both sides with client_action_invalid and nothing is recorded; reading evidence through ac_run_evidence and ac_observe records no confirmation
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_mcp_and_the_cli_each_record_one_client_action_with_its_frame_index_row",
+    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_an_unknown_artifact_or_run_is_refused_and_nothing_is_recorded",
+    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_ac_run_evidence_and_ac_observe_record_no_confirmation",
+]
+incident = ["#422 LN-7c C"]

@@ -12,9 +12,10 @@ use crate::ledger_observer::{
     BUFFER_BYTES, BUFFER_HYSTERESIS_RATIO, BUFFER_RECORDS, BUFFER_TIER1_RATIO, BUFFER_TIER2_RATIO,
     BUFFER_TIER3_RATIO, DUMP_MAX_BYTES, FLUSH_ATTEMPT_STALL_MS, FLUSH_BATCH_RECORDS,
     FLUSH_BATCH_RECORDS_BUSY, FLUSH_LAG_WARN_MS, HEALTH_PROBE_INTERVAL_MS, OPEN_TIMEOUT_MS,
-    OPEN_WARN_RATIO_MILLI, PROBE_INTERVAL_MS, PROBE_SAMPLE_KEYS, REQUEST_INDEX_RECORDS,
+    OPEN_WARN_RATIO_MILLI, PROBE_INTERVAL_MS, PROBE_SAMPLE_KEYS, READ_BUDGET_MS,
+    REQUEST_INDEX_RECORDS, SCRUB_CHUNK_ROWS, SCRUB_PASS_INTERVAL_MS, SCRUB_ROWS_PER_SECOND,
     SPILL_BATCH_BYTES, STATUS_GAP_WINDOW_MS, TAG_REOBSERVE_PREFIXES, TAG_WORKBENCH_PATTERNS,
-    WRITE_ATTEMPTS, WRITE_RETRY_BACKOFF_MS,
+    WRITE_ATTEMPTS, WRITE_RETRY_BACKOFF_MS, WRITER_REPLY_TIMEOUT_MS,
 };
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, RuntimeConfigManifest,
@@ -28,7 +29,7 @@ const DEVICE: DeviceBounds = DeviceBounds {
 };
 
 // §15 `tag.workbench_patterns`.
-const WORKBENCH_PATTERNS: [&str; 10] = [
+const WORKBENCH_PATTERNS: [&str; 11] = [
     "task.*.last_duration_ms",
     "task.*.last_outcome",
     "task.*.failure_streak",
@@ -39,6 +40,7 @@ const WORKBENCH_PATTERNS: [&str; 10] = [
     "host.perf_baseline.*",
     "host.perf_calibration.*",
     "host.config_overrides",
+    "host.contained_settlement",
 ];
 // §15 `tag.reobserve_prefixes`.
 const REOBSERVE_PREFIXES: [&str; 10] = [
@@ -153,14 +155,17 @@ fn ao1_keys_every_ledger_observer_key_has_its_contract_default() {
         assert_eq!(parameter.source, ConfigParameterSource::Default, "{key}");
         assert!(!parameter.settable, "{key}");
     }
-    // The 21 keys of §15, #411 A51's `read_budget_ms` and `close_timeout_ms`, and P0-LO's
-    // `open_timeout_ms` and `open_warn_ratio_milli`.
+    // The 21 keys of §15, #411 A51's `read_budget_ms` and `close_timeout_ms`, P0-LO's
+    // `open_timeout_ms` and `open_warn_ratio_milli`, LN-5's `history_page_rows`, LN-TUNE's
+    // `writer_reply_timeout_ms`, LN-8's `open_verify_tail_records`, LN-9's three scrub keys and
+    // LN-WS's `read_check_vm_steps` and `history_scan_rows`, and #422 LN-7c Q's
+    // `frame_query_steps_per_second` and `frame_query_chunk_frames`.
     assert_eq!(
         parameters
             .iter()
             .filter(|parameter| parameter.key.starts_with("ledger_observer."))
             .count(),
-        25
+        35
     );
 
     let config = from_file(json!({}));
@@ -422,6 +427,216 @@ fn p0_lo_open_values_outside_their_ranges_are_refused() {
         (
             json!({"open_warn_ratio_milli": 1_001}),
             OPEN_WARN_RATIO_MILLI,
+        ),
+    ] {
+        let case = section.to_string();
+        let refused = render(section).expect_err(&case);
+        assert_eq!(
+            refused.failure_code(),
+            ConfigCode::ConfigValueInvalid,
+            "{case}"
+        );
+        assert_eq!(refused.config_key(), config_key, "{case}");
+        assert_eq!(
+            refused.problem(),
+            Some(ConfigValueProblem::OutOfRange),
+            "{case}"
+        );
+    }
+}
+
+// #422 LN-TUNE (brief rd-1026/brief-ln-tune.md item 1): `writer_reply_timeout_ms` is read from
+// the defaults file (10 000 ms) and from an explicit value, is read when the ledger opens (an
+// instruction is refused), and a value below 1 000 ms or above 600 000 ms is refused as
+// `config_value_invalid` (`out_of_range`); a read budget at the reply limit in effect breaks the
+// section's rule that a read stops before its caller stops waiting.
+#[test]
+fn ln_tune_the_writer_reply_timeout_is_read_and_refuses_an_out_of_range_value() {
+    let defaulted = from_file(json!({}));
+    defaulted
+        .check(&context())
+        .expect("the defaults pass the check");
+    let section = defaulted.ledger_observer().expect("the section in effect");
+    assert_eq!(section.writer_reply_timeout_ms, 10_000);
+    let parameter = render(json!({}))
+        .expect("the defaults resolve")
+        .into_iter()
+        .find(|parameter| parameter.key == WRITER_REPLY_TIMEOUT_MS)
+        .expect("the key is reported");
+    assert_eq!(parameter.value, FactScalar::DurationMs(10_000));
+    assert_eq!(parameter.source, ConfigParameterSource::Default);
+    assert!(!parameter.settable);
+
+    let configured = from_file(json!({"writer_reply_timeout_ms": 30_000}));
+    configured
+        .check(&context())
+        .expect("an in-range value passes the check");
+    let section = configured.ledger_observer().expect("the section in effect");
+    assert_eq!(section.writer_reply_timeout_ms, 30_000);
+    let stamp = InstructionStamp {
+        set_unix_ms: 1,
+        set_in_owner_epoch: "epoch".to_owned(),
+        request_id: "request".to_owned(),
+        channel: None,
+    };
+    let refused = configured
+        .apply(
+            &[ConfigSettingChange {
+                key: WRITER_REPLY_TIMEOUT_MS.to_owned(),
+                value: Some(json!(60_000)),
+            }],
+            &stamp,
+            &context(),
+        )
+        .expect_err("the key is read when the ledger opens");
+    assert_eq!(refused.failure_code(), ConfigCode::ConfigKeyNotSettable);
+    assert_eq!(configured.ledger_observer(), Ok(section));
+
+    for value in [999, 600_001] {
+        let case = format!("writer_reply_timeout_ms {value}");
+        let refused = render(json!({"writer_reply_timeout_ms": value})).expect_err(&case);
+        assert_eq!(
+            refused.failure_code(),
+            ConfigCode::ConfigValueInvalid,
+            "{case}"
+        );
+        assert_eq!(refused.config_key(), WRITER_REPLY_TIMEOUT_MS, "{case}");
+        assert_eq!(
+            refused.problem(),
+            Some(ConfigValueProblem::OutOfRange),
+            "{case}"
+        );
+    }
+
+    let refused = from_file(json!({"writer_reply_timeout_ms": 1_000, "read_budget_ms": 1_000}))
+        .check(&context())
+        .expect_err("a read budget at the reply limit");
+    assert_eq!(refused.failure_code(), ConfigCode::ConfigValueInvalid);
+    assert_eq!(refused.config_key(), READ_BUDGET_MS);
+    assert_eq!(refused.problem(), Some(ConfigValueProblem::SectionCheck));
+}
+
+// #422 LN-9 (LEAN-L §3.7, §6; Alice's ruling 57): the scrub's three keys are read from the defaults
+// file (625 rows a second, chunks of 256 rows, a pass every 2 400 000 ms) and from explicit values;
+// the rate is settable (an instruction in its range takes effect, one out of it is refused and the
+// rate in effect stays), the chunk and the pass interval are read when the ledger opens; a value
+// outside its range is `config_value_invalid` (`out_of_range`).
+#[test]
+fn ln9_the_scrub_keys_default_take_explicit_values_and_refuse_out_of_range_values() {
+    let defaulted = from_file(json!({}));
+    defaulted
+        .check(&context())
+        .expect("the defaults pass the check");
+    let section = defaulted.ledger_observer().expect("the section in effect");
+    assert_eq!(
+        (
+            section.scrub_rows_per_second,
+            section.scrub_chunk_rows,
+            section.scrub_pass_interval_ms
+        ),
+        (625, 256, 2_400_000)
+    );
+    let parameters = render(json!({})).expect("the defaults resolve");
+    for (key, value, settable) in [
+        (SCRUB_ROWS_PER_SECOND, FactScalar::Integer(625), true),
+        (SCRUB_CHUNK_ROWS, FactScalar::Integer(256), false),
+        (
+            SCRUB_PASS_INTERVAL_MS,
+            FactScalar::DurationMs(2_400_000),
+            false,
+        ),
+    ] {
+        let parameter = parameters
+            .iter()
+            .find(|parameter| parameter.key == key)
+            .unwrap_or_else(|| panic!("no parameter {key}"));
+        assert_eq!(parameter.value, value, "{key}");
+        assert_eq!(parameter.source, ConfigParameterSource::Default, "{key}");
+        assert_eq!(parameter.settable, settable, "{key}");
+    }
+
+    let configured = from_file(json!({
+        "scrub_rows_per_second": 1_000,
+        "scrub_chunk_rows": 512,
+        "scrub_pass_interval_ms": 3_600_000
+    }));
+    configured
+        .check(&context())
+        .expect("in-range values pass the check");
+    let section = configured.ledger_observer().expect("the section in effect");
+    assert_eq!(
+        (
+            section.scrub_rows_per_second,
+            section.scrub_chunk_rows,
+            section.scrub_pass_interval_ms
+        ),
+        (1_000, 512, 3_600_000)
+    );
+
+    let stamp = InstructionStamp {
+        set_unix_ms: 1,
+        set_in_owner_epoch: "epoch".to_owned(),
+        request_id: "request".to_owned(),
+        channel: None,
+    };
+    let change = |key: &str, value: Value| ConfigSettingChange {
+        key: key.to_owned(),
+        value: Some(value),
+    };
+    let applied = configured
+        .apply(
+            &[change(SCRUB_ROWS_PER_SECOND, json!(250))],
+            &stamp,
+            &context(),
+        )
+        .expect("the rate is settable");
+    assert_eq!(
+        applied
+            .config
+            .ledger_observer()
+            .expect("the section in effect")
+            .scrub_rows_per_second,
+        250
+    );
+    let refused = configured
+        .apply(
+            &[change(SCRUB_ROWS_PER_SECOND, json!(100_001))],
+            &stamp,
+            &context(),
+        )
+        .expect_err("a rate out of range");
+    assert_eq!(refused.failure_code(), ConfigCode::ConfigValueInvalid);
+    assert_eq!(refused.problem(), Some(ConfigValueProblem::OutOfRange));
+    for (key, value) in [
+        (SCRUB_CHUNK_ROWS, json!(128)),
+        (SCRUB_PASS_INTERVAL_MS, json!(600_000)),
+    ] {
+        let refused = configured
+            .apply(&[change(key, value)], &stamp, &context())
+            .expect_err("the key is read when the ledger opens");
+        assert_eq!(
+            refused.failure_code(),
+            ConfigCode::ConfigKeyNotSettable,
+            "{key}"
+        );
+    }
+    assert_eq!(configured.ledger_observer(), Ok(section));
+
+    for (section, config_key) in [
+        (json!({"scrub_rows_per_second": 0}), SCRUB_ROWS_PER_SECOND),
+        (
+            json!({"scrub_rows_per_second": 100_001}),
+            SCRUB_ROWS_PER_SECOND,
+        ),
+        (json!({"scrub_chunk_rows": 0}), SCRUB_CHUNK_ROWS),
+        (json!({"scrub_chunk_rows": 4_097}), SCRUB_CHUNK_ROWS),
+        (
+            json!({"scrub_pass_interval_ms": 59_999}),
+            SCRUB_PASS_INTERVAL_MS,
+        ),
+        (
+            json!({"scrub_pass_interval_ms": 86_400_001}),
+            SCRUB_PASS_INTERVAL_MS,
         ),
     ] {
         let case = section.to_string();

@@ -34,7 +34,7 @@ use crate::ActingctlError;
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::shutdown_wait;
-use crate::watchdog::{self, decide, io_failure, json_failure, observe, start};
+use crate::watchdog::{self, decide, io_failure, observe, start};
 use actingcommand_contract::outcome::{Category, CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     EventActor, EventSource, InstancePauseState, OwnerEpoch, RuntimeReceipt, SchedulingPauseState,
@@ -55,9 +55,6 @@ const USAGE: &str = "usage: actingctl start --root <root> [--config <file>] [--s
 const MAX_WAIT_SECONDS: u64 = 3600;
 /// `restart` waits for the shutdown as `request-shutdown --wait 60` does.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
-/// A watchdog tick holds `run.lock` through its own start: wait for it as `watchdog uninstall`
-/// does, up to the tick's readiness window and its probes.
-const RUN_LOCK_WAIT: Duration = Duration::from_millis(decide::READY_TIMEOUT_MS + 20_000);
 /// How often `restart --wait-idle` reads Status again (train 4 review ruling): every Status
 /// appends a ledger observation (command table §2.5), so the wait reads it every 10 s, and once
 /// more when `--wait-idle` ends.
@@ -109,7 +106,8 @@ struct Arguments {
     root: PathBuf,
     config: Option<PathBuf>,
     state_root: Option<PathBuf>,
-    ready_timeout: Duration,
+    /// `--ready-timeout-s`; without it the configuration's start window (#411 A66).
+    ready_timeout: Option<Duration>,
     wait_idle: Duration,
 }
 
@@ -166,7 +164,7 @@ impl Arguments {
             root: root.ok_or_else(usage)?,
             config,
             state_root,
-            ready_timeout: ready_timeout.unwrap_or(Duration::from_millis(decide::READY_TIMEOUT_MS)),
+            ready_timeout,
             wait_idle: wait_idle.unwrap_or(Duration::ZERO),
         })
     }
@@ -274,11 +272,15 @@ struct ShutdownReport {
 /// with the answering owner's `pid`, `owner_epoch` and the start `log`.
 fn run(mode: Mode, arguments: &Arguments) -> Result<(Report, Outcome), Failed> {
     let located = Located::resolve(arguments)?;
+    // #411 A66: an explicit `--ready-timeout-s` wins; otherwise the start may take the
+    // configuration's start window (`watchdog.start_window_ms`), as a watchdog start may.
     let target = start::Target {
         root_plain: &located.root_plain,
         config_plain: &located.config_plain,
         state_root: &located.state_root,
-        ready_timeout: arguments.ready_timeout,
+        ready_timeout: arguments
+            .ready_timeout
+            .unwrap_or(Duration::from_millis(located.start_window_ms)),
     };
     let report = match mode {
         Mode::Start => Report::Start(start_runtime(&located, &target)?),
@@ -305,6 +307,8 @@ struct Located {
     root_plain: PathBuf,
     config_plain: PathBuf,
     state_root: PathBuf,
+    /// #411 A66: the configuration's start window (`watchdog.start_window_ms`), in milliseconds.
+    start_window_ms: u64,
     /// An A/B root's selection, holding its slot pinned for the command as a watchdog tick does.
     _installation: Option<observe::Installation>,
 }
@@ -319,13 +323,14 @@ impl Located {
                 IoOp::Canonicalize,
             )
         })?;
-        let (installation, config_plain, configured) = match &arguments.config {
+        let (installation, config_plain, configured, start_window_ms) = match &arguments.config {
             // The selected generation, exactly as the watchdog starts it.
             None => {
                 let installation = ab_installation(&root)?;
                 let config = installation.config_plain.clone();
                 let state_root = installation.state_root.clone();
-                (Some(installation), config, state_root)
+                let start_window_ms = installation.start_window_ms;
+                (Some(installation), config, state_root, start_window_ms)
             }
             Some(config) => {
                 let unreadable = |path: &Path, error: &std::io::Error, op: IoOp| {
@@ -347,8 +352,8 @@ impl Located {
                     ));
                 }
                 let config = observe::plain_path(&config);
-                let state_root = configured_state_root(&bytes, &config)?;
-                (None, config, state_root)
+                let (state_root, start_window_ms) = observe::configured(&bytes, &config)?;
+                (None, config, state_root, start_window_ms)
             }
         };
         let state_root = match &arguments.state_root {
@@ -360,6 +365,7 @@ impl Located {
             root,
             config_plain,
             state_root,
+            start_window_ms,
             _installation: installation,
         })
     }
@@ -378,23 +384,6 @@ pub(crate) fn ab_installation(root: &Path) -> Result<observe::Installation, Fail
             failed
         }
     })
-}
-
-/// The config's absolute `state_root`, as the watchdog reads a selected config: a config that
-/// is not JSON is `watchdog_config_unreadable`, one without an absolute `state_root`
-/// `watchdog_state_root_invalid`, each with the config's `path`.
-fn configured_state_root(bytes: &[u8], config: &Path) -> Result<PathBuf, Outcome> {
-    let document: Value = serde_json::from_slice(bytes).map_err(|error| {
-        Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
-            .path(config)
-            .caused_by(json_failure(&error))
-    })?;
-    document
-        .get("state_root")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or_else(|| Outcome::new(ActingctlCode::WatchdogStateRootInvalid).path(config))
 }
 
 /// `--state-root` only checks the config's state root: the same spelling, or the same
@@ -484,7 +473,14 @@ fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartR
             IoOp::CreateDir,
         )
     })?;
-    let run_lock = watchdog::hold_run_lock(&directory, RUN_LOCK_WAIT).map_err(refused)?;
+    // A watchdog tick holds `run.lock` through its own start: wait for it as `watchdog
+    // uninstall` does, up to the start window and the tick's probes (#411 A66).
+    let run_lock_wait = Duration::from_millis(
+        located
+            .start_window_ms
+            .saturating_add(decide::RUN_LOCK_MARGIN_MS),
+    );
+    let run_lock = watchdog::hold_run_lock(&directory, run_lock_wait).map_err(refused)?;
     // A tick that held the lock may have started the Runtime meanwhile.
     refuse_live(&located.state_root)?;
     // 3-4. The watchdog's manual start and readiness. The log lies in the root, where the
@@ -605,7 +601,8 @@ mod tests {
     }
 
     /// §2.1 and §4.11: each subcommand takes only its own flags, each once; the defaults are
-    /// 180 s for readiness and 0 s (idle now) for `--wait-idle`.
+    /// the configuration's start window for readiness (#411 A66: no flag value, decided when the
+    /// configuration is read) and 0 s (idle now) for `--wait-idle`.
     #[test]
     fn start_and_restart_take_only_their_flags_once() {
         let start = parse(Mode::Start, &["--root", "R"]).expect("start --root");
@@ -616,7 +613,7 @@ mod tests {
                 start.config,
                 start.state_root
             ),
-            (Duration::from_secs(180), Duration::ZERO, None, None)
+            (None, Duration::ZERO, None, None)
         );
         let restart = parse(
             Mode::Restart,
@@ -640,7 +637,7 @@ mod tests {
                 root: PathBuf::from("R"),
                 config: Some(PathBuf::from("C")),
                 state_root: Some(PathBuf::from("S")),
-                ready_timeout: Duration::from_secs(60),
+                ready_timeout: Some(Duration::from_secs(60)),
                 wait_idle: Duration::from_secs(30),
             }
         );

@@ -143,7 +143,10 @@ actingcommand_contract::outcome_codes! {
         /// start; the start fails (Workflow #369 S6c; keys `alias`).
         EmulatorAutostartRequiresPhysicalInstance => "emulator_autostart_requires_physical_instance": error / none,
         /// Info. The daemon enqueued the autostart claims of the configured instances whose
-        /// emulator is stopped (Workflow #369 S6c; keys `count`). A report line.
+        /// emulator is stopped (Workflow #369 S6c; keys `count`). A report line. emu-watch: the
+        /// emulator watch enqueued one for a configured instance it found stopped (`count` 1,
+        /// `alias`, `attempts` this restart's place in the window, `limit_count`), also a
+        /// `device_state_observed` record under the instance.
         EmulatorAutostartQueued => "emulator_autostart_queued": info / none,
         /// Info. An autostart claim read internet access from the operating system's
         /// connectivity status (Workflow #369 S6c, P3; keys `alias`, `elapsed_ms`, the wait). A
@@ -172,12 +175,10 @@ actingcommand_contract::outcome_codes! {
         /// its key before its Start, with no failure pair (Workflow #369 S6c; keys `alias`). A
         /// report line.
         EmulatorAutostartSuperseded => "emulator_autostart_superseded": info / none,
-        /// Info. A scheduling pause holds the instance or the global gate: the autostart claim
-        /// queues again as a gated entry and releases its key (Workflow #369 S6c; keys `alias`).
-        /// A report line.
-        EmulatorAutostartYielded => "emulator_autostart_yielded": info / none,
         /// Info. The instance already runs when its autostart claim holds the key: the claim
-        /// ends without action (Workflow #369 S6c; keys `alias`). A report line.
+        /// ends without action (Workflow #369 S6c; keys `alias`). emu-watch: for the watch's
+        /// claim, the status read just before its Start found the emulator process running. A
+        /// report line.
         EmulatorAutostartSkipped => "emulator_autostart_skipped": info / none,
         /// Info. A drain or a shutdown ended the autostart claim before its Start; it releases
         /// its key (Workflow #369 S6c; keys `alias`). A report line.
@@ -448,6 +449,11 @@ actingcommand_contract::outcome_codes! {
         ClientFactReplayOriginConflict => "client_fact_replay_origin_conflict": error / none,
         ClientFactRequestIdConflict => "client_fact_request_id_conflict": error / none,
         ConnectionPreparationCooldownOverflow => "connection_preparation_cooldown_overflow": error / none,
+        /// Fatal (#411 A65). The runtime fact `host.contained_settlement`, which names the start
+        /// event of the start that last completed the previous-epoch settlement of direct runs,
+        /// is not the Runtime's integer or names no start event before this start's. The start
+        /// fails; the fact comes back at every start.
+        ContainedSettlementAnchorInvalid => "contained_settlement_anchor_invalid": fatal / none,
         ContainedTaskActiveIdentityMismatch => "contained_task_active_identity_mismatch": error / none,
         ContainedTaskAlreadyRunning => "contained_task_already_running": error / none,
         ContainedTaskCancellationIdentityMissing => "contained_task_cancellation_identity_missing": error / none,
@@ -718,6 +724,10 @@ actingcommand_contract::outcome_codes! {
         InstallTicketMismatch => "install_ticket_mismatch": error / none,
         InstallTransitionConflict => "install_transition_conflict": error / none,
         InstallTransitionUnknown => "install_transition_unknown": error / none,
+        /// Error (ISO-M #419, R8). A lock of one instance alone that guards no data (its admission
+        /// guard, its queue-order lock) was left poisoned by a panic: its poison is cleared, the
+        /// work that met it fails and the instance is fenced; every other instance goes on.
+        InstanceLockPoisoned => "instance_lock_poisoned": error / none,
         InstanceNotRunning => "instance_not_running": error / none,
         InstanceWorkerSpawnFailed => "instance_worker_spawn_failed": error / none,
         InstanceWorkerUnavailable => "instance_worker_unavailable": error / none,
@@ -816,7 +826,8 @@ actingcommand_contract::outcome_codes! {
         // lines.
         /// Info. The start opened its ledger (keys `event_count`, `artifact_count`,
         /// `artifact_bytes`, `worker_count`, `sql_read_ms`, `verify_ms`, `material_ms`,
-        /// `restore_ms`, `timeout_ms`; N1).
+        /// `restore_ms`, `timeout_ms`; N1; #422 LN-8: the phases `meta_ms`, `tail_ms`,
+        /// `index_ms` and `import_ms`).
         LedgerOpened => "ledger_opened": info / none,
         /// Info. What a ledger open or a maintenance read measured before it failed: the same
         /// keys as `ledger_opened`, as a `note` link of the failure (N1).
@@ -1001,6 +1012,9 @@ actingcommand_contract::outcome_codes! {
         PolicyOutcomeTerminalNotUnique => "policy_outcome_terminal_not_unique": error / none,
         PolicyPoolAuthorityConflict => "policy_pool_authority_conflict": error / none,
         PolicyPoolBindingInvalid => "policy_pool_binding_invalid": error / none,
+        // ROUT-L RL-1b (RL-1a review, #386 6399836824 item 1): a configured static pool reading
+        // names a pool no composed game declares; it is left out of the evaluation (`pool_id`).
+        PolicyPoolReadingUnused => "policy_pool_reading_unused": warning / none,
         PolicyReasonChainMismatch => "policy_reason_chain_mismatch": error / none,
         PolicyRecomputePositionRegressed => "policy_recompute_position_regressed": error / none,
         PolicyRecomputeProjectionInvalid => "policy_recompute_projection_invalid": error / none,
@@ -1222,6 +1236,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeInstanceRegistryIncomplete => "runtime_instance_registry_incomplete": error / none,
         RuntimeListenerAddressFailed => "runtime_listener_address_failed": error / none,
         RuntimeListenerConfigFailed => "runtime_listener_config_failed": error / none,
+        /// Error. A Runtime monitor thread could not be spawned: the monitor probe at the host's
+        /// start, or the emulator watch (emu-watch). The Runtime halts.
         RuntimeMonitorSpawnFailed => "runtime_monitor_spawn_failed": error / none,
         /// Error. The thread of the task package admission after start could not be started;
         /// the start fails (Workflow #386 SR-3).
@@ -1405,6 +1421,12 @@ actingcommand_contract::outcome_codes! {
         /// `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
         // ---- Workflow #373 NAV-6: end
+        // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §2.2, register §1.65 TB3): begin
+        /// Warning. A column of a standard-pack table declares `valid_until_unix_s` and that
+        /// second has passed: every cell of the column reads `null` (keys `game`, `path`,
+        /// `table_column`). A note of check-config.
+        StandardPackTableColumnExpired => "standard_pack_table_column_expired": warning / none,
+        // ---- Workflow #357 DB-1: end
         // ---- Workflow #373 NAV-5 (full-match entry routing, M-373 §5, §9.1): begin
         /// Info. A locate of the entry gate matched exactly one page of `pages.json` (keys
         /// `page_id`, `count`: the locate's number).
@@ -1495,7 +1517,9 @@ actingcommand_contract::outcome_codes! {
         /// `adb_port_present`, `adb_port`, `elapsed_ms`).
         EmulatorDeviceUnrecognized => "emulator_device_unrecognized": error / environment_fault,
         /// Warning. A self-check's emulator status read failed; the check went on from the
-        /// Runtime's own state of the instance. The read's failure text is the cause.
+        /// Runtime's own state of the instance. The read's failure text is the cause. emu-watch:
+        /// also a failed status read of the emulator watch, or of its autostart claim just before
+        /// the Start (keys `alias`); the instance's reading stays.
         EmulatorStateReadFailed => "emulator_state_read_failed": warning / none,
         // ---- #411 A48: end
         // ---- #411 A50: a restart launches only after the old VM has exited: begin
@@ -2423,6 +2447,8 @@ pub(crate) mod test_spellings {
             ScheduledPolicyCheckpointMarkerWriteFailed => "scheduled_policy_checkpoint_marker_write_failed": error / none,
             ScheduledPolicyCheckpointTestHookAlreadyInstalled => "scheduled_policy_checkpoint_test_hook_already_installed": error / none,
             SchedulingTerminalAppendInjectedFailure => "scheduling_terminal_append_injected_failure": error / none,
+            // #411 A65: a start made to fail right after it appended its start event.
+            StartFailedAfterStartEventForTest => "start_failed_after_start_event_for_test": error / none,
             TestClaimNotGranted => "test_claim_not_granted": error / none,
             TestInstanceMissing => "test_instance_missing": error / none,
             TestLeaseExpiryCheckpointDuplicate => "test_lease_expiry_checkpoint_duplicate": error / none,
@@ -2458,14 +2484,18 @@ pub(crate) mod test_spellings {
             // #411 A36c: the hook between a PP-OCR diagnostic stream's writes and its seal.
             ConsumePpocrSealTestHook => "consume_ppocr_seal_test_hook",
             ConsumeScheduledPolicyCheckpointTestHook => "consume_scheduled_policy_checkpoint_test_hook",
+            // ISO-M (#419): `contain_failure` at a boundary, and a fence that fails.
+            ContainFailureForTest => "contain_failure_for_test",
             ExpireAllQueuedForTest => "expire_all_queued_for_test",
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
             FailScheduledHostClaimForTest => "fail_scheduled_host_claim_for_test",
+            FailStartAfterStartEventForTest => "fail_start_after_start_event_for_test",
             InjectInstanceWorkerPanicForTest => "inject_instance_worker_panic_for_test",
             InjectTestContainedTaskOcrFailurePersistence => "inject_test_contained_task_ocr_failure_persistence",
             InjectTestContainedTaskStabilityEventAppendFailure => "inject_test_contained_task_stability_event_append_failure",
             InjectTestContainedTaskStabilityPersistenceFailure => "inject_test_contained_task_stability_persistence_failure",
+            InjectTestFenceFailure => "inject_test_fence_failure",
             InjectTestPolicyOutcomeProjectionFailure => "inject_test_policy_outcome_projection_failure",
             InjectTestPolicyOutcomeProjectionPosition => "inject_test_policy_outcome_projection_position",
             InjectTestSchedulingTerminalAppendFailure => "inject_test_scheduling_terminal_append_failure",
@@ -2569,12 +2599,18 @@ actingcommand_contract::outcome_codes! {
         /// changed (keys `package_id`, `actual_digest`, `runtime_commit`; SR-3).
         PackAdmissionLifted => "pack_admission_lifted": info / none,
         /// Info. A candidate is deferred inside a blackout until its end (keys `instance_id`,
-        /// `blackout_id`, `next_eligible_unix_ms`; SR-4a).
+        /// `blackout_id`, `blackout_source`, `next_eligible_unix_ms`; SR-4a2), and admission
+        /// refuses an intent that crossed into it.
         BlackoutActive => "blackout_active": info / none,
-        /// Info. A candidate is deferred because its response deadline plus the quiet margin
-        /// reaches the next blackout start (keys `instance_id`, `blackout_id`,
-        /// `blackout_start_unix_ms`, `required_ms`; SR-4a).
+        /// Info. A candidate is deferred because its horizon plus the quiet margin reaches the
+        /// next blackout start (keys `instance_id`, `blackout_id`, `blackout_source`,
+        /// `blackout_start_unix_ms`, `required_ms`; SR-4a2), and admission refuses it the same.
         BlackoutApproaching => "blackout_approaching": info / none,
+        /// Info. A Runtime-started policy run would not end, by its expected duration, before
+        /// the end of the activity window it would be admitted in; it waits for the next window
+        /// (keys `instance_id`, `window_end_unix_ms`, `required_ms`, `next_eligible_unix_ms`;
+        /// SCH-M D-6, slice SR-4a2), and admission refuses it the same.
+        PolicyDayBoundaryApproaching => "policy_day_boundary_approaching": info / none,
         /// Error. A run still active when a blackout started was stopped at its next
         /// checkpoint (keys `blackout_id`, `blackout_start_unix_ms`; SR-4b).
         BlackoutRunStopped => "blackout_run_stopped": error / planned_stop,
@@ -2820,3 +2856,112 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #411 B15 R0: end ----
+
+// ---- emu-watch (Alice's ruling 35; review item 5): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's own codes of the emulator watch (emu-watch): it polls the emulator status of
+    /// every discovery-bound instance and starts a configured one it finds stopped, within a
+    /// bound. Each is a `device_state_observed` record under the instance and the same report
+    /// line, which actingd writes as a daemon line. #420 S4: everything else the watch says is an
+    /// existing code (`emulator_state_read_failed`, `emulator_autostart_queued`,
+    /// `runtime_monitor_spawn_failed`).
+    pub(crate) enum EmulatorWatchCode {
+        /// Info. A poll read the instance's emulator in another running state than the Runtime
+        /// held: `emulator_state` takes the reading (keys `alias`, `process_started`,
+        /// `android_started`, `adb_port_present`).
+        StateChanged => "emulator_watch_state_changed": info / none,
+        /// Warning. A poll found the configured instance's emulator stopped, but the watch already
+        /// started it `emulator_control.restart_attempts` times within
+        /// `emulator_control.restart_window_ms`: no start until the oldest leaves the window
+        /// (`retry_after_ms`) or a person's emulator control of the instance. Once per streak
+        /// (keys `alias`, `attempts`, `limit_count`, `retry_after_ms`).
+        RestartExhausted => "emulator_watch_restart_exhausted": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operation of the emulator watch (emu-watch).
+    pub(crate) enum EmulatorWatchLocation {
+        /// The watch: its start (`RuntimeHost::start_emulator_watch`), its polls of the emulator
+        /// status and the restarts they request, and its end with the host.
+        Watch => "emulator_watch",
+    }
+}
+// ---- emu-watch: end ----
+
+// ---- IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the idle action (IDLE-1; #420 S4: one domain code with values, and
+    /// the one warning a code of one category cannot carry). Everything else the action and its
+    /// wake say is an existing code: the stop's and the close's own command and failure records,
+    /// `emulator_autostart_queued` and the startup package's `startup_package_scheduled`,
+    /// `invalid_application_identity`, `application_foreground_unknown`.
+    pub(crate) enum IdleCode {
+        /// Info. An idle instance's action ran (`operation` `run_idle_action`: the game's
+        /// application was stopped, or the instance's sessions were closed and its emulator
+        /// stopped), or its wake was queued (`operation` `queue_idle_wake`). Keys `alias`,
+        /// `idle_action` (`close_app` or `stop_emulator`), `next_occurrence_unix_ms` (the next
+        /// due time the scheduler gave, when it gave one), `at_unix_ms` (the planned wake, when
+        /// there is one) and, for `close_app`, `application_id`. A `device_state_observed` record
+        /// under the instance and the same report line.
+        Taken => "instance_idle_action": info / none,
+        /// Warning (Fail Loud). The instance's idle action in effect cannot work, because the
+        /// instance cannot be brought back after it: `member` names what its `instances[]` entry
+        /// lacks, `startup_package` (both actions) or `start_emulator` (`stop_emulator`). The
+        /// action never runs on it; reported once per action in effect, at the first idle check
+        /// that finds it (`operation` `check_idle_instances`). Keys `alias`, `idle_action`,
+        /// `member`. A `device_state_observed` record under the instance and the same report
+        /// line.
+        Unsupported => "instance_idle_action_unsupported": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the idle action (IDLE-1).
+    pub(crate) enum IdleLocation {
+        /// The idle check of every instance, at every policy cycle and every lease sweep
+        /// (`HostShared::check_idle_instances`).
+        Check => "check_idle_instances",
+        /// One instance's idle action on its emulator-control claim
+        /// (`HostShared::run_idle_action`).
+        Action => "run_idle_action",
+        /// One instance's wake: the configured emulator start and the startup package queued
+        /// (`HostShared::queue_idle_wake`).
+        Wake => "queue_idle_wake",
+    }
+}
+// ---- IDLE-1: end ----
+
+// ---- SCH-M ED-2 (frozen model v1.0 §3.4; Alice 10-22 「近5次该任务包的平均时间加5分钟」): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the run-duration samples (SCH-M ED-2; #420 S4: the two codes the
+    /// model names, one of them a domain code with values). Everything else is an existing
+    /// code: the store's own refusals, `policy_facts_stale`.
+    pub(crate) enum RunDurationCode {
+        /// Error. A client published `health.run_duration`, which only the Runtime writes; the
+        /// publication is refused before the fact write gate and nothing is appended. Keys
+        /// `fact_key`.
+        KeyReserved => "run_duration_key_reserved": error / none,
+        /// Warning (Fail Loud). A row of an instance's `health.run_duration` record was dropped,
+        /// or a sample was not recorded: a new package's row beyond the 256-row bound dropped the
+        /// row with the oldest `at` (`package_id` that row's); the write dropped a stored row it
+        /// could not read (`package_id` when it could be read); or the store refused the
+        /// record's publication (`package_id` the run's, the refusal as the `caused_by` link).
+        /// That package's next expected duration is its declared one until it has runs again.
+        /// Keys `instance_id` (the instance alias), `package_id`.
+        RowDropped => "run_duration_row_dropped": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the run-duration samples (SCH-M ED-2).
+    pub(crate) enum RunDurationLocation {
+        /// One successful scheduled run's sample written to its instance's `health.run_duration`
+        /// record at its settlement (`HostShared::add_run_duration_sample`).
+        RecordSample => "record_run_duration_sample",
+        /// The expected durations E projected from the instances' records into an evaluation's
+        /// task states (`HostShared::project_expected_runtimes`).
+        Project => "project_expected_runtime",
+    }
+}
+// ---- SCH-M ED-2: end ----

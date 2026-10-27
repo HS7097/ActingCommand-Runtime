@@ -25,6 +25,19 @@ pub(crate) fn catalog_ledger_error(error: &GlobalLedgerError) -> RuntimeHostErro
     .with_native_detail(format!("{error}; detail={:?}", error.detail()))
 }
 
+/// #419 LN-WS-F (R1): a failed read of the catalog's transitions: a read the writer did not answer
+/// in time, or stopped at its budget, fails only the request that projects the catalog at a
+/// position, with the ledger's code (`ledger_read_error`); any other failure stays fatal
+/// ([`catalog_ledger_error`]).
+fn catalog_read_error(error: &GlobalLedgerError) -> RuntimeHostError {
+    let read = crate::host::ledger_read_error(error, HostLocation::ProjectPolicyCatalog);
+    if read.is_fatal() {
+        catalog_ledger_error(error)
+    } else {
+        read
+    }
+}
+
 fn work_error(error: RuntimeHostError) -> TransactionWorkError {
     TransactionWorkError {
         code: error.code(),
@@ -250,10 +263,19 @@ impl CatalogStore {
                 )
             })?
             .clone();
+        // LN-5 (#422, LEAN-L §3.3): the type's history is read from the store page by page.
         let recorded = ledger
-            .query(EventQuery {
-                event_type: Some(EventType::StateMigrated),
-                ..EventQuery::default()
+            .latest_sequence()
+            .and_then(|through| {
+                crate::recovery_read::read_pages(
+                    ledger,
+                    &EventQuery {
+                        event_type: Some(EventType::StateMigrated),
+                        ..EventQuery::default()
+                    },
+                    through,
+                    ledger.history_page_events(),
+                )
             })
             .map_err(|error| catalog_ledger_error(&error))?;
         let mut matching = 0;
@@ -363,10 +385,10 @@ impl CatalogStore {
         ledger: &GlobalLedger,
         through: u64,
     ) -> RuntimeHostResult<(Option<LoadedCatalog>, CatalogLineage)> {
+        // LN-5 (#422, LEAN-L §3.3): each type's history is read from the store page by page.
         let events = catalog_projection_events(through, |query| {
-            ledger
-                .query(query)
-                .map_err(|error| catalog_ledger_error(&error))
+            crate::recovery_read::read_pages(ledger, &query, through, ledger.history_page_events())
+                .map_err(|error| catalog_read_error(&error))
         })?;
         let (current, lineage) = self.fold_catalog_events(&events)?;
         let Some((id, version, hash)) = current else {

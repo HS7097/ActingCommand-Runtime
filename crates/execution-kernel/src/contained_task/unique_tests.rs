@@ -248,8 +248,9 @@ fn a_search_past_its_time_limit_fails_the_guard_evaluation_and_taps_nothing() {
     assert!(runtime.inputs.is_empty(), "zero inputs, never a pass");
 }
 
-/// An uncompressed RGB PNG of one stored deflate block.
-fn encode_png(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+/// An uncompressed RGB PNG of one stored deflate block (Workflow #392 DA-2a's gate tests use it
+/// too).
+pub(super) fn encode_png(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
     let mut scanlines = Vec::new();
     for y in 0..height {
         scanlines.push(0);

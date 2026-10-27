@@ -19,8 +19,10 @@ writer; retiring Segment writes does not remove those files or read capabilities
 
 ## Offline entry
 
-`actingd ledger-maintenance` reads the normal configuration only for state root
-and fingerprint salt. It does not assemble Provider, policy, IPC or devices.
+`actingd ledger-maintenance` reads the normal configuration only for state root,
+fingerprint salt and (#422 LN-7c V, used only by `verify --frame-query`) the two frame
+retention dedup switches, at their defaults when the file names neither. It does not
+assemble Provider, policy, IPC or devices.
 All operations acquire the existing OwnerGuard and Ledger OS locks; unresolved
 resource ownership refuses maintenance. The canonical Ledger lock remains
 `ledger/writer.lock`; a present candidate `writer.lock` is also held and must
@@ -30,9 +32,15 @@ have a provably closed owner.
 actingd ledger-maintenance backup --config runtime.json --backup frozen-backup
 actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingd ledger-maintenance import --config runtime.json --backup frozen-backup
-actingd ledger-maintenance verify --config runtime.json
+actingd ledger-maintenance verify --config runtime.json [--frame-query]
 actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target restored-root
 ```
+
+`--frame-query` (#422 LN-7c V, a flag without a value) adds the frame query check described
+under the limits below. It is never ignored: any operation other than `verify` refuses it
+with `maintenance_arguments_invalid` before the root is touched, and `verify` refuses it the
+same way on a root that is not formal (a Segment or candidate root), where the check cannot
+run. Without it `verify` is exactly the complete read it was before the check existed.
 
 Relative destinations resolve against the process working directory before
 validation, creation and sync. Backup paths must be disjoint from the source and
@@ -137,8 +145,30 @@ The defaults bound one maintenance operation. Startup, `actingd unlock-owner` an
 authenticated Ledger extent (Workflow #375). `verify` classifies a formal root by
 its keyed meta row, as startup does, and verifies it in one complete read that
 reads no further than the authenticated head; its receipt's `ledger` comes from
-that read. A Missing (Segment) or candidate root keeps the full status read under
-the limits. `backup` (with its binding read), dry-run, import and restore still
+that read. #422 LN-7c V (`rd-1026/ln7c/final-query.md` §7 row V), opt-in: only with
+`--frame-query`, after that read passes, `verify` runs the frame cleaner's statements
+W, L and K, as the cleaner runs them, against the full frame view of the same records,
+over the root's `artifacts\` and `kept\` listings (directory entries only: no frame
+file is opened, hashed or read) at one clock, within the same deadline
+([ledger-store.md](ledger-store.md), "Frame cleaner", the offline check). A
+difference is `ledger_index_mismatch` of `verify_frame_query` with the frame's
+`artifact_id` and the answer's differing `field`, and fails the pass; a frame index
+that does not cover the ledger fails it the same way (`frame_refs_incomplete` in the
+developer text). A pass prints one stderr line, `INFO actingd:
+ledger_maintenance_completed verify frame_query_live=<n> frame_query_kept=<n>
+frame_query_accounted=<n>`: the live and kept frames compared and the safe
+differences accounted; the receipt is unchanged. The check builds the full retention
+index of every record on top of the complete read and runs the statements unpaced, all
+inside `verify`'s deadline, so on a large ledger it may fail with
+`ledger_read_budget_exceeded` where the read alone passes; that is why it is opt-in.
+Without the flag `verify` builds no retention index, runs no statement, lists no
+frame store, resolves none of the check's keys and prints no extra line: its read, its
+findings and its answer are those of the complete read alone. The Runtime never runs
+this check. A Missing (Segment) or candidate root keeps the full status read under
+the limits without the flag. With the flag such a root is refused with
+`maintenance_arguments_invalid` (Fail Loud, fix round 1b) right after `verify` classifies
+it by its keyed meta row: before the State digest and the status read, with nothing
+written but the owner journal's records that every maintenance pass appends. `backup` (with its binding read), dry-run, import and restore still
 return `ledger_read_budget_exceeded` for a root beyond the default limits; such a
 root needs `RuntimeHost::maintain_ledger` with explicit limits (at most 1,000,000
 events, 4 GiB, 600 seconds). The CLI takes no limit options.

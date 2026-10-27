@@ -87,7 +87,10 @@ options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file na
 only when it is `true`, and only the installer's Lab transaction writes them. Until U-6 they are
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
 `startup_discovery` section below (default `file`, not settable, read once at assembly).
-Workflow #406 T12's rows: the `touch` section below (default `file`, settable). A
+Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
+the `execution` section below (default `file`, settable). Workflow #392 DA-4b-D's rows: the
+`display_safe_area` section below (default `file`, settable) and the per-instance
+`display_safe_area.model` (string, default `section:display_safe_area.model`, settable). A
 manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -230,17 +233,34 @@ function.
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
 | `host_claims.renewal_slack_ms` | milliseconds, settable (read at the next renewal) | `1000` |
+| `host_claims.run_end_grace_ms` | milliseconds, `10000..=600000`, settable (read when a run reaches its deadline) | `120000` |
 
 Before a step a Runtime-held key renews to the step's bound (capped at a task's longest deadline
 plus the heartbeat bound, as every claim TTL), unless its remaining time plus
 `renewal_slack_ms` already covers that bound. The value is read at each renewal; a value that is
 not milliseconds is refused (`config_value_invalid`, `wrong_type`).
 
+#411 A64 (ruling C-43, `actingd-config` revision 11): a contained run that reaches its deadline
+while it still holds its lease enters its end phase. Before any of its end work (the diagnostic
+seal, the capture summary, the terminal, the close) its lease is renewed once to
+`run_end_grace_ms` from then, and every step of its end runs under that lease. The lease sweep
+leaves the lease of a run inside its end grace alone, also when that renewal was refused; after
+the grace it may expire it as any lapsed lease. A close in the end phase that meets the lapsed
+lease fences only that instance (Workflow #403; the refusal is recorded once per run), and once
+the lapsed lease has ended the instance's session, which the multi-Nemu rule closes at every lease
+end, is closed under a dedicated resource-close lease (left to a holder that took the key on). A
+terminal that finds its lease already expired by the sweep is still recorded, its outcome
+carrying `lease_expired`, and fences the instance; neither stops the Runtime. A run whose lease
+ended before its end began enters no end phase, and every other lease (an ordinary client lease
+included) keeps its behaviour from before C-43.
+
 ## The `standard_packs` section (Workflow #373 NAV-6; moved by D1c)
 
 | Key | Type | Default |
 |---|---|---|
 | `standard_packs.root` | string (a path), not settable (read once at assembly) | none: without it no standard-pack root is read |
+| `standard_packs.check_interval_ms` | milliseconds, `1000..=3600000`, settable (ROUT-L RL-1b, since 0.12.13) | `60000` |
+| `standard_packs.cached_generations` | integer, `0..=8`, settable (ROUT-L RL-1b, since 0.12.13) | `1` |
 
 The directory that holds one root per game (`<root>/<game>/`), written once by the installer. A
 relative path resolves against the configuration file's directory; an empty one is refused.
@@ -248,6 +268,16 @@ D1c moves the section's structure from actingd's own configuration into this cra
 deviation 5); the file member and its meaning are unchanged, and `config.parameters.standard_packs`
 reports it as the file writes it when the file names it. Changing it needs a commit and a
 restart.
+
+ROUT-L RL-1b (frozen model v1.0 §3.3, §3.8; [standard-pack-schedule.md](standard-pack-schedule.md),
+"The scheduler workbench"): when the `policy` section names no `catalog` (composer mode), the
+scheduler workbench composes the rules from the `schedule.json` of the games in use, and
+`standard_packs.root` is required (`config_value_invalid`, `config_key` `standard_packs.root`).
+`check_interval_ms` is the least time between two checks of the games in use, at the start of a
+policy cycle; `cached_generations` is how many composed generations older than the active one
+stay in memory (it replaces the fixed bound of 8). Both are read at each check and can change
+while the Runtime runs. A configuration that names `policy.catalog` keeps the configured catalog
+path as before; the workbench then reads nothing.
 
 ## The performance section (Workflow #385 P-c)
 
@@ -336,6 +366,8 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.blackout.host` | list of host blackout entries | `[]` |
 | `scheduling.blackout.quiet_margin_ms`, `.hard_quiet_ms` | milliseconds | `60000`, `0` |
 | `scheduling.blackout.stop_in_flight_at_start` | boolean | `true` |
+| `scheduling.blackout.quiet_horizon` (Workflow #386 SR-4a1) | `deadline` \| `expected` | `deadline` |
+| `scheduling.day_boundary.quiet` (Workflow #386 SR-4a1) | boolean | `true` |
 | `scheduling.feature_lock.locked_valid_for_ms` | milliseconds | `86400000` |
 | `scheduling.feature_lock.codes` | list of codes, as `rerun.condition_codes` | `["contained_task_feature_locked"]` |
 | `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
@@ -346,6 +378,10 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.fact_refresh.daily_limit`, `.max_consecutive_failures` (Workflow #384 D2-S4) | integer `0..=4294967295` | `96`, `3` |
 | `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
 | `scheduling.fact_refresh.overdue_ms` (Workflow #384 D2-S5) | milliseconds | none (unset: not reported) |
+| `scheduling.fact_refresh.expected_duration_ms` (SCH-M ED-1) | milliseconds `1..=1800000` | `60000` |
+| `scheduling.expected_runtime.enabled` (SCH-M ED-1) | boolean | `true` |
+| `scheduling.expected_runtime.runs` (SCH-M ED-1) | integer `1..=16` | `5` |
+| `scheduling.expected_runtime.margin_ms` (SCH-M ED-1) | milliseconds `0..=3600000` | `300000` |
 | `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
 | `scheduling.pack_admission.check_in_check_config`, `.check_after_start` (Workflow #386 SR-3) | boolean | `true`, `true` |
 | `scheduling.pack_admission.suspend_codes` (Workflow #386 SR-3) | list of codes, as `rerun.condition_codes` | `["recognition_sample_budget_invalid"]` |
@@ -355,10 +391,12 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
-one `code_retired`; a host blackout entry that breaks a rule of
-[scheduling-blackout.md](scheduling-blackout.md) refuses a start and `check-config` with
-`blackout_config_invalid` (`field`, and `blackout_id` when the entry has a usable id: one to 256
-bytes, no control character) and an instruction with `config_value_invalid` (`section_check`);
+one `code_retired`; a blackout entry (of the host list or, Workflow #386 SR-4a1, of an
+instance's own list) that breaks a rule of [scheduling-blackout.md](scheduling-blackout.md)
+("Configuration blackouts": `weekly` and `once` entries, at most 64 per list) refuses a start and
+`check-config` with `blackout_config_invalid` (`field`, `blackout_source` naming the list, and
+`blackout_id` when the entry has a usable id: one to 256 bytes, no control character) and an
+instruction with `config_value_invalid` (`section_check`);
 `random_delay.min_ms` above `random_delay.max_ms` is `config_value_invalid` (`section_check`) for
 `min_ms`.
 
@@ -374,6 +412,33 @@ dispatches to it ([scheduling-blackout.md](scheduling-blackout.md), "Order of th
 position 9). Every member is settable while the Runtime runs; a change applies to the draws made
 after it (a draw already made keeps its delay), and `enabled = false` releases the instance's
 waiting tasks at the next evaluation.
+
+**Blackouts and the day boundary per instance (Workflow #386 SR-4a1, SCH-M §3.2 D-1, D-6;
+`actingd-config` revision 11).** `instance.<instance id>.scheduling.blackout`, in the file the
+entry's `scheduling.blackout` member, is the instance's own blackout list: no default (an instance
+whose entry names none has no entries of its own and reports no row), settable once the entry
+names one, its entries checked as the host list's are.
+`instance.<instance id>.scheduling.day_boundary.quiet`, in the file the entry's
+`scheduling.day_boundary.quiet`, settable, default `section:scheduling.day_boundary.quiet`. Accessors `EffectiveConfig::instance_blackouts` and
+`EffectiveConfig::day_boundary_quiet`; SR-4a2 reads them, and `scheduling.blackout.quiet_horizon`,
+at every policy cycle.
+
+**Expected duration (SCH-M slice ED-1, frozen model v1.0 §3.4; `actingd-config` revision
+11).** `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms` set the expected duration E
+of a task package on an instance: the mean of its latest `runs` successful scheduled runs, rounded
+up, plus `margin_ms`, at most the task's `loop_budget.max_runtime_ms`; with no run, or with
+`enabled` false, the declared value ([scheduling/README.md](scheduling/README.md), "Settlement
+Feedback And Eligibility Age"). Each is also per instance,
+`instance.<instance id>.scheduling.expected_runtime.<member>`, in the file the entry's
+`scheduling.expected_runtime` member, settable, default `section:scheduling.expected_runtime.<member>`;
+`EffectiveConfig::expected_runtime(instance_id)` returns each member's value in effect, the
+instance's own or the section's. `scheduling.fact_refresh.expected_duration_ms` is the declared
+duration D of a fact refresh read. ED-1 parses and checks the keys; slice ED-2 reads them: each
+instance's `enabled`, `runs` and `margin_ms` at every write of a run-duration sample and every
+projection of the evaluation inputs ([instance-fact-store.md](instance-fact-store.md), "Run duration
+facts"), and `scheduling.fact_refresh.expected_duration_ms` at every evaluation and admission of a
+fact refresh read, whose intent record carries a value other than the spec's nominal 60 000, so
+recovery reserves it again. ED-2 adds no key.
 
 **Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
 v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
@@ -433,6 +498,16 @@ with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag r
 | `ledger_observer.close_timeout_ms` (#411 A51) | milliseconds, above `read_budget_ms` | `60000` | no |
 | `ledger_observer.open_timeout_ms` (P0-LO) | milliseconds `10000..=600000` | `600000` | no |
 | `ledger_observer.open_warn_ratio_milli` (P0-LO) | integer `100..=1000` (thousandths) | `500` | no |
+| `ledger_observer.history_page_rows` (#422 LN-5) | integer `1..=4096` | `256` | no |
+| `ledger_observer.writer_reply_timeout_ms` (#422 LN-TUNE) | milliseconds `1000..=600000`, above `read_budget_ms` | `10000` | no |
+| `ledger_observer.open_verify_tail_records` (#422 LN-8) | integer `1..=1000000` | `4096` | no |
+| `ledger_observer.scrub_rows_per_second` (#422 LN-9) | integer `1..=100000` | `625` | yes |
+| `ledger_observer.scrub_chunk_rows` (#422 LN-9) | integer `1..=4096` | `256` | no |
+| `ledger_observer.scrub_pass_interval_ms` (#422 LN-9) | milliseconds `60000..=86400000` | `2400000` | no |
+| `ledger_observer.read_check_vm_steps` (#422 LN-WS) | integer `100..=1000000` | `10000` | no |
+| `ledger_observer.history_scan_rows` (#422 LN-WS) | integer `1024..=1048576` | `65536` | no |
+| `ledger_observer.frame_query_steps_per_second` (#422 LN-7c Q) | integer `1000..=100000000` | `500000` | yes |
+| `ledger_observer.frame_query_chunk_frames` (#422 LN-7c Q) | integer `1..=4096` | `256` | no |
 | `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
 | `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
 
@@ -444,8 +519,9 @@ the tiers rise strictly within (0, 1] (`tier1_ratio` above 0 and below `tier2_ra
 `tier2_ratio` below `tier3_ratio`, `tier3_ratio` at most 1); `hysteresis_ratio` lies within
 (0, 1); (`tier3_ratio` − `tier2_ratio`) × `buffer_bytes` is at least `spill_batch_bytes`;
 `write_retry_backoff_ms` lists exactly `write_attempts` waits; the tag lists hold non-empty texts
-without spaces or control characters; `read_budget_ms` lies below the writer's 10 s reply limit
-and `close_timeout_ms` above `read_budget_ms` (#411 A51). A ratio or a wait of the wrong type is `wrong_type`.
+without spaces or control characters; `read_budget_ms` lies below the writer's reply limit
+`writer_reply_timeout_ms` (#411 A51; #422 LN-TUNE) and `close_timeout_ms` above `read_budget_ms`
+(#411 A51). A ratio or a wait of the wrong type is `wrong_type`.
 
 P0-LO (Runtime v0.12.11, `actingd-config` revision 10): `open_timeout_ms` is the deadline of the
 start's ledger open (it was a fixed 120 s): the host's own open takes it as its maintenance
@@ -458,6 +534,64 @@ time (the sum of the phases `ledger_opened` reports) exceeds `open_timeout_ms` �
 ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). Both keys
 are read when the ledger opens (not settable); a value outside its range is `config_value_invalid`
 (`out_of_range`).
+
+#422 LN-5 (v0.12.13, `actingd-config` revision 12): `history_page_rows` is the rows of one page of a
+history read; the ledger reads its history from SQLite a page at a time, and the Runtime's paged
+history reads take as many events per page, at most a query page's 1 024
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). It is read
+when the ledger opens (not settable); a value outside `1..=4096` is `config_value_invalid`
+(`out_of_range`).
+
+#422 LN-TUNE (`actingd-config` revision 12): `writer_reply_timeout_ms` is how long a caller waits
+for one reply of the ledger writer (until LN-TUNE the ledger's fixed 10 s): every writer command,
+a subscription's replay page, the close's confirmation of deferred appends and the host's
+boundaries that confirm them wait it; one that runs out is `writer_response_timeout`
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). It is read
+when the ledger opens (not settable); a value outside `1000..=600000` is `config_value_invalid`
+(`out_of_range`), and a `read_budget_ms` not below it is `config_value_invalid`
+(`section_check`) for `read_budget_ms`.
+
+#422 LN-8 (`actingd-config` revision 13): `open_verify_tail_records` is how many of the newest
+records the start's ledger open reads and authenticates; the open reads no older record, which a
+reader authenticates when it reads it and `ledger-maintenance verify` and the background re-check
+read in full ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer);
+[ledger-store.md](ledger-store.md#open-ownership-and-append-durability)). It is read when the
+ledger opens (not settable); a value outside `1..=1000000` is `config_value_invalid`
+(`out_of_range`).
+
+#422 LN-9 (`actingd-config` revision 13; LEAN-L §6, Alice's ruling 57): the pace and the limits
+of the ledger's background scrub of the whole chain
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)).
+`scrub_rows_per_second` is the rows a second it reads and authenticates; it is settable, and the
+scrub reads the value in effect after each chunk (at start, once the instruction values are
+restored, and after every instruction). `scrub_chunk_rows` is the rows of one chunk, each in a
+read transaction of its own, and `scrub_pass_interval_ms` the least time from the start of one
+pass to the start of the next; both are read when the ledger opens (not settable). The defaults
+read 1.5 million records in about 40 minutes. A value outside its range is
+`config_value_invalid` (`out_of_range`).
+
+#422 LN-WS (`actingd-config` revision 14; the production stop of 2026-10-26 19:12:43):
+`read_check_vm_steps` is how often, in SQLite virtual-machine steps, a read that serves a Runtime
+request looks at its `read_budget_ms` inside a statement, and `history_scan_rows` how many
+sequences one history statement of a view page spans at most
+([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)). Both are
+read when the ledger opens (not settable); a value outside its range is `config_value_invalid`
+(`out_of_range`).
+
+#422 LN-7c Q (`actingd-config` revision 16; `rd-1026/ln7c/final-query.md` §1.5, §5):
+`frame_query_steps_per_second` is the SQLite virtual-machine steps a second the frame
+cleaner's statements take; it is settable, and the cleaner reads the value in effect after
+each statement. `frame_query_chunk_frames` is the frames of one statement L or K, read at
+start (not settable). A value outside its range is `config_value_invalid` (`out_of_range`).
+The top-level key `frame_retention_evidence_max_age_days` (integer `1..=3650`, default `15`,
+settable; beside the three frame retention switches of revision 4) is the age, by a frame's
+ingestion time, at which the cleaner removes an evidence frame in `kept\` that no agent or
+person confirmed reading; a confirmed one goes at its next pass, whatever its age. The
+cleaner takes it at each pass start, so an instruction takes effect at the next pass; a value
+outside its range or of another type is `config_value_invalid`. actingd reports it in
+`config.parameters.top_level`, which `actingledger frames` reads
+([ledger-store.md](ledger-store.md), "Frame cleaner" and "Frame listing"). There is no 14-day
+key (the 14-day question answered A).
 
 ## The `device_link` section (Workflow #398 RD-2)
 
@@ -587,11 +721,80 @@ a file that does not name it keeps its revision.
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
 | `emulator_control.restart_exit_wait_ms` | milliseconds `1000..=300000`, the longest wait for the old VM to exit, on the Runtime clock | `60000` | yes |
+| `emulator_control.watch_enabled` | boolean: whether the emulator watch polls the emulator status of the discovery-bound instances (emu-watch R2) | `true` | yes |
+| `emulator_control.watch_interval_ms` | milliseconds `5000..=3600000`, the time between two polls, on the Runtime clock | `60000` | yes |
+| `emulator_control.restart_attempts` | integer `1..=100`, the most starts of one configured instance's stopped emulator by the watch within `restart_window_ms` (emu-watch R3) | `3` | yes |
+| `emulator_control.restart_window_ms` | milliseconds `60000..=86400000`, the window `restart_attempts` counts in | `1800000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
-`wrong_type`. The row is that of `config.parameters.emulator_control`. The client's receipt wait of
-a restart adds the range's maximum (745 s).
+`wrong_type` (`watch_enabled`: no boolean). The rows are those of
+`config.parameters.emulator_control`. The client's receipt wait of a restart adds the range's
+maximum of `restart_exit_wait_ms` (745 s).
+
+emu-watch (Alice's ruling 35; [emulator-control.md](emulator-control.md), "Emulator watch"): the
+watch reads its four keys at every tick, so an instruction changes them while the Runtime runs;
+`watch_enabled` false stops the polls (and so the watch's restarts) until it is true again.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
+keys; a file that names none of them keeps its revision.
+
+## The `watchdog` section (#411 A66)
+
+#411 A66 ([runtime-watchdog.md](runtime-watchdog.md), "Start window"; coordinator ruling 10-24):
+how long a start may take before the watchdog, or `actingctl start` and `restart` without
+`--ready-timeout-s`, calls it `start_timeout`. The same window bounds which open watchdog start an
+answering owner belongs to, and a waiter for the watchdog's `run.lock` waits it plus 20 s. actingd
+parses and checks the section with the rest of the file (its row is that of
+`config.parameters.watchdog`) but never uses it. The watchdog and `actingctl` read it from the
+configuration file they already read for the state root, at every tick or command, through this
+crate (`watchdog::start_window_ms`), never from the configuration in effect, so it is not settable.
+`actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the section;
+a file that does not name it keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `watchdog.start_window_ms` | milliseconds `60000..=3600000`, the longest a start may take | `900000` | no (read from the file by the watchdog and `actingctl`) |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at actingd's start, in `check-config`, and on every watchdog tick or `actingctl start`
+or `restart` (the tick's `watchdog_misconfigured`); a value that is no integer is `wrong_type`.
+
+## The `execution` section (PERF-B1, Workflow #407 B1)
+
+PERF-B1 ([v012-register.md](v012-register.md) §1.177; [resource-declarations.md](resource-declarations.md),
+"Capture cadence"): the keys the contained-task kernel takes from the configuration, so far its
+capture cadence (`execution.capture.*`), how often a run captures while a step waits for a page; the
+planned `execution.defaults.*` (register §5) would join the section. A package
+declares its capture interval for every wait (`control.capture_interval_ms`, 50 ms when it declares
+none) and for one step's wait (`expect_after.interval_ms`; a `linear_steps` transition's
+`interval_ms`). The run refuses a package that declares an interval above
+`capture.max_interval_ms` before its first capture, with the code admission gives a broken
+interval (`contained_task_control_invalid`; `contained_task_linear_invalid`,
+`reason=transition_interval`, for a transition); admission itself bounds an interval only by the
+key's range maximum. While a step waits for a page (the page wait and the confirmation of the
+page-graph path, the waits of a `linear_steps` step), each frame unchanged from the wait's frame
+before it by the Runtime's frame-change measure (#411 B12, the whole frame) doubles the next pause,
+up to `capture.idle_ceiling_ms` or the declared interval, whichever is longer, and the first changed frame
+returns it to the declared interval; the pause is still cut at the wait's remaining time and the
+task's deadline. Host-wide. The host hands the three keys to the kernel with each step's pacing, so
+an instruction may change each while the Runtime runs: the ceiling takes effect at the next run, the
+back-off at the next step. A runtime without the configuration (offline simulation, fixtures) uses
+the default ceiling and no back-off. `actingd-config` revision 11
+([component-interfaces.md](component-interfaces.md)) adds the section; a file that does not name it
+keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `execution.capture.max_interval_ms` | milliseconds `5000..=1800000`, the largest capture interval a package may declare (at least the bound every package was held to before PERF-B1; at most the longest wait a step may declare) | `60000` | yes |
+| `execution.capture.backoff_enabled` | boolean, whether a step's wait for a page lengthens its pause over unchanged frames | `true` | yes |
+| `execution.capture.idle_ceiling_ms` | milliseconds `50..=60000`, the longest pause the back-off reaches unless the declared interval is longer | `5000` | yes |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) at start, in `check-config` and in `ConfigureSettings`; a value of another type is
+`wrong_type`. The rows are those of `config.parameters.execution`. Each run's effective
+intervals stay where they were recorded (`EffectiveTaskTiming.capture_interval`, each operation's
+`interval`); a pause the back-off lengthened is the span of its wait boundary
+(`page_recognition_wait`, `postcondition_wait`).
 
 ## The `install` section (Workflow #421 INST-1)
 
@@ -638,11 +841,96 @@ member of the section or of one of its objects for `actingctl install`, is `conf
 (`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
 unknown member of the file (`config_decode_failed`).
 
+## The `idle` section (IDLE-1)
+
+IDLE-1 (Alice's ruling 41 of 10-24: when an instance has no task, close the game inside the
+emulator, and the startup package relaunches it when a task is due; her ruling of 10-25:
+「没有任务的时候直接关闭模拟器……任务结束或者接下来一段时间比如30分钟内没有任务的时候关闭应用程序」, two options
+of one function; Workflow #386 comment 6393646823): what the Runtime does with an instance that
+has no task soon, and when it brings the instance back. Each key is also per instance,
+`instance.<instance id>.idle.<member>`, in the file the `idle` member of the `instances[]` entry,
+default the section's key of the same name (`section:idle.<member>`). Every key is settable: the
+Runtime reads them at every idle check, so an instruction takes effect at the next one; an
+instance that is idle when its action in effect changes is brought back at once. `actingd-config`
+revision 12 ([component-interfaces.md](component-interfaces.md)) adds the section and the entry's
+member; a file that names neither keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `idle.action` | one of `none` (nothing ever happens), `close_app` (the game's application is stopped inside the emulator), `stop_emulator` (the instance's sessions are closed and its emulator is stopped) | `close_app` | yes |
+| `idle.min_gap_ms` | milliseconds `60000..=86400000`, the least time to the scheduler's next due task for the instance before the action runs | `1800000` | yes |
+| `idle.close_app_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose application was closed is brought back (the startup package) | `60000` | yes |
+| `idle.stop_emulator_wake_lead_ms` | milliseconds `0..=3600000`, how long before the next due task an instance whose emulator was stopped is brought back (the emulator's boot and the startup package) | `300000` | yes |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max` for the milliseconds) at start, in `check-config` and in `ConfigureSettings`; a value
+of another type is `wrong_type`. The whole-section check, the section's and each instance's keys in
+effect: each wake lead is shorter than `idle.min_gap_ms` (`section_check` on the lead's key), and
+an instance whose action in effect is `stop_emulator` is one whose emulator the Runtime starts
+(`instance.<id>.start_emulator` true; `section_check` on `instance.<id>.idle.action`), since its
+wake starts the emulator through that configured start. The rows are those of
+`config.parameters.idle` and, per instance, `config.parameters.instance`.
+
+When (the Runtime host, `host/idle.rs`): at every policy cycle, right after its evaluation and
+before actingd admits its dispatches, and between cycles every second of the lease sweep, the idle
+check takes each registered physical instance the configuration names. The action runs once when
+the instance has no lease, no queued request and no keyless work holding its admission guard, no
+scheduling pause holds it (nor a resource fence), its emulator runs, it can be brought back (a
+startup package, and for `stop_emulator` its configured emulator start), and the latest policy
+evaluation, made after the instance was last seen in use, has no due task for it and no next wake
+closer than `idle.min_gap_ms` (the not-run explanation's due candidates and next wake of the
+instance, the evaluator's own; no other estimate). It runs on an emulator-control claim of the
+instance's key. `close_app` stops the application `<standard_packs.root>/<game>/applications.json`
+declares for the instance's server (`servers.<server>.application_id`), which must be the
+instance's assigned application, through the application lifecycle path; `stop_emulator` is the
+emulator-control Stop on the claim's key (the fence on the key, the retained session's close, the
+provider's Stop, never MuMuManager `api`). The wake comes at the next due time minus the action's
+wake lead, or at once when a later evaluation shows a due task: after `close_app` the startup
+package is queued, after `stop_emulator` the configured emulator start, which hands the key to the
+startup package. While an instance's emulator is held stopped the emulator watch does not start
+it. Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
+or `queue_idle_wake`, `idle_action` naming the action). An instance whose action in effect cannot
+bring it back (its `instances[]` entry has no `startup_package`, or for `stop_emulator` no
+`start_emulator`) never acts, and the first idle check that finds it records one
+`instance_idle_action_unsupported` warning (`member` naming what the entry lacks, `operation`
+`check_idle_instances`) and the same report line, once per action in effect; after a start that is
+the first policy cycle or lease sweep. A failed close or stop is recorded and goes through the one
+decision point (`contain_failure`, #419), so it fails only that instance's action: the instance is
+left as it is, no wake follows, its next due task goes through the normal path, and only a failure
+that is the Runtime's as a whole latches it.
+
+## The `display_safe_area` section (Workflow #392 DA-4b-D)
+
+Workflow #392 DA-4b-D (Alice's ruling 69 of 2026-10-26: 「只有安全区适配不做，但是需要留出来声明式的安全区接口，
+也就是说可以依照声明的文件直接切换安全区形态」, 「一份文件对应一个机型或多个机型，并且修改设置后实时生效」;
+[display-adapter.md](display-adapter.md) section 9): where the declared safe areas live, how often
+the Runtime reads them, and which device model an instance declares. The model is also per
+instance, `instance.<instance id>.display_safe_area.model`, in the file the `display_safe_area`
+member (`{model}`) of the `instances[]` entry, default the section's key
+(`section:display_safe_area.model`). Every key is settable: the Runtime reads them at every frame
+of a run whose game's display declaration measures on the safe area, so an instruction takes
+effect from the next frame. `actingd-config` revision 15
+([component-interfaces.md](component-interfaces.md)) adds the section and the entry's member; a
+file that names neither keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `display_safe_area.directory` | string, the directory of the declaration files (`actingcommand.display-safe-area.v1`); a relative path resolves against the Runtime's state root | `display-safe-area` | yes |
+| `display_safe_area.check_interval_ms` | milliseconds `0..=3600000`, the least time between two reads of the directory; 0 reads it at every frame that needs it | `1000` | yes |
+| `display_safe_area.model` | string, the device model every instance declares unless it names its own; empty declares none | empty | yes |
+
+A value of another type is `config_value_invalid` (`wrong_type`); an empty directory or an interval
+outside its range is `out_of_range`, at start, in `check-config` and in `ConfigureSettings`. The
+rows are those of `config.parameters.display_safe_area` and, per instance,
+`config.parameters.instance`. What the declarations hold, which insets a frame takes and how a
+broken declaration is refused (`display_map_unresolved` with its `display_problem`) is
+[display-adapter.md](display-adapter.md) section 9.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
 |---|---|---|
-| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without | at start |
+| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without; SCH-M CF-1 adds the always-on row `condition_edges` (the catalog edge members, [actingd-check-config.md](actingd-check-config.md)); SCH-M CF-2 adds the always-on row `resource_reading_time` (completion-time readings, [actingd-check-config.md](actingd-check-config.md)); #386 CF-4 adds the always-on row `fact_reference` (a `fact` predicate that compares with another fact plus an offset, [actingd-check-config.md](actingd-check-config.md)); SCH-M ED-2 adds the always-on row `expected_runtime` (the run-duration samples and E, [actingd-check-config.md](actingd-check-config.md)) | at start |
 | `config.selection` | one: `config_sha256`, `defaults_sha256` (`sha256:<hex>`), `config_generation` (decimal text, installed Runtime only) | at start |
 | `config.catalog` (Workflow #389 MCP-9a, register A5) | one, the active policy catalog generation: `catalog_id`, `catalog_version` (decimal text), `catalog_hash`, `activated_event_id` (the event id of the `catalog.activated` or `catalog.rolled_back` record that made it active), and when known `approval_id` and `approval_disposition` (the latest approval decision whose target is that generation), `previous_catalog_id` and `previous_catalog_version` (decimal text; the generation that record replaced); no fact while no generation is active | at start, after each committed catalog transition and after each approval decision, each time only when it changed |
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |

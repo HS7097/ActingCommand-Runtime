@@ -10,10 +10,13 @@ use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
-    PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetDenial,
-    PolicyBudgetDimension, PolicyBudgetReceipt, PolicyConditionSettlement,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyFailureRecord, RuntimeErrorCode, scheduled_failure_code_str,
+    MAX_POLICY_CONTROL_STATE_DAYS, PerformanceContext, PolicyActivitySample,
+    PolicyActivityStateRecord, PolicyAdmissionRecord, PolicyBudgetDenial, PolicyBudgetDimension,
+    PolicyBudgetReceipt, PolicyConditionSettlement, PolicyControlStateRecord, PolicyDailyCount,
+    PolicyDispatchClockRecord, PolicyExecutionEventData, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, PolicyFailureStreakRecord,
+    PolicyJournalDispatchRecord, PolicyRetryRoundRecord, RuntimeErrorCode,
+    scheduled_failure_code_str,
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
@@ -98,6 +101,11 @@ struct RetryRound {
     admission: PolicyAdmissionRecord,
     until_unix_ms: u64,
     expected_duration_ms: u64,
+    /// SCH-M ED-2: the task spec's declared duration when the round opened, which a later
+    /// catalog's must keep for the round to go on; the round's own duration may be the pair's
+    /// expected duration E. Memory only: a round loaded from a value record has none and its
+    /// own duration is compared, as before ED-2.
+    declared_duration_ms: Option<u64>,
     /// Workflow #372 K5: the order in which the round was opened among all rounds, so a task
     /// reads the latest round of its accounting group. Memory only; replay rebuilds it.
     opened: u64,
@@ -122,9 +130,328 @@ pub(crate) struct PolicyControlState {
     /// Workflow #372 K5: the counters behind `failure_settled` and `RetryRound::opened`.
     settlements: u64,
     rounds_opened: u64,
+    /// Workflow #422 LN-3 (register L7): per (task, instance), the activity window of the pair's
+    /// latest admission, the one its value record's window counts and runtime count in.
+    task_active_window: BTreeMap<(String, String), String>,
+    /// Workflow #422 LN-3 (register L14): per (activity profile, instance), the day and the
+    /// window of its latest admission, the ones its value record counts in.
+    activity_active: BTreeMap<(String, String), (i64, String)>,
+}
+
+/// Workflow #422 LN-3: one value record of the decision memory, with its key's complete state
+/// (register L7 `policy.control_state_recorded`, L14 `policy.activity_state_recorded`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PolicyValueRecord {
+    Control(Box<PolicyControlStateRecord>),
+    Activity(PolicyActivityStateRecord),
+}
+
+impl PolicyValueRecord {
+    /// The record's key as the ledger's index names it (`contracts/ledger-observer.md` §11.1):
+    /// `decision_memory/<instance>/<task>` for a dispatch pair,
+    /// `activity_memory/<instance>/<activity profile>` for an activity state.
+    pub(crate) fn index_key(&self) -> String {
+        match self {
+            Self::Control(state) => {
+                format!("decision_memory/{}/{}", state.instance_id, state.task_id)
+            }
+            Self::Activity(state) => {
+                format!("activity_memory/{}/{}", state.instance_id, state.profile_id)
+            }
+        }
+    }
 }
 
 impl PolicyControlState {
+    /// Workflow #422 LN-3 (register L7, L14): the value record of every key this state holds,
+    /// each with the key's complete state. `dispatch_clocks` are the admission times of the
+    /// pairs' admitted dispatches that are not completed yet, per (task, instance); the policy
+    /// host keeps them. Workflow #422 LN-4 (register §1.184 LN4-7): `dispatches` are the
+    /// dispatches the policy host's journal keeps per pair, which its record names.
+    pub(crate) fn value_records(
+        &self,
+        dispatch_clocks: &BTreeMap<(String, String), u64>,
+        dispatches: &BTreeMap<(String, String), Vec<PolicyJournalDispatchRecord>>,
+    ) -> BTreeMap<String, PolicyValueRecord> {
+        let pairs = self
+            .task_daily
+            .keys()
+            .map(|(task, instance, _)| (task, instance))
+            .chain(
+                self.task_window
+                    .keys()
+                    .map(|(task, instance, _)| (task, instance)),
+            )
+            .chain(
+                self.task_runtime
+                    .keys()
+                    .map(|(task, instance, _)| (task, instance)),
+            )
+            .chain(
+                self.task_active_window
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(
+                self.failure_streaks
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(
+                self.retry_rounds
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(
+                dispatch_clocks
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(
+                self.failure_settled
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(dispatches.keys().map(|(task, instance)| (task, instance)))
+            .collect::<BTreeSet<_>>();
+        let mut records = BTreeMap::new();
+        for (task_id, instance_id) in pairs {
+            let pair = (task_id.clone(), instance_id.clone());
+            let clock = dispatch_clocks.get(&pair).copied();
+            let mut record = self.control_record(task_id, instance_id, clock);
+            record.dispatches = dispatches.get(&pair).cloned().unwrap_or_default();
+            let record = PolicyValueRecord::Control(Box::new(record));
+            records.insert(record.index_key(), record);
+        }
+        for ((profile_id, instance_id), (local_day, window_id)) in &self.activity_active {
+            let window = (profile_id.clone(), instance_id.clone(), window_id.clone());
+            let record = PolicyValueRecord::Activity(PolicyActivityStateRecord {
+                instance_id: instance_id.clone(),
+                profile_id: profile_id.clone(),
+                local_day: *local_day,
+                daily_count: self
+                    .activity_daily
+                    .get(&(profile_id.clone(), instance_id.clone(), *local_day))
+                    .copied()
+                    .unwrap_or(0),
+                window_id: window_id.clone(),
+                window_count: self.activity_window.get(&window).copied().unwrap_or(0),
+                window_runtime_ms: self.activity_runtime.get(&window).copied().unwrap_or(0),
+                next_eligible_unix_ms: self
+                    .next_activity_eligible
+                    .get(&(instance_id.clone(), profile_id.clone()))
+                    .copied(),
+            });
+            records.insert(record.index_key(), record);
+        }
+        records
+    }
+
+    /// One dispatch pair's complete decision memory: its newest day counts (at most
+    /// `MAX_POLICY_CONTROL_STATE_DAYS`), its counts and runtime in the window of its latest
+    /// admission, its failure streak (`paused_on` is rebuilt from the failure identity), its retry
+    /// round and its dispatch clock. Workflow #386 SR-2b keeps the rerun state a condition ending
+    /// owes; no settlement owes one before it, so `condition_reruns` stays empty.
+    fn control_record(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+        dispatch_clock: Option<u64>,
+    ) -> PolicyControlStateRecord {
+        let pair = (task_id.to_owned(), instance_id.to_owned());
+        let mut days = self
+            .task_daily
+            .range(
+                (pair.0.clone(), pair.1.clone(), i64::MIN)
+                    ..=(pair.0.clone(), pair.1.clone(), i64::MAX),
+            )
+            .map(|((_, _, local_day), count)| PolicyDailyCount {
+                local_day: *local_day,
+                count: *count,
+            })
+            .collect::<Vec<_>>();
+        let daily_counts = days.split_off(days.len().saturating_sub(MAX_POLICY_CONTROL_STATE_DAYS));
+        let active_window = self.task_active_window.get(&pair).cloned();
+        let (window_counts, window_runtime_ms) = active_window.as_ref().map_or((0, 0), |window| {
+            let key = (pair.0.clone(), pair.1.clone(), window.clone());
+            (
+                self.task_window.get(&key).copied().unwrap_or(0),
+                self.task_runtime.get(&key).copied().unwrap_or(0),
+            )
+        });
+        PolicyControlStateRecord {
+            instance_id: instance_id.to_owned(),
+            task_id: task_id.to_owned(),
+            daily_counts,
+            window_counts,
+            window_runtime_ms,
+            active_window,
+            failure_streak: self.failure_streaks.get(&pair).map(|streak| {
+                PolicyFailureStreakRecord {
+                    failure_code: streak.failure_code.clone(),
+                    failure_identity: streak.failure_identity.clone(),
+                    class: streak.class,
+                    count: streak.count,
+                    escalation_streak: streak.escalation_streak,
+                    disposition: streak.disposition,
+                    retry_at_unix_ms: streak.retry_at_unix_ms,
+                    decision_id: streak.decision_id.clone(),
+                }
+            }),
+            retry_round: self
+                .retry_rounds
+                .get(&pair)
+                .map(|round| PolicyRetryRoundRecord {
+                    admission: round.admission.clone(),
+                    until_unix_ms: round.until_unix_ms,
+                    expected_duration_ms: round.expected_duration_ms,
+                    opened: Some(round.opened),
+                }),
+            dispatch_clock: dispatch_clock.map(|admitted_at_unix_ms| PolicyDispatchClockRecord {
+                admitted_at_unix_ms,
+            }),
+            condition_reruns: None,
+            failure_settled: self.failure_settled.get(&pair).copied(),
+            dispatches: Vec::new(),
+        }
+    }
+
+    /// Workflow #422 LN-3 (register L7, L14): applies one value record; the record replaces its
+    /// key's whole state. LN-4's start load runs it over the records the index names, in ledger
+    /// order. The dispatch clock is the policy host's, not this state's. Workflow #422 LN-4
+    /// (register §1.184 LN4-2): the record carries the Workflow #372 K5 orders, `failure_settled`
+    /// and the retry round's `opened`, and the counters behind them go on after the largest one
+    /// loaded; a record without a round's order (LN-3's) takes the next one in the order applied.
+    pub(crate) fn apply_value_record(
+        &mut self,
+        record: &PolicyValueRecord,
+    ) -> RuntimeHostResult<()> {
+        match record {
+            PolicyValueRecord::Control(state) => {
+                let pair = (state.task_id.clone(), state.instance_id.clone());
+                let of_pair =
+                    |task: &String, instance: &String| *task == pair.0 && *instance == pair.1;
+                self.task_daily
+                    .retain(|(task, instance, _), _| !of_pair(task, instance));
+                self.task_window
+                    .retain(|(task, instance, _), _| !of_pair(task, instance));
+                self.task_runtime
+                    .retain(|(task, instance, _), _| !of_pair(task, instance));
+                for day in &state.daily_counts {
+                    self.task_daily
+                        .insert((pair.0.clone(), pair.1.clone(), day.local_day), day.count);
+                }
+                match &state.active_window {
+                    Some(window) => {
+                        let key = (pair.0.clone(), pair.1.clone(), window.clone());
+                        self.task_window.insert(key.clone(), state.window_counts);
+                        self.task_runtime.insert(key, state.window_runtime_ms);
+                        self.task_active_window.insert(pair.clone(), window.clone());
+                    }
+                    None => {
+                        self.task_active_window.remove(&pair);
+                    }
+                }
+                match &state.failure_streak {
+                    Some(streak) => {
+                        self.failure_streaks.insert(
+                            pair.clone(),
+                            FailureStreak {
+                                failure_code: streak.failure_code.clone(),
+                                failure_identity: streak.failure_identity.clone(),
+                                class: streak.class,
+                                count: streak.count,
+                                escalation_streak: streak.escalation_streak,
+                                disposition: streak.disposition,
+                                retry_at_unix_ms: streak.retry_at_unix_ms,
+                                decision_id: streak.decision_id.clone(),
+                                paused_on: (streak.disposition
+                                    == PolicyFailureDisposition::PausedTask)
+                                    .then(|| {
+                                        PausedPackages::of_identity(
+                                            streak.failure_identity.as_deref(),
+                                        )
+                                    }),
+                            },
+                        );
+                    }
+                    None => {
+                        self.failure_streaks.remove(&pair);
+                    }
+                }
+                match state.failure_settled {
+                    Some(settled) => {
+                        self.settlements = self.settlements.max(settled);
+                        self.failure_settled.insert(pair.clone(), settled);
+                    }
+                    None => {
+                        self.failure_settled.remove(&pair);
+                    }
+                }
+                match &state.retry_round {
+                    Some(round) => {
+                        let opened = match round.opened {
+                            Some(opened) => opened,
+                            None => self.rounds_opened.checked_add(1).ok_or_else(|| {
+                                fatal(
+                                    HostCode::PolicyBudgetCounterOverflow,
+                                    HostLocation::RecoverPolicyControl,
+                                )
+                            })?,
+                        };
+                        self.rounds_opened = self.rounds_opened.max(opened);
+                        self.retry_rounds.insert(
+                            pair,
+                            RetryRound {
+                                admission: round.admission.clone(),
+                                until_unix_ms: round.until_unix_ms,
+                                expected_duration_ms: round.expected_duration_ms,
+                                declared_duration_ms: None,
+                                opened,
+                            },
+                        );
+                    }
+                    None => {
+                        self.retry_rounds.remove(&pair);
+                    }
+                }
+            }
+            PolicyValueRecord::Activity(state) => {
+                let window = (
+                    state.profile_id.clone(),
+                    state.instance_id.clone(),
+                    state.window_id.clone(),
+                );
+                self.activity_daily.insert(
+                    (
+                        state.profile_id.clone(),
+                        state.instance_id.clone(),
+                        state.local_day,
+                    ),
+                    state.daily_count,
+                );
+                self.activity_window
+                    .insert(window.clone(), state.window_count);
+                self.activity_runtime
+                    .insert(window, state.window_runtime_ms);
+                let cadence = (state.instance_id.clone(), state.profile_id.clone());
+                match state.next_eligible_unix_ms {
+                    Some(eligible) => {
+                        self.next_activity_eligible.insert(cadence, eligible);
+                    }
+                    None => {
+                        self.next_activity_eligible.remove(&cadence);
+                    }
+                }
+                self.activity_active.insert(
+                    (state.profile_id.clone(), state.instance_id.clone()),
+                    (state.local_day, state.window_id.clone()),
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn preview_admission(
         &self,
@@ -469,7 +796,7 @@ impl PolicyControlState {
             ));
         }
         if !immediate_retry {
-            let (_, profile) = task_and_profile(catalog, intent)?;
+            let (task, profile) = task_and_profile(catalog, intent)?;
             let window = activity_window_at(profile, admission.activity.admitted_at_unix_ms)
                 .map_err(|_| {
                     fatal(
@@ -495,6 +822,7 @@ impl PolicyControlState {
                     admission: admission.clone(),
                     until_unix_ms: window.until_unix_ms,
                     expected_duration_ms: intent.expected_duration_ms,
+                    declared_duration_ms: Some(task.expected_duration_ms),
                     opened: self.rounds_opened,
                 },
             );
@@ -594,6 +922,22 @@ impl PolicyControlState {
                 admission.activity.profile_id.clone(),
             ),
             admission.activity.next_eligible_unix_ms,
+        );
+        // Workflow #422 LN-3: the window and the day the pair's and the activity's value records
+        // count in.
+        self.task_active_window.insert(
+            (intent.task_id.clone(), intent.instance_id.clone()),
+            admission.activity.window_id.clone(),
+        );
+        self.activity_active.insert(
+            (
+                admission.activity.profile_id.clone(),
+                intent.instance_id.clone(),
+            ),
+            (
+                admission.activity.local_day,
+                admission.activity.window_id.clone(),
+            ),
         );
         // Counts are spent on admission. Runtime reservations settle to actual usage first.
         self.end_exhausted_retry_rounds(catalog, &intent.instance_id, false)
@@ -1083,7 +1427,7 @@ impl PolicyControlState {
             }
             // Workflow #372 K5: the entry stands for the task whose accounting group holds its
             // id, and only while it is that task's failure state; the round is that group's.
-            let task_id = accounting_owner(catalog, &pair.0);
+            let task_id = accounting_owner(catalog, &pair.0, &pair.1);
             if self.failure_key(catalog, task_id, &pair.1) != *pair {
                 continue;
             }
@@ -1094,8 +1438,13 @@ impl PolicyControlState {
             if now_unix_ms < origin.admitted_at_unix_ms || now_unix_ms >= round.until_unix_ms {
                 continue;
             }
+            // SCH-M ED-2: the task keeps the declared duration the round opened under.
             if !catalog.catalog().tasks.tasks.iter().any(|task| {
-                task.id == task_id && task.expected_duration_ms == round.expected_duration_ms
+                task.id == task_id
+                    && task.expected_duration_ms
+                        == round
+                            .declared_duration_ms
+                            .unwrap_or(round.expected_duration_ms)
             }) {
                 continue;
             }
@@ -1276,7 +1625,7 @@ impl PolicyControlState {
             if pair.1 == instance_id
                 && !self.retry_round_has_budget(
                     catalog,
-                    accounting_owner(catalog, &pair.0),
+                    accounting_owner(catalog, &pair.0, &pair.1),
                     &pair.1,
                     round,
                     include_runtime,
@@ -1292,10 +1641,18 @@ impl PolicyControlState {
     }
 }
 
-/// Workflow #372 K5: the task whose accounting group holds `task_id` under `catalog`: the task
-/// that continues it, else `task_id` itself.
-fn accounting_owner<'a>(catalog: &'a CompiledCatalog, task_id: &'a str) -> &'a str {
-    catalog.continued_by(task_id).unwrap_or(task_id)
+/// Workflow #372 K5: the task whose accounting group holds `task_id` on `instance_id` under
+/// `catalog`: the task that continues it there, else `task_id` itself. ROUT-L RL-1b: read per
+/// instance, as two instances of one game and server each continue the file's id with their own
+/// copy.
+fn accounting_owner<'a>(
+    catalog: &'a CompiledCatalog,
+    task_id: &'a str,
+    instance_id: &str,
+) -> &'a str {
+    catalog
+        .continued_by_on(task_id, instance_id)
+        .unwrap_or(task_id)
 }
 
 /// Workflow #372 K5: the sum of the entries of `ids` on `instance_id` for one day or window
@@ -2926,6 +3283,162 @@ mod tests {
                     hash: "0123456789ab".to_owned(),
                 })],
             }
+        );
+    }
+
+    /// Workflow #422 LN-3: the value records of `state`, written as the host writes them and
+    /// read back from their stored form.
+    fn stored_value_records(state: &PolicyControlState) -> Vec<PolicyValueRecord> {
+        use actingcommand_contract::{
+            AuditInput, EventActor, EventPayload, EventSeverity, EventSource, OriginModule,
+            PolicyPayload, PolicyPayloadDraft,
+        };
+        let events = crate::events::RuntimeEvents::new(
+            b"ln3-fixture-salt",
+            std::sync::Arc::new(crate::SystemRuntimeClock::new()),
+        )
+        .expect("runtime events");
+        state
+            .value_records(&BTreeMap::new(), &BTreeMap::new())
+            .into_values()
+            .map(|record| {
+                let payload = match &record {
+                    PolicyValueRecord::Control(value) => {
+                        PolicyPayloadDraft::control_state_recorded(
+                            value.as_ref().clone(),
+                            AuditInput::new(),
+                        )
+                    }
+                    PolicyValueRecord::Activity(value) => {
+                        PolicyPayloadDraft::activity_state_recorded(
+                            value.clone(),
+                            AuditInput::new(),
+                        )
+                    }
+                };
+                let draft = events
+                    .draft(
+                        EventSeverity::Info,
+                        EventSource::Scheduler,
+                        OriginModule::Policy,
+                        EventActor::Scheduler,
+                        events.system_links().expect("system links"),
+                        payload,
+                    )
+                    .expect("a value record draft");
+                let stored = serde_json::to_value(
+                    events
+                        .sanitize(draft)
+                        .expect("the value record sanitizes")
+                        .payload(),
+                )
+                .expect("the stored form");
+                let read: EventPayload =
+                    serde_json::from_value(stored).expect("the stored form reads back");
+                read.validate().expect("the stored record validates");
+                match read {
+                    EventPayload::Policy(PolicyPayload::ControlStateRecorded(value)) => {
+                        PolicyValueRecord::Control(Box::new(value.state().clone()))
+                    }
+                    EventPayload::Policy(PolicyPayload::ActivityStateRecorded(value)) => {
+                        PolicyValueRecord::Activity(value.state().clone())
+                    }
+                    other => panic!("a value record, not {:?}", other.event_type()),
+                }
+            })
+            .collect()
+    }
+
+    // Workflow #422 LN-3, test row 2 (LEAN-L §5.1; register L7, L14; `ledger-observer.md`
+    // §11.3): a restart from the value records alone keeps the runtime budgets and the activity
+    // interval. Two runs of a pair use 90 s of its 100 s window runtime; the second admission's
+    // sampled interval is still running. A state rebuilt from nothing but the records, as stored,
+    // admits and refuses exactly as the state that wrote them: inside the interval, at its end
+    // (the runtime budget refuses), and later in the window.
+    #[test]
+    fn ln3_b_a_restart_from_the_value_records_alone_keeps_runtime_budgets_and_activity_intervals() {
+        let catalog = catalog_with(
+            |tasks| {
+                tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(30000);
+                tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(10);
+                tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(10);
+                tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = serde_json::json!(100000);
+            },
+            |activity| {
+                activity["profiles"][0]["daily_budget"] = serde_json::json!(10);
+                activity["profiles"][0]["max_window_iterations"] = serde_json::json!(10);
+                activity["profiles"][0]["session_max_ms"] = serde_json::json!(1000000);
+            },
+        );
+        let mut state = PolicyControlState::default();
+        let (first, _) = settle(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 1),
+            NOW,
+            50_000,
+            &PolicyExecutionInput::Succeeded,
+            None,
+        );
+        let (second, _) = settle(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 2),
+            first.activity.next_eligible_unix_ms,
+            40_000,
+            &PolicyExecutionInput::Succeeded,
+            None,
+        );
+
+        let records = stored_value_records(&state);
+        assert_eq!(records.len(), 2, "one pair and one activity profile");
+        let mut restarted = PolicyControlState::default();
+        for record in &records {
+            restarted
+                .apply_value_record(record)
+                .expect("the record applies");
+        }
+        assert_eq!(
+            restarted.value_records(&BTreeMap::new(), &BTreeMap::new()),
+            state.value_records(&BTreeMap::new(), &BTreeMap::new()),
+            "the records hold the complete state"
+        );
+
+        let third = intent(&catalog, 3);
+        let eligible = second.activity.next_eligible_unix_ms;
+        for at in [eligible - 1, eligible, NOW + 3_600_000] {
+            match (
+                state.preview_admission(&catalog, &third, at),
+                restarted.preview_admission(&catalog, &third, at),
+            ) {
+                (Ok(live), Ok(reloaded)) => assert_eq!(reloaded, live, "at {at}"),
+                (Err(live), Err(reloaded)) => {
+                    assert_eq!(reloaded.code(), live.code(), "at {at}");
+                    assert_eq!(
+                        reloaded.policy_rejection(),
+                        live.policy_rejection(),
+                        "at {at}"
+                    );
+                }
+                (live, reloaded) => panic!("at {at}: live {live:?}, restarted {reloaded:?}"),
+            }
+        }
+        let interval = restarted
+            .preview_admission(&catalog, &third, eligible - 1)
+            .expect_err("the sampled interval still runs");
+        assert_eq!(interval.code(), "policy_activity_interval_active");
+        let budget = restarted
+            .preview_admission(&catalog, &third, eligible)
+            .expect_err("the window runtime is spent");
+        assert_eq!(budget.code(), "policy_budget_exhausted");
+        assert_eq!(
+            budget.policy_rejection().budget,
+            Some(PolicyBudgetDenial {
+                dimension: PolicyBudgetDimension::TaskRuntime,
+                used: 90_000,
+                requested: 30_000,
+                limit: 100_000,
+            })
         );
     }
 }

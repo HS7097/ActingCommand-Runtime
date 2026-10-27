@@ -213,6 +213,32 @@ V1 rejects unknown fields and any schema version other than the exact supported 
 
 The `env.*` namespace remains an ordinary fact-key family. Existing execution substitutions that use `{env:...}` remain an execution-boundary concern; scheduling predicates reference the same stored values through typed `fact` predicates without changing that substitution syntax.
 
+## Catalog Source
+
+ROUT-L (frozen model v1.0 §3.1–§3.2; slice RL-1a; [standard-pack-schedule.md](../standard-pack-schedule.md)).
+A catalog comes from one of two sources:
+
+- **The configuration** (today's path): `policy.catalog` names the four documents, and
+  `policy.catalog_approval_ids` and `policy.procedure_manifest` bind them. Everything below
+  ("Catalog Lineage", "Scope And Overrides") describes that path. RL-C removes it.
+- **The standard packs**: each game root may hold `schedule.json`, the game's rules without
+  scope, instance or approval. The policy crate's `compose_standard_pack_rules` composes the
+  games of the bound instances into one V2 catalog `{catalog_id: "standard-packs",
+  catalog_version, approval_refs: []}`: one copy of each rule and item per bound instance, the
+  file's ids with one instance per (game, server) and `<id>@<alias>` ids, with references
+  rewritten and `continues_from` the file's id, with two or more. The composed documents are
+  bounded by the 4 MiB catalog bound, not 1 MiB each (`compile_composed_catalog`); every other
+  compiler rule applies. A composition without rules is a valid empty catalog. The scheduler
+  workbench that loads, composes and activates it is RL-1b's
+  ([standard-pack-schedule.md](../standard-pack-schedule.md), "The scheduler workbench
+  (RL-1b)"): it runs when the `policy` section names no `catalog`, and a configuration that
+  names one keeps the configured path for this release. Under a composed generation a
+  `policy.resources.pools` reading for a pool no composed game declares is left out of the
+  evaluation (`policy_pool_reading_unused`), and `continues_from` is read per instance.
+
+Both sources compile into the same `CompiledCatalog` and are evaluated alike: the evaluator
+orders candidates by score, tie-breaker, task id and instance, never by document order.
+
 ## Catalog Lineage
 
 Workflow #361 A. A state root is not bound to one catalog id. The generations that were active
@@ -795,7 +821,7 @@ by it.
 
 Workflow #386 (scheduling model v1.4.2 §8; slice SR-6a). Every decision that is not selected
 carries at least one reason, and its last reason is a registered outcome code
-(`contracts/outcome-codes.json`, the policy fragment for the evaluator's own codes): that is the
+(the outcome catalog `contracts/outcome-codes/`, the policy fragment for the evaluator's own codes): that is the
 code `why` names in a dispatch decision record, and it is never `none`. An evaluator path that
 would end a decision without a reason is a programming error: the candidate is still deferred,
 with the reason `decision_reason_missing` (error; `task_id`, `instance_id`), and the round goes
@@ -819,7 +845,10 @@ instance that has a decision in that evaluation, by alias:
   `rejected` or `completed`, as the dispatch projection holds it; a rejected one did not run
   either);
 - every other decision as a candidate row `{task_id, state, eligibility, why, reasons,
-  reasons_omitted?, next_wake_unix_ms?, since_unix_ms}`: `state` is `blocked` for a blocked
+  reasons_omitted?, next_wake_unix_ms?, since_unix_ms, expected_runtime_ms,
+  expected_runtime_source}` (the last two SCH-M ED-2: the duration the pair's dispatch would
+  reserve in that evaluation, its expected duration E or its declared duration, and `runs:<n>` or
+  `declared`; "Settlement Feedback And Eligibility Age"): `state` is `blocked` for a blocked
   decision and `deferred` for every other (an eligible one that another task outranked waited
   this round); `why` is the full outcome of its last reason, the code `why=` names in a dispatch
   decision record; `reasons` are the codes of its reasons in order, the last 32 when there are
@@ -874,6 +903,15 @@ decides the trigger (Workflow #405, "Fact-time wake" below): `fact_time_pending`
 `fact_key`, `next_eligible_unix_ms`) while the time its fact holds plus its offset has not come,
 and `fact_time_unavailable` (info; `fact_key`, `fact_time_problem`) when its fact gives no time.
 
+An edge member that makes its predicate false adds its own reason the same way (SCH-M CF-1,
+"Condition edges" below): `dependency_already_served` (info; `task_id`, `predecessor_task_id`)
+for `dependency_completed` with `since_own_run`, and `fact_time_served` (info; `fact_key`,
+`served_by_dispatch_unix_ms`) for `fact_time_reached` with `once_per_reading`.
+
+A `fact` predicate whose value is a fact reference adds `fact_reference_unavailable` (info;
+`fact_key` the referenced fact, `unknown_reason`) the same way when the referenced fact gives no
+integer (#386 CF-4, "Fact references" below).
+
 ## Settlement Feedback And Eligibility Age
 
 In the Runtime (Workflow #308 slice 5b) every `TaskRuntimeSnapshot` the host
@@ -886,6 +924,42 @@ projects carries what earlier runs of that task on that instance settled:
   precedes its admission). The score stage uses it as the utility cost:
   `cost_ms = last_duration_ms` when above zero, else the declared
   `expected_duration_ms`, and the `score_computed` detail prints that `cost_ms`.
+  When the snapshot carries the expected duration E (below), the cost is E.
+- `expected_runtime_ms` and `expected_runtime_runs` (SCH-M slice ED-1, frozen model v1.0 §3.4
+  D-12, D-15) carry the expected duration E of the pair and how many samples it is the mean of:
+  E = min(⌈mean of the latest `runs` successful scheduled runs of the task's package on the
+  instance⌉ + `margin_ms`, the task's `loop_budget.max_runtime_ms`), with the instance's
+  `scheduling.expected_runtime.*` in effect (`actingcommand_policy::expected_runtime`). With no
+  sample, or with `enabled` false, E is the declared value and both members are absent, so the
+  evaluation input and every evaluation are byte for byte those without samples. When present, E
+  (at most `max_runtime_ms`) replaces the declared `expected_duration_ms` as the candidate's cost,
+  as the dispatch intent's `expected_duration_ms` (hence the budget reservations, forward
+  planning and the random-delay cut) and in the strategy's production estimate. Hard deadlines,
+  lease TTLs and `loop_budget.max_runtime_ms` never use E. SCH-M slice ED-2: the host fills the
+  members in every authoritative projection from the instance's `health.run_duration` record
+  ([instance-fact-store.md](../instance-fact-store.md), "Run duration facts"): the samples are the
+  durations of the instance's successful scheduled runs of the task's package, written at their
+  settlement; tasks that share a package share them. A fact refresh read's declared duration is
+  `scheduling.fact_refresh.expected_duration_ms`, and its E reads the samples of the instance's
+  recognition maintenance package.
+  - **Admission** compares the intent's `expected_duration_ms` with the duration the admission's
+    own projection gives the pair: with E there, a different value is `policy_facts_stale` (a
+    sample landed after the evaluation, and the next cycle evaluates again); without, the declared
+    duration must match as before (`policy_intent_catalog_mismatch`).
+  - **The dispatch intent record** (`policy.dispatch_intent`) carries `expected_duration_ms` when
+    the duration it reserved is not its task spec's declared one (E, or a configured fact refresh
+    duration); only an intent carries it (`invalid_policy_payload`, field
+    `expected_duration_ms`), never 0. Recovery and replay reserve that value (the coordinator's
+    ruling of 10-24 14:1x), so a receipt reserved with E replays without
+    `policy_budget_receipt_mismatch`; an intent without it reserved its spec's declared duration.
+    An immediate retry round keeps the declared duration it opened under, which a later catalog's
+    task must still declare.
+  - **Not-run explanation**: every candidate row of `ScheduleExplanation` (`ac_schedule`,
+    `actingctl schedule`) carries `expected_runtime_ms`, the duration the pair's dispatch would
+    reserve in that evaluation, and `expected_runtime_source`, `declared` or `runs:<n>`.
+  - With `scheduling.expected_runtime.enabled` false for an instance nothing is written for it and
+    nothing is projected: its evaluations, intents and records are those without samples. This is
+    the rollback without a restart (`ConfigureSettings`).
 - `failure_streak` is the number of consecutive failed runs ending at that
   latest completed run, 0 after a success. The evaluator validates and carries
   it; the score stage does not consume it yet.
@@ -1050,7 +1124,7 @@ Recoverable failures receive a positive, bounded backoff. Only repeated failures
 
 Before an intent becomes trusted, a Runtime-owned manifest content-addressably binds `procedure_ref`, the package SHA-256 digest, `operation_id`, and the ordered `yield_points`. The binding digest participates in decision identity and is persisted with dispatch events. Admission resolves the alias again and requires the exact package and binding digests before requesting a lease.
 
-`expected_duration_ms` is the declared reservation and planning duration. `cooldown_ms` is the minimum interval after the last dispatch before the task can become eligible again. `next_run_clamp_ms` caps recoverable retry delay. `yield_points` names the only package-declared safe cooperation points that may be exposed to a mechanism adapter; it never grants a new operation. `sensitive` disables automatic restart after failure and does not weaken fatal-error propagation.
+`expected_duration_ms` is the declared reservation and planning duration D; a pair whose snapshot carries the expected duration E (SCH-M ED-1, "Settlement Feedback And Eligibility Age") uses E instead. `cooldown_ms` is the minimum interval after the last dispatch before the task can become eligible again. `next_run_clamp_ms` caps recoverable retry delay. `yield_points` names the only package-declared safe cooperation points that may be exposed to a mechanism adapter; it never grants a new operation. `sensitive` disables automatic restart after failure and does not weaken fatal-error propagation.
 
 ## Clock Sources
 
@@ -1103,9 +1177,44 @@ A task that is due when earlier work ends, at an instant a package read and publ
 - **True** when the fact at (`scope`, `fact_key`) exists, its confidence is above 0, it is fresh exactly as for `fact` (observed no longer ago than `max_age_ms` when M is not null, and not past its own `expires_at_unix_ms`), its value is a `timestamp_ms` T, and the evaluation is at or after `T + N`. The sum is signed and never overflows; a sum below 0 counts as 0. While the predicate is true, its freshness is the fact's and it wakes the evaluation one millisecond after that freshness ends, as `fact` does.
 - **False, not reached**, before `T + N`: the predicate adds the info reason `fact_time_pending` {`fact_key`, `next_eligible_unix_ms` = `T + N`} and wakes the evaluation at `T + N`, or one millisecond after the fact's freshness ends when that comes first. A newer reading of the fact wakes the scheduler as every fact publication does, and the next evaluation reads the new time.
 - **False, no time**: the fact is missing, its confidence is 0, it is older than M, it is past its own expiry, or its value is not a `timestamp_ms`. The predicate adds the info reason `fact_time_unavailable` {`fact_key`, `fact_time_problem`: `missing`, `low_confidence`, `stale`, `expired` or `not_a_time`} and no wake. Unlike `fact` it is false, not Unknown: the time is the output of the package that ran the work, which the instance's recognition maintenance package cannot read, so the predicate never asks for a fact refresh ("Fact Refresh") and gives no detection suggestion.
-- **Minimum interval.** Once T + N has passed, the predicate stays true until a newer reading moves the time. The least time between two dispatches of the task is its `cooldown_ms` ("Task Execution Fields"); the predicate has no interval of its own.
+- **Minimum interval.** Once T + N has passed, the predicate stays true until a newer reading moves the time, unless it carries `once_per_reading` ("Condition edges" below). The least time between two dispatches of the task is its `cooldown_ms` ("Task Execution Fields"); the predicate has no interval of its own.
 - **Fallback.** A catalog may write the predicate and a clock in one `any`: whichever is true first makes the task due, so the clock still runs it while the fact gives no time. Under `all` and `not` the predicate combines as any other, and every other predicate evaluates as before. When the predicate decides the trigger, the decision ends with `trigger_false` after its reason.
 - It is no counted clock for the clock-slot records (above) and references no outcome key.
+
+## Condition edges (SCH-M CF-1)
+
+A chain step runs once per new result of its predecessor, and a completion time is served once, without the pass, round and slot reset events that cleared `task.` and `outcome.` facts so that a level could fire again. Two optional boolean members ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only) make a predicate an edge. Both are absent by default: a catalog without them evaluates, serializes and hashes exactly as before. Their inputs are the `TaskRuntimeSnapshot` fields of this task and of the predecessor on the decision's instance ("Settlement Feedback And Eligibility Age"); nothing else is read.
+
+- **`dependency_completed` with `since_own_run: true`.** True when the predecessor's latest terminal state is one of `terminal_states`, and this task has not served it yet: it has no admitted dispatch on the instance, or its latest dispatch is before the predecessor's latest dispatch, or its latest run did not succeed. Otherwise false, with the info reason `dependency_already_served` {`task_id` this task, `predecessor_task_id`} and no wake; the predecessor's next accepted terminal makes it true again.
+  - A failed successor stays due. Its cooldown, its retry and backoff (the Runtime's `on_failure` handling) and its daily limits bound how often it runs again.
+  - A predecessor with no settled run is Unknown (`dependency_state_missing`) as before, and a terminal state the predicate does not accept is false as before.
+  - With `false` or without the member the predicate is the level it always was: true whenever the predecessor's latest terminal state is accepted.
+  - Chain handover ("Chain Handover") names the predecessor the same way, with or without the member.
+- **`fact_time_reached` with `once_per_reading: true`.** A time T the fact holds counts as **served** when this task's latest run on the instance succeeded and was dispatched at or after max(`T + N`, the fact's `observed_at_unix_ms`). A served time makes the predicate false, with the info reason `fact_time_served` {`fact_key`, `served_by_dispatch_unix_ms` that dispatch} and no wake. It stays false until a newer reading, observed after that dispatch, gives a time; the publication of that reading wakes the scheduler, as every fact publication does. A run that failed, or one dispatched before the time or before the reading was observed, served nothing. Every other case is "Fact-time wake" above.
+  - This closes the loop of an emptied slot: a slot left empty shows no countdown, so its last (past) time would otherwise stay true forever. A catalog names a free-slot count fact in an `any` beside it.
+- When a member decides the trigger, the decision ends with `trigger_false` after its reason.
+- **Version.** A V1 document that writes `since_own_run`, with either value, is refused as `unknown_field` at the member; `fact_time_reached` is V2 only as a whole.
+- **Capability.** A Runtime that reads both members reports the always-on subsystem `condition_edges` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). The catalog generator emits neither member for a Runtime whose check-config does not name it; an older Runtime refuses a catalog that writes them (`unknown_field`).
+
+## Fact references (#386 CF-4)
+
+A red line is the current cap less a margin, never a fixed number (Alice 10-26): a package publishes the cap as a fact beside the amount, and a rule compares the two. A `fact` predicate's `value` may be a **fact reference** instead of a typed value ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only):
+
+```text
+{"kind": "fact", "scope": S, "fact_key": A, "comparison": C,
+ "value": {"type": "fact", "fact_key": B, "offset": N}, "max_age_ms": M}
+```
+
+It reads: the integer the fact at (S, A) holds compares by C with the integer the fact at (S, B) holds plus N. All three members of the reference are required; N is a signed integer. A predicate with a typed value evaluates, serializes and hashes exactly as before.
+
+- **Same scope.** The reference names no scope: B is read in the predicate's own scope S. In a `schedule.json` the composer fills S for the predicate as for every `fact` node, and the reference needs none.
+- **One freshness.** Both facts obey the predicate's `max_age_ms` and each its own `expires_at_unix_ms`, and each needs a confidence above 0; the reference has no `max_age_ms` of its own. While the predicate is true or false, its freshness ends at the earlier end of the two facts' freshness, and it wakes the evaluation one millisecond after that, as `fact` does.
+- **The fact itself** (S, A) is read as for every `fact` predicate: missing, at confidence 0, older than M or past its expiry, it is Unknown with its detection suggestion ("Fact Refresh"); a value that is not an `integer` is Unknown with `type_mismatch` ("Runtime Enforcement").
+- **The referenced fact** (S, B) that gives no integer makes the predicate **false**, not Unknown: the info reason `fact_reference_unavailable` {`fact_key` B, `unknown_reason`: `fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired` or `type_mismatch`}, no wake and no detection suggestion. The next reading of B wakes the scheduler, as every fact publication does. When the predicate decides the trigger, the decision ends with `trigger_false` after its reason. Under `not` a false predicate becomes true, as any other.
+- **Comparison.** `eq`, `not_eq`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, over the integers A and B + N; the sum never overflows. `contains` is refused.
+- **Refusals**, each at its pointer: in a V1 document, `unknown_field` at `value/type`; `contains`, `predicate_uncomputable` at `comparison`; a reference `fact_key` that is no identifier, `type_mismatch` at `value/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `value/offset`; a reference that names a `scope` (a cross-scope reference), `unknown_field` at `value/scope`. A `value` whose `type` is neither a value kind nor `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
+- **Capability.** A Runtime that reads fact references reports the always-on subsystem `fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` whose rule writes one must list `fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with a reference refuses it at its reader.
+- For example, a task due while the amount is at least the capacity less 1000: `"fact_key": "resource.neutral.amount", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -1000}`.
 
 ## Runtime Boundary
 

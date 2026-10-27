@@ -72,4 +72,9 @@ impl FormalRoot {
     pub(super) fn artifacts(&self) -> &ArtifactStore {
         &self.artifacts
     }
+
+    /// #422 LN-7c Q: the state root's directory.
+    pub(super) fn path(&self) -> &std::path::Path {
+        self._directory.path()
+    }
 }

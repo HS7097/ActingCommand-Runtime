@@ -11,6 +11,8 @@ mod agent_dispatcher;
 mod approval;
 mod catalog_plan;
 pub mod codes;
+// Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe areas, read from their directory.
+mod display_safe_area;
 mod emulator_control;
 mod error;
 mod events;
@@ -20,6 +22,8 @@ mod fact_refresh_transitions;
 mod fact_store;
 mod failure_identity;
 mod host;
+// IDLE-1 (Alice's ruling 41): the idle planner, pure.
+mod idle_action;
 mod ipc;
 mod ledger_maintenance;
 mod monitor;
@@ -57,11 +61,15 @@ pub use remedy::{
 };
 // Workflow #384 D2-S3.
 mod resource_adjustment;
+// SCH-M ED-2: the instance store record `health.run_duration` (the run-duration samples).
+mod run_duration;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation, memory only.
 mod schedule_explanation;
 mod strategy;
 mod suspension_lift;
 mod suspension_report;
+// Workflow #422 LN-4: whether a start loads the tagged state or seeds it once.
+mod tagged_state;
 mod time;
 // Workflow #406 T12: the landing history of single-region presses (memory only).
 mod touch_history;

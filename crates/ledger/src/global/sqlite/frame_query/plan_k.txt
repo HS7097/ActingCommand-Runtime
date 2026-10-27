@@ -1,0 +1,12 @@
+MATERIALIZE k
+  SCAN json_each VIRTUAL TABLE INDEX 1:
+  SEARCH a USING INDEX ledger_artifacts_artifact (artifact_id=?)
+  SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+SCAN k
+CORRELATED SCALAR SUBQUERY 3
+  SEARCH cr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+  SEARCH ce USING INTEGER PRIMARY KEY (rowid=?)
+CORRELATED SCALAR SUBQUERY 4
+  SEARCH cr USING PRIMARY KEY (target_kind=? AND target_id=? AND pointer=?)
+  SEARCH ce USING INTEGER PRIMARY KEY (rowid=?)
+USE TEMP B-TREE FOR ORDER BY

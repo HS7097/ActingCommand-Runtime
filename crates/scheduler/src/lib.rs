@@ -114,9 +114,12 @@ pub enum ClaimKind {
     Ladder,
     /// The holding ladder's own continuation, queued before each rung run.
     LadderContinuation,
-    /// An instance's startup package after an emulator start.
+    /// An instance's startup package after an emulator start. Workflow #386 SR-4a3: blackout
+    /// silence holds it (`ClaimGate::Silenced`).
     StartupPackage,
-    /// A configured emulator start at daemon start.
+    /// A configured emulator start: at daemon start, and (emu-watch) the emulator watch's start
+    /// of a configured emulator it found stopped. A scheduling pause never holds it (Alice's
+    /// ruling 35); Workflow #386 SR-4a3: a blackout does (`ClaimGate::Silenced`).
     Autostart,
     /// A direct task run (CLI, console, MCP).
     DirectTaskRun,
@@ -148,7 +151,8 @@ pub enum ClaimClass {
     HolderOwned,
     /// Passes a closed gate.
     Operator,
-    /// The Runtime's own dedicated leases.
+    /// The Runtime's own dedicated leases, and (emu-watch R1) its configured emulator start,
+    /// which a scheduling pause never holds.
     HostInternal,
 }
 
@@ -175,9 +179,7 @@ impl ClaimKind {
 
     pub const fn class(self) -> ClaimClass {
         match self {
-            Self::PolicyDispatch | Self::Ladder | Self::StartupPackage | Self::Autostart => {
-                ClaimClass::Routine
-            }
+            Self::PolicyDispatch | Self::Ladder | Self::StartupPackage => ClaimClass::Routine,
             Self::LadderContinuation => ClaimClass::HolderOwned,
             Self::DirectTaskRun
             | Self::EmulatorControl
@@ -186,12 +188,16 @@ impl ClaimKind {
             | Self::SelfCheck
             | Self::LabOperation
             | Self::ClientLease => ClaimClass::Operator,
-            Self::DaemonStartPreparation | Self::ResourceClose => ClaimClass::HostInternal,
+            Self::Autostart | Self::DaemonStartPreparation | Self::ResourceClose => {
+                ClaimClass::HostInternal
+            }
         }
     }
 
     /// Q-3 (4): a routine entry is skipped while a pause holds. Since #369 S6b that includes the
-    /// startup claim (H-4, M6; `scheduling-pause.md`).
+    /// startup claim (H-4, M6; `scheduling-pause.md`); since emu-watch (Alice's ruling 35) the
+    /// autostart claim is no routine entry: a pause holds only dispatches, never the emulator
+    /// start.
     pub const fn gated_by_pause(self) -> bool {
         matches!(self.class(), ClaimClass::Routine)
     }
@@ -236,11 +242,76 @@ impl ClaimKind {
 
 /// Workflow #369 Q-3 (4): the routine gate of one instance, read by the caller from the
 /// scheduling pauses at the moment of the decision (the scheduler keeps no copy of it).
+/// Workflow #386 SR-4a3 (`contracts/scheduling-blackout.md`, "Complete silence"): and from the
+/// instance's blackouts, which the caller reads at the same moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimGate {
     Open,
     /// A scheduling pause holds the instance or the global gate: routine entries wait.
     RoutineHeld,
+    /// Workflow #386 SR-4a3: blackout silence. The instance's startup package waits: a blackout
+    /// covers the instance, or the next one starts before the package could end (its response
+    /// deadline plus the quiet margin). `autostart`: a blackout covers the instance, so its
+    /// configured emulator start waits too. `routine_held`: a scheduling pause holds the
+    /// instance as well, as [`Self::RoutineHeld`] does.
+    Silenced {
+        routine_held: bool,
+        autostart: bool,
+    },
+}
+
+impl ClaimGate {
+    /// Whether a scheduling pause (or what the caller reads as one) holds the routine entries.
+    pub const fn routine_held(self) -> bool {
+        matches!(
+            self,
+            Self::RoutineHeld
+                | Self::Silenced {
+                    routine_held: true,
+                    ..
+                }
+        )
+    }
+
+    /// Workflow #386 SR-4a3: whether a blackout covers the instance (its emulator autostart
+    /// waits).
+    pub const fn blackout(self) -> bool {
+        matches!(
+            self,
+            Self::Silenced {
+                autostart: true,
+                ..
+            }
+        )
+    }
+
+    /// Whether this gate holds an entry of `kind` back: a pause holds the routine entries
+    /// (`gated_by_pause`); blackout silence holds the startup package, and in a blackout the
+    /// emulator autostart. A direct run, a Lab operation and every other client or operator
+    /// entry always pass.
+    pub const fn holds(self, kind: ClaimKind) -> bool {
+        match self {
+            Self::Open => false,
+            Self::RoutineHeld => kind.gated_by_pause(),
+            Self::Silenced {
+                routine_held,
+                autostart,
+            } => {
+                (routine_held && kind.gated_by_pause())
+                    || matches!(kind, ClaimKind::StartupPackage)
+                    || (autostart && matches!(kind, ClaimKind::Autostart))
+            }
+        }
+    }
+
+    /// Workflow #386 SR-4a3: this gate with blackout silence laid over it (`autostart`: a
+    /// blackout covers the instance; otherwise one starts before its startup package could end).
+    pub const fn silenced(self, autostart: bool) -> Self {
+        Self::Silenced {
+            routine_held: self.routine_held(),
+            autostart: autostart || self.blackout(),
+        }
+    }
 }
 
 /// Workflow #369 Q-6, Q-7: a Runtime-internal claim. It is queued with no deadline and never
@@ -527,10 +598,11 @@ struct QueueEntry {
 }
 
 impl QueueEntry {
-    /// Q-3 (4): not expired, and not a routine entry behind a closed gate.
+    /// Q-3 (4): not expired, and not an entry the gate holds back (a routine entry behind a
+    /// closed gate; Workflow #386 SR-4a3: a startup package or an autostart blackout silence
+    /// holds).
     fn eligible(&self, gate: ClaimGate, now_monotonic_ms: u64) -> bool {
-        self.deadline_monotonic_ms > now_monotonic_ms
-            && (gate == ClaimGate::Open || !self.kind.gated_by_pause())
+        self.deadline_monotonic_ms > now_monotonic_ms && !gate.holds(self.kind)
     }
 }
 
@@ -1066,13 +1138,13 @@ impl SeedScheduler {
                 return Err(queue_ahead(state, ahead));
             }
             // Workflow #369 Q-3 (4) (S6c): while a pause holds the gate, a routine claim that
-            // waits in the queue (a ladder, a startup package, an autostart) waits as a gated
-            // entry from the first moment, even on a free instance. A policy dispatch is never
+            // waits in the queue (a ladder, a startup package) waits as a gated entry from the
+            // first moment, even on a free instance (since emu-watch the autostart claim is no
+            // routine claim and a pause never holds it). A policy dispatch is never
             // queued: its pause deferral is the admission's own, before the scheduler is asked.
-            if policy.gate == ClaimGate::RoutineHeld
-                && policy.kind.gated_by_pause()
-                && policy.kind != ClaimKind::PolicyDispatch
-            {
+            // Workflow #386 SR-4a3: so does a startup package or an autostart claim blackout
+            // silence holds back.
+            if policy.gate.holds(policy.kind) && policy.kind != ClaimKind::PolicyDispatch {
                 return Err(SchedulerError::GateHeld);
             }
         }
@@ -1465,14 +1537,28 @@ impl SeedScheduler {
     /// entry counts: an operator or client entry (past its deadline or not), a holder-owned
     /// continuation, and a routine entry that a #403 resource fence holds or nothing holds.
     pub fn waiting_total(&self, held_by_pause: impl Fn(InstanceId) -> bool) -> usize {
+        self.waiting_total_gated(|instance_id| {
+            if held_by_pause(instance_id) {
+                ClaimGate::RoutineHeld
+            } else {
+                ClaimGate::Open
+            }
+        })
+    }
+
+    /// [`Self::waiting_total`] with each instance's gate as `gate_of` reads it: an entry the
+    /// gate holds does no work and does not count. Workflow #386 SR-4a3: neither does a startup
+    /// package or an autostart claim blackout silence holds (it waits for the blackout's end,
+    /// and a shutdown disconnects it as it disconnects a paused one).
+    pub fn waiting_total_gated(&self, gate_of: impl Fn(InstanceId) -> ClaimGate) -> usize {
         self.instances
             .iter()
             .map(|(instance_id, state)| {
-                let held = held_by_pause(*instance_id);
+                let gate = gate_of(*instance_id);
                 state
                     .queue
                     .iter()
-                    .filter(|entry| !(held && entry.kind.gated_by_pause()))
+                    .filter(|entry| !gate.holds(entry.kind))
                     .count()
             })
             .sum()
@@ -1893,7 +1979,7 @@ impl SeedScheduler {
         if lease.destructive_step.is_some() {
             return Ok(TransferPreparation::Deferred);
         }
-        if gate == ClaimGate::RoutineHeld && claim.kind.gated_by_pause() {
+        if gate.holds(claim.kind) {
             return Ok(TransferPreparation::NoCandidate);
         }
         if self.instances.values().any(|state| {

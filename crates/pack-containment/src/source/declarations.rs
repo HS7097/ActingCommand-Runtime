@@ -7,7 +7,7 @@ use actingcommand_contract::candidate_projection::{
     validate_candidate_feature_name, validate_candidate_layout_id,
 };
 use actingcommand_contract::codes::{SharedCode, TaskflowCode};
-use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
+use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason, TaskSchema};
 use actingcommand_recognition::color_digest::{
     self, ColorDigest, ColorDigestAlgorithm, ColorDigestGrid, MAX_GRID_AXIS,
 };
@@ -81,11 +81,17 @@ pub(super) fn task_declaration_error(
 }
 
 impl Declaration<'_> {
-    /// Task schemas `0.6` through `0.9`, which accept the declarations of pack schema `0.7`
+    /// Task schema `0.6` and later, which accept the declarations of pack schema `0.7`
     /// (`checks`, color digests, per-target `max_distance`, `guard.check` and
     /// `candidate_layouts`).
     fn schema_0_6_or_later(&self) -> bool {
-        matches!(self.schema, Some("0.6" | "0.7" | "0.8" | "0.9"))
+        TaskSchema::at_least(self.schema, TaskSchema::V0_6)
+    }
+
+    /// Workflow #392 DA-5a: whether the declaration's schema names no task schema at or after
+    /// `schema`, where a member `schema` introduces is unconsumed.
+    fn schema_before(&self, schema: TaskSchema) -> bool {
+        !TaskSchema::at_least(self.schema, schema)
     }
 
     fn control(&self, value: &Value) -> CliOutcome<()> {
@@ -696,7 +702,7 @@ impl Declaration<'_> {
     /// before it): `{"max_ms": <unsigned>, "on_timeout"?: "<key>"}`, nothing else. Runtime
     /// admission checks the values and the operation's other members.
     fn wait(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(value, pointer, &["max_ms", "on_timeout"])?;
@@ -714,7 +720,7 @@ impl Declaration<'_> {
     /// (`UnconsumedField` before it): `{"page_id": "<page>", "max_ms": <unsigned>}`, nothing
     /// else. Runtime admission checks the page and the value.
     fn wait_page(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(value, pointer, &["page_id", "max_ms"])?;
@@ -732,7 +738,7 @@ impl Declaration<'_> {
     /// before it): an unsigned integer. Runtime admission checks 1..=1000 and that `on_max_runs`
     /// comes with it.
     fn max_runs(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         self.unsigned(value, pointer)
@@ -741,7 +747,7 @@ impl Declaration<'_> {
     /// #411 B16 part 1: an operation's `on_max_runs`, task schema `0.9` only (`UnconsumedField`
     /// before it): the string `next_candidate` or `{"outcome_key": "<key>"}`, nothing else.
     fn on_max_runs(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         self.keyed_end(value, pointer, &["outcome_key"])
@@ -793,7 +799,7 @@ impl Declaration<'_> {
         variants: &[(&str, &[&str])],
         optional: &[(&str, &[&str], &[&str])],
     ) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = value
@@ -845,7 +851,7 @@ impl Declaration<'_> {
     /// before it): `{"present": "<target>"}` or `{"absent": "<target>"}`, one member naming a
     /// target, nothing else. Runtime admission checks the target.
     fn when(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(value, pointer, WHEN_MEMBERS)?;
@@ -864,7 +870,7 @@ impl Declaration<'_> {
     /// `{"outcome_key": "<key>", "failed"?: "<target>"}`, nothing else. Runtime admission checks
     /// the guard and the target.
     fn on_guard_refused(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         self.keyed_end(value, pointer, &["outcome_key", "failed"])
@@ -1232,7 +1238,7 @@ impl Declaration<'_> {
             ));
         }
         // Workflow #396 REC-1: a locate OCR target guards the input from task schema `0.9`.
-        if object.contains_key("verify_text") && self.schema != Some("0.9") {
+        if object.contains_key("verify_text") && self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(
                 &child(pointer, "verify_text"),
                 ResourceDeclarationReason::UnconsumedField,
@@ -1262,7 +1268,7 @@ impl Declaration<'_> {
     /// optional `line_merge`. Its shape is checked here; its values with the derived
     /// recognition pack (`contracts/selection-graph.md`, section Shared OCR read).
     fn shared_ocr(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(
@@ -1318,7 +1324,7 @@ impl Declaration<'_> {
         const CELLS: [&str; 8] = [
             "x", "y", "width", "height", "pitch_x", "pitch_y", "columns", "rows",
         ];
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(
@@ -1367,7 +1373,7 @@ impl Declaration<'_> {
     /// entry of task schema `0.9`. Its shape is checked here; its value with the derived
     /// recognition pack.
     fn unique(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(value, pointer, &["margin_milli"])?;
@@ -1381,7 +1387,7 @@ impl Declaration<'_> {
     /// schema `0.9`: `{"factors_milli": [...]}` of integers. Its values are checked with the
     /// derived recognition pack.
     fn scales(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(value, pointer, &["factors_milli"])?;
@@ -1400,7 +1406,7 @@ impl Declaration<'_> {
     /// schema `0.9`: `{"mean_ratio_milli"?, "contrast_ratio_milli"?}` of integers. Its values are
     /// checked with the derived recognition pack.
     fn luma_floor(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let object = self.object(
@@ -1424,7 +1430,7 @@ impl Declaration<'_> {
         value: &Value,
         pointer: &str,
     ) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         if field == "maskRange" && entry.contains_key("mask") {
@@ -1677,7 +1683,9 @@ impl Declaration<'_> {
                 "mask" | "maskRange" => self.mask(object, field, value, &pointer)?,
                 // Workflow #396 REC-7: `verify_templates[]` takes `color_check` from task
                 // schema 0.9 on.
-                "color_check" if family == "verify_templates" && self.schema != Some("0.9") => {
+                "color_check"
+                    if family == "verify_templates" && self.schema_before(TaskSchema::V0_9) =>
+                {
                     return Err(self.error(&pointer, ResourceDeclarationReason::UnconsumedField));
                 }
                 "color_check" if !value.is_null() => {
@@ -1910,7 +1918,7 @@ impl Declaration<'_> {
             )?;
             if object.contains_key("value_test") {
                 let value_test_pointer = child(&pointer, "value_test");
-                if self.schema != Some("0.9") {
+                if self.schema_before(TaskSchema::V0_9) {
                     return Err(self.error(
                         &value_test_pointer,
                         ResourceDeclarationReason::UnconsumedField,
@@ -2340,7 +2348,7 @@ impl Declaration<'_> {
         pointer: &str,
         expected: Option<&Value>,
     ) -> CliOutcome<()> {
-        if self.schema != Some("0.9") {
+        if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
         }
         let colors = self.array(value, pointer)?;
@@ -3114,7 +3122,7 @@ impl Declaration<'_> {
         // Workflow #390 OUT-2: a designated effect set is a task schema `0.9` declaration.
         if let Some(effects) = object.get("designated_effects") {
             let effects_pointer = child(pointer, "designated_effects");
-            if self.schema != Some("0.9") {
+            if self.schema_before(TaskSchema::V0_9) {
                 return Err(
                     self.error(&effects_pointer, ResourceDeclarationReason::UnconsumedField)
                 );
@@ -3499,26 +3507,49 @@ impl Declaration<'_> {
                 ));
             }
             let value_pointer = child(&pointer, "value");
+            // SCH-M CF-2: `base` is a member of a completion time (`timestamp_ms`) only.
             let value_type = self.object(
                 &object["value"],
                 &value_pointer,
-                &["type", "min", "max", "format", "dictionary"],
+                &["type", "min", "max", "format", "dictionary", "base"],
             )?;
             let kind = self.required(value_type, &value_pointer, "type")?;
             self.string(kind, &child(&value_pointer, "type"))?;
-            if kind.as_str() != Some("unsigned_integer") {
+            let timestamp = match kind.as_str() {
+                Some("unsigned_integer") => false,
+                Some("timestamp_ms") => true,
+                _ => {
+                    return Err(self.error(
+                        &child(&value_pointer, "type"),
+                        ResourceDeclarationReason::InvalidValue,
+                    ));
+                }
+            };
+            let foreign: &[&str] = if timestamp {
+                &["min", "max", "dictionary"]
+            } else {
+                &["base"]
+            };
+            if let Some(member) = foreign
+                .iter()
+                .find(|member| value_type.contains_key(**member))
+            {
                 return Err(self.error(
-                    &child(&value_pointer, "type"),
-                    ResourceDeclarationReason::InvalidValue,
+                    &child(&value_pointer, member),
+                    ResourceDeclarationReason::UnknownField,
                 ));
             }
-            for field in ["min", "max"] {
-                self.unsigned(
-                    self.required(value_type, &value_pointer, field)?,
-                    &child(&value_pointer, field),
-                )?;
+            if timestamp {
+                self.timestamp_reading_value(value_type, &value_pointer)?;
+            } else {
+                for field in ["min", "max"] {
+                    self.unsigned(
+                        self.required(value_type, &value_pointer, field)?,
+                        &child(&value_pointer, field),
+                    )?;
+                }
             }
-            if let Some(format) = value_type.get("format") {
+            if let Some(format) = value_type.get("format").filter(|_| !timestamp) {
                 let format_pointer = child(&value_pointer, "format");
                 self.string(format, &format_pointer)?;
                 if serde_json::from_value::<actingcommand_contract::OcrUnsignedIntegerFormat>(
@@ -3613,6 +3644,36 @@ impl Declaration<'_> {
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// SCH-M CF-2: the `value` of a completion-time mark (`timestamp_ms`): `format` is required
+    /// and must be `clock_hms`, and `base` is required and must be `observation`; each is
+    /// refused at its member.
+    fn timestamp_reading_value(
+        &self,
+        value_type: &Map<String, Value>,
+        value_pointer: &str,
+    ) -> CliOutcome<()> {
+        let format_pointer = child(value_pointer, "format");
+        let format = self.required(value_type, value_pointer, "format")?;
+        self.string(format, &format_pointer)?;
+        if serde_json::from_value::<actingcommand_contract::OcrUnsignedIntegerFormat>(
+            format.clone(),
+        )
+        .ok()
+            != Some(actingcommand_contract::OcrUnsignedIntegerFormat::ClockHms)
+        {
+            return Err(self.error(&format_pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        let base_pointer = child(value_pointer, "base");
+        let base = self.required(value_type, value_pointer, "base")?;
+        self.string(base, &base_pointer)?;
+        if serde_json::from_value::<actingcommand_contract::ResourceReadingTimeBase>(base.clone())
+            .is_err()
+        {
+            return Err(self.error(&base_pointer, ResourceDeclarationReason::InvalidValue));
         }
         Ok(())
     }
@@ -3904,10 +3965,7 @@ impl Declaration<'_> {
         for field in ["schema_version", "task_id", "game"] {
             self.string(self.required(object, "", field)?, &child("", field))?;
         }
-        if !matches!(
-            self.schema,
-            Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7" | "0.8" | "0.9")
-        ) {
+        if TaskSchema::of(self.schema).is_none() {
             return Err(self.error("/schema_version", ResourceDeclarationReason::InvalidValue));
         }
         match self.schema {
@@ -3923,19 +3981,17 @@ impl Declaration<'_> {
             _ => {}
         }
         for field in ["timeout_ms", "max_steps"] {
-            if object.contains_key(field) && !matches!(self.schema, Some("0.7" | "0.8" | "0.9")) {
+            if object.contains_key(field) && self.schema_before(TaskSchema::V0_7) {
                 return Err(self.error(
                     &child("", field),
                     ResourceDeclarationReason::UnconsumedField,
                 ));
             }
         }
-        if object.contains_key("phases") && self.schema != Some("0.9") {
+        if object.contains_key("phases") && self.schema_before(TaskSchema::V0_9) {
             return Err(self.error("/phases", ResourceDeclarationReason::UnconsumedField));
         }
-        if object.contains_key("ocr_targets")
-            && !matches!(self.schema, Some("0.6" | "0.7" | "0.8" | "0.9"))
-        {
+        if object.contains_key("ocr_targets") && self.schema_before(TaskSchema::V0_6) {
             return Err(self.error("/ocr_targets", ResourceDeclarationReason::UnconsumedField));
         }
         if object.contains_key("checks") && !self.schema_0_6_or_later() {
@@ -3953,16 +4009,14 @@ impl Declaration<'_> {
                 ResourceDeclarationReason::UnconsumedField,
             ));
         }
-        if object.contains_key("resource_readings") && !matches!(self.schema, Some("0.8" | "0.9")) {
+        if object.contains_key("resource_readings") && self.schema_before(TaskSchema::V0_8) {
             return Err(self.error(
                 "/resource_readings",
                 ResourceDeclarationReason::UnconsumedField,
             ));
         }
         // Workflow #384 D2-S3: adjustments come with the reading marks' task schemas.
-        if object.contains_key("resource_adjustments")
-            && !matches!(self.schema, Some("0.8" | "0.9"))
-        {
+        if object.contains_key("resource_adjustments") && self.schema_before(TaskSchema::V0_8) {
             return Err(self.error(
                 "/resource_adjustments",
                 ResourceDeclarationReason::UnconsumedField,

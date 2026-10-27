@@ -144,6 +144,55 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SCH-M CF-1: this build reads the catalog edge members `since_own_run` and
+        // `once_per_reading`; the catalog generator emits them only when check-config names it.
+        subsystem(
+            "condition_edges",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        // SCH-M CF-2: this build admits completion-time reading marks (`timestamp_ms`) and
+        // publishes their times; packs that declare one are placed only on a Runtime that names
+        // it.
+        subsystem(
+            "resource_reading_time",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        // ROUT-L RL-1b (frozen model v1.0 §3.8): this build's scheduler workbench composes the
+        // standard packs' `schedule.json` (composer mode, without `policy.catalog`); a pack
+        // that requires it is placed only on a Runtime that names it.
+        subsystem(
+            "standard_pack_schedule",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        // #386 CF-4: this build reads a `fact` predicate whose value is another fact plus an
+        // offset; a `schedule.json` that writes one requires it, so an older Runtime refuses the
+        // file instead of misreading it.
+        subsystem(
+            "fact_reference",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        // SCH-M ED-2 (frozen model v1.0 §3.4, §3.8): this build keeps the run-duration samples
+        // (`health.run_duration`) and dispatches by the expected duration E; the catalog
+        // generator emits catalog v35 only for a Runtime that names it.
+        subsystem(
+            "expected_runtime",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        // Workflow #386 SR-4a2 (`contracts/scheduling-blackout.md`, "Configuration"): this
+        // build's policy reads blackouts of all three sources (deferral positions 4 and 7, the
+        // admission re-check, the random delay's cut) and the day-boundary fit; `count` is the
+        // number of host blackout entries. A catalog generator emits `maintenance` events only
+        // for a Runtime that names it.
+        subsystem(
+            "scheduling_blackout",
+            true,
+            scheduling_blackout_reason(&inputs.mechanism_parameters),
+        ),
         env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
     let explicit_or_default = |present: bool| {
@@ -396,6 +445,26 @@ fn subsystem(name: &str, enabled: bool, outcome: Outcome) -> ConfigSubsystem {
         name: name.to_owned(),
         enabled,
         outcome,
+    }
+}
+
+/// Workflow #386 SR-4a2: the `scheduling_blackout` row's reason, always on, with `count` the
+/// number of entries of `scheduling.blackout.host` as the configuration mechanism rendered it
+/// (a list, written as JSON text). A value that is not a list carries no `count`: the section
+/// check that follows the manifest refuses it with `blackout_config_invalid`.
+fn scheduling_blackout_reason(parameters: &[ConfigParameter]) -> Outcome {
+    let entries = parameters
+        .iter()
+        .find(|parameter| parameter.key == actingcommand_runtime_config::scheduling::BLACKOUT_HOST)
+        .and_then(|parameter| match &parameter.value {
+            FactScalar::String(text) => serde_json::from_str::<serde_json::Value>(text).ok(),
+            _ => None,
+        })
+        .and_then(|value| value.as_array().map(Vec::len));
+    let outcome = Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn);
+    match entries {
+        Some(entries) => outcome.count(entries),
+        None => outcome,
     }
 }
 

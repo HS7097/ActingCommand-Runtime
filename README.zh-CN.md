@@ -133,7 +133,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **离线读取**由 `actingledger` 提供，它只开只读证据快照，从不写入。子命令为：`open`、`events`、`chain --req <request-id>`、`tail`、`repairs`、`export`（可加 `--performance` / `--stability` / `--task-evidence`）、`views`（账本终态视图的一页，与运行时提供的页相同）、`material --request <json>`（一件已提交工件的一段已校验字节）、`signatures`、`frames`（已存截图的只读列表）、`facts --at <sequence>`（按账本位置重放程序事实库）、`replay`、`codes`（本构建内嵌码目录里的结果码）。除裸 `export` 输出人类可读的多行文本报告外，其余报告都是单行 JSON；证据存在缺口时先打印报告再以 `signature_replay_incomplete`、`stability_export_incomplete`、`task_evidence_export_incomplete`、`ledger_view_source_incomplete` 非零退出；`facts` 不可用时以 `runtime_facts_not_available` 或失败码非零退出。
 
-**结果码。** 已登记的结果码放在 `contracts/outcome-codes/` 下的分片里，每个所属包或程序一片（共 26 片，从 `contract`、`ledger`、`runtime-host` 到 `actingctl`、`actingd`、`actinglab`、`actingledger`），共用的键与词表在 `catalog.json`；`outcome-guard merge` 把它们合并成码目录 `contracts/outcome-codes.json`。回执、账本记录、`actingctl`、`actingd`、看门狗与 MCP 工具错误都以 outcome 的形式携带这些码；`actingctl codes`、`actingledger codes` 与 MCP `ac_outcome_code` 可以查码。每个版本都带一份快照 `contracts/outcome-codes/released/<版本>.json`（v0.12.10：3,766 个码，其中 172 个已定稿；1,647 个位置），缺了快照的发布构建会停下。守卫仍豁免 Lab 的 `apps/actinglab` 与 `crates/lab`。
+**结果码。** 已登记的结果码放在 `contracts/outcome-codes/` 下的分片里，每个所属包或程序一片（共 26 片，从 `contract`、`ledger`、`runtime-host` 到 `actingctl`、`actingd`、`actinglab`、`actingledger`），共用的键与词表在 `catalog.json`；构建时把它们合并成码目录并嵌入程序（`outcome-guard merge` 输出的是同一份内容；合并后的文件不提交进仓库）。回执、账本记录、`actingctl`、`actingd`、看门狗与 MCP 工具错误都以 outcome 的形式携带这些码；`actingctl codes`、`actingledger codes` 与 MCP `ac_outcome_code` 可以查码。每个版本都带一份快照 `contracts/outcome-codes/released/<版本>.json`（v0.12.10：3,766 个码，其中 172 个已定稿；1,647 个位置），缺了快照的发布构建会停下。守卫仍豁免 Lab 的 `apps/actinglab` 与 `crates/lab`。
 
 ## 不变式与守卫
 
@@ -147,7 +147,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## Workspace 成员
 
-工作区声明 31 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 32 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
 ### apps（5）
 
@@ -159,13 +159,14 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
-### crates（23）
+### crates（24）
 
 | 路径 | 包 | 职责 |
 | --- | --- | --- |
 | crates/actingcommand-contract | actingcommand-contract | 协议、设备与引擎边界的合约定义，不含目标逻辑 |
 | crates/artifact-store | actingcommand-artifact-store | 工件字节、哈希、保留元数据、帧缓冲与证据归档 |
 | crates/device | actingcommand-device | 设备层原语；输入经显式后端链选择 |
+| crates/display-adapter | actingcommand-display-adapter | 包的基准坐标、尺度帧与设备帧之间的纯整数映射：九宫格锚点、取整、旋转与裁剪；不做 I/O，不接后端 |
 | crates/execution-kernel | actingcommand-execution-kernel | 守护进程拥有的执行会话与纯任务/探测决策规划 |
 | crates/host-metrics | actingcommand-host-metrics | 平台性能计数器的安全边界（仅 cfg(windows) 依赖 windows-sys） |
 | crates/lab | actingcommand-lab | 可选的创作与调试适配层；排除后生产仍可构建可运行 |
@@ -198,7 +199,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
 | tools/actinglab-architecture | actingcommand-actinglab-architecture | lib | 从源码推导的架构守卫；仅限开发，不链接进运行时二进制 |
-| tools/outcome-guard | actingcommand-outcome-guard | lib + bin `outcome-guard` | `outcome-guard merge` 把 `contracts/outcome-codes/` 下的结果码分片合并成 `contracts/outcome-codes.json`；仅限开发，由 CI 运行 |
+| tools/outcome-guard | actingcommand-outcome-guard | lib + bin `outcome-guard` | `outcome-guard merge` 输出 `contracts/outcome-codes/` 下结果码分片合并后的码表（构建时嵌入的就是同一份内容，不提交进仓库）；`outcome-guard release` 是发版闸门 G10；仅限开发 |
 
 ## 设备与识别
 
@@ -210,7 +211,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 识别目标分八类：Template、Color、ClickOnly、Ocr、Nn、ColorDigest（颜色摘要，`contracts/color-digest.md`）、Composite（对 2–8 个其他目标的具名「全部满足 / 任一满足」检查）与 ValueTest（比较读到的值）。模板匹配是 CPU 图像匹配，带 5 秒显式超时与粗匹配/精修两段，超时失败会报告发生在哪一段。生产 OCR 与 NN 在 `vision-ffi` 边界后的进程内引擎中运行；每个目标指明其模型文件夹与内容（`contracts/vision-model-folders.md`），宿主侧适配器强制该身份：`model_ref` 必须是不含 `/`、`\` 或 `:` 的有界逻辑标识（不接受主机路径），`model_sha256` 必须是恰好 64 位小写十六进制。模型在第一次用到时从 `<vision root>\models\<model_ref>\` 加载。页面投影是对单帧已解析事实的无副作用投影，schema `actingcommand.page-projection.v1`，上限 64 条 / 32 KiB，条目按角色（Navigate / PageOp / ControlPoint）、任务 ID、资源 ID 与页面为键，每条携带 Safety 分类且默认值为 Dangerous；操作 schema `0.8` 的 OCR 字段声明走 `post_admission_ocr.mode = fields_v1`，字段声明与旧的真值集合声明不可混用，且本合约不含任何目标专有值（`contracts/ocr-fields.md`、`contracts/page-projection.md`）。
 
-包的坐标处在它声明的分辨率下（今天的标准包都用 1280×720）；截图尺寸不同时任务以 `contained_task_frame_resolution_mismatch` 明确失败（`contracts/linear-steps.md`）。设备上受限任务的第一帧会把实例的显示记为事实（`display.frame_extent`、`display.rotation`、`display.orientation`、`display.aspect`）；不会因为帧自身的宽高比拒绝任何帧，只在帧的宽高比与采集它的显示不一致时拒绝（`contained_task_geometry_frame_display_mismatch`）。
+包的坐标处在它声明的分辨率下（今天的标准包都用 1280×720）。每一帧都经过显示适配壳的收帧闸（`contracts/display-adapter.md`）：与包同尺寸的帧原样使用，同比例更大的帧缩到包的尺寸再识别，其余的帧以 `display_map_unresolved` 明确失败；输入侧映射之前（Workflow #392 DA-3），缩放的帧不发输入。设备上受限任务的第一帧会把实例的显示记为事实（`display.frame_extent`、`display.rotation`、`display.orientation`、`display.aspect`）；不会因为帧自身的宽高比拒绝任何帧，只在帧的宽高比与采集它的显示不一致时拒绝（`contained_task_geometry_frame_display_mismatch`）。
 
 ## MCP 服务
 
@@ -344,7 +345,7 @@ actingctl resume --state-root <state-root> --instance <alias>
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance import  --config runtime.json --backup frozen-backup
-actingcommand-actingd ledger-maintenance verify  --config runtime.json
+actingcommand-actingd ledger-maintenance verify  --config runtime.json [--frame-query]     # --frame-query（需显式开启）：另用完整帧视图核对帧清理器的查询；它在 verify 的时限内重建整个保留索引，账本很大时可能超时。绝不静默忽略：根不是正式根（Segment、候选）或操作不是 verify 时，以 maintenance_arguments_invalid 拒绝
 actingcommand-actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target <restore-dir> [--artifact-root <dir>]
 
 # 无副作用的配置检查（与启动相同的加载/装配/校验；不触碰 state_root 下任何内容）

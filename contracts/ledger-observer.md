@@ -673,6 +673,18 @@ CREATE TABLE ledger_index (
     `tag.workbench_patterns` pattern (`*` = any text); `input_boundary/<instance>/committed` and
     `/failed`; `decision_memory/<instance>/<task>`; `activity_memory/<instance>/<profile>`;
     `wake/<wake id>`.
+  - Workflow #422 LN-3 adds `monitor/<alias>` (register §1.182 LN3-4): the monitor registry's
+    latest applied change of the alias (`runtime_state` `monitor_changed`), or the import for each
+    alias it brings (`monitor_imported`). A change that was not applied is not tagged.
+  - Workflow #422 LN-4 (register §1.184 LN4-1) adds three rules:
+    - `monitor_import` names every import of the monitor registry, with or without instances, so
+      the start finds the import the registry compares its journal file with;
+    - `wake/<wake id>` also names the latest record of the obligation's session
+      (`agent.session_started`, `agent.session_resumed`, `agent.response_recorded`,
+      `agent.session_completed`, `agent.session_escalated`); a row that names a completed session
+      is an ended obligation;
+    - the `lifecycle` key `tagged_state_enabled` names the seeding's marker
+      (`runtime.lifecycle_observed` phase `tagged_state_enabled`).
   - `open`: the intents `policy.dispatch_intent`, `lease.transition_intent`,
     `task.terminal_intent`, `input.intent` and `application.intent`. A result (dispatch admitted
     or rejected, lease granted, transferred, renewed, released, expired or failed, task
@@ -729,6 +741,31 @@ CREATE TABLE ledger_index (
   `PolicyControlState`, so a restart after AO-6 keeps runtime budgets and activity intervals
   (register L7, L14).
 - Wake obligations get `agent.wake_obligation_recorded` (one `AgentWakeRecord` as of AO-4).
+- **As built by LN-3** (Workflow #422, register §1.182; AO-4's gates are not needed): the records
+  go through the existing append path, under the guard the change was made under.
+  - The policy host writes one `policy.control_state_recorded` per changed dispatch pair and one
+    `policy.activity_state_recorded` per changed (instance, activity profile) after an
+    admission's outcome, after a settlement's completion, and after the start's and the online
+    settlement reconciliations. A change is a difference between the key's complete state and its
+    latest record; an exact replay writes nothing.
+  - `daily_counts` holds the newest 32 days. `active_window` is the window of the pair's latest
+    admission. `dispatch_clock` is the admission time of the pair's latest admitted dispatch
+    until its completion. `condition_reruns` stays absent until SR-2b keeps a rerun state.
+  - At the open the replayed state counts as recorded; seeding one record per key once is LN-4's
+    (§11.6), and so is the load (§11.5). The records carry no settlement order: the Workflow #372
+    K5 order a continued id's failure state follows is not rebuilt from them.
+  - Each `agent.wake_requested` is followed by the obligation's `agent.wake_obligation_recorded`
+    with the same wake.
+  - The monitor registry's records already carry an alias's complete state; the index tags them
+    `monitor/<alias>` (§11.1).
+- **Settlement order, as built by LN-4** (register §1.184 LN4-2). The Workflow #372 K5 orders
+  are part of the pair's record: `failure_settled`, the place of the pair's latest settlement
+  that set or cleared its failure state (a success, or a failure no condition settled) among all
+  such settlements, and the retry round's `opened`, its place among the rounds opened. Both are
+  absent in LN-3's records. Loaded, they keep the order a continued id's failure state and a
+  group's latest round follow, and the counters go on after the largest one loaded. A renamed
+  or continued task therefore reads after a restart the failure state and the round it read
+  before.
 - Derived on load for the instance store: `latest_observed` = the latest record's observation
   time; tombstones = keys whose latest record is an invalidation (≤ key limit; after a tombstone
   rolls out, a resend of the same identity is still refused by `latest_observed` as
@@ -783,6 +820,80 @@ time L that D2 needs (D2 A-7) is the end of step 7.
 | history without the marker (first start of the build that brings AO-5 + AO-6) | `ledger_tagged_state_seeded` (info) | seed once (§11.6) |
 | an index row disagrees with its record | `ledger_tag_index_mismatch` (fatal) | refuse to start |
 
+- **As built by LN-2** (Workflow #422, register §1.183): the instance store runs steps 1–4
+  through `GlobalLedger::tagged_state` over `instance_facts/` and `input_boundary/`. A row
+  agrees with its record when the record has the row's sequence and event id, carries the row's
+  key and its stored hash is `value_sha256`. A loaded publication loads only the records its rows
+  name. For each loaded publication the first later event that would have invalidated it is read
+  through the type index (an input type only when a scope instance's boundary lies after the
+  publication), so an invalidation not written before the stop is the same pending invalidation
+  replay would make; today's reducer applies records and triggers in ledger order. The read
+  volume is the index rows, their point reads and those trigger reads. Steps 5 and 6, lineages,
+  seeding and the other stores are not LN-2's; the decision memory and the monitor are LN-4's.
+
+- **As built by LN-4** (Workflow #422, register §1.184; LEAN-L model §3.2 step 5):
+  - The start reads the `lifecycle` row `tagged_state_enabled` first.
+  - Each index read is one writer command (`GlobalLedger::index_records`): the rows of one role
+    with a key prefix, a point read of each row's record by its sequence, and the checks of
+    step 3. A row whose event id, key or hash disagrees with its record is
+    `ledger_tag_index_mismatch` (fatal), relayed by the host.
+  - Loads, when the marker is present:
+    - **decision memory**: the `decision_memory/` and `activity_memory/` records, applied with
+      the value records' reducer. The admissions and executions after the records' position (the
+      latest value record's sequence, at least the marker's) take effect on the loaded state; the
+      earlier ones are in the records already;
+    - **dispatch journal** (register §1.184 LN4-7; coordinator ruling 10-26): each pair's record
+      names, by the sequences of their records, the dispatches the journal keeps of it: the open
+      ones, the latest completed one with the pair's consecutive-failure count, and for a task of
+      the remedy journal its latest runs. Each is read by point reads of its intent, admission and
+      completion, and its execution among the executions between its admission and its
+      completion (an open one's: through the records' position). They are applied in ledger
+      order with recovery's checks. Then only the dispatch records after the records' position
+      are read;
+    - **monitor registry**: the `monitor_import` record, then each `monitor/<alias>` change;
+      the revision is the largest the records carry, and the journal file is compared with the
+      import as before;
+    - **agent dispatcher**: the `wake/` rows give the obligations. A completed one is not
+      loaded. A session escalated to a person is loaded with its status and its wake. For the
+      live ones the Agent records are read from the earliest live wake's own record on, and only
+      the records of live wakes are folded. With no live obligation, only the rows and the
+      escalated wakes' records are read.
+  - A re-alignment of the dispatch journal after an append error (`refresh_dispatches`) no
+    longer reads the whole history. It rebuilds the decision memory from the latest value
+    records, then applies the dispatch records after the records' position. Every dispatch
+    change writes its pair's record under the guard it was applied under, so a dispatch with a
+    record after that position is open or its pair's latest completed one, which the journal
+    keeps.
+  - The resident dispatch journal is bounded, never by the event count (LEAN-L model §3.1;
+    coordinator ruling 10-26). Per (task, instance) it keeps every open dispatch, the latest
+    intent (the not-run explanation names its state) and the latest 64 admitted dispatches
+    (`REMEDY_JOURNAL_MAX_RUNS`), which hold the latest completed one and the remedy journal's
+    runs. Each completed dispatch keeps the pair's consecutive failed runs through it, counted at
+    its completion from the pair's previous completed dispatch, never folded over all runs.
+    Everything else is read on demand (§3.3 of the model), page by page under the read budget:
+    - a decision page reads the dispatch records through its snapshot position;
+    - the task runtime projection at a position the journal does not answer (a pair whose
+      earlier dispatches it no longer holds and that has no dispatch admitted and none completed
+      at or before the position) reads the dispatch records through that position;
+    - a replayed admission of a decision the journal does not hold looks for its intent among
+      the intents after the decision's input ledger position.
+  - Without the marker, the start replays once, as today:
+    - the decision memory counts nothing as recorded, so the start's reconciliation writes one
+      `policy.control_state_recorded` and one `policy.activity_state_recorded` per key;
+    - the monitor registry records its import again when no `monitor_import` row names it (a
+      replay of the same import changes nothing), then one applied change of every alias whose
+      state moved since the import;
+    - each live wake without a `wake/` row gets its `agent.wake_obligation_recorded`;
+    - then the marker, whose report is `ledger_tagged_state_seeded` with `count`, the keys
+      seeded. A root's first start (the ledger holds no `runtime.started` or
+      `runtime.takeover` before it) has no earlier epoch to seed and writes no marker; the
+      root's next start seeds what that epoch recorded.
+  - The agent dispatcher keeps no ended session (§11.2). At a session's end its request records
+    leave memory. A completed session's wake, trigger and session leave too. A session escalated
+    to a person keeps its status and its wake for the person who reads them. A resent response
+    of an ended session is answered from the ledger's record of the request. A planning signal without its wake is looked for
+    only after the previous epoch's start record, against the wakes recorded after it.
+
 ### 11.6 Seeding once, exception reads
 
 - **Seeding** (AO-5): with history but no `tagged_state_enabled`, step 3 runs today's recovery
@@ -803,9 +914,113 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   An intent that never committed is not found by X1; it lies in the tail gap (rule 9's accepted
   cost). The same holds for the last request ids and X3.
 
+### 11.7 The frame index `ledger_frame_refs` (#422 LN-7c R)
+
+Alice's ruling 70 (board #422 6412761773, frame retention by ledger query) needs the frames a record
+names only in its payload to be found by key. Design: `rd-1026/ln7c/final-query.md` §3 (F5).
+
+```sql
+CREATE TABLE ledger_frame_refs (
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('frame', 'artifact', 'run')),
+    target_id   TEXT NOT NULL,       -- the identifier's canonical text
+    sequence    INTEGER NOT NULL,    -- the naming record's sequence
+    pointer     TEXT NOT NULL CHECK (pointer IN ('summary_frame', 'summary_pin',
+                    'published_artifact', 'published_frame', 'reading', 'before_frame',
+                    'preserved_frame', 'read_confirmed')),
+    run_id      TEXT,                -- the run a resource reading's snapshot id names
+    PRIMARY KEY (target_kind, target_id, pointer, sequence)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX ledger_frame_refs_sequence ON ledger_frame_refs(sequence);
+CREATE TABLE ledger_frame_refs_extent (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    from_sequence INTEGER NOT NULL, through_sequence INTEGER NOT NULL
+) STRICT;
+```
+
+| Record | Pointer in its payload | Row |
+|---|---|---|
+| `capture.summary_committed` | each summary frame's artifact | `('artifact', id, 'summary_frame')` |
+| same | each pinned artifact whose reason is not `recognition_evidence` | `('artifact', id, 'summary_pin')` |
+| `fact.published` | a record's `source_snapshot_id` `run:<run>/frame:<frame>/…` with a `resource_reading:` detector | `('frame', frame, 'reading')`, `run_id` = the run |
+| same | the same snapshot form with any other detector | `('frame', frame, 'published_frame')` |
+| same | a record whose content is an artifact | `('artifact', id, 'published_artifact')` |
+| `input.intent` | `provenance.before_frame_id` | `('frame', frame, 'before_frame')` |
+| `capture.dedup_window` | `preserved_frame_id` | `('frame', frame, 'preserved_frame')` |
+| `client.action` from (agent, adapter), (cli, cli) or (user, ui) | control `evidence_read_frame` / `evidence_read_run`, a path-safe value | `('artifact', id, 'read_confirmed')` / `('run', id, 'read_confirmed')` |
+
+- **The rule: the derived table never fails an open or an append.** It is derived from the
+  records and can be rebuilt, and nothing reads it yet, so no state of it fails the writer open or
+  an append, or stops the Runtime (the scrub's findings about it included, below). Each case below ends in one warning: the open's is a
+  `note` link of `ledger_opened` (`ledger_index_mismatch` of `build_ledger_frame_refs`, its `stage`
+  naming what was found and `ledger_sequence` where; the catalog fixes that code's category, and no
+  new code is added). The open itself fails only where it failed before this table existed.
+- **Written** by the writer in the record's own batch transaction (every append, the segment
+  import), from the record alone, so no producer writes them and a new producer is covered.
+  Two pointers of one record to one target and pointer are one row. The extent moves only when it
+  is contiguous with the batch: when it ends right before the batch, its rows are written and
+  `through_sequence` moves to the batch's last sequence in the same transaction. Otherwise, or when
+  a statement of the index fails, the batch's rows are **not written** (a savepoint takes back what
+  was written), the extent stays, and the batch commits as always. The next open fills the gap and
+  warns (`stage` `write_ledger_frame_refs`, `ledger_sequence` the extent's end). Only a savepoint
+  that cannot be taken back, which means the batch's own transaction is gone (a full disk), returns
+  its error, as the batch's commit would. A new root starts with the extent `1..=0`; the segment
+  import writes `1..=cutover`.
+- **Trusted only inside the extent** `from_sequence..=through_sequence`, the records whose rows are
+  all written. A row outside it is removed at the next writer open.
+- **Filled at the writer open**, after the views and indexes exist and before any record is
+  appended (`build_ledger_frame_refs`). The open creates the tables a root lacks; a table it creates
+  starts empty without a warning (the first open of this release backfills once). An **untrusted
+  extent** (past the head, malformed, or missing on a table that exists: a copy, a restore) is
+  removed with every row and the index is rebuilt from the extent `head + 1..=head`, with one
+  warning (`stage` `verify_ledger_frame_refs`, `ledger_sequence` the extent's end when there was
+  one). Then the gap `(through_sequence, head]` is filled upwards (records an older build or a
+  batch above appended without rows; one warning), and the backfill goes from the head down to 1
+  (ageing out is not safe: `final-query.md` §3.3). Each page holds at most `history_page_rows`
+  pointer records, selected by type in `ledger_view_index_type_v1` with a sequence bound and
+  authenticated one by one as a history page reads them; it commits with the extent moved. After
+  a complete fill the extent is `1..=head`. **A fill that stops** never fails the open: a record
+  that fails its authentication, the open's deadline (checked before each page), or any failure of
+  the index stops the fill where it is. The page in progress rolls back, so the extent stops short
+  of that record (below it for the gap, above it for the backfill) and does not cover the history,
+  and the next open tries again. The open warns once (`stage` `build_ledger_frame_refs`,
+  `ledger_sequence` the record it stopped at, the failure as its cause). The damaged record itself
+  is found by the scrub, as before. On production the one-time backfill reads about 85 000 records
+  (estimate: 5–10 s); a gap after a day's rollback, about 11 000 (about 1 s).
+- **Checked** by the scrub (§15, LN-9): for every row a chunk authenticates inside the extent read
+  with the pass's head, the chunk's frame index rows must be those the record gives, read in the
+  chunk's transaction through `ledger_frame_refs_sequence`. `ledger-maintenance verify` does the
+  same over the whole root, within the extent its snapshot holds; a root without the extent is not
+  checked. A difference, or an extent that is not `1 <= from <= through + 1 <= head + 1`, is
+  `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs` and the sequence
+  in its detail; the scrub adds `phase=scrub`). No new code (#420 S4).
+  - **The scrub's finding about the derived table is non-fatal.** This covers a difference and an
+    extent table the scrub cannot read. It is recorded (`GlobalLedger::scrub_frame_refs_finding`,
+    with what and where in its detail), the host does not latch it, and the Runtime keeps running.
+    The host hands it once to the daemon's log through #411 A51's reporter
+    (`RuntimeDaemonReporter::ledger_index_finding`). actingd writes it as one line:
+    `ERROR actingd: ledger_index_mismatch operation=verify_ledger_frame_refs table=ledger_frame_refs
+    sequence=<n>; after_sequence=<chunk start>; phase=scrub; extent=untrusted`. The next open's
+    rebuild needs no further line.
+    The scrub stops checking the index for the rest of the pass and goes on with the chain.
+    Findings in the primary ledger tables stay fatal, as before.
+  - **The extent is marked untrusted**: it becomes `through + 1..=through`, which covers no record
+    (one statement on the shared connection, the scrub's only write; `extent=untrusted` in the
+    finding's detail). Later batches extend it from there. The next writer open removes every row
+    below it and rebuilds them by its backfill, and a later query never trusts a row outside it.
+  - **`ledger-maintenance verify`**, a tool run, still fails on the same difference with a non-zero
+    exit. It marks the extent untrusted in the same way before it returns.
+- **Compatibility** (`final-query.md` §8): no name starts with `ledger_view_`, and `table_count`
+  counts only the four ledger tables, so an older build opens, writes and scrubs the database
+  unchanged; it writes no rows and leaves `through_sequence` behind, and the next open of this
+  release fills the gap. #422 LN-7c Q: the frame cleaner's statements L and K decide on the
+  rows, and run only while the extent covers `1..=` their snapshot's head; otherwise the pass
+  decides nothing (`actingd frame_retention pass skipped=frame_refs_incomplete`;
+  [ledger-store.md](ledger-store.md), "Frame cleaner"). No configuration key of the index.
+
 ## 12 Start and shutdown order (AO-6; G16 from AO-3)
 
-1. take the owner; open the ledger; verify it (today); start the capture queue and the flush
+1. take the owner; open the ledger; verify it (#422 LN-8: the meta row, `MAX(sequence)` and the
+   newest `open_verify_tail_records` records, §15); start the capture queue and the flush
    thread at once — every later record goes through `capture`;
 2. import the dump (§9.4), `ledger.dump_imported`;
 3. read and check the index (§11.5 steps 1–3); without the enabled marker, replay once (§11.6);
@@ -830,6 +1045,10 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   `host.rs:1475`) move to step 9 (AO-6), so a new lineage's first change follows its base record.
 - Every G16 record goes through `capture`, so facts with `invalidate_on: [runtime.takeover]` are
   invalidated at once.
+- #422 LN-7: step 1's open reads the retention state by type and by index, not from the records
+  it verifies ([ledger-store.md](ledger-store.md#open-ownership-and-append-durability), the LN-7
+  paragraph); the prior-epoch closes the start writes take the previous epochs' scopes grouped
+  from the link index.
 - Reads that leave the start path (AO-6): full instance-store replay; workbench recovery; monitor
   registration scan (→ `monitor.journal`); `PolicyHost` folds by type; dispatch reconciliation and
   settlement projection; approval projection (→ the state document's projection); agent recovery;
@@ -958,7 +1177,17 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `close_timeout_ms` | 60 000 | ms | how long the Runtime's close waits for the writer's answer and its end; then `ledger_close_timeout` (#411 A51) | A51, 0.12.9 |
 | `open_timeout_ms` | 600 000 | ms | the deadline of the start's ledger open (was a fixed 120 s); `10000..=600000` (P0-LO) | P0-LO, 0.12.11 |
 | `open_warn_ratio_milli` | 500 | integer | an open whose measured time exceeds `open_timeout_ms` × it / 1000 writes `ledger_open_slow`; `100..=1000` (P0-LO) | P0-LO, 0.12.11 |
-| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
+| `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.13 |
+| `writer_reply_timeout_ms` | 10 000 | ms | how long a caller waits for one reply of the ledger writer (was a fixed 10 s); one that runs out is `writer_response_timeout`; `1000..=600000`, above `read_budget_ms` (#422 LN-TUNE) | LN-TUNE, 0.12.13 |
+| `open_verify_tail_records` | 4 096 | integer | how many of the newest records the start's ledger open reads and authenticates; older records are authenticated when they are read, by `ledger-maintenance verify` and by the background re-check; `1..=1000000` (#422 LN-8, LEAN-L §3.7) | LN-8, 0.12.14 |
+| `scrub_rows_per_second` | 625 | integer | rows a second the background scrub reads and authenticates: a chunk starts no earlier than the one before plus its rows at this rate, about 40 minutes a pass at 1.5 million records (Alice's ruling 57); `1..=100000`, settable, read after each chunk (#422 LN-9) | LN-9, 0.12.14 |
+| `scrub_chunk_rows` | 256 | integer | rows of one scrub chunk, each chunk in a read transaction of its own; `1..=4096` (#422 LN-9) | LN-9, 0.12.14 |
+| `scrub_pass_interval_ms` | 2 400 000 | ms | the least time from the start of one scrub pass to the start of the next; the first starts when the writer opens; `60000..=86400000` (#422 LN-9) | LN-9, 0.12.14 |
+| `read_check_vm_steps` | 10 000 | integer | SQLite virtual-machine steps between two looks at the clock of a read that serves a Runtime request (a view page, a subscription's replay page): its `read_budget_ms` holds inside a statement too; `100..=1000000` (#422 LN-WS) | LN-WS, 0.12.15 |
+| `history_scan_rows` | 65 536 | integer | sequences one history statement of a view page (its selection and its runs' recovery context) spans at most, so a page its budget stops has always gone on; `1024..=1048576` (#422 LN-WS) | LN-WS, 0.12.15 |
+| `frame_query_steps_per_second` | 500 000 | integer | SQLite virtual-machine steps a second the frame cleaner's statements take: a statement starts no earlier than the one before plus its steps at this rate; `1000..=100000000`, settable, read after each statement (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
+| `frame_query_chunk_frames` | 256 | integer | frames of one statement L or K of the frame cleaner; `1..=4096`, read at start (#422 LN-7c Q) | LN-7c Q, 0.12.17 |
+| `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`, `host.contained_settlement` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
 - `settable` as fixed by AO-1: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys` and
@@ -975,7 +1204,11 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `read_budget_ms` of 10 000 or more (a read stops before its caller stops waiting for it) and a
   `close_timeout_ms` not above `read_budget_ms` (the close waits longer than one read). A read
   looks at the writer's clock every 256 rows it visits; the appends that queued behind it commit
-  before the writer's next command. A close that passes its bound leaves the writer behind and
+  before the writer's next command. Since #422 LN-WS the budget holds inside a statement too: a
+  read that serves a Runtime request (a view page, a subscription's replay page) also looks at the
+  clock every `read_check_vm_steps` SQLite steps, so it ends within `read_budget_ms` and one check
+  interval even when one SQLite step scans many rows, and an append behind it waits at most that
+  plus its own flush. A close that passes its bound leaves the writer behind and
   ends with `ledger_close_timeout` (`stage` the writer's command, `elapsed_ms`, `timeout_ms`), so
   actingd ends and its watchdog starts it again.
 - P0-LO (0.12.11, `actingd-config` revision 10): the start's ledger open (§12 step 1) runs under
@@ -991,7 +1224,138 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `timeout_ms`, `event_count`) right after `ledger_opened`; it is a daemon line, not a ledger
   record. Both keys are read when the ledger opens (`false`). The open's time grows with the
   ledger; archive and rotation (AO-3, AO-5, AO-6) are to bound the open's work itself.
+- #422 LN-5 (LEAN-L, v0.12.13, `actingd-config` revision 12): the ledger's
+  history is on disk. The writer keeps no list and no index of its records: every read of the
+  history (`query`, `query_page`, `project`, `project_page`, a subscription's replay, the
+  scheduling outcome projection, the barrier's committed sequence) reads SQLite on the writer's
+  thread after its drain, one page of `history_page_rows` rows at a time, each row authenticated
+  on its own (hash, keyed tag, predecessor link, link and artifact rows), within `read_budget_ms`.
+  The selection uses the sequence key, the view indexes (type, module, source, time, severity), the
+  link indexes and, new, `ledger_artifacts(artifact_id, sequence)`, created once at the first
+  writer open of the build; conditions without a column (`diagnostic_code`, `fact_key`,
+  `maximum_severity` beside the severity column, the Lab view's relation) are checked on the
+  decoded rows. The checks an append makes look up the store's indexes and the records its batch
+  has staged: the event id (`event_id` unique index), a task fact's run (`run_id` link), the
+  scheduled-settlement continuation's chain (the decision's dispatch and execution records by
+  their payload's decision, then `run_id`, `lease_id` and `instance_id` links), retention's sources
+  by position and its Lab relation from the view and link indexes. A refused batch drops its
+  staged records with nothing to rebuild; every refusal of a batch write ends the writer (§9.2).
+  The open still read every record until LN-8 and kept only the retention state.
+  `history_page_rows` is read when the ledger opens (`false`).
+- #422 LN-6 (LEAN-L): the Runtime's view pages and artifact resolution read SQLite as well; the
+  writer keeps no verified prefix of the history (its second copy of every record's metadata,
+  indexes and retention state). A view page authenticates the meta row against the writer's head,
+  selects its rows through the indexes and the stored view's predicate (the Lab view through the
+  Lab relations as of the page's snapshot), reads each row it uses on its own, the related-run
+  recovery context by the run's link, and stops within `read_budget_ms` with an incomplete page;
+  an artifact's record is one authenticated point read and its eviction proof comes from the
+  writer's proof set. No key is added.
+- #422 LN-7 (LEAN-L): retention keeps nothing that grows with the history. Resident are the
+  eviction proof set, the owner changes, ends, imports and closes, the scopes a start may still
+  close, and the facts of the frames present in the live frame store with what their classes read;
+  the open reads them by type and by index, each sweep start of the frame cleaner drops the rest,
+  and a record naming a run or a frame the writer no longer holds loads it again by index before
+  it is checked (ledger-store.md, "Open, ownership and append durability" and "Frame cleaner").
+  No key is added.
+- #422 LN-TUNE (the release after v0.12.12, `actingd-config` revision 12):
+  `writer_reply_timeout_ms` is the wait of every caller of the writer, its replay pages and the
+  confirmations of deferred appends included; it was the ledger's fixed 10 s. It is read when the
+  ledger opens (`false`); the section's check refuses a `read_budget_ms` not below it, as A51's
+  check did against the fixed 10 s. A paged history read with a limit asks the store for no more
+  rows than it can still return (at most `history_page_rows`), so each row is read and
+  authenticated once: the monitor registry's replay reads 128 events a page, and each page read
+  256 rows before.
+- #422 LN-8 (LEAN-L §3.2 step 2, §6; the release after v0.12.13, `actingd-config` revision 13):
+  the start's ledger open reads the format and marker, the keyed meta row, `MAX(sequence)` and the
+  newest `open_verify_tail_records` records, each authenticated on its own, chained to its
+  predecessor's stored hash and ending at the meta row's head hash; then the views and indexes a
+  database lacks and the retention state by type and by index (LN-7). Damage in that tail fails
+  the open with the code a complete read gives for it; an older record is authenticated when a
+  reader reads it, by `ledger-maintenance verify` (every row, the migrated prefix and the
+  whole-file `quick_check(1)`) and by the background re-check of LN-9. The Runtime's start no
+  longer runs the whole-file `quick_check(1)` when it opens the state database
+  ([runtime-database.md](runtime-database.md)). `ledger_opened` reports the open's phases as the
+  values `meta_ms`, `tail_ms`, `index_ms` and `import_ms` and the tail records it authenticated as
+  `event_count`; `sql_read_ms`, `verify_ms` and `restore_ms` remain the phases of
+  `ledger-maintenance verify`'s complete read and are 0 for the start, and `ledger_open_slow`'s
+  `elapsed_ms` is the sum of all of them. `open_verify_tail_records` is read when the ledger
+  opens (`false`).
+- #422 LN-8d (the v0.12.14 start on the production ledger, 10-26): `open_timeout_ms` bounds the
+  open's retention reads as well, checked before each page (`ledger_read_budget_exceeded`), and
+  `history_page_rows` is the rows of their pages too. A link-set page picks its rows in each link
+  dimension's own index, ordered and limited there, so its work does not grow with the linked
+  records after it (ledger-store.md, "Open, ownership and append durability"). No key is added.
+- #422 LN-9 (LEAN-L §6, Alice's ruling 57: damage in old rows that nobody reads is found by a
+  background re-check of about 40 minutes a pass; the release after v0.12.13, `actingd-config`
+  revision 13): the Runtime's writer (the one opened with a failure plan) runs a paced background
+  scrub of the whole chain on a thread of its own. It starts when the writer opens and stops first
+  at the close, within one chunk: the close raises its stop and interrupts its statement in
+  progress. Each pass opens a read-only connection of its own and never takes the shared
+  connection the writer commits on, so the writer's flush does not wait for it. In one read
+  transaction it authenticates the keyed meta row and checks `MAX(sequence)` against the head; it
+  then reads the rows `1..=head` in chunks of `scrub_chunk_rows`, each chunk in a read transaction
+  of its own, authenticates every row on its own as a history read does (decode, stored sequence,
+  hash, keyed tag, predecessor link chained across chunks, link and artifact rows; event ids unique
+  within a chunk, across chunks by the `event_id` unique index), checks that the last row's hash is
+  the head hash, and ends with the whole-file `PRAGMA quick_check(1)` on its connection. A chunk
+  starts no earlier than the one before plus its rows at `scrub_rows_per_second`, whose value in
+  effect it reads after each chunk (an instruction changes it); a pass starts at most once every
+  `scrub_pass_interval_ms`, the first when the writer opens. A finding is the failure the full
+  verification (`ledger-maintenance verify`, and the start's open before LN-8) gives for the same
+  damage, with its code and operation (`ledger_record_mismatch`, `ledger_index_mismatch`,
+  `sequence_discontinuity`, `ledger_meta_mismatch`, `corrupt_ledger_record`, ...;
+  `state_database_corrupt` from `quick_check`, of the location `ledger_scrub`) and `phase=scrub` in
+  its detail; every other failure of the scrub (its connection, a statement, a panic) is reported
+  the same way (#422 LN-7c R: except a finding about the derived frame index, which is non-fatal,
+  §11.7). The scrub stops at its finding, and the host's health check
+  (`GlobalLedger::scrub_finding`) latches it as a Global failure
+  ([runtime-outcomes.md](runtime-outcomes.md), "Failure scope"), so the Runtime stops with the code
+  a start gave for the same damage before LN-8. The scrub keeps nothing that grows with the
+  ledger, and writes no record and no daemon line; the pass-end line `ledger_scrub_pass` of the
+  LEAN-L model §3.8 is not added. At 1.5 million records a pass reads for about 2 400 s at the
+  default rate, then runs `quick_check` once over the file.
+- #422 LN-WS (the production stop of 2026-10-26 19:12:43; v0.12.15,
+  `actingd-config` revision 14): no read can make a write fail. A view page with a time window and
+  no instance ran on the writer's thread as one SQLite step that scanned the history from sequence
+  1 (about 1.58 million rows, 15 to 18 s); A51's budget looked at the clock only between returned
+  rows, so nothing stopped it, and an append behind it waited out `writer_reply_timeout_ms`.
+  - The budget holds inside a statement. While the writer handles a `ProjectViewPage` or a
+    `ReplayPage` command, and only then, the read's statements run under a progress handler on the
+    shared connection that looks at the command's clock every `read_check_vm_steps` steps;
+    installed while the read holds the connection and removed before it lets it go (before the
+    next flush), so no write runs under it. Once the budget is spent the handler interrupts the
+    statement in progress, which ends only that read: a page answers incomplete (`read_budget`) at
+    the end of its last whole statement, a replay page `ledger_read_budget_exceeded`, and a page
+    whose head check or Lab relations it interrupts `ledger_read_budget_exceeded` too (request
+    class). An `SQLITE_INTERRUPT` the handler did not cause stays a SQL failure. The Runtime's own
+    reads keep A51's bound between rows: the policy driver ends on any cycle error, and those
+    reads are index-bounded.
+  - A view page's history statements span at most `history_scan_rows` sequences each
+    (`e.sequence>c AND e.sequence<=min(c+span, through)`, which also bounds a link index range
+    through its join), its selection's and its runs' recovery context's alike. A page's first
+    statement spans one sequence and runs whatever the budget; each later span is twice the one
+    before, up to `history_scan_rows`, and the page looks at its budget before each. A page its
+    budget stops therefore answers a cursor past its start, and a client paging on always
+    advances. The rows and their order are those of one unbounded statement. A run's recovery
+    context that the budget cuts short is limited (`context_limit`, state `unknown`).
+  - A first page with `from_timestamp_unix_ms` starts at the first record at or after it, minus
+    one: `MIN(sequence)` through the time index alone (`ledger_view_index_time_v1`), exact
+    whatever the records' order of times; its work follows the records after the window's start.
+    When the handler interrupts that lookup, the page starts where it would have. Offline
+    readers keep their path.
+  - Both keys are read when the ledger opens (`false`). No code is added.
+- #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §1.5, §5; v0.12.17, `actingd-config` revision
+  16): the frame cleaner decides by ledger query on a read-only connection of its own
+  ([ledger-store.md](ledger-store.md), "Frame cleaner"). `frame_query_steps_per_second` paces
+  its statements by the SQLite steps each took, not by rows; it is settable and read after each
+  statement. `frame_query_chunk_frames` is the frames of one statement, read at start (not
+  settable). The query's stop is watched every `read_check_vm_steps` steps. The open reads no
+  frame and the writer keeps no frame facts (ledger-store.md, the LN-7c Q paragraph), so LN-7's
+  resident frame facts above are gone. The top-level key `frame_retention_evidence_max_age_days`
+  of the same revision is the evidence-frame rule's age ([runtime-config.md](runtime-config.md)).
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
+  `host.contained_settlement` joins it in #411 A65 (0.12.12; see
+  [runtime-fact-store.md](runtime-fact-store.md));
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
   (#387) and `config.catalog` (MCP-9a) fall under the existing `config.` prefix.
 - These defaults are a starting point; AO-2's first round fills them from a real-machine copy.

@@ -9,7 +9,7 @@ use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_ma
 use actingcommand_runtime_host::{
     CatalogGeneration, CatalogPreview, CatalogPreviewRequest, ExecutionBackendProvider,
     ExecutionBackendRegistry, ResolvedAdbEndpoint, ResolvedInstanceEndpoint, RuntimeHostConfig,
-    inspect_standard_packs, preview_policy_catalog_transition,
+    inspect_standard_packs, preview_policy_catalog_transition, preview_standard_pack_schedule,
 };
 use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider, VisionListingCode};
 use config::InstanceBindingKey;
@@ -272,18 +272,17 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     // the bound packages do not declare, is a `policy_remedy_declaration_unusable` note, a row's
     // also a developer line naming it; each package the table cannot read is the developer line
     // the running Runtime writes for it. The configuration stays valid. Nothing is written.
-    if let Some(policy) = policy.as_ref() {
+    if let Some(policy) = policy.as_ref()
+        && let Some(catalog) = policy.catalog.as_ref()
+    {
         let lists = remedy_choice_lists(&checked.manifest).map_err(|failure| {
             staged(
                 ActingdError::refused(failure.failure_code(), failure.outcome()),
                 ActingdLocation::ConfigAssemble,
             )
         })?;
-        let remedies = actingcommand_runtime_host::remedy_declaration_notes(
-            &checked.host,
-            &policy.catalog,
-            &lists,
-        );
+        let remedies =
+            actingcommand_runtime_host::remedy_declaration_notes(&checked.host, catalog, &lists);
         for line in &remedies.unreadable {
             write_stderr(&format!("{line}\n"));
         }
@@ -298,7 +297,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     let previewing = std::time::Instant::now();
     let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {
         state_root: checked.host.state_root(),
-        catalog: policy.as_ref().map(|policy| &policy.catalog),
+        catalog: policy.as_ref().and_then(|policy| policy.catalog.as_ref()),
         transition: policy
             .as_ref()
             .and_then(|policy| policy.catalog_transition.as_ref()),
@@ -315,6 +314,48 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         )
     })?;
     report["policy_plan"] = policy_plan_report(&preview);
+    // ROUT-L RL-1b (frozen model v1.0 §6.4 step 1, §7.2): the composition the scheduler
+    // workbench would make for the configured instances, in either mode; each problem is a note.
+    if policy.is_some() {
+        let instances = checked
+            .host
+            .policy_inputs()
+            .map(|inputs| {
+                inputs
+                    .facts()
+                    .instances
+                    .iter()
+                    .map(|instance| {
+                        (
+                            instance.instance_id.clone(),
+                            instance.game_id.clone(),
+                            instance.server_id.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let subsystems = checked
+            .manifest
+            .subsystems
+            .iter()
+            .filter(|subsystem| subsystem.enabled)
+            .map(|subsystem| subsystem.name.clone())
+            .collect::<BTreeSet<_>>();
+        let schedule = preview_standard_pack_schedule(
+            checked.host.standard_packs_root(),
+            &instances,
+            Some(&subsystems),
+            checked.host.standard_pack_schedule(),
+        );
+        notes.extend(schedule.problems.iter().cloned());
+        report["standard_pack_schedule"] = serde_json::to_value(&schedule).map_err(|_| {
+            staged(
+                ActingdError::process(ActingdCode::CheckConfigReportEncodeFailed),
+                ActingdLocation::PolicyState,
+            )
+        })?;
+    }
     if !preview.state_root_present()
         && let Some(not_checked) = report["not_checked"].as_array_mut()
     {
@@ -663,14 +704,23 @@ fn summarize(
     });
     // Workflow #373 NAV-6 (M-373 §7): the standard-pack root as startup reads it (root files
     // only, no package admitted). A broken game root is that game's problem and one note, its
-    // problem's outcome; the configuration itself is not refused.
-    let standard_packs = inspect_standard_packs(checked.host.standard_packs_root());
+    // problem's outcome; the configuration itself is not refused. Workflow #357 DB-1 (register
+    // §1.65 TB3): each sound root lists its tables; a refused table and an expired column are
+    // notes too, judged on the system clock.
+    let now_unix_ms = system_unix_ms().map_err(|_| {
+        registered(
+            SharedCode::SystemClockInvalid,
+            ActingdLocation::ConfigAssemble,
+        )
+    })?;
+    let standard_packs = inspect_standard_packs(checked.host.standard_packs_root(), now_unix_ms);
     notes.extend(standard_packs.root_problem.iter().cloned());
     notes.extend(
         standard_packs
             .problems()
             .map(|(_, problem)| problem.clone()),
     );
+    notes.extend(standard_packs.table_notes());
     report["standard_packs"] = serde_json::to_value(&standard_packs).map_err(|_| {
         registered(
             ActingdCode::CheckConfigReportEncodeFailed,

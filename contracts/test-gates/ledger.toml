@@ -1,8 +1,9 @@
 # Gate map, ledger fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
-# Keys are the ids of rd-1009/tests/inventory-ledger.md. One `[[gate]]` row per key with exactly
-# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
-# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
-# appended to; a row leaves only when its feature retires.
+# Each `[[gate]]` row has `coverage` ("Y", or "P" = tested only on the cfg(test) Segment
+# backend), `tests` (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when
+# none). A new row carries no `key`: its tests name it (Workflow #420 S6). Rows from before #420
+# keep their `key`, an id of rd-1009/tests/inventory-ledger.md, as history. Rows are only appended
+# to; a row leaves only when its feature retires.
 
 # Single writer
 [[gate]]
@@ -606,3 +607,156 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_411_bt_lr::bt_lr_t2_the_writer_refuses_a_fact_out_of_its_runs_order",
 ]
 incident = ["#411 BT-LR"]
+
+# LN-5 (#422, LEAN-L §3.3, §3.4, §5 LN-5): the history is on disk; the writer keeps no list or index of its records. On a SQLite store with two-row history pages, each `EventQuery` condition selects exactly what `contracts/global-ledger-query.md` names (query, query pages, a subscription's replay, again after the writer is opened anew); a history read its budget stops is refused with `ledger_read_budget_exceeded`, not fatally, and the same history read page by page is whole; a duplicate event id is refused against the store and against the batch staged with it; run rules see the records staged in the same batch; the scheduled-settlement continuation reads its chain from the store after the writer is opened anew, settles once, and refuses a chain without its lease grant without stopping the writer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t1_each_query_condition_selects_what_the_contract_names",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t2_a_history_read_over_its_budget_is_refused_and_its_pages_read_it_whole",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t3_a_duplicate_event_id_is_refused_against_the_store_and_the_batch",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t4_run_rules_see_the_records_staged_in_the_same_batch",
+    "actingcommand-ledger::lib::global::tests::gate_ln5::ln5_t5_the_settlement_continuation_reads_its_chain_from_the_store",
+]
+incident = ["#422 LN-5"]
+
+# LN-DIAG (#422, LEAN-L §3.2 step 5 X4, §6; Alice 10-24 #422 ruling 57; contracts/ledger-store.md "Release source references"): the Release baseline read selects the `state.migrated` records through the event-type index and authenticates each on its own, with the newest row at the authenticated head; it finds the one boundary with its original locator and absence without one, refuses two boundaries (`release_baseline_source_conflict`), a damaged boundary (`ledger_record_mismatch`) and a history short of its head (`ledger_meta_mismatch`), and reads no record it does not select, so the start's `runtime_state` step and the boundary's joint append no longer read the whole history
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::tests::ln_diag_the_release_baseline_read_reads_only_the_records_it_selects",
+]
+incident = ["#422 LN-DIAG"]
+
+# LN-6 (#422, LEAN-L §3.3, §5 LN-6): the Runtime's view pages and artifact resolution read the store; the writer keeps no verified prefix of the history. On a SQLite store with two-row history pages, each of the six views returns, page by page, the rows its stored view (`ledger_view_*_v1`) selects at the page's snapshot, each row naming the views whose stored view selects it and each page the in-memory projection's (again after the writer is opened anew); the Lab view relates a record through an anchor's request or correlation, directly or through its run, from the anchor's position on; `resolve_artifact` answers an artifact without an eviction proof and one with its intent and outcome by one authenticated point read and refuses a position the ledger does not hold; a view page its work budget stops answers incomplete and its cursors read the whole selection
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t1_each_view_returns_what_its_stored_view_selects",
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t2_the_lab_view_relates_records_through_the_anchors_links_from_its_position",
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t3_resolve_artifact_answers_with_and_without_proofs",
+    "actingcommand-ledger::lib::global::tests::gate_ln6::ln6_t4_a_view_page_over_its_budget_answers_incomplete_and_its_cursors_read_it_whole",
+]
+incident = ["#422 LN-6"]
+
+# LN-TUNE (#422, brief rd-1026 item 2): a paged history read with a limit asks the store for no more rows than it can still return, so the monitor registry's replay (pages of half a history page) reads and authenticates each Runtime record once, and its pages hold what one unpaged read of the same query holds
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln_tune::ln_tune_every_monitor_row_is_authenticated_once_per_read",
+]
+incident = ["#422 LN-TUNE"]
+
+# LN-8 (#422, LEAN-L §3.2 step 2, §6; brief rd-1026/brief-ln8.md "Tests"): the formal writer open reads the keyed meta row, `MAX(sequence)` and the newest `ledger_observer.open_verify_tail_records` records, each authenticated on its own; damage in that tail (a row's tag, the head's record, a row's link, the hash the oldest tail row chains to, a missing head row) fails the open with the code and operation `ledger-maintenance verify` gives for it; damage in an older row is not read at open (the open authenticates exactly its tail and opens), and is refused by a read of that row, which ends the writer, and by `ledger-maintenance verify`
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln8::ln8_damage_in_the_tail_is_refused_at_open_as_verify_refuses_it",
+    "actingcommand-ledger::lib::global::tests::gate_ln8::ln8_damage_in_an_old_row_is_not_read_at_open_and_is_found_by_its_read_and_by_verify",
+]
+incident = ["#422 LN-8"]
+
+# LN-9 (#422, LEAN-L row LN-9, §6; Alice's ruling 57): the paced background scrub of the Runtime's writer, on a stepping clock. Damage in an old row (its bytes, its link row, a missing row) is found within one pass with the code and operation the full verification gives for the same damage, and the finding is fatal; a chunk starts no earlier than the one before plus its rows at the rate in effect, a new rate takes effect at the next chunk, a rate out of range is refused and a pass starts once per pass interval; a whole pass runs while the writer's shared connection is held, and the writer commits while the scrub holds its chunk's snapshot
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln9::ln9_a_damage_in_an_old_row_is_found_within_one_pass_with_the_full_verification_code",
+    "actingcommand-ledger::lib::global::tests::gate_ln9::ln9_b_the_scrub_keeps_its_rate_and_takes_a_new_rate_at_its_next_chunk",
+    "actingcommand-ledger::lib::global::tests::gate_ln9::ln9_c_the_writer_does_not_wait_for_the_scrub",
+]
+incident = ["#422 LN-9"]
+
+# LN-8d (#422; brief rd-1026/brief-open-stall.md; the v0.12.14 start on the production ledger, 10-26): a history page of a link set with no other row condition picks its sequences in each dimension's own index, ordered and limited there, so its plan sorts nothing at its top and its SQLite work does not follow the linked records after the page (v0.12.14 sorted every linked record after the page, n²/(2·rows) visits); the writer open reads a link set's dimensions in one read, so its SQLite work per record read does not grow with a history whose live frames span it; the open's deadline (`ledger_observer.open_timeout_ms`) stops its retention read with `ledger_read_budget_exceeded`
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_ln8d::ln8d_a_link_set_page_reads_its_page_whatever_follows_it",
+    "actingcommand-ledger::lib::global::tests::gate_ln8d::ln8d_the_opens_work_per_record_read_does_not_grow_with_the_history_of_its_live_frames",
+    "actingcommand-ledger::lib::global::tests::gate_ln8d::ln8d_the_opens_deadline_stops_its_retention_read",
+]
+incident = ["#422 LN-8d"]
+
+# LN-WS (#422; brief rd-1026/brief-ln-ws.md; root cause rd-1026/writer-stall/root-cause.md §5; the production stop of 2026-10-26 19:12:43): no read can make a write fail. On a production-shaped synthetic ledger (LN-8d's frame shape, four instances with one in seven runs of twenty, hours of times with one inverted record, the window at 90 to 95 % of the history) the costliest history statement of each incident read form (no instance with `changes`, `events`, none and `errors`; one instance; the run listing; one run) on 12 000 records is at most 1.5 times that on 3 000 (`ledger_observer.history_scan_rows`); a no-instance window read whose budget runs out inside a statement answers incomplete with a cursor past its start, and at most one look at the clock runs after the budget point (`ledger_observer.read_check_vm_steps`); an append captured behind an over-budget read commits once the read answers at its budget, `Ok`, its observation naming the read; paging the window reads on a small budget returns the unbounded read's rows in order, each cursor past the one before; a first window page starts its first history statement at the window's first record (by the time index, exact with the inversion) and reads the unbounded rows; every bounded read on a fake writer clock, a 600 s reply limit and no sleep
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t1_no_history_statement_of_an_incident_read_grows_with_the_history",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t2_a_window_read_stops_inside_a_statement_at_its_budget_past_its_start",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append_captured_behind_an_over_budget_read_commits_once_it_answers",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t4_paging_window_reads_on_a_small_budget_returns_the_unbounded_rows_in_order",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t5_a_window_page_starts_at_the_windows_first_record_and_reads_the_unbounded_rows",
+]
+incident = ["#422 LN-WS"]
+
+# LN-7c F6 (#422; rd-1026/ln7c/final-query.md §1.1, §1.3, §7 F6; ruling 70): capture frames by ingestion time, the plain partial index `ledger_artifacts_created` (never a `ledger_view_*` object, so an older build opens, writes and scrubs a root that has it): a new root has it from `schema.sql`, a root without it gets it at its first writer open, over every capture frame, and a second open leaves it as it is; the plan check for ledger tests holds a statement's plan on an empty database to the §1.3 rule and rejects a statement doctored to read the whole history (a scan of a ledger table, its alias or index, an automatic index on one, the type index without a sequence bound, a history-wide index)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_a_root_without_the_frame_time_index_gets_it_at_its_first_writer_open",
+    "actingcommand-ledger::lib::global::sqlite::gate_ln7c_f6::ln7c_f6_the_plan_check_rejects_a_doctored_statement_that_reads_the_whole_history",
+]
+incident = ["#422 LN-7c F6"]
+
+# LN-7c R (#422; rd-1026/ln7c/final-query.md §7 row R, §3; Alice's ruling 70): the frame index `ledger_frame_refs` of the pointers a record carries only in its payload. Each pointer kind (summary frame, summary pin, resource reading, published frame, published artifact, before-frame, preserved frame, frame and run read confirmations from a confirmer's origin) gives its row in the record's batch transaction and a confirmation from another origin none; a summary with N frames gives N rows; a backfilled synthetic root holds the rows the synthetic appender writes incrementally; records appended by a writer that skips the rows are filled at the next open and the extent moves to the head; a root without the extent is fully backfilled, a stray row gone; a doctored row is a non-fatal scrub finding `ledger_index_mismatch` of `verify_ledger_frame_refs`: the Runtime keeps running, the extent is marked untrusted and the next open rebuilds the index with matching rows, while `ledger-maintenance verify` still refuses it and marks the extent; the table never fails an open or an append: an extent past the head is rebuilt with one warning on `ledger_opened`, a batch the extent does not end before commits without its rows and the next open fills the gap with one warning, a fill that meets a damaged record stops short of it with one warning while the open succeeds, and the next open tries again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r1_each_pointer_kind_gives_its_rows_in_the_records_transaction",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r2_a_summary_with_n_frames_gives_n_rows",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r3_a_backfilled_synthetic_root_holds_the_rows_written_incrementally",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r4_records_appended_without_rows_are_filled_at_reopen_and_the_extent_moves",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r5_a_root_without_the_extent_is_fully_backfilled",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r6_a_doctored_row_is_a_non_fatal_scrub_finding_and_the_next_open_rebuilds_the_index",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r7_an_extent_past_the_head_is_rebuilt_with_its_warning",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r8_a_batch_the_extent_does_not_end_before_commits_and_is_filled_at_reopen",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_r::ln7c_r9_a_fill_that_meets_a_damaged_record_stops_short_of_it_and_the_open_succeeds",
+]
+incident = ["#422 LN-7c R"]
+
+# LN-7c O (#422; rd-1026/ln7c/final-query.md §7 row O, §2): the writer open reads the owner records of the two latest owner epochs: those after the start before the latest one by the type index, read back in forward chunks to the first record of that owner, and of each older owner a start may still close, read back the same way; the owner state it keeps (the retained owners, the owners a next start closes, and of each retained owner its epochs, end, reopening, import, closes, their writer, quiescences, scope sources and releases) equals the read of every owner record on roots with many starts, a takeover, a dump import of the previous owner, a reopened owner and a prior-epoch close; a retained owner in no start's epoch makes the open read every owner record and say why (`owner_in_no_start_epoch`); the owner rows read stay in the two latest epochs and are the same on histories of 3 000, 12 000 and 30 000 records (`LedgerReadCounts`); fix round 1 (review `rd-1026/ln7c/review-o.md`): on a production-shaped root (live frames in four epochs, lease releases and run terminals, a takeover, a dump import of the previous owner) the bounded open's frame view and kept moves, at the open and at the cleaner's sweep start after the start's records, and the records a real startup reconcile writes equal the read of every owner record's; a dump present at the open makes it read every owner record and say why (`dump_present`), and so do the previous owner in no start's epoch and an epoch with no owner record after its start (`owner_in_no_start_epoch`)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o1_the_open_keeps_the_owner_state_of_the_read_of_every_owner_record",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o2_the_owner_rows_read_at_open_stay_in_the_two_latest_epochs_whatever_the_history",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_o::ln7c_o3_the_bounded_open_keeps_the_frame_view_and_the_startup_closes_of_the_full_read",
+]
+incident = ["#422 LN-7c O"]
+
+# DIAG-RUN (#419; brief rd-1026/brief-diag-run.md; root cause rd-1026/stop2/root-cause.md §5 R1; the production stop of 2026-10-26 23:23:04): a history read with an equality on a per-run link (every link but the instance) is driven by that run's link index, its other indexable terms written with a unary `+`. On the synthetic ledger in production's shape (three instances, runs of 24 frames with every second frame stored), the statement of each per-run read form (the task diagnostic's `artifact.verified` + request + task + run; the error frame's `capture.completed` + run; one frame's artifact; the lease grant of `linked_policy_run_events`; event types with a request; an artifact of one instance's run) has a per-run link index as its outer loop, never the event type, time, severity, origin or instance index, and passes the plan check, while forms A and C of stop 1 keep today's statement; each form's first page for a short run at the head takes at most 1.5 times the SQLite work on 12 000 records that it takes on 3 000; paging each form from 0 to the end in pages of 256 and of 2 returns the selected records in ledger order for a short run at the head, a run with more than 256 `artifact.verified` records interleaved with two other runs, and a run with a record stamped before the whole history
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index",
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t2_a_run_reads_work_does_not_grow_with_the_history",
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::diag_run_t3_paging_a_per_run_read_returns_the_selected_records_in_ledger_order",
+]
+incident = ["#419 DIAG-RUN"]
+
+# LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1, §2, §4; Alice's ruling 70; brief rd-1026/brief-ln7c-q.md): the frame cleaner's statements W, L and K on an empty database pass the §1.3 plan rule and equal their golden plans (T-plan); on the case fixture (A6 with F5, F6 and duplicates) and on a production-shaped history each live frame's action equals the full view's class with E1's due time (T-eq; the 1M-record run is on demand), with a Lab-reason pin that keeps its frame Lab by L's pin term alone and on gate L-2's error-point rows (fix round 1, review F3); a kept frame goes once confirmed (by its frame or its run, at or after its capture) or at frame_retention_evidence_max_age_days, never earlier and never on a read through ac_run_evidence (T-evidence); the writer open reads no frame row and does not list the frame store (T-open); a raised stop interrupts the statement in progress (T-pace)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::frame_query::tests::ln7c_q_t_plan_w_l_and_k_pass_the_rule_and_equal_their_golden_plans",
+    "actingcommand-ledger::lib::global::sqlite::frame_query::tests::ln7c_q_t_plan_the_owner_point_statement_passes_the_rule",
+    "actingcommand-ledger::lib::global::tests::gate_ln7::ln7c_q_teq_the_query_decides_each_live_frame_of_the_case_fixture_as_the_full_view",
+    "actingcommand-ledger::lib::global::tests::gate_ln7::ln7c_q_teq_a_lab_reason_pin_keeps_its_frame_lab_by_statement_ls_pin_term",
+    "actingcommand-ledger::lib::global::tests::gate_l2::ln7c_q_teq_statement_l_keeps_the_frames_of_the_same_error_points_as_the_full_view",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_teq_the_query_decides_the_live_frames_of_a_production_shaped_history_as_the_full_view",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_t_evidence_a_kept_frame_goes_once_confirmed_or_at_its_maximum_age_only",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_t_open_the_writer_open_reads_no_frame_and_does_not_list_the_frame_store",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_t_pace_a_raised_stop_interrupts_the_statement_in_progress",
+]
+incident = ["#422 LN-7c Q"]
+
+# LN-7c V (#422; rd-1026/ln7c/final-query.md §7 row V, §6; briefs rd-1026/brief-ln7c-v.md and brief-ln7c-v-fix1.md): ledger-maintenance verify --frame-query (opt-in) runs the frame cleaner's statements W, L and K against the full view over the same root, listings and clock. On T-eq's case fixture a matching root reports no difference (every live frame and a kept frame of the ledger compared, an unknown kept file left out, E4 accounted), on the ledger's call and through RuntimeHost::maintain_ledger with the flag; a root whose F5 row was removed consistently (a valid root with a wrong row: verify's index row check passes) is reported, ledger_index_mismatch of verify_frame_query with the frame's artifact_id and field /class; without the flag, verify of the matching root answers the complete read's receipt alone and gives no count for the stderr line; the flag is never ignored (fix round 1b): with an operation other than verify it is refused before the root is touched, and on a Segment root after the root's classification, both maintenance_arguments_invalid, nothing written but the owner journal's records of a pass that acquired it
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_a_matching_root_reports_no_difference",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_a_consistently_removed_frame_index_row_is_reported",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_without_the_flag_verify_answers_the_complete_read_alone",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_frame_query_with_another_operation_is_refused_before_the_root_is_touched",
+    "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_frame_query_on_a_non_formal_root_is_refused",
+]
+incident = ["#422 LN-7c V"]

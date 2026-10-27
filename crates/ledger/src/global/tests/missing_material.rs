@@ -121,6 +121,7 @@ fn maintain(
             target,
             artifact_root: None,
             limits: MaintenanceLimits::default(),
+            frame_query: false,
         },
     )
 }
@@ -636,10 +637,15 @@ fn a_dedup_window_makes_the_interior_frame_a_duplicate_in_the_frame_view() {
         dedup_lab: false,
     };
     let captured = |index: usize| frames[index].0.reference.created_at_unix_ms;
+    // #422 LN-7c Q: the writer keeps no frame view; the full view is read beside it.
     let classes = |now: u64| {
-        let view = ledger
-            .frame_retention_view(now, switches)
-            .expect("frame view");
+        let view = crate::GlobalLedger::open_evidence(
+            crate::GlobalLedgerEvidenceConfig::new(root.path()).sqlite_material_not_read(),
+            |_| None,
+        )
+        .expect("the whole opening beside the writer")
+        .frame_retention_view(now, switches)
+        .expect("frame view");
         frames
             .iter()
             .map(|(capture, _)| {
@@ -666,7 +672,7 @@ fn a_dedup_window_makes_the_interior_frame_a_duplicate_in_the_frame_view() {
             (FrameRetentionClass::Default, Some(captured(2) + DAY_MS)),
         ]
     );
-    // The cached classes at the same head give the same view again.
+    // The classes at the same head give the same view again.
     assert_eq!(classes(captured(2) + 2 * DAY_MS), settled);
 }
 

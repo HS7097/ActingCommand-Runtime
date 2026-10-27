@@ -8,20 +8,24 @@
 //! material at all; only their timing is kept here.
 
 use super::RetentionIndex;
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::StoredEventRecord;
 use crate::global::GlobalLedgerResult;
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{ProjectedArtifactReference, VerifiedArtifactReference};
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// Timings of one complete formal opening (never persisted). The startup writer open prints
-/// them on one stdout line, and a failed `ledger-maintenance verify` reports them in its
-/// failure cause. A phase that did not run stays 0. Workflow #375 R5a: a formal opening
-/// reads no artifact material, so `artifacts`, `artifact_bytes`, `workers` and
-/// `material_ms` are always 0; they stay in the line so that its format is unchanged.
+/// Timings of one formal opening (never persisted). The startup writer open reports them as
+/// `ledger_opened`, and a failed `ledger-maintenance verify` reports them in its failure cause.
+/// A phase that did not run stays 0. Workflow #375 R5a: a formal opening reads no artifact
+/// material, so `artifacts`, `artifact_bytes`, `workers` and `material_ms` are always 0; they
+/// stay in the line so that its format is unchanged. LN-8 (#422, LEAN-L §3.2 step 2): the writer
+/// open runs the phases `meta_ms`, `tail_ms`, `index_ms` and `import_ms`; the complete read of
+/// `ledger-maintenance verify` runs `sql_read_ms`, `verify_ms` and `restore_ms`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LedgerOpenTiming {
-    /// Records authenticated and restored.
+    /// Records authenticated (and, for a complete read, restored): the writer open's tail.
     pub events: u64,
     /// Distinct artifact references verified: 0, since material is never read.
     pub artifacts: u64,
@@ -35,6 +39,90 @@ pub struct LedgerOpenTiming {
     /// Material verification: 0.
     pub material_ms: u64,
     pub restore_ms: u64,
+    /// LN-8: the format, the marker, the keyed meta row and `MAX(sequence)`.
+    pub meta_ms: u64,
+    /// LN-8: the newest `ledger_observer.open_verify_tail_records` rows read and authenticated.
+    pub tail_ms: u64,
+    /// LN-8: the views and indexes a database lacks created, the retention state read by type
+    /// and by index.
+    pub index_ms: u64,
+    /// LN-8: a dump an earlier run left imported, the previous epoch's tail gap and the stale
+    /// owner's recovery record written.
+    pub import_ms: u64,
+    /// #422 LN-7c O: why the writer open read every owner record of the history instead of those
+    /// of the two latest owner epochs; `None` when its owner read was bounded (or the history
+    /// has fewer than two starts). Not part of the line above.
+    pub owner_read_full: Option<OwnerReadFull>,
+    /// #422 LN-7c R: what the open found of the frame index `ledger_frame_refs` when it had to
+    /// rebuild it, fill a gap of records appended without rows, or stop its fill; `None` when the
+    /// index was complete or was built for the first time. It never fails the open.
+    pub frame_refs: Option<LedgerFrameRefsNote>,
+}
+
+/// #422 LN-7c R (`contracts/ledger-observer.md` §11.7): one warning of the writer open about the
+/// derived frame index, which the start reports as a `note` link of `ledger_opened`
+/// ([`Self::outcome`]: `ledger_index_mismatch` of `build_ledger_frame_refs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LedgerFrameRefsNote {
+    /// What was found: `verify_ledger_frame_refs`, the extent was untrusted (missing on an
+    /// existing table, past the head or malformed), so the rows and the extent were removed and
+    /// the index rebuilt; `write_ledger_frame_refs`, records were appended without their rows
+    /// (an older build, or a batch the extent did not end before), so the gap was filled;
+    /// `build_ledger_frame_refs`, the fill stopped and the extent does not cover the history.
+    pub stage: LedgerLocation,
+    /// The untrusted extent's end, the end of the extent before the gap, or the record the fill
+    /// stopped at.
+    pub sequence: Option<u64>,
+    /// The failure that stopped the fill: its code and operation.
+    pub cause: Option<(&'static str, &'static str)>,
+}
+
+impl LedgerFrameRefsNote {
+    /// The note's outcome: `ledger_index_mismatch` with `operation`, `stage` and
+    /// `ledger_sequence`, caused by the failure that stopped the fill.
+    pub fn outcome(&self) -> Outcome {
+        let mut outcome = Outcome::new(LedgerCode::LedgerIndexMismatch)
+            .operation(LedgerLocation::BuildLedgerFrameRefs)
+            .stage(self.stage);
+        if let Some(sequence) = self.sequence {
+            outcome = outcome.ledger_sequence(sequence);
+        }
+        if let Some((code, operation)) = self.cause
+            && let Some(code) = Code::relayed(code)
+        {
+            let mut cause = Outcome::new(code);
+            if let Some(operation) = Location::relayed(operation) {
+                cause = cause.operation(operation);
+            }
+            outcome = outcome.caused_by(cause);
+        }
+        outcome
+    }
+}
+
+/// #422 LN-7c O (`contracts/ledger-store.md`): why the writer open read every owner record of
+/// the history. actingd prints it as one line, `actingd ledger_open owner_read=full
+/// reason=<reason>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerReadFull {
+    /// The bounded read could not place a retained owner in a start's epoch: its first block
+    /// holds no start record (a start that stopped before it wrote its start record), or
+    /// reading an owner back reached the start before its own (an epoch with no owner record
+    /// after its start record).
+    OwnerInNoStartEpoch,
+    /// A ledger dump an earlier run left is at the dump path or the fallback path. The open
+    /// imports it, and the owner it names may precede the bounded read.
+    DumpPresent,
+}
+
+impl OwnerReadFull {
+    /// The `reason` of actingd's line, as its token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OwnerInNoStartEpoch => "owner_in_no_start_epoch",
+            Self::DumpPresent => "dump_present",
+        }
+    }
 }
 
 impl std::fmt::Display for LedgerOpenTiming {

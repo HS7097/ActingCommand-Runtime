@@ -398,6 +398,8 @@ fn served_at(at: u64) -> TaskRuntimeSnapshot {
         completed_window: None,
         last_duration_ms: None,
         failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
     }
 }
 
@@ -547,6 +549,7 @@ fn evaluate_at(
             daily_limit: 96,
             failure_backoff_ms: 600_000,
             max_consecutive_failures: 3,
+            expected_duration_ms: crate::FACT_REFRESH_EXPECTED_DURATION_MS,
         },
         readers: vec![FactRefreshReader {
             instance_id: INSTANCE_A.to_owned(),

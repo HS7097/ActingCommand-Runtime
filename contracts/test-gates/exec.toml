@@ -1,8 +1,9 @@
 # Gate map, exec fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
-# Keys are the ids of rd-1009/tests/inventory-exec.md. One `[[gate]]` row per key with exactly
-# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
-# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
-# appended to; a row leaves only when its feature retires.
+# Each `[[gate]]` row has `coverage` ("Y", or "P" = tested only on the cfg(test) Segment
+# backend), `tests` (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when
+# none). A new row carries no `key`: its tests name it (Workflow #420 S6). Rows from before #420
+# keep their `key`, an id of rd-1009/tests/inventory-exec.md, as history. Rows are only appended
+# to; a row leaves only when its feature retires.
 
 # Contained-task admission fails closed
 [[gate]]
@@ -1057,8 +1058,6 @@ tests = [
     "actingcommand-contract::lib::package::tests::s5_t2_a_bundle_index_v2_or_v3_is_refused",
     "actingcommand-lab::lib::gate_336_pkgs5::s5_t3_record_stop_writes_its_package_as_its_package_id_and_replaces_one_of_that_name",
     "actingcommand-lab::lib::gate_336_pkgs5::s5_t3_a_container_that_expands_to_another_table_fails_its_round_trip",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_no_package_reference_is_left",
     "actingcommand-contract::lib::package::tests::s5_t6_bundle_v4_reads_its_tables_list_and_refuses_a_pack_named_tables",
 ]
 incident = ["#336 PKG-S5"]
@@ -2113,3 +2112,236 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_411_b36::a35_s3_t5_admission_refuses_a_broken_wait_step_or_wait_page_with_its_rule",
 ]
 incident = ["#411 B36", "#411 B19", "#412 B-3"]
+
+# PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177; brief rd-1024/brief-perf-b1-capture.md, test row (a); requirement R1): a step's `expect_after.interval_ms` is its own wait's capture interval: a wait declared at 30 000 ms captures at most ⌈duration / interval⌉ + 1 frames, its pauses the declared interval and the last cut at its end, while the package's other steps keep their own interval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_a_a_slow_wait_keeps_its_declared_interval_and_the_other_steps_keep_theirs",
+]
+incident = ["#407 B1"]
+
+# PERF-B1 (register §1.177; test row (b); requirements R3, R4): while a step waits for a page, each unchanged frame (#411 B12's whole-frame measure) doubles the pause from the declared interval (50 ms for a package that declares none) up to the idle ceiling (execution.capture.idle_ceiling_ms, default 5 000); the first changed frame returns it to the declared interval; execution.capture.backoff_enabled false keeps every pause at the declared interval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_b_unchanged_frames_back_off_to_the_idle_ceiling_and_a_change_returns_to_the_declared_interval",
+]
+incident = ["#407 B1"]
+
+# PERF-B1 (register §1.177; test row (c); requirement R3): the back-off never passes the step's remaining time: a pause is cut at the time left of the step's own wait and at the task's deadline, and the wait ends at its limit with its own code
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_c_the_back_off_never_passes_the_steps_remaining_time",
+]
+incident = ["#407 B1"]
+
+# PERF-B1 (register §1.177 B1-1, B1-2; test row (d); requirement R2): with a configured ceiling (execution.capture.max_interval_ms) of 20 000 ms a run refuses, before any capture, a package that declares a longer interval: contained_task_control_invalid for the control's capture_interval_ms and a step's expect_after.interval_ms, contained_task_linear_invalid for a transition's interval_ms; 20 000 ms runs; admission takes an interval up to the key's maximum, 1 800 000 ms, and refuses one above it with the same codes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_407_b1::b1_d_a_declared_interval_above_the_configured_ceiling_is_refused",
+]
+incident = ["#407 B1"]
+
+# ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_386_rlt::rlt_1_standard_pack_compose_receives_every_instance_of_its_command_line",
+]
+incident = ["#386 ROUT-L RL-T"]
+
+# ROUT-L RL-T (#386; contracts/resource-declarations.md): resource validate reads a repository root's schedule.json by parse_standard_pack_schedule: a valid file is family standard_pack_schedule with no warning; an invalid one is resource_declaration_invalid naming the file, its standard_pack_problem and its json_pointer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_386_rlt::rlt_2_resource_validate_accepts_a_valid_root_schedule_json",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_386_rlt::rlt_2_resource_validate_refuses_an_invalid_root_schedule_json_with_its_pointer",
+]
+incident = ["#386 ROUT-L RL-T"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §4.1, §13 row DA4-T4; register §1.192 DL-3): package bundle --display-layout lays the given file beside bundle.json as display-layout.json byte for byte, whatever it is named; the installed game root made of that bundle passes standard-pack check, whose root_files list bundle.json and display-layout.json
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da4::da4_t4_package_bundle_lays_the_declaration_and_standard_pack_check_lists_it",
+]
+incident = ["#392 DA-4"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): a 1280x720 package on a 1280x720 frame, with or without a declaration, is the identity: every grid point and box maps to itself into the scale frame, to the device frame and back, under every class and anchor (DA1-T1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t1_identity_maps_every_grid_point_and_box_to_itself",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): 1920x1080 for 1280x720 without a declaration is a pure scale, s = 3/2, scale frame 1280x720, no translation; points and boxes go to the device frame and back without drifting (DA1-T2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t2_pure_scale_has_no_translation_and_round_trips_without_drift",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): 2340x1080 by height is a translation onto a 1560x720 scale space; the five reference boxes (model 392 v1.1 section 4.4) map corner by corner as the hand table says (DA1-T3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t3_landscape_translation_maps_the_five_reference_boxes",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): a 720x1280 package on 1080x2340 by width maps onto 720x1560; the top, middle and bottom thirds move by 0, 140 and 280 (DA1-T4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t4_portrait_translation_moves_the_three_rows_by_0_140_and_280",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): each of the nine explicit anchors moves a box that crosses both third lines as one piece by its own share of the room and keeps its size (DA1-T5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t5_each_explicit_anchor_moves_a_crossing_box_rigidly",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): a coordinate on a third line (3x = Wb, 3x = 2Wb) is in the middle; a box's right and bottom edges are judged at their open ends (DA1-T6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t6_third_lines_belong_to_the_middle_and_open_ends_decide_the_far_corner",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): with a 90 left inset the four combinations of scale.area and anchor_area, by height and by width, give the hand-worked scale, scale space, anchor area and moves; insets of 0 equal the screen (DA1-T7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t7_safe_area_arithmetic_matches_the_hand_table",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): 960x540 for 1280x720 is display_map_unresolved scale_below_base with or without a declaration; 1280x720 passes (DA1-T8)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t8_a_device_smaller_than_the_base_is_refused",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): without a declaration 2340x1080 is layout_undeclared, 1920x1080 maps, and the same ratio with insets in use is layout_undeclared (DA1-T9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t9_an_undeclared_layout_maps_only_a_pure_scale",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): seven ratios in both orientations all build under a declaration; the only problems any of them can give are scale_below_base and orientation_mismatch (DA1-T10)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t10_no_ratio_is_ever_refused",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): the four rows of the rotation table, a 9:16 frame of a landscape package at a known rotation turned upright among them, with the turn undone for frame-coordinate input (DA1-T11)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t11_the_rotation_table_has_four_rows",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): points and lengths to the nearest, input boxes inward, evidence boxes outward; an input box under one pixel and a narrow crossing box on a narrower scale space are collapsed (DA1-T12)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t12_the_rounding_table_holds",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): the same inputs build the same map and the same mappings, bit for bit (integer arithmetic only) (DA1-T14)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t14_the_same_inputs_build_the_same_map_bit_for_bit",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): a 1080x2336 crop at y = 2 of a 1080x2340 display is the identity on the display: regions move up 2, inputs down 2, the cropped rows are outside_frame (DA1-T15)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t15_a_cropped_frame_moves_regions_up_and_inputs_down_by_its_offset",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-1 (model 392 v1.2 section 13; contracts/display-adapter.md): each of the six display_problem tokens, reached through its own path, is display_map_unresolved (error, declaration_error) with that token, its stage and the frame's and the base's sizes (DA1-T16)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-display-adapter::lib::gate_392_da1::da1_t16_every_display_problem_is_display_map_unresolved",
+]
+incident = ["#392 DA-1"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §12.2, C16, §13 row DA2-T1; Alice 10-26, merge is deploy): a 1280x720 package on a 1280x720 frame passes the display adapter's frame gate as the identity, with or without a declaration, its scale frame the frame's own buffer; at each of the six capture entries it is recognised byte for byte as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_identity_a_1280x720_package_on_a_1280x720_frame_passes_unchanged_at_all_six_entries",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T2; brief rd-1026/brief-da2a, the pure-scale test): a 1920x1080 frame of a 1280x720 package is a pure scale of 3/2 whose scale frame is the base scene; the page and the template are recognised at their base positions and the recognition reports the device frame's size and each region as the device box that covers it
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t2_a_1920x1080_frame_of_a_1280x720_package_reports_the_same_regions_scaled",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T3, as this slice requires it): a 2340x1080 frame of a 1280x720 package is layout_undeclared without a declaration and, under one, a translation refused translation_unsupported until DA-2b; a run on it ends with that refusal and no input
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t3_a_translation_waits_for_da_2b_and_sends_nothing",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §13 row DA2-T6): on a 1920x1080 frame of a 1280x720 package a colour probe, the stability crop, a still-frames region and a plain text area read their base boxes of the scale frame, never widened
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t6_positional_regions_are_mapped_and_never_widened",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §0.2 C1 and C10, §13 row DA2-T12): every one of the six capture entries passes a 1920x1080 frame of a 1280x720 package as a pure scale and gives what the 1280x720 frame gives, its sizes the device frame's and its regions scaled; contained_task_frame_resolution_mismatch is retired
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t12_every_capture_entry_passes_a_1920x1080_frame_of_a_1280x720_package",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §5.1, C11, §13 row DA2-T14): the frames of one observation keep one map: a sample and its page frame under two maps end recognition_sample_geometry_changed, a candidate sample under another map candidate_sample_page_or_geometry_changed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t14_frames_of_one_observation_keep_one_map",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §4.7, §13 row DA2-T15, as this slice requires it): a 1080x2336 frame cropped at y = 2 from the 1080x2340 display of a 1080x2340 package waits for DA-2b (translation_unsupported) and a run on it sends nothing; without its crop record it is layout_undeclared
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t15_a_cropped_frame_waits_for_da_2b_and_sends_nothing",
+]
+incident = ["#392 DA-2a"]

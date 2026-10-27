@@ -8,8 +8,8 @@
 //! never consults the unlinked-warning latch, the Warning ring or the K/T policy.
 
 use super::super::GlobalLedgerResult;
-use super::super::projection::EventIndexes;
-use super::{RetentionIndex, material_references, referenced_frames, source};
+use super::super::projection::LabKeys;
+use super::{RetentionIndex, material_references, referenced_frames};
 use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::outcome::CodeStr;
@@ -21,16 +21,15 @@ use actingcommand_contract::{
     TaskSemanticFact, parse_resource_reading_snapshot_id,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::PoisonError;
 
 /// A frame is in an error window when its capture time lies in `[t - 30 s, t]`.
-const ERROR_WINDOW_MS: u64 = 30_000;
+pub(in crate::global) const ERROR_WINDOW_MS: u64 = 30_000;
 /// A frame settles no earlier than 60 s after its capture.
-const SETTLE_AGE_MS: u64 = 60_000;
-const DAY_MS: u64 = 86_400_000;
+pub(in crate::global) const SETTLE_AGE_MS: u64 = 60_000;
+pub(in crate::global) const DAY_MS: u64 = 86_400_000;
 const DAY_MS_I64: i64 = 86_400_000;
 /// A resource reading frame is deleted 7 days after its entry time.
-const READING_DAYS: u64 = 7;
+pub(in crate::global) const READING_DAYS: u64 = 7;
 /// The `<code>` of an error leaf is at most 64 characters.
 const LEAF_NAME_CHARS: usize = 64;
 
@@ -57,7 +56,7 @@ impl Default for FrameRetentionSwitches {
 
 /// A UTC instant's local offset in milliseconds east of UTC, `None` when unknown. The view
 /// uses [`crate::local_time::machine_local_offset_ms`]; the tests pass a fixed zone.
-type LocalOffsetMs = fn(u64) -> Option<i64>;
+pub(in crate::global) type LocalOffsetMs = fn(u64) -> Option<i64>;
 
 /// A frame's class, in order of precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -516,14 +515,6 @@ struct RunSpan {
     instance: InstanceId,
 }
 
-/// Workflow #375 R5d: the classes at one head and one setting. Only the clock turns them into
-/// a view, so a cleaner round at an unchanged head classes nothing again.
-pub(super) struct FrameCache {
-    through_sequence: u64,
-    switches: FrameRetentionSwitches,
-    classified: Classified,
-}
-
 /// Every frame classed at one head, independent of the clock.
 struct Classified {
     frames: Vec<ClassifiedFrame>,
@@ -579,27 +570,19 @@ impl Classified {
 }
 
 impl RetentionIndex {
-    /// Workflow #375 R5c/R5d: the frame view at this index's head and at `now`, named in the
-    /// machine's local time. The classes are cached by head and setting.
-    pub(in crate::global) fn frame_view<E: LedgerEventRead>(
+    /// Workflow #375 R5c: the frame view at this index's head and at `now`, named in the
+    /// machine's local time. LN-5: `related` answers whether a Lab anchor at this head relates to a
+    /// frame's verified record (by its Lab keys). #422 LN-7c Q: only a full build of the index
+    /// (`GlobalLedgerEvidence`, the reference of the frame cleaner's queries) has a view; the
+    /// writer keeps no frame facts.
+    pub(in crate::global) fn frame_view(
         &self,
-        events: &[E],
-        indexes: &EventIndexes,
+        related: &mut dyn FnMut(&LabKeys) -> GlobalLedgerResult<bool>,
         now: u64,
         switches: FrameRetentionSwitches,
         work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<FrameRetentionView> {
-        // A poisoned cache only loses its cached value, which is built again below.
-        let mut cache = self
-            .frame_cache
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(cached) = cache.as_ref().filter(|cached| {
-            cached.through_sequence == self.through_sequence && cached.switches == switches
-        }) {
-            return Ok(cached.classified.at(self.through_sequence, now));
-        }
-        let frames = self.view_frames(events, indexes, work)?;
+        let frames = self.view_frames(related, work)?;
         let classified = classify(
             &self.frame_facts,
             &self.frames,
@@ -607,26 +590,19 @@ impl RetentionIndex {
             switches,
             crate::local_time::machine_local_offset_ms,
         )
-        // A local time the system cannot convert refuses this view; the writer goes on.
+        // A local time the system cannot convert refuses this view.
         .ok_or_else(|| {
             super::super::GlobalLedgerError::request(
                 LedgerCode::ArtifactRetentionClockFailed.code(),
                 LedgerLocation::FrameRetentionView.location(),
             )
         })?;
-        let view = classified.at(self.through_sequence, now);
-        *cache = Some(FrameCache {
-            through_sequence: self.through_sequence,
-            switches,
-            classified,
-        });
-        Ok(view)
+        Ok(classified.at(self.through_sequence, now))
     }
 
-    fn view_frames<E: LedgerEventRead>(
+    fn view_frames(
         &self,
-        events: &[E],
-        indexes: &EventIndexes,
+        related: &mut dyn FnMut(&LabKeys) -> GlobalLedgerResult<bool>,
         work: &crate::global::read_work::ReadWork,
     ) -> GlobalLedgerResult<Vec<ViewFrame>> {
         let mut frames = Vec::new();
@@ -648,9 +624,7 @@ impl RetentionIndex {
                 .values()
                 .any(|(_, reason)| *reason == ArtifactPinReason::Lab)
                 || match &object.verified {
-                    Some(verified) => {
-                        self.lab_protected(object, source(events, verified)?, indexes)
-                    }
+                    Some(_) => self.lab_protected(object, || related(&object.verified_lab))?,
                     None => false,
                 };
             frames.push(ViewFrame {
@@ -977,13 +951,20 @@ fn received_code(leaf_name: &str) -> Option<CodeStr> {
 
 /// `<HHmmss-fff>_<object file name>`, in local time.
 fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> Option<String> {
-    let object = frame
-        .reference
-        .object_key
-        .as_deref()
+    kept_file_name(frame.reference.object_key.as_deref(), frame.at, local)
+}
+
+/// `<HHmmss-fff>_<object file name>` of a frame captured at `at` whose object key is
+/// `object_key`, in local time; #422 LN-7c Q names a moved frame's file with it too.
+pub(in crate::global) fn kept_file_name(
+    object_key: Option<&str>,
+    at: u64,
+    local: LocalOffsetMs,
+) -> Option<String> {
+    let object = object_key
         .and_then(|key| key.rsplit('/').next())
         .unwrap_or_default();
-    let time = local_time(frame.at, local)?;
+    let time = local_time(at, local)?;
     Some(format!(
         "{:02}{:02}{:02}-{:03}_{object}",
         time.hour, time.minute, time.second, time.milli
@@ -994,7 +975,7 @@ fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> Option<String> {
 /// its rejection's outcome), else its own `code` member, else the failure code of its run's
 /// failure terminal when that terminal precedes it, else its event type with `.` as `_`; at
 /// most 64 characters, outside `[A-Za-z0-9_-]` as `_`.
-fn leaf_name(
+pub(in crate::global) fn leaf_name(
     own_failure: Option<String>,
     own_value: Option<String>,
     preceding_failure: Option<String>,
@@ -1008,7 +989,7 @@ fn leaf_name(
 }
 
 /// The first string under `key` in the JSON, depth first in field order.
-fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
+pub(in crate::global) fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
     match value {
         serde_json::Value::Object(map) => map.iter().find_map(|(name, item)| match item {
             serde_json::Value::String(text) if name == key => Some(text.clone()),
@@ -1020,14 +1001,14 @@ fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 /// The event type's wire name with `.` as `_` (`runtime.takeover` is `runtime_takeover`).
-fn type_leaf_name(event_type: EventType) -> String {
+pub(in crate::global) fn type_leaf_name(event_type: EventType) -> String {
     match serde_json::to_value(event_type) {
         Ok(serde_json::Value::String(name)) => name.replace('.', "_"),
         _ => String::new(),
     }
 }
 
-fn id_text(instance: &InstanceId) -> String {
+pub(in crate::global) fn id_text(instance: &InstanceId) -> String {
     match serde_json::to_value(instance) {
         Ok(serde_json::Value::String(text)) => text,
         _ => String::new(),
@@ -1035,7 +1016,7 @@ fn id_text(instance: &InstanceId) -> String {
 }
 
 /// At most `limit` characters, each outside `[A-Za-z0-9_-]` replaced by `_`.
-fn leaf_part(text: &str, limit: usize) -> String {
+pub(in crate::global) fn leaf_part(text: &str, limit: usize) -> String {
     text.chars()
         .take(limit)
         .map(|character| {
@@ -1087,57 +1068,12 @@ fn local_time(unix_ms: u64, local: LocalOffsetMs) -> Option<LocalTime> {
     })
 }
 
-fn local_date(unix_ms: u64, local: LocalOffsetMs) -> Option<String> {
+pub(in crate::global) fn local_date(unix_ms: u64, local: LocalOffsetMs) -> Option<String> {
     let time = local_time(unix_ms, local)?;
     Some(format!(
         "{:04}-{:02}-{:02}",
         time.year, time.month, time.day
     ))
-}
-
-impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore<B> {
-    /// Workflow #375 R5d: the frame view at the writer's head.
-    /// #411 A51 (R2): a rebuild of the view stops where `work`'s budget runs out, with
-    /// `ledger_read_budget_exceeded`; the cleaner reads it again at its next round.
-    pub(in crate::global) fn frame_retention_view(
-        &self,
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-        work: &crate::global::read_work::ReadWork,
-    ) -> GlobalLedgerResult<FrameRetentionView> {
-        self.retention
-            .frame_view(&self.events, &self.indexes, now_unix_ms, switches, work)
-    }
-}
-
-impl super::super::GlobalLedger {
-    /// Workflow #375 R5d: the frame view at the writer's head and at `now_unix_ms`, which the
-    /// frame cleaner reads once per sweep. Read-only; the classes are cached by head.
-    pub fn frame_retention_view(
-        &self,
-        now_unix_ms: u64,
-        switches: FrameRetentionSwitches,
-    ) -> GlobalLedgerResult<FrameRetentionView> {
-        let (response, receiver) = std::sync::mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| super::invalid(LedgerCode::WriterUnavailable.code()))?;
-        super::super::send_command(
-            sender,
-            super::super::WriterCommand::FrameRetentionView {
-                now_unix_ms,
-                switches,
-                response,
-            },
-            LedgerLocation::FrameRetentionView.location(),
-        )?;
-        super::super::receive_response(
-            receiver,
-            LedgerLocation::FrameRetentionView.location(),
-            self.reply_timeout,
-        )?
-    }
 }
 
 impl super::super::GlobalLedgerEvidence {
@@ -1159,14 +1095,33 @@ impl super::super::GlobalLedgerEvidence {
                 self.frame_index.get_or_init(|| built)
             }
         };
+        let through = retention.through_sequence;
         retention.frame_view(
-            events,
-            indexes,
+            &mut |keys| Ok(indexes.lab_related(keys, through)),
             now_unix_ms,
             switches,
             &crate::global::read_work::ReadWork::unbounded(),
         )
     }
+}
+
+/// #422 LN-7c V: the full view of `events` (every verified record) at `now_unix_ms`, built once
+/// without the evidence opening's cache: the reference `ledger-maintenance verify` checks the
+/// frame cleaner's statements against. `check` is asked at each record, as the full build asks.
+pub(in crate::global) fn full_frame_view(
+    events: &[crate::PersistedEvent],
+    now_unix_ms: u64,
+    switches: FrameRetentionSwitches,
+    check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
+) -> GlobalLedgerResult<FrameRetentionView> {
+    let (retention, indexes) = RetentionIndex::from_events_with_indexes_checked(events, check)?;
+    let through = retention.through_sequence;
+    retention.frame_view(
+        &mut |keys| Ok(indexes.lab_related(keys, through)),
+        now_unix_ms,
+        switches,
+        &crate::global::read_work::ReadWork::unbounded(),
+    )
 }
 
 #[cfg(test)]

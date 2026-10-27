@@ -41,14 +41,14 @@ before SH-1 merges.
 | L4 | record envelope `capture` | new optional envelope member of every stored event | SH-1 | AO-2 (`capture_seq`, `captured_at_unix_ms`; built, §1.38 OB2), AO-3 (`source`) | `{capture_seq, captured_at_unix_ms, source? {source: instance_facts \| runtime_facts \| decision_memory \| fact_refresh_transitions, lineage, revision}}`; `timestamp` = capture time |
 | L5 | `runtime.lifecycle_observed` phase `tagged_state_loaded` | new phase | SH-1 | AO-6 | `{stores: [{source, previous_lineage?, previous_revision?, lineage, loaded_count}]}`; the base record of a new lineage |
 | L6 | `runtime.lifecycle_observed` phase `tagged_state_enabled` | new phase | SH-1 | AO-5 / AO-6 | no members |
-| L7 | `policy.control_state_recorded` | new event type, family `policy`, action `policy.control_state` (new), info; tagged | SH-1 | AO-4 | one dispatch pair's complete decision memory: `{instance_id, task_id (or the reserved D2 recognition identity), daily_counts, window_counts, window_runtime_ms, active_window?, failure_streak? {failure_code, failure_identity? (failure identity v2; §1.15 Q1), class, count, escalation_streak, disposition, retry_at_unix_ms?, decision_id}, retry_round?, dispatch_clock?, condition_reruns? {failure_code, count, expires_at_unix_ms}}`; `active_window` = the `window_id` of the task's activity profile that `window_counts` and `window_runtime_ms` count in; `window_runtime_ms` = the runtime the task has reserved or used in that window (`PolicyControlState.task_runtime`, `policy_control.rs:87`); `paused_on` is rebuilt from `failure_identity` and never stored; the activity profile's own state is L14 |
-| L8 | `agent.wake_obligation_recorded` | new event type, family `agent`, action `agent.wake`, info; tagged | SH-1 | AO-4 | one wake obligation (`AgentWakeRecord` at AO-4's head) |
+| L7 | `policy.control_state_recorded` | new event type, family `policy`, action `policy.control_state` (new), info; tagged | SH-1 | LN-3 (§1.182; was AO-4) | one dispatch pair's complete decision memory: `{instance_id, task_id (or the reserved D2 recognition identity), daily_counts, window_counts, window_runtime_ms, active_window?, failure_streak? {failure_code, failure_identity? (failure identity v2; §1.15 Q1), class, count, escalation_streak, disposition, retry_at_unix_ms?, decision_id}, retry_round?, dispatch_clock?, condition_reruns? {failure_code, count, expires_at_unix_ms}}`; `active_window` = the `window_id` of the task's activity profile that `window_counts` and `window_runtime_ms` count in; `window_runtime_ms` = the runtime the task has reserved or used in that window (`PolicyControlState.task_runtime`, `policy_control.rs:87`); `paused_on` is rebuilt from `failure_identity` and never stored; the activity profile's own state is L14 |
+| L8 | `agent.wake_obligation_recorded` | new event type, family `agent`, action `agent.wake`, info; tagged | SH-1 | LN-3 (§1.182; was AO-4) | one wake obligation (`AgentWakeRecord` at AO-4's head) |
 | L9 | `policy.dispatch_intent`, `task.selection_evaluated`: `input_fact_revisions` | new optional member | SH-1 | AO-3 | `{instance_facts {lineage, revision}, runtime_facts {lineage, revision}}`; readers accept either it or `input_ledger_position` (still non-zero when present); AO-4 stops writing the old member (ORD §3.5 item 11) |
 | L10 | `runtime.fact_snapshot` sealed by the ledger | existing type, origin module `global-ledger` | — | AO-8 (T2) | the core stops writing it (AO-4) |
 | L11 | `ledger_index` table | new table in `runtime-state.sqlite` | AO-2 | AO-2 (built, §1.38 OB1) | [ledger-observer.md §11.1](ledger-observer.md#111-the-index-table-ledger_index) |
 | L12 | ledger dump file | file format, `dump_version` 1 | AO-1 (built, §1.26 AO1) | AO-1 | [ledger-observer.md §9.3](ledger-observer.md#93-dump-file) |
 | L13 | view lists | Health gains `ledger.gap_recorded`, `ledger.health_observed`, `ledger.dump_imported`; Changes gains `policy.control_state_recorded`, `policy.activity_state_recorded`, `policy.fact_refresh_transition`, `agent.wake_obligation_recorded` | SH-1 (view schema upgrade, `views.rs:40-43`) | — | the new `perf.*` types join Health through their family |
-| L14 | `policy.activity_state_recorded` | new event type, family `policy`, action `policy.control_state`, info; tagged | SH-1 | AO-4 | one (instance, activity profile)'s complete activity state, index key `activity_memory/<instance>/<activity profile>`: `{instance_id, profile_id, local_day, daily_count, window_id, window_count, window_runtime_ms, next_eligible_unix_ms?}` = today's `activity_daily`, `activity_window`, `activity_runtime` and `next_activity_eligible` (`policy_control.rs:88-91`); without it a restart after AO-6 would reset the activity budgets and the activity interval |
+| L14 | `policy.activity_state_recorded` | new event type, family `policy`, action `policy.control_state`, info; tagged | SH-1 | LN-3 (§1.182; was AO-4) | one (instance, activity profile)'s complete activity state, index key `activity_memory/<instance>/<activity profile>`: `{instance_id, profile_id, local_day, daily_count, window_id, window_count, window_runtime_ms, next_eligible_unix_ms?}` = today's `activity_daily`, `activity_window`, `activity_runtime` and `next_activity_eligible` (`policy_control.rs:88-91`); without it a restart after AO-6 would reset the activity budgets and the activity interval |
 
 ### 1.2 Fact refresh (#384, D2M §5.3 A-5, N3)
 
@@ -215,7 +215,7 @@ appears only once `standard_packs.root` is set.
 | N1 | `TaskSemanticFact::EntryRecoveryPackageAdmitted`, `::EntryRecoveryCompleted`, `::EntryRecoveryFailed` (`task.entry_preflight`) | new optional member `role` (`TaskEntryRecoveryRole`) | NAV-6 | NAV-6 | value `interrupt_handler` (a shared interrupt page's handler or `then.run` package run as a layer); serde default, omitted when absent. Prerequisite, return-home and bound recovery layers carry none until NAV-3a (`prerequisite`, `return_home`) and NAV-5 (`navigation_hop`, `recovery_chain`) add their values (M-373 §8.3) |
 | N2 | `TaskSemanticFact::InterruptHandled` (`task.entry_preflight`, kind `interrupt_handled`) | new record | NAV-6 | NAV-6 | `{page, handler_package_label, then, count, outcome}` (`deny_unknown_fields` as every task fact): `page` the `pages.json` id, `then` `"resume"`, `"end_run"` or `{"run": <package label>}` (`TaskInterruptThen`), `count` 1..=8 (`invalid_task_interrupt` otherwise), `outcome` `contained_task_interrupt_handled` (info) with `page_id`, `count` |
 | N3 | `TaskSemanticFact::InterruptAmbiguous` (`task.entry_preflight`, kind `interrupt_ambiguous`) | new record | NAV-6 | NAV-6 | `{page_ids [2..=32 pages.json ids], outcome}`, `outcome` `contained_task_interrupt_ambiguous` (warning) with `page_ids`; the record M-373 §6.3 asks for (N6-8), a shape §8.3 does not name |
-| N4 | `RuntimeLifecyclePhase::StandardPackRead` (`runtime.lifecycle_observed`, phase `standard_pack_read`) | new lifecycle phase | NAV-6 | NAV-6 | `{outcome}`: `standard_pack_registered` (info; `game`, `count`, optional `added_package_ids`, `removed_package_ids`), `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) or `standard_pack_root_unreadable` (`path`, optional `game`; `foreign_os_error` cause), all error but the first; system links; durable (`CommitSync::Full`). At startup one per game root; in a run's preparation one when the registry changed (M-373 §8.4) |
+| N4 | `RuntimeLifecyclePhase::StandardPackRead` (`runtime.lifecycle_observed`, phase `standard_pack_read`) | new lifecycle phase | NAV-6 | NAV-6 | `{outcome}`: `standard_pack_registered` (info; `game`, `count`, optional `added_package_ids`, `removed_package_ids`), `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) or `standard_pack_root_unreadable` (`path`, optional `game`; `foreign_os_error` cause), all error but the first; system links; durable (`CommitSync::Full`). At startup one per game root, plus (Workflow #357 DB-1, §1.65 TB2) one per refused table of a sound root (`standard_pack_table_invalid` or `standard_pack_table_unreadable`); in a run's preparation one when the registry changed (M-373 §8.4) |
 | N5 | `standard_packs.root` (actingd configuration, section `standard_packs`) | new configuration key | NAV-6 | NAV-6 | a path, relative to the configuration file's directory; empty refused (`config_decode_failed`); no default (absent = no root is read); startup key (`settable = false`, M-373 §8.6). Parsed the existing way; D1b/D1c move it into `crates/runtime-config` as a section file. Not in `config.parameters` |
 | N6 | check-config v1 report: member `standard_packs` `{root, root_problem, games: [{game, bundle_version, pack_count, root_files, problem}]}` and `warnings` entries `<code>:<game>` | interface | NAV-6 | NAV-6 | always present; a broken game root keeps `status: ok` ([actingd-check-config.md](actingd-check-config.md), "Standard packs") |
 | N7 | root files `pages.json` (`actingcommand.pages.v1`) and `interrupts.json` (`actingcommand.interrupts.v1`) | resource file formats, not ledger shapes | NAV-6 (reader, contract checks) | resource side (NAV-1, NAV-2) | [package-reference.md](package-reference.md), "Standard package root"; `actinglab resource validate` families `standard_pack_pages`, `standard_pack_interrupts` |
@@ -3174,6 +3174,418 @@ code. Gates: exec keys 175 to 179.
 | S3-5 | `TaskPhaseOperation.on_timeout_key`, `wait_timeout_mapping_busy` | Runtime-internal interface (memory only) | A35-S3 | A35-S3 | the walk's view of the new member, shared by source parsing, build and Runtime admission |
 | S3-6 | `lab_operation_problem` token `wait` | new token of an existing vocabulary (Lab B-3 S0, §1.159 B3-6) on the existing `contained_task_declared_operation_unsupported` (exec 179) | A35-S3 | A35-S3 | Lab B-3 S1's admission of a declared operation (`PreparedContainedTask::declared_operation`, §1.161 B3S1-2, B3S1-3) refuses a wait step before any lease, with `pack_operation_id` and `lab_operation_problem` `wait` (Lab decision Q2: page-graph clicks only); checked after the package's execution mode, the application effect and the select step; no new code or key |
 
+### 1.177 Slice PERF-B1 (0.12.x): a wait's own capture interval, the configured ceiling of a declared interval, and the back-off on unchanged frames (Workflow #407 B1; coordinator brief 10-24 `rd-1024/brief-perf-b1-capture.md`; Alice 10-24: performance first, #405)
+
+A package that declares no interval captures every 50 ms plus the capture's own time (about every
+0.6 s in production), and a package could declare at most 5 000 ms: a 25-minute wait took about
+2 700 captures, each with its ledger events and its frame. Now a step's `expect_after.interval_ms`
+(its confirmation, or a wait step's wait) may declare a slow interval for that one wait (R1; the
+kernel already had the unit, only the bound held it at 5 000 ms), the bound is the configuration's
+(R2), and a step's wait for a page lengthens its pause over unchanged frames (R3); a package that
+declares nothing keeps its 50 ms (R4). [resource-declarations.md](resource-declarations.md)
+("Capture cadence"), [runtime-config.md](runtime-config.md) ("The `execution` section"),
+[README.md](README.md) and [linear-steps.md](linear-steps.md) are the contract. **No persisted
+ledger shape**: no code, location, value key or vocabulary token; the refusal above the ceiling
+reuses the codes admission gives a broken interval, and the effective intervals stay where they
+were recorded (`EffectiveTaskTiming.capture_interval`, each operation's `interval`). The new
+section adds one section fact of an existing family (B1-2). Gates: the `gate_407_b1` tests (a) to
+(d), in rows of exec.toml and host.toml.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B1-1 | control `capture_interval_ms`, `expect_after.interval_ms` and a `linear_steps` transition's `interval_ms` admitted in `1..=1800000` (were `1..=5000`) | rule of an existing member (resource file format, not a ledger shape) (tests (a), (d)) | PERF-B1 | resource side | the bound is the longest wait a step may declare and the range maximum of B1-2; refused above it as before (`contained_task_control_invalid`; `contained_task_linear_invalid`, `reason=transition_interval`); `post_delay_ms` and a scan's `settle.interval_ms` keep their 5 000 ms bound |
+| B1-2 | `execution.capture.max_interval_ms` (`5000..=1800000`, 60 000) | configuration key of a new section (§5 row; `config.parameters.execution` row) (tests (d)) | PERF-B1 | PERF-B1 | settable; handed to the kernel with each step's pacing; a run (and an entry check) refuses a package that declares a longer interval before its first capture, with B1-1's codes and `reason=capture_interval_ceiling` in the detail (`transition_interval` for a transition); `config_value_invalid` (`out_of_range`) at load, in check-config and through an instruction |
+| B1-3 | `execution.capture.backoff_enabled` (`true`), `execution.capture.idle_ceiling_ms` (`50..=60000`, 5 000) | configuration keys of the same section (tests (b), (c), (d)) | PERF-B1 | PERF-B1 | settable, read at each step; `wrong_type` for a value of another type, `out_of_range` outside the range |
+| B1-4 | the back-off of a step's wait for a page (the page wait and the confirmation of the page-graph path, a wait step's wait, the waits of a `linear_steps` step) | rule (no shape change) (tests (b), (c)) | PERF-B1 | PERF-B1 | a frame of the wait unchanged from the one before it by #411 B12's whole-frame measure doubles the next pause up to the idle ceiling or the declared interval, whichever is longer; the first changed frame, a handled shared interrupt page or a failed observation returns it to the declared interval; the pause is cut at the wait's remaining time and the task's deadline; entry checks, observation windows, input rechecks, samples and a scan's settle keep their interval |
+| B1-5 | `StepPacing.capture_cadence`, `CaptureCadence` (`execution-kernel`) | Runtime-internal interface (memory only) | PERF-B1 | PERF-B1 | the host hands the section with each step's pacing; a runtime that hands none (offline simulation, fixtures, the Lab's declared operation) gets the default ceiling and no back-off |
+
+### 1.178 Slice ED-1 (0.12.x): the expected duration E, pure, and its configuration keys (#405; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.4 D-12, D-15, §6 row ED-1; Alice 10-22 16:4x, #405 comment 6335497930; ruling 39 R6.2, R6.3)
+
+Wave 1 groundwork of v35: behaviour-neutral until ED-2 fills the snapshot members.
+[scheduling/README.md](scheduling/README.md) ("Settlement Feedback And Eligibility Age") and
+[runtime-config.md](runtime-config.md) ("Expected duration") are the contract. **No persisted
+ledger shape.** The configuration joins `actingd-config` revision 11. Gates: the `gate_ed1` tests t1 to
+t6 (policy) and `ed1_tests` (runtime-config, host).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ED1-1 | `expected_runtime(samples_newest_first, ExpectedRuntimeSettings {enabled, runs, margin_ms}, declared_ms, max_runtime_ms) -> ExpectedRuntime {expected_ms, source: Declared \| Runs(n)}`; `ExpectedRuntime::snapshot_members` | policy interface (memory only) (tests t1 to t4) | ED-1 | ED-1 | D-12: E = min(⌈mean of the latest min(runs, k)⌉ + margin, M); k = 0 or the switch off: D, no snapshot member |
+| ED1-2 | `TaskRuntimeSnapshot.expected_runtime_ms`, `.expected_runtime_runs` | new optional members of the evaluation input (memory and the input identity; absent: today's bytes) (tests t5, t6) | ED-1 | ED-2 (built, §1.190 ED2-4) | the evaluator uses E (at most `max_runtime_ms`) for the cost, the intent's `expected_duration_ms`, forward planning and the production estimate; absent, the declared value (and the cost's `last_duration_ms` fallback) as before |
+| ED1-3 | `scheduling.expected_runtime.{enabled, runs, margin_ms}` (`true`, 5 in `1..=16`, 300 000 in `0..=3600000`) and per instance `instance.<id>.scheduling.expected_runtime.*` (default the section's); `scheduling.fact_refresh.expected_duration_ms` (60 000 in `1..=1800000`) | configuration keys (`actingd-config` revision 11) (test c1) | ED-1 | person | all settable; accessor `EffectiveConfig::expected_runtime(instance_id)`; `FactRefreshConfig.expected_duration_ms`; read by ED-2 |
+
+### 1.179 Slice SR-4a1 (0.12.x): the pure blackout and day-boundary judgements, per-instance and `once` blackout entries (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-1, D-4, D-6, §6 row SR-4a1; Alice 10-24 12:1x, #386 comment 6379206178)
+
+Wave 1 groundwork of v35: behaviour-neutral until SR-4a2 reads it.
+[scheduling-blackout.md](scheduling-blackout.md) ("Configuration blackouts", "Pure judgement",
+"Day-boundary fit", "Configuration", "Codes") and [runtime-config.md](runtime-config.md) are the
+contract. **No persisted ledger shape.** The configuration joins `actingd-config` revision 11.
+Gates: the `gate_sr4a1` tests t1 to t4 (policy.toml) and the `sr4a1_tests` c1 and c2 (host.toml).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR4A1-1 | `blackout_at`, `next_blackout_start` over `BlackoutSources {host, instances, catalog}`; `Blackout {id, source, start_unix_ms, end_unix_ms}`; `BlackoutEntry {id, window}`, `BlackoutWindow::{Weekly, Once}` | policy interface (memory only) (policy tests t1 to t4) | SR-4a1 | SR-4a1 | the union of overlapping or adjacent intervals of the three sources; its end the union's end; the reported entry covers the time and ends last; catalog `maintenance` events with V2 validity and the instance's scope; no reader yet (SR-4a2) |
+| SR4A1-2 | `day_boundary_fit(profile, now, required_ms) -> Option<DayBoundaryDeferral {window_end_unix_ms, required_ms, next_eligible_unix_ms}>` | policy interface (memory only) | SR-4a1 | SR-4a1 | SCH-M D-6; the wake is the profile's next window start; its code `policy_day_boundary_approaching` and its tests are SR-4a2's |
+| SR4A1-3 | blackout entry `kind` (`weekly`, `once`); at most 64 per list; `instance.<id>.scheduling.blackout` (list, no default, settable) | configuration keys (`actingd-config` revision 11) (host test c2) | SR-4a1 | person / deploy command | an entry without `kind` is `weekly` (the host shape); `once` `[from_unix_ms, until_unix_ms)` non-empty; ids unique per list; pointer `/instances/<i>/scheduling/blackout/<n>/…` for an instance entry; accessor `EffectiveConfig::instance_blackouts` |
+| SR4A1-4 | `scheduling.blackout.quiet_horizon` (`deadline` \| `expected`, default `deadline`); `scheduling.day_boundary.quiet` (boolean, default `true`) and per instance `instance.<id>.scheduling.day_boundary.quiet` (default the section's) | configuration keys (`actingd-config` revision 11) (host test c1) | SR-4a1 | person | all settable; read by SR-4a2; SR-4b changes the default of `quiet_horizon` to `expected`; accessor `EffectiveConfig::day_boundary_quiet` |
+| SR4A1-5 | key `blackout_source` (`vocab:blackout_source`); vocabulary `blackout_source` (`host`, `instance`, `catalog`; contract crate `BlackoutSource`) | new key and vocabulary (host test c2) | SR-4a1 | SR-4a1 | `blackout_config_invalid` gains `blackout_source` (required; first written by SR-4a1); `blackout_active` and `blackout_approaching` gain it (required; first written by SR-4a2) |
+
+### 1.180 Slice CF-1 (0.12.x): the edge members `since_own_run` and `once_per_reading`: a chain step runs once per new result of its predecessor, a completion time is served once (SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.3 D-8, §6 row CF-1; #405, Alice 10-22, comment 6335384240: condition-first, not a timer)
+
+CF-1: two optional V2 catalog members turn a level into an edge, so condition-first catalogs (v34)
+need no pass, round or slot reset events to make a successor or a completion time fire again.
+[scheduling/README.md](scheduling/README.md) ("Condition edges", "Why A Candidate Does Not Run")
+and [scheduling/v2/README.md](scheduling/v2/README.md) are the contract. **No persisted ledger
+shape**: the members are a catalog format addition (the ledger holds only the catalog's
+`catalog_hash`, unchanged for a catalog without them); the reasons are catalog codes carried by the
+evaluation's decisions and the existing dispatch decision records; the subsystem row is a value of
+the existing `config.subsystems` fact. No wire, configuration key or interface revision changes. A
+Runtime before CF-1 refuses a catalog that writes either member (`unknown_field`), so the generator
+emits them only when check-config names `condition_edges`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF1-1 | `dependency_completed.since_own_run` (optional boolean; `PredicateSpec::DependencyCompleted`, `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | CF-1 | GEN-34 | V2 only (a V1 document writing it, either value: `unknown_field` at the member); `true`: true when the predecessor's latest terminal is accepted and this task has no admitted dispatch on the instance, or its latest dispatch is before the predecessor's latest dispatch, or its latest run did not succeed; otherwise false with `dependency_already_served`, no wake; absent or `false`: the level as before; absent serializes as nothing |
+| CF1-2 | `fact_time_reached.once_per_reading` (optional boolean; `PredicateSpec::FactTimeReached`) | catalog format addition (no ledger shape) | CF-1 | GEN-34 | V2 only with its predicate; `true`: a time T is served when this task's latest run succeeded and was dispatched at or after max(T + `offset_ms`, the fact's `observed_at_unix_ms`), then false with `fact_time_served`, no wake, until a reading observed after that dispatch; absent or `false`: §1.134 W1-2 as before; absent serializes as nothing |
+| CF1-3 | codes `dependency_already_served` (info; `task_id`, `predecessor_task_id`), `fact_time_served` (info; `fact_key`, `served_by_dispatch_unix_ms`) | new catalog entries (no shape) | CF-1 | CF-1 | owner policy (registry `PolicyCode`, block `SCH-M CF-1`), `ladder_class` `none` (row 7: a scheduling decision reason, not how work on an instance ended), layer `policy`, review `pending`; the prefixes `dependency_` and `fact_` already cover policy |
+| CF1-4 | keys `predecessor_task_id` (name), `served_by_dispatch_unix_ms` (unix_ms) | new key-table entries (no shape) | CF-1 | CF-1 | — |
+| CF1-5 | `config.subsystems` row `condition_edges` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-1 | CF-1 | [actingd-check-config.md](actingd-check-config.md); the generator's capability check for both members |
+
+### 1.181 Slice CF-2 (0.12.x): a reading mark publishes a completion time, its frame time plus the countdown it shows (SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.3 D-9, §6 row CF-2; #405)
+
+CF-2: a package can publish the time some work completes, `*_ready_at`, read from the screen as a
+countdown, so the catalog predicate `fact_time_reached` (§1.134) has a time to wake at.
+[resource-readings.md](resource-readings.md) ("Completion times", "Version gate", "Kernel
+reading", "Host") and [ocr-fields.md](ocr-fields.md) are the contract. **No persisted ledger
+shape**: the record is the existing `fact.published` with an inline `timestamp_ms` content, a
+value type the fact record already holds; no code, key, location or configuration key is added
+(declaration refusals reuse `resource_declaration_invalid`, and a frame disagreement the reading
+problem `no_agreement`). The value joins `package` revision 6, which BT-PK6 declares; until then
+it is admitted by code. The subsystem row is a value of the existing `config.subsystems` fact.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF2-1 | `resource_readings[].value` `{"type": "timestamp_ms", "format": "clock_hms", "base": "observation"}` (`ResourceReadingType::TimestampMs`, `ResourceReadingTimeBase`) | new value type (resource file format, not a ledger shape) | CF-2 | CF-P (resource side) | `format` and `base` required; another format `InvalidValue` @ `…/value/format`, another base `InvalidValue` @ `…/value/base`; `min`, `max`, `dictionary` `UnknownField` at the member (and `base` on `unsigned_integer`); `capacity_fact_key` refused as for every non-fraction mark; the shared `validate` refuses another format with `resource_declaration_invalid`; a Runtime before CF-2 refuses the value (`UnknownField` @ `…/value/base`), never silently |
+| CF2-2 | the record of a completion-time reading | existing `fact.published`, inline `timestamp_ms` content (no shape change) | CF-2 | CF-2 | `observed_at_unix_ms` + countdown seconds × 1000, the frame's capture time as `observed_at_unix_ms`, `expires_at_unix_ms` = `observed_at_unix_ms` + `valid_for_ms`, every other field as for a reading; the kernel trace carries the countdown in seconds |
+| CF2-3 | a completion-time mark with an agreement | rule (no shape) | CF-2 | CF-2 | holds when each frame gives its reading and the instants (frame capture time + countdown) lie within (`frames` − 1) × `interval_ms` + 1000 ms, latest minus earliest; else `no_agreement`; the reading is the handed-off frame's |
+| CF2-4 | `config.subsystems` row `resource_reading_time` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-2 | CF-2 | [actingd-check-config.md](actingd-check-config.md); packs that declare the value are placed only on a Runtime that names it |
+| CF2-5 | a `resource_adjustments` entry naming a completion-time mark's key | rule (no shape) | CF-2 | CF-2 | coordinator ruling of 2026-10-24: refused at declaration, with or without `amount`, `InvalidValue` @ `/resource_adjustments/<i>`; the shared `validate_resource_adjustments` gives the existing `resource_declaration_invalid` (no new code) |
+
+### 1.182 Slice LN-3 (0.12.x): the value records of the decision memory, the wake obligations and the monitor registry (#422 LEAN-L; frozen model v1.0 `rd-1024/lean-ledger/model.md` §1.2 H-c, H-e, §3.6, §4, §5.1 row LN-3; Alice 10-24 14:0x, #422: the start loads only tagged content such as the scheduler workbench)
+
+LN-3 is the first writer of L7, L8 and L14, which the register gave to AO-4; LEAN-L §4 takes
+them onto the #422 path, written through the existing append path (AO-2's capture queue and
+flush) with no gate machinery. The only new shape is one `state` key rule of L11,
+`monitor/<alias>`. Loading from these records at start is LN-4's: until then the start still
+replays, and the records are written only.
+[ledger-observer.md §11.1 and §11.3](ledger-observer.md#113-value-records-the-latest-record-is-the-current-value),
+"As built by LN-3", are the contract. No code, location, value key, vocabulary token or
+configuration key is added. Gates: the `gate_422_ln3` tests, `monitor::tests::ln3_a_…` and
+`policy_control::tests::ln3_b_…`, one row of host.toml. The number 1.182 is provisional for the
+parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN3-1 | `policy.control_state_recorded` (L7) | first writer of a registered type | LN-3 | LN-3 | one record per change of a dispatch pair's state, after the admission's outcome, after the settlement's completion, and after the start's and the online settlement reconciliations, under the policy guard; a change is a difference between the pair's complete state and its latest record, so a replayed admission or a repeated settlement writes none. `daily_counts`: the newest 32 days; `active_window`: the window of the pair's latest admission, with `window_counts` and `window_runtime_ms` in it; `dispatch_clock`: the admission time of the pair's latest admitted dispatch until its completion; `condition_reruns`: absent until SR-2b keeps a rerun state. Origin `scheduler` / `policy` / `scheduler`, system links, info. At the open the replayed state counts as recorded; seeding one record per key is LN-4's |
+| LN3-2 | `policy.activity_state_recorded` (L14) | first writer | LN-3 | LN-3 | the same occasions and rule; `local_day` and `window_id` are those of the latest admission of the profile on the instance |
+| LN3-3 | `agent.wake_obligation_recorded` (L8) | first writer | LN-3 | LN-3 | right after each wake's `agent.wake_requested`, the same `AgentWakeData`; origin `scheduler` / `agent_dispatcher` / `runtime`, system links. Never replayed: the agent dispatcher's whole-ledger fold now takes only the replayed types, as its paged read does |
+| LN3-4 | `ledger_index` `state` key `monitor/<alias>` (L11) | new key rule | LN-3 | LN-3 | the monitor registry's records already carry an alias's complete state (`runtime_state` `monitor_changed`: status, revision, configuration version; `monitor_imported`: every instance it brings). The key names the alias's latest applied change, or the import for each alias it brings; a change that was not applied is not tagged. Tagged records commit on arrival (§11.4). An import of no instance tags nothing |
+| LN3-5 | `PolicyControlState::value_records`, `apply_value_record`; `PolicyHost::changed_value_records` | Runtime-internal interface (memory only) | LN-3 | — | the reducer is test-only until LN-4 wires the start load. The records carry no settlement order, so Workflow #372 K5's `failure_settled` (whose failure state a continued id reads) and a retry round's `opened` cannot be rebuilt from them (LN-4) |
+
+### 1.183 Slice LN-2 (0.12.x): the instance fact store loads from the tagged `state` rows; the start's whole-ledger replay goes (#422 LEAN-L; frozen model v1.0 `rd-1024/lean-ledger/model.md` §1.2 H-a, H-g, H-j, §3.1, §3.2 step 5, §5.1 row LN-2, §7 A3 and A6; Alice 10-24 14:0x, #422: 「账本仅向内存加载带有特定标签的内容，不要全量加载」)
+
+LN-2 is the first reader of L11's `state` rows (§11.5 steps 1–4) for the instance store.
+[ledger-observer.md §11.5](ledger-observer.md#115-start-loading-ao-6), "As built by LN-2", is the
+contract. No code, location, value key, vocabulary token or configuration key is added: the load
+reuses the registered `ledger_tag_index_mismatch` (fatal, §16) and the location
+`ledger_index_rows`. Gates: the `gate_422_ln2` tests, one row of host.toml. The number 1.183 is
+provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN2-1 | `GlobalLedger::tagged_state(prefixes)` → `LedgerTaggedState {through_sequence, records: [LedgerTaggedRecord {key, event}]}`; `instance_fact_state_key(scope, key)` | ledger interface (read only) | LN-2 | — | the `state` rows whose key starts with a prefix, each record read by the row's sequence (a point read of the store through the sequence key, the record authenticated on its own: LN-5's history read; no other record is read), sorted by (sequence, key), at the writer's head. Each row is checked: a record has that sequence and the row's event id, carries the row's key (under any workbench pattern) and its stored `record_sha256` is the row's `value_sha256`; otherwise `ledger_tag_index_mismatch` with `fact_key` (the row key as a token: `/` → `:`), `event_id`, `expected_sha256` (the index's) and `actual_sha256` (the record's) when they fit the key table, the raw row in the detail. Its writer command kind is `Query`, never a whole-ledger query; the read count is the records returned. A store without an index (the test-only segment store) answers `ledger_joint_transaction_unsupported` |
+| LN2-2 | `InstanceFactStore::recover` | Runtime-internal (memory only) | LN-2 | — | loads from `instance_facts/` and `input_boundary/`: a publication loads only the records its rows name; for each loaded publication the first later event of a type in its `invalidate_on` whose scope matches (an input type only when a scope instance's boundary row of that type lies after the publication, read by type and instances; any other type by its type index) is applied as replay would apply it, so a fact whose invalidation was not written yet is the same pending invalidation; records and triggers go through today's reducer in ledger order; the position is the writer's head. A key whose latest record is an invalidation has its tombstone and `latest_observed` = its invalidation time (§11.3). The whole-ledger replay, the start's `HistoricalFactProjection` pass and `RuntimeStateStore::recover_fact_projections` (its only caller was the start; a `fact.invalidated` and its tombstone commit in one transaction and are never dumped) are gone. `HistoricalFactProjection` stays for the on-demand history reads (`at_position`, `active_records_at`). Other read failures stop the start as `fact_store_recovery_failed` with the ledger's failure as the detail |
+| LN2-3 | `ApprovalRecordsAt` | Runtime-internal (memory only) | LN-2 | — | the resident read projection keeps the latest record only of the approvals in `active` and `recent` (at most 512); a later decision of a dropped id is folded without the target check against its earlier record, which the governance path's own full projection keeps |
+| LN2-4 | `VerifiedArtifactIndex` removed | Runtime-internal (memory only) | LN-2 | — | `artifact.verified` is read on demand, by its type index in pages through the ledger's latest position at the call; the three callers read the same references in ledger order |
+
+### 1.184 Slice LN-4 (0.12.x): the decision memory, the agent dispatcher and the monitor registry load from their tagged records; seeding once plus the marker (#422 LEAN-L; frozen model v1.0 `rd-1024/lean-ledger/model.md` §1.2 H-c, H-e, H-i, §3.2 step 5, §3.6, §5.1 row LN-4; Alice 10-24 14:0x, #422)
+
+LN-4 is the first loader of L7, L8 and L14 and the first writer of L6 (`tagged_state_enabled`).
+[ledger-observer.md §11.1, §11.3 and §11.5](ledger-observer.md#115-start-loading-ao-6), "As built
+by LN-4", are the contract. No code, location, vocabulary token or configuration key is added;
+the load and the seeding use the registered `ledger_tag_index_mismatch` and
+`ledger_tagged_state_seeded` (L6's report, value `count`). Gates: `gate_422_ln4`,
+`agent_sessions::ln4_d_…`, one row of host.toml. The number 1.184 is provisional for the
+parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN4-1 | `ledger_index` `state` key `monitor_import`; `wake/<wake id>` also for the five session record types; `lifecycle` key `tagged_state_enabled` (L11) | new key rules | LN-4 | LN-4 | `monitor_import` settles LN3-4's import of no instance; a `wake/` row naming a completed session is an ended obligation, one naming an escalated session keeps it for the person; the marker row is one read at start |
+| LN4-2 | L7 `failure_settled?` (u64 ≥ 1); L7 `retry_round.opened?` (u64 ≥ 1) | new optional members of a registered type | LN-4 | LN-4 | settles LN3-5 (register L7 as written carries no settlement order): the Workflow #372 K5 order of the pair's latest settlement that set or cleared its failure state, and of the round's opening; absent in LN-3's records, which the seeding replaces; the smallest addition, since neither order can be rebuilt from L7's other members (a success leaves no failure record, and two rounds of one group may open in one millisecond) |
+| LN4-3 | L6 `runtime.lifecycle_observed` phase `tagged_state_enabled` | first writer of a registered phase | LN-4 | LN-4 | written once by a start without the marker, after the value records it seeds; its report `ledger_tagged_state_seeded` `{count}` is the keys seeded. A root's first start (no `runtime.started` or `runtime.takeover` before it, the `lifecycle` row `last_start`) has no earlier epoch to seed and writes no marker; the root's next start seeds what that epoch recorded |
+| LN4-4 | `GlobalLedger::index_records(role, prefixes)` | Runtime-internal interface | LN-4 | — | one writer command: the rows of `state`, `open` or `lifecycle` with a key prefix, a point read of each row's record, the §11.5 step 3 checks; a store that keeps no index answers `ledger_selection_query_unsupported`; reads count as `Query` in the writer's peak |
+| LN4-5 | the agent dispatcher prunes an ended session | Runtime-internal behaviour | LN-4 | — | §11.2 "sessions are not kept": at a session's end its request records leave memory; a completed session's wake, trigger and session leave too, an escalated one keeps its status and wake for the person; a resent response of an ended session is answered from the ledger; the wake reconciliation reads only the previous epoch's planning signals and wakes |
+| LN4-6 | `refresh_dispatches` | Runtime-internal behaviour | LN-4 | — | rebuilds the decision memory from the latest value records and reads only the dispatch records after the records' position (each dispatch change writes its pair's record under its guard, so a dispatch with a later record is open or its pair's latest completed one, which the journal keeps); before the seeding wrote the records it replays as before |
+| LN4-7 | L7 `dispatches[]?` of `{intent_sequence, admitted_sequence?, completed_sequence?, failures?}` (≤ 128 entries, strictly increasing intents; `admitted` > `intent`; `completed` > `admitted` only with `failures`) | new optional member of a registered type (coordinator ruling 3, 10-26) | LN-4 | LN-4 | the smallest member that lets a start find a pair's latest completed dispatch by indexed reads: the sequences of the dispatches the journal keeps of the pair, which the start point-reads (the execution is read among the executions between the admission and the completion). It names the open dispatches, the latest completed one and, for a task of the remedy journal (one that declares a remedy or provides a capability), its latest runs (at most 64). `failures` is the pair's consecutive failed runs through that dispatch, the per-pair consecutive-failure count of ruling 2, kept at each completion. Empty while the pair has none; absent in earlier records (no old-version compatibility, Alice 10-11) |
+| LN4-8 | the policy host's dispatch journal | Runtime-internal behaviour (coordinator rulings 1 and 2, 10-26) | LN-4 | — | bounded, never by the event count: per (task, instance) the open dispatches, the latest intent and the latest 64 admitted dispatches (the latest completed one and the remedy journal's runs). A pair's settlement reads its latest executed run and the count its completion keeps, no fold over all runs. Decision pages, the task runtime projection at a position the journal does not answer, and a replayed admission of a decision it no longer holds read the dispatch history on demand, page by page (LN-5's SQLite reads under the read budget) |
+
+Deviations, as the coordinator ruled them (10-26 ruling 4): a session escalated to a person keeps
+its status and its wake until it completes (LN4-5), and the wake reconciliation looks back one
+epoch only (LN4-5). Two more of LN4-8: a Workflow #372 K5 group's failure streak is the count of
+the group's latest run's own pair (a continued id's trailing failures before the rename are not
+added), and a resent execution or completion of a dispatch the journal no longer holds (older
+than the pair's latest 64 runs) is refused `policy_dispatch_unknown` instead of being replayed.
+
+### 1.185 Slice RL-1b (0.12.x): the scheduler workbench in the host: load when used, unload when not, no approval (#420 ROUT-L; frozen model v1.0 `rd-1024/rout-lean/model.md` §3.3–§3.6, §3.8, §3.9, §6.1 row RL-1b, §7.1 A2–A6, A8, A9; Alice's ruling 51, #386 6380164487: 「直接动态加载，用到的时候再加载，不用了直接从内存卸载，这个应该是要放到调度器工作台的」)
+
+[standard-pack-schedule.md](standard-pack-schedule.md), "The scheduler workbench (RL-1b)", is the
+contract. Pending decision 58 takes its recommended answer A (a pause does not unload a game's
+rules). One code is added (`policy_pool_reading_unused`), four optional values of
+`standard_pack_registered`, two configuration keys and one subsystem; `actingd-config` revision
+12, shared with IDLE-1. Gates: the `gate_rl1b` tests, eight rows of host.toml. The number 1.185
+is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RL1B-1 | a `policy` section without `catalog`, `catalog_approval_ids` and `procedure_manifest` (composer mode) | configuration (revision 12) | RL-1b | the person | requires `standard_packs.root` (`config_value_invalid`, `config_key` `standard_packs.root`); approval ids, a manifest or a `catalog_transition` without `catalog` are refused; with `catalog` the configured path is unchanged for this release |
+| RL1B-2 | `standard_packs.check_interval_ms` (1000..=3600000, default 60000), `standard_packs.cached_generations` (0..=8, default 1), both settable | configuration keys (revision 12) | RL-1b | the person | read at each check; `cached_generations` replaces the memo's fixed bound of 8 once the workbench runs |
+| RL1B-3 | a composed generation directory: the four documents, `fragments/<game>.json`, `standard-packs.json` (`actingcommand.standard-pack-composition.v1`: `rules_digest`, `games`, `procedures`, `pools`), `manifest.json` | Runtime state (immutable, by content hash) | RL-1b | RL-1b | activated with the existing `catalog.transition_intent` / `catalog.activated`, no promotion, no approval decision; read back with the 4 MiB catalog bound |
+| RL1B-4 | `standard_pack_registered` values `schedule_sha256`, `rules`, `held`, `unclassified` | outcome values (optional) | RL-1b | RL-1b | one record per changed `schedule.json` of a game in use |
+| RL1B-5 | `policy_pool_reading_unused` (warning, `pool_id`) | outcome code | RL-1b | RL-1b | a configured static pool reading for a pool no composed game declares is left out of the evaluation; recorded once per pool (RL-1a review item 1) |
+| RL1B-6 | `config.subsystems` row `standard_pack_schedule` (always on) | new row value of an existing fact | RL-1b | RL-1b | a `schedule.json` that requires it is composed only by a Runtime that names it |
+| RL1B-7 | check-config `report.standard_pack_schedule` (`composer_mode`, `games`, `rules`, `pools`, `profiles`, `events`, `unclassified`, `problems`, `left_out`) | check-config report member | RL-1b | — | the composition the workbench would make for the configured instances, in either mode; each problem is a note |
+
+### 1.186 Slice LN-7 (0.12.x): retention without resident history: the facts of the live frames only, read by type and by index (#422 LEAN-L; frozen model v1.0 `rd-1024/lean-ledger/model.md` §3.5, §5.1 row LN-7, §7 A6; Alice 10-24 14:0x, #422 R1 and P2: nothing resident grows with the history)
+
+[ledger-store.md](ledger-store.md#open-ownership-and-append-durability), the LN-7 paragraphs of
+"Open, ownership and append durability", "Prior-epoch scope close" and "Frame cleaner", is the
+contract. No code, location, value key, vocabulary token or configuration key is added: a listing
+failure of the frame store reuses `ledger_io` (fatal at the open, a request error at a sweep
+start), an old artifact's other reference reuses `artifact_identity_conflict`. Part 1 (#1338): the
+prior-epoch closes come from the previous epoch only and `owner_epochs` keeps owner changes only.
+Gates: the `gate_ln7` tests of the ledger and of the frame cleaner. The number 1.186 is
+provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN7-1 | `GlobalLedger::frame_retention_view_live(now_unix_ms, switches, root)` | ledger interface (read) | LN-7 | — | lists `root`'s live frame store on the caller's thread, then the writer keeps only the facts of the frames present there and answers the frame view of `frame_retention_view`; its writer command kind stays `RetentionCandidates` |
+| LN7-2 | the writer's resident retention state | Runtime-internal behaviour | LN-7 | — | the eviction proof set; the owner changes, ends, imports and closes; the scopes of the latest owner, the one before it and the owners whose import or close they wrote; the facts of the live frames and what their classes read (every frame of their runs, the open runs, the runs with a frame at most 30 s after a live frame, the marker neighbours, the error points whose window can hold a live frame, the Lab scopes). Kept frames that left the store are classed beside the live ones and not listed. A record naming a run or a capture frame the writer no longer holds loads it by the run link, the `artifact_id` index and the frame link before it is checked; `classify` and `apply` are fed the records unchanged, in ledger order |
+| LN7-3 | the open's retention read | Runtime-internal behaviour | LN-7 | — | by type (owner records, starts, bindings, eviction intents and outcomes, `Performed` releases of the retained owners' epochs), by index (the live and proven frames' records and what they name) and the retained owners' scopes grouped in SQL over the link index; no `validate` replay of every record. The owner records scale with their types (lifecycle observations, capacity samples, runtime-state facts) |
+| LN7-4 | `actingcommand_artifact_store::list_live_frames(root)` | artifact store interface (read only) | LN-7 | — | the canonical artifact ids of `artifacts\<shard>\artifact_<hex>.png` under the state root; no file contents, never `kept\`; a missing `artifacts\` or a shard that vanishes lists nothing |
+| LN7-5 | the frame cleaner's sweep start | Runtime-internal behaviour | LN-7 | — | reads `frame_retention_view_live`; `handled` and `failed` keep only the ids its view lists, so they are bounded by the frames on disk; `absent` and `rescanned_absent` count only frames that left the store after the listing |
+| LN7-6 | the non-recovery branch of `retention_candidates` and eviction admission | Runtime-internal behaviour | LN-7 | — | lists and judges the resident objects: every admissible object has its material present, so it is live and resident; the host reads only `recovery_pending` outside recovery (startup recovery is the only caller) |
+
+### 1.187 Slice LN-8 (0.12.x): the start's ledger open reads the meta row, `MAX(sequence)`, the newest records and the indexes only; `quick_check` leaves the start (#422 LEAN-L; frozen model v1.0 `rd-1024/lean-ledger/model.md` §3.2 steps 1 and 2, §3.7, §6, §5.1 row LN-8, §7.1 A1 to A3; Alice's rulings 56 and 57)
+
+[ledger-store.md](ledger-store.md#open-ownership-and-append-durability), the LN-8 paragraph of
+"Open, ownership and append durability", [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)
+(the LN-8 note) and [runtime-database.md](runtime-database.md) are the contract. No code or
+location is added: damage in the open's tail reuses the integrity codes a complete read gives for
+it. `ledger-maintenance verify` keeps its complete read and the whole-file check; old rows that no
+reader reads are re-checked by LN-9 (the same release). Gates: the `gate_ln8` tests of the
+ledger and the scale harness (`Lean scale`), which gates model §7.1 A1 to A3 from this slice on.
+The number 1.187 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN8-1 | `ledger_observer.open_verify_tail_records` | configuration key (`actingd-config` revision 13) | LN-8 | — | how many of the newest records the start's ledger open reads and authenticates; 4 096, `1..=1000000`, not settable (read when the ledger opens); `LedgerFailurePlan::with_open_verify_tail_records`, `GlobalLedgerConfig::with_open_verify_tail_records` |
+| LN8-2 | `ledger_opened`, `ledger_open_measured`: the optional values `meta_ms`, `tail_ms`, `index_ms`, `import_ms` | outcome value keys (duration) | LN-8 | — | the start's open phases: format, marker, meta row and `MAX(sequence)`; the tail; the missing views and indexes with the retention read by type and by index; the dump import, tail gap and stale-owner record. `event_count` is the tail records authenticated; `sql_read_ms`, `verify_ms`, `restore_ms` stay the phases of `ledger-maintenance verify` and are 0 for the start; `ledger_open_slow`'s `elapsed_ms` sums all eight |
+| LN8-3 | the formal writer open's verification | Runtime-internal behaviour | LN-8 | — | one read transaction: format and marker, keyed meta row, `MAX(sequence)` = head, then the newest rows in chunks, each authenticated on its own with its link and artifact rows, contiguous through the head, the oldest chained to its predecessor's stored hash and the newest's hash the meta row's; no other row and no migrated-prefix digest; the views a database lacks are created against the meta row and `MAX(sequence)`, without a second read |
+| LN8-4 | `RuntimeDatabase::open_existing_for_start(root)` | database interface | LN-8 | — | the Runtime start's open of existing storage: read-write with every check of `open_existing(root, false)` except the whole-file `quick_check(1)` |
+
+### 1.188 Slice CF-4 (0.12.x): a `fact` predicate compares with another fact of its scope plus an offset (#386, condition-first; Alice 10-26: 「上限-1000才可能当做红线，并且这个红线绝对不是固定的」)
+
+[scheduling/README.md](scheduling/README.md) ("Fact references", "Why A Candidate Does Not
+Run"), [scheduling/v2/README.md](scheduling/v2/README.md) and
+[standard-pack-schedule.md](standard-pack-schedule.md) (`requires`) are the contract. **No
+persisted ledger shape**: the reference is a catalog format addition (the ledger holds only the
+catalog's `catalog_hash`, unchanged for a catalog without one); the reason is a catalog code
+carried by the evaluation's decisions and the existing dispatch decision records; the subsystem
+row is a value of the existing `config.subsystems` fact. No wire, configuration key or interface
+revision changes. The number 1.188 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF4-1 | `fact.value` may be `{"type": "fact", "fact_key", "offset"}` (`FactComparand::Fact`, `FactReference`; schema `factReference` in `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | CF-4 | the standard packs' `schedule.json` | V2 only (V1: `unknown_field` at `value/type`); the referenced fact is read in the predicate's scope with its `max_age_ms`; both facts integers, compared as `a C b + offset`; `contains` refused; a typed value serializes and hashes as before |
+| CF4-2 | code `fact_reference_unavailable` (info; `fact_key`, `unknown_reason`) | new catalog entry (no shape) | CF-4 | CF-4 | owner policy (registry `PolicyCode`, block `#386 CF-4`), `ladder_class` `none` (row 7: a scheduling decision reason), layer `policy`, review `pending`, since 0.12.14; the existing vocabulary `unknown_reason` (`fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired`, `type_mismatch`); no new key |
+| CF4-3 | `config.subsystems` row `fact_reference` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-4 | CF-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose rule writes a reference must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the reference) |
+
+### 1.189 Slice SR-4a3 (0.12.x): complete silence at the ladder, the startup package, the emulator autostart and the monitor probe (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, §6 row SR-4a3; frozen scheduling model v1.4.2 §5.2a, §5.3 rule 3, C-3; Alice 10-09: 「黑名单就是完全静默，连接断开了也不管」)
+
+[scheduling-blackout.md](scheduling-blackout.md), "Complete silence" ("How the Runtime holds
+them"), is the contract. No code, configuration key, subsystem or persisted shape is added: the
+ladder suppression `blackout` (register S3) is first written here, `blackout_config_invalid` gains
+its first host writer with `blackout_source` `catalog`, and the scheduler's routine gate gains a
+value in memory. With both blackout lists empty and no catalog `maintenance` event nothing
+behaves differently. Gates: the `gate_386_sr4a3` tests, one row of host.toml. The number 1.189
+is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR4A3-1 | `ClaimGate::Silenced {routine_held, autostart}`; `ClaimGate::{routine_held, blackout, holds, silenced}`; `SeedScheduler::waiting_total_gated` | scheduler interface (memory only) | SR-4a3 | SR-4a3 | holds `startup_package` (a blackout covers the instance, or the next starts within the package's deadline plus `quiet_margin_ms`) and `autostart` (a blackout covers it); every client and operator kind passes |
+| SR4A3-2 | `recovery_ladder_suppressed` reason `blackout`, `until_unix_ms` the blackout's end (Info) | persisted enum value (registered by AO-0, S3) | SR-4a3 | SR-4a3 | at admission (every trigger stage), at a granted claim's climb, for a queued ladder claim at the lease sweep, before a rung or a hold's rerun its time limit would carry into a blackout |
+| SR4A3-3 | `blackout_config_invalid` with `blackout_source` `catalog`, `field` `/events/<n>/validity`, `blackout_id` the event's id | outcome values (existing) | SR-4a3 | SR-4a3 | a catalog `maintenance` event with a duration and no V2 validity, once per active generation; the event is left out of the host's blackouts |
+
+### 1.190 Slice ED-2 (0.12.x): the run-duration samples and the expected duration E in force (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.4 D-13, D-14, D-15, §6 row ED-2, and the coordinator's ruling of 10-24 14:1x after the freeze; Alice 10-22 16:4x, #405 comment 6335497930: 「每个任务执行所需的时间可以动态的从账本读，近5次该任务包的平均时间加5分钟」; ruling 39 R6.2, R6.3)
+
+E takes effect when this slice deploys; `scheduling.expected_runtime.enabled` false (section or per
+instance) rolls it back without a restart. [instance-fact-store.md](instance-fact-store.md) ("Run
+duration facts", the capacity ledger), [scheduling/README.md](scheduling/README.md) ("Settlement
+Feedback And Eligibility Age"), [runtime-config.md](runtime-config.md) ("Expected duration") and
+[actingd-check-config.md](actingd-check-config.md) are the contract. The ruling after the freeze
+overrides the model's "dispatch intent shape unchanged" (§5): the intent records the duration it
+reserved (ED2-3). **No configuration key** (ED-1's keys are read now). Codes: the model's two,
+`run_duration_key_reserved` and `run_duration_row_dropped` (#420 S4: one domain warning with
+values covers the row bound, an unreadable row and a refused publication). Gates: the `gate_ed2`
+tests t1 to t9 (host). The number 1.190 is provisional for the parallel slices (1.189 is SR-4a3's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ED2-1 | `health.run_duration` (one per instance): `record_list` rows `{package_id, n, d1 … dn, at}` | instance fact key (tagged, as every instance key) (tests t1 to t5, t7) | ED-2 | ED-2 (the settlement of a successful scheduled run) | newest duration `d1`, at most `runs` (≤ 16) per row, ≤ 256 rows (the oldest `at` dropped with `run_duration_row_dropped`); source `runtime.run-duration`, no expiry; loaded by LN-2's tagged start; +1 active fact per instance in the capacity ledger; kept by package updates and upgrades (R6.2) |
+| ED2-2 | `run_duration_key_reserved` (error; `fact_key`), `run_duration_row_dropped` (warning; `instance_id`, `package_id`, the refusal as `caused_by`); locations `record_run_duration_sample`, `project_expected_runtime` | outcome codes and locations (tests t6, t7) | ED-2 | ED-2 | a client's publication of the key, or any other path but the settlement, is refused before the fact write gate with nothing appended; the warning is one `runtime.failed` with system links |
+| ED2-3 | `policy.dispatch_intent`: `expected_duration_ms` (milliseconds, not 0) | new optional member of a persisted record (tests t4, t9) | ED-2 | ED-2 | written only when the intent's duration is not its task spec's declared `expected_duration_ms` (E, or a configured fact refresh duration); only an intent carries it (`invalid_policy_payload`, field `expected_duration_ms`); recovery and replay reserve it (`control_intent`), absent the spec's declared one; `PolicyPayloadDraft::dispatch_intent_with(data, random_delay, expected_duration_ms, audit)`, `PolicyDispatchPayload::expected_duration_ms()` |
+| ED2-4 | the projection of E into `TaskRuntimeSnapshot.expected_runtime_ms`, `.expected_runtime_runs` (ED1-2) | Runtime-internal behaviour (memory and the input identity) (tests t1, t3, t4, t8, t9) | ED-2 | — | every authoritative projection; a pair's package is the `package_id` a scheduled run's preparation admitted at its procedure binding's location in this process (`PackAdmission::learn_prepared`; never the admission after start, so E never turns on between an evaluation and its admission), the fact refresh's the reader binding's; the record is never an ordinary fact; admission compares the intent's duration with its own projection's (`policy_facts_stale` with E there) |
+| ED2-5 | `ScheduleExplanationCandidate.expected_runtime_ms`, `.expected_runtime_source` (`declared` \| `runs:<n>`) | new optional members of a wire shape (runtime-client; `ac_schedule`, `actingctl schedule`) (tests t1, t9) | ED-2 | ED-2 | every candidate row the Runtime answers carries both; the MCP result schema names them |
+| ED2-6 | `config.subsystems` row `expected_runtime` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | ED-2 | ED-2 | the catalog generator emits v35 only for a Runtime that names it (model §3.8) |
+| ED2-7 | `FactRefreshSettings.expected_duration_ms` (policy) | policy interface (memory only) | ED-2 | ED-2 | the fact refresh's declared duration D is `scheduling.fact_refresh.expected_duration_ms`; the spec's `FACT_REFRESH_EXPECTED_DURATION_MS` (60 000) stays as its nominal value, the key's default |
+
+### 1.191 Slice SR-4a2 (0.12.x): the policy closes over blackouts: positions 4 and 7, the day boundary, the admission re-check, the random delay's cut (#386; SCH-M frozen model v1.0 `rd-1024/sched-design/model.md` §3.2 D-3, D-4, D-6, §6 row SR-4a2; Alice's ruling 50, #386 6380164487: the day-boundary rule as recommended, per-instance switch, default on)
+
+The gate of catalog v35 on the Runtime side, over SR-4a1's pure judgements (§1.179).
+[scheduling-blackout.md](scheduling-blackout.md) ("Day-boundary fit", "Gradual quiet", "Order of
+the deferrals", "Configuration", "Codes") and [actingd-check-config.md](actingd-check-config.md)
+are the contract. **No persisted ledger shape and no configuration key**: every key it reads is
+SR-4a1's (revision 11); the refusals are existing `policy.dispatch_rejected` records with the
+code's outcome. One code is added. Gates: the `gate_386_sr4a2` tests, ten rows of host.toml. The
+number 1.191 is provisional for the parallel slices (1.189 is SR-4a3's, 1.190 ED-2's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR4A2-1 | `blackout_active` and `blackout_approaching` with `blackout_source` (registered by SR-0, the value by SR-4a1) | outcome codes, first emitted | SR-4a2 | SR-4a2 | evaluation reasons (the alias as `instance_id`) and admission refusals at Info (the opaque `instance_id`, the wake as the rejection's `next_eligible_unix_ms`); waiting gates of the #372 K2 clock-slot records |
+| SR4A2-2 | `policy_day_boundary_approaching` (info, `instance_id`, `window_end_unix_ms`, `required_ms`, `next_eligible_unix_ms`) | outcome code (new) | SR-4a2 | SR-4a2 | SCH-M D-6: E does not fit the activity window it would be admitted in; wake at the next window start; a waiting gate of the clock-slot records |
+| SR4A2-3 | `config.subsystems` row `scheduling_blackout` (always on, `count` the host entries) | new row value of an existing fact | SR-4a2 | SR-4a2 | a catalog generator emits `maintenance` events only for a Runtime that names it (GEN-35) |
+| SR4A2-4 | the random delay's cut gains the quiet point (the next blackout start minus the lead; where the day boundary applies, the window's end minus E) | behaviour (memory only) | SR-4a2 | — | the draw's `allowed_until` is the earliest of the four; `PolicyRandomDelay` unchanged |
+
+### 1.192 Slice DA-4 (0.12.x): a game root's display declaration `display-layout.json` (#392 / #401; model 392 v1.2 `rd-1012/m392/model-392-adapter-shell-v1.2.md` §4.1, §0.2 C9, §12.1 row DA-4; the coordinator's ruling of 10-13, §17 item 2: the declaration sits at the standard package's root and the NAV-5 root reader reads it)
+
+[package-reference.md](package-reference.md) ("Content-directory tools and the bundle index",
+"Standard package root", `display-layout.json`) and [actingd-check-config.md](actingd-check-config.md)
+are the contract. **No persisted ledger shape, no configuration key and no new code**: a broken
+file is the existing `standard_pack_root_invalid` with one more `standard_pack_problem` token
+(#420 S4); the display adapter that uses the declaration comes with DA-2a. The SH-2 rows X6 to
+X8 and X10 (§1.25) name DA-4 their first writer by model v1.1's slicing; under v1.2 their
+writers are DA-2a (X7, X8 and X10's `display.map`) and DA-4b (X6, the safe area), and this slice
+writes none of them. A game root without `display-layout.json` behaves as before, and no
+resource repository carries one in this wave. Gates: the contract's `standard_pack_display`
+tests (DA4-T1, DA4-T2), the host's `gate_392_da4` tests (DA4-T3 and the identity test) and
+actinglab's `gate_392_da4` test (DA4-T4). The number 1.192 is provisional for the parallel
+slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DL-1 | root file `display-layout.json` (`actingcommand.display-layout.v1`): `{schema_version, game, scale {by: height \| width, area: screen \| safe_area}, anchor_area: screen \| safe_area, correction {radius_px}}` (`StandardPackDisplayLayout`, `parse_standard_pack_display_layout`, `STANDARD_PACK_DISPLAY_LAYOUT_FILE`; `StandardPackRootBytes.display_layout`, `StandardPackRoot.display_layout`) | resource file format, not a ledger shape (tests DA4-T1, DA4-T2) | DA-4 (reader, contract checks) | resource side (DA-6) | every member required, unknown members refused, no Runtime default; `malformed` at the first unknown, missing or misfit member's pointer (empty for the whole document), `game_mismatch` at `/game`, `display_layout_invalid` at `/correction/radius_px` above 64 (the shape's bound, not a tunable); without `bundle.json` `bundle_missing`; no `pages.json` needed; read by `read_standard_pack_root` for every reader; the spellings are SH-2's `DisplayScaleBy` and `DisplayArea` (X7) |
+| DL-2 | `standard_pack_problem` token `display_layout_invalid` | vocabulary token of an existing code (`standard_pack_root_invalid`, contract) | DA-4 | DA-4 | model 392 §9.2: v1.1's code `display_layout_invalid` becomes this token; the code's description lists `display-layout.json` among the root files |
+| DL-3 | `package bundle --display-layout <file>`; output `display-layout.json` beside `bundle.json` (`StandardPackRootFiles.display_layout`); `resource verify`'s bundle step lays a repository root's `display-layout.json` the same way | new tool flag and output layout (test DA4-T4) | DA-4 | resource side (DA-6) | laid byte for byte, under its root file name whatever the given file is named, once the game root the bundle makes passes `read_standard_pack_root` (`standard_pack_root_invalid` with the given file's `path`); with it every pack is admitted for real as with any root file; `standard-pack check` lists it in `root_files` |
+| DL-4 | the Runtime's reading of the file: at startup with the other root files (a broken one only recorded); in a run's preparation, the game root read when it holds the file (a broken one refuses the run before any lease and task record); check-config's `root_files`; `actingctl packs`' sound root; the scheduler workbench's and `standard-pack compose`'s root read | behaviour (memory only) (tests DA4-T3, identity) | DA-4 | — | what a preparation read is not kept yet (DA-2a keeps it for the run's display map); a file replaced in place is read by the next run; a 1280x720 package on a 1280x720 device records and sends byte for byte what it does without the file and without a root |
+
+### 1.193 Slice DA-2a (0.12.x): the display adapter's capture side for the identity and a pure scale (#392 / #401; model 392 v1.2 `rd-1012/m392/model-392-adapter-shell-v1.2.md` §0.2 C1 to C3, C10, C11, §5.1, §6.6, §8.3, §12.1 row DA-2a; coordinator work order `rd-1026/brief-da2a.md`: the identity and a pure scale only, a translation waits for DA-2b)
+
+[display-adapter.md](display-adapter.md) section 8 is the contract. **No new persisted shape, no
+configuration key and no new code**: the SH-2 shapes X7 and X8 (§1.25) get their writer, the
+vocabulary `display_problem` gains three tokens, `contained_task_geometry_unavailable` an optional
+value, and `contained_task_frame_resolution_mismatch` is retired (`replaced_by`
+`display_map_unresolved`, retired in 0.12.15). X10's `display.map` and `display.logical_extent`
+keep no writer in this slice. A 1280x720 package on a 1280x720 device records and sends byte for
+byte what it did. Gates: the kernel's `gate_392_da2a` tests (DA2-T1, T2, T3, T6, T12, T14, T15 and
+the identity test), the host's `gate_392_da2a` tests (DA2-T9, the input prerequisite and the safe
+area); the measurement DA2-B is no gate. The number 1.193 is provisional for parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DA2a-1 | the frame gate `Resolution::validate_frame` at the kernel's six capture entries (entry page, navigation locate, sample, page frame, reading agreement frame, Lab dry-run select) | behaviour (memory only) | DA-2a | — | the map from the frame's size and its producer's geometry, the package's base and the run's declaration; the identity uses the frame's own buffer, a pure scale is resampled once to the base's size (REC-5); a translation, a cropped frame or a turned frame is `display_map_unresolved` (`translation_unsupported`, a turned one `orientation_mismatch`) until DA-2b; a refusal of the map is `display_map_unresolved` with its problem (a frame not showing its display `contained_task_frame_invalid`); the frames of one observation keep one map (`recognition_sample_geometry_changed`, a candidate sample `candidate_sample_page_or_geometry_changed`); a recognition record's regions are device boxes (outward) |
+| DA2a-2 | `ContainedTaskRuntime::display_layout` (default `None`) and the run's kept declaration (`RunStandardPack`, from `prepare_run_interrupts`) | kernel seam, behaviour (memory only) | DA-2a | — | the declaration a run's preparation read (DA-4, §1.192 DL-4) holds for the whole run and all its layers; `DisplayRule::from(&StandardPackDisplayLayout)` is the mapping input, no second copy of the shape |
+| DA2a-3 | `TaskGeometryObservation.display_map` (X7) | first writer | SH-2 | DA-2a | written on a passed `initial` or `changed` observation whose map is not the plain identity (the identity leaves the record as it was); undeclared, it names the rule the map was built by (`width`, `screen`, `screen`, `declared: false`); the validation now admits a declared `translate` of the base's size (insets narrow its anchor area only) |
+| DA2a-4 | `TaskGeometryPhase::Changed` with `extent_changed`, `rotation_changed`, `insets_changed` (X8) | first writer | SH-2 | DA-2a | a frame whose size or whose producer's rotation, crop or insets differ from those the map was built on reads the geometry again and is recorded `changed` (the first change its trigger); the map is rebuilt, the display facts are published again when they changed, and the run goes on: a size change no longer fails the input prerequisite |
+| DA2a-5 | the input prerequisite under a map that is not the plain identity | behaviour | DA-2a | — | until DA-3 maps input, `display_map_unresolved` (`input_scale_unsupported`, stage `display_input_map`, the frame's and the base's sizes), no input |
+| DA2a-6 | `display_problem` tokens `translation_unsupported`, `input_scale_unsupported`, `safe_area_unavailable`; `contained_task_geometry_unavailable` value `display_problem` (optional); `contained_task_frame_resolution_mismatch` retired | vocabulary tokens, an optional value, a retirement (#420 S4) | DA-2a | DA-2a | a declaration measured on the safe area ends the run at its first frame `contained_task_geometry_unavailable` (`safe_area_unavailable`) before DA-4b reads insets |
+
+### 1.194 Slice LN-WS (0.12.x): no read can make a write fail: a request's read is bounded inside a SQLite statement, its history statements span bounded ranges from the window's first record, and an append keeps the ledger's code (#422; root cause `rd-1026/writer-stall/root-cause.md` §5; the production stop of 2026-10-26 19:12:43)
+
+[ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) (the A51 and
+LN-WS notes) and [runtime-config.md](runtime-config.md) ("The `ledger_observer` section") are the
+contract. **No new persisted shape and no new code**: `ledger_read_budget_exceeded`,
+`writer_response_timeout` and a page's `read_budget` limit carry every outcome. Two
+configuration keys join `actingd-config` revision 14. Gates: the ledger's `gate_ln_ws` tests (T1
+to T5) and the host's (T6, T7); the scale harness's six read forms are a measurement, no gate.
+The number 1.194 is provisional for parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LNWS-1 | `ledger_observer.read_check_vm_steps` | configuration key (`actingd-config` revision 14) | LN-WS | — | SQLite virtual-machine steps between two looks at the clock of a read that serves a Runtime request; 10 000, `100..=1000000`, not settable (read when the ledger opens); `LedgerFailurePlan::with_read_check_vm_steps`, `GlobalLedgerConfig::with_read_check_vm_steps` |
+| LNWS-2 | `ledger_observer.history_scan_rows` | configuration key (`actingd-config` revision 14) | LN-WS | — | sequences one history statement of a view page spans at most; 65 536, `1024..=1048576`, not settable (read when the ledger opens); `LedgerFailurePlan::with_history_scan_rows`, `GlobalLedgerConfig::with_history_scan_rows` |
+| LNWS-3 | the statement bound of `ProjectViewPage` and `ReplayPage` | Runtime-internal behaviour | LN-WS | — | a progress handler on the shared connection, installed while the read holds it and removed before it lets it go; it interrupts the statement in progress once the read's budget is spent: a page answers incomplete, a replay page and an interrupted head check `ledger_read_budget_exceeded`; the Runtime's own reads keep A51's bound between rows |
+| LNWS-4 | a view page's history statements | Runtime-internal behaviour | LN-WS | — | spans of at most `history_scan_rows` sequences, the first of one sequence (completed whatever the budget), each later twice the one before; a first page with a window starts at `MIN(sequence)` of the time index for its start, minus one; a run's recovery context the budget cuts short is `context_limit` |
+| LNWS-5 | `append_runtime_event`, `record_policy_values`, `linked_policy_run_events` | host failure mapping | LN-WS | — | the fatal `ledger_failure` keeps the ledger's code as its `caused_by` link (`writer_response_timeout`, ...); fatality unchanged |
+
+### 1.195 Slice DA-4b-D (0.12.16): the declared safe area (#392 / #401; Alice's ruling 69 of 2026-10-26, board #392 6414416615 and 6414691189: 「只有安全区适配不做，但是需要留出来声明式的安全区接口，也就是说可以依照声明的文件直接切换安全区形态」, 「一份文件对应一个机型或多个机型，并且修改设置后实时生效」; coordinator work order `rd-1026/brief-da4bd.md`, which replaces model 392 v1.2's DA-4b row)
+
+[display-adapter.md](display-adapter.md) section 9 is the contract. **No new persisted shape and
+no new code**: SH-2's X6 `CaptureGeometry.safe_insets` gets its first writer, X7's
+`insets_source` its `declared`, the vocabulary `display_problem` four tokens, and
+`display_map_unresolved` four optional values; `actingd-config` rises to revision 15 (§6). Not
+done, by the ruling: no display's cutout is read (model 392 §8.2), X10's
+`display.safe_area.reported` and `display.safe_area.declared` keep no writer, and no device's
+model is detected. A 1280x720 package on a 1280x720 emulator records and sends byte for byte what
+it did: only a run whose game measures on the safe area is touched. Gates: the host's
+`gate_392_da4bd` tests (work order tests 1 to 4) and DA-2a's adapted safe-area test (test 4's
+handset). The number 1.195 is provisional for parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DA4bD-1 | declaration file `actingcommand.display-safe-area.v1`: `{schema_version, models: [string], forms: [{display {width, height}, rotation: r0 \| r90 \| r180 \| r270, insets {left, top, right, bottom}}]}`, every `*.json` of the declaration directory | Runtime-side declaration file, not a ledger shape (tests 1 to 3) | DA-4b-D | a person or an agent | every member required, unknown members refused; models non-empty and distinct, forms non-empty, displays at least 1, insets that leave a width and a height, no two forms of one display and rotation; one model in one file only; parsed in the host (`crate::display_safe_area`), its one reader |
+| DA4bD-2 | keys `display_safe_area.directory` (string, default `display-safe-area`, relative to the state root, non-empty), `display_safe_area.check_interval_ms` (milliseconds `0..=3600000`, default 1 000), `display_safe_area.model` (string, default empty: none) and per instance `display_safe_area.model` (default `section:display_safe_area.model`; the entry's `display_safe_area.model`) | configuration keys, **`actingd-config` revision 15** | DA-4b-D | — | all settable, read at every frame of a run whose game measures on the safe area; the defaults only in `actingd.defaults.json`; `config.parameters.display_safe_area` and `config.parameters.instance` |
+| DA4bD-3 | X6 `CaptureGeometry.safe_insets` on a delivered frame's own geometry; X7 `insets_source` `declared` | first writer | SH-2 | DA-4b-D | the host stamps them before the frame reaches the kernel: the declared model's form for the frame's logical display and rotation, an emulator without a model 0, a handset without one none (`contained_task_geometry_unavailable`, `safe_area_unavailable`, as DA-2a); a change of them is DA-2a's `changed` record with `insets_changed` and the map's rebuild, from the next frame (DA2a-4); a map measured on the safe area names `declared` (DA2a-3) |
+| DA4bD-4 | live reload | behaviour (memory only) (test 2) | DA-4b-D | — | the directory is read again once the interval has passed (0: every frame); files of the same names and bytes (SHA-256) keep their catalog; the model setting is read at every frame; nothing needs a restart |
+| DA4bD-5 | `display_problem` tokens `safe_area_declaration_invalid`, `safe_area_model_repeated`, `safe_area_model_undeclared`, `safe_area_form_undeclared`; `display_map_unresolved` optional values `path`, `other_path`, `json_pointer`, `config_key` (existing keys) | vocabulary tokens, optional values (#420 S4: one domain code with values) | DA-4b-D | DA-4b-D | each ends the run at stage `display_map_build` with the frame's size and no input (test 3); `safe_area_unavailable`'s meaning narrows to a handset that declares no model |
+
+### 1.196 Slice LN-7c Q (0.12.17): the frame cleaner by ledger query, the evidence-frame rule, and no frame read at the open (#422; Alice's ruling 70; design `rd-1026/ln7c/final-query.md` §1, §2, §4, §5; coordinator work order `rd-1026/brief-ln7c-q.md`; the 14-day question answered A)
+
+[ledger-store.md](ledger-store.md) ("Frame cleaner", "Frame listing", the LN-7c Q paragraph of
+the open) and [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer)
+are the contract. **No new persisted shape and no new code**: `ledger_index_mismatch`, `ledger_io`
+and the cleaner's existing warnings carry every outcome; two ledger locations are added
+(`query_frame_retention`, `frame_retention_live_objects`). Three configuration keys join
+`actingd-config` revision 16 (§6). Gates: the ledger's `ln7c_q_t_plan_*`, `ln7c_q_teq_*`,
+`ln7c_q_t_evidence_*`, `ln7c_q_t_open_*` and `ln7c_q_t_pace_*` tests, the host cleaner's
+`ln7c_q_t_pace_*`, `ln7c_q_t_schedule_*` and `ln7c_q_t_evidence_*` tests, and runtime-config's
+`ln7c_q_t_evidence_*`. The number 1.196 is provisional for parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN7CQ-1 | `frame_retention_evidence_max_age_days` | configuration key (top level, **`actingd-config` revision 16**) | LN-7c Q | — | 15, `1..=3650`, settable, taken at each pass start; joins `config.parameters.top_level`; no 14-day key |
+| LN7CQ-2 | `ledger_observer.frame_query_steps_per_second` | configuration key (**`actingd-config` revision 16**) | LN-7c Q | — | 500 000, `1000..=100000000`, settable, read after each statement; the pace is in SQLite steps, not rows |
+| LN7CQ-3 | `ledger_observer.frame_query_chunk_frames` | configuration key (**`actingd-config` revision 16**) | LN-7c Q | — | 256, `1..=4096`, read at start (not settable) |
+| LN7CQ-4 | statements W, L, K and the owner statement (`crates/ledger/src/global/sqlite/frame_query/*.sql`) | Runtime-internal behaviour | LN-7c Q | — | on a read-only connection of the cleaner's own, one read transaction per statement, run only while `ledger_frame_refs` covers `1..=` the snapshot's head; golden plans `plan_w.txt`, `plan_l.txt`, `plan_k.txt` |
+| LN7CQ-5 | the pass line `actingd frame_retention pass …` | daemon line | LN-7c Q | — | gains `kept_examined`, `removed_confirmed`, `removed_expired`, `kept_unknown`, `query_steps`; a pass without a complete frame index prints `actingd frame_retention pass skipped=frame_refs_incomplete` |
+| LN7CQ-6 | `ac_evidence_confirm_read`, `actingctl evidence confirm-read` | MCP and CLI answer member | LN-7c Q | — | `covers {evidence_frames, in_kept}` (C's answer gains it); a count that cannot be made leaves it out with a warning |
+| LN7CQ-7 | `actingledger frames` | offline tool output | LN-7c Q | — | live classes from statement L; `evidence {max_age_days, kept_staying, kept_remove_confirmed, kept_remove_expired, kept_unknown, live_remove_confirmed, confirmed[]}` with `confirmed_by {actor, source, surface, client, at_unix_ms, sequence}` |
+| LN7CQ-8 | the writer's open and its retention state | Runtime-internal behaviour | LN-7c Q | — | the open reads no frame and does not list the live frame store; the writer keeps no frame facts and answers no frame view (`GlobalLedger::frame_retention_view`, `frame_retention_view_live` removed); `GlobalLedger::retain_live_frames` trims the frame objects at each pass start |
+
+### 1.197 Slice LN-7c V (0.12.17): `ledger-maintenance verify` checks the frame cleaner's statements against the full view (#422; Alice's ruling 70; design `rd-1026/ln7c/final-query.md` §7 row V, §6; coordinator work order `rd-1026/brief-ln7c-v.md`)
+
+[ledger-store.md](ledger-store.md) ("Frame cleaner", the offline check) and
+[ledger-maintenance.md](ledger-maintenance.md) are the contract. **No new code, key, revision or
+persisted shape**; one ledger location is added (`verify_frame_query`). Offline only: the Runtime
+never runs the check. Opt-in (fix round 1): only `verify --frame-query` runs it; without the flag
+`verify` is the complete read alone, as before this slice. Gates: the ledger's `ln7c_v_*` tests.
+The number 1.197 is provisional for parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LN7CV-1 | `ledger_index_mismatch` optional values `artifact_id`, `field` (existing keys) | optional values (#420 S4: one domain code with values) | LN-7c V | LN-7c V | operation `verify_frame_query`: the frame whose statement answer differs from the full view, and the answer's member as a JSON pointer (`/class`, `/action`, `/created_at_unix_ms`, `/run_id`, `/folder`, empty for a frame one side does not answer); the ruled (E1, E11) and safe (E3, E4, E5) differences are not reported |
+| LN7CV-2 | `INFO actingd: ledger_maintenance_completed verify frame_query_live=<n> frame_query_kept=<n> frame_query_accounted=<n>` | daemon line (stderr) | LN-7c V | — | after a passing `verify --frame-query` of a formal root; never without the flag; the receipt is unchanged |
+| LN7CV-3 | `actingd ledger-maintenance` reads `frame_retention_dedup_error` and `frame_retention_dedup_lab` | behaviour | LN-7c V | — | for `verify --frame-query`'s check, with the defaults a start uses when the file names neither |
+| LN7CV-4 | `actingd ledger-maintenance verify --frame-query`; `LedgerMaintenanceRequest.frame_query` (default `false`) | command-line flag; host request member | LN-7c V | — | opt-in: runs the check after the complete read; without it `verify` builds no retention index, runs no statement and prints no count line; never ignored (fix round 1b): another operation with it, or `verify` of a root that is not formal (Segment, candidate), is `maintenance_arguments_invalid` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -3225,15 +3637,18 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | Key | Store | Tagged | Writer slice |
 |---|---|---|---|
 | `health.perf_baseline.<signal>.<backend>` (per instance, one per backend in use) | instance | yes (every instance key) | P-m |
+| `health.run_duration` (per instance, one record of at most 256 package rows; [instance-fact-store.md](instance-fact-store.md), "Run duration facts"; §1.190 ED2-1) | instance | yes (every instance key) | SCH-M ED-2 |
 | `session.pack.schedule` (one per scope) | instance | yes | SR-11 |
 | `session.feature.<feature_key>` | instance | yes | SR-5a |
 | `session.instructions` (reserved, one per scope) | instance | yes | GOAL-1 |
 | `host.perf_baseline.<signal>` | workbench | yes (`tag.workbench_patterns`) | P-m |
 | `host.perf_calibration.stats`, `.curve`, `.phase` | workbench | yes | P-m (`stats`), P-a |
 | `host.config_overrides` | workbench | yes (added to `tag.workbench_patterns` by M387 §5.7) | D1b |
+| `host.contained_settlement` (an integer: the start event of the last start that completed the settlement of open direct runs; [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #411 A65) | #411 A65 |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
+| `config.parameters.execution` (a section fact of the `config.parameters.<section>` family, three rows; §1.177 B1-2, B1-3) | workbench | no (`config.` is re-observed) | PERF-B1 |
 | `host.pack_registry.*` | workbench | no (added to `tag.reobserve_prefixes`, UIM §6.5) | U-3 |
 | `display.frame_extent`, `display.rotation`, `display.orientation`, `display.aspect` (per instance, only for an instance bound to a device; [instance-fact-store.md](instance-fact-store.md#display-facts)) | instance | yes (every instance key) | DA-A |
 | `display.logical_extent` (one row `{width, height}`), `display.safe_area.reported` (one row `{left, top, right, bottom}`, device-frame pixels), `display.safe_area.declared` (the same row), `display.map` (one row, model 392 §8.1) (per instance; §1.25 X10) | instance | yes (every instance key) | DA-4 (`display.safe_area.declared`: a person or an agent) |
@@ -3257,7 +3672,7 @@ when it takes effect.
 
 | Section | Keys | Defaults and meaning | Parsed by | Read by (takes effect) |
 |---|---|---|---|---|
-| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer); #411 A51 (**`actingd-config` revision 8**): `read_budget_ms`, `close_timeout_ms`; P0-LO (**`actingd-config` revision 10**): `open_timeout_ms`, `open_warn_ratio_milli` | there; A51: 1 000 (`1..=9999`), 60 000 (above `read_budget_ms`), not settable (§1.151 A51-3); P0-LO: 600 000 (`10000..=600000`), 500 (`100..=1000`), not settable | AO-1 (built, §1.26); A51 (§1.151); P0-LO | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x); A51 (0.12.9); P0-LO (0.12.11) |
+| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer); #411 A51 (**`actingd-config` revision 8**): `read_budget_ms`, `close_timeout_ms`; P0-LO (**`actingd-config` revision 10**): `open_timeout_ms`, `open_warn_ratio_milli`; #422 LN-5 (**`actingd-config` revision 12**): `history_page_rows`; #422 LN-TUNE (**`actingd-config` revision 12**): `writer_reply_timeout_ms`; #422 LN-8 (**`actingd-config` revision 13**): `open_verify_tail_records`; #422 LN-9 (**`actingd-config` revision 13**): `scrub_rows_per_second`, `scrub_chunk_rows`, `scrub_pass_interval_ms`; #422 LN-WS (**`actingd-config` revision 14**): `read_check_vm_steps`, `history_scan_rows`; #422 LN-7c Q (**`actingd-config` revision 16**): `frame_query_steps_per_second`, `frame_query_chunk_frames` | there; A51: 1 000 (`1..=9999`, below `writer_reply_timeout_ms`), 60 000 (above `read_budget_ms`), not settable (§1.151 A51-3); P0-LO: 600 000 (`10000..=600000`), 500 (`100..=1000`), not settable; LN-5: 256 (`1..=4096`), not settable; LN-TUNE: 10 000 (`1000..=600000`), not settable; LN-8: 4 096 (`1..=1000000`), not settable; LN-9: 625 (`1..=100000`, settable), 256 (`1..=4096`), 2 400 000 (`60000..=86400000`), the last two not settable; LN-WS: 10 000 (`100..=1000000`), 65 536 (`1024..=1048576`), not settable (§1.194); LN-7c Q: 500 000 (`1000..=100000000`, settable), 256 (`1..=4096`, not settable) (§1.196) | AO-1 (built, §1.26); A51 (§1.151); P0-LO; LN-5; LN-TUNE; LN-8; LN-9; LN-WS; LN-7c Q | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x); A51 (0.12.9); P0-LO (0.12.11); LN-5 (0.12.13); LN-TUNE (0.12.13); LN-8 (0.12.14); LN-9 (0.12.14); LN-WS (0.12.15); LN-7c Q (0.12.17) |
 | `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms`; Workflow #398 RD-4: `rules.start_beyond_profile`, `profiles`, `kind_profiles`; #411 A38 (**`actingd-config` revision 8**): `fence_recheck.interval_ms`, `fence_recheck.max_attempts`; #411 B37 (A35-S1, revision 8): `busy.poll_ms`, `busy.outcome.recheck_ms`, `.max_wait_ms`, `.on_exhausted`; #411 A35 (A35-S2, **`actingd-config` revision 9**): `busy.screen.classes`, `.probe_frames`, `.probe_interval_ms`, `.change_max_milli`, `.recheck_ms`, `.max_wait_ms`, `.on_exhausted` | M387 §7.1; model-398 §6.3, §6.6 (`exhaust`, the `handset` profile of return home and application restart for the kind `handset`); A38: 300 000 (`10000..=86400000`), 12 (`0..=1000`), settable (§1.148 A38-6); A35-S1: 500, 60 000, 3 600 000, `stop`, settable (§1.152 B37-4); A35-S2: `["pack_logic_mismatch"]`, 5, 1 000, 1 500, 15 000, 900 000, `escalate`, settable (§1.168 A35-4) | D1c; RD-4 (§1.81); A38 (§1.148); A35-S1 (§1.152); A35-S2 (§1.168) | D1c (v0.12.0); RD-4 (v0.12.0); A38 (0.12.9); A35-S1 (0.12.x); A35-S2 (0.12.x) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
@@ -3267,8 +3682,11 @@ when it takes effect.
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
+| `execution.capture.*` | `max_interval_ms`, `backoff_enabled`, `idle_ceiling_ms` (**`actingd-config` revision 11**) | 60 000 (`5000..=1800000`), `true`, 5 000 (`50..=60000`), settable (§1.177 B1-2, B1-3) | PERF-B1 | PERF-B1 (0.12.x) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` MCP-19b |
+| `scheduling.expected_runtime.*` and per instance `instance.<id>.scheduling.expected_runtime.*`; `scheduling.fact_refresh.expected_duration_ms` (`actingd-config` revision 11) | `enabled`, `runs`, `margin_ms`; the declared duration of a fact refresh read | `true`, 5 (`1..=16`), 300 000 (`0..=3600000`); 60 000 (`1..=1800000`); an instance's default is the section's (SCH-M §3.4) | ED-1 (built, §1.178) | ED-2 |
+| `scheduling.blackout.quiet_horizon`, `scheduling.day_boundary.quiet`, and per instance `instance.<id>.scheduling.blackout`, `instance.<id>.scheduling.day_boundary.quiet` (`actingd-config` revision 11) | SCH-M §3.2 D-1, D-4, D-6 | `deadline`, `true`; no instance list by default; an instance's `day_boundary.quiet` defaults to the section's | SR-4a1 (built, §1.179) | SR-4a2 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 D1 (0.12.5, §1.135): the pair in effect per instance, read at every policy cycle |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 (built, §1.69 SR3-4) | SR-3 (v0.12.0) |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default value: unset, no `fact_reader_overdue` is reported; that is its declared default, coordinator ruling 9 of 2026-10-16, so R4 holds) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
@@ -3301,7 +3719,7 @@ when it takes effect.
 | Rows | Count |
 |---|---|
 | today (`apps/actingd/src/config/manifest.rs` at 706ead94) | about 55, plus 2 per instance |
-| `ledger_observer.*` | 25 (21, #411 A51's two and P0-LO's two) |
+| `ledger_observer.*` | 35 (21, #411 A51's two, P0-LO's two, one each of #422 LN-5, LN-TUNE and LN-8, #422 LN-9's three, #422 LN-WS's two and #422 LN-7c Q's two) |
 | `recovery_ladder.*`, `host_claims.*` | 16 (and #411 A38's two, #411 B37's four, #411 A35's seven) |
 | `performance.*`, `execution.defaults.*` | about 100 (some replace today's `performance_monitor.*` / `performance_control.*` rows) |
 | `scheduling.*` (recognition, rerun, cost_commit, blackout, feature_lock, not_run, pack_admission, fact_refresh, suspension, random_delay) | 32 |
@@ -3322,7 +3740,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 
 | Interface | v0.12.0 | Sources in this register |
 |---|---|---|
-| `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read |
+| `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read. #411 A64, #411 A66, PERF-B1 and SCH-M ED-1 raise it to [5, 11] in v0.12.12: revision 11 adds `host_claims.run_end_grace_ms` (A64, ruling C-43), the `watchdog` section (`start_window_ms`, A66), the `execution` section (`capture.max_interval_ms`, `capture.backoff_enabled`, `capture.idle_ceiling_ms`; PERF-B1, §1.177 B1-2) and SCH-M ED-1's `scheduling.expected_runtime.*` (also per instance) and `scheduling.fact_refresh.expected_duration_ms` (§1.178 ED1-3), and revisions 5 to 10 are still read. IDLE-1 (Alice's ruling 41) raises it to [5, 12] in the release after v0.12.12: revision 12 adds the `idle` section (`action`, `min_gap_ms`, `close_app_wake_lead_ms`, `stop_emulator_wake_lead_ms`) and an instance entry's `idle` member; ROUT-L RL-1b (same release, §1.185 RL1B-1, RL1B-2) adds to revision 12 the `standard_packs` keys `check_interval_ms` and `cached_generations` and a `policy` section without `catalog` (composer mode), #422 LN-5 `ledger_observer.history_page_rows` and #422 LN-TUNE `ledger_observer.writer_reply_timeout_ms`; and revisions 5 to 11 are still read. #422 LN-8 raises it to [5, 13] in the release after v0.12.13: revision 13 adds `ledger_observer.open_verify_tail_records`, and revisions 5 to 12 are still read. #422 LN-WS raises it to [5, 14] in v0.12.15 (§1.194): revision 14 adds `ledger_observer.read_check_vm_steps` and `history_scan_rows`, and revisions 5 to 13 are still read Workflow #392 DA-4b-D (Alice's ruling 69) raises it to [5, 15] in v0.12.16 (§1.195 DA4bD-2): revision 15 adds the `display_safe_area` section (`directory`, `check_interval_ms`, `model`) and an instance entry's `display_safe_area` member (`model`), and revisions 5 to 14 are still read. #422 LN-7c Q raises it to [5, 16] in v0.12.17 (§1.196 LN7CQ-1 to LN7CQ-3): revision 16 adds the top-level `frame_retention_evidence_max_age_days` and `ledger_observer.frame_query_steps_per_second` and `frame_query_chunk_frames`, and revisions 5 to 15 are still read |
 | `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read |
 | `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was |
 | `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read |

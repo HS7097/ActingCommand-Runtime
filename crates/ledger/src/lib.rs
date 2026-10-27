@@ -38,12 +38,22 @@ mod read_hold;
 // P0-LO: a slower writer open of a state root, for tests in other crates.
 #[cfg(any(test, feature = "test-hooks"))]
 mod open_delay;
+// LN-1 (Workflow #422): the scale harness's synthetic ledger and process measures.
+#[cfg(any(test, feature = "test-hooks"))]
+mod synthetic;
+// #422 LN-WS: the record of the statements a state root's writer reads with, for tests in other
+// crates.
+#[cfg(any(test, feature = "test-hooks"))]
+mod writer_statements;
 pub use codes::{LedgerCode, LedgerLocation};
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
 // Workflow #382 L-3 (LED-I5): the read counters of the SQLite medium on the opening thread.
 #[cfg(test)]
-pub use read_count::{LedgerReadCounter, LedgerReadCounts, LedgerTableReads};
+pub use read_count::{
+    LedgerReadCounter, LedgerReadCounts, LedgerSequencesRead, LedgerTableReads,
+    LedgerUnidentifiedRows,
+};
 // Workflow #383 AO-1: the write faults of a state root, for tests in other crates.
 #[cfg(any(test, feature = "test-hooks"))]
 pub use read_hold::WriterReadHoldGate;
@@ -51,10 +61,22 @@ pub use read_hold::WriterReadHoldGate;
 pub use write_fault::LedgerWriteFaultGate;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use writer_stall::WriterStallGate;
+// #422 LN-WS: the statements of a state root's writer reads, for tests in other crates.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use writer_statements::{
+    LedgerStatementRun, LedgerWriterCommandStatements, WriterStatementRecorder,
+};
 
 // P0-LO: the slower writer open of a state root, for tests in other crates.
 #[cfg(any(test, feature = "test-hooks"))]
 pub use open_delay::LedgerOpenDelayGate;
+
+// LN-1 (Workflow #422): the synthetic ledger and process measures of the scale harness.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use synthetic::{
+    ProcessMemory, SyntheticInstance, SyntheticInversion, SyntheticLedgerReport,
+    SyntheticLedgerSpec, SyntheticMix, process_age_ms, process_memory, write_synthetic_ledger,
+};
 
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";
 const LEDGER_HEADER_SCHEMA_VERSION: &str = "actingcommand.ledger.session.v0.1";

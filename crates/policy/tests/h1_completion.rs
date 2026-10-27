@@ -152,6 +152,8 @@ impl SimulationState {
                 completed_window: None,
                 last_duration_ms: None,
                 failure_streak: None,
+                expected_runtime_ms: None,
+                expected_runtime_runs: None,
             })
             .collect();
         EvaluationFacts {

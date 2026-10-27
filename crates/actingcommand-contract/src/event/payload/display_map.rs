@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #383 register X7 (model 392 §4, §8.1, §8.3; first writer DA-4): the display map a
-// task geometry observation used, carried by `TaskGeometryObservation.display_map`. Types,
-// reader and validation only; DA-4 writes it.
+// Workflow #383 register X7 (model 392 §4, §8.1, §8.3): the display map a task geometry
+// observation used, carried by `TaskGeometryObservation.display_map`. Workflow #392 DA-2a is its
+// first writer (the display adapter's `DisplayMap::record`).
 
 use crate::SanitizationError;
 use crate::codes::SanitizationCode;
@@ -67,8 +67,11 @@ pub struct TaskGeometryDisplayMap {
 impl TaskGeometryDisplayMap {
     /// The map agrees with itself (model 392 §4.2, §4.5, §11): sizes are pixels; the scale
     /// factor is reduced and at least 1; identity is the factor 1 on the base size, a pure
-    /// scale a larger factor on the base size, a translation any other scale frame and only
-    /// under a declaration; a map that measures on the safe area names its insets' source.
+    /// scale a larger factor on the base size, a translation anything else and only under a
+    /// declaration; a map that measures on the safe area names its insets' source. Workflow #392
+    /// DA-2a: a translation may keep the base size, since insets narrow its anchor area without
+    /// changing its scale space (the display adapter's kinds, `contracts/display-adapter.md`
+    /// section 2.5).
     pub(super) fn validate(&self) -> Result<(), SanitizationError> {
         let sized = [
             self.scale_num,
@@ -85,7 +88,7 @@ impl TaskGeometryDisplayMap {
         let kind_agrees = match self.kind {
             DisplayMapKind::Identity => self.scale_num == self.scale_den && base_sized,
             DisplayMapKind::Scale => self.scale_num > self.scale_den && base_sized,
-            DisplayMapKind::Translate => !base_sized && self.declared,
+            DisplayMapKind::Translate => self.declared,
         };
         let safe_area =
             self.scale_area == DisplayArea::SafeArea || self.anchor_area == DisplayArea::SafeArea;

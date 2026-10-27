@@ -5,9 +5,12 @@
 //! cancelled the 10-02 latch (Workflow #375 R5d): once the cleaner's clock passes 1 day after
 //! the frames' entry time, the due frame files are removed and the ledger holds no eviction
 //! record (`contracts/ledger-store.md`, "Frame cleaner"). A formal writer ledger and its
-//! artifact store share one temporary state root; every timestamp is a constant.
+//! artifact store share one temporary state root; every timestamp is a constant. #422 LN-7c Q:
+//! the cleaner decides by ledger query (statements W and L on its own connection); the frames'
+//! classes before the Warning are read from the same query (adapted: they were read from the
+//! writer's frame view, which Q removed).
 
-use super::super::{FrameRetention, FrameRetentionWarning};
+use super::super::{CleanerClock, CleanerSettings, FrameRetention, FrameRetentionWarning};
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactEventSink, ArtifactStore, ArtifactStoreError,
     ArtifactStoreResult, ArtifactWriteContext, ArtifactWriteRequest, KEPT_DIRECTORY,
@@ -24,8 +27,9 @@ use actingcommand_contract::{
     ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft, TerminalEvent,
 };
 use actingcommand_ledger::{
-    FrameRetentionClass, FrameRetentionSwitches, GlobalLedger, GlobalLedgerError,
-    LedgerMaintenance, PersistedEvent, Sha256SecretFingerprinter,
+    FrameQueryAction, FrameQueryOutcome, FrameQuerySettings, FrameRetentionClass,
+    FrameRetentionSwitches, GlobalLedger, GlobalLedgerError, LedgerMaintenance, PersistedEvent,
+    Sha256SecretFingerprinter,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use std::path::{Path, PathBuf};
@@ -34,17 +38,32 @@ use std::sync::Arc;
 const DAY_MS: u64 = 86_400_000;
 const MINUTE_MS: u64 = 60_000;
 /// The capture times of the three run-less frames.
-const CAPTURED: [u64; 3] = [1_791_753_302_117, 1_791_753_303_117, 1_791_753_304_117];
+pub(super) const CAPTURED: [u64; 3] = [1_791_753_302_117, 1_791_753_303_117, 1_791_753_304_117];
 /// The owner epoch is recorded before the first frame.
 const OWNER_RECORDED: u64 = CAPTURED[0] - 1_000;
 /// The unlinked Warning follows the last frame.
 const WARNED: u64 = CAPTURED[2] + 1_000;
 /// The cleaner's manual clock: past the 1-day boundary of every frame (the latest capture,
 /// plus 1 day and 1 minute), so every frame's due time lies before it.
-const NOW: u64 = CAPTURED[2] + DAY_MS + MINUTE_MS;
+pub(super) const NOW: u64 = CAPTURED[2] + DAY_MS + MINUTE_MS;
+/// #422 LN-7c Q: the cleaner's keys at their defaults.
+pub(super) const SETTINGS: CleanerSettings = CleanerSettings {
+    evidence_max_age_days: 15,
+    steps_per_second: 500_000,
+    chunk_frames: 256,
+};
+
+/// #422 LN-7c Q: the cleaner's clock at its `round`th call, a minute apart on the monotonic
+/// clock, so every paced statement may start.
+pub(super) fn round_clock(round: u64) -> CleanerClock {
+    CleanerClock {
+        unix_ms: NOW,
+        monotonic_ms: round * MINUTE_MS,
+    }
+}
 
 /// A formal writer ledger in `root`, as acsetup leaves it.
-fn formal_writer(root: &Path) -> GlobalLedger {
+pub(super) fn formal_writer(root: &Path) -> GlobalLedger {
     let database = Arc::new(
         RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
             root,
@@ -94,7 +113,11 @@ impl ArtifactCapacityAdmission for Capacity {
 }
 
 /// The artifact store of the state root `root`, with its capacity owner.
-fn artifact_store(root: &Path, ids: &IdentifierIssuer, owner: OwnerEpoch) -> ArtifactStore {
+pub(super) fn artifact_store(
+    root: &Path,
+    ids: &IdentifierIssuer,
+    owner: OwnerEpoch,
+) -> ArtifactStore {
     let artifacts = ArtifactStore::open(root).expect("artifact store");
     artifacts
         .install_capacity_admission(Arc::new(Capacity {
@@ -128,19 +151,19 @@ impl ArtifactEventSink for Sink<'_> {
 }
 
 /// One fixture frame: its reference, the file at its object key and its capture time.
-struct Frame {
-    reference: ProjectedArtifactReference,
-    material: PathBuf,
-    captured: u64,
+pub(super) struct Frame {
+    pub(super) reference: ProjectedArtifactReference,
+    pub(super) material: PathBuf,
+    pub(super) captured: u64,
 }
 
 /// The writer, the fingerprinter and the identities every fixture event uses.
-struct Fixture<'a> {
-    ledger: &'a GlobalLedger,
-    fingerprinter: &'a Sha256SecretFingerprinter,
-    ids: &'a IdentifierIssuer,
-    owner: OwnerEpoch,
-    instance: IssuedInstanceId,
+pub(super) struct Fixture<'a> {
+    pub(super) ledger: &'a GlobalLedger,
+    pub(super) fingerprinter: &'a Sha256SecretFingerprinter,
+    pub(super) ids: &'a IdentifierIssuer,
+    pub(super) owner: OwnerEpoch,
+    pub(super) instance: IssuedInstanceId,
 }
 
 impl Fixture<'_> {
@@ -154,7 +177,7 @@ impl Fixture<'_> {
     }
 
     /// Records the owner epoch: a confirmed resource quiescence of the instance.
-    fn record_owner(&self) {
+    pub(super) fn record_owner(&self) {
         self.append(EventDraft::new(
             self.event_id(),
             OWNER_RECORDED,
@@ -185,7 +208,7 @@ impl Fixture<'_> {
 
     /// One run-less observe frame captured at `captured`: published through the store, pinned
     /// with its `Explicit` identity, and closed by its `capture.completed`.
-    fn observe(&self, artifacts: &ArtifactStore, captured: u64, bytes: &[u8]) -> Frame {
+    pub(super) fn observe(&self, artifacts: &ArtifactStore, captured: u64, bytes: &[u8]) -> Frame {
         let request = self.ids.mint_request_id().expect("request");
         let correlation = self.ids.mint_correlation_id().expect("correlation");
         let frame = self.ids.mint_frame_id().expect("frame");
@@ -354,24 +377,47 @@ fn gate_an_unlinked_warning_does_not_stop_the_cleaner_removing_due_frames() {
     ];
     let switches = FrameRetentionSwitches::default();
 
-    // Before the Warning: every frame is a settled Default frame, due 1 day after its entry.
-    let view = ledger
-        .frame_retention_view(NOW, switches)
-        .expect("the frame view before the Warning");
+    // Before the Warning: every frame is a settled Default frame, due 1 day after its ingestion
+    // time, as the cleaner's query answers.
+    let mut query = ledger
+        .frame_query(std::sync::Arc::new(|| false))
+        .expect("the frame query");
+    let FrameQueryOutcome::Answered { value: waits, .. } = query.waits().expect("statement W")
+    else {
+        panic!("statement W answered nothing");
+    };
+    let asked = frames
+        .iter()
+        .map(|frame| frame.reference.artifact_id)
+        .collect::<Vec<_>>();
+    let FrameQueryOutcome::Answered { value: answers, .. } = query
+        .live(
+            &asked,
+            &waits,
+            &FrameQuerySettings {
+                now_unix_ms: NOW,
+                switches,
+                evidence_max_age_ms: 15 * DAY_MS,
+            },
+        )
+        .expect("statement L")
+    else {
+        panic!("statement L answered nothing");
+    };
+    drop(query);
     for frame in &frames {
-        let listed = view
-            .frames
+        let answer = answers
             .iter()
-            .find(|listed| listed.reference.artifact_id == frame.reference.artifact_id)
-            .expect("every fixture frame is in the cleaner's view");
+            .find(|answer| answer.artifact_id == frame.reference.artifact_id)
+            .expect("the query answers every fixture frame");
         assert_eq!(
-            (listed.class, listed.entry_unix_ms, listed.due_unix_ms),
+            (answer.class, answer.created_at_unix_ms, answer.action),
             (
                 FrameRetentionClass::Default,
-                Some(frame.captured),
-                Some(frame.captured + DAY_MS)
+                frame.captured,
+                FrameQueryAction::Remove
             ),
-            "a run-less frame is Default, enters at its capture time and is due 1 day later \
+            "a run-less frame is Default and is due 1 day after its ingestion time \
              (ledger-store.md, Frame cleaner)"
         );
         assert!(
@@ -413,12 +459,20 @@ fn gate_an_unlinked_warning_does_not_stop_the_cleaner_removing_due_frames() {
             "the cleaner's sweep did not complete within {bound} calls"
         );
         retention
-            .maintain(&ledger, artifacts.root(), NOW, &|| false, &mut |warning| {
-                warnings.push(warning.clone());
-                Ok(())
-            })
+            .maintain(
+                &ledger,
+                artifacts.root(),
+                round_clock(calls as u64),
+                SETTINGS,
+                std::sync::Arc::new(|| false),
+                &|| false,
+                &mut |warning| {
+                    warnings.push(warning.clone());
+                    Ok(())
+                },
+            )
             .expect("one unlinked Warning must not stop the cleaner: every call returns Ok");
-        if retention.sweep.is_none() {
+        if retention.pass.is_none() {
             break;
         }
     }

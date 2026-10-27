@@ -53,7 +53,35 @@ pub struct RuntimeHostError {
     code: HostErrorCode,
     operation: HostErrorOperation,
     projection: Box<RuntimeErrorProjection>,
+    /// ISO-M (#419): what the error's constructor said about its scope ([`Self::scope_at`]).
+    scope: ScopeTag,
     pub(crate) lifecycle: Box<RuntimeHostFailureContext>,
+}
+
+/// ISO-M (#419, R0.1): what one failure concerns, and so how much work it may stop. One
+/// emulator's fault must not stop the whole Runtime: only a `Global` failure latches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureScope {
+    /// The Runtime as a whole cannot run normally: the failure latches the Runtime.
+    Global,
+    /// The failure originates in, or concerns only, this instance: it holds the instance (a
+    /// resource fence), and every other instance goes on dispatching and executing.
+    Instance(InstanceId),
+    /// The failure concerns one request or operation, and its instance is sound: only the
+    /// operation fails, with its own code.
+    Operation,
+}
+
+/// ISO-M (#419, §6): the scope a failure's constructor gave it. `into_fatal`, the poisons,
+/// `with_caused_by` and the other wrappers keep it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScopeTag {
+    /// No constructor said: the failure takes its scope from its projection, `Global` when it
+    /// is fatal (fail-safe) and `Operation` otherwise.
+    Untagged,
+    /// The failure concerns one instance only: the instance it names, else the instance of the
+    /// boundary that contains it ([`RuntimeHostError::instance_scoped`]).
+    Instance,
 }
 
 /// The code a [`RuntimeHostError`] carries: a registered code, or the spelling of a code that
@@ -149,6 +177,7 @@ impl PartialEq for RuntimeHostError {
         self.code() == other.code()
             && self.operation() == other.operation()
             && self.projection == other.projection
+            && self.scope == other.scope
             && self.lifecycle.complete_failure == other.lifecycle.complete_failure
             && self.lifecycle.failure_stage == other.lifecycle.failure_stage
             && self.lifecycle.installation_effect == other.lifecycle.installation_effect
@@ -450,6 +479,85 @@ impl RuntimeHostError {
         &self.projection
     }
 
+    /// ISO-M (#419, R0.1-R0.4): the scope of this failure.
+    /// - A failure joined with a `Global` one (B7) is `Global`.
+    /// - An untagged failure is `Global` when it is fatal (fail-safe: the Global list names
+    ///   it, or no slice has classified its path yet) and `Operation` otherwise.
+    /// - An instance-scoped failure ([`Self::instance_scoped`]) is `Instance` of the instance it
+    ///   names, else of `boundary_instance`; it stays `Global` when its code is on the closed
+    ///   Global list, and when neither names an instance.
+    pub(crate) fn scope_at(&self, boundary_instance: Option<InstanceId>) -> FailureScope {
+        let joined_global = self
+            .lifecycle
+            .complete_failure
+            .as_ref()
+            .is_some_and(|complete| {
+                complete
+                    .secondary
+                    .iter()
+                    .any(|(_, error)| error.scope_at(None) == FailureScope::Global)
+            });
+        if joined_global {
+            return FailureScope::Global;
+        }
+        match self.scope {
+            ScopeTag::Untagged if self.projection.fatal => FailureScope::Global,
+            ScopeTag::Untagged => FailureScope::Operation,
+            ScopeTag::Instance if crate::host::failure_scope::is_global_code(self.code()) => {
+                FailureScope::Global
+            }
+            ScopeTag::Instance => self
+                .lifecycle
+                .instance_id
+                .or(boundary_instance)
+                .map_or(FailureScope::Global, FailureScope::Instance),
+        }
+    }
+
+    /// ISO-M (#419): the scope of this failure without a boundary's instance
+    /// ([`Self::scope_at`]).
+    pub fn scope(&self) -> FailureScope {
+        self.scope_at(None)
+    }
+
+    /// ISO-M (#419, R0.2, §6): whether this failure may stop the Runtime: latch it, end
+    /// actingd's driver or monitor, end a shared thread, fail a start or block the watchdog.
+    /// Only a `Global` failure may; `is_fatal` says only how severe the failure is for the work
+    /// that met it.
+    pub fn halts_runtime(&self) -> bool {
+        self.scope() == FailureScope::Global
+    }
+
+    /// ISO-M (#419, §6): this failure concerns only one instance: the instance it names, else
+    /// the instance of the boundary that contains it ([`Self::scope_at`]). Its boundary fences
+    /// that instance instead of latching the Runtime (`contain_failure`); a code of the Global
+    /// list stays `Global`.
+    pub(crate) fn instance_scoped(mut self) -> Self {
+        self.scope = ScopeTag::Instance;
+        self
+    }
+
+    /// ISO-M (#419, §6, R0.6): a failure that originates in `instance` and leaves that
+    /// instance's state unknown (its device, session, backend, lease or key, worker, a lock of
+    /// its own, an invariant about its data). It is severe for the work that met it (a fatal
+    /// projection with `runtime_code`), and its boundary fences `instance` instead of latching
+    /// the Runtime.
+    pub(crate) fn instance_fault(
+        code: impl Into<Code>,
+        operation: impl Into<Location>,
+        runtime_code: RuntimeErrorCode,
+        instance: InstanceId,
+    ) -> Self {
+        let mut error = Self::with_projection(
+            code,
+            operation,
+            RuntimeErrorProjection::new(runtime_code, true),
+        )
+        .instance_scoped();
+        error.lifecycle.instance_id = Some(instance);
+        error
+    }
+
     /// This error as the outcome of a denied or failed receipt (Workflow #378 A4, model section
     /// 7.2): the outcome its ledger record carries ([`Self::outcome`]: its code on top with the
     /// values its producer attached, its operation, and the failure behind it as the `caused_by`
@@ -459,6 +567,16 @@ impl RuntimeHostError {
     /// `outcome_relay_unregistered` with its `raw_code`.
     pub(crate) fn receipt_outcome(&self) -> Outcome {
         self.projection.with_receipt_values(self.outcome())
+    }
+
+    /// ISO-M (#419; #411 A54): [`Self::receipt_outcome`] whose `host_halted` is `true` only when
+    /// the Runtime latched (`runtime_latched`, its fatal state when the receipt is written). How
+    /// severe the failure was for its own work does not make the receipt say the host halted;
+    /// on a host that latched, the receipt is [`Self::receipt_outcome`] unchanged.
+    pub(crate) fn receipt_outcome_latched(&self, runtime_latched: bool) -> Outcome {
+        let mut projection = self.projection.as_ref().clone();
+        projection.fatal &= runtime_latched;
+        projection.with_receipt_values(self.outcome())
     }
 
     /// Workflow #378 A6a (model section 2.3, M1a): how a latched host answers a later request.
@@ -667,6 +785,7 @@ impl RuntimeHostError {
             code,
             operation,
             projection: Box::new(projection),
+            scope: ScopeTag::Untagged,
             lifecycle: Box::default(),
         }
     }
@@ -675,6 +794,11 @@ impl RuntimeHostError {
         Self::with_projection(error.code(), operation, error.projection())
     }
 
+    /// A failure of the execution kernel: its device, session or backend failure keeps the
+    /// kernel's code and severity, and (ISO-2, #419 R1) concerns only the session's instance,
+    /// the instance it names, else the instance of the boundary that contains it: the boundary
+    /// fences that instance (or the run fails), and the Runtime does not latch. A kernel code on
+    /// the closed Global list (the session registry, an OS thread) stays `Global`.
     pub(crate) fn execution(operation: impl Into<Location>, error: &ExecutionKernelError) -> Self {
         let kernel_code = error.code().as_str();
         let runtime_code = match kernel_code {
@@ -730,6 +854,7 @@ impl RuntimeHostError {
             code: HostErrorCode::Registered(error.code()),
             operation: HostErrorOperation::Registered(operation.into()),
             projection: Box::new(RuntimeErrorProjection::new(runtime_code, error.is_fatal())),
+            scope: ScopeTag::Instance,
             lifecycle: Box::new(RuntimeHostFailureContext {
                 diagnostics: error.failure_context().clone(),
                 instance_id: error.instance_id(),
@@ -788,6 +913,27 @@ impl RuntimeHostError {
         if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed) {
             *result.projection =
                 RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
+        }
+        result
+    }
+
+    /// ISO-2 (#419 R1; ISO-M rows A05, E14, E15, E16): the kernel refused one operation on its
+    /// instance's session: a frame commit or resolve met a session that was closed, is closing
+    /// or was retired, or a frame that a later capture replaced. Nothing of the instance is
+    /// left held, so only that operation fails, with the kernel's code, non-fatal. Its scope is
+    /// the session's own instance when the kernel names one, else `instance`'s. An unconfirmed
+    /// close and a code on the closed Global list keep the kernel's severity.
+    pub(crate) fn instance_operation(
+        operation: impl Into<Location>,
+        error: &ExecutionKernelError,
+        instance: Option<InstanceId>,
+    ) -> Self {
+        let mut result = Self::execution(operation, error);
+        result.lifecycle.instance_id = result.lifecycle.instance_id.or(instance);
+        if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
+            && !crate::host::failure_scope::is_global_code(result.code())
+        {
+            result.projection.fatal = false;
         }
         result
     }
@@ -992,6 +1138,17 @@ pub trait RuntimeDaemonReporter: Send + Sync {
     /// A background step that a ledger read did not answer in time, or that its read stopped at
     /// its work budget, skipped (R3); the step runs again at its next tick.
     fn step_skipped(&self, outcome: &Outcome);
+
+    /// #411 A67-R: a warning the host records in the ledger while it runs, at the moment it
+    /// records it: `frame_store_budget_floor_applied` when the capture frame stores' budget
+    /// enters the floor, at the start or at a refresh.
+    fn warning_recorded(&self, outcome: &Outcome);
+
+    /// #422 LN-7c R (`contracts/ledger-observer.md` §11.7): the ledger scrub's non-fatal finding
+    /// about the derived frame index (`ledger_index_mismatch` of `verify_ledger_frame_refs`),
+    /// once, when the host first sees it, with its developer text: what, where and
+    /// `extent=untrusted`. Nothing is latched and the Runtime keeps running.
+    fn ledger_index_finding(&self, _outcome: &Outcome, _developer: &str) {}
 }
 
 /// #411 A50: a capture open failure's cause as a token of the catalog vocabulary
@@ -1039,6 +1196,8 @@ pub(crate) struct FatalState {
     shutdown: Arc<AtomicBool>,
     /// #411 A51: the daemon's log, which the first latched condition is handed to at once.
     reporter: Option<Arc<dyn RuntimeDaemonReporter>>,
+    /// #422 LN-7c R: the scrub's finding about the derived frame index was reported.
+    ledger_index_reported: Arc<AtomicBool>,
 }
 
 impl FatalState {
@@ -1084,6 +1243,39 @@ impl FatalState {
         if let Some(reporter) = self.reporter.as_ref() {
             reporter.step_skipped(outcome);
         }
+    }
+
+    /// #411 A67-R: hands a warning the host records to the daemon's log.
+    pub(crate) fn report_warning(&self, outcome: &Outcome) {
+        if let Some(reporter) = self.reporter.as_ref() {
+            reporter.warning_recorded(outcome);
+        }
+    }
+
+    /// #422 LN-7c R: hands the ledger scrub's non-fatal finding about its derived frame index to
+    /// the daemon's log, once: its code and operation, and the developer text `operation=<operation>
+    /// <detail>` (what, where and `extent=untrusted`). Nothing is latched.
+    pub(crate) fn report_ledger_index_finding(
+        &self,
+        finding: &actingcommand_ledger::GlobalLedgerError,
+    ) {
+        if self.ledger_index_reported.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (Some(reporter), Some(code)) = (self.reporter.as_ref(), Code::relayed(finding.code()))
+        else {
+            return;
+        };
+        let mut outcome = Outcome::new(code);
+        if let Some(operation) = Location::relayed(finding.operation()) {
+            outcome = outcome.operation(operation);
+        }
+        let developer = format!(
+            "operation={} {}",
+            finding.operation(),
+            finding.detail().unwrap_or_default()
+        );
+        reporter.ledger_index_finding(&outcome, &developer);
     }
 
     /// The latched condition as the host answers a later request with it (Workflow #378 A6a,

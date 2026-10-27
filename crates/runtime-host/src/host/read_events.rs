@@ -55,7 +55,10 @@ impl HostShared {
             HostLocation::ProjectRuntimeApprovals,
         )?
         .records_at(&self.ledger, Arc::clone(&self.state), ledger_position)
-        .map_err(RequestFailure::poison_without_terminal)?;
+        // #419 LN-WS-F (R1): a read of the approvals, the catalog's transitions or the dispatch
+        // history the writer did not answer in time, or stopped at its budget, fails only this
+        // request, `failed` with the ledger's code; any other failure is handled as before.
+        .map_err(unanswered_or_poison)?;
         // Every policy dispatch writer appends and applies under the policy guard (Workflow
         // #191 U5-F1), so taking it after reading the position sees every event up to it.
         let (catalog, decisions) = {
@@ -63,8 +66,16 @@ impl HostShared {
             (
                 policy
                     .active_loaded_at(&self.ledger, ledger_position)
-                    .map_err(project_interface_failure)?,
-                policy.project_dispatches(current_ledger_position, &decision_page)?,
+                    .map_err(|error| {
+                        if unanswered_ledger_read(&error) {
+                            request_failure(error)
+                        } else {
+                            project_interface_failure(error)
+                        }
+                    })?,
+                policy
+                    .project_dispatches(&self.ledger, current_ledger_position, &decision_page)
+                    .map_err(unanswered_or_poison)?,
             )
         };
         if decisions.snapshot_ledger_position != ledger_position {

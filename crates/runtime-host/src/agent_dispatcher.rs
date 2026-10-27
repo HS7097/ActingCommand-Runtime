@@ -3,7 +3,7 @@
 //! Runtime-owned durable session state for a detachable Agent Dispatcher sidecar.
 
 use crate::codes::{HostCode, HostLocation};
-use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types, read_event_types_after};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
@@ -14,8 +14,15 @@ use actingcommand_contract::{
     EventPayload, EventQuery, EventType, InstanceId, PolicyPayload, PolicyPlanningSignalKind,
     ProjectedEvent, ProjectionProfile, RequestId, RuntimeErrorCode, TerminalEvent,
 };
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerResult, PersistedEvent};
+use actingcommand_ledger::{
+    GlobalLedger, GlobalLedgerError, GlobalLedgerResult, LedgerIndexRole, PersistedEvent,
+};
 use std::collections::BTreeMap;
+
+/// Workflow #422 LN-4: the `state` keys of the wake obligations (`wake/<wake id>`). The row names
+/// the obligation's latest record: its value record while no session has started, then its
+/// session's latest record (`contracts/ledger-observer.md` §11.1).
+pub(crate) const WAKE_KEY_PREFIX: &str = "wake/";
 
 /// The event types of the Agent records the dispatcher replays; the Ledger checks every record's
 /// type against its payload, so these types select exactly those records. A wake obligation's
@@ -146,20 +153,135 @@ impl AgentDispatcherState {
         page_events: usize,
     ) -> RuntimeHostResult<Self> {
         let (signals, agent_events) = read_recovery_events(ledger, page_events)
-            .map_err(|_| ledger_error(HostLocation::RecoverAgentDispatcher))?;
+            .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
         Self::fold(&signals, &agent_events, instance_ids_by_alias)
     }
 
-    /// The fold before Workflow #381 R4a, over one whole-ledger read; the reference the paged
-    /// recovery is checked against.
+    /// Workflow #422 LN-4 (LEAN-L model §3.2 step 5, §3.6; `contracts/ledger-observer.md` §11.5):
+    /// the start's load from the tagged records. The `wake/` rows name each obligation's latest
+    /// record:
+    /// - an obligation whose session completed is not loaded;
+    /// - a session escalated to a person keeps its status and its wake, as the session's end
+    ///   leaves them (`end_session`), read from the row's record and the wake's own record;
+    /// - for the live obligations (no session yet, or an active one) the Agent records are read
+    ///   from the earliest live wake's own record on, in pages, and only the records of live
+    ///   wakes are folded, so their sessions and request records are rebuilt as a whole-ledger
+    ///   fold rebuilds them.
+    ///
+    /// With no live obligation nothing but the rows and the escalated wakes' records is read.
+    pub(crate) fn load(ledger: &GlobalLedger, page_events: usize) -> RuntimeHostResult<Self> {
+        let rows =
+            crate::tagged_state::index_records(ledger, LedgerIndexRole::State, &[WAKE_KEY_PREFIX])?;
+        let mut live = BTreeMap::<AgentWakeId, CorrelationId>::new();
+        let mut escalated = Vec::new();
+        for record in &rows.records {
+            match record.event.payload() {
+                EventPayload::Agent(AgentPayload::WakeObligationRecorded(obligation)) => {
+                    let wake = obligation.wake();
+                    live.insert(wake.wake_id(), wake.correlation_id());
+                }
+                EventPayload::Agent(
+                    AgentPayload::SessionStarted(payload)
+                    | AgentPayload::SessionResumed(payload)
+                    | AgentPayload::ResponseRecorded(payload)
+                    | AgentPayload::SessionCompleted(payload)
+                    | AgentPayload::SessionEscalated(payload),
+                ) => {
+                    let status = payload.session().status();
+                    match status.state() {
+                        AgentAttentionState::Completed => {}
+                        AgentAttentionState::PausedNeedsHuman => escalated.push(status.clone()),
+                        AgentAttentionState::Active | AgentAttentionState::PausedNeedsAgent => {
+                            live.insert(status.wake_id(), status.correlation_id());
+                        }
+                    }
+                }
+                _ => {
+                    return Err(fatal(
+                        HostCode::AgentEventFamilyInvalid,
+                        HostLocation::RecoverAgentDispatcher,
+                    ));
+                }
+            }
+        }
+        let mut state = Self::default();
+        for status in escalated {
+            let requested = wake_record(ledger, status.correlation_id())?;
+            state.apply_event(&requested, None)?;
+            state
+                .session_by_wake
+                .insert(status.wake_id(), status.session_id());
+            state.sessions.insert(status.session_id(), status);
+        }
+        let mut from = None::<u64>;
+        for correlation_id in live.values() {
+            let sequence = wake_record(ledger, *correlation_id)?.sequence();
+            from = Some(from.map_or(sequence, |from| from.min(sequence)));
+        }
+        let Some(from) = from else {
+            return Ok(state);
+        };
+        let events = read_event_types_after(
+            ledger,
+            &AGENT_EVENT_TYPES,
+            from.saturating_sub(1),
+            rows.through_sequence,
+            page_events,
+        )
+        .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
+        for event in &events {
+            if wake_of(event).is_some_and(|wake_id| live.contains_key(&wake_id)) {
+                state.apply_event(event, None)?;
+            }
+        }
+        Ok(state)
+    }
+
+    /// Workflow #422 LN-4: the live wakes, for the seeding of their value records.
+    pub(crate) fn live_wakes(&self) -> impl Iterator<Item = &AgentWakeRecord> {
+        self.wakes.values()
+    }
+
+    /// Workflow #422 LN-4, tests: the sizes of the seven maps.
+    #[cfg(test)]
+    pub(crate) fn map_sizes_for_test(&self) -> [usize; 7] {
+        [
+            self.wakes.len(),
+            self.wakes_by_trigger.len(),
+            self.sessions.len(),
+            self.session_by_wake.len(),
+            self.active_by_scope.len(),
+            self.resume_requests.len(),
+            self.response_requests.len(),
+        ]
+    }
+
+    /// The fold before Workflow #381 R4a, once over every event of the ledger through its head;
+    /// the reference the paged recovery is checked against.
+    ///
+    /// Workflow #422 LN-4 follow-up: the events are read in pages pinned to the head, as the
+    /// startup reads page (#411 A65 R1, [`crate::recovery_read::LedgerPages`]): a page the
+    /// writer's read budget stops is read again smaller, so the reference no longer fails with
+    /// `ledger_read_budget_exceeded` on a slow runner, as one unpaged read of the whole ledger
+    /// under the real-clock `ledger_observer.read_budget_ms` did. The fold is unchanged.
     #[cfg(test)]
     pub(crate) fn recover_whole_ledger_for_test(
         ledger: &GlobalLedger,
         instance_ids_by_alias: &BTreeMap<String, InstanceId>,
     ) -> RuntimeHostResult<Self> {
         let events = ledger
-            .query(EventQuery::default())
-            .map_err(|_| ledger_error(crate::codes::HostLocation::RecoverAgentDispatcher))?;
+            .latest_sequence()
+            .and_then(|through| {
+                crate::recovery_read::LedgerPages::new(
+                    ledger,
+                    EventQuery::default(),
+                    0,
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+                .read_all()
+            })
+            .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
         Self::fold(&events, &events, instance_ids_by_alias)
     }
 
@@ -204,8 +326,10 @@ impl AgentDispatcherState {
             })
             .collect::<BTreeMap<_, _>>();
         let mut state = Self::default();
+        // Workflow #422 LN-3: the fold takes the replayed types only, so the whole-ledger
+        // reference skips the wake obligations' value records as the paged read does.
         for event in agent_events {
-            if matches!(event.payload(), EventPayload::Agent(_)) {
+            if AGENT_EVENT_TYPES.contains(&event.event_type()) {
                 state.apply_event(event, Some(&source_events))?;
             }
         }
@@ -339,6 +463,7 @@ impl AgentDispatcherState {
 
     pub(crate) fn prepare_response(
         &self,
+        ledger: &GlobalLedger,
         request_id: RequestId,
         response: &AgentSessionResponse,
         runtime_observed_at_unix_ms: u64,
@@ -352,6 +477,16 @@ impl AgentDispatcherState {
                     ContractLocation::RecordAgentResponse,
                 ))
             };
+        }
+        // Workflow #422 LN-4: the maps keep no request of an ended session, so a resent response
+        // of one is answered from the ledger's record of the request.
+        if self
+            .sessions
+            .get(&response.session_id())
+            .is_none_or(|session| session.state() != AgentAttentionState::Active)
+            && let Some(status) = ended_response_replay(ledger, request_id, response)?
+        {
+            return Ok(AgentResponsePreparation::Replay(status));
         }
         if self.resume_requests.contains_key(&request_id) {
             return Err(request(
@@ -751,8 +886,116 @@ impl AgentDispatcherState {
         if status.state() == AgentAttentionState::Active {
             self.active_by_scope.insert(scope, status.session_id());
         }
+        self.end_session(status);
         Ok(())
     }
+
+    /// Workflow #422 LN-4 (LEAN-L model §1.2 H-i; `contracts/ledger-observer.md` §11.2: sessions
+    /// are not kept): at a session's end its request records leave memory, and a resent request
+    /// of it is answered from the ledger (`prepare_response`). A completed session ends its wake's
+    /// obligation, so the wake, its trigger and the session leave memory too, and the start loads
+    /// no such obligation (`load`). A session escalated to a person keeps its status and its wake
+    /// for the person who reads them.
+    fn end_session(&mut self, status: &AgentSessionStatus) {
+        let session_id = status.session_id();
+        match status.state() {
+            AgentAttentionState::Completed => {
+                let wake_id = status.wake_id();
+                if let Some(wake) = self.wakes.remove(&wake_id)
+                    && let Some(trigger) = wake.data.trigger_event_id()
+                {
+                    self.wakes_by_trigger.remove(&trigger);
+                }
+                self.sessions.remove(&session_id);
+                self.session_by_wake.remove(&wake_id);
+            }
+            AgentAttentionState::PausedNeedsHuman => {}
+            AgentAttentionState::Active | AgentAttentionState::PausedNeedsAgent => return,
+        }
+        self.active_by_scope
+            .retain(|_, active| *active != session_id);
+        self.resume_requests
+            .retain(|_, resume| resume.session_id != session_id);
+        self.response_requests
+            .retain(|_, response| response.status().session_id() != session_id);
+    }
+}
+
+/// Workflow #422 LN-4: the wake's own record, by the correlation link it shares with the wake
+/// (`apply_event` checks it); exactly one.
+fn wake_record(
+    ledger: &GlobalLedger,
+    correlation_id: CorrelationId,
+) -> RuntimeHostResult<PersistedEvent> {
+    let mut requested = ledger
+        .query(EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        })
+        .map_err(|error| ledger_error(&error, HostLocation::RecoverAgentDispatcher))?;
+    match (requested.pop(), requested.is_empty()) {
+        (Some(requested), true) => Ok(requested),
+        _ => Err(fatal(
+            HostCode::AgentWakeIdentityConflict,
+            HostLocation::RecoverAgentDispatcher,
+        )),
+    }
+}
+
+/// Workflow #422 LN-4: the wake an Agent record belongs to.
+fn wake_of(event: &PersistedEvent) -> Option<AgentWakeId> {
+    match event.payload() {
+        EventPayload::Agent(AgentPayload::WakeRequested(payload)) => Some(payload.wake().wake_id()),
+        EventPayload::Agent(
+            AgentPayload::SessionStarted(payload)
+            | AgentPayload::SessionResumed(payload)
+            | AgentPayload::ResponseRecorded(payload)
+            | AgentPayload::SessionCompleted(payload)
+            | AgentPayload::SessionEscalated(payload),
+        ) => Some(payload.session().status().wake_id()),
+        _ => None,
+    }
+}
+
+/// Workflow #422 LN-4: the status the ledger recorded for the response request `request_id` of
+/// an ended session, if it recorded `response` under it; another response under the same request
+/// is a conflict.
+fn ended_response_replay(
+    ledger: &GlobalLedger,
+    request_id: RequestId,
+    response: &AgentSessionResponse,
+) -> RuntimeHostResult<Option<AgentSessionStatus>> {
+    let recorded = ledger
+        .query(EventQuery {
+            request_id: Some(request_id),
+            event_types: vec![
+                EventType::AgentResponseRecorded,
+                EventType::AgentSessionCompleted,
+                EventType::AgentSessionEscalated,
+            ],
+            ..EventQuery::default()
+        })
+        .map_err(|error| ledger_error(&error, ContractLocation::RecordAgentResponse))?;
+    for event in &recorded {
+        let EventPayload::Agent(
+            AgentPayload::ResponseRecorded(payload)
+            | AgentPayload::SessionCompleted(payload)
+            | AgentPayload::SessionEscalated(payload),
+        ) = event.payload()
+        else {
+            continue;
+        };
+        return if payload.session().response() == Some(response) {
+            Ok(Some(payload.session().status().clone()))
+        } else {
+            Err(fatal(
+                HostCode::AgentResponseRequestConflict,
+                ContractLocation::RecordAgentResponse,
+            ))
+        };
+    }
+    Ok(None)
 }
 
 /// The planning signals and the Agent records through one ledger position, each in ledger order.
@@ -779,10 +1022,13 @@ fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostEr
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
-fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
+/// `agent_ledger_failure` (fatal) of `operation`, with the ledger's own failure `error` (its code,
+/// operation and detail) as the native detail (Fail Loud; Workflow #422 LN-4 follow-up).
+fn ledger_error(error: &GlobalLedgerError, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::AgentLedgerFailure,
         operation,
         RuntimeErrorCode::LedgerFailure,
     )
+    .with_native_detail(format!("{error}; detail={:?}", error.detail()))
 }

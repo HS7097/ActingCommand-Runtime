@@ -1,8 +1,9 @@
 # Gate map, host fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
-# Keys are the ids of rd-1009/tests/inventory-host.md. One `[[gate]]` row per key with exactly
-# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
-# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
-# appended to; a row leaves only when its feature retires.
+# Each `[[gate]]` row has `coverage` ("Y", or "P" = tested only on the cfg(test) Segment
+# backend), `tests` (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when
+# none). A new row carries no `key`: its tests name it (Workflow #420 S6). Rows from before #420
+# keep their `key`, an id of rd-1009/tests/inventory-host.md, as history. Rows are only appended
+# to; a row leaves only when its feature retires.
 
 # One owner per state root; a clean restart gets a new epoch
 [[gate]]
@@ -825,7 +826,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t3_a_main_package_changed_in_place_lifts_after_the_interval_without_a_restart",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t4_only_a_package_the_pause_names_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t5_actingd_suspended_reports_the_paused_and_current_hash_prefixes",
-    "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t9_a_restart_rebuilds_the_recorded_hashes_from_the_failure_identity",
 ]
@@ -906,7 +906,7 @@ tests = [
 ]
 incident = ["#398"]
 
-# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it waits queued as a gated entry from the first moment (never granted at once on the free instance, merge ledger :303) until the resume; a pause during the wait makes it queue again and release, so the pause completes; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
+# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it is granted at once and starts (merge ledger :303; emu-watch, Alice's ruling 35: a pause never holds the emulator start), and a pause during the wait does not make it yield; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
 [[gate]]
 key = "86"
 coverage = "Y"
@@ -915,8 +915,8 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_2_no_internet_then_internet_after_two_reads_starts_the_emulator",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_3_an_unknown_status_starts_at_once_with_one_line",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_4_no_internet_for_600_s_refuses_the_start_with_the_failure_pair",
-    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_waits_queued_until_the_resume",
-    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_yields_and_the_pause_completes",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_is_granted_at_once_and_starts",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_does_not_hold_the_start",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_7_a_cli_start_during_the_wait_supersedes_the_claim",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_8_a_failed_preparation_hands_the_key_to_the_ladder",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_9_two_instances_start_in_configuration_order_and_the_waiting_claim_renews",
@@ -1028,7 +1028,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t31_the_admission_after_start_suspends_in_the_background_and_the_evaluation_copies_it",
 ]
 incident = ["#386 SR-3"]
-
 
 # Workflow #390 EXEC-3 (FCM E-02; register §1.70): the live settlement of a scheduled page-graph run writes its failure identity (format v2: the failure code as its base, the run's package_id as its main package), so a failure scheduled for a retry is admitted again at the next evaluation after its backoff and the activity's sampled interval as failure_retry_immediate, before its trigger is due (R22), as a linear_steps task's is; a required-entry check made first is the run's gate scope and its entry recovery package its layer scope (wave 14 ruling 3); contained_task_step_unconfirmed in the main scope outside the restart segment pauses by repeating and a changed package lifts the pause (R21, wave 14 ruling 4)
 [[gate]]
@@ -1207,12 +1206,12 @@ tests = [
 ]
 incident = ["#390"]
 
-# Workflow #411 A3 (R-1, v0.12.1; register E6C-2 note): the shutdown idle test does not count a routine entry on an instance whose routine gate a scheduling pause holds (the global pause or the instance's own): a paused instance's gated autostart claim no longer refuses request-shutdown, an accepted shutdown disconnects it with scheduler.denied lease.queue_disconnected and no report line, and the next start restores the pause and queues it again, gated; an operator start under the pause passes the gated claim and the shutdown is accepted; a resume done before the decision wins (the eligible or granted claim refuses it, runtime_busy); a routine entry that only a #403 resource fence holds, an operator, client or holder-owned entry still counts
+# Workflow #411 A3 (R-1, v0.12.1; register E6C-2 note): the shutdown idle test does not count a routine entry on an instance whose routine gate a scheduling pause holds (the global pause or the instance's own): a paused instance's gated routine claim (a Runtime-internal ladder claim since emu-watch, as a pause no longer holds the autostart claim) no longer refuses request-shutdown, and an accepted shutdown disconnects it with scheduler.denied lease.queue_disconnected while the pause is restored; an operator start under the pause passes the gated claim and the shutdown is accepted; a resume done before the decision wins (the eligible or granted claim refuses it, runtime_busy); a routine entry that only a #403 resource fence holds, an operator, client or holder-owned entry still counts
 [[gate]]
 key = "102"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_claim",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_routine_claim",
     "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_resume_before_the_shutdown_grants_the_claim_and_the_shutdown_stays_busy",
     "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_an_operator_start_passes_the_gated_claim_and_the_shutdown_is_accepted",
     "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_fence_gated_routine_entry_still_refuses_a_shutdown",
@@ -1792,6 +1791,33 @@ tests = [
 ]
 incident = ["#411 A44"]
 
+# #411 A64 (0.12.12; ruling C-43 of 10-24; no persisted ledger shape; configuration key host_claims.run_end_grace_ms, actingd-config revision 11; host keys 175 to 177, the next free above 174, for the coordinator to confirm): a scheduled run that reaches its deadline renews its lease once by the end grace before its terminal; when its end overruns the grace, its close at the lease end meets the lapsed lease (begin_resource_close: lease_expired) and fences only its instance (Workflow #403, cause lease_expired, the refusal recorded once naming the lease and stage runtime_lifecycle_session_close); the Runtime runs, the run keeps its terminal contained_task_deadline_exceeded, and another instance's direct run completes
+[[gate]]
+key = "175"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a64::a64_a_closeout_after_the_lease_lapsed_fences_only_its_instance",
+]
+incident = ["#411 A64"]
+
+# #411 A64 (ruling C-43 test (c)): a run whose end work takes longer than the old heartbeat reserve (5 s) and less than the end grace ends normally under its renewed lease: its terminal contained_task_deadline_exceeded with no lapse, its lease renewed once before the terminal, never expired and released once, its session closed, no instance fenced
+[[gate]]
+key = "176"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a64::a64_c_end_work_longer_than_the_reserve_and_inside_the_grace_ends_normally",
+]
+incident = ["#411 A64"]
+
+# #411 A64 (ruling C-43 test (d), the 10-24 order): a lease sweep tick after the deadline plus the old reserve, while the run is still at its end work, leaves the lease alone inside the end grace; a tick after the grace expires it (its expiry end fences the instance); the run's later terminal is still recorded, contained_task_deadline_exceeded carrying lease_expired; the instance is fenced with cause lease_expired, the Runtime runs and another instance's direct run completes
+[[gate]]
+key = "177"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a64::a64_d_the_sweep_leaves_the_end_alone_inside_the_grace_and_the_late_terminal_is_kept",
+]
+incident = ["#411 A64"]
+
 # #412 Lab B-3 S2 (0.12.x; register §1.162 B3S2-1, B3S2-2; ledger revision 4, the writer of §1.153 LR-10; design rd-1021/train-0129/lab-b3-design.md §2.3, §3, §5 S2 T2-1; host keys 152 to 155 from the wave-3 frame): a Lab operation that runs a declared operation of two attempts (a failed confirmation, the retry, a second input that arrives) on a fake device ends confirmed; its prepared record was persisted and verified before attempt 1's InputIntent, and its record passes its own validation and the shared evidence verifier. T2-8 (coordinator rulings 1 and 2 of 10-22, LR-10 amended before its first writer): a keyed guard refusal before any input (#411 B22) ends run_completed with its key, no attempt, no before frame or action and the guard not_evaluated; its frames are listed and the records pass the shared verifier
 [[gate]]
 key = "152"
@@ -1828,3 +1854,543 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_412_b3_s2::b3_s2_t2_4_two_operation_requests_on_one_box_land_on_different_candidates",
 ]
 incident = ["#412 B-3"]
+
+# PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177 B1-2, B1-3; test row (d); requirements R2, R3): execution.capture.max_interval_ms (60 000, 5 000..=1 800 000), execution.capture.backoff_enabled (true) and execution.capture.idle_ceiling_ms (5 000, 50..=60 000) default from the defaults file and are settable; a value outside its bounds is config_value_invalid (out_of_range) when the file is rendered, in the whole-section check and in an instruction, and a switch that is no boolean is wrong_type
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_407_b1::b1_d_the_capture_keys_default_from_the_file_and_their_bounds_are_checked",
+]
+incident = ["#407 B1"]
+
+# ISO-1 (Workflow #419, ISO-M R0.1-R0.4, R8): the scope classification table. Every code of the closed Global list is Global, built fatal and untagged or tagged as one instance's, and resolves to its family; every listed family names a code; a catalog code of category fatal is Global; a device, lease or run failure tagged as one instance's is Instance of that instance whatever the boundary's, severe for its work and halting nothing, and the wrappers keep its scope; a tagged failure without an instance takes the boundary's, else is Global; an unclassified fatal failure stays Global (fail-safe); a request failure is Operation; a join with a Global failure is Global; a poisoned lock of one instance alone is cleared and fails as instance_lock_poisoned of that instance
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_a_the_scope_classification_table",
+]
+incident = ["#419"]
+
+# ISO-1 (Workflow #419, ISO-M R0.2, R0.5-R0.7), each on its own host with instances X and Y and a manual clock: contain_failure fences an Instance failure of X (one instance_resources_fenced record caused by the failure, X's fence in the status, no latch, no shutdown) and Y's direct run completes after it; an Operation failure fails only its operation; a Global failure (ledger_failure) latches the Runtime and fences nothing; a fence that fails latches its own failure
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_b_contain_failure_fences_an_instance_failure_and_the_other_instance_runs",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_c_contain_failure_fails_only_the_operation_of_an_operation_failure",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_d_contain_failure_latches_a_global_failure",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_e_a_fence_that_fails_latches_the_runtime",
+]
+incident = ["#419"]
+
+# ISO-1 (Workflow #419, ISO-M §5.4; #411 A54): a failed receipt's host_halted says whether the Runtime latched: a read-only observe whose capture fails with a fatal device error (capture_failed) and an IPC input whose backend fails (backend_operation_failed) latch nothing, and both receipts say host_halted false
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso1::iso1_f_a_receipt_says_host_halted_only_when_the_runtime_latched",
+]
+incident = ["#419", "#411 A54"]
+
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): the shipped defaults name no blackout entry (host list empty, no instance list in effect); scheduling.blackout.quiet_horizon is deadline and scheduling.day_boundary.quiet true, per instance defaulting to the section's, all settable
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c1_no_blackout_entry_by_default_and_the_new_keys_have_their_model_defaults",
+]
+incident = ["#386 SR-4a1"]
+
+# Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, D-4, D-6, §6 row SR-4a1; contracts/scheduling-blackout.md, "Configuration blackouts"; register §1.179 SR4A1-3 to SR4A1-5): weekly and once entries of the host list and of an instance's own list are read as written; a broken entry refuses a start and check-config with blackout_config_invalid naming field, blackout_id and blackout_source (host or instance); through an instruction config_value_invalid (section_check)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::sr4a1_tests::sr4a1_c2_bad_blackout_entries_are_refused_with_their_source",
+]
+incident = ["#386 SR-4a1"]
+
+# SCH-M ED-1 (frozen model v1.0 §3.4 "Configuration", §6 row ED-1; contracts/runtime-config.md, "Expected duration"; register §1.178 ED1-3): scheduling.expected_runtime.enabled, runs and margin_ms default to true, 5 and 300000 and scheduling.fact_refresh.expected_duration_ms to 60000, all settable; each instance's expected_runtime keys default to the section's, an instance's own key overrides the section for that instance only (from the file and through an instruction), and a change of the section's key reaches every instance that names none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ed1_tests::ed1_c1_per_instance_keys_override_the_section",
+]
+incident = ["#405 ED-1"]
+
+# LN-3 (Workflow #422, LEAN-L model v1.0 §3.6, §5.1 row LN-3; contracts/ledger-observer.md §11.1, §11.3; register L7, L8, L14): each change of a dispatch pair's control state, an activity state and the monitor registry's alias state, and each wake obligation, writes exactly one value record with the key's complete state, and its `state` row names it (`decision_memory/`, `activity_memory/`, `wake/`, `monitor/`); a change that changes nothing writes none; a restart from the records alone keeps the runtime budgets and the activity interval
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln3::ln3_a_each_decision_memory_change_writes_one_value_record_its_state_row_names",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln3::ln3_a_each_wake_obligation_writes_one_value_record_its_state_row_names",
+    "actingcommand-runtime-host::lib::monitor::tests::ln3_a_the_monitor_row_names_the_latest_change_of_each_alias",
+    "actingcommand-runtime-host::lib::policy_control::tests::ln3_b_a_restart_from_the_value_records_alone_keeps_runtime_budgets_and_activity_intervals",
+]
+incident = ["#422 LN-3"]
+
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25; Workflow #386 comment 6393646823; contracts/runtime-config.md, "The `idle` section"): idle.action defaults to close_app (one of none, close_app, stop_emulator), idle.min_gap_ms to 1800000, idle.close_app_wake_lead_ms to 60000 and idle.stop_emulator_wake_lead_ms to 300000, all settable; each instance's idle keys default to the section's and an instance's own key overrides it for that instance only, from the file and through an instruction; an unknown action, a value out of range or of another type is refused where it enters; a wake lead not shorter than the gap (the section's or an instance's) is section_check at start and through an instruction; stop_emulator is refused on an instance whose emulator the Runtime does not start
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::idle1_tests::idle1_c1_defaults_and_per_instance_keys",
+    "actingcommand-runtime-config::lib::idle1_tests::idle1_c2_bad_values_are_refused",
+]
+incident = ["#386 IDLE-1"]
+
+# IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): the idle planner on a manual clock with neutral instances: a gap to the next due task of at least idle.min_gap_ms runs the action once, a shorter one never; a paused, leased, queued or manually held instance is left alone, and so is one whose plan predates its last work; one whose action in effect cannot bring it back (no startup package, or for stop_emulator no configured emulator start) never acts and is reported once (instance_idle_action_unsupported, naming the member it lacks); close_app brings the instance back at next due minus its lead through the startup package, stop_emulator through the configured emulator start and then the startup package; a due task earlier than planned, or the action switched off, wakes it at once; a failed stop fails only its own instance (no wake, no retry until work held it again) while another instance's wake goes on; none never acts or wakes; through the host (coordinator's follow-up on #1333, #419), a failed stop_emulator is recorded under its instance and goes through contain_failure: no instance_idle_action record and no wake follow for it, the Runtime does not latch, and another instance's run completes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_a_the_action_runs_once_at_the_minimum_gap_and_never_below_it",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_b_a_paused_leased_queued_or_manually_held_instance_is_left_alone",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_c_each_action_brings_the_instance_back_at_next_due_minus_its_lead",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_d_a_due_task_earlier_than_planned_wakes_the_instance_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_e_a_failed_stop_fails_only_that_instance",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle1_f_none_never_acts_or_wakes",
+    "actingcommand-runtime-host::lib::tests::gate_idle1_host::idle1_g_a_failed_stop_is_contained_to_its_instance_and_the_runtime_goes_on",
+]
+incident = ["#386 IDLE-1"]
+
+# IDLE-2 (the owed wake; root cause rd-1026/idle-wake/root-cause.md §Q3, §Q4; v0.12.13 in production on 10-26: close_app ran 57 times and the 17:54 and 18:54 wakes never queued): with the production keys (close_app, its wake lead 300000, idle.min_gap_ms 1800000) an idle instance keeps its wake through every hold, and the wake is its only exit: momentary holds (its admission guard held, its own claim, a queued claim) neither close it again nor drop the wake, which comes once at next due minus the lead, also after a hold inside the last minimum gap and while the instance is held; a reading due on the closed app wakes it at once, and a reading due within the minimum gap keeps it from closing again; a close whose stop request was sent and failed (IdleEnd::Indeterminate) owes the wake, and one not performed is left as it is with no wake; through the host, a check while the instance's admission guard is held leaves stop_emulator's wake in place: one run_idle_action, then at the wake queue_idle_wake and emulator_autostart_queued
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle2_a_momentary_holds_neither_close_the_instance_again_nor_drop_its_wake",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle2_b_a_hold_inside_the_last_minimum_gap_does_not_drop_the_wake",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle2_c_a_wake_due_while_the_instance_is_held_is_queued",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle2_d_a_reading_due_on_the_closed_app_wakes_it_first_and_does_not_cycle",
+    "actingcommand-runtime-host::lib::tests::gate_idle1::idle2_e_a_close_whose_stop_was_sent_and_failed_owes_the_wake",
+    "actingcommand-runtime-host::lib::tests::gate_idle1_host::idle2_h_a_held_admission_guard_keeps_the_idle_instances_wake_through_the_host",
+]
+incident = ["#386 IDLE-2"]
+
+# ROUT-L RL-1b A2 (§7.1, §3.3): a placed pack is scheduled within one check interval without a restart, with a higher catalog version and no approval record; a truncated schedule.json is standard_pack_root_invalid exactly once while the last good rules run; the complete file is then composed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a2_a_placed_pack_is_scheduled_without_a_restart",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A3 (§7.1, §3.3 Unload): a game left out of the composition frees its generation with cached_generations 0; the memory holds at most 1 + cached generations and no source byte
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a3_a_game_left_out_frees_its_generation",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A4 (§7.1, §3.3 Load): a game root without a bound instance is never opened and gets no schedule values
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a4_a_root_without_a_bound_instance_is_never_read",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A5 (§7.1, §3.5): a composed generation is activated and runs a dispatch with no approval decision in the ledger
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a5_a_composed_generation_runs_dispatches_without_any_approval",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A6 (§7.1, §3.6): a broken schedule.json keeps that game's last good rules, is recorded once per sha256, and the other games are unaffected
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a6_a_broken_file_keeps_that_games_last_good_rules_and_spares_the_others",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A8 (§7.1, §9.1 item 10): with a configured catalog the dual source is inert: the evaluation equals that of a root without schedule.json, and nothing is composed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a8_a_configured_catalog_evaluates_as_before",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b A9 (§7.1, §6.1 row RL-1b): a dispatch admitted under generation N settles after N+1 is active with cached_generations 0; the first composition switches from a configured catalog with the same task ids
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a9_a_dispatch_admitted_under_one_generation_settles_after_the_next",
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_a9_the_first_composition_switches_from_a_configured_catalog_with_the_same_task_ids",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# ROUT-L RL-1b RL-1a review item 1 (#386 6399836824; #419; §3.6): a configured pool reading for a pool no composed game declares never stops the evaluation of the other games' instances and is recorded once as policy_pool_reading_unused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::rl1b_item1_a_stale_pool_reading_never_stops_the_other_games",
+]
+incident = ["#420 ROUT-L RL-1b"]
+
+# LN-2 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §5.1 row LN-2, §7 A3 and A6; contracts/ledger-observer.md §11.3, §11.5; register §1.183): the instance fact store loads from the tagged `state` rows and equals the whole-ledger replay (active records with their sources, latest_observed, input boundaries, the latest tombstone of each key without an active record, pending invalidations, position) on the synthetic ledger and on fixtures with input boundaries, with no whole-ledger query and no read larger than the tagged rows; a row that disagrees with its record stops the load with the fatal ledger_tag_index_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_a_the_tagged_load_equals_the_replay_on_the_synthetic_ledger",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_b_the_tagged_load_equals_the_replay_with_input_boundaries",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln2::ln2_c_a_doctored_index_row_stops_the_load_with_ledger_tag_index_mismatch",
+]
+incident = ["#422 LN-2"]
+
+# LN-4 (Workflow #422, LEAN-L model v1.0 §3.2 step 5, §3.6, §5.1 row LN-4; contracts/ledger-observer.md §11.1, §11.5, §11.6; register §1.184): a start without the marker replays once, writes one value record per key and the marker; the next start loads the decision memory, the agent dispatcher and the monitor registry from the records the index names, equal to today's recoveries on the synthetic ledger, and those loads, the dispatch journal among them, read nothing but the index rows, their records and point reads of the dispatches the records name; the dispatch journal is bounded, never by the event count (flat under 10k dispatches); the agent dispatcher's maps are pruned at session end; the agent dispatcher's ledger failure (agent_ledger_failure) keeps the ledger's own failure as its native detail (LN-4 follow-up)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_a_seed_then_load_equals_todays_recovery_on_the_synthetic_ledger",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_b_a_loading_start_reads_no_typed_history_for_the_tagged_state",
+    "actingcommand-runtime-host::lib::tests::gate_422_ln4::ln4_c_the_journal_size_stays_flat_under_10k_synthetic_dispatches",
+    "actingcommand-runtime-host::lib::tests::agent_sessions::ln4_d_the_agent_maps_are_pruned_at_session_end",
+    "actingcommand-runtime-host::lib::tests::agent_sessions::ln4_e_an_agent_ledger_failure_keeps_the_ledgers_failure_as_its_native_detail",
+]
+incident = ["#422 LN-4"]
+
+# LN-TUNE (#422, brief rd-1026 items 1 and 3): `ledger_observer.writer_reply_timeout_ms` (actingd-config revision 12) is read from the defaults file (10 000 ms) and from an explicit value when the ledger opens, is not settable, refuses a value outside 1 000..=600 000 ms (`out_of_range`) and a read budget not below it (`section_check`); the planning-signal recovery of a second start on a root reads no record at or before the planning checkpoint the first host committed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ledger_observer_tests::ln_tune_the_writer_reply_timeout_is_read_and_refuses_an_out_of_range_value",
+    "actingcommand-runtime-host::lib::tests::gate_ln_tune::ln_tune_a_second_start_reads_no_planning_history_before_the_checkpoint",
+]
+incident = ["#422 LN-TUNE"]
+
+# LN-8c (#422, LEAN-L model v1.0 §7.1 A3; scale run 40257524915): the start's runtime-fact recovery reads the record events after its newest complete snapshot set (every one of them without a set) through the ledger's head in pages of `GlobalLedger::history_page_events` events (`ledger_observer.history_page_rows`, at most 1 024), so no writer command of it returns more than one page; on the synthetic history, at every page size, it reads every runtime-fact event and rebuilds the store that one read of them and today's replay rebuild, its largest read one page (or the whole selection when that fits one) and no whole-ledger query
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_422_ln8c::ln8c_the_runtime_fact_recovery_reads_its_records_in_bounded_pages",
+]
+incident = ["#422 LN-8c"]
+
+# LN-9 (#422, LEAN-L row LN-9, §3.7, §6.3; Alice's ruling 57): `ledger_observer.scrub_rows_per_second` (625, 1..=100000, settable), `scrub_chunk_rows` (256, 1..=4096) and `scrub_pass_interval_ms` (2 400 000, 60000..=86400000) are read from the defaults file and from explicit values, the rate is changed by an instruction and the other two refuse one, and a value out of range is refused (`out_of_range`); on a host with the shipped defaults and a stepping scrub clock, damage in an old row that no reader reads stops the Runtime within one pass as a Global failure, latched and closed with the code and operation the full verification gives for the same damage
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ledger_observer_tests::ln9_the_scrub_keys_default_take_explicit_values_and_refuse_out_of_range_values",
+    "actingcommand-runtime-host::lib::tests::gate_ln9::ln9_d_a_scrub_finding_stops_the_runtime_as_a_global_failure_with_the_full_verification_code",
+]
+incident = ["#422 LN-9"]
+
+# Workflow #386 SR-4a3 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a3; frozen scheduling model v1.4.2 §5.2a, §5.3 rule 3, C-3, rows T17, T17b, T17c, T46; contracts/scheduling-blackout.md, "Complete silence"; register §1.189): inside a blackout the ladders of a task failure, a daemon-start preparation and a person's self-check are dropped, never queued (recovery_ladder_suppressed blackout until the end), and so is a ladder claim waiting for the key when it starts; the self-check itself runs; a climbing ladder starts no rung whose time limit plus quiet_margin_ms reaches the next blackout and ends with the same suppression, its key released; the startup package waits queued inside a blackout or when its deadline would reach the next one, and runs at the end; the monitor probe takes no frame and records nothing; an autostart claim inside a blackout gets no key and no Start, the same configuration outside one starts at once, and the first round after the end starts it once; a direct run and a Lab operation pass
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_a_a_failed_runs_ladder_inside_a_blackout_is_dropped_never_queued",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_b_a_failed_daemon_start_preparation_inside_a_blackout_raises_no_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17c_a_persons_self_check_runs_inside_a_blackout_and_raises_no_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_d_a_ladder_claim_waiting_when_a_blackout_starts_is_dropped",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17b_a_a_climbing_ladder_starts_no_rung_whose_limit_reaches_the_next_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_e_inside_a_blackout_the_startup_package_waits_for_the_end_and_a_direct_run_passes",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17b_b_a_startup_package_waits_when_its_deadline_reaches_the_next_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t17_f_the_monitor_probe_takes_no_frame_inside_a_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_g_a_lab_operation_passes_a_blackout",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a3::sr4a3_t46_an_autostart_inside_a_blackout_takes_no_key_and_starts_once_after_it",
+]
+incident = ["#386 SR-4a3"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a successful scheduled run adds its runtime_ms as the newest sample of its package's row of health.run_duration (at its terminal time, one Runtime publication); the next evaluation dispatches with E and the task that shares the package shows E and runs:1, after declared before the run
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t1_a_success_adds_a_sample_to_its_package_row",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a failed scheduled run, one a condition ended and a direct run add no sample and the record is never published
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t2_a_failure_a_condition_end_and_a_direct_run_add_none",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a row keeps the newest five samples (runs 5) and E is the mean of exactly those, rounded up, plus 300 000 ms
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t3_the_sixth_sample_drops_the_first",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a restart loads the samples from the ledger; a dispatch admitted with E records E on its intent and its recovery reserves it again without policy_budget_receipt_mismatch; after the restart the evaluation's E is admitted
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t4_restart_keeps_the_samples_and_recovers_a_dispatch_admitted_with_e",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a package changed in place (same package_id) keeps its row and its next run adds to it
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t5_a_package_update_keeps_the_samples",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a client's PublishFact of health.run_duration and the Runtime's ordinary publication path are refused run_duration_key_reserved with the key, non-fatal, nothing appended
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t6_a_client_publish_of_the_key_is_refused",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a 257th package row drops the row with the oldest at and records one run_duration_row_dropped warning naming that package and the instance; 256 rows remain
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t7_row_257_drops_the_oldest_with_a_warning",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): a sample that lands between the evaluation and the admission refuses the intent policy_facts_stale; the next evaluation's intent with the new E is admitted
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t8_an_intent_stale_after_a_new_sample_is_refused",
+]
+incident = ["#386 ED-2"]
+
+# SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2, ruling 10-24 14:1x; contracts/instance-fact-store.md, "Run duration facts"; register §1.190): with scheduling.expected_runtime.enabled false no sample is written, the kept record is not read, the dispatch reserves the declared duration, its intent records none and ac_schedule shows declared
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ed2::ed2_t9_with_the_switch_off_nothing_is_written_or_read",
+]
+incident = ["#386 ED-2"]
+
+# Workflow #386 SR-4a2 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a2; SCHED T14; contracts/scheduling-blackout.md, "Order of the deferrals" position 4 and "Admission"; register §1.191): a catalog maintenance event in effect defers the candidates of its server with blackout_active (blackout_id, blackout_source catalog, the wake at its end), another server's event defers nothing there; an intent evaluated at the last admissible instant and admitted inside the event is refused blackout_active at Info, its rejection carrying the opaque instance_id and the end as next_eligible_unix_ms, no admitted record; at the end the candidate runs
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t14_a_catalog_maintenance_event_defers_its_scope_and_admission_refuses_a_crossing_intent",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-4; SCHED T16; contracts/scheduling-blackout.md, "Gradual quiet" rules 1 and 2): under the default horizon (the 30 min response deadline) a candidate is admitted until its deadline plus quiet_margin_ms reaches the next host blackout start and is deferred blackout_approaching (blackout_id, blackout_source host, blackout_start_unix_ms, required_ms the deadline, the wake at the blackout's end) one millisecond later; admission refuses an intent that no longer fits with the same code; ScheduleExplanation shows it as the instance's not-running reason with the wake; a changed quiet_margin_ms changes the point at once
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t16_the_quiet_defers_a_deadline_that_reaches_the_start_and_follows_the_margin",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-4; SCHED T16, §5.3 item 2 「越接近开始，只有越短的任务能进」): under quiet_horizon expected each candidate's horizon is its expected duration, so near a blackout start the long candidate waits blackout_approaching (required_ms its E) while the short one still runs, until its own quiet point
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t16_shorter_candidates_still_run_up_to_their_own_quiet_point",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCHED T18, §5.4; contracts/scheduling-blackout.md, "Owed occurrences and the bookkeeping day"): a daily clock that falls due inside a host blackout is deferred blackout_active and dispatched once at the first evaluation after the blackout, its admission counted in the same local day (task_daily_used 1), and not again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t18_a_clock_due_inside_a_blackout_runs_once_after_it_in_the_same_bookkeeping_day",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCHED T15, §5.1 c): with a bookkeeping-day activity profile (04:00 to 03:59 UTC) and no blackout a short task is admitted at any time inside it (01:00, 03:58, 04:00, 12:00, 23:59), no decision names a blackout, and the admission's local day turns at 04:00
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_t15_without_blackouts_a_bookkeeping_day_admits_at_any_time_and_turns_at_the_reset",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-1, row SR-4a2): an entry of one instance's own list (instance.<id>.scheduling.blackout) defers only that instance's candidates (blackout_source instance); the other instance's task is dispatched and names no blackout
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_an_instance_entry_defers_only_its_instance",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-1, row SR-4a2): a once host entry [from, until) defers blackout_active from its from to its last millisecond with the wake at until, ScheduleExplanation (ac_schedule) shows blackout_active with blackout_id and next_eligible_unix_ms as the not-running reason and the wake as the instance's next wake, and at until the candidate runs again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_a_once_entry_starts_and_expires",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (SCH-M §3.2 D-6, Alice's ruling 50; contracts/scheduling-blackout.md, "Day-boundary fit"): on a bookkeeping day a run whose expected duration would cross the window's end is deferred policy_day_boundary_approaching (window_end_unix_ms, required_ms its E, the wake at the next window start) while a short one runs; admission refuses an intent evaluated earlier that no longer fits with the same code at Info; ScheduleExplanation shows it; the instance's own day_boundary.quiet set false admits the long run
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_the_day_boundary_defers_a_long_run_and_admits_a_short_one",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (contracts/scheduling-blackout.md, "Order of the deferrals" position 9): a random delay drawn 30 s before the quiet point (the next blackout start minus the deadline and quiet_margin_ms) is cut to it whatever the draw, and the pair is dispatched there without a blackout reason
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_the_random_delay_never_passes_the_quiet_point",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #386 SR-4a2 (row SR-4a2 「empty lists → behavior unchanged」): with no blackout entry in either list and no catalog maintenance event the instants another configuration would black out or quiet dispatch as before, no decision names a blackout code, and a fixed random delay is drawn whole
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr4a2::sr4a2_empty_lists_leave_the_evaluation_unchanged",
+]
+incident = ["#386 SR-4a2"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §4.1, §13 rows DA4-T1 and DA4-T2; register §1.192 DL-1, DL-2): a valid display-layout.json is read by read_standard_pack_root with every member as written (radius 64 and 0 pass, a repository root's file names its game); a missing, unknown or misfit member is standard_pack_root_invalid malformed at that member's pointer at any depth (empty for the whole document), another game is game_mismatch, radius 65 is display_layout_invalid at /correction/radius_px, the root reader refusing each as the parser does; display-layout.json without bundle.json is bundle_missing, and with it no pages.json is needed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_display::tests::da4_t1_a_valid_display_layout_is_read_by_the_root_reader",
+    "actingcommand-contract::lib::standard_pack_display::tests::da4_t1_each_display_layout_violation_is_its_problem_at_its_pointer",
+    "actingcommand-contract::lib::standard_pack_display::tests::da4_t2_display_layout_without_bundle_json_is_bundle_missing_and_needs_no_pages",
+]
+incident = ["#392 DA-4"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §4.1, §13 row DA4-T3; register §1.192 DL-4): a broken display-layout.json is recorded at startup as standard_pack_root_invalid and the Runtime starts; a run of its game is refused in its preparation (display_layout_invalid at /correction/radius_px) with no task record and no input; repaired in place it is read by the next run, which goes on; a declaration replaced by a broken file during a run leaves that run to its end and refuses the next (malformed at /schema_version)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4::da4_t3_a_broken_declaration_refuses_the_run_before_its_lease_and_a_repaired_one_is_read_next",
+    "actingcommand-runtime-host::lib::tests::gate_392_da4::da4_t3_the_declaration_read_in_preparation_holds_for_the_whole_run",
+]
+incident = ["#392 DA-4"]
+
+# Workflow #392 DA-4 (model 392 v1.2 §12.2, C16; Alice 10-26, merge is deploy): a 1280x720 package on a 1280x720 device records the same task records and sends the same input with a game root holding a valid display-layout.json as with a game root without one and as with no standard-pack root
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4::da4_identity_a_1280x720_package_on_a_1280x720_device_runs_byte_for_byte_as_before",
+]
+incident = ["#392 DA-4"]
+
+# Workflow #392 DA-5a (model 392 v1.2 §0.2 C12 and C16, §12.1 row DA-5a): the task schema checks are one ordered type and no package behaves otherwise; a 1280x720 package on a 1280x720 frame, at task schema 0.6 under control v1 and at task schema 0.9 under control v2, passes the task geometry, completes on its target page and its one input is the tap it declares
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5a::da5a_identity_a_1280x720_package_on_a_1280x720_frame_runs_as_declared",
+]
+incident = ["#392 DA-5a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §0.2 C2 and C3, §6.6, §13 row DA2-T9): a device whose 720x1280 display becomes 1080x1920 during a run: the new frame's geometry is read again and recorded changed (extent_changed) with its display_map (a pure scale of 3/2 by the declaration), the display facts follow, and the run is not stopped and completes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_t9_a_frame_that_changes_its_size_rebuilds_the_map_and_the_run_goes_on",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §6.6; the input side maps from DA-3): on a 1920x1080 device a 1280x720 package's tap is not sent; the run ends display_map_unresolved (input_scale_unsupported at display_input_map) with no input
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_an_input_waits_for_the_input_side_under_a_pure_scale",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-2a (model 392 v1.2 §4.5): a declaration measured on the safe area finds no insets before DA-4b; the run ends contained_task_geometry_unavailable (safe_area_unavailable) after its geometry record and before any input
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da2a::da2a_a_safe_area_declaration_finds_no_insets_before_da_4b",
+]
+incident = ["#392 DA-2a"]
+
+# Workflow #392 DA-4b-D (Alice's ruling 69; work order test 1): a declaration file of two invented device models gives its insets to a handset that declares either; every frame carries them and the run completes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t1_a_file_of_two_models_applies_to_an_instance_that_declares_either",
+]
+incident = ["#392 DA-4b-D"]
+
+# Workflow #392 DA-4b-D (Alice's ruling 69; work order test 2): editing the declaration file, or changing the instance's model setting, while a run runs changes the map from the next frame: recorded changed (insets_changed) with the rebuilt map, no restart
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t2_editing_the_declaration_changes_the_map_at_the_next_frame",
+    "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t2_changing_the_model_setting_changes_the_map_at_the_next_frame",
+]
+incident = ["#392 DA-4b-D"]
+
+# Workflow #392 DA-4b-D (work order test 3; #420 S4): a malformed file, one model in two files, a model no file declares and a file without the frame's form each end the run at its first frame with no input, display_map_unresolved with its display_problem
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t3_each_broken_declaration_refuses_the_run_with_its_problem",
+]
+incident = ["#392 DA-4b-D"]
+
+# Workflow #392 DA-4b-D (Alice's ruling 69; work order test 4): an emulator that declares no model takes insets 0 and its run completes; a screen layout takes no declaration (a handset without one is DA-2a's adapted safe-area row)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da4bd::da4bd_t4_an_emulator_takes_insets_0_and_a_screen_layout_no_declaration",
+]
+incident = ["#392 DA-4b-D"]
+
+# LN-7c R (#422; ledger-observer.md §11.7; coordinator 10-26): the ledger scrub's finding about the derived frame index `ledger_frame_refs` is non-fatal: the host hands it to the daemon's log once (one line with the code, what, where and `extent=untrusted`), latches nothing, and the Runtime keeps running and closes as usual
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln9::ln7c_r_a_frame_index_finding_is_one_daemon_line_and_the_runtime_keeps_running",
+]
+incident = ["#422 LN-7c R"]
+
+# LN-WS (#422; brief rd-1026/brief-ln-ws.md; root cause rd-1026/writer-stall/root-cause.md §5; the production stop of 2026-10-26 19:12:43): on a host over a production-shaped synthetic ledger with the shipped `ledger_observer.read_check_vm_steps` and `history_scan_rows`, a fake writer clock and a 600 s reply limit, each read of the incident's table (the 19:12:24, 19:11:30 and 19:12:38 calls, a run listing page, a run evidence read) sent as QueryEvents while an append through append_runtime_event is in flight behind it answers a page, complete or incomplete at its budget, the append commits and the Runtime keeps running; an append the writer does not answer within its reply limit fails with ledger_failure whose cause names writer_response_timeout
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws::ln_ws_t6_the_incident_reads_answer_while_an_append_commits_and_the_runtime_runs",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws::ln_ws_t7_an_append_not_answered_in_time_fails_naming_writer_response_timeout",
+]
+incident = ["#422 LN-WS"]
+
+# DIAG-RUN (#419; brief rd-1026/brief-diag-run.md; root cause rd-1026/stop2/root-cause.md §5 R2; the production stop of 2026-10-26 23:23:04): a task diagnostic's ledger read maps its failure through `ledger_read_failure` at `task_diagnostic_failed`. On direct runs on a fake Runtime clock, a diagnostic page read the writer does not answer within its reply limit (the writer held in that read by the read hold) fails only its run: `failed`, not fatal, with `writer_response_timeout` at `task_diagnostic_failed` in the receipt and the one terminal, nothing of the diagnostic stream published and its staging file gone, nothing latched, no stop requested, and the instance's next run admitted and completed; a diagnostic read that meets a damaged record still latches a fatal failure and stops the Runtime
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_diag_run::diag_run_t4_a_diagnostic_read_not_answered_in_time_fails_only_its_run",
+    "actingcommand-runtime-host::lib::tests::gate_diag_run::diag_run_t5_a_fatal_ledger_failure_of_the_diagnostic_read_still_stops_the_runtime",
+]
+incident = ["#419 DIAG-RUN"]
+
+# LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1.4, §1.5, §4, §5; brief rd-1026/brief-ln7c-q.md): the frame cleaner by query, on a fake clock and step counter: a statement starts no earlier than the one before plus its steps at frame_query_steps_per_second, so the steps never exceed the rate by more than one statement, and a raised stop interrupts the pass (T-pace); a live frame is examined at settle, at 1 day and at 7 days by its answers, a running one at every pass, a late window point after settle moves the frame at 1 day, and a class change between queueing and the round is acted on by the round's answer, and every chunk is examined at the pass start's clock, so a frame captured in the 30 s before the pass start waits for a run that started after W (T-schedule; fix round 1, review F1); kept frames go when confirmed or at the age the pass starts with, and a changed age takes effect at the next pass (T-evidence); frame_retention_evidence_max_age_days is 15 by default, settable within 1..=3650 and refused outside it, frame_query_steps_per_second settable and frame_query_chunk_frames read at start
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_pace_steps_never_exceed_the_rate_by_more_than_one_statement",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_pace_the_stop_interrupts",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_every_pass",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_schedule_a_frame_unsettled_at_the_pass_start_waits_for_a_run_w_does_not_hold",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::ln7c_q_t_evidence_kept_frames_go_when_confirmed_or_at_the_age_the_pass_starts_with",
+    "actingcommand-runtime-config::lib::gate_ln7c_q::ln7c_q_t_evidence_the_evidence_age_is_settable_within_its_range_and_refused_outside_it",
+]
+incident = ["#422 LN-7c Q"]
+
+# LN-WS-F (#419 / #422; brief rd-1026/brief-ln-ws-f.md; the "Exposure" audit of #1367): the Runtime's own recurring ledger reads stay bounded and fail only their own work. On a production-shaped synthetic ledger (three instances, runs of 24 frames with every second frame stored) with a dispatch intent every twenty records appended under its own run links and two stored reports, a decision's dispatch intent read from the sequence the dispatch journal holds (the reconciliation tick's) and the verified records of a proposal's reports or a strategic report's evidence (by the `artifact_id` index) take at most 1.5 times the SQLite work on 12 000 records that they take on 3 000, and answer what the history-wide reads answer (one intent, two intents of one decision, none; verified references, one with another digest, one the ledger does not hold, alone and together). With a 3 s writer reply limit, the reconciliation tick's read of a pending settlement held past it skips only that settlement this tick (nothing latched, no stop, nothing written) and the next tick settles it; a proposal request's read held past it is answered `failed`, non-fatal, with `writer_response_timeout` and the same proposal is then evaluated; a damaged dispatch intent on the settlement read still latches and stops the Runtime
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t1_a_bounded_read_does_not_grow_with_the_history",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t2_a_bounded_read_answers_as_the_history_wide_read",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t3_a_settlement_read_not_answered_in_time_skips_only_its_settlement_this_tick",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t4_a_proposal_read_not_answered_in_time_fails_only_that_request",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t5_a_damaged_record_on_a_settlement_read_still_stops_the_runtime",
+]
+incident = ["#419 LN-WS-F"]
+
+# LN-WS-F fix round 1 (brief rd-1026/brief-ln-ws-f-fix1.md; review rd-1026/ln-ws-f/review.md H1, L1): a live settlement's completion read, which comes after its execution record is committed, held past a 3 s writer reply limit stays fatal: the Runtime latches a `ledger_failure` whose cause is the ledger's `writer_response_timeout` and a stop is requested. With two pending settlements and the writer held from the reconciliation tick's first settlement read on, only that read waits out the limit (one skipped step in the daemon's log), nothing latches, neither settlement writes anything, and the next tick settles both
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t6_a_completion_read_not_answered_after_the_execution_commit_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_ln_ws_f::ln_ws_f_t7_the_first_unanswered_settlement_read_ends_the_ticks_reads",
+]
+incident = ["#419 LN-WS-F"]

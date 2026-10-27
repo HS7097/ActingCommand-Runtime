@@ -48,12 +48,12 @@ pub(super) trait LedgerStore: Send + 'static {
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates>;
-    fn frame_retention_view(
-        &self,
-        now_unix_ms: u64,
-        switches: super::FrameRetentionSwitches,
-        work: &ReadWork,
-    ) -> GlobalLedgerResult<super::FrameRetentionView>;
+    /// #422 LN-7c Q (final-query §2): at a frame cleaner pass start, the writer keeps of the
+    /// capture frame objects only those in `live` (the live frame store) and the proof set.
+    fn retain_live_objects(
+        &mut self,
+        live: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+    );
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
@@ -76,7 +76,8 @@ pub(super) trait LedgerStore: Send + 'static {
         identifiers: &IdentifierIssuer,
     ) -> FlushReport;
     /// Workflow #383 AO-2 (§8.4): the ledger sequence of a committed record, for the barrier.
-    fn committed_sequence(&self, event_id: &EventId) -> Option<u64>;
+    /// LN-5: read from the store's unique index; a failed read is that failure.
+    fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>>;
 
     /// Revalidates persisted admission/effect/release facts. Returns the existing
     /// or new completion, plus only newly appended events in sequence order.
@@ -85,9 +86,9 @@ pub(super) trait LedgerStore: Send + 'static {
         execution: PolicyExecutionEventData,
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)>;
 
-    fn query(&self, query: &EventQuery) -> Vec<PersistedEvent>;
     /// #411 A51 (R2): every read below stops where `work`'s budget runs out; a page answers
-    /// incomplete, any other read `ledger_read_budget_exceeded` of `operation`.
+    /// incomplete, any other read `ledger_read_budget_exceeded` of `operation`. LN-5 (#422): each
+    /// reads the store, one page of `history_page_rows` rows at a time.
     fn query_within(
         &self,
         query: &EventQuery,
@@ -104,6 +105,38 @@ pub(super) trait LedgerStore: Send + 'static {
         operation: Location,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
     fn latest_sequence(&self) -> u64;
+    /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 steps 1 to 3): the checked
+    /// records the index rows of `role` with a key starting with one of `prefixes` name.
+    fn index_records(
+        &self,
+        role: super::LedgerIndexRole,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerIndexRecords>;
+    /// Workflow #422 LN-2 (`contracts/ledger-observer.md` §11.5): the tagged keys under
+    /// `prefixes` with their checked latest records.
+    fn tagged_state(
+        &self,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerTaggedState>;
+    /// #422 LN-7c C: whether the capture frame or the run `target` names is in the store; `None`
+    /// when `work`'s budget stopped the read first.
+    fn evidence_target_known(
+        &self,
+        target: &super::LedgerEvidenceTarget,
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<bool>>;
+    /// #419 LN-WS-F (R2): the committed records through `through` that carry one of `artifacts`
+    /// (the `artifact_id` index), in ledger order, within `work`'s budget;
+    /// `ledger_read_budget_exceeded` of `operation` when it ran out.
+    fn artifact_records(
+        &self,
+        artifacts: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through: u64,
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -162,13 +195,11 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates> {
         Self::retention_candidates(self, after)
     }
-    fn frame_retention_view(
-        &self,
-        now_unix_ms: u64,
-        switches: super::FrameRetentionSwitches,
-        work: &ReadWork,
-    ) -> GlobalLedgerResult<super::FrameRetentionView> {
-        Self::frame_retention_view(self, now_unix_ms, switches, work)
+    fn retain_live_objects(
+        &mut self,
+        live: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+    ) {
+        self.retention.retain_live_objects(live);
     }
     fn admit_artifact_eviction(
         &mut self,
@@ -196,7 +227,7 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         Self::commit_captured(self, batch, identifiers)
     }
 
-    fn committed_sequence(&self, event_id: &EventId) -> Option<u64> {
+    fn committed_sequence(&self, event_id: &EventId) -> GlobalLedgerResult<Option<u64>> {
         Self::committed_sequence(self, event_id)
     }
 
@@ -205,10 +236,6 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         execution: PolicyExecutionEventData,
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)> {
         Self::reconcile_scheduled_policy_settlement(self, execution)
-    }
-
-    fn query(&self, query: &EventQuery) -> Vec<PersistedEvent> {
-        Self::query(self, query)
     }
 
     fn query_within(
@@ -233,6 +260,42 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
 
     fn latest_sequence(&self) -> u64 {
         Self::latest_sequence(self)
+    }
+
+    fn index_records(
+        &self,
+        role: super::LedgerIndexRole,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerIndexRecords> {
+        Self::index_records(self, role, prefixes, work)
+    }
+
+    fn tagged_state(
+        &self,
+        prefixes: &[String],
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<super::LedgerTaggedState> {
+        Self::tagged_state(self, prefixes, work)
+    }
+
+    fn evidence_target_known(
+        &self,
+        target: &super::LedgerEvidenceTarget,
+        work: &ReadWork,
+    ) -> GlobalLedgerResult<Option<bool>> {
+        Self::evidence_target_known(self, target, work)
+    }
+
+    fn artifact_records(
+        &self,
+        artifacts: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
+        through: u64,
+        work: &ReadWork,
+        operation: Location,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        Self::read_artifact_records(self, artifacts, (0, through), work)?
+            .ok_or_else(|| ReadWork::exceeded(operation))
     }
 
     fn project_view_page(

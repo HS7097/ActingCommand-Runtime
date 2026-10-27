@@ -254,6 +254,9 @@ impl HostShared {
         // a ladder already admitted keeps its snapshot (§4.7).
         self.refresh_ladder_config()
             .map_err(RequestFailure::poison_without_terminal)?;
+        // LN-9 (#422): the ledger's scrub reads its rate before its next chunk.
+        self.refresh_ledger_scrub_rate()
+            .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
@@ -355,6 +358,72 @@ impl HostShared {
         Ok(config)
     }
 
+    /// LN-9 (#422, LEAN-L §3.7): `ledger_observer.scrub_rows_per_second` in effect (settable),
+    /// handed to the ledger's scrub at start, once the instruction values are restored, and after
+    /// every change of the configuration; the scrub reads it before its next chunk.
+    pub(super) fn refresh_ledger_scrub_rate(&self) -> RuntimeHostResult<()> {
+        let section = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .ledger_observer()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        self.ledger
+            .set_scrub_rows_per_second(section.scrub_rows_per_second)
+            .map_err(|error| {
+                RuntimeHostError::relayed_fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            })
+    }
+
+    /// #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §5): the frame cleaner's keys in effect, read at
+    /// each of its rounds: `frame_retention_evidence_max_age_days` (settable; a pass takes it at
+    /// its start), `ledger_observer.frame_query_steps_per_second` (settable; read after each
+    /// statement) and `ledger_observer.frame_query_chunk_frames` (not settable).
+    pub(super) fn frame_cleaner_settings(
+        &self,
+    ) -> RuntimeHostResult<super::frame_retention::CleanerSettings> {
+        let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+            RuntimeHostError::fatal(
+                failure.failure_code(),
+                ConfigHostLocation::ReadRuntimeConfig,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+            .with_outcome_values(|outcome| failure.with_values(outcome))
+        };
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let section = config.ledger_observer().map_err(refused)?;
+        Ok(super::frame_retention::CleanerSettings {
+            evidence_max_age_days: config
+                .frame_retention_evidence_max_age_days()
+                .map_err(refused)?,
+            steps_per_second: section.frame_query_steps_per_second,
+            chunk_frames: usize::try_from(section.frame_query_chunk_frames).unwrap_or(usize::MAX),
+        })
+    }
+
+    /// #411 A64 (ruling C-43): `host_claims.run_end_grace_ms` in effect, read when a run reaches
+    /// its deadline.
+    pub(super) fn run_end_grace_ms(&self) -> RuntimeHostResult<u64> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .run_end_grace_ms()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, read at every renewal.
     pub(super) fn renewal_slack_ms(&self) -> RuntimeHostResult<u64> {
         lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
@@ -374,6 +443,72 @@ impl HostShared {
     pub(super) fn restart_exit_wait_ms(&self) -> RuntimeHostResult<u64> {
         lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
             .restart_exit_wait_ms()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
+    /// emu-watch: the emulator watch's keys of the `emulator_control` section in effect
+    /// (`watch_enabled`, `watch_interval_ms`, `restart_attempts`, `restart_window_ms`), read at
+    /// every tick of the watch.
+    pub(super) fn emulator_watch_settings(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::EmulatorWatchConfig> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .emulator_watch()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
+    /// IDLE-1: the idle keys in effect for the instance `instance_id` (its own
+    /// `instance.<id>.idle.*`, else the `idle` section's), read at every idle check; `None` for an
+    /// instance the configuration in effect does not name (a host started without actingd's
+    /// manifest), which has no idle action.
+    pub(super) fn idle_settings(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<actingcommand_runtime_config::IdleConfig>> {
+        let id = crate::failure_identity::identifier_text(&instance_id);
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let named = actingcommand_runtime_config::instance_key(
+            &id,
+            actingcommand_runtime_config::idle::ACTION,
+        );
+        if config.value(&named).is_none() {
+            return Ok(None);
+        }
+        config.idle(&id).map(Some).map_err(|failure| {
+            RuntimeHostError::fatal(
+                failure.failure_code(),
+                ConfigHostLocation::ReadRuntimeConfig,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+            .with_outcome_values(|outcome| failure.with_values(outcome))
+        })
+    }
+
+    /// Workflow #392 DA-4b-D (Alice's ruling 69): the `display_safe_area` keys in effect for the
+    /// instance `instance_id` (its own `instance.<id>.display_safe_area.model`, else the
+    /// section's), read at every frame of a run whose game's display declaration measures on the
+    /// safe area, so an instruction takes effect from the next frame.
+    pub(super) fn display_safe_area_settings(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::DisplaySafeAreaConfig> {
+        let id = crate::failure_identity::identifier_text(&instance_id);
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .display_safe_area(&id)
             .map_err(|failure| {
                 RuntimeHostError::fatal(
                     failure.failure_code(),
@@ -421,6 +556,34 @@ impl HostShared {
             daily_limit: config.daily_limit,
             failure_backoff_ms: config.failure_backoff_ms,
             max_consecutive_failures: config.max_consecutive_failures,
+            // SCH-M ED-2: the declared duration of a fact refresh read.
+            expected_duration_ms: config.expected_duration_ms,
+        })
+    }
+
+    /// SCH-M ED-2 (§3.4 "Configuration"): the expected-duration keys in effect for the instance
+    /// `alias` names (`EffectiveConfig::expected_runtime` by its registry id; an alias the
+    /// registry does not hold takes the section's keys), read at every write of a sample and
+    /// every projection of the evaluation inputs. The keys are checked whenever the
+    /// configuration is loaded or changed, so a value that cannot be read here is a halt.
+    pub(super) fn expected_runtime_settings(
+        &self,
+        alias: &str,
+    ) -> RuntimeHostResult<actingcommand_policy::ExpectedRuntimeSettings> {
+        let id = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == alias)
+        .map(|instance| crate::failure_identity::identifier_text(&instance.instance_id));
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .expected_runtime(id.as_deref().unwrap_or(alias))
+            .map_err(remedy_config_failure)?;
+        Ok(actingcommand_policy::ExpectedRuntimeSettings {
+            enabled: config.enabled,
+            runs: config.runs,
+            margin_ms: config.margin_ms,
         })
     }
 
@@ -548,6 +711,68 @@ impl HostShared {
         Ok(delays)
     }
 
+    /// Workflow #386 SR-4a2 (SCH-M §3.2 D-1, D-4, D-6): the blackout keys in effect for the
+    /// instances `aliases` name, read at every authoritative policy cycle and at every policy
+    /// admission: the host list, each instance's own list (`EffectiveConfig::instance_blackouts`
+    /// by its registry id; an alias the registry does not hold has none), the quiet keys and
+    /// each instance's day-boundary switch in effect. The keys are checked whenever the
+    /// configuration is loaded or changed, so one that cannot be read here is a halt.
+    pub(super) fn blackout_context(
+        &self,
+        aliases: &[&str],
+        operation: HostLocation,
+    ) -> RuntimeHostResult<crate::policy_host::BlackoutContext> {
+        let ids = lock(&self.registered_instances, operation)?
+            .values()
+            .map(|instance| {
+                (
+                    instance.instance_alias.clone(),
+                    crate::failure_identity::identifier_text(&instance.instance_id),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let scheduling = config.scheduling().map_err(remedy_config_failure)?;
+        let blackout = scheduling.blackout;
+        let mut instances = BTreeMap::new();
+        let mut day_boundary_quiet = BTreeMap::new();
+        for alias in aliases {
+            // The per-instance keys name registry ids; an alias the registry does not hold names
+            // no key of its own, so the section's switch and no list of its own are in effect.
+            let id = ids.get(*alias).map_or(*alias, String::as_str);
+            day_boundary_quiet.insert(
+                (*alias).to_owned(),
+                config
+                    .day_boundary_quiet(id)
+                    .map_err(remedy_config_failure)?,
+            );
+            let own = config
+                .instance_blackouts(id)
+                .map_err(remedy_config_failure)?;
+            if !own.is_empty() {
+                instances.insert(
+                    (*alias).to_owned(),
+                    own.iter()
+                        .map(crate::policy_host::policy_blackout_entry)
+                        .collect(),
+                );
+            }
+        }
+        Ok(crate::policy_host::BlackoutContext {
+            host: blackout
+                .host
+                .iter()
+                .map(crate::policy_host::policy_blackout_entry)
+                .collect(),
+            instances,
+            day_boundary_quiet,
+            day_boundary_section: scheduling.day_boundary_quiet,
+            quiet_margin_ms: blackout.quiet_margin_ms,
+            hard_quiet_ms: blackout.hard_quiet_ms,
+            quiet_horizon: blackout.quiet_horizon,
+        })
+    }
+
     /// Workflow #398 RD-2: the `device_link` section in effect (model-398 §4.6), read at every
     /// link change, restore and watch restart.
     pub(super) fn device_link_config(
@@ -615,6 +840,28 @@ impl HostShared {
             })
     }
 
+    /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, read at each step of a
+    /// contained run and handed to the kernel with the step's pacing.
+    pub(super) fn capture_cadence(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_execution_kernel::CaptureCadence> {
+        let cadence = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .capture_cadence()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        Ok(actingcommand_execution_kernel::CaptureCadence::new(
+            cadence.max_interval_ms,
+            cadence.backoff_enabled,
+            cadence.idle_ceiling_ms,
+        ))
+    }
+
     /// Records one configuration fact, observed now and strictly after the stored record of its
     /// key, ledger-first through [`Self::record_runtime_fact`].
     /// Workflow #389 MCP-9a (register A5): records `config.catalog`, the active policy catalog
@@ -629,11 +876,20 @@ impl HostShared {
             let Some(generation) = self.active_policy_catalog()? else {
                 return Ok(());
             };
+            // LN-5 (#422, LEAN-L §3.3): each type's history is read from the store page by page.
             let read = |event_type| {
                 self.ledger
-                    .query(EventQuery {
-                        event_type: Some(event_type),
-                        ..EventQuery::default()
+                    .latest_sequence()
+                    .and_then(|through| {
+                        crate::recovery_read::read_pages(
+                            &self.ledger,
+                            &EventQuery {
+                                event_type: Some(event_type),
+                                ..EventQuery::default()
+                            },
+                            through,
+                            self.ledger.history_page_events(),
+                        )
                     })
                     .map_err(|error| crate::policy_host::catalog_ledger_error(&error))
             };

@@ -1,0 +1,84 @@
+{
+  "owner": "display-adapter",
+  "codes": {
+    "display_map_unresolved": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "display_problem": "required",
+        "stage": "optional",
+        "frame_width": "optional",
+        "frame_height": "optional",
+        "base_width": "optional",
+        "base_height": "optional",
+        "target_id": "optional",
+        "pack_operation_id": "optional",
+        "path": "optional",
+        "other_path": "optional",
+        "json_pointer": "optional",
+        "config_key": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "The display adapter cannot map a frame, a region or an input box of a task package onto the delivered frame (Workflow #392, model 392 v1.2 §9.1); display_problem says why. As a run's end it is decidable without the screen and leaves the run with no input: no declaration where one is needed (layout_undeclared), a device smaller than the base (scale_below_base), a box with no size left (collapsed), a box wholly outside the frame (outside_frame), or a positional box across a third line under a translation without an anchor (straddles_zones). Workflow #392 DA-2a: the kernel's frame gate (every frame a run recognises, at stage display_map_build) admits only the identity and a pure scale and refuses a translation or a cropped frame as translation_unsupported until DA-2b, and a frame of the package's other orientation as orientation_mismatch (only a cause from DA-2b on); the host's input prerequisite refuses an input on a frame that is not the plain identity as input_scale_unsupported (stage display_input_map) until DA-3. Workflow #392 DA-4b-D (Alice's ruling 69): a run whose game measures on the safe area takes each frame's insets from the instance's declared device model, and the host refuses the frame at stage display_map_build, before any input, when the declaration directory or a file is broken (safe_area_declaration_invalid, path and json_pointer), one model is in two files (safe_area_model_repeated, path and other_path), no file declares the model (safe_area_model_undeclared, config_key and path) or the model's file covers no display size and rotation the frame shows (safe_area_form_undeclared, path). It replaces the retired contained_task_frame_resolution_mismatch. Ends only that run, never the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "display_map_stale": {
+      "category": "warning",
+      "ladder_class": "stability_warning",
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "The display geometry changed after a frame was taken and before its input (Workflow #392, model 392 v1.2 §6.6): that step sends no input and the next frame is taken. Registered by DA-1; first emitted by DA-3.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  },
+  "locations": {
+    "display_map_build": {
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "Building the display map of one frame: its orientation, the layout it is measured on, the scale factor and the scale space (Workflow #392 DA-1)."
+    },
+    "display_region_map": {
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "Mapping a region of a task package into the scale frame (Workflow #392 DA-1)."
+    },
+    "display_input_map": {
+      "owner": "display-adapter",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.15",
+      "description": "Mapping an input box or point of a task package to the device frame (Workflow #392 DA-1)."
+    }
+  }
+}

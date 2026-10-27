@@ -18,8 +18,14 @@
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
 //!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8);
 //!   `startup_discovery` (Workflow #390 DISC-1); `touch` (Workflow #406 T12);
-//!   `emulator_control` (#411 A50); `install` (Workflow #421 INST-1, read by `actingctl install`
-//!   from the configuration file, [`install::settings`]).
+//!   `emulator_control` (#411 A50; emu-watch adds the emulator watch's keys); `watchdog` (#411
+//!   A66, read by the watchdog and `actingctl` from the configuration file,
+//!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
+//!   capture cadence); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance with
+//!   no task soon, also per instance); `display_safe_area` (Workflow #392 DA-4b-D, Alice's
+//!   ruling 69: the declared safe areas' directory and each instance's device model); `install`
+//!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
+//!   [`install::settings`]).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -30,10 +36,14 @@ mod codes;
 mod defaults;
 pub mod device_link;
 pub mod device_state;
+pub mod display_safe_area;
 mod effective;
 pub mod emulator_control;
+pub mod execution;
 mod existing;
+pub mod frame_retention;
 mod host_claims;
+pub mod idle;
 // Workflow #421 INST-1: `install.*`, read by `actingctl install` from the configuration file.
 pub mod install;
 mod instance;
@@ -48,6 +58,7 @@ pub mod startup_discovery;
 mod table;
 pub mod touch;
 mod value;
+pub mod watchdog;
 
 pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
@@ -55,6 +66,9 @@ pub use defaults::{
 };
 pub use device_link::{DeviceLinkConfig, DeviceLinkFile, OfflineAction};
 pub use device_state::{DeviceStateConfig, DeviceStateFile, KeyguardInsecureAction, ThermalLevel};
+pub use display_safe_area::{
+    DisplaySafeAreaConfig, DisplaySafeAreaFile, InstanceDisplaySafeAreaFile,
+};
 pub use effective::{
     AppliedSettings, CheckContext, ConfigFailure, DeviceBounds, EffectiveConfig, InstructionStamp,
     InstructionValue, OVERRIDE_BASE_JSON, OVERRIDE_BASE_SOURCE, OVERRIDE_CHANNEL,
@@ -62,10 +76,13 @@ pub use effective::{
     OVERRIDE_VALUE_JSON, OverridesInvalid, RestoreNote,
 };
 pub use emulator_control::{
-    EmulatorControlFile, RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
+    EmulatorControlFile, EmulatorWatchConfig,
+    RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };
-pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
+pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
+pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
+pub use idle::{IdleAction, IdleConfig, IdleFile};
 pub use instance::{
     DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR,
     STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS,
@@ -80,11 +97,16 @@ pub use recovery_ladder::{
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
-    BlackoutConfig, CostCommitConfig, FactRefreshConfig, FeatureLockConfig, HostBlackout,
-    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay, RemedyChoiceRow,
-    RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+    BlackoutConfig, BlackoutEntry, BlackoutWindow, CostCommitConfig, ExpectedRuntimeConfig,
+    FactRefreshConfig, FeatureLockConfig, InstanceSchedulingFile, PacingStage, PackAdmissionConfig,
+    QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
+    SchedulingConfig, SchedulingFile,
 };
-pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
+pub use standard_packs::{
+    CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,
+    CHECK_INTERVAL_MS as STANDARD_PACKS_CHECK_INTERVAL_MS, ROOT as STANDARD_PACKS_ROOT,
+    StandardPackWorkbenchConfig, StandardPacksDefaultsFile, StandardPacksFile,
+};
 pub use startup_discovery::{StartupDiscoveryConfig, StartupDiscoveryFile};
 pub use table::{
     DefaultSource, FilePath, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, NotSettable, Settable,
@@ -113,6 +135,12 @@ mod device_link_tests;
 // Workflow #398 RD-5b.
 #[cfg(test)]
 mod device_state_tests;
+// SCH-M ED-1.
+#[cfg(test)]
+mod ed1_tests;
+// IDLE-1.
+#[cfg(test)]
+mod idle1_tests;
 #[cfg(test)]
 mod ladder_tests;
 // Workflow #383 AO-1.
@@ -126,6 +154,9 @@ mod perf_tests;
 mod rd4_tests;
 #[cfg(test)]
 mod scheduling_tests;
+// Workflow #386 SR-4a1.
+#[cfg(test)]
+mod sr4a1_tests;
 #[cfg(test)]
 mod tests;
 // Workflow #406 T12.
@@ -135,3 +166,11 @@ mod touch_tests;
 // #411 B37 (A35-S1, host key 137): the busy hold's configuration keys.
 #[cfg(test)]
 mod gate_411_b37;
+
+// PERF-B1 (Workflow #407 B1): the `execution.capture` keys.
+#[cfg(test)]
+mod gate_407_b1;
+
+// #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
+#[cfg(test)]
+mod gate_ln7c_q;

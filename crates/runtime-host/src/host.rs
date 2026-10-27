@@ -25,6 +25,7 @@ use crate::policy_host::{
 };
 use crate::proposal::prepare_proposal;
 use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
+use crate::tagged_state::TaggedStart;
 use crate::time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock, unix_ms_now};
 use crate::{
     AgentDispatcherConfig, CatalogGeneration, FatalState, MaintenanceLedgerQuery,
@@ -157,6 +158,8 @@ const CONNECTION_PREPARATION_CONNECTION_VALUE: u64 = u64::MAX - 3;
 
 mod agent_control;
 mod backend_open;
+// Workflow #386 SR-4a3: complete silence at the host's own entries, read from the blackouts.
+mod blackout_silence;
 // Workflow #411 B41: the resting pages and package entries the chain handover reads.
 mod chain_handover;
 pub(crate) use chain_handover::chain_entry_holds_page;
@@ -171,8 +174,15 @@ mod device_state;
 mod emulator_autostart;
 pub use emulator_autostart::EmulatorAutostartReports;
 mod emulator_instance;
+// emu-watch (Alice's ruling 35): the Runtime polls its emulators and starts a configured one it
+// finds stopped, within a bound.
+mod emulator_watch;
 mod evidence_export;
 mod facts;
+// IDLE-1 (Alice's ruling 41): the idle action of an instance with no task soon, and its wake.
+mod idle;
+// ISO-M (#419): the failure scope core, the closed Global list and `contain_failure`.
+pub(crate) mod failure_scope;
 mod failure_settlement;
 mod foreground_gate;
 mod frame_retention;
@@ -219,6 +229,9 @@ mod resource_close;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod resource_fence;
 mod resource_targets;
+// SCH-M ED-2: the run-duration samples at settlement and the expected duration E in the
+// evaluation's task states.
+mod run_duration;
 mod runtime_config;
 mod runtime_facts;
 mod saved_artifact_ocr;
@@ -233,6 +246,9 @@ mod signatures;
 mod standard_pack;
 pub(crate) use standard_pack::read_registries;
 pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_standard_packs};
+// ROUT-L RL-1b: the scheduler workbench, which composes the standard packs' schedule rules.
+mod standard_pack_schedule;
+pub use standard_pack_schedule::{StandardPackSchedulePreview, preview_standard_pack_schedule};
 mod startup_package;
 mod state_control;
 mod task_diagnostic;
@@ -271,6 +287,15 @@ use policy_dispatch::{SchedulingPauseTable, TrustedPolicyDispatchStore};
 pub(crate) use policy_outcome::insert_authoritative_policy_outcome;
 #[cfg(test)]
 use policy_outcome::{PolicyOutcomeCacheUpdate, validate_policy_run_admission_request};
+// #419 LN-WS-F, tests: the bounded reads with their forms, and the hooks around the tick's
+// settlement reads, a live settlement's completion read and a proposal's read.
+#[cfg(test)]
+pub(crate) use planning::{AROUND_VERIFIED_READ, verified_reference_sequences};
+#[cfg(test)]
+pub(crate) use policy_outcome::{
+    AROUND_COMPLETION_READ, AROUND_SETTLEMENT_READS, SettlementRead, policy_dispatch_intent,
+    policy_dispatch_intents,
+};
 use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
@@ -545,6 +570,8 @@ pub struct RuntimeHostConfig {
     /// Workflow #373 NAV-3a: its registries are where every prerequisite package and every
     /// return-home package is found (M-373 §4.3).
     standard_packs_root: Option<PathBuf>,
+    /// ROUT-L RL-1b: the scheduler workbench composes the rules (no configured catalog).
+    standard_pack_schedule: bool,
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.2 step 4): where the ledger reports
     /// a retried write and its fatal stop; actingd's sink writes its lines and ends the process.
     /// Without one the ledger's writer ends at the stop and every later write fails.
@@ -571,6 +598,28 @@ pub struct RuntimeHostConfig {
     /// test releases it.
     #[cfg(test)]
     pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
+    /// #411 A65, test only: the ledger writer's read budget in place of
+    /// `ledger_observer.read_budget_ms` (whose configured value is at least 1 ms), and the
+    /// writer's clock it is measured on in place of the process's monotonic clock.
+    #[cfg(test)]
+    ledger_read_budget_for_test: Option<(Duration, actingcommand_ledger::LedgerMonotonicClock)>,
+    /// LN-9 (#422), test only: the clock the ledger's scrub is paced on in place of the process's
+    /// monotonic clock.
+    #[cfg(test)]
+    ledger_scrub_clock_for_test: Option<Arc<dyn actingcommand_ledger::LedgerScrubClock>>,
+    /// #411 A65, test only: the start fails right after it appended its start event and the
+    /// `runtime.instance_bound` events.
+    #[cfg(test)]
+    fail_after_start_event_for_test: bool,
+    /// #411 A65 (Codex's counterexample on #420), test only: the start settles the direct runs
+    /// of earlier epochs but records no `host.contained_settlement`, as a build before A65 did,
+    /// so its ledger is an old one without the anchor.
+    #[cfg(test)]
+    contained_settlement_unrecorded_for_test: bool,
+    /// #411 A67-R, test only: the memory sample every capture frame store reads in place of the
+    /// host's physical memory.
+    #[cfg(test)]
+    capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -613,6 +662,7 @@ impl RuntimeHostConfig {
             stuck_recovery: BTreeMap::new(),
             recognition_packages: BTreeMap::new(),
             standard_packs_root: None,
+            standard_pack_schedule: false,
             ledger_failure_sink: None,
             runtime_commit: None,
             daemon_reporter: None,
@@ -625,7 +675,66 @@ impl RuntimeHostConfig {
             network_connectivity_for_test: None,
             #[cfg(test)]
             pack_admission_hold_for_test: None,
+            #[cfg(test)]
+            ledger_read_budget_for_test: None,
+            #[cfg(test)]
+            ledger_scrub_clock_for_test: None,
+            #[cfg(test)]
+            fail_after_start_event_for_test: false,
+            #[cfg(test)]
+            contained_settlement_unrecorded_for_test: false,
+            #[cfg(test)]
+            capture_memory_sample_for_test: None,
         }
+    }
+
+    /// #411 A67-R, test only: every capture frame store reads `sample` in place of the host's
+    /// physical memory.
+    #[cfg(test)]
+    pub(crate) fn with_capture_memory_sample_for_test(
+        mut self,
+        sample: actingcommand_artifact_store::MemorySample,
+    ) -> Self {
+        self.capture_memory_sample_for_test = Some(sample);
+        self
+    }
+
+    /// #411 A65, test only: every read on the ledger writer gets `budget` in place of
+    /// `ledger_observer.read_budget_ms`, measured on `clock` (the writer's clock, which the
+    /// close bound and the stall watch read too).
+    #[cfg(test)]
+    pub(crate) fn with_ledger_read_budget_for_test(
+        mut self,
+        budget: Duration,
+        clock: actingcommand_ledger::LedgerMonotonicClock,
+    ) -> Self {
+        self.ledger_read_budget_for_test = Some((budget, clock));
+        self
+    }
+
+    /// LN-9 (#422), test only: the ledger's scrub is paced on `clock`.
+    #[cfg(test)]
+    pub(crate) fn with_ledger_scrub_clock_for_test(
+        mut self,
+        clock: Arc<dyn actingcommand_ledger::LedgerScrubClock>,
+    ) -> Self {
+        self.ledger_scrub_clock_for_test = Some(clock);
+        self
+    }
+
+    /// #411 A65, test only: the start fails right after it appended its start event.
+    #[cfg(test)]
+    pub(crate) fn with_start_failure_after_start_event_for_test(mut self) -> Self {
+        self.fail_after_start_event_for_test = true;
+        self
+    }
+
+    /// #411 A65 (Codex's counterexample on #420), test only: the start records no
+    /// `host.contained_settlement`, as a build before A65 did.
+    #[cfg(test)]
+    pub(crate) fn with_contained_settlement_unrecorded_for_test(mut self) -> Self {
+        self.contained_settlement_unrecorded_for_test = true;
+        self
     }
 
     /// Workflow #386 SR-3, test only: the task package admission after start waits for `hold`.
@@ -906,6 +1015,18 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench composes the schedule
+    /// rules from the standard packs of the games in use, instead of a configured catalog.
+    pub fn with_standard_pack_schedule(mut self, enabled: bool) -> Self {
+        self.standard_pack_schedule = enabled;
+        self
+    }
+
+    /// ROUT-L RL-1b: whether the scheduler workbench composes the rules.
+    pub const fn standard_pack_schedule(&self) -> bool {
+        self.standard_pack_schedule
+    }
+
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1, §9.2 step 4): where the ledger
     /// reports a retried write (`ledger_write_retried`) and the fatal stop after its dump
     /// (`ledger_write_failed`, `ledger_dump_failed`).
@@ -1125,6 +1246,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             )
             .field("stuck_recovery", &self.stuck_recovery)
             .field("standard_packs_root", &self.standard_packs_root)
+            .field("standard_pack_schedule", &self.standard_pack_schedule)
             .field("ledger_failure_sink", &self.ledger_failure_sink.is_some())
             .field("runtime_commit", &self.runtime_commit)
             .finish()
@@ -1164,11 +1286,20 @@ impl RuntimeHost {
         config: RuntimeHostConfig,
         request: crate::LedgerMaintenanceRequest,
     ) -> Result<crate::LedgerMaintenanceReceipt, crate::LedgerMaintenanceFailure> {
+        // #422 LN-7c V: `verify --frame-query` (opt-in) checks the frame cleaner's statements as
+        // this host would run them; without it `verify` reads no key and no extra clock sample.
+        let frame_query = match request.operation {
+            crate::LedgerMaintenanceOperation::Verify if request.frame_query => {
+                Some(frame_query_check(&config)?)
+            }
+            _ => None,
+        };
         crate::ledger_maintenance::run(
             &config.state_root,
             &config.secret_fingerprint_salt,
             config.clock,
             request,
+            frame_query,
         )
     }
 
@@ -1265,13 +1396,14 @@ impl RuntimeHost {
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
             .map_err(|error| RuntimeHostError::scheduler(HostLocation::StartRuntimeHost, &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
+        // LN-8 (#422, LEAN-L §3.2 step 1): the existing storage opens without the whole-file
+        // `quick_check(1)`; `ledger-maintenance verify` keeps it.
         let database = Arc::new(if fresh_storage {
             RuntimeStateStore::open_database(&config.state_root, &config.secret_fingerprint_salt)
                 .map_err(|error| RuntimeHostError::state(&error))?
         } else {
-            actingcommand_runtime_database::RuntimeDatabase::open_existing(
+            actingcommand_runtime_database::RuntimeDatabase::open_existing_for_start(
                 &config.state_root,
-                false,
             )
             .map_err(|error| {
                 RuntimeHostError::fatal(
@@ -1372,6 +1504,16 @@ impl RuntimeHost {
                 timeout_ms,
             ))
         })?;
+        // #422 LN-7c O: the open read every owner record of the history, not those of the two
+        // latest owner epochs: it could not place a retained owner in a start's epoch
+        // (`owner_in_no_start_epoch`), or a dump an earlier run left was present
+        // (`dump_present`).
+        if let Some(full) = timing.owner_read_full {
+            println!(
+                "actingd ledger_open owner_read=full reason={}",
+                full.as_str()
+            );
+        }
         let ledger_opened = ledger_open_outcome(HostCode::LedgerOpened, &timing, timeout_ms);
         let ledger_open_slow =
             ledger_open_slow_outcome(&timing, timeout_ms, observer.open_warn_ratio_milli);
@@ -1581,7 +1723,7 @@ impl RuntimeHost {
                     .and_then(|()| {
                         device_diagnostic::confirm_deferred_appends(
                             &ledger,
-                            GlobalLedger::REPLY_TIMEOUT,
+                            ledger.reply_timeout(),
                             HostLocation::AppendDeviceDiagnosticBudget,
                         )
                     }) {
@@ -1599,6 +1741,7 @@ impl RuntimeHost {
             owner_epoch,
             takeover,
             config.clock.sample()?.unix_ms,
+            ledger.history_page_events(),
         )?;
         // Workflow #375 R5d: with the frame cleaner off, the developer log says so once.
         if !config.frame_retention_enabled {
@@ -1632,6 +1775,9 @@ impl RuntimeHost {
                     },
                 )
             })),
+            frame_store_floor: Arc::default(),
+            #[cfg(test)]
+            capture_memory_sample_for_test: config.capture_memory_sample_for_test,
             governance_write_gate: Mutex::new(()),
             governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),
@@ -1655,7 +1801,6 @@ impl RuntimeHost {
             authoritative_policy_outcomes: Mutex::new(BTreeMap::new()),
             procedure_manifest: Mutex::new(config.procedure_manifest),
             verified_materials: Mutex::new(material_read::VerifiedMaterialCache::default()),
-            verified_artifacts: Mutex::new(planning::VerifiedArtifactIndex::default()),
             approval_records: Mutex::new(crate::approval::ApprovalRecordsAt::default()),
             owner: Mutex::new(owner),
             ledger,
@@ -1694,6 +1839,9 @@ impl RuntimeHost {
             debug_runs: Mutex::new(BTreeMap::new()),
             observe_marks: Mutex::new(observation::ObserveMarks::default()),
             touch_history: Mutex::new(crate::touch_history::TouchHistory::default()),
+            display_safe_area: Mutex::new(crate::display_safe_area::SafeAreaDeclarations::new(
+                config.state_root.clone(),
+            )),
             contained_runs: Mutex::new(BTreeMap::new()),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
@@ -1701,8 +1849,17 @@ impl RuntimeHost {
             emulator_autostart: OnceLock::new(),
             emulator_autostart_turn: Mutex::new(emulator_autostart::AutostartTurn::default()),
             emulator_autostart_reports: EmulatorAutostartReports::default(),
+            emulator_watch: Mutex::new(emulator_watch::EmulatorWatch::default()),
+            #[cfg(test)]
+            emulator_watch_polled: Condvar::new(),
+            idle: Mutex::new(crate::idle_action::IdlePlanner::default()),
+            #[cfg(test)]
+            idle_action_ended: Condvar::new(),
             #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
+            #[cfg(test)]
+            contained_settlement_unrecorded_for_test: config
+                .contained_settlement_unrecorded_for_test,
             host_claim_work: Mutex::new(BTreeMap::new()),
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
             #[cfg(test)]
@@ -1711,6 +1868,8 @@ impl RuntimeHost {
             frame_extent_fault_for_test: AtomicBool::new(false),
             #[cfg(test)]
             ppocr_seal_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            fence_failure_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
@@ -1723,6 +1882,7 @@ impl RuntimeHost {
             recovery_ladder_config: Mutex::new(None),
             stability_counter: Mutex::new(recovery_ladder::StabilityCounter::default()),
             unclassified_codes: Mutex::new(BTreeSet::new()),
+            blackout_silence: Mutex::new(blackout_silence::BlackoutSilence::default()),
             #[cfg(test)]
             performance_hold_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
@@ -1730,7 +1890,14 @@ impl RuntimeHost {
             fact_refresh_recorder: Mutex::new(
                 crate::fact_refresh_transitions::FactRefreshRecorder::default(),
             ),
-            standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
+            standard_packs: standard_pack::StandardPackRoots::new(
+                config.standard_packs_root,
+                config.standard_pack_schedule.then(|| {
+                    standard_pack_schedule::StandardPackWorkbench::new(
+                        config.config_manifest.as_ref(),
+                    )
+                }),
+            ),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             lift_checks: crate::suspension_lift::LiftChecks::default(),
             pack_admission: crate::pack_admission::PackAdmission::new(
@@ -1865,20 +2032,37 @@ impl RuntimeHost {
                 .values()
                 .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
                 .collect::<BTreeMap<_, _>>();
+            // Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5, §11.6): the seeding's
+            // marker decides whether the monitor registry, the policy host's decision memory and
+            // the agent dispatcher load from their tagged records or are seeded once.
+            let tagged_start = TaggedStart::read(&shared.ledger)?;
+            // Workflow #422 LN-4: a root's first start has no earlier epoch to seed and writes
+            // no marker; read before this start's own start record.
+            let earlier_start = crate::tagged_state::earlier_start(&shared.ledger)?;
             // Workflow #381 R6: each recovery step is timed, and the line is printed whether
             // the recovery succeeds or fails.
             let recovery_started = Instant::now();
             let recovered = (|| {
                 let monitor_registry = timed(&mut startup_recovery.monitor_registry_ms, || {
-                    MonitorRegistry::open(
-                        &config.state_root,
-                        registered_instances
-                            .values()
-                            .map(|instance| instance.instance_alias.clone()),
-                        owner_epoch,
-                        &shared.ledger,
-                        &shared.events,
-                    )
+                    let aliases = registered_instances
+                        .values()
+                        .map(|instance| instance.instance_alias.clone());
+                    match tagged_start {
+                        TaggedStart::Load { .. } => MonitorRegistry::load(
+                            &config.state_root,
+                            aliases,
+                            owner_epoch,
+                            &shared.ledger,
+                            &shared.events,
+                        ),
+                        TaggedStart::Seed => MonitorRegistry::open(
+                            &config.state_root,
+                            aliases,
+                            owner_epoch,
+                            &shared.ledger,
+                            &shared.events,
+                        ),
+                    }
                 })?;
                 let mut policy = timed(&mut startup_recovery.policy_host_ms, || {
                     PolicyHost::open(
@@ -1887,8 +2071,32 @@ impl RuntimeHost {
                         &shared.ledger,
                         config.policy_cadence.clone(),
                         &shared.events,
+                        tagged_start,
                     )
                 })?;
+                // ROUT-L RL-1b (model §3.4): in composer mode the procedures of the active
+                // composed generation are scheduled runs too, so a run a stop cut is told apart
+                // as the configured ones are.
+                let scheduled_procedures = if config.standard_pack_schedule {
+                    let mut procedures = config.scheduled_procedures.clone();
+                    if let Some(active) = policy.active_loaded()
+                        && active.generation().catalog_id()
+                            == actingcommand_policy::STANDARD_PACKS_CATALOG_ID
+                    {
+                        procedures.extend(
+                            active
+                                .compiled()
+                                .catalog()
+                                .tasks
+                                .tasks
+                                .iter()
+                                .map(|task| task.procedure_ref.clone()),
+                        );
+                    }
+                    procedures
+                } else {
+                    config.scheduled_procedures.clone()
+                };
                 let unsettled_dispatches =
                     timed(&mut startup_recovery.policy_dispatches_ms, || {
                         // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
@@ -1897,7 +2105,7 @@ impl RuntimeHost {
                             ended_without_release: shared.recover_unreleased_policy_runs(
                                 &policy,
                                 &registered_instances,
-                                &config.scheduled_procedures,
+                                &scheduled_procedures,
                             )?,
                             unsettled: Vec::new(),
                             #[cfg(test)]
@@ -1911,10 +2119,7 @@ impl RuntimeHost {
                         )?;
                         // #670 final review (Fail Loud): a scheduled dispatch still open here is
                         // recorded, never left silently.
-                        shared.record_open_scheduled_dispatches(
-                            &policy,
-                            &config.scheduled_procedures,
-                        )?;
+                        shared.record_open_scheduled_dispatches(&policy, &scheduled_procedures)?;
                         Ok::<_, RuntimeHostError>(settlement.unsettled)
                     })?;
                 let authoritative_policy_outcomes =
@@ -1956,9 +2161,19 @@ impl RuntimeHost {
                 timed(&mut startup_recovery.runtime_state_ms, || {
                     reconcile_runtime_state(&shared.state, &shared.ledger, &shared.events)
                 })?;
-                let agent_dispatcher = timed(&mut startup_recovery.agent_dispatcher_ms, || {
-                    AgentDispatcherState::recover(&shared.ledger, &agent_instance_ids)
-                })?;
+                let agent_dispatcher =
+                    timed(
+                        &mut startup_recovery.agent_dispatcher_ms,
+                        || match tagged_start {
+                            TaggedStart::Load { .. } => AgentDispatcherState::load(
+                                &shared.ledger,
+                                crate::recovery_read::RECOVERY_PAGE_EVENTS,
+                            ),
+                            TaggedStart::Seed => {
+                                AgentDispatcherState::recover(&shared.ledger, &agent_instance_ids)
+                            }
+                        },
+                    )?;
                 Ok::<_, RuntimeHostError>((
                     monitor_registry,
                     policy,
@@ -1980,8 +2195,8 @@ impl RuntimeHost {
                 host.startup_recovery = startup_recovery;
             }
             let (
-                monitor_registry,
-                policy,
+                mut monitor_registry,
+                mut policy,
                 authoritative_policy_outcomes,
                 policy_dispatch_clocks,
                 mut agent_dispatcher,
@@ -2012,6 +2227,23 @@ impl RuntimeHost {
                 config.device_diagnostic_mode,
             )?;
             append_instance_binding_events(&shared.ledger, &shared.events, &registered_instances)?;
+            if tagged_start == TaggedStart::Seed {
+                seed_tagged_state(
+                    &shared,
+                    &mut policy,
+                    &mut monitor_registry,
+                    &agent_dispatcher,
+                    earlier_start,
+                )?;
+            }
+            #[cfg(test)]
+            if config.fail_after_start_event_for_test {
+                return Err(RuntimeHostError::fatal(
+                    crate::codes::test_spellings::TestCode::StartFailedAfterStartEventForTest,
+                    crate::codes::test_spellings::TestLocation::FailStartAfterStartEventForTest,
+                    RuntimeErrorCode::RuntimeHalted,
+                ));
+            }
             installation::set_prepared(&shared.policy, Mutex::new(policy))?;
             installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
             installation::set_prepared(&shared.startup_packages, startup_packages)?;
@@ -2046,6 +2278,11 @@ impl RuntimeHost {
             // for a host started without a manifest), read and checked before any instance is
             // prepared.
             shared.refresh_ladder_config()?;
+            // Workflow #386 SR-4a3: the active catalog's `maintenance` events, before any instance
+            // is prepared (a failed daemon-start preparation's ladder reads its blackouts).
+            shared.refresh_blackout_catalog(true)?;
+            // LN-9 (#422): the scrub's rate in effect, an instruction value included.
+            shared.refresh_ledger_scrub_rate()?;
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
             // a broken one never stops the start.
             shared.register_standard_packs_on_start()?;
@@ -2066,6 +2303,9 @@ impl RuntimeHost {
             // so a failed preparation's ladder already has one.
             host_claims::spawn_instance_workers(&shared)?;
             shared.prepare_physical_instances_on_start()?;
+            // #411 A67-R: a preparation whose frame store opened on the floor is in the daemon's
+            // log and the ledger before the start goes on.
+            shared.record_frame_store_floor_entries()?;
             shared.check_install_preparation()?;
             // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
             // after their daemon-start preparation; none without a bound handset.
@@ -2222,6 +2462,26 @@ impl RuntimeHost {
         runtime_facts::take_last_runtime_fact_replay()
     }
 
+    /// #422 LN-8c: the start's runtime-fact recovery on `ledger` without a takeover, its record
+    /// events read in pages of `page_events` events: the records of the store it rebuilds.
+    #[cfg(test)]
+    pub(crate) fn recover_runtime_facts_for_test(
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+        owner_epoch: actingcommand_contract::OwnerEpoch,
+        page_events: usize,
+    ) -> RuntimeHostResult<Vec<RuntimeFactRecord>> {
+        let (store, _) = runtime_facts::recover_runtime_fact_store(
+            ledger,
+            events,
+            owner_epoch,
+            false,
+            0,
+            page_events,
+        )?;
+        Ok(store.records().cloned().collect())
+    }
+
     /// Workflow #381 R6: the recovery timing this start printed.
     #[cfg(test)]
     pub(crate) const fn startup_recovery_for_test(&self) -> StartupRecoveryTiming {
@@ -2293,6 +2553,38 @@ impl RuntimeHost {
         self.emulator_autostart_reports.clone()
     }
 
+    /// emu-watch (Alice's ruling 35; R2, R3, R4): starts the emulator watch, which polls the
+    /// emulator status of every discovery-bound instance every
+    /// `emulator_control.watch_interval_ms` while `emulator_control.watch_enabled`, records each
+    /// change, and starts a configured instance's stopped emulator again within
+    /// `emulator_control.restart_attempts` per `emulator_control.restart_window_ms`, paused or
+    /// not. actingd calls it once, right after `enqueue_emulator_autostart`; a second call does
+    /// nothing. It does not block; the watch ends with the host. Only a failure the Runtime does
+    /// not survive is the error (`runtime_monitor_spawn_failed`).
+    pub fn start_emulator_watch(&self) -> RuntimeHostResult<()> {
+        let shared = self.shared.as_ref().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeHostClosed,
+                crate::codes::EmulatorWatchLocation::Watch,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })?;
+        emulator_watch::start(shared)
+    }
+
+    /// emu-watch, test only: the number of finished polls once it reaches `polls`, waiting at
+    /// most `wait`; `None` when it did not in time.
+    #[cfg(test)]
+    pub(crate) fn await_emulator_watch_polls_for_test(
+        &self,
+        polls: u64,
+        wait: Duration,
+    ) -> Option<u64> {
+        self.shared
+            .as_deref()?
+            .await_emulator_watch_polls(polls, wait)
+    }
+
     /// The daemon checks fatal_error first, then returns through its owned close path.
     pub fn is_shutdown_requested(&self) -> RuntimeHostResult<bool> {
         Ok(self
@@ -2355,6 +2647,24 @@ impl RuntimeHost {
 
     pub fn fatal_error(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
         let shared = self.shared_ref(HostLocation::ReadRuntimeHealth)?;
+        // LN-9 (#422, LEAN-L §6.3): what the ledger's background scrub found is the failure a
+        // full verification gives for the same damage, with its code and operation; it stops the
+        // Runtime as a Global failure (ISO-M), as the same damage stopped a start before LN-8.
+        if let Some(finding) = shared.ledger.scrub_finding() {
+            shared.fatal.mark(
+                RuntimeHostError::relayed_fatal(
+                    finding.code(),
+                    finding.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{finding:?}")),
+            )?;
+        }
+        // #422 LN-7c R (ledger-observer.md §11.7): what the scrub found wrong with the derived
+        // frame index is non-fatal: one daemon line, once, and nothing is latched.
+        if let Some(finding) = shared.ledger.scrub_frame_refs_finding() {
+            shared.fatal.report_ledger_index_finding(&finding);
+        }
         if let Err(error) = shared.ledger.check_writer_health() {
             shared.fatal.mark(RuntimeHostError::relayed_fatal(
                 error.code(),
@@ -2389,6 +2699,18 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<CatalogTransitionPlan> {
         self.work_ref(HostLocation::PlanPolicyCatalogTransition)?
             .plan_policy_catalog_transition(sources, request, approval_ids)
+    }
+
+    /// ROUT-L RL-1b (frozen model v1.0 §3.4): the request of a scheduled run of a composed
+    /// procedure (`package.<package_id>`): its package as the game's registry places it now,
+    /// with the longest response deadline. `None` for a procedure the scheduler workbench did not
+    /// compose (a configured binding or the fact refresh's).
+    pub fn standard_pack_request(
+        &self,
+        procedure_ref: &str,
+    ) -> RuntimeHostResult<Option<ContainedTaskRequest>> {
+        self.work_ref(HostLocation::StandardPackRead)?
+            .standard_pack_request(procedure_ref)
     }
 
     /// Workflow #361 C2: records a planned transition; the first catalog write of startup.
@@ -2451,6 +2773,13 @@ impl RuntimeHost {
             .performance_hold_for_test
             .store(held, Ordering::Release);
         Ok(())
+    }
+
+    /// Workflow #386 SR-4a3: the due monitor probes a blackout skipped so far.
+    #[cfg(test)]
+    pub(crate) fn monitor_probes_silenced_for_test(&self) -> RuntimeHostResult<u64> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?
+            .monitor_probes_silenced_for_test()
     }
 
     /// Workflow #361 B1: the held scheduling pauses, global and per instance alias.
@@ -2582,6 +2911,36 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::HostLocation::RecordFactRefreshTransitions)?
             .replace_fact_refresh_recorder_for_test(recorder)
+    }
+
+    /// ROUT-L RL-1b, test only (acceptance A4): how many times the scheduler workbench opened
+    /// `game`'s `schedule.json`.
+    #[cfg(test)]
+    pub(crate) fn standard_pack_schedule_reads_for_test(
+        &self,
+        game: &str,
+    ) -> RuntimeHostResult<u64> {
+        self.shared_ref(HostLocation::StandardPackRead)?
+            .standard_pack_schedule_reads(game)
+    }
+
+    /// ROUT-L RL-1b, test only (acceptance A3): what the catalog memory holds, and a handle that
+    /// upgrades only while the active generation's compiled catalog is still in memory.
+    #[cfg(test)]
+    pub(crate) fn policy_catalog_memory_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        crate::policy_host::CatalogResidency,
+        Option<std::sync::Weak<actingcommand_policy::CompiledCatalog>>,
+    )> {
+        let shared = self.shared_ref(HostLocation::StandardPackRead)?;
+        let policy = lock(shared.policy()?, HostLocation::StandardPackRead)?;
+        Ok((
+            policy.residency()?,
+            policy
+                .active_loaded()
+                .map(|loaded| Arc::downgrade(loaded.compiled_handle())),
+        ))
     }
 
     #[cfg(test)]
@@ -2926,6 +3285,28 @@ impl RuntimeHost {
         )
     }
 
+    /// #419 DIAG-RUN: runs `action` at `point` of the run of `request_id`, on whatever lease it
+    /// takes.
+    #[cfg(test)]
+    pub(crate) fn run_at_request_checkpoint_for_test<F>(
+        &self,
+        point: ContainedTaskCheckpointPoint,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        action: F,
+    ) -> RuntimeHostResult<ContainedTaskCheckpointTestControl>
+    where
+        F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
+    {
+        self.install_contained_task_checkpoint_for_test(
+            point,
+            Some(request_id),
+            instance_id,
+            None,
+            action,
+        )
+    }
+
     /// Workflow #369 E3 (#670 final review): runs `action` at `point` of the run on `lease_id`,
     /// whatever its request (a scheduled run mints its own task request).
     #[cfg(test)]
@@ -3002,9 +3383,23 @@ impl RuntimeHost {
             Err(failure) => {
                 shared.record_scheduled_policy_failure(context, &failure.error)?;
                 let settlement = shared.complete_scheduled_policy_failure(context, &failure);
-                let error = *failure.error;
-                if failure.poison_runtime {
-                    shared.fatal.mark(error.clone())?;
+                let mut error = *failure.error;
+                // ISO-M (#419) R0.5, ISO-2: the scheduled run's boundary. A failure that would
+                // stop the Runtime (a poison, or a fatal failure actingd's driver stops on) goes
+                // to the one decision point against the run's instance: only a `Global` failure
+                // latches; an `Instance` one fences that instance, and the run fails with the
+                // fence's non-fatal failure, so the driver goes on with the other instances.
+                if failure.poison_runtime || error.is_fatal() {
+                    let links = shared.policy_run_event_links(context)?;
+                    error = match shared.contain_failure(
+                        error,
+                        Some(context.lease_token().instance_id()),
+                        links,
+                    )? {
+                        failure_scope::Contained::Latched(error) => error,
+                        failure_scope::Contained::Fenced(error)
+                        | failure_scope::Contained::Failed(error) => error,
+                    };
                 }
                 if let Err(settlement_error) = settlement {
                     shared.record_scheduled_policy_failure(context, &settlement_error)?;
@@ -3196,6 +3591,18 @@ impl RuntimeHost {
     pub(crate) fn expire_due_leases_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::ExpireDueLeasesForTest)?
             .expire_due_leases()
+    }
+
+    /// #411 A64: holds the lease sweep's expiry scan (`expire_due_leases`) until the returned
+    /// guard drops, so that a run's own lease end, not the sweep, meets the run's lapsed lease.
+    #[cfg(test)]
+    pub(crate) fn hold_lease_expiry_scan_for_test(&self) -> RuntimeHostResult<MutexGuard<'_, ()>> {
+        let shared = self
+            .shared_ref(crate::codes::test_spellings::TestLocation::SerializeTestLeaseExpiryScan)?;
+        lock(
+            &shared.lease_expiry_scan_test_gate,
+            crate::codes::test_spellings::TestLocation::SerializeTestLeaseExpiryScan,
+        )
     }
 
     /// Workflow #398 RD-2: one event of the running device-link watch, handed in as its reader
@@ -4026,12 +4433,17 @@ impl RuntimeHost {
         &self,
         query: EventQuery,
     ) -> RuntimeHostResult<Vec<PersistedEvent>> {
-        self.shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
-            .ledger
-            .query(query)
-            .map_err(|_| {
-                ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
-            })
+        // LN-5 (#422, LEAN-L §3.3): the selection is read from the store page by page at the
+        // head, as every other whole-history read of the host; one command per page.
+        crate::recovery_read::read_through_head(
+            &self
+                .shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
+                .ledger,
+            &query,
+        )
+        .map_err(|_| {
+            ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
+        })
     }
 
     /// Workflow #411 B15 R4, test only: the remedy table in effect.
@@ -4041,6 +4453,108 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<Option<crate::remedy::BuiltTable>> {
         let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
         Ok(lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?.remedy_table_for_test())
+    }
+
+    /// Workflow #422 LN-4, test only: the decision memory the policy host holds, as value
+    /// records; the same rebuilt by today's replay of every dispatch event; and the size of the
+    /// dispatch journal.
+    #[cfg(test)]
+    pub(crate) fn decision_memory_for_test(
+        &self,
+    ) -> RuntimeHostResult<(ValueRecordsForTest, ValueRecordsForTest, usize)> {
+        let shared = self.shared_ref(HostLocation::RecoverPolicyControl)?;
+        let policy = lock(shared.policy()?, HostLocation::RecoverPolicyControl)?;
+        let (held, journal) = policy.decision_memory_for_test()?;
+        let replayed = policy.replayed_decision_memory_for_test(&shared.ledger)?;
+        Ok((held, replayed, journal))
+    }
+
+    /// Workflow #422 LN-4, test only: the policy host's dispatch journal, and today's
+    /// whole-history journal kept by the journal's rule.
+    #[cfg(test)]
+    pub(crate) fn dispatch_journal_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        crate::policy_host::DispatchJournalForTest,
+        crate::policy_host::DispatchJournalForTest,
+    )> {
+        let shared = self.shared_ref(HostLocation::RecoverPolicyDispatches)?;
+        let policy = lock(shared.policy()?, HostLocation::RecoverPolicyDispatches)?;
+        let replayed = policy.replayed_dispatch_journal_for_test(&shared.ledger)?;
+        Ok((policy.dispatch_journal_for_test(), replayed))
+    }
+
+    /// SCH-M ED-2, test only: one run-duration sample of `package_id` on the instance `alias`,
+    /// written as a settlement writes it, the run's terminal at `terminal_unix_ms`.
+    #[cfg(test)]
+    pub(crate) fn add_run_duration_sample_for_test(
+        &self,
+        alias: &str,
+        package_id: &str,
+        duration_ms: u64,
+        terminal_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::RunDurationLocation::RecordSample)?
+            .add_run_duration_sample_for_test(alias, package_id, duration_ms, terminal_unix_ms)
+    }
+
+    /// SCH-M ED-2, test only: the rows of the instance `alias`'s `health.run_duration` record as
+    /// the store holds it now.
+    #[cfg(test)]
+    pub(crate) fn run_durations_for_test(
+        &self,
+        alias: &str,
+    ) -> RuntimeHostResult<crate::run_duration::RunDurations> {
+        self.shared_ref(crate::codes::RunDurationLocation::RecordSample)?
+            .run_durations_for_test(alias)
+    }
+
+    /// SCH-M ED-2, test only: a scheduled run's preparation admitted `package_id` at `path`, as
+    /// the first preparation of a package since the start records it.
+    #[cfg(test)]
+    pub(crate) fn learn_package_for_test(
+        &self,
+        path: &str,
+        package_id: &str,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::RunDurationLocation::Project)?
+            .pack_admission
+            .learn_prepared(path, package_id)
+    }
+
+    /// Workflow #422 LN-4, test only: the monitor registry's state, and the same rebuilt by
+    /// today's replay of every Runtime record.
+    #[cfg(test)]
+    pub(crate) fn monitor_state_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        crate::monitor::MonitorStateForTest,
+        crate::monitor::MonitorStateForTest,
+    )> {
+        let shared = self.shared_ref(HostLocation::OpenMonitorRegistry)?;
+        let registry = lock(
+            shared.monitor_registry()?,
+            HostLocation::OpenMonitorRegistry,
+        )?;
+        let replayed = MonitorRegistry::replayed_for_test(
+            registry.aliases_for_test(),
+            shared.owner_epoch,
+            &shared.ledger,
+        )?;
+        Ok((registry.state_for_test(), replayed.state_for_test()))
+    }
+
+    /// Workflow #422 LN-4, test only: whether the agent dispatcher's state equals today's
+    /// whole-ledger fold, and the sizes of its seven maps.
+    #[cfg(test)]
+    pub(crate) fn agent_dispatcher_state_for_test(&self) -> RuntimeHostResult<(bool, [usize; 7])> {
+        let replayed = self.recover_agent_dispatcher_for_test(None)?;
+        let shared = self.shared_ref(HostLocation::RecoverAgentDispatcher)?;
+        let state = lock(
+            &shared.agent_dispatcher,
+            HostLocation::RecoverAgentDispatcher,
+        )?;
+        Ok((*state == replayed, state.map_sizes_for_test()))
     }
 
     /// Workflow #406 T12, test only: the landing points `instance_alias` keeps for the box
@@ -4168,6 +4682,13 @@ impl RuntimeHost {
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
             device_state::stop(&shared),
+        );
+        // emu-watch: the emulator watch ends with the shutdown request and is joined, before the
+        // queues are cancelled, so no restart is requested after them.
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            emulator_watch::stop(&shared),
         );
         // Workflow #369 W-2: pumping stopped with the shutdown request; the queues are
         // cancelled (`lease.queue_disconnected`), then the instance workers are signalled and
@@ -4547,6 +5068,13 @@ struct HostShared {
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
     frame_retention: Mutex<Option<frame_retention::FrameRetention>>,
+    /// #411 A67-R: the floor watch of every capture frame store's budget; the start's
+    /// preparation and the sweep record the warnings of the budgets that entered the floor
+    /// (`record_frame_store_floor_entries`).
+    frame_store_floor: Arc<actingcommand_artifact_store::BudgetFloorWatch>,
+    /// #411 A67-R, test only: see [`RuntimeHostConfig::with_capture_memory_sample_for_test`].
+    #[cfg(test)]
+    capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
     governance_policy: GovernancePolicy,
@@ -4586,9 +5114,7 @@ struct HostShared {
     procedure_manifest: Mutex<Option<ProcedureManifest>>,
     // Whole verified material objects, so chunked reads verify each object once.
     verified_materials: Mutex<material_read::VerifiedMaterialCache>,
-    // Workflow #317 read face: verified artifact references read so far (item C) and the
-    // approval projection last built for a read position (item H).
-    verified_artifacts: Mutex<planning::VerifiedArtifactIndex>,
+    // Workflow #317 read face: the approval projection last built for a read position (item H).
     approval_records: Mutex<crate::approval::ApprovalRecordsAt>,
     ledger: GlobalLedger,
     artifacts: Arc<ArtifactStore>,
@@ -4642,6 +5168,9 @@ struct HostShared {
     /// landed and when (memory only; empty after a restart). A leaf lock: nothing else is taken
     /// while it is held.
     touch_history: Mutex<crate::touch_history::TouchHistory>,
+    /// Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe areas as last read from
+    /// their directory (memory only). A leaf lock: nothing else is taken while it is held.
+    display_safe_area: Mutex<crate::display_safe_area::SafeAreaDeclarations>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
     // Workflow #191 ps1: the operator's scheduling pauses (no expiry; since Workflow #361 B1
     // persisted as `host.scheduling_pause`).
@@ -4656,8 +5185,23 @@ struct HostShared {
     emulator_autostart: OnceLock<Vec<(InstanceId, String)>>,
     emulator_autostart_turn: Mutex<emulator_autostart::AutostartTurn>,
     emulator_autostart_reports: EmulatorAutostartReports,
+    // emu-watch: the emulator watch's thread, its restarts in the window and its streaks (a leaf
+    // lock), and, test only, the signal of each finished poll.
+    emulator_watch: Mutex<emulator_watch::EmulatorWatch>,
+    #[cfg(test)]
+    emulator_watch_polled: Condvar,
+    // IDLE-1: every instance's idle state (memory only). Taken by the idle check across its
+    // instances, and alone by an action's worker and by the emulator watch.
+    idle: Mutex<crate::idle_action::IdlePlanner>,
+    // IDLE-1, test only: notified when an idle action's worker ends.
+    #[cfg(test)]
+    idle_action_ended: Condvar,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// #411 A65 (Codex's counterexample on #420), test only: see
+    /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
+    #[cfg(test)]
+    contained_settlement_unrecorded_for_test: bool,
     // Workflow #369 W-2: what each queued or handed-off host claim runs once granted, by the
     // claim's request id (like `queued_requests`, with no state of its own), and the
     // per-instance workers that run it.
@@ -4672,6 +5216,10 @@ struct HostShared {
     // and its seal.
     #[cfg(test)]
     ppocr_seal_hook_for_test: Mutex<Option<PpocrSealTestHook>>,
+    // ISO-M (#419) R0.7, test only: the next fence of a contained failure fails as its ledger
+    // record would.
+    #[cfg(test)]
+    fence_failure_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the
@@ -4702,6 +5250,9 @@ struct HostShared {
     recovery_ladder_config: Mutex<Option<Arc<actingcommand_runtime_config::LadderConfig>>>,
     stability_counter: Mutex<recovery_ladder::StabilityCounter>,
     unclassified_codes: Mutex<BTreeSet<String>>,
+    // Workflow #386 SR-4a3: the active catalog's `maintenance` events the host's own entries read
+    // their blackouts from (a leaf lock).
+    blackout_silence: Mutex<blackout_silence::BlackoutSilence>,
     // Workflow #387 D1c, test only: holds every instance back from performance release (§3.7),
     // the stand-in for performance control's suspension.
     #[cfg(test)]
@@ -5039,7 +5590,7 @@ impl HostShared {
         record_failure(
             &mut failure,
             self.confirm_deferred_appends(
-                GlobalLedger::REPLY_TIMEOUT,
+                self.ledger.reply_timeout(),
                 HostLocation::ConfirmDeferredAppends,
             ),
         );
@@ -5294,6 +5845,13 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
+        // Workflow #386 SR-4a3: the blackouts of every instance as the tick starts: direction ①
+        // counts nothing made inside one, and the ladder claims that wait for a covered instance
+        // are dropped before the sweep's pump could grant them.
+        if let Err(error) = shared.sweep_blackout_silence() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
         // Workflow #387 D1c (§3.4): the bursts direction ① registered since the last tick are
         // admitted here, outside every write lock, before the sweep's pump grants anything.
         if let Err(error) = shared.admit_stability_bursts() {
@@ -5308,9 +5866,21 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }
+        // #411 A67-R: a capture frame store's budget that entered the floor since the last tick
+        // (at an open or a frame's refresh) is recorded once.
+        if let Err(error) = shared.record_frame_store_floor_entries() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
         // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and
         // the watch's restarts), on the host clock.
         if let Err(error) = device_link::tick(&shared) {
+            shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
+        // IDLE-1: the idle check between policy cycles, so a planned wake comes on time. A
+        // failure of one instance is contained to it; only the Runtime's own is returned.
+        if let Err(error) = shared.check_idle_instances(true) {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }
@@ -5425,6 +5995,103 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     )
 }
 
+/// Workflow #422 LN-4, tests: the decision memory as its value records, by index key.
+#[cfg(test)]
+type ValueRecordsForTest = BTreeMap<String, crate::policy_control::PolicyValueRecord>;
+
+/// Workflow #422 LN-4 (LEAN-L model §3.6; `contracts/ledger-observer.md` §11.6, §12 step 8): on
+/// a start without the marker, the value records the index does not name yet, then the marker
+/// with the seeding's report (`ledger_tagged_state_seeded`, the keys seeded). The decision
+/// memory's records were written by the start's reconciliation, which found none recorded; any
+/// left are written here. The monitor registry's and the live wake obligations' are written
+/// here. Later starts load and never replay. A root's first start (`earlier_start` false: the
+/// ledger holds no `runtime.started` or `runtime.takeover` before it) has no earlier epoch to
+/// seed and writes no marker; the root's next start seeds what that epoch recorded.
+fn seed_tagged_state(
+    shared: &HostShared,
+    policy: &mut PolicyHost,
+    monitor_registry: &mut MonitorRegistry,
+    agent_dispatcher: &AgentDispatcherState,
+    earlier_start: bool,
+) -> RuntimeHostResult<()> {
+    shared.record_policy_values(policy)?;
+    let through = shared
+        .ledger
+        .latest_sequence()
+        .map_err(|_| ledger_error(HostLocation::RecoverPolicyControl))?;
+    policy.mark_values_seeded(through)?;
+    let mut seeded = policy.recorded_value_count();
+    seeded += monitor_registry.seed(&shared.ledger, &shared.events)?;
+    let named = crate::tagged_state::index_records(
+        &shared.ledger,
+        actingcommand_ledger::LedgerIndexRole::State,
+        &[crate::agent_dispatcher::WAKE_KEY_PREFIX],
+    )?
+    .records
+    .into_iter()
+    .map(|record| record.key)
+    .collect::<BTreeSet<_>>();
+    for wake in agent_dispatcher.live_wakes() {
+        let key = format!(
+            "{}{}",
+            crate::agent_dispatcher::WAKE_KEY_PREFIX,
+            crate::failure_identity::identifier_text(&wake.data().wake_id())
+        );
+        if named.contains(&key) {
+            continue;
+        }
+        let draft = shared.events.draft(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::AgentDispatcher,
+            EventActor::Runtime,
+            shared.events.system_links()?,
+            AgentPayloadDraft::wake_obligation_recorded(wake.data().clone(), AuditInput::new()),
+        )?;
+        shared
+            .ledger
+            .append(shared.events.sanitize(draft)?)
+            .map_err(|_| ledger_error(HostLocation::AppendAgentWake))?;
+        seeded += 1;
+    }
+    if !earlier_start {
+        return Ok(());
+    }
+    shared.append_lifecycle_observed(
+        RuntimeLifecyclePhase::TaggedStateEnabled {
+            outcome: Some(
+                Outcome::new(actingcommand_ledger::LedgerCode::LedgerTaggedStateSeeded.code())
+                    .count(seeded),
+            ),
+        },
+        shared.events.system_links()?,
+    )?;
+    Ok(())
+}
+
+/// #411 A65 (R2): [`ledger_error`] of `operation` with the ledger's own failure as its outcome's
+/// `caused_by` link: the ledger's code with the values the ledger attached and its operation
+/// (`ledger_read_budget_exceeded` of `query_event_page`, for example).
+fn ledger_error_caused_by(
+    operation: impl Into<Location>,
+    error: &actingcommand_ledger::GlobalLedgerError,
+) -> RuntimeHostError {
+    ledger_error(operation).with_caused_by(ledger_cause(error))
+}
+
+/// #411 A65 (R2): the ledger's own failure as an outcome's `caused_by` link: the ledger's code
+/// with the values the ledger attached and its operation.
+fn ledger_cause(error: &actingcommand_ledger::GlobalLedgerError) -> Outcome {
+    let cause = error
+        .outcome_values()
+        .cloned()
+        .unwrap_or_else(|| Outcome::relayed(error.code()));
+    match Location::relayed(error.operation()) {
+        Some(location) if cause.value("operation").is_none() => cause.operation(location),
+        _ => cause,
+    }
+}
+
 /// #411 A51 (R3): the ledger codes of a read the writer did not answer in time
 /// (`writer_response_timeout`) or stopped at its work budget (`ledger_read_budget_exceeded`).
 /// Neither is a ledger failure: the Runtime goes on, and the read's caller reads again at its
@@ -5486,14 +6153,64 @@ fn unanswered_ledger_read(error: &RuntimeHostError) -> bool {
             .any(|code| code.as_str() == error.code())
 }
 
+/// #419 LN-WS-F (R1): a failed ledger read of `operation` on a Runtime path that fails only its own
+/// unit of work (a request, or one step of a tick) when the writer does not answer the read: a
+/// read the writer did not answer in time, or stopped at its budget, is relayed as a request error
+/// with the ledger's code ([`ledger_read_error`]); any other read failure stays the fatal failure
+/// `fatal` gives, with the ledger's own failure as its `caused_by` link (#411 A65).
+pub(crate) fn tolerant_ledger_read_error(
+    error: &actingcommand_ledger::GlobalLedgerError,
+    operation: impl Into<Location>,
+    fatal: impl FnOnce() -> RuntimeHostError,
+) -> RuntimeHostError {
+    let read = ledger_read_error(error, operation);
+    if read.is_fatal() {
+        fatal().with_caused_by(ledger_cause(error))
+    } else {
+        read
+    }
+}
+
+/// #419 LN-WS-F (R1): a request's failure of `error` from a Runtime read that fails only the
+/// request when the writer does not answer it ([`unanswered_ledger_read`]): such a read is
+/// answered `failed` with the ledger's code; any other failure poisons the Runtime, as before.
+fn unanswered_or_poison(error: RuntimeHostError) -> RequestFailure {
+    if unanswered_ledger_read(&error) {
+        RequestFailure::request(error, RuntimeReceiptState::Failed, None)
+    } else {
+        RequestFailure::poison_without_terminal(error)
+    }
+}
+
+/// #419 LN-WS-F, tests: a hook a test installs on its thread around one Runtime read: called right
+/// before the read, and what it returns is dropped once the read has returned (a test arms the
+/// writer's read hold in it, so the read waits out its reply limit, and the hold is released
+/// before anything else is sent to the writer).
+#[cfg(test)]
+pub(crate) type AroundReadForTest =
+    std::cell::RefCell<Option<Box<dyn FnOnce() -> Box<dyn std::any::Any>>>>;
+
+/// #419 LN-WS-F, tests: runs the hook installed in `hook` on this thread, once; what it returns
+/// lives until the caller drops it.
+#[cfg(test)]
+pub(crate) fn around_read_for_test(
+    hook: &'static std::thread::LocalKey<AroundReadForTest>,
+) -> Option<Box<dyn std::any::Any>> {
+    hook.with(|around| around.borrow_mut().take())
+        .map(|around| around())
+}
+
 /// Workflow #378 A6a (model section 7.4, N1): `code` (`ledger_opened` or, as a note link of a
-/// failed open, `ledger_open_measured`) with the phases of a ledger open and its deadline.
+/// failed open, `ledger_open_measured`) with the phases of a ledger open and its deadline. LN-8
+/// (#422): the writer open's phases are `meta_ms`, `tail_ms`, `index_ms` and `import_ms`, and
+/// `event_count` the records its tail authenticated; `sql_read_ms`, `verify_ms` and `restore_ms`
+/// are the phases of `ledger-maintenance verify`'s complete read, 0 for the writer open.
 pub(crate) fn ledger_open_outcome(
     code: HostCode,
     timing: &actingcommand_ledger::LedgerOpenTiming,
     timeout_ms: u64,
 ) -> Outcome {
-    Outcome::new(code)
+    let outcome = Outcome::new(code)
         .event_count(timing.events)
         .artifact_count(timing.artifacts)
         .artifact_bytes(timing.artifact_bytes)
@@ -5502,7 +6219,36 @@ pub(crate) fn ledger_open_outcome(
         .verify_ms(timing.verify_ms)
         .material_ms(timing.material_ms)
         .restore_ms(timing.restore_ms)
-        .timeout_ms(timeout_ms)
+        .meta_ms(timing.meta_ms)
+        .tail_ms(timing.tail_ms)
+        .index_ms(timing.index_ms)
+        .import_ms(timing.import_ms)
+        .timeout_ms(timeout_ms);
+    // #422 LN-7c R (ledger-observer.md §11.7): the open's one warning about the derived frame
+    // index, as a `note` link; the index never fails the open.
+    match timing.frame_refs {
+        Some(note) => outcome.link(
+            actingcommand_contract::outcome::CauseRelation::Note,
+            note.outcome(),
+        ),
+        None => outcome,
+    }
+}
+
+/// The measured time of a ledger open: the sum of every phase it reports.
+pub(crate) fn ledger_open_elapsed_ms(timing: &actingcommand_ledger::LedgerOpenTiming) -> u64 {
+    [
+        timing.sql_read_ms,
+        timing.verify_ms,
+        timing.material_ms,
+        timing.restore_ms,
+        timing.meta_ms,
+        timing.tail_ms,
+        timing.index_ms,
+        timing.import_ms,
+    ]
+    .into_iter()
+    .fold(0, u64::saturating_add)
 }
 
 /// P0-LO: `ledger_open_slow` (warning) when the open's measured time, the sum of the phases
@@ -5513,11 +6259,7 @@ pub(crate) fn ledger_open_slow_outcome(
     timeout_ms: u64,
     ratio_milli: u64,
 ) -> Option<Outcome> {
-    let elapsed_ms = timing
-        .sql_read_ms
-        .saturating_add(timing.verify_ms)
-        .saturating_add(timing.material_ms)
-        .saturating_add(timing.restore_ms);
+    let elapsed_ms = ledger_open_elapsed_ms(timing);
     let warn_ms = timeout_ms.saturating_mul(ratio_milli) / 1000;
     (elapsed_ms > warn_ms).then(|| {
         Outcome::new(HostCode::LedgerOpenSlow)
@@ -5584,6 +6326,42 @@ fn ledger_observer_section(
     effective.ledger_observer().map_err(refused)
 }
 
+/// #422 LN-7c V (`rd-1026/ln7c/final-query.md` §7 row V): what `ledger-maintenance verify
+/// --frame-query` runs the frame cleaner's statements with, as this host would: its dedup switches,
+/// `frame_retention_evidence_max_age_days`, `ledger_observer.frame_query_chunk_frames` and
+/// `ledger_observer.read_check_vm_steps` in effect (the defaults file's values without actingd's
+/// manifest), at its clock's time.
+fn frame_query_check(
+    config: &RuntimeHostConfig,
+) -> RuntimeHostResult<actingcommand_ledger::FrameQueryCheckSettings> {
+    let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+        RuntimeHostError::fatal(
+            failure.failure_code(),
+            crate::codes::ConfigHostLocation::ReadRuntimeConfig,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+        .with_outcome_values(|outcome| failure.with_values(outcome))
+    };
+    let effective = match &config.config_manifest {
+        Some(manifest) => actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)
+            .map_err(refused)?,
+        None => actingcommand_runtime_config::EffectiveConfig::default(),
+    };
+    let section = effective.ledger_observer().map_err(refused)?;
+    Ok(actingcommand_ledger::FrameQueryCheckSettings {
+        now_unix_ms: config.clock.sample()?.unix_ms,
+        switches: actingcommand_ledger::FrameRetentionSwitches {
+            dedup_error: config.frame_retention_dedup_error,
+            dedup_lab: config.frame_retention_dedup_lab,
+        },
+        evidence_max_age_days: effective
+            .frame_retention_evidence_max_age_days()
+            .map_err(refused)?,
+        chunk_frames: usize::try_from(section.frame_query_chunk_frames).unwrap_or(usize::MAX),
+        check_vm_steps: u32::try_from(section.read_check_vm_steps).unwrap_or(u32::MAX),
+    })
+}
+
 /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure
 /// plan from the `ledger_observer` section in effect: its write policy, its dump file in the
 /// state root and in `%LOCALAPPDATA%\ActingCommand\ledger-dumps` when the variable is set, and
@@ -5637,7 +6415,46 @@ fn ledger_failure_plan(
     // (`ledger_observer.read_budget_ms`, `close_timeout_ms`); both on the plan's clock.
     plan = plan
         .with_read_budget(Duration::from_millis(section.read_budget_ms))
-        .with_close_timeout(Duration::from_millis(section.close_timeout_ms));
+        .with_close_timeout(Duration::from_millis(section.close_timeout_ms))
+        // LN-5 (#422, LEAN-L §3.7): the rows of one page of a history read; a value the ledger
+        // does not take is refused when it opens (`invalid_ledger_config`).
+        .with_history_page_rows(usize::try_from(section.history_page_rows).unwrap_or(usize::MAX))
+        // LN-8 (#422, LEAN-L §3.2 step 2): the newest records the open authenticates.
+        .with_open_verify_tail_records(
+            usize::try_from(section.open_verify_tail_records).unwrap_or(usize::MAX),
+        )
+        // #422 LN-WS (R1, R2): how often a request's read looks at its budget inside a statement,
+        // and the span of a view page's history statement; a value the ledger does not take is
+        // refused when it opens (`invalid_ledger_config`).
+        .with_read_check_vm_steps(u32::try_from(section.read_check_vm_steps).unwrap_or(u32::MAX))
+        .with_history_scan_rows(usize::try_from(section.history_scan_rows).unwrap_or(usize::MAX));
+    #[cfg(test)]
+    if let Some((budget, clock)) = &config.ledger_read_budget_for_test {
+        plan = plan.with_read_budget(*budget).with_clock(Arc::clone(clock));
+    }
+    // LN-9 (#422, LEAN-L §6, Alice's ruling 57): the paced background scrub of the whole chain;
+    // a value the ledger does not take is refused when it opens (`invalid_ledger_config`).
+    let scrub = actingcommand_ledger::LedgerScrubPolicy::new(
+        section.scrub_rows_per_second,
+        usize::try_from(section.scrub_chunk_rows).unwrap_or(usize::MAX),
+        section.scrub_pass_interval_ms,
+    )
+    .map_err(|error| {
+        RuntimeHostError::relayed_fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::LedgerFailure,
+        )
+    })?;
+    #[cfg(test)]
+    let scrub = match &config.ledger_scrub_clock_for_test {
+        Some(clock) => scrub.with_clock(Arc::clone(clock)),
+        None => scrub,
+    };
+    plan = plan.with_scrub(scrub);
+    // #422 LN-TUNE: how long a caller waits for one writer reply
+    // (`ledger_observer.writer_reply_timeout_ms`); a test may wait less.
+    plan = plan.with_reply_timeout(Duration::from_millis(section.writer_reply_timeout_ms));
     if let Some(timeout) = config.ledger_reply_timeout {
         plan = plan.with_reply_timeout(timeout);
     }

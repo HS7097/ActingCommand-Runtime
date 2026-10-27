@@ -8,6 +8,12 @@ use actingcommand_contract::{
 };
 use std::{sync::Arc, time::Instant};
 
+/// One page of prior-epoch scopes and the cursor of the page after it.
+type PriorEpochPage = (
+    Vec<(ClosureScope, (TerminalEvent, u64))>,
+    Option<PriorEpochScope>,
+);
+
 impl ClosureScope {
     pub(super) fn from_subject(value: PriorEpochScope) -> Self {
         Self {
@@ -47,10 +53,10 @@ impl RetentionIndex {
             .flatten()
     }
 
-    pub(super) fn validate_prior_epoch<E: LedgerEventRead>(
+    pub(super) fn validate_prior_epoch<E: LedgerEventRead, H: RetentionHistory<Event = E>>(
         &self,
         event: &E,
-        events: &[E],
+        history: &H,
         guarded: bool,
     ) -> GlobalLedgerResult<()> {
         let Some(observation) = fact(event) else {
@@ -104,14 +110,14 @@ impl RetentionIndex {
                 {
                     return Err(invalid(LedgerCode::PriorEpochScopePrefixConflict.code()));
                 }
-                let original = source(events, &record.scope_source)?;
+                let original = source(history, &record.scope_source)?;
                 if self.owner_at(original.sequence()) != Some(scope.owner)
-                    || ClosureScope::from_event(original, scope.owner) != Some(scope)
+                    || ClosureScope::from_event(&original, scope.owner) != Some(scope)
                 {
                     return Err(invalid(LedgerCode::PriorEpochScopeSourceConflict.code()));
                 }
-                let imported = source(events, &record.proof)?;
-                if !matches!(fact(imported), Some(PriorEpochCloseFact::OwnerImported(value)) if value == proof)
+                let imported = source(history, &record.proof)?;
+                if !matches!(fact(&imported), Some(PriorEpochCloseFact::OwnerImported(value)) if value == proof)
                 {
                     return Err(invalid(LedgerCode::PriorEpochImportSourceConflict.code()));
                 }
@@ -121,19 +127,74 @@ impl RetentionIndex {
     }
 
     pub(super) fn apply_prior_epoch<E: LedgerEventRead>(&mut self, event: &E) {
-        match fact(event) {
+        let subject = match fact(event) {
             Some(PriorEpochCloseFact::OwnerImported(record)) => {
                 self.owner_imports
                     .insert(record.evidence.subject, (terminal(event), record.clone()));
+                record.evidence.subject
             }
             Some(PriorEpochCloseFact::ScopeClosed(record)) => {
                 self.prior_epoch_closes.insert(
                     ClosureScope::from_subject(record.subject),
                     (terminal(event), record.clone()),
                 );
+                record.subject.owner
             }
-            None => {}
+            None => return,
+        };
+        if let Some(writer) = recorded_owner(event) {
+            self.prior_epoch_writers.insert(subject, writer);
         }
+    }
+
+    /// LN-7 (#422, LEAN-L §3.5): the owners whose scopes the start of `writer` closes: the owner
+    /// of the epoch that ended right before the writer's, and each owner whose import or a scope
+    /// close of it that epoch wrote, whose closes this start resumes (that start may have stopped
+    /// before it closed every scope). An older epoch was closed by the start that followed it.
+    pub(super) fn prior_epoch_owners(&self, writer: OwnerEpoch) -> BTreeSet<OwnerEpoch> {
+        let Some(previous) = self
+            .owner_epochs
+            .values()
+            .rev()
+            .copied()
+            .find(|epoch| *epoch != writer)
+        else {
+            return BTreeSet::new();
+        };
+        let mut owners = self
+            .prior_epoch_writers
+            .iter()
+            .filter(|(subject, written_by)| **written_by == previous && **subject != writer)
+            .map(|(subject, _)| *subject)
+            .collect::<BTreeSet<_>>();
+        owners.insert(previous);
+        owners
+    }
+
+    /// LN-7: the next scopes of `owners` after `after`, at most `RETENTION_ROUND_OBJECTS` of
+    /// them, with the cursor of the page after them. The scopes are in key order, so the pages
+    /// of one start together pass over the scope keys once.
+    pub(super) fn prior_epoch_page(
+        &self,
+        owners: &BTreeSet<OwnerEpoch>,
+        after: Option<PriorEpochScope>,
+    ) -> PriorEpochPage {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let page = self
+            .scope_sources
+            .range((
+                after
+                    .map(ClosureScope::from_subject)
+                    .map_or(Unbounded, Excluded),
+                Unbounded,
+            ))
+            .filter(|(scope, _)| owners.contains(&scope.owner))
+            .take(RETENTION_ROUND_OBJECTS)
+            .map(|(scope, value)| (*scope, *value))
+            .collect::<Vec<_>>();
+        let next = (page.len() == RETENTION_ROUND_OBJECTS)
+            .then(|| page.last().expect("full page").0.subject());
+        (page, next)
     }
 
     pub(super) fn close_owner_matches<E: LedgerEventRead>(
@@ -205,11 +266,25 @@ fn classify_unproven(block: Option<&OwnerEpochBlock>) -> GlobalLedgerResult<Unpr
     }
 }
 
+/// LN-7 (#422, LEAN-L §3.5): what the start knows of one prior owner's import, checked against
+/// the native read once per owner and page, not once per scope.
+enum PriorOwner {
+    /// Not sealed, and the owner's epoch has no known end (or was reopened): none of its scopes
+    /// closes.
+    Unbounded,
+    /// Sealed and still supported by the native read: its scopes close up to `upper`.
+    Sealed { upper: u64 },
+    /// Not sealed yet: the import the owner's first open scope writes.
+    Unsealed(Box<PriorEpochOwnerImport>),
+}
+
 impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore<B> {
     /// The page counts visited scopes, including unknown/already closed scopes. It only
     /// appends facts; retention material operations retain their original admission path.
     /// A prior owner without a native proof is imported and closed with an explicit
     /// unproven reason; a sealed import must still be supported by the native read.
+    /// LN-7 (#422, LEAN-L §3.5): only the scopes of the owners `prior_epoch_owners` names are
+    /// visited: the previous epoch's, and those whose closes the previous start began.
     pub(in crate::global) fn reconcile_prior_epoch_closes(
         &mut self,
         writer: OwnerEpoch,
@@ -217,7 +292,6 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         after: Option<PriorEpochScope>,
         deadline: Instant,
     ) -> GlobalLedgerResult<(Option<PriorEpochScope>, Vec<PersistedEvent>)> {
-        use std::ops::Bound::{Excluded, Unbounded};
         deadline_check(deadline)?;
         if self.recovering_retention
             || self.retention.has_pending()
@@ -228,81 +302,47 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         {
             return Err(invalid(LedgerCode::PriorEpochStartupBarrierConflict.code()));
         }
-        let page = self
-            .retention
-            .scope_sources
-            .range((
-                after
-                    .map(ClosureScope::from_subject)
-                    .map_or(Unbounded, Excluded),
-                Unbounded,
-            ))
-            .take(RETENTION_ROUND_OBJECTS)
-            .map(|(scope, value)| (*scope, *value))
-            .collect::<Vec<_>>();
-        let next = (page.len() == RETENTION_ROUND_OBJECTS)
-            .then(|| page.last().expect("full page").0.subject());
+        let owners = self.retention.prior_epoch_owners(writer);
+        let (page, next) = self.retention.prior_epoch_page(&owners, after);
         let mut appended = Vec::new();
+        let mut checked = BTreeMap::<OwnerEpoch, PriorOwner>::new();
         for (scope, (scope_source, last)) in page {
             deadline_check(deadline)?;
-            if scope.owner == writer {
+            let completed = self.retention.prior_epoch_closes.contains_key(&scope);
+            if !completed && self.retention.ordinary_close(&scope).is_some() {
                 continue;
             }
-            let completed = self.retention.prior_epoch_closes.get(&scope);
-            if completed.is_none() && self.retention.ordinary_close(&scope).is_some() {
-                continue;
-            }
-            let sealed = self.retention.owner_imports.get(&scope.owner);
-            let native = journal.proofs.get(&scope.owner);
-            if native.is_none()
-                && sealed.is_some_and(|(_, proof)| proof.basis == PriorEpochCloseBasis::Proven)
-            {
-                return Err(invalid(LedgerCode::PriorEpochNativeProofMissing.code()));
-            }
-            let current = match native {
-                Some(_) => PriorEpochCloseBasis::Proven,
-                None => PriorEpochCloseBasis::Unproven {
-                    reason: classify_unproven(journal.block(scope.owner))?,
-                },
+            let state = match checked.remove(&scope.owner) {
+                Some(state) => state,
+                None => self.prior_owner(scope.owner, journal)?,
             };
-            if let Some((_, proof)) = sealed {
-                let supported = match proof.basis {
-                    PriorEpochCloseBasis::Proven => journal.supports(&proof.evidence),
-                    PriorEpochCloseBasis::Unproven { .. } => {
-                        current == proof.basis && journal.supports_observation(&proof.evidence)
+            let state = match state {
+                PriorOwner::Unbounded => {
+                    checked.insert(scope.owner, PriorOwner::Unbounded);
+                    continue;
+                }
+                PriorOwner::Sealed { upper } => {
+                    if last > upper {
+                        return Err(invalid(LedgerCode::PriorEpochNativeProofConflict.code()));
                     }
-                };
-                if !supported
-                    || self.retention.prior_epoch_upper(scope.owner)
-                        != Some(proof.scope_upper_sequence)
-                    || last > proof.scope_upper_sequence
-                {
-                    return Err(invalid(LedgerCode::PriorEpochNativeProofConflict.code()));
+                    PriorOwner::Sealed { upper }
                 }
-                if completed.is_some() {
-                    continue;
+                PriorOwner::Unsealed(record) => {
+                    let upper = record.scope_upper_sequence;
+                    if last > upper {
+                        return Err(invalid(LedgerCode::PriorEpochScopeRangeConflict.code()));
+                    }
+                    appended.push(self.append_prior_epoch_fact(
+                        writer,
+                        PriorEpochCloseFact::OwnerImported(*record),
+                        deadline,
+                    )?);
+                    PriorOwner::Sealed { upper }
                 }
-            } else {
-                let Some(upper) = self.retention.prior_epoch_upper(scope.owner) else {
-                    continue;
-                };
-                if last > upper {
-                    return Err(invalid(LedgerCode::PriorEpochScopeRangeConflict.code()));
-                }
-                let record = PriorEpochOwnerImport {
-                    evidence: match native {
-                        Some(proof) => proof.clone(),
-                        None => journal.observation(scope.owner),
-                    },
-                    basis: current,
-                    through_sequence: self.retention.through_sequence,
-                    scope_upper_sequence: upper,
-                };
-                appended.push(self.append_prior_epoch_fact(
-                    writer,
-                    PriorEpochCloseFact::OwnerImported(record),
-                    deadline,
-                )?);
+            };
+            checked.insert(scope.owner, state);
+            if completed {
+                continue;
             }
             let (proof_source, proof) = self
                 .retention
@@ -328,6 +368,56 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         }
         deadline_check(deadline)?;
         Ok((next, appended))
+    }
+
+    /// LN-7: the import of prior owner `owner`, checked once: a sealed import must still be
+    /// supported by the native read and seal the owner's epoch upper sequence; an owner without
+    /// one gets one, built here, when its first open scope closes.
+    fn prior_owner(
+        &self,
+        owner: OwnerEpoch,
+        journal: &RuntimeOwnerJournal,
+    ) -> GlobalLedgerResult<PriorOwner> {
+        let sealed = self.retention.owner_imports.get(&owner);
+        let native = journal.proofs.get(&owner);
+        if native.is_none()
+            && sealed.is_some_and(|(_, proof)| proof.basis == PriorEpochCloseBasis::Proven)
+        {
+            return Err(invalid(LedgerCode::PriorEpochNativeProofMissing.code()));
+        }
+        let current = match native {
+            Some(_) => PriorEpochCloseBasis::Proven,
+            None => PriorEpochCloseBasis::Unproven {
+                reason: classify_unproven(journal.block(owner))?,
+            },
+        };
+        let upper = self.retention.prior_epoch_upper(owner);
+        if let Some((_, proof)) = sealed {
+            let supported = match proof.basis {
+                PriorEpochCloseBasis::Proven => journal.supports(&proof.evidence),
+                PriorEpochCloseBasis::Unproven { .. } => {
+                    current == proof.basis && journal.supports_observation(&proof.evidence)
+                }
+            };
+            if !supported || upper != Some(proof.scope_upper_sequence) {
+                return Err(invalid(LedgerCode::PriorEpochNativeProofConflict.code()));
+            }
+            return Ok(PriorOwner::Sealed {
+                upper: proof.scope_upper_sequence,
+            });
+        }
+        let Some(upper) = upper else {
+            return Ok(PriorOwner::Unbounded);
+        };
+        Ok(PriorOwner::Unsealed(Box::new(PriorEpochOwnerImport {
+            evidence: match native {
+                Some(proof) => proof.clone(),
+                None => journal.observation(owner),
+            },
+            basis: current,
+            through_sequence: self.retention.through_sequence,
+            scope_upper_sequence: upper,
+        })))
     }
 
     fn append_prior_epoch_fact(
@@ -401,7 +491,7 @@ impl super::super::GlobalLedger {
             )?;
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
-                .min(super::super::COMMAND_TIMEOUT);
+                .min(self.reply_timeout);
             let next = receiver.recv_timeout(remaining).map_err(|error| {
                 invalid(match error {
                     std::sync::mpsc::RecvTimeoutError::Timeout => {
@@ -418,5 +508,123 @@ impl super::super::GlobalLedger {
                 None => return Ok(()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RetentionIndex;
+    use crate::PersistedEvent;
+    use crate::global::Sha256SecretFingerprinter;
+    use actingcommand_contract::{
+        AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+        EventPayloadDraft, EventSeverity, EventSource, IdentifierIssuer, OriginModule, OwnerEpoch,
+        RunId, RuntimeLifecyclePhase, RuntimePayloadDraft, TaskPayloadDraft,
+    };
+    use std::collections::BTreeSet;
+
+    /// Records of several owner epochs, numbered from 1 in the order they are added.
+    struct History {
+        ids: IdentifierIssuer,
+        fingerprinter: Sha256SecretFingerprinter,
+        events: Vec<PersistedEvent>,
+    }
+
+    impl History {
+        fn push(&mut self, links: EventLinksDraft, payload: EventPayloadDraft) {
+            let sequence = self.events.len() as u64 + 1;
+            let draft = EventDraft::new(
+                self.ids.mint_event_id().expect("event id"),
+                1_752_147_200_000 + sequence,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                links,
+                payload,
+            )
+            .sanitize(&self.fingerprinter)
+            .expect("sanitize");
+            self.events
+                .push(PersistedEvent::from_sanitized(sequence, draft).expect("persisted event"));
+        }
+
+        /// A record of `owner`'s epoch; the first one after another owner's starts the epoch.
+        fn owner(&mut self, owner: OwnerEpoch) {
+            self.push(
+                EventLinksDraft::default(),
+                RuntimePayloadDraft::lifecycle_observed(
+                    owner,
+                    RuntimeLifecyclePhase::ShutdownRequested,
+                    AuditInput::new(),
+                )
+                .into(),
+            );
+        }
+
+        /// A run's first record in the current epoch: its scope opens and nothing closes it.
+        fn open_run(&mut self) -> RunId {
+            let run = self.ids.mint_run_id().expect("run");
+            let id = *run.transport();
+            let links = EventLinksDraft::default()
+                .with_instance_id(self.ids.mint_instance_id().expect("instance"))
+                .with_request_id(self.ids.mint_request_id().expect("request"))
+                .with_correlation_id(self.ids.mint_correlation_id().expect("correlation"))
+                .with_task_id(self.ids.mint_task_id().expect("task"))
+                .with_run_id(run);
+            self.push(
+                links,
+                TaskPayloadDraft::started(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
+            );
+            id
+        }
+    }
+
+    /// LN-7 (#422, LEAN-L §3.5; the LN-7 row): the start's prior-epoch closes come from the
+    /// previous epoch only. An older epoch and the previous epoch each leave two runs' scopes
+    /// open; the writer's start visits the previous epoch's scopes, every one of them, and none
+    /// of the older epoch's.
+    #[test]
+    fn prior_epoch_closes_come_from_the_previous_epoch_only() {
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let [older, previous, writer] =
+            [(); 3].map(|()| *ids.mint_owner_epoch().expect("owner epoch").transport());
+        let mut history = History {
+            ids,
+            fingerprinter: Sha256SecretFingerprinter::new(b"ledger-ln7-prior-epoch")
+                .expect("fingerprinter"),
+            events: Vec::new(),
+        };
+        history.owner(older);
+        let older_runs = [history.open_run(), history.open_run()];
+        history.owner(older);
+        history.owner(previous);
+        let previous_runs = [history.open_run(), history.open_run()];
+        history.owner(previous);
+        history.owner(writer);
+        let index = RetentionIndex::from_events(&history.events).expect("retention index");
+
+        let owners = index.prior_epoch_owners(writer);
+        assert_eq!(owners, BTreeSet::from([previous]));
+        let (page, next) = index.prior_epoch_page(&owners, None);
+        assert_eq!(next, None);
+        let visited = page
+            .iter()
+            .map(|(scope, _)| (scope.owner, scope.run))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            visited,
+            previous_runs
+                .iter()
+                .map(|run| (previous, Some(*run)))
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(
+            page.iter().all(|(scope, _)| scope.owner != older
+                && scope.run.is_none_or(|run| !older_runs.contains(&run))),
+            "no scope of the older epoch is visited"
+        );
     }
 }

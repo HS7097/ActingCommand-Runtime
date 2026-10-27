@@ -75,6 +75,10 @@ outcome_keys! {
     actual_bytes: integer,
     limit_bytes: integer,
     free_bytes: integer,
+    memory_total_bytes: integer,
+    memory_available_bytes: integer,
+    memory_reserve_bytes: integer,
+    memory_floor_bytes: integer,
     carried_bytes: integer,
     count_known: boolean,
     event_count: integer,
@@ -85,6 +89,11 @@ outcome_keys! {
     verify_ms: duration_ms,
     material_ms: duration_ms,
     restore_ms: duration_ms,
+    // #422 LN-8: the phases of the start's bounded ledger open.
+    meta_ms: duration_ms,
+    tail_ms: duration_ms,
+    index_ms: duration_ms,
+    import_ms: duration_ms,
     pending_evictions: integer,
     runtime_code: code,
     client_code: code,
@@ -404,6 +413,8 @@ outcome_keys! {
     page_id: id,
     blackout_id: id,
     blackout_start_unix_ms: unix_ms,
+    // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): which of the three sources a blackout comes from.
+    blackout_source: vocab(blackout_source),
     pacing_stage: vocab(pacing_stage),
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
@@ -437,6 +448,12 @@ outcome_keys! {
     added_package_ids: list(name),
     removed_package_ids: list(name),
     // ---- Workflow #373 NAV-6: end ----
+    // ROUT-L RL-1b (frozen model v1.0 §3.8): what a game's `schedule.json` gave the scheduler
+    // workbench: its sha256 and its rules, held and unclassified packages.
+    schedule_sha256: hash,
+    rules: integer,
+    held: integer,
+    unclassified: integer,
     // Workflow #373 NAV-3a: why a prerequisite package is not bound.
     registry_problem: vocab(registry_problem),
     // Workflow #373 NAV-5: which navigation bound a run reached.
@@ -562,6 +579,13 @@ outcome_keys! {
     reserve_at_least: integer,
     amount_after: integer,
     // ---- Workflow #411 B16 part 2: end ----
+    // ---- SCH-M CF-1 (condition edges, contracts/scheduling/README.md): begin ----
+    predecessor_task_id: name,
+    served_by_dispatch_unix_ms: unix_ms,
+    // ---- SCH-M CF-1: end ----
+    // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §6.1): begin ----
+    table_column: token,
+    // ---- Workflow #357 DB-1: end ----
     // ---- Workflow #421 INST-0 (`actingctl install`, contracts/install-cli.md): begin ----
     install_operation_id: id,
     plan_id: id,
@@ -570,5 +594,17 @@ outcome_keys! {
     rollback_gate_parts: list(vocab(rollback_gate_part)),
     ledger_sequence: integer,
     install_guards: list(vocab(install_guard)),
+    // Ruling 54 (#420 S4): the kind of `install_caveat_noted`, the one warning of the family.
+    install_caveat: vocab(install_caveat),
     // ---- Workflow #421 INST-0: end ----
+    // ---- IDLE-1 (the idle action, Alice's ruling 41): begin ----
+    idle_action: name,
+    // ---- IDLE-1: end ----
+    // ---- Workflow #392 DA-1 (the display adapter, model 392 v1.2 §9.1): begin ----
+    display_problem: vocab(display_problem),
+    frame_width: integer,
+    frame_height: integer,
+    base_width: integer,
+    base_height: integer,
+    // ---- Workflow #392 DA-1: end ----
 }

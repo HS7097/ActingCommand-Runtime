@@ -68,7 +68,7 @@ fn strategic_report_uses_authoritative_policy_projection() {
             },
             fact_key: "feature.enabled".to_owned(),
             comparison: Comparison::Eq,
-            value: FactValue::Boolean(true),
+            value: FactValue::Boolean(true).into(),
             max_age_ms: Some(60_000),
         },
         match_bands: vec![
