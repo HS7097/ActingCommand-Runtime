@@ -2,21 +2,23 @@
 
 // Workflow #389 MCP-8 (MCP-0 command table v1.1 §4.9): ac_overview's truncation order. An answer
 // that does not fit the output budget is cut one block at a time, earlier blocks first:
-// fact_refresh, host, startup, tagged_state, ledger, performance, watchdog, catalog,
-// config_generation, then each instance row's run from the last instance back, then each row's
-// monitor, then install.build. Each cut block is marked `<block>_truncated: true`. The daemon,
-// the global pause, each row's identity, pause, lease_active and queued, and incomplete are never
-// cut. Cutting stops as soon as the answer fits; when nothing is left to cut the answer stays as
-// it is, and the call answers output_budget_exceeded (MCP-T1 gate 30). The overview below holds
-// every block of §4.9, those later slices add included, so that the whole order is seen.
+// host, startup, tagged_state, ledger, performance, watchdog, catalog, config_generation, then
+// each instance row's run from the last instance back, then each row's monitor, then
+// install.build, and fact_refresh last (#422 OV-24K: its rows are the warnings an operator needs,
+// so it outlasts every less urgent block). Each cut block is marked `<block>_truncated: true`,
+// and `truncated` lists the JSON pointer of each cut block in the order it was cut (#422
+// OV-24K). The daemon, the global pause, each row's identity, pause, lease_active and queued, and
+// incomplete are never cut. Cutting stops as soon as the answer fits; when nothing is left to cut
+// the answer stays as it is, and the call answers output_budget_exceeded (MCP-T1 gate 30). The
+// overview below holds every block of §4.9, those later slices add included, so that the whole
+// order is seen.
 
 use super::super::observer::cut_to_fit;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 
-// The top-level blocks of §4.9, in its order.
-const TOP_BLOCKS: [&str; 9] = [
-    "fact_refresh",
+// The top-level blocks of §4.9 cut before the rows, in its order.
+const TOP_BLOCKS: [&str; 8] = [
     "host",
     "startup",
     "tagged_state",
@@ -26,6 +28,8 @@ const TOP_BLOCKS: [&str; 9] = [
     "catalog",
     "config_generation",
 ];
+// #422 OV-24K: the block cut last of all.
+const LAST_BLOCK: &str = "fact_refresh";
 const ROWS: usize = 3;
 
 // One instance row with every member it can carry.
@@ -58,7 +62,7 @@ fn full_overview() -> Value {
         },
         "incomplete": true,
     });
-    for block in TOP_BLOCKS {
+    for block in TOP_BLOCKS.into_iter().chain([LAST_BLOCK]) {
         overview[block] = json!({"neutral": block});
     }
     overview
@@ -97,6 +101,19 @@ fn cut_between(before: &Value, after: &Value) -> String {
     cuts.remove(0)
 }
 
+// #422 OV-24K: the JSON pointers `truncated` names `cuts` by, from each cut's name in
+// `cut_between`.
+fn pointers(cuts: &[String]) -> Value {
+    json!(
+        cuts.iter()
+            .map(|cut| match cut.split_once('@') {
+                Some((block, index)) => format!("/instances/{index}/{block}"),
+                None => format!("/{}", cut.replace('.', "/")),
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
 // Every answer `fits` was asked about, in order, and the cuts between them.
 fn cuts_until(fits: impl Fn(&Value) -> bool) -> (Value, Vec<String>) {
     let mut overview = full_overview();
@@ -119,13 +136,14 @@ fn gate_ac_overview_cuts_every_block_in_the_order_of_4_9_and_never_the_identity_
     let mut expected = TOP_BLOCKS.map(str::to_owned).to_vec();
     // Each row's run, from the last instance back.
     expected.extend((0..ROWS).rev().map(|index| format!("run@{index}")));
-    assert_eq!(cuts.len(), expected.len() + ROWS + 1, "cuts: {cuts:?}");
+    assert_eq!(cuts.len(), expected.len() + ROWS + 2, "cuts: {cuts:?}");
     assert_eq!(
         &cuts[..expected.len()],
         expected.as_slice(),
         "cuts: {cuts:?}"
     );
-    // Then each row's monitor (§4.9 names no order among the rows), then the build.
+    // Then each row's monitor (§4.9 names no order among the rows), then the build, and
+    // fact_refresh last (#422 OV-24K).
     let mut monitors = cuts[expected.len()..expected.len() + ROWS].to_vec();
     monitors.sort();
     assert_eq!(
@@ -135,12 +153,18 @@ fn gate_ac_overview_cuts_every_block_in_the_order_of_4_9_and_never_the_identity_
             .collect::<Vec<_>>(),
         "cuts: {cuts:?}"
     );
-    assert_eq!(cuts.last().map(String::as_str), Some("install.build"));
+    assert_eq!(
+        &cuts[cuts.len() - 2..],
+        ["install.build".to_owned(), LAST_BLOCK.to_owned()],
+        "cuts: {cuts:?}"
+    );
+    // #422 OV-24K: `truncated` names every cut, in the order it was cut.
+    assert_eq!(overview["truncated"], pointers(&cuts), "{overview}");
 
     // Nothing left to cut: what is never cut stays as it was, each cut block left its marker.
     let mut kept = full_overview();
     let members = kept.as_object_mut().expect("an object");
-    for block in TOP_BLOCKS {
+    for block in TOP_BLOCKS.into_iter().chain([LAST_BLOCK]) {
         members.remove(block);
         members.insert(format!("{block}_truncated"), json!(true));
     }
@@ -158,6 +182,7 @@ fn gate_ac_overview_cuts_every_block_in_the_order_of_4_9_and_never_the_identity_
     let install = members["install"].as_object_mut().expect("install");
     install.remove("build");
     install.insert("build_truncated".to_owned(), json!(true));
+    members.insert("truncated".to_owned(), overview["truncated"].clone());
     assert_eq!(overview, kept);
 }
 
@@ -180,12 +205,15 @@ fn gate_ac_overview_stops_cutting_as_soon_as_the_answer_fits() {
         );
     }
     assert_eq!(overview["install"], full_overview()["install"]);
+    // #422 OV-24K: fact_refresh outlasts every block cut so far.
+    assert_eq!(overview[LAST_BLOCK], full_overview()[LAST_BLOCK]);
+    assert_eq!(overview["truncated"], pointers(&cuts), "{overview}");
 }
 
 // Workflow #389 MCP-5b (MCP-0 command table v1.1 §4.6, §4.9; ADD:311: a slice that adds an
 // overview block registers its place in the order): each instance row's `foreground` is cut after
 // every row's monitor and before install.build, each cut leaving `foreground_truncated: true` in
-// its row; what is never cut stays as it was.
+// its row; what is never cut stays as it was. #422 OV-24K: fact_refresh is cut after the build.
 #[test]
 fn gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_before_the_build() {
     let mut overview = full_overview();
@@ -207,7 +235,7 @@ fn gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_befo
         .map(|pair| cut_between(&pair[0], &pair[1]))
         .collect::<Vec<_>>();
     let rows_from = TOP_BLOCKS.len();
-    assert_eq!(cuts.len(), rows_from + 3 * ROWS + 1, "cuts: {cuts:?}");
+    assert_eq!(cuts.len(), rows_from + 3 * ROWS + 2, "cuts: {cuts:?}");
     for (offset, block) in ["run", "monitor", "foreground"].into_iter().enumerate() {
         let from = rows_from + offset * ROWS;
         let mut cut = cuts[from..from + ROWS].to_vec();
@@ -220,7 +248,11 @@ fn gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_befo
             "cuts: {cuts:?}"
         );
     }
-    assert_eq!(cuts.last().map(String::as_str), Some("install.build"));
+    assert_eq!(
+        &cuts[cuts.len() - 2..],
+        ["install.build".to_owned(), LAST_BLOCK.to_owned()],
+        "cuts: {cuts:?}"
+    );
     for index in 0..ROWS {
         let row = &overview["instances"][index];
         assert_eq!(

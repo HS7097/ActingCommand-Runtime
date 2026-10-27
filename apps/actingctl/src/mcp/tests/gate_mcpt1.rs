@@ -49,10 +49,12 @@ fn has_member(value: &Value, name: &str) -> bool {
     }
 }
 
-/// A result whose envelope is far over the 11 KiB payload budget; every row names itself.
+/// A result whose envelope is far over the 24 KiB output budget even sent once (#422 OV-24K: the
+/// budget is counted on the bytes sent, the JSON once beside the summary text where twice does
+/// not fit; 800 rows, some 17 KB, fit once); every row names itself.
 fn oversized_result() -> Value {
     json!({
-        "rows": (0..800).map(|index| format!("oversized-row-{index:04}")).collect::<Vec<_>>(),
+        "rows": (0..2000).map(|index| format!("oversized-row-{index:04}")).collect::<Vec<_>>(),
     })
 }
 

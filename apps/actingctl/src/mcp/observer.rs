@@ -6,7 +6,11 @@
 //! `events` (Workflow #389 MCP-1). Errors and warnings are outcomes (Workflow #378 A5).
 //! ac_overview is `actingctl overview` (`crate::overview`, Workflow #389 MCP-8): the same read
 //! and result, cut here to the output budget in the order of the MCP-0 command table §4.9.
+//! #422 OV-24K (v0.12.20): the budget is counted on the bytes sent in the protocol version the
+//! session negotiated, the JSON once where twice does not fit (`tools::fits_sent`); `fact_refresh`
+//! is cut last, and a cut answer says so.
 
+use super::protocol::Era;
 use super::runtime::{self, Connected};
 use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess,
@@ -31,8 +35,7 @@ use std::time::Duration;
 /// MCP-0 command table §4.9: the top-level blocks ac_overview cuts first, in this order, when its
 /// answer does not fit the output budget. A slice that adds an overview block registers its place
 /// here in the same PR; a block the answer does not hold is passed over.
-const CUT_BLOCKS: [&str; 9] = [
-    "fact_refresh",
+const CUT_BLOCKS: [&str; 8] = [
     "host",
     "startup",
     "tagged_state",
@@ -46,6 +49,11 @@ const CUT_BLOCKS: [&str; 9] = [
 /// way, then each row's `foreground` (Workflow #389 MCP-5b registers it last of the row blocks: it
 /// is the smallest); then `install.build`.
 const CUT_ROW_BLOCKS: [&str; 3] = ["run", "monitor", "foreground"];
+/// #422 OV-24K: last of all, what the fact refresh waits for: its rows are the warnings an
+/// operator needs (`fact_refresh_unbound`, …), so it outlasts every less urgent block.
+const CUT_LAST: &str = "fact_refresh";
+/// #422 OV-24K: the member of a cut answer listing what was cut, in the order it was cut.
+const TRUNCATED: &str = "truncated";
 const MAX_TEXT_BYTES: u64 = 8192;
 const DEFAULT_TEXT_BYTES: u64 = 4096;
 /// The largest material ac_material exports; ac_observe and `actingctl observe --export` share it.
@@ -56,7 +64,7 @@ const EXPORT_WRITE_RESERVE: Duration = Duration::from_secs(2);
 /// ac_overview: `actingctl overview` over MCP (Workflow #389 MCP-8). Its arguments are the CLI's
 /// flags (R2; `sections` a list where the CLI takes a comma-separated value); the server's
 /// location stands for the CLI's `--root` and `--state-root`. The result is the CLI's stdout JSON
-/// without its `warnings`, which go beside it, cut to the output budget (`cut_to_fit`).
+/// without its `warnings`, which go beside it, fitted to the output budget (`fit_answer`).
 pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "sections"])?;
     let instance = arguments.string("instance")?.map(str::to_owned);
@@ -110,13 +118,28 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
             }
         })
         .collect::<Vec<_>>();
-    let mut result = Value::Object(answer.result);
-    // The envelope is `{ok, result, warnings}`; this wrapper is a little larger, so an answer it
-    // lets through always fits.
-    cut_to_fit(&mut result, |result| {
-        tools::fits_success(&json!({"result": result, "warnings": warnings}))
-    });
-    Ok(ToolSuccess { result, warnings })
+    Ok(fit_answer(
+        Value::Object(answer.result),
+        warnings,
+        context.era,
+    ))
+}
+
+/// #422 OV-24K: an ac_overview answer, `result` with `warnings`, within the output budget as it is
+/// sent in `era`, the protocol version the session negotiated (fix 1, L1; `tools::fits_sent`: the
+/// bytes sent, the JSON once beside a summary text with every warning where twice does not fit).
+/// An answer that fits is returned whole. Otherwise it is never cut silently: the warning
+/// `output_budget_exceeded` says how many bytes the whole answer takes (`actual_bytes`) and the
+/// budget (`limit_bytes`), and `cut_to_fit` cuts it, naming each cut in `truncated`.
+pub(super) fn fit_answer(mut result: Value, mut warnings: Vec<Value>, era: Era) -> ToolSuccess {
+    if !tools::fits_sent(&result, &warnings, era) {
+        let whole = tools::sent_size(&result, &warnings, era);
+        warnings.push(tools::budget_exceeded(whole).into_warning());
+        cut_to_fit(&mut result, |result| {
+            tools::fits_sent(result, &warnings, era)
+        });
+    }
+    ToolSuccess { result, warnings }
 }
 
 /// A Runtime read failure as a tool error: on the server's connection, which is dropped when the
@@ -135,52 +158,64 @@ fn runtime_failure(
 /// Cuts `result`, an ac_overview answer, one block at a time in the order of the MCP-0 command
 /// table §4.9 until `fits` takes it: the top-level blocks of [`CUT_BLOCKS`], then each instance
 /// row's `run` from the last row back, then each row's `monitor` the same way, then each row's
-/// `foreground` (MCP-5b), then `install.build`. Each cut block leaves `<block>_truncated: true` where it was. The daemon, the
-/// global pause, each row's identity, `emulator_state` (Workflow #390 九处-1),
-/// `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b), `pause`,
-/// `lease_active` and `queued`, and `incomplete` are never cut: an answer that still does not fit when nothing is left to cut is returned as it is,
-/// and the call answers `output_budget_exceeded` (`tools::call_result`).
+/// `foreground` (MCP-5b), then `install.build`, then `fact_refresh` (#422 OV-24K: its warnings
+/// outlast every less urgent block). Each cut block leaves `<block>_truncated: true` where it
+/// was, and `truncated` lists the JSON pointer of every cut block in the order it was cut (#422
+/// OV-24K). The daemon, the global pause, each row's identity, `emulator_state` (Workflow #390
+/// 九处-1), `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b), `pause`,
+/// `lease_active` and `queued`, `incomplete` and each `<block>_incomplete` are never cut: an
+/// answer that still does not fit when nothing is left to cut is returned as it is, and the call
+/// sends it with as many warnings in the summary text as fit, or answers
+/// `output_budget_exceeded` (`tools::tool_call_result`).
 pub(super) fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
+    let mut cut = Vec::new();
     while !fits(result) {
-        if !cut_next(result) {
+        let Some(pointer) = cut_next(result) else {
             return;
+        };
+        cut.push(pointer);
+        if let Some(members) = result.as_object_mut() {
+            members.insert(TRUNCATED.to_owned(), json!(cut));
         }
     }
 }
 
-/// The next cut of [`cut_to_fit`]; false when nothing is left to cut.
-fn cut_next(result: &mut Value) -> bool {
-    let Some(members) = result.as_object_mut() else {
-        return false;
-    };
+/// The next cut of [`cut_to_fit`]: the JSON pointer of the block it cut, `None` when nothing is
+/// left to cut.
+fn cut_next(result: &mut Value) -> Option<String> {
+    let members = result.as_object_mut()?;
     for block in CUT_BLOCKS {
         if members.remove(block).is_some() {
             members.insert(format!("{block}_truncated"), json!(true));
-            return true;
+            return Some(format!("/{block}"));
         }
     }
+    let instances = overview::Section::Instances.name();
     for block in CUT_ROW_BLOCKS {
-        let rows = members
-            .get_mut(overview::Section::Instances.name())
-            .and_then(Value::as_array_mut);
-        for row in rows.into_iter().flatten().rev() {
+        let Some(rows) = members.get_mut(instances).and_then(Value::as_array_mut) else {
+            break;
+        };
+        for (index, row) in rows.iter_mut().enumerate().rev() {
             if let Some(row) = row.as_object_mut()
                 && row.remove(block).is_some()
             {
                 row.insert(format!("{block}_truncated"), json!(true));
-                return true;
+                return Some(format!("/{instances}/{index}/{block}"));
             }
         }
     }
-    if let Some(install) = members
-        .get_mut(overview::Section::Install.name())
-        .and_then(Value::as_object_mut)
-        && install.remove("build").is_some()
+    let install = overview::Section::Install.name();
+    if let Some(members) = members.get_mut(install).and_then(Value::as_object_mut)
+        && members.remove("build").is_some()
     {
-        install.insert("build_truncated".to_owned(), json!(true));
-        return true;
+        members.insert("build_truncated".to_owned(), json!(true));
+        return Some(format!("/{install}/build"));
     }
-    false
+    if members.remove(CUT_LAST).is_some() {
+        members.insert(format!("{CUT_LAST}_truncated"), json!(true));
+        return Some(format!("/{CUT_LAST}"));
+    }
+    None
 }
 
 /// The instance an `instance` argument names by alias, instance_id or ADB port, as the

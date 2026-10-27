@@ -18,6 +18,7 @@
 use super::super::{DO, NOT_A_FLAG, OBSERVE, act, command_line, do_input, observe, observe_input};
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::mcp::jobs::Jobs;
+use crate::mcp::protocol::Era;
 use crate::mcp::runtime::RuntimeAccess;
 use crate::mcp::tests::gate_mcpt1::unreached_deadline;
 use crate::mcp::tools::{ToolContext, ToolOutcome};
@@ -43,6 +44,7 @@ fn call(tool: Tool, arguments: &Map<String, Value>) -> ToolOutcome {
         runtime: &runtime,
         cancelled: &cancelled,
         deadline: unreached_deadline(),
+        era: Era::Modern,
         session: 1,
         jobs: &jobs,
     };

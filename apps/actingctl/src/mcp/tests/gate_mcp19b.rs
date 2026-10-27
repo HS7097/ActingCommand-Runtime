@@ -208,9 +208,10 @@ fn mcp19b_ac_schedule_cuts_candidate_rows_from_the_end() {
     assert_eq!(whole, answer);
 
     // An answer whose uncuttable part alone is over the budget: every row is cut, the rest stays,
-    // and the call answers output_budget_exceeded.
+    // and the call answers output_budget_exceeded. #422 OV-24K: the budget is counted on the bytes
+    // sent, the JSON once where twice does not fit, so 128 entries (64 came to about 24 KiB once).
     let many = json!(explanation(
-        (0..64)
+        (0..128)
             .map(|index| entry(
                 &format!("neutral.instance.{index:03}"),
                 vec![outranked("fixture.second")]
