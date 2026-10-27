@@ -5,8 +5,9 @@
 //! the policy host's memory. Every evaluated cycle replaces it from the bound evaluation, before
 //! the host adds its notes to the decisions; a deferred cycle and a failed evaluation leave it as
 //! it was, and a start begins with none. Nothing here reaches the ledger and no decision reads
-//! it: only the read `ScheduleExplanation` does.
+//! it: only the read `ScheduleExplanation` and the idle check (IDLE-1, its plan per instance) do.
 
+use crate::idle_action::IdlePlan;
 use actingcommand_contract::codes::ScheduleExplanationRowCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -16,7 +17,7 @@ use actingcommand_contract::{
     ScheduleExplanationNotRunning, ScheduleExplanationSelected,
 };
 use actingcommand_policy::{
-    EligibilityState, PolicyEvaluation, SchedulingDecisionState, TaskDecision,
+    EligibilityState, FACT_REFRESH_TASK_ID, PolicyEvaluation, SchedulingDecisionState, TaskDecision,
 };
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -47,6 +48,54 @@ struct InstanceRows {
     /// Every candidate row, in answer order; the read cuts them.
     candidates: Vec<ScheduleExplanationCandidate>,
     not_running: ScheduleExplanationNotRunning,
+    /// IDLE-1 (IDLE-1P, #405): the instance's plan as the idle check reads it.
+    idle: IdlePlan,
+}
+
+/// IDLE-1P (#405): one instance's plan as the idle check reads it, gathered over its decisions.
+/// A decision is due when it is selected, or eligible with no wake of its own later than the
+/// evaluation (held by the instance's queue, blocked); an eligible one deferred to a later time
+/// (a budget, a random delay, a gate's wake) is due at that wake. The fact-refresh reading is
+/// kept apart from the tasks.
+#[derive(Debug, Default)]
+struct IdleDraft {
+    task_due: bool,
+    task_wake: Option<u64>,
+    reading_due: Option<u64>,
+}
+
+impl IdleDraft {
+    fn add(&mut self, decision: &TaskDecision, evaluated_at_unix_ms: u64) {
+        let eligible = decision.state == SchedulingDecisionState::Selected
+            || decision.eligibility == EligibilityState::True;
+        let due = decision.state == SchedulingDecisionState::Selected
+            || (eligible
+                && decision
+                    .next_wake_unix_ms
+                    .is_none_or(|wake| wake <= evaluated_at_unix_ms));
+        if decision.task_id == FACT_REFRESH_TASK_ID {
+            let at = if due {
+                Some(evaluated_at_unix_ms)
+            } else if eligible {
+                decision.next_wake_unix_ms
+            } else {
+                None
+            };
+            self.reading_due = earliest(self.reading_due, at);
+        } else {
+            self.task_due |= due;
+            self.task_wake = earliest(self.task_wake, decision.next_wake_unix_ms);
+        }
+    }
+
+    const fn plan(&self, evaluated_at_unix_ms: u64) -> IdlePlan {
+        IdlePlan {
+            evaluated_at_unix_ms,
+            due_now: self.task_due,
+            next_wake_unix_ms: self.task_wake,
+            reading_due_unix_ms: self.reading_due,
+        }
+    }
 }
 
 /// One unselected decision with its rank, before the rows are ordered.
@@ -74,12 +123,16 @@ impl ScheduleExplanationTable {
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();
         let mut selected = BTreeMap::<&str, (String, String)>::new();
         let mut drafts = BTreeMap::<&str, Vec<Draft<'_>>>::new();
+        let mut idle = BTreeMap::<&str, IdleDraft>::new();
         for decision in &evaluation.decisions {
             let Some(alias) = decision.instance_id.as_deref() else {
                 continue;
             };
             let wake = wakes.entry(alias).or_default();
             *wake = earliest(*wake, decision.next_wake_unix_ms);
+            idle.entry(alias)
+                .or_default()
+                .add(decision, evaluated_at_unix_ms);
             let rows = drafts.entry(alias).or_default();
             if decision.state == SchedulingDecisionState::Selected {
                 // Every selected decision has its intent (bound to the same decision id the
@@ -133,6 +186,10 @@ impl ScheduleExplanationTable {
                     selected: selected.remove(alias),
                     candidates,
                     not_running,
+                    idle: idle
+                        .remove(alias)
+                        .unwrap_or_default()
+                        .plan(evaluated_at_unix_ms),
                 },
             );
         }
@@ -141,6 +198,17 @@ impl ScheduleExplanationTable {
             catalog_hash: catalog_hash.to_owned(),
             instances,
         });
+    }
+
+    /// IDLE-1 (IDLE-1P, #405): the latest evaluation's plan for `alias` as the idle check reads
+    /// it: none before the first evaluated cycle after a start; an instance the evaluation decided
+    /// nothing for has no due task, no wake and no reading.
+    pub(crate) fn idle_plan(&self, alias: &str) -> Option<IdlePlan> {
+        let latest = self.latest.as_ref()?;
+        Some(latest.instances.get(alias).map_or_else(
+            || IdleDraft::default().plan(latest.evaluated_at_unix_ms),
+            |rows| rows.idle,
+        ))
     }
 
     /// The answer of `ScheduleExplanation`: the entry of `instance` (none when the latest

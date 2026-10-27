@@ -561,6 +561,7 @@ fn evaluate_at(
         }],
         instance_facts_loaded_at_unix_ms: Some(NOW - DAY_MS),
         instance_holds: BTreeMap::new(),
+        idle_closed: BTreeMap::new(),
     };
     evaluate_with_fact_refresh::<PolicyEvaluationError>(
         catalog,

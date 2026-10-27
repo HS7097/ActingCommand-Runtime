@@ -549,6 +549,17 @@ read it, and the candidate waits.
   an unavailable instance, a host that cannot take its load (for now); and
   `task_cooldown_active` until both `min_interval_ms` after its latest dispatch
   and, after a failed run, `failure_backoff_ms` after that run's end (for now).
+  Past these, #405 IDLE-1P: on an instance the Runtime's idle action closed as
+  the cycle starts, R_I waits, with no wake, for the instance's next natural
+  wake unless a candidate it reads for is due (its trigger true): its decision
+  carries `instance_idle_action` and the candidates `fact_refresh_pending` with
+  that `gate_code` (for now), so a reading alone never brings a closed game back
+  ([runtime-config.md](../runtime-config.md), "The `idle` section"). When one
+  of the gates above holds R_I there too, its decision keeps that gate's
+  reasons and wake and adds `instance_idle_action`, and the candidates keep
+  the row that gate gives them (its `gate_code`, or `fact_refresh_exhausted`)
+  but take no wake of R_I's, neither as their wake nor as
+  `next_eligible_unix_ms`.
   In the allocation the Runtime's admission defers it like any candidate; a
   closed activity window or a spent activity budget, a spent task budget and a
   paused pair are limits, everything else is for now.

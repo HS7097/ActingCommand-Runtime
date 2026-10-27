@@ -296,6 +296,9 @@ pub(crate) struct FactRefreshContext<'a> {
     pub(crate) settings: actingcommand_policy::FactRefreshSettings,
     pub(crate) bindings: &'a BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,
     pub(crate) instance_facts_loaded_at_unix_ms: u64,
+    /// IDLE-1P (#405): the instances the idle action closed, or is closing, as the cycle starts,
+    /// by alias; their fact refresh waits for their next wake unless a candidate needs it now.
+    pub(crate) idle_closed: &'a BTreeMap<String, actingcommand_policy::IdleClosed>,
 }
 
 /// Workflow #369 W-1: what keeps a policy dispatch from an instance as a cycle starts. Policy
@@ -2627,6 +2630,12 @@ impl PolicyHost {
             .collect()
     }
 
+    /// IDLE-1 (IDLE-1P, #405): the latest evaluation's plan for `alias` as the idle check reads
+    /// it (its tasks and its fact-refresh reading apart); none before the first evaluated cycle.
+    pub(crate) fn idle_plan(&self, alias: &str) -> Option<crate::idle_action::IdlePlan> {
+        self.explanation.idle_plan(alias)
+    }
+
     /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
     /// explanation for `instance` (every instance when absent), with the selected decision's
     /// dispatch state as the dispatch projection holds it now: `pending` before its intent is
@@ -3030,7 +3039,8 @@ impl PolicyHost {
     /// recognition maintenance package of every instance in the snapshot, with the fact refresh
     /// dispatches admitted on it in its current activity day and the code of its latest failure
     /// while no success followed it; the instances the closure's positions 1-2 hold, and
-    /// (Workflow #386 SR-4a2) those a blackout covers at position 4; the settings in effect; L.
+    /// (Workflow #386 SR-4a2) those a blackout covers at position 4; (IDLE-1P, #405) those the
+    /// idle action closed; the settings in effect; L.
     #[allow(clippy::too_many_arguments)]
     fn fact_refresh_inputs(
         &self,
@@ -3101,6 +3111,7 @@ impl PolicyHost {
             readers,
             instance_facts_loaded_at_unix_ms: Some(context.instance_facts_loaded_at_unix_ms),
             instance_holds,
+            idle_closed: context.idle_closed.clone(),
         })
     }
 

@@ -17,6 +17,9 @@
 //!   one, the pause for the rest of the day after `max_consecutive_failures` failures in a row,
 //!   its daily limit, placement, the host budget and the Runtime's admission preview (§3.4,
 //!   §3.9). Each affected candidate takes the first row of §3.7 that matches.
+//! - IDLE-1P (#405): R_I on an instance the idle action closed waits for the instance's next
+//!   wake unless a candidate it unlocks is due ([`IdleClosed`]); its own gates' wakes stay on R_I
+//!   and never become its candidates' wakes there (review M-1).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -105,6 +108,17 @@ pub struct InstanceHold {
     pub next_wake_unix_ms: Option<u64>,
 }
 
+/// IDLE-1P (#405): an instance the Runtime's idle action closed, or is closing, as the cycle
+/// starts. Its R_I waits for the instance's next wake unless a candidate it unlocks is due: a
+/// reading alone never brings a closed game back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleClosed {
+    /// The `gate_code` of `fact_refresh_pending` on every candidate that waits for R_I.
+    pub gate: Code,
+    /// The reason R_I's own decision carries.
+    pub reason: DecisionReason,
+}
+
 /// Workflow #384 D2-S4: what one evaluation's fact refresh reads besides the evaluation inputs.
 /// Memory only: none of it enters a snapshot or decision identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +131,9 @@ pub struct FactRefreshInputs {
     pub instance_facts_loaded_at_unix_ms: Option<u64>,
     /// Per instance alias, the closure's positions 1-2 that hold it as the cycle starts.
     pub instance_holds: BTreeMap<String, InstanceHold>,
+    /// IDLE-1P (#405): per instance alias, the instances the idle action closed as the cycle
+    /// starts.
+    pub idle_closed: BTreeMap<String, IdleClosed>,
 }
 
 /// The task spec a fact refresh dispatch is admitted, budgeted and settled under, the same for
@@ -209,6 +226,20 @@ pub(super) enum RefreshGate {
     },
 }
 
+impl RefreshGate {
+    /// The same gate with no wake (IDLE-1P, review M-1: what an idle-held plan's candidates read).
+    const fn without_wake(self) -> Self {
+        match self {
+            Self::Limit { limit, gate, .. } => Self::Limit {
+                limit,
+                gate,
+                wake: None,
+            },
+            Self::Temporary { gate, .. } => Self::Temporary { gate, wake: None },
+        }
+    }
+}
+
 /// One instance's fact refresh this round.
 #[derive(Debug)]
 pub(super) struct RefreshPlan {
@@ -224,6 +255,9 @@ pub(super) struct RefreshPlan {
     state: Option<TaskRuntimeSnapshot>,
     /// The code of R_I's latest failure, when its latest run failed.
     last_failure_code: Option<Code>,
+    /// IDLE-1P (#405, review M-1): the instance is idle-closed and no candidate R_I reads for is
+    /// due, whatever R_I's own gates say: its candidates take no wake from R_I's gate.
+    idle_held: bool,
 }
 
 /// What [`plan`] reads.
@@ -380,7 +414,13 @@ pub(super) fn plan(
             entry.reasons.push(requested_reason(&instance_id, key));
         }
         let keys = requested.keys().copied().collect::<Vec<_>>();
-        let gate = own_gate(context, instance, reader, state, &keys, &mut entry)?;
+        // IDLE-1P (#405, review M-1): the idle hold is decided whatever R_I's own gates say, so
+        // a minimum interval, a failure backoff or a limit keeps its reasons and its wake on R_I
+        // alone and never becomes a wake of the candidates on a closed instance.
+        let own = own_gate(context, instance, reader, state, &keys, &mut entry)?;
+        let held = idle_gate(context.inputs, &instance_id, &planned, work, &mut entry);
+        let idle_held = held.is_some();
+        let gate = own.or(held);
         match gate {
             Some(gate) => {
                 entry.state = SchedulingDecisionState::Deferred;
@@ -410,6 +450,7 @@ pub(super) fn plan(
             pre_gate: gate,
             state: state.cloned(),
             last_failure_code: reader.last_failure_code.filter(|_| failed),
+            idle_held,
         });
     }
     Ok(plans)
@@ -540,6 +581,36 @@ fn own_gate(
     Ok(None)
 }
 
+/// IDLE-1P (#405): R_I on an instance the idle action closed. No candidate it unlocks is due
+/// (each read its keys through an undecided predicate): R_I is held back with the instance's
+/// [`IdleClosed`] reason, so the keys stay unknown until the instance's next natural wake. Past
+/// R_I's own gates this is the gate (no wake) its candidates' `fact_refresh_pending` names; when
+/// one of R_I's own gates holds it too (review M-1: its minimum interval, failure backoff or a
+/// limit), that gate stays the one named and keeps its wake on R_I alone. Either way the plan is
+/// idle-held: its candidates take no wake from R_I (`finish`). A due candidate (its trigger
+/// true, its feedback stop false) needs the reading now: R_I goes on, and the idle check wakes
+/// the instance for that candidate before R_I's dispatch is admitted.
+fn idle_gate(
+    inputs: &FactRefreshInputs,
+    instance_id: &str,
+    planned: &[(usize, Vec<RefreshKey>)],
+    work: &[TaskWork],
+    entry: &mut TaskWork,
+) -> Option<RefreshGate> {
+    let closed = inputs.idle_closed.get(instance_id)?;
+    if planned
+        .iter()
+        .any(|(work_index, _)| work[*work_index].eligibility == EligibilityState::True)
+    {
+        return None;
+    }
+    entry.reasons.push(closed.reason.clone());
+    Some(RefreshGate::Temporary {
+        gate: Some(closed.gate),
+        wake: None,
+    })
+}
+
 /// When R_I may next be dispatched by its own clocks: the minimum interval after its latest
 /// dispatch and, after a failed run, the failure backoff from the run's end.
 fn next_eligible(
@@ -640,6 +711,12 @@ fn refresh_candidate(
 ///    `fact_refresh_unresolved`, R_I's next eligible time;
 /// 6. anything else: `fact_refresh_pending` with the gate's code and wake, and the code of
 ///    R_I's latest failure when its latest run failed.
+///
+/// IDLE-1P (#405, review M-1): on an idle-held plan the rows keep their codes and gate, but no
+/// wake of R_I's (its minimum interval, its failure backoff, a limit's end) reaches a candidate,
+/// neither as its decision's wake nor as `next_eligible_unix_ms`: the candidate waits for the
+/// instance's next natural wake, which the idle check plans from the instance's tasks, so a
+/// reading alone never cold-starts a closed game.
 pub(super) fn finish(
     plans: &[RefreshPlan],
     gates: &BTreeMap<usize, RefreshGate>,
@@ -650,9 +727,19 @@ pub(super) fn finish(
 ) -> PolicyEvaluationResult<()> {
     for plan in plans {
         let selected = work[plan.work_index].state == SchedulingDecisionState::Selected;
-        let gate = gates.get(&plan.work_index).copied().or(plan.pre_gate);
+        let gate = gates
+            .get(&plan.work_index)
+            .copied()
+            .or(plan.pre_gate)
+            .map(|gate| {
+                if plan.idle_held {
+                    gate.without_wake()
+                } else {
+                    gate
+                }
+            });
         let next_eligible = next_eligible(&inputs.settings, plan.state.as_ref())?
-            .filter(|until| *until > time.unix_ms);
+            .filter(|until| *until > time.unix_ms && !plan.idle_held);
         for (work_index, keys) in &plan.affected {
             let mut wake = None;
             for key in keys {

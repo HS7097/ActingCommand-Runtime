@@ -6,7 +6,9 @@
 //! An instance configured with `start_emulator` (S6a; off unless the configuration names it, and
 //! allowed only on a discovery-bound instance) whose emulator is stopped when the daemon starts
 //! (its endpoint is pending) gets one autostart claim (`ClaimKind::Autostart`, a Runtime-internal
-//! claim with no deadline that never preempts). actingd enqueues the claims once, after policy
+//! claim with no deadline that never preempts); IDLE-1P (#405): not one whose emulator the idle
+//! action `stop_emulator` holds stopped (restored at this start), which its wake starts through
+//! the same claim. actingd enqueues the claims once, after policy
 //! initialization and before `runtime_ready`; the enqueue does not block. Every claim is visible:
 //! a holder from the enqueue, or a queued entry behind another holder. emu-watch (Alice's ruling
 //! 35, #414 option 3): a scheduling pause, the instance's own or the global one (a restored one
@@ -251,6 +253,14 @@ impl HostShared {
         if configured.is_empty() {
             return Ok(0);
         }
+        // IDLE-1P (#405): an emulator the idle action holds stopped (restored at this start)
+        // waits for its wake, which starts it through this same configured start.
+        let mut held_stopped = BTreeSet::new();
+        for (_, instance_alias) in &configured {
+            if self.idle_holds_emulator_stopped(instance_alias)? {
+                held_stopped.insert(instance_alias.clone());
+            }
+        }
         let pending = {
             let registry = lock(
                 &self.registered_instances,
@@ -259,10 +269,11 @@ impl HostShared {
             configured
                 .into_iter()
                 .enumerate()
-                .filter(|(_, (instance_id, _))| {
+                .filter(|(_, (instance_id, instance_alias))| {
                     registry
                         .get(instance_id)
                         .is_some_and(RegisteredInstance::endpoint_pending)
+                        && !held_stopped.contains(instance_alias)
                 })
                 .map(
                     |(position, (instance_id, instance_alias))| PendingAutostart {

@@ -843,6 +843,9 @@ impl HostShared {
         if trigger == PolicyTrigger::Reconciliation {
             self.reconcile_pending_policy_settlements()?;
         }
+        // IDLE-1P (#405): the instances the idle action closed as this cycle starts, read before
+        // any other lock of the cycle is taken.
+        let idle_closed = self.idle_closed_for_policy()?;
         // ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench's check, at most once
         // per `standard_packs.check_interval_ms`, before this cycle reads its manifest and
         // catalog. Nothing in configured mode.
@@ -959,6 +962,7 @@ impl HostShared {
                         settings: fact_refresh_settings,
                         bindings: &self.fact_refresh_bindings,
                         instance_facts_loaded_at_unix_ms: self.instance_facts_loaded_at_unix_ms,
+                        idle_closed: &idle_closed,
                     },
                     remedy: &remedy_context,
                     random_delay: &random_delay_context,

@@ -161,6 +161,9 @@ mod gate_emu_watch;
 mod gate_idle1;
 // IDLE-1 (#419): a failed idle stop is contained to its instance and the Runtime goes on.
 mod gate_idle1_host;
+// #405 IDLE-1P: the closed instances and their wakes survive a restart, and a reading alone never
+// wakes a closed game.
+mod gate_idle1p;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).

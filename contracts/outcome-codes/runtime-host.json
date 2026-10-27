@@ -22415,7 +22415,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.13",
-      "description": "IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): an instance with no task soon. With operation run_idle_action, its idle action ran: close_app stopped the game's application inside the emulator (application_id, the one the game's standard pack root applications.json declares for the instance's server, which is the instance's assigned application), or stop_emulator closed the instance's sessions and stopped its emulator through the emulator-control path. It ran only with no lease, no queued request and no keyless work on the instance, no scheduling pause holding it, its emulator running and the scheduler's next due time for it (next_occurrence_unix_ms, absent when the latest evaluation gave none) at least idle.min_gap_ms away. With operation queue_idle_wake, the instance's wake was queued: at_unix_ms or earlier when a due task arrived earlier (the startup package; after stop_emulator the configured emulator start first, whose emulator_autostart_queued record follows). at_unix_ms is the planned wake (the next due time minus the action's wake lead), absent when none was planned. idle_action names the action. A device_state_observed record under the instance and the same report line.",
+      "description": "IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): an instance with no task soon. With operation run_idle_action, its idle action ran: close_app stopped the game's application inside the emulator (application_id, the one the game's standard pack root applications.json declares for the instance's server, which is the instance's assigned application), or stop_emulator closed the instance's sessions and stopped its emulator through the emulator-control path. It ran only with no lease, no queued request and no keyless work on the instance, no scheduling pause holding it, its emulator running and the scheduler's next due time for it (next_occurrence_unix_ms, absent when the latest evaluation gave none) at least idle.min_gap_ms away. With operation queue_idle_wake, the instance's wake was queued: at_unix_ms or earlier when a due task arrived earlier (the startup package; after stop_emulator the configured emulator start first, whose emulator_autostart_queued record follows). at_unix_ms is the planned wake (the next due time minus the action's wake lead), absent when none was planned. idle_action names the action. A device_state_observed record under the instance and the same report line. #405 IDLE-1P: without operation, the reason of a scheduling decision of the instance's fact refresh reading (its recognition maintenance package) held back because the idle action closed the instance (at_unix_ms its planned wake, when there is one), and the gate_code of the waiting candidates' fact_refresh_pending: the reading waits for the instance's next wake unless a task that needs it is due.",
       "common_causes": "The instance has no task within idle.min_gap_ms, or its wake is due.",
       "handling": "None needed. Set idle.action (or instance.<id>.idle.action) to none to keep the instance running, or to close_app or stop_emulator to choose the action; idle.min_gap_ms and the wake leads set when it acts and when it comes back."
     },
@@ -29416,6 +29416,14 @@
       "status": "active",
       "since": "0.12.13",
       "description": "A Runtime host operation: one idle instance's wake (IDLE-1): the configured emulator start (after stop_emulator) and the startup package queued."
+    },
+    "restore_idle_state": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.20",
+      "description": "A Runtime host operation: the start's restore of the idle planner (#405 IDLE-1P) from the runtime fact host.idle_state, the instances the idle action closed or was closing when the Runtime stopped and their wakes, before any instance is prepared; a record of another shape is invalid_runtime_state_fact, recorded, and the start goes on with those instances' state unknown."
     },
     "record_run_duration_sample": {
       "owner": "runtime-host",
