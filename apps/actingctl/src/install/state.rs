@@ -213,6 +213,8 @@ pub(crate) fn write_state(paths: &Paths, state: &InstallState) -> Result<(), Out
 pub(crate) enum OperationKind {
     ReleaseStage,
     Adopt,
+    Update,
+    Rollback,
 }
 
 impl OperationKind {
@@ -221,6 +223,8 @@ impl OperationKind {
         match self {
             Self::ReleaseStage => InstallLocation::ReleaseStage,
             Self::Adopt => InstallLocation::Adopt,
+            Self::Update => InstallLocation::UpdateApply,
+            Self::Rollback => InstallLocation::RollbackApply,
         }
     }
 }
@@ -242,6 +246,34 @@ pub(crate) enum CurrentState {
     Unfinished(Current),
     /// A `current.json` that cannot be read or is not this shape.
     Unreadable(Outcome),
+}
+
+/// Workflow #421 INST-1, watchdog row 7a″: `current.json` of `root` as the watchdog and
+/// `actingctl start` read it. `None` when there is none, or when it names an unfinished
+/// `release stage` or `adopt`, which change only `install\` (review S1 F7: the row is for the
+/// operations that swap program files, an update or a rollback and their undo); otherwise the
+/// unfinished operation's id when the file can be read and names one, `Some(None)` when it
+/// cannot.
+pub(crate) fn unfinished_operation(root: &Path) -> Option<Option<String>> {
+    let path = root.join("install").join("current.json");
+    if !path.exists() {
+        return None;
+    }
+    match files::read_json::<Current>(&path) {
+        Ok(current)
+            if matches!(
+                current.kind,
+                OperationKind::ReleaseStage | OperationKind::Adopt
+            ) =>
+        {
+            None
+        }
+        Ok(current) => Some(
+            Some(current.operation_id)
+                .filter(|operation_id| super::journal::operation_ms(operation_id).is_some()),
+        ),
+        Err(_) => Some(None),
+    }
 }
 
 /// Reads `current.json`.

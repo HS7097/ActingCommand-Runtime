@@ -50,7 +50,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   so [5, 15]. #422 LN-7c Q (v0.12.17, Alice's ruling 70): revision 16 adds the top-level
 ///   `frame_retention_evidence_max_age_days` and the `ledger_observer` keys
 ///   `frame_query_steps_per_second` and `frame_query_chunk_frames`; revisions 5 to 15 are still
-///   read, so [5, 16].
+///   read, so [5, 16]. Workflow #421 INST-1 (v0.12.18): revision 17 adds the `install` section
+///   (`actingctl install`'s waits, attempts, margins and guard values); revisions 5 to 16 are
+///   still read, so [5, 17].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -64,7 +66,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused.
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 16]),
+    ("actingd-config", [5, 17]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 4]),

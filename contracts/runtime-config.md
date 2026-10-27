@@ -803,8 +803,8 @@ installer of a single-location root (Alice 10-09: 「绝不硬编码」). acting
 section with the rest of the file (its rows are those of `config.parameters.install`) but never
 uses it. `actingctl install` reads it from the root's configuration file at every command,
 through this crate (`install::settings`), never from the configuration in effect, so no key is
-settable. `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds
-the section; a file that does not name it keeps its revision. The section and each of its
+settable. `actingd-config` revision 17 ([component-interfaces.md](component-interfaces.md), Runtime
+v0.12.18) adds the section; a file that does not name it keeps its revision. The section and each of its
 objects deny unknown members.
 
 | Key | Type | Default (`actingd.defaults.json`) | Read by |
@@ -821,6 +821,13 @@ objects deny unknown members.
 | `install.guard.before_next_start_ms` | milliseconds `0..=86400000` | `900000` | guard `schedule_near` (INST-2) |
 | `install.guard.blocked_windows` | list of windows (below) | `[]` | guard `blocked_window` (INST-2) |
 | `install.guard.adb_timeout_ms` | milliseconds `1000..=60000` | `15000` | guard `adb` (INST-2) |
+| `install.child.check_config_timeout_ms` | milliseconds `10000..=3600000` | `900000` | each `actingd check-config` the installer runs (INST-1b-F fix round 1) |
+| `install.child.ledger_read_timeout_ms` | milliseconds `10000..=3600000` | `300000` | each `actingledger` read: S0, each page of the rollback gate's reader part (INST-1b-F fix round 1) |
+| `install.child.ledger_verify_timeout_ms` | milliseconds `60000..=86400000` | `1800000` | the `actingd ledger-maintenance verify` of an update or rollback (INST-1b-F fix round 1) |
+
+A child still running at its `install.child.*` deadline is left running, never killed (the
+stall rule), and reported with its `pid` and the key ([install-cli.md](install-cli.md),
+"Children and their deadlines").
 
 A window of `install.guard.blocked_windows` is one object, in host local time, `[from, to)`,
 wrapping past the end of its day or hour when `to` is less than `from`:

@@ -11,7 +11,7 @@
 //! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
 //! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
 //! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`; #422 LN-7c Q adds
-//! `frame_retention_evidence_max_age_days`).
+//! `frame_retention_evidence_max_age_days`; Workflow #421 INST-1 adds `install`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
@@ -20,6 +20,7 @@ use crate::emulator_control::EmulatorControlFile;
 use crate::execution::ExecutionFile;
 use crate::host_claims::HostClaimsFile;
 use crate::idle::IdleFile;
+use crate::install::InstallFile;
 use crate::ledger_observer::LedgerObserverFile;
 use crate::performance::PerformanceFile;
 use crate::recovery_ladder::RecoveryLadderFile;
@@ -91,6 +92,9 @@ pub struct DefaultsFile {
     /// #422 LN-7c Q: the evidence-frame rule's age, 15 days.
     #[serde(default)]
     pub frame_retention_evidence_max_age_days: Option<Value>,
+    /// Workflow #421 INST-1.
+    #[serde(default)]
+    pub install: Option<InstallFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

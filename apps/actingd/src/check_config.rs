@@ -47,27 +47,43 @@ const DEVICE_PATH_NAMES: [&str; 5] = [
 /// missing fact reader) is a `note` link of it. A refused one is the refusal's code with the
 /// `stage` that refused it and the values that name what was refused.
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
-    if arguments.len() > 3 {
+    // Workflow #421 INST-1: `--config` and the optional `--install-root`, each once.
+    if arguments.len() > 5 {
         return Err(ActingdError::config(ActingdCode::CheckConfigUsageInvalid));
     }
     let mut config = None;
+    let mut install_root = None;
     let (pairs, remaining) = arguments[1..].as_chunks::<2>();
     for pair in pairs {
-        if pair[0] != "--config" || config.is_some() || pair[1].is_empty() {
+        let slot = if pair[0] == "--config" {
+            &mut config
+        } else if pair[0] == "--install-root" {
+            &mut install_root
+        } else {
+            return Err(ActingdError::config(ActingdCode::CheckConfigOptionInvalid));
+        };
+        if slot.is_some() || pair[1].is_empty() {
             return Err(ActingdError::config(ActingdCode::CheckConfigOptionInvalid));
         }
-        config = Some(PathBuf::from(&pair[1]));
+        *slot = Some(PathBuf::from(&pair[1]));
     }
     if !remaining.is_empty() {
         return Err(ActingdError::config(ActingdCode::CheckConfigOptionInvalid));
     }
     let config_path =
         config.ok_or_else(|| ActingdError::config(ActingdCode::CheckConfigConfigMissing))?;
+    let install_root = install_root
+        .map(|root| install_root_of(&root))
+        .transpose()?;
     let file = config::load_for(
         &config_path,
         actingcommand_contract::InstallConfigPurpose::CandidateCheck,
     )
     .map_err(|code| staged(ActingdError::config(code), ActingdLocation::ConfigLoad))?;
+    let file = match install_root {
+        Some(root) => file.with_install_root(root),
+        None => file,
+    };
     // Workflow #398 RD-1b: the device refusal's outcome, when the assembly meets it.
     let device = file.device_refusal();
     // Workflow #369 S6a: the instance a `start_emulator` refusal names.
@@ -350,6 +366,30 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         |outcome, note| outcome.joined(CauseRelation::Note, note),
     );
     Ok(Reported::new(passed).with("report", report))
+}
+
+/// Workflow #421 INST-1: the root `--install-root` names, canonical; one that does not resolve or
+/// holds no `runtime\BUILD-MANIFEST.json` is no install root (`check_config_install_root_invalid`,
+/// `path` the given root, the OS's failure as its link).
+fn install_root_of(given: &Path) -> Result<PathBuf, ActingdError> {
+    let refused = |cause: Option<Outcome>| {
+        let outcome = Outcome::new(ActingdCode::CheckConfigInstallRootInvalid).path(given);
+        let outcome = match cause {
+            Some(cause) => outcome.caused_by(cause),
+            None => outcome,
+        };
+        ActingdError::refused(ActingdCode::CheckConfigInstallRootInvalid, outcome)
+    };
+    let root = std::fs::canonicalize(given).map_err(|error| {
+        refused(Some(Outcome::from_io_error(
+            &error,
+            actingcommand_contract::outcome::IoOp::Canonicalize,
+        )))
+    })?;
+    if !root.join("runtime").join("BUILD-MANIFEST.json").is_file() {
+        return Err(refused(None));
+    }
+    Ok(root)
 }
 
 /// The error with the check-config stage that refused (Workflow #378 A6a: its outcome's

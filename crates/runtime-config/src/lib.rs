@@ -23,7 +23,9 @@
 //!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
 //!   capture cadence); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance with
 //!   no task soon, also per instance); `display_safe_area` (Workflow #392 DA-4b-D, Alice's
-//!   ruling 69: the declared safe areas' directory and each instance's device model).
+//!   ruling 69: the declared safe areas' directory and each instance's device model); `install`
+//!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
+//!   [`install::settings`]).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -42,6 +44,8 @@ mod existing;
 pub mod frame_retention;
 mod host_claims;
 pub mod idle;
+// Workflow #421 INST-1: `install.*`, read by `actingctl install` from the configuration file.
+pub mod install;
 mod instance;
 pub mod lab_module;
 pub mod ledger_observer;

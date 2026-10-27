@@ -30,7 +30,8 @@ mod gate_382_a4;
 mod gate_wd1;
 mod log;
 pub(crate) mod observe;
-mod powershell;
+// Workflow #421 INST-1: `actingctl install` runs the same hidden CIM query for its process probe.
+pub(crate) mod powershell;
 pub(crate) mod start;
 mod state;
 mod task;
@@ -375,6 +376,11 @@ impl Tick {
                 guard,
             ));
         }
+        // Row 7a″ (Workflow #421 INST-1): an unfinished installer operation; the OS released its
+        // writer lock when the installer ended, so only `install\current.json` tells.
+        if let Some(operation_id) = crate::install::unfinished_operation(&self.installation.root) {
+            return Err(Decision::InstallerUnfinished { operation_id });
+        }
         let probe = seams
             .host_probe(&self.installation.root_plain)
             .map_err(Decision::StartFailed)?;
@@ -537,6 +543,12 @@ fn status(root: &Path) -> Report {
                 .caused_by(last.start_result.outcome()),
         );
     }
+    // Workflow #421 INST-1: an unfinished installer operation needs attention whatever decided.
+    if !matches!(decision, Decision::InstallerUnfinished { .. })
+        && let Some(operation_id) = crate::install::unfinished_operation(&root)
+    {
+        attention.push(Decision::InstallerUnfinished { operation_id }.outcome());
+    }
     let starts_24h = decide::starts_in_day(&state, now);
     if starts_24h >= decide::REPEATED_RESTARTS {
         attention.push(Outcome::new(ActingctlCode::WatchdogRestartsRepeated).count(starts_24h));
@@ -561,6 +573,12 @@ fn status(root: &Path) -> Report {
 /// `run-once`: one supervision tick (`contracts/runtime-watchdog.md`, "Decision").
 fn run_once(root: &Path, from_task: bool) -> Report {
     run_once_with(&start::system(), root, from_task)
+}
+
+/// Test-only (Workflow #421 INST-1, IT-10): the decision of one task tick on `seams`.
+#[cfg(test)]
+pub(crate) fn tick_for_test(seams: &dyn TickSeams, root: &Path) -> Outcome {
+    run_once_with(seams, root, true).outcome
 }
 
 /// One tick on `seams` (Workflow #382 A-4, test plan v2.2 APPS-I3).
@@ -912,6 +930,11 @@ fn record_decision(
         Decision::SelectionChanged => (
             Level::Info,
             ActingctlCode::WatchdogSelectionChanged.code(),
+            Vec::new(),
+        ),
+        Decision::InstallerUnfinished { .. } => (
+            Level::Warn,
+            ActingctlCode::WatchdogInstallerUnfinished.code(),
             Vec::new(),
         ),
         Decision::RuntimeProcessPresent { processes } => (

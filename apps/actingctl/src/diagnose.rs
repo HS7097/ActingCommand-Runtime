@@ -1225,7 +1225,7 @@ impl SuspensionReport {
                         ChildFailure::Spawn(_) => ActingctlCode::SuspendedReportSpawnFailed,
                         ChildFailure::Io(_) => ActingctlCode::SuspendedReportIoFailed,
                         // Still running at the end of the call budget.
-                        ChildFailure::StillRunning => ActingctlCode::SuspendedReportTimeout,
+                        ChildFailure::StillRunning { .. } => ActingctlCode::SuspendedReportTimeout,
                     }
                 };
                 let outcome = Outcome::new(code);

@@ -495,5 +495,34 @@
     "directory": "display-safe-area",
     "check_interval_ms": 1000,
     "model": ""
+  },
+  "install": {
+    "lock_wait_ms": 60000,
+    "stop": {
+      "drain_timeout_ms": 300000,
+      "shutdown_wait_ms": 60000
+    },
+    "start": {
+      "ready_timeout_ms": 900000,
+      "attempts": 2
+    },
+    "hold_after_start": true,
+    "hot": {
+      "idle_wait_ms": 600000
+    },
+    "rollback": {
+      "open_margin_ms": 20000
+    },
+    "guard": {
+      "min_available_memory_mb": 10000,
+      "before_next_start_ms": 900000,
+      "blocked_windows": [],
+      "adb_timeout_ms": 15000
+    },
+    "child": {
+      "check_config_timeout_ms": 900000,
+      "ledger_read_timeout_ms": 300000,
+      "ledger_verify_timeout_ms": 1800000
+    }
   }
 }

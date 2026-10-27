@@ -252,6 +252,14 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     display_safe_area: Option<actingcommand_runtime_config::DisplaySafeAreaFile>,
+    /// Workflow #421 INST-1: the waits, attempts, margins and guard values of `actingctl
+    /// install` (`install.*`), each member optional; the defaults file holds every default.
+    /// actingd checks the section and never uses it.
+    // Interface anchor `actingd-config` revision 17 (contracts/component-interfaces.md): a Runtime
+    // before Workflow #421 INST-1 refuses a file that names the section, because the file denies
+    // unknown members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    install: Option<actingcommand_runtime_config::install::InstallFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -264,6 +272,10 @@ pub(super) struct ActingdConfigFile {
     /// The install root the daemon runs from, when it runs from one (set by `load_for`).
     #[serde(skip)]
     install_root: Option<PathBuf>,
+    /// Workflow #421 INST-1: the install root check-config's `--install-root` names, judged in
+    /// place of the running executable's (the adb, the default vision root).
+    #[serde(skip)]
+    install_root_override: Option<PathBuf>,
 }
 
 /// Workflow #375 R5c: the frame classes' dedup switches the file names, else their defaults
@@ -1179,6 +1191,14 @@ pub(super) fn load_for(
 }
 
 impl ActingdConfigFile {
+    /// Workflow #421 INST-1: check-config's `--install-root <root>`: the configuration judged as
+    /// a daemon running from `<root>\runtime` would judge it.
+    pub(super) fn with_install_root(mut self, root: PathBuf) -> Self {
+        self.install_root = Some(root.clone());
+        self.install_root_override = Some(root);
+        self
+    }
+
     pub(super) fn maintenance_config(self) -> Result<RuntimeHostConfig, Code> {
         if self.schema_version != CONFIG_SCHEMA_VERSION
             || self.state_root.as_os_str().is_empty()
@@ -1278,8 +1298,12 @@ impl ActingdConfigFile {
             env_overrides(self.allow_env_overrides.unwrap_or(false), |name| {
                 std::env::var_os(name)
             });
-        // Workflow #337: resolved once; every device instance carries the result.
-        let installed_adb = ac_adb::InstalledAdb::detect();
+        // Workflow #337: resolved once; every device instance carries the result. Workflow #421
+        // INST-1: check-config's `--install-root` names the install root instead.
+        let installed_adb = match &self.install_root_override {
+            Some(root) => Some(ac_adb::InstalledAdb::at(root)),
+            None => ac_adb::InstalledAdb::detect(),
+        };
         let mut adb_requirement = ac_adb::AdbRequirement::new(installed_adb.clone());
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
@@ -1519,6 +1543,8 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "display_safe_area": serde_json::to_value(&self.display_safe_area)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "install": serde_json::to_value(&self.install)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
             .standard_packs
@@ -1560,6 +1586,12 @@ impl ActingdConfigFile {
             &|_| None,
         )
         .map_err(|failure| {
+            *refused = Some(failure.outcome());
+            failure.failure_code().code()
+        })?;
+        // Workflow #421 INST-1: the `install` section's windows and objects by their rules, as
+        // `actingctl install` reads them; actingd uses none of its values.
+        actingcommand_runtime_config::install::settings(&file_layer).map_err(|failure| {
             *refused = Some(failure.outcome());
             failure.failure_code().code()
         })?;

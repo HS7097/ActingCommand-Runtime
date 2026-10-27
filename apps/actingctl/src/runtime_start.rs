@@ -421,10 +421,40 @@ fn refuse_live(state_root: &Path) -> Result<(), Failed> {
 /// caused by the watchdog's `watchdog_installer_busy`. A free lock comes back held shared, so
 /// acsetup cannot begin before the guard is dropped, as during a tick's start (review L4).
 fn refuse_installer_busy(root: &Path) -> Result<Option<File>, Failed> {
-    match observe::writer_lock(root)? {
-        observe::WriterProbe::Free(guard) => Ok(guard),
-        observe::WriterProbe::Busy => Err(refused(decide::Decision::InstallerBusy.outcome())),
+    let guard = match observe::writer_lock(root)? {
+        observe::WriterProbe::Free(guard) => guard,
+        observe::WriterProbe::Busy => {
+            return Err(refused(decide::Decision::InstallerBusy.outcome()));
+        }
+    };
+    // Row 7a″ (Workflow #421 INST-1): an unfinished installer operation refuses too.
+    if let Some(operation_id) = crate::install::unfinished_operation(root) {
+        return Err(refused(
+            decide::Decision::InstallerUnfinished { operation_id }.outcome(),
+        ));
     }
+    Ok(guard)
+}
+
+/// Test-only (Workflow #421 INST-1, IT-10): `actingctl start --root <root> --config <config>` up
+/// to its first refusal, `None` when nothing refused it before the start itself.
+#[cfg(test)]
+pub(crate) fn start_refusal_for_test(root: &Path, config: &Path) -> Option<Outcome> {
+    let arguments = Arguments {
+        root: root.to_path_buf(),
+        config: Some(config.to_path_buf()),
+        state_root: None,
+        ready_timeout: None,
+        wait_idle: Duration::ZERO,
+    };
+    let located = match Located::resolve(&arguments) {
+        Ok(located) => located,
+        Err(failed) => return Some(failed.outcome),
+    };
+    refuse_live(&located.state_root)
+        .and_then(|()| refuse_installer_busy(&located.root).map(drop))
+        .err()
+        .map(|failed| failed.outcome)
 }
 
 fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartReport, Failed> {

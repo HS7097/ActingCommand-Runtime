@@ -34,8 +34,9 @@ pub(crate) enum ChildFailure {
     Spawn(io::Error),
     /// Waiting for the child or reading its output failed.
     Io(io::Error),
-    /// The child was still running at the deadline; it keeps running.
-    StillRunning,
+    /// The child was still running at the deadline; it keeps running. `pid` is its process id
+    /// (Workflow #421 INST-1b-F: the installer reports the child it left running).
+    StillRunning { pid: u32 },
 }
 
 impl ChildFailure {
@@ -48,7 +49,7 @@ impl ChildFailure {
             Self::Io(error) if !reader_panicked(error) => {
                 Some(Outcome::from_io_error(error, IoOp::Wait))
             }
-            Self::Io(_) | Self::StillRunning => None,
+            Self::Io(_) | Self::StillRunning { .. } => None,
         }
     }
 
@@ -133,7 +134,7 @@ fn wait(child: &mut Child, deadline: Option<Instant>) -> Result<ExitStatus, Chil
             return Ok(status);
         }
         if Instant::now() >= deadline {
-            return Err(ChildFailure::StillRunning);
+            return Err(ChildFailure::StillRunning { pid: child.id() });
         }
         thread::sleep(POLL_INTERVAL);
     }

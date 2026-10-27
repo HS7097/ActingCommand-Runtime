@@ -66,6 +66,15 @@ impl InstalledAdb {
         Some(Self { root, adb })
     }
 
+    /// Workflow #421 INST-1: the adb of the install root `root` that check-config's
+    /// `--install-root` names (canonical, an install root).
+    pub(super) fn at(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            adb: root.join("tools").join("platform-tools").join("adb.exe"),
+        }
+    }
+
     /// The adb path an instance that uses this adb registers.
     pub(super) fn path_string(&self) -> String {
         self.adb.to_string_lossy().into_owned()

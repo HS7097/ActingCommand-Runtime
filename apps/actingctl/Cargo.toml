@@ -29,7 +29,8 @@ actingcommand-contract = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 # #411 A66: the watchdog and `actingctl start` read `watchdog.start_window_ms` from actingd's
-# configuration through the key table and the defaults file.
+# configuration through the key table and the defaults file. Workflow #421 INST-1: `actingctl
+# install` reads the `install` section and the key table from the same file.
 actingcommand-runtime-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

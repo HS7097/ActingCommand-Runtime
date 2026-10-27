@@ -49,6 +49,9 @@ mod gate_369_s6c;
 // Test-only: Workflow #384 D2-S5 (D2 model §8 T37), the fact refresh transitions' daemon lines.
 #[cfg(test)]
 mod gate_384_d2s5;
+// Test-only: Workflow #421 INST-1 (model INST-M §12, IT-13), `check-config --install-root`.
+#[cfg(test)]
+mod gate_inst1;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{

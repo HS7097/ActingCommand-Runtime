@@ -59,7 +59,7 @@ the root's `runtime\` or `tools\`, holds `install\writer.lock` exclusively for t
 whole replacement (creating the file when it is missing), or disables the task first.
 While the lock is held the launcher runs nothing and a tick answers
 `watchdog_installer_busy` (row 7a). While `install\current.json` names an unfinished
-installer operation, a tick that would consider a start answers
+installer update or rollback (or its undo), a tick that would consider a start answers
 `watchdog_installer_unfinished` (row 7a″). `actingctl start` and `restart` without
 `--config` still need an A/B selection: on a single-location root they refuse with
 `watchdog_layout_unknown`; pass `--config`.
@@ -97,10 +97,11 @@ installer operation, a tick that would consider a start answers
      different selection stands aside for one tick. On a single-location root an
      `install\active.json` that appeared is a changed selection too (row 7a′).
    - **U** (Workflow #421 INST-1), `install\current.json` read under that shared lock:
-     an installer operation that is unfinished, named by its `operation_id`. The file is
-     absent when none is; one that cannot be read or names no operation id is
-     `watchdog_installer_unfinished` too, without the id: the watchdog never starts a
-     root whose installer state it cannot read.
+     an installer update or rollback (or its undo) that is unfinished, named by its
+     `operation_id`. The file is absent when none is; an unfinished `release stage` or
+     `adopt` changes only `install\` and is no U (INST-1b-F fix round 1); one that cannot
+     be read or names no operation id is `watchdog_installer_unfinished` too, without the
+     id: the watchdog never starts a root whose installer state it cannot read.
    - **P**, processes named `actingcommand-actingd.exe` whose executable path is under
      `<root>\` (case-insensitive), or whose path cannot be read, through a CIM query
      in a hidden Windows PowerShell. The same query reads the last boot time
@@ -127,7 +128,7 @@ Each decision is one registered code; its category sets the exit (Workflow #378 
 | 6 | J inactive otherwise | `watchdog_formal_close` | 0 | INFO, once per epoch |
 | 7a | W held | `watchdog_installer_busy` | 0 | INFO |
 | 7a′ | selection changed | `watchdog_selection_changed` | 0 | INFO |
-| 7a″ | U present: an unfinished installer operation (Workflow #421 INST-1) | `watchdog_installer_unfinished` (warning; `install_operation_id` when U names one) | 0 | WARN |
+| 7a″ | U present: an unfinished installer update or rollback (Workflow #421 INST-1) | `watchdog_installer_unfinished` (warning; `install_operation_id` when U names one) | 0 | WARN |
 | 7b | P present, under 10 minutes | `watchdog_runtime_process_present` | 0 | INFO |
 | 7b′ | P present for 10 minutes or more | `watchdog_runtime_process_without_owner` | 1 | ERROR |
 | 7c | exhaustion recorded | `watchdog_budget_exhausted` or `panic_unrecovered` (see "Budget") | 1 or 2 | ERROR |
@@ -409,7 +410,7 @@ the launcher's 20–23; their conditions are outcome codes now.
 | `watchdog_restarts_repeated` | 2 or more watchdog starts within 24 hours and since the last formal start |
 | `watchdog_formal_close_unlogged` | no candidate log was written between the closed epoch's start and its close plus 2 s, so the terminal outcome of an unlogged start would be invisible |
 | `watchdog_misconfigured` | the log directories for the close evidence, or the task, could not be read |
-| `watchdog_installer_unfinished` | `install\current.json` names an unfinished installer operation and the decision is another one (Workflow #421 INST-1; row 7a″ decides it when a start would be considered) |
+| `watchdog_installer_unfinished` | `install\current.json` names an unfinished installer update or rollback and the decision is another one (Workflow #421 INST-1; row 7a″ decides it when a start would be considered) |
 
 `install` exits 0 with `watchdog_installed`, else 1 with its failure; a refusal by an
 info decision (acsetup's writer lock, a tick's run lock) is `watchdog_install_refused`

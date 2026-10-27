@@ -148,6 +148,12 @@ pub(crate) enum Decision {
     },
     InstallerBusy,
     SelectionChanged,
+    /// Row 7a″ (Workflow #421 INST-1): `install\current.json` names an unfinished installer
+    /// update or rollback, or its undo (its id, when the file can be read; INST-1b-F fix round
+    /// 1: not a `release stage` or `adopt`, which change only `install\`).
+    InstallerUnfinished {
+        operation_id: Option<String>,
+    },
     RuntimeProcessPresent {
         processes: Vec<RuntimeProcess>,
     },
@@ -204,6 +210,7 @@ impl Decision {
             Self::FormalClose { .. } => ActingctlCode::WatchdogFormalClose,
             Self::InstallerBusy => ActingctlCode::WatchdogInstallerBusy,
             Self::SelectionChanged => ActingctlCode::WatchdogSelectionChanged,
+            Self::InstallerUnfinished { .. } => ActingctlCode::WatchdogInstallerUnfinished,
             Self::RuntimeProcessPresent { .. } => ActingctlCode::WatchdogRuntimeProcessPresent,
             Self::RuntimeProcessWithoutOwner { .. } => {
                 ActingctlCode::WatchdogRuntimeProcessWithoutOwner
@@ -271,6 +278,10 @@ impl Decision {
                 .limit_count(BUDGET_STARTS)
                 .caused_by(terminal.clone()),
             Self::Grace { until_unix_ms } => outcome.next_eligible_unix_ms(*until_unix_ms),
+            Self::InstallerUnfinished { operation_id } => match operation_id {
+                Some(operation_id) => outcome.install_operation_id(operation_id.clone()),
+                None => outcome,
+            },
             Self::Started { owner, log, .. } => outcome
                 .owner_epoch(owner.owner_epoch.clone())
                 .pid(owner.pid)
