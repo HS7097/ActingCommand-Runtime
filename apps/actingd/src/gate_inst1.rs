@@ -87,8 +87,7 @@ fn inst1_it_13_check_config_install_root_judges_adb_and_vision_against_the_named
         "--install-root",
         plain.to_str().expect("a UTF-8 path"),
     ]))
-    .err()
-    .expect("a plain folder is refused");
+    .expect_err("a plain folder is refused");
     let outcome = refused.outcome();
     assert_eq!(
         outcome.code().as_str(),

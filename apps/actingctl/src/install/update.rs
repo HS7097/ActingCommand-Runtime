@@ -25,7 +25,7 @@ use super::programs;
 use super::state::{self, LiveBuild, OperationKind, Paths};
 use super::{Answer, Flags};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal, RollbackGatePart};
-use actingcommand_contract::outcome::{Outcome, OutcomeEnvelope};
+use actingcommand_contract::outcome::{CauseRelation, Outcome, OutcomeEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
@@ -154,7 +154,7 @@ impl Gate {
             None => refusal,
         };
         let refusal = match &self.config_refusal {
-            Some(config) => refusal.caused_by(config.clone()),
+            Some(config) => refusal.joined(CauseRelation::CausedBy, config.clone()),
             None => refusal,
         };
         Some(self.with_notes(refusal))
@@ -646,10 +646,11 @@ fn run(mut operation: Operation<'_>) -> Result<Answer, Outcome> {
                     &paths.build(&target).join(Half::Runtime.dir()),
                     &config,
                 ) {
-                    // Nothing has changed yet: the operation ends refused.
+                    // Nothing has changed yet: the operation ends refused (a fatal report of the
+                    // verification tops the refusal by the fatal-link rule).
                     let refusal = super::refusal(command, InstallRefusal::LedgerVerifyFailed)
                         .commit_sha(target.clone())
-                        .caused_by(cause);
+                        .joined(CauseRelation::CausedBy, cause);
                     operation.finish(&refusal)?;
                     return Err(refusal);
                 }

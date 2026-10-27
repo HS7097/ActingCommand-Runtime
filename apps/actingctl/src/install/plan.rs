@@ -827,7 +827,10 @@ fn refuse(planned: Planned) -> Result<Planned, Refused> {
     if !planned.target_check.passed() && !rollback {
         let outcome = super::refusal(operation, InstallRefusal::ConfigRefusedByTarget)
             .commit_sha(planned.target.commit.clone())
-            .caused_by(planned.target_check.received.clone());
+            .joined(
+                CauseRelation::CausedBy,
+                planned.target_check.received.clone(),
+            );
         return Err(Refused::Answer(planned.answer(outcome)?));
     }
     let failed = planned

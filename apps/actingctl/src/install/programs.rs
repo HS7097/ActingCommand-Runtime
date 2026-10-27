@@ -174,7 +174,8 @@ pub(crate) fn check_config(
 }
 
 /// `<runtime>\actingcommand-actingd.exe ledger-maintenance verify --config <config>`: `Ok` on
-/// exit 0; otherwise the child's failure, with the outcome it reported as its link.
+/// exit 0; otherwise the child's failure, with the outcome it reported joined as its `related`
+/// link (a fatal report, a ledger integrity failure say, tops it by the fatal-link rule).
 pub(crate) fn ledger_verify(host: &dyn Host, runtime: &Path, config: &Path) -> Result<(), Outcome> {
     let program = runtime.join(DAEMON);
     let config_word = config.to_string_lossy().into_owned();
@@ -197,7 +198,7 @@ pub(crate) fn ledger_verify(host: &dyn Host, runtime: &Path, config: &Path) -> R
             serde_json::from_value::<OutcomeEnvelope>(report["outcome"].clone()).ok()
         });
     Err(match reported {
-        Some(envelope) => failure.link(
+        Some(envelope) => failure.joined(
             actingcommand_contract::outcome::CauseRelation::Related,
             envelope.into_outcome(),
         ),
@@ -220,8 +221,9 @@ pub(crate) fn ledger_head(
     }
     let report: Value = serde_json::from_slice(files::without_bom(&ran.stdout))
         .map_err(|error| files::json_failure(&error))?;
-    report["data"]["latest_sequence"]
-        .as_u64()
+    report
+        .pointer("/data/latest_sequence")
+        .and_then(Value::as_u64)
         .ok_or_else(|| exited(&ran))
 }
 
