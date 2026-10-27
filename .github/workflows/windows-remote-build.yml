@@ -392,6 +392,7 @@ jobs:
             --bin actingcommand-actingd `
             --bin actingctl `
             --bin actingwatch `
+            --bin actingcommand-mcp-entry `
             --bin actinglab `
             --bin actingledger `
             --bin actingcommand-vision-provider-check
@@ -658,7 +659,8 @@ jobs:
             'actinglab.exe',
             'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
-            'actingwatch.exe'
+            'actingwatch.exe',
+            'actingcommand-mcp-entry.exe'
           )
           # Workflow #337: the official platform-tools files the fetch step verified, under platform-tools/.
           $platformToolsFiles = @(

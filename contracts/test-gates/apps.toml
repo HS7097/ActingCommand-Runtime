@@ -871,3 +871,41 @@ tests = [
     "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_ac_run_evidence_and_ac_observe_record_no_confirmation",
 ]
 incident = ["#422 LN-7c C"]
+
+# Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, Alice 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways with ids kept (E-1); replays the client's handshake to a candidate and refuses one that negotiates another protocol version (E-2); switches only between calls (E-3); keeps the old child and reports a failed candidate (E-4); answers a request in flight when its child dies with mcp_entry_outcome_unknown, never resends it, and starts a fresh child for the next (E-5); waits while the child holds process-local handles, past drain_max_ms too, and switches at 0 (E-6); counts a child without actingcommand/entryStatus as 0 (E-7); asks no plan while an install operation is under way (E-8); sends the legacy notice and records the refetch (E-9); sends the 2026-07-28 notice through subscriptions/listen (E-10); writes the status file (E-11); actingctl mcp-config --entry renders the four clients' snippets (E-12); the real entry binary pipes a session and switches once with a fake child (process)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e1_the_entry_pipes_both_ways_and_keeps_ids",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e2_the_handshake_is_replayed_and_a_changed_protocol_version_is_refused",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e3_a_switch_happens_only_between_calls",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e4_a_failed_candidate_keeps_the_old_child_and_is_reported",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e5_a_child_that_dies_mid_call_gives_outcome_unknown_and_is_never_resent",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e6_outstanding_handles_defer_the_switch_until_they_reach_zero",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e7_a_child_without_entry_status_counts_as_zero",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e8_no_plan_while_an_install_operation_is_under_way",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e9_the_legacy_notice_is_sent_and_the_refetch_recorded",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e10_the_2026_07_28_notice_goes_through_subscriptions_listen",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e11_the_status_file_says_what_the_entry_runs",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e12_mcp_config_entry_renders_each_clients_snippet",
+    "actingcommand-mcp-entry::entry_process::mcp_entry_process_pipes_a_session_and_switches_once",
+]
+incident = ["#421 MCP-ENTRY"]
+
+# Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked after the install changed under the child is a switch, never the child's build (E-13, H1); install\current.json alone does not hold the entry back, a held writer lock does (E-14, M1); a finished job whose handle went out only in a cancelled call's answer holds no switch back, one whose handle went out counts until read (E-15, M2); the status names the outstanding handles (E-16, M2); a run job counts while it submits (E-17, M3); consecutive plan refusals double the wait up to install.mcp_entry.refused_retry_max_ms and their tunables are taken (E-18, M4); a stopped child is ended only past its grace (E-19, L1); a refused candidate is tried once more after settle_ms (E-20, L2); a fresh child of another build sends the change notice (E-21, L3); the status drops an answered call at once (E-22, L5); a 0 answered after another call reached the child does not count (E-23, L7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e13_an_initial_plan_after_the_install_changed_under_the_child_is_a_switch",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e14_an_unfinished_operation_file_alone_does_not_hold_the_entry_back",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e15_a_cancelled_call_leaves_no_uncollectable_handle",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e16_the_status_names_the_outstanding_handles",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e17_a_run_pack_job_counts_while_it_submits",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e18_consecutive_refusals_back_off_and_carry_the_tunables",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e19_a_stopped_child_is_ended_only_past_its_grace",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e20_a_rejected_candidate_is_tried_once_more_after_settle",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e21_a_fresh_child_of_another_build_sends_the_notice",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e22_the_status_drops_an_answered_call_at_once",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e23_a_zero_count_is_ignored_after_a_call_reached_the_child",
+]
+incident = ["#421 MCP-ENTRY"]

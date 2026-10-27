@@ -161,6 +161,9 @@ pub(super) fn job_answer(
             }),
         };
     }
+    // Workflow #421 MCP-ENTRY fix round 1 (review M2): the job counts for the MCP entry only if
+    // this answer reaches the client; the worker marks it issued when it sends the answer.
+    super::jobs::offer(&job.handle);
     Ok(ToolSuccess {
         result: json!({"handle": job.handle, "job_phase": job.phase()}),
         warnings,

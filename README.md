@@ -157,6 +157,7 @@ The workspace declares 32 members, resolver `3`, a workspace-level edition of 20
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | Lean process adapter for the resident runtime |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 50 top-level dispatch arms, 139 commands |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
+| apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | The stable MCP entry every client starts (Tools half): pipes JSON-RPC to the current `actingctl mcp-serve` and switches it, between calls, to the installed build |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
 ### crates (24)
@@ -227,6 +228,8 @@ A pack's coordinates are in the resolution it declares (today's standard packs u
 # Every tool of every tier, with descriptions
 <install root>\runtime\actingctl.exe mcp-serve --list-tools --format markdown
 ```
+
+**The stable entry (v0.12.18).** On a single-location root every client (Claude Code, Codex, Antigravity, DSH) starts `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier <tiers>` instead of `actingctl mcp-serve`. The entry pipes JSON-RPC to one `<root>\runtime\actingctl.exe` child with the words after `--` unchanged; after an update it switches, between calls and only to a verified complete install (`actingctl mcp-entry plan`), to a new child, replays the client's handshake and sends the change notice (legacy `notifications/tools/list_changed`, or the same notification on a 2026-07-28 `subscriptions/listen` stream). A switch waits while the old child holds job or Lab handles whose results were not read; a request in flight when its child ends gets `mcp_entry_outcome_unknown` (inspect with `ac_get_run` or `ac_overview`) and is never sent again. Moving a client onto the entry needs one client restart; after that an update needs none. Claude Code fetches the new tools by itself; Codex reloads the server, Antigravity uses Refresh in its MCP manager, and DSH reloads its plugin with its tool whitelist unchanged. `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <tiers>` prints each client's snippet; `actingctl mcp-entry list --root <root>` shows each entry's status (`<root>\mcp-entry\state\entry-<pid>.json`). Details: [contracts/install-cli.md](contracts/install-cli.md), "The MCP entry".
 
 **Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. The table lists the 38 tools of v0.12.10; the 16 marked † are new in the 0.12 series. A tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
 
@@ -312,6 +315,10 @@ actingctl watchdog install --root <install root>     # also: status | run-once |
 actingctl mcp-serve [--root <install root>] [--state-root <dir>] [--tier observer|operator|author[,...]] [--detail codes|full]
 actingctl mcp-serve --list-tools [--format json|markdown]
 actingctl mcp-config --client claude|codex [--tier observer|operator|author[,...]]
+actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> [--tier observer|operator|author[,...]]
+actingctl mcp-entry plan --root <root> --entry-protocol 1 [--current-build <commit>] [-- <child arguments>]
+actingctl mcp-entry list --root <root> [--all]
+actingcommand-mcp-entry --root <root> [--client claude|codex|antigravity|dsh] -- mcp-serve [--tier ...]
 
 # Read-only forensics (same state root)
 actingledger --state-root <state-root> open

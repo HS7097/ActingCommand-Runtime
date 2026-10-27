@@ -183,6 +183,10 @@ fn main() -> ExitCode {
         if let Some(exit) = install::dispatch(&arguments) {
             return exit;
         }
+        // Workflow #421 MCP-ENTRY: `mcp-entry plan|list`, asked by the MCP entry.
+        if let Some(exit) = install::dispatch_mcp_entry(&arguments) {
+            return exit;
+        }
     }
     // --- Workflow #389 MCP-1: `events`, the CLI of ac_events, parses its own flags. ---
     if let Some(exit) = events::dispatch(&arguments) {

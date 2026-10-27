@@ -59,6 +59,18 @@ pub const CHILD_LEDGER_READ_TIMEOUT_MS: &str = "install.child.ledger_read_timeou
 /// The `actingd ledger-maintenance verify` of an update or rollback, its deadline in
 /// milliseconds.
 pub const CHILD_LEDGER_VERIFY_TIMEOUT_MS: &str = "install.child.ledger_verify_timeout_ms";
+/// Workflow #421 MCP-ENTRY (D3): how often the MCP entry looks at the install, in milliseconds.
+pub const MCP_ENTRY_POLL_MS: &str = "install.mcp_entry.poll_ms";
+/// How long a change of the install must stay put before the entry asks for a plan.
+pub const MCP_ENTRY_SETTLE_MS: &str = "install.mcp_entry.settle_ms";
+/// The deadline of a candidate child's verification (and of the plan and a handle count).
+pub const MCP_ENTRY_VERIFY_TIMEOUT_MS: &str = "install.mcp_entry.verify_timeout_ms";
+/// How long a switch waits for outstanding handles before the status says it waited past it
+/// (it keeps waiting).
+pub const MCP_ENTRY_DRAIN_MAX_MS: &str = "install.mcp_entry.drain_max_ms";
+/// MCP-ENTRY fix round 1 (review M4): the cap of the entry's wait before the next plan after
+/// consecutive refusals (the wait doubles from `settle_ms`).
+pub const MCP_ENTRY_REFUSED_RETRY_MAX_MS: &str = "install.mcp_entry.refused_retry_max_ms";
 
 /// The section as the configuration file and the defaults file write it: every member may be
 /// left out and none is unknown (M387 §5.3).
@@ -84,6 +96,24 @@ pub struct InstallFile {
     guard: Option<GuardFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     child: Option<ChildFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp_entry: Option<McpEntryFile>,
+}
+
+/// The MCP entry's tunables (Workflow #421 MCP-ENTRY), read by `actingctl mcp-entry plan`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct McpEntryFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    poll_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settle_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verify_timeout_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    drain_max_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refused_retry_max_ms: Option<Value>,
 }
 
 /// The deadlines of the programs the installer runs (INST-1b-F fix round 1, review S1 F4).
@@ -235,6 +265,31 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         milliseconds(60_000, 86_400_000),
     ),
+    row(
+        MCP_ENTRY_POLL_MS,
+        ValueType::DurationMs,
+        milliseconds(100, 60_000),
+    ),
+    row(
+        MCP_ENTRY_SETTLE_MS,
+        ValueType::DurationMs,
+        milliseconds(0, 600_000),
+    ),
+    row(
+        MCP_ENTRY_VERIFY_TIMEOUT_MS,
+        ValueType::DurationMs,
+        milliseconds(1_000, 600_000),
+    ),
+    row(
+        MCP_ENTRY_DRAIN_MAX_MS,
+        ValueType::DurationMs,
+        milliseconds(0, 86_400_000),
+    ),
+    row(
+        MCP_ENTRY_REFUSED_RETRY_MAX_MS,
+        ValueType::DurationMs,
+        milliseconds(1_000, 86_400_000),
+    ),
 ];
 
 /// One blocked window of `install.guard.blocked_windows`, in host local time, `[from, to)`,
@@ -271,6 +326,11 @@ pub struct InstallSettings {
     pub child_check_config_timeout_ms: u64,
     pub child_ledger_read_timeout_ms: u64,
     pub child_ledger_verify_timeout_ms: u64,
+    pub mcp_entry_poll_ms: u64,
+    pub mcp_entry_settle_ms: u64,
+    pub mcp_entry_verify_timeout_ms: u64,
+    pub mcp_entry_drain_max_ms: u64,
+    pub mcp_entry_refused_retry_max_ms: u64,
 }
 
 /// The section of the configuration document `file` (actingd's configuration as `actingctl`
@@ -358,6 +418,11 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
         child_check_config_timeout_ms: duration(CHILD_CHECK_CONFIG_TIMEOUT_MS)?,
         child_ledger_read_timeout_ms: duration(CHILD_LEDGER_READ_TIMEOUT_MS)?,
         child_ledger_verify_timeout_ms: duration(CHILD_LEDGER_VERIFY_TIMEOUT_MS)?,
+        mcp_entry_poll_ms: duration(MCP_ENTRY_POLL_MS)?,
+        mcp_entry_settle_ms: duration(MCP_ENTRY_SETTLE_MS)?,
+        mcp_entry_verify_timeout_ms: duration(MCP_ENTRY_VERIFY_TIMEOUT_MS)?,
+        mcp_entry_drain_max_ms: duration(MCP_ENTRY_DRAIN_MAX_MS)?,
+        mcp_entry_refused_retry_max_ms: duration(MCP_ENTRY_REFUSED_RETRY_MAX_MS)?,
     })
 }
 
@@ -500,6 +565,12 @@ mod tests {
             child_check_config_timeout_ms: 900_000,
             child_ledger_read_timeout_ms: 300_000,
             child_ledger_verify_timeout_ms: 1_800_000,
+            // Workflow #421 MCP-ENTRY: the MCP entry's tunables.
+            mcp_entry_poll_ms: 2_000,
+            mcp_entry_settle_ms: 10_000,
+            mcp_entry_verify_timeout_ms: 60_000,
+            mcp_entry_drain_max_ms: 600_000,
+            mcp_entry_refused_retry_max_ms: 300_000,
         };
         assert_eq!(settings(&json!({})), Ok(defaults.clone()));
         assert_eq!(settings(&json!({"install": {}})), Ok(defaults.clone()));

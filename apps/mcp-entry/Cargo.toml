@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Workflow #421 MCP-ENTRY: the stable MCP entry every client starts. It pipes JSON-RPC to one
+# current `actingctl mcp-serve` child and switches it, between calls, to the install's current
+# build (contracts/install-cli.md, "The MCP entry"). Shipped in the Tools half; a client runs it
+# from `<root>\mcp-entry\g<generation>\`.
+
+[package]
+name = "actingcommand-mcp-entry"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "actingcommand-mcp-entry"
+path = "src/main.rs"
+
+# Test helper of the process test (tests/entry_process.rs): a fake `actingctl` that serves a
+# minimal MCP and answers `mcp-entry plan`. Never shipped. It keeps the default `test = true`:
+# `cargo test --bins` runs its (empty) harness anyway, and CI's test build table must list it.
+[[bin]]
+name = "actingcommand-mcp-entry-fake-child"
+path = "src/fake_child.rs"
+
+[dependencies]
+actingcommand-contract = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
