@@ -52,6 +52,9 @@ mod gate_384_d2s5;
 // Test-only: Workflow #421 INST-1 (model INST-M §12, IT-13), `check-config --install-root`.
 #[cfg(test)]
 mod gate_inst1;
+// Test-only: ROUT-L RL-1c (#411), check-config and `suspended` in composer mode.
+#[cfg(test)]
+mod gate_rl1c;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{

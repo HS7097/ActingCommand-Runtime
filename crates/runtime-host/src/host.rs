@@ -250,7 +250,10 @@ pub(crate) use standard_pack::read_registries;
 pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_standard_packs};
 // ROUT-L RL-1b: the scheduler workbench, which composes the standard packs' schedule rules.
 mod standard_pack_schedule;
-pub use standard_pack_schedule::{StandardPackSchedulePreview, preview_standard_pack_schedule};
+pub use standard_pack_schedule::{
+    ConfiguredStandardPackSchedule, StandardPackSchedulePreview, compose_configured_standard_packs,
+    preview_standard_pack_schedule,
+};
 mod startup_package;
 mod state_control;
 mod task_diagnostic;
@@ -5838,7 +5841,9 @@ fn reap_finished_connections(
 /// Workflow #386 SR-3 (scheduling model §2.4 item 2): the task package admission after start.
 /// It admits each package the procedure bindings locate once with this Runtime's kernel and
 /// suspends a package refused with a suspend code; it only suspends. A shutdown stops it between
-/// two packages.
+/// two packages. ROUT-L RL-1c (#411): in composer mode the bindings are the composition's, which
+/// the scheduler workbench installs at its first check, so the admission waits for that check
+/// (or a stop) and then admits them.
 fn pack_admission_check(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     #[cfg(test)]
     if let Some(hold) = &shared.pack_admission_hold_for_test
@@ -5846,7 +5851,15 @@ fn pack_admission_check(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     {
         return Ok(());
     }
-    let result = shared.check_pack_admission();
+    let result = shared
+        .await_first_standard_pack_check()
+        .and_then(|checked| {
+            if checked {
+                shared.check_pack_admission()
+            } else {
+                Ok(())
+            }
+        });
     if let Err(error) = &result {
         shared.fatal.mark(error.clone())?;
     }

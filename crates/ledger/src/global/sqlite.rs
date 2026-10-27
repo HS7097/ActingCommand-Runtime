@@ -3261,16 +3261,26 @@ pub(super) struct SelectedRead {
     pub(super) events: Vec<LedgerEventMetadata>,
     /// The authenticated head of the keyed meta row.
     pub(super) head_sequence: u64,
+    /// ROUT-L RL-1c fix 2 (#411 M2): the head row's time; `None` for an empty ledger.
+    pub(super) head_time_unix_ms: Option<u64>,
+    /// The ledger's latest time when it was asked for (#411 A24): the maximum timestamp.
+    pub(super) latest_time_unix_ms: Option<u64>,
+    /// The newest matching row of each `newest` query, in their order.
+    pub(super) newest: Vec<Option<LedgerEventMetadata>>,
 }
 
 /// Workflow #375 R375-3: in one read transaction, the keyed meta row, the contiguity of the
 /// stored sequences (`1..=head`), the head row and the rows of `event_types`, each read and
 /// authenticated once on its own (decode, metadata, stored sequence, predecessor hash, tag and
 /// index columns) with its link and artifact rows. Rows of other types are never read, so this
-/// read does not establish their integrity; the migrated-prefix digest is not run.
+/// read does not establish their integrity; the migrated-prefix digest is not run. ROUT-L RL-1c
+/// fix 2 (#411 M2): in the same transaction and budget, `extras.newest` (each query's newest
+/// matching row, read newest first through the type index) and `extras.latest_time` (the row of
+/// the latest timestamp, through the time index).
 pub(super) fn read_selected(
     database: &RuntimeDatabase,
     event_types: &[EventType],
+    extras: &super::GlobalLedgerSelectionExtras,
     budget: ReadBudget,
 ) -> GlobalLedgerResult<SelectedRead> {
     check_read_budget(budget, 0, 0)?;
@@ -3278,7 +3288,7 @@ pub(super) fn read_selected(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
         .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
-    let read = read_selected_rows(database, &transaction, event_types, budget)?;
+    let read = read_selected_rows(database, &transaction, event_types, extras, budget)?;
     transaction
         .commit()
         .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
@@ -3289,8 +3299,12 @@ fn read_selected_rows(
     database: &RuntimeDatabase,
     connection: &Connection,
     event_types: &[EventType],
+    extras: &super::GlobalLedgerSelectionExtras,
     budget: ReadBudget,
 ) -> GlobalLedgerResult<SelectedRead> {
+    for query in &extras.newest {
+        super::evidence::check_newest_query(query)?;
+    }
     refuse_unsupported_format(connection)?;
     // A different view schema refuses; absent views leave the selection to a table scan.
     views::installed(connection)?;
@@ -3399,11 +3413,211 @@ fn read_selected_rows(
         ));
     }
     check_read_budget(budget, reader.bytes, metadata.len())?;
+    // RL-1c fix 2 (#411 M2): the head row is the last row read.
+    let head_time_unix_ms = metadata
+        .last()
+        .filter(|_| head != 0)
+        .map(LedgerEventMetadata::timestamp_unix_ms);
+    // Each further row is read by a reader of its own (the same row may be read again there),
+    // within the same budget; only the rows kept count among the rows held.
+    let mut bytes = reader.bytes;
+    let mut held = metadata.len();
+    let mut newest = Vec::with_capacity(extras.newest.len());
+    for query in &extras.newest {
+        let found = read_newest(database, connection, query, head, budget, &mut bytes, held)?;
+        held += usize::from(found.is_some());
+        newest.push(found);
+    }
+    let latest_time_unix_ms = if extras.latest_time && head != 0 {
+        read_latest_time(database, connection, budget, &mut bytes, held)?
+    } else {
+        None
+    };
+    check_read_budget(budget, bytes, held)?;
     metadata.truncate(selected_count);
     Ok(SelectedRead {
         events: metadata,
         head_sequence: head,
+        head_time_unix_ms,
+        latest_time_unix_ms,
+        newest,
     })
+}
+
+/// Rows per statement of a newest-first read (RL-1c fix 2), as a range read's chunks.
+const NEWEST_CHUNK_ROWS: usize = RANGE_CHUNK_ROWS;
+
+/// ROUT-L RL-1c fix 2 (#411 M2): the newest row at or below `head` of `query`'s event type that
+/// matches `query`, read newest first through the type index (`ledger_view_index_type_v1`,
+/// `event_type, sequence`) in statements of `NEWEST_CHUNK_ROWS` rows, until one matches or the
+/// type has no older row. Each row read is authenticated on its own; the match alone is kept,
+/// with its link and artifact rows checked, so the rows read before it are never held together.
+/// `held` is the rows the read holds already; each row read counts as one more while it is read.
+fn read_newest(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+    query: &EventQuery,
+    head: u64,
+    budget: ReadBudget,
+    bytes: &mut u64,
+    held: usize,
+) -> GlobalLedgerResult<Option<LedgerEventMetadata>> {
+    let Some(event_type) = query.event_type else {
+        return Ok(None);
+    };
+    let mut reader = RowReader::new(database, connection, budget);
+    reader.bytes = *bytes;
+    let sql = newest_statement();
+    let event_type = SqlValue::Text(views::key(event_type)?);
+    let mut through = head;
+    let mut found = None;
+    'chunks: while through > 0 {
+        let rows = read_rows_bound(
+            connection,
+            &sql,
+            &[event_type.clone(), SqlValue::Integer(encode(through))],
+            budget,
+            &mut reader.bytes,
+            false,
+        )?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            let (event, links, artifacts) = reader.authenticate(row, held + 1)?;
+            let sequence = event.sequence();
+            if super::projection::query_matches_fields(query, &event) {
+                found = Some((event, links, artifacts));
+                break 'chunks;
+            }
+            through = sequence.saturating_sub(1);
+        }
+    }
+    let found = match found {
+        Some((event, links, artifacts)) => {
+            check_row_relations(&mut reader, event.sequence(), links, artifacts)?;
+            Some(event)
+        }
+        None => None,
+    };
+    *bytes = reader.bytes;
+    Ok(found)
+}
+
+/// The statement of one chunk of [`read_newest`]: the rows of a type at or below a sequence,
+/// newest first, through the type index (`event_type=? AND sequence<?`, no sort).
+fn newest_statement() -> String {
+    format!(
+        "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE event_type=? AND sequence<=? ORDER BY sequence DESC LIMIT {NEWEST_CHUNK_ROWS}"
+    )
+}
+
+/// ROUT-L RL-1c fix 3 (#411 M1): the ledger's latest time, one entry of the time index
+/// (`ledger_view_index_time_v1`, `timestamp_unix_ms, sequence`).
+const LATEST_TIME: &str = "SELECT MAX(timestamp_unix_ms) FROM ledger_events";
+
+/// ROUT-L RL-1c fix 3 (#411 M1): the newest row at a time, through the time index
+/// (`timestamp_unix_ms=?`, its sequences newest first, no sort).
+fn latest_time_row_statement() -> String {
+    format!(
+        "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE timestamp_unix_ms=? ORDER BY sequence DESC LIMIT 1"
+    )
+}
+
+/// ROUT-L RL-1c fix 2 (#411 M2, A24): the ledger's latest time, the maximum `timestamp_unix_ms`
+/// of the rows of this read transaction, which `verify_sequence_extent` proved are `1..=head`.
+/// RL-1c fix 3 (#411 M1): both statements read through the time index
+/// (`ledger_view_index_time_v1`, `timestamp_unix_ms, sequence`): [`LATEST_TIME`], one index
+/// entry, then the newest row at that time, one row, authenticated on its own with its link and
+/// artifact rows. `held` as for [`read_newest`].
+fn read_latest_time(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+    budget: ReadBudget,
+    bytes: &mut u64,
+    held: usize,
+) -> GlobalLedgerResult<Option<u64>> {
+    let mut reader = RowReader::new(database, connection, budget);
+    reader.bytes = *bytes;
+    let maximum = read_rows(connection, LATEST_TIME, budget, &mut reader.bytes, false)?;
+    let time = match maximum.as_slice() {
+        [row] => match row.as_slice() {
+            [SqlValue::Null] => None,
+            [SqlValue::Integer(time)] => Some(*time),
+            _ => {
+                return Err(failure(
+                    LedgerCode::InvalidEventInteger.code(),
+                    LedgerLocation::ReadSqliteRow.location(),
+                ));
+            }
+        },
+        _ => {
+            return Err(failure(
+                LedgerCode::InvalidEventInteger.code(),
+                LedgerLocation::ReadSqliteRow.location(),
+            ));
+        }
+    };
+    let Some(time) = time else {
+        *bytes = reader.bytes;
+        return Ok(None);
+    };
+    let rows = read_rows_bound(
+        connection,
+        &latest_time_row_statement(),
+        &[SqlValue::Integer(time)],
+        budget,
+        &mut reader.bytes,
+        false,
+    )?;
+    // The maximum was read in this transaction, so a row holds it; none is a broken index.
+    let Some(row) = rows.into_iter().next() else {
+        return Err(failure(
+            LedgerCode::LedgerIndexMismatch.code(),
+            LedgerLocation::ReadSqliteRow.location(),
+        ));
+    };
+    let (event, links, artifacts) = reader.authenticate(row, held + 1)?;
+    let latest = event.timestamp_unix_ms();
+    check_row_relations(&mut reader, event.sequence(), links, artifacts)?;
+    *bytes = reader.bytes;
+    Ok(Some(latest))
+}
+
+/// The link and artifact rows of one row read on its own (`sequence`) must be the ones it
+/// requires (`links`, `artifacts`), as the head row's are checked.
+fn check_row_relations(
+    reader: &mut RowReader<'_>,
+    sequence: u64,
+    links: SqlRow,
+    artifacts: Vec<SqlRow>,
+) -> GlobalLedgerResult<()> {
+    let value = [SqlValue::Integer(encode(sequence))];
+    let stored_links = read_rows_bound(
+        reader.connection,
+        &format!("SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence=?"),
+        &value,
+        reader.budget,
+        &mut reader.bytes,
+        false,
+    )?;
+    let stored_artifacts = read_rows_bound(
+        reader.connection,
+        &format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence=? ORDER BY ordinal"
+        ),
+        &value,
+        reader.budget,
+        &mut reader.bytes,
+        false,
+    )?;
+    if stored_links != [links] || stored_artifacts != artifacts {
+        return Err(failure(
+            LedgerCode::LedgerIndexMismatch.code(),
+            LedgerLocation::VerifySqliteRelations.location(),
+        ));
+    }
+    Ok(())
 }
 
 /// The keyed meta row of a ready ledger, authenticated in this read transaction: its head
@@ -5271,3 +5485,9 @@ mod gate_ln7c_f6;
 #[cfg(test)]
 #[path = "sqlite/gate_diag_run.rs"]
 mod gate_diag_run;
+
+// ROUT-L RL-1c fix 3 (#411 M1): the suspended report's latest-time and newest-first statements
+// read through their indexes with no sort.
+#[cfg(test)]
+#[path = "sqlite/gate_rl1c_fix3.rs"]
+mod gate_rl1c_fix3;

@@ -612,7 +612,7 @@ pub(super) fn check_read_budget(
         format!("bytes {bytes} > {max_bytes}")
     } else if events > max_events {
         format!("events {events} > {max_events}")
-    } else if Instant::now() >= deadline {
+    } else if crate::read_deadline_passed(deadline) {
         format!("deadline reached at check (bytes={bytes}, events={events})")
     } else {
         return Ok(());

@@ -115,12 +115,23 @@ pub(crate) fn marked_keys(checked: &[CheckedBinding]) -> BTreeMap<String, BTreeS
 
 /// `fact_reader_missing` for the configured catalog (D2 model §3.2): each realistic fact a
 /// catalog task reads in an instance's scope that the instance's reader (`marked`) does not
-/// mark. None without a policy.
+/// mark. None without a policy. ROUT-L RL-1c (#411): in composer mode (`composed`, the
+/// configuration's composition) the composed catalog's tasks are read instead, as the scheduler
+/// workbench composes them; none when the composition as a whole is refused (its problem is
+/// check-config's `standard_pack_schedule` note).
 pub(crate) fn missing_reader_warnings(
     policy: Option<&PolicyBootstrap>,
+    composed: Option<&actingcommand_runtime_host::ConfiguredStandardPackSchedule>,
     marked: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<Vec<Outcome>, Code> {
-    // ROUT-L RL-1b: in composer mode there is no configured catalog to read.
+    if let Some(composed) = composed {
+        return Ok(composed
+            .compiled()
+            .map(|compiled| {
+                actingcommand_runtime_host::missing_fact_readers(compiled.catalog(), marked)
+            })
+            .unwrap_or_default());
+    }
     let Some(catalog) = policy.and_then(|policy| policy.catalog.as_ref()) else {
         return Ok(Vec::new());
     };

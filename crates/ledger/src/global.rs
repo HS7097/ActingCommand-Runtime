@@ -8,7 +8,8 @@ mod planning;
 pub use evidence::{
     GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata, GlobalLedgerRangeRead,
     GlobalLedgerRangeRequest, GlobalLedgerReadExtent, GlobalLedgerReadPhases,
-    GlobalLedgerSelection, LedgerArtifactSelection, ResolvedLedgerArtifact,
+    GlobalLedgerSelection, GlobalLedgerSelectionExtras, LedgerArtifactSelection,
+    ResolvedLedgerArtifact,
 };
 pub use planning::{PlanningSignalRecoveryPage, verify_transaction_planning_page};
 mod projection;

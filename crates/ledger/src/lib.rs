@@ -27,6 +27,8 @@ pub mod owner_journal;
 // Workflow #382 L-3 (LED-I5): test-only, so production carries no counting.
 #[cfg(test)]
 mod read_count;
+// ROUT-L RL-1c fix 2 (#411 L3): the clock a read's deadline is judged by (a fake one in tests).
+mod read_clock;
 pub mod signatures;
 #[cfg(any(test, feature = "test-hooks"))]
 mod write_fault;
@@ -48,6 +50,10 @@ mod writer_statements;
 pub use codes::{LedgerCode, LedgerLocation};
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
+// ROUT-L RL-1c fix 2 (#411 L3): a read's deadline, judged by the wall clock or a test's fake one.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use read_clock::LedgerReadClock;
+pub use read_clock::read_deadline_passed;
 // Workflow #382 L-3 (LED-I5): the read counters of the SQLite medium on the opening thread.
 #[cfg(test)]
 pub use read_count::{

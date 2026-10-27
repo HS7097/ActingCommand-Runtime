@@ -449,6 +449,15 @@ mod gate_mcp19a;
 mod gate_p0;
 // ROUT-L RL-1b (frozen model v1.0 §6.1 row RL-1b, §7.1 A2-A6, A8, A9): the scheduler workbench.
 mod gate_rl1b;
+// ROUT-L RL-1c (#411; work order `rd-1027/brief-rl1c.md` C-2, C-5): the admission after start and
+// the suspended report in composer mode.
+mod gate_rl1c;
+// ROUT-L RL-1c fix round 1 (#411; work order `rd-1027/brief-rl1c-fix1.md`, review H1 and M1): the
+// suspended report's bounded ledger read and the composition's problems as its warnings.
+mod gate_rl1c_fix1;
+// ROUT-L RL-1c fix round 2 (#411; work order `rd-1027/brief-rl1c-fix2.md`, re-review M2 and L3):
+// the suspended report's smaller selection, its deadline path and a run it leaves unread.
+mod gate_rl1c_fix2;
 mod home_entry;
 mod input;
 mod input_failure;

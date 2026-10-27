@@ -27,6 +27,9 @@ actingcommand-contract = { workspace = true }
 # #422 LN-7c Q: `evidence confirm-read` counts the evidence frames a confirmation covers with the
 # frame cleaner's statements, read-only (`evidence_covers`).
 actingcommand-ledger = { workspace = true }
+# ROUT-L RL-1c (#411): `actingctl packs` lists a composer-mode configuration's procedures from the
+# standard packs' `schedule.json` through the composer actingd's scheduler workbench uses.
+actingcommand-policy = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 # #411 A66: the watchdog and `actingctl start` read `watchdog.start_window_ms` from actingd's
 # configuration through the key table and the defaults file. Workflow #421 INST-1: `actingctl
