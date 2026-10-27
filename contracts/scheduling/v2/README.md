@@ -102,8 +102,8 @@ units, that each named pool must still hold after a run of the task. The
 evaluator does not admit a candidate that would leave a pool below it
 (`resource_reserve_insufficient`, `../README.md`, "Task Reserves"). A pool the
 catalog does not declare is `dangling_reference` and a pool named twice is
-`duplicate_id`, each at the entry's `pool_id`; N above the pool's `capacity` is
-`limit_exceeded` at `at_least`; an empty list or more than 128 entries is
+`duplicate_id`, each at the entry's `pool_id`; N above the pool's `capacity` (a
+constant; #386 CF-5) is `limit_exceeded` at `at_least`; an empty list or more than 128 entries is
 `limit_exceeded` at the member; a V1 document that names it is refused as an
 unknown member. A task without `reserves` serializes, and hashes, exactly as
 before.
@@ -148,3 +148,20 @@ reference that names a `scope` is refused as an unknown field at `value/scope`
 (it always reads the predicate's scope). A V1 document that writes one is
 refused as an unknown field at `value/type`. A catalog whose `fact` predicates
 hold typed values serializes, and hashes, exactly as before.
+
+A pool's `capacity` and a `resource_projection`'s `value` may each be a fact
+reference too (#386 CF-5), V2 only: `{"type": "fact", "fact_key": B, "offset":
+N}` (`../README.md`, "Pool fact references"; schema `factReference`). Both read
+B in the pool's own scope. A capacity is then, at each evaluation, the integer B
+holds plus N (at least 1, or the pool has no value and its projection is Unknown
+with B's reason); a reading above it stays as read and regeneration stops at
+it. A comparand compares the projected amount with B plus N, and a B that gives
+no integer makes the predicate false with `fact_reference_unavailable`. The
+members follow the rules above, at `capacity/…` or `value/…`: N within the
+canonical integers (`limit_exceeded` at `…/offset`), B by `fact_key`'s rules
+(`type_mismatch` at `…/fact_key`), no `scope` (an unknown field at
+`…/scope`); a V1 document that writes one is refused as an unknown field at
+`capacity/type` or `value/type`. Against a capacity read from a fact, a
+reserve's `at_least` and an effect's quantity are not checked at compilation.
+A catalog whose capacities and projection values are numbers serializes, and
+hashes, exactly as before.

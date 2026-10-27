@@ -73,4 +73,7 @@ mod tests {
 
     // #386 CF-4: a `fact` predicate compares with another fact of its scope plus an offset.
     mod gate_386_cf4;
+
+    // #386 CF-5: a pool's capacity and a projection's comparand can be facts.
+    mod gate_386_cf5;
 }

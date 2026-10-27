@@ -3586,6 +3586,24 @@ The number 1.197 is provisional for parallel slices.
 | LN7CV-3 | `actingd ledger-maintenance` reads `frame_retention_dedup_error` and `frame_retention_dedup_lab` | behaviour | LN-7c V | — | for `verify --frame-query`'s check, with the defaults a start uses when the file names neither |
 | LN7CV-4 | `actingd ledger-maintenance verify --frame-query`; `LedgerMaintenanceRequest.frame_query` (default `false`) | command-line flag; host request member | LN-7c V | — | opt-in: runs the check after the complete read; without it `verify` builds no retention index, runs no statement and prints no count line; never ignored (fix round 1b): another operation with it, or `verify` of a root that is not formal (Segment, candidate), is `maintenance_arguments_invalid` |
 
+### 1.198 Slice CF-5 (0.12.18): a pool's capacity and a `resource_projection`'s comparand can be facts (#386, condition-first; Alice 10-26, memory `no-fixed-account-thresholds`: an account's cap is read and a rule writes "≥ cap − margin"; coordinator work order `rd-1026/brief-cf5.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Pool fact references", with "Pool Projection",
+"Task Reserves", "Fact Refresh" and "Why A Candidate Does Not Run"),
+[scheduling/v2/README.md](scheduling/v2/README.md), [resource-targets.md](resource-targets.md)
+and [standard-pack-schedule.md](standard-pack-schedule.md) (`requires`) are the contract. **No
+persisted ledger shape**: both forms are catalog format additions (the ledger holds only the
+catalog's `catalog_hash`, unchanged for a catalog whose capacities and projection values are
+numbers); no new code (the existing `fact_reference_unavailable` is also emitted by a
+`resource_projection`; its pending entry's description says so), no configuration key, no wire
+or interface revision. The number 1.198 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CF5-1 | a pool's `capacity` may be `{"type": "fact", "fact_key", "offset"}` (`PoolCapacity::Fact`, `FactReference`; schema `factReference` in `contracts/scheduling/v2/common.schema.json`, used by `v2/pools.schema.json`) | catalog format addition (no ledger shape) | CF-5 | the standard packs' `schedule.json` | V2 only (V1: `unknown_field` at `capacity/type`); read at each evaluation in the pool's scope as the pool reads its value (the pool's minimum confidence, its own expiry), capacity = integer + offset, at least 1; otherwise the pool has no value and its projection is Unknown with the fact's detection suggestion (`fact_missing`, `fact_low_confidence`, `fact_expired`, `type_mismatch`), no constant fallback; a reading above it stays as read, regeneration stops at it; the compiler's reserve and effect bounds apply to a constant only; a constant serializes and hashes as before |
+| CF5-2 | a `resource_projection`'s `value` may be `{"type": "fact", "fact_key", "offset"}` (`ProjectionComparand::Fact`) | catalog format addition (no ledger shape) | CF-5 | the standard packs' `schedule.json` | V2 only (V1: `unknown_field` at `value/type`); the referenced fact is read in the pool's scope with its own expiry and a confidence above 0; compared as `projected C b + offset` in `i128`; a referenced fact that gives no integer makes the predicate false with `fact_reference_unavailable {fact_key, unknown_reason}` (CF4-2), no wake, no fact refresh; an integer serializes and hashes as before |
+| CF5-3 | `config.subsystems` row `pool_fact_reference` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-5 | CF-5 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` that writes CF5-1 or CF5-2 must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the first reference: rules, then pools) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

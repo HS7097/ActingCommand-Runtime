@@ -23,9 +23,9 @@ use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicySt
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactComparand,
     FactReference, FactScalar, FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES,
-    ManualOffset, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PredicateSpec,
-    PrioritySelection, RemedyPlan, ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec,
-    TaskTerminalState, TimelineEvent,
+    ManualOffset, MissedSlotRule, ObservationRef, PoolCapacity, PoolProjection, PoolSpec,
+    PredicateSpec, PrioritySelection, ProjectionComparand, RemedyPlan, ResourceEffectSpec,
+    ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
 // Workflow #386 SR-4a1 (SCH-M §3.2 D-1, D-6): the pure blackout and day-boundary judgements.
@@ -547,8 +547,8 @@ pub fn project_fact_pools(
         projected.pools.retain(|value| value.pool_id != pool.id);
         if let Some(observation) = pool_fact(pool, facts)
             && let FactValue::Integer(value) = observation.value
+            && usable_pool_reading(pool, value)
             && let Ok(value) = u64::try_from(value)
-            && value <= pool.capacity
         {
             projected.pools.push(PoolValueSnapshot {
                 pool_id: pool.id.clone(),
@@ -578,6 +578,132 @@ fn pool_fact<'a>(pool: &PoolSpec, facts: &'a EvaluationFacts) -> Option<&'a Obse
             && fact.fact_key == *fact_key
             && fact.confidence_milli >= minimum_confidence_milli
     })
+}
+
+/// Whether the integer `value` read for `pool` is a usable pool value: within `0..=capacity`
+/// for a constant capacity, and (#386 CF-5) any non-negative integer for a capacity read from a
+/// fact, since a reading above it stays as read.
+fn usable_pool_reading(pool: &PoolSpec, value: i64) -> bool {
+    u64::try_from(value).is_ok_and(|value| {
+        pool.capacity
+            .constant()
+            .is_none_or(|capacity| value <= capacity)
+    })
+}
+
+/// #386 CF-5: the capacity a pool's value is held to at one evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PoolBound {
+    /// A `capacity` written as a number: a value above it is refused, as before CF-5.
+    Constant(u64),
+    /// A `capacity` read from its fact, and the end of that reading's freshness: a value above
+    /// it stays as read, and regeneration stops at it.
+    Read {
+        capacity: u64,
+        fresh_until: Option<u64>,
+    },
+}
+
+impl PoolBound {
+    pub(crate) fn capacity(self) -> u64 {
+        match self {
+            Self::Constant(capacity) | Self::Read { capacity, .. } => capacity,
+        }
+    }
+
+    pub(crate) fn fresh_until(self) -> Option<u64> {
+        match self {
+            Self::Constant(_) => None,
+            Self::Read { fresh_until, .. } => fresh_until,
+        }
+    }
+}
+
+/// #386 CF-5: the capacity of `pool` at `time`. A constant is itself. A capacity fact is read in
+/// the pool's own scope as the pool reads its value: with at least the pool's minimum confidence
+/// (above 0 for a static snapshot pool), not past its own expiry, holding an integer; the capacity
+/// is that integer plus the reference's offset, and must be positive. Otherwise why it gives none,
+/// as an `unknown_reason`: `fact_missing`, `fact_low_confidence`, `fact_expired`, or
+/// `type_mismatch` (no integer, or no positive capacity). There is no constant to fall back on.
+pub(crate) fn pool_bound(
+    pool: &PoolSpec,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> Result<PoolBound, UnknownReason> {
+    let reference = match &pool.capacity {
+        PoolCapacity::Constant(capacity) => return Ok(PoolBound::Constant(*capacity)),
+        PoolCapacity::Fact(reference) => reference,
+    };
+    let Some(fact) = facts
+        .facts
+        .iter()
+        .find(|fact| fact.scope == pool.scope && fact.fact_key == reference.fact_key)
+    else {
+        return Err(UnknownReason::FactMissing);
+    };
+    let minimum_confidence = match pool.value_source {
+        crate::PoolValueSource::LedgerFact {
+            minimum_confidence_milli,
+        } => minimum_confidence_milli.max(1),
+        crate::PoolValueSource::StaticSnapshot => 1,
+    };
+    if fact.confidence_milli < minimum_confidence {
+        return Err(UnknownReason::FactLowConfidence);
+    }
+    if fact
+        .expires_at_unix_ms
+        .is_some_and(|expiry| time.unix_ms > expiry)
+    {
+        return Err(UnknownReason::FactExpired);
+    }
+    let FactValue::Integer(value) = fact.value else {
+        return Err(UnknownReason::TypeMismatch);
+    };
+    match u64::try_from(i128::from(value) + i128::from(reference.offset)) {
+        Ok(capacity) if capacity >= 1 => Ok(PoolBound::Read {
+            capacity,
+            fresh_until: fact.expires_at_unix_ms,
+        }),
+        _ => Err(UnknownReason::TypeMismatch),
+    }
+}
+
+/// A pool's value at one evaluation: its snapshot and (#386 CF-5) the capacity it is held to.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PoolReading<'a> {
+    pub(crate) snapshot: &'a PoolValueSnapshot,
+    pub(crate) bound: PoolBound,
+}
+
+/// The pool values an evaluation reads: a static pool's, or a live pool's while the record it
+/// reads is current. #386 CF-5: each with the capacity it is held to; a pool whose capacity fact
+/// gives no capacity has no value, and its `resource_projection` is Unknown with that fact's
+/// reason ([`resource_suggestion`]).
+fn evaluation_pool_values<'a>(
+    pool_specs: &BTreeMap<&str, &PoolSpec>,
+    resources: &'a EvaluationResources,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> BTreeMap<&'a str, PoolReading<'a>> {
+    resources
+        .pools
+        .iter()
+        .filter_map(|snapshot| {
+            let pool = pool_specs.get(snapshot.pool_id.as_str())?;
+            let current = pool.value_source.is_static()
+                || pool_fact(pool, facts).is_some_and(|fact| {
+                    fact.observed_at_unix_ms <= time.unix_ms
+                        && fact
+                            .expires_at_unix_ms
+                            .is_none_or(|expiry| time.unix_ms <= expiry)
+                });
+            if !current {
+                return None;
+            }
+            let bound = pool_bound(pool, facts, time).ok()?;
+            Some((snapshot.pool_id.as_str(), PoolReading { snapshot, bound }))
+        })
+        .collect()
 }
 
 pub(crate) fn project_time_validity(
@@ -897,35 +1023,28 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .iter()
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
-    let pool_values: BTreeMap<&str, &PoolValueSnapshot> = resources
-        .pools
-        .iter()
-        .filter(|snapshot| {
-            pool_specs
-                .get(snapshot.pool_id.as_str())
-                .is_some_and(|pool| {
-                    pool.value_source.is_static()
-                        || pool_fact(pool, facts).is_some_and(|fact| {
-                            fact.observed_at_unix_ms <= time.unix_ms
-                                && fact
-                                    .expires_at_unix_ms
-                                    .is_none_or(|expiry| time.unix_ms <= expiry)
-                        })
-                })
-        })
-        .map(|pool| (pool.pool_id.as_str(), pool))
-        .collect();
+    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, time);
     let host_resources: BTreeMap<&str, HostRemaining> = resources
         .hosts
         .iter()
         .map(|host| (host.host_id.as_str(), HostRemaining::from(host)))
         .collect();
 
+    // #386 CF-5: a capacity read from its fact wakes the evaluation when that reading expires,
+    // as the pool's own reading does.
     let pool_fresh_until = catalog_bundle
         .pools
         .pools
         .iter()
-        .filter_map(|pool| pool_fact(pool, facts).and_then(|fact| fact.expires_at_unix_ms))
+        .flat_map(|pool| {
+            [
+                pool_fact(pool, facts).and_then(|fact| fact.expires_at_unix_ms),
+                pool_bound(pool, facts, time)
+                    .ok()
+                    .and_then(PoolBound::fresh_until),
+            ]
+        })
+        .flatten()
         .filter(|expiry| *expiry >= time.unix_ms)
         .min();
     let mut next_wake = pool_fresh_until.and_then(|expiry| expiry.checked_add(1));
@@ -2324,7 +2443,7 @@ enum PlacementResult {
 struct PlacementContext<'a> {
     profiles: &'a [ActivityProfile],
     pool_specs: &'a BTreeMap<&'a str, &'a PoolSpec>,
-    pool_values: &'a BTreeMap<&'a str, &'a PoolValueSnapshot>,
+    pool_values: &'a BTreeMap<&'a str, PoolReading<'a>>,
     hosts: &'a BTreeMap<&'a str, HostRemaining>,
     time: EvaluationTime,
     seed: u64,
@@ -3182,12 +3301,17 @@ fn reserve_views(
                     "compiled catalog references missing pool '{pool_id}'"
                 ))
             })?;
-            let Some(snapshot) = context.pool_values.get(pool_id) else {
+            let Some(reading) = context.pool_values.get(pool_id) else {
                 return Ok(None);
             };
             Ok(Some((
-                project_pool_value(spec, snapshot, context.time.unix_ms)?,
-                next_pool_projection_change(spec, snapshot, context.time.unix_ms)?,
+                project_pool_value(spec, reading.bound, reading.snapshot, context.time.unix_ms)?,
+                next_pool_projection_change(
+                    spec,
+                    reading.bound,
+                    reading.snapshot,
+                    context.time.unix_ms,
+                )?,
             )))
         })?;
         if let Some(reserved) = reserved {
@@ -3250,7 +3374,7 @@ fn apply_reserves(
             context
                 .pool_values
                 .get(pool_id)
-                .map(|snapshot| snapshot.observed_at_unix_ms)
+                .map(|reading| reading.snapshot.observed_at_unix_ms)
         })?;
     let candidates = order
         .iter()
@@ -3489,7 +3613,7 @@ impl VocabularyToken for UnknownReasonToken {
 }
 
 /// The token of the `unknown_reason` vocabulary for one selection-policy reason.
-const fn unknown_token(unknown_reason: UnknownReason) -> &'static str {
+pub(crate) const fn unknown_token(unknown_reason: UnknownReason) -> &'static str {
     match unknown_reason {
         UnknownReason::FactMissing => "fact_missing",
         UnknownReason::FactExpired => "fact_expired",
@@ -3798,7 +3922,7 @@ fn rank_task(
     instance: &InstanceSnapshot,
     profiles: &[ActivityProfile],
     pool_specs: &BTreeMap<&str, &PoolSpec>,
-    pool_values: &BTreeMap<&str, &PoolValueSnapshot>,
+    pool_values: &BTreeMap<&str, PoolReading<'_>>,
     priority: i16,
     task_weight: u16,
     load: ResourceLoad,
@@ -3884,14 +4008,16 @@ fn deadline_urgency_milli(now: u64, deadline: u64) -> u16 {
 fn resource_urgency_milli(
     effect: &ResourceEffectSpec,
     specs: &BTreeMap<&str, &PoolSpec>,
-    values: &BTreeMap<&str, &PoolValueSnapshot>,
+    values: &BTreeMap<&str, PoolReading<'_>>,
 ) -> Option<u16> {
     let spec = specs.get(effect.pool_id.as_str())?;
     if matches!(spec.projection, PoolProjection::NonRegenerating { .. }) {
         return Some(0);
     }
-    let value = values.get(effect.pool_id.as_str())?;
-    let ratio = value.value.min(spec.capacity).saturating_mul(1_000) / spec.capacity;
+    let reading = values.get(effect.pool_id.as_str())?;
+    // A capacity is positive: a constant is validated so, a read one is required to be.
+    let capacity = reading.bound.capacity();
+    let ratio = reading.snapshot.value.min(capacity).saturating_mul(1_000) / capacity;
     u16::try_from(ratio).ok()
 }
 
@@ -4032,7 +4158,7 @@ fn evaluate_predicate(
     decision_scope: &ScopeSelector,
     facts: &EvaluationFacts,
     pool_specs: &BTreeMap<&str, &PoolSpec>,
-    pool_values: &BTreeMap<&str, &PoolValueSnapshot>,
+    pool_values: &BTreeMap<&str, PoolReading<'_>>,
     time: EvaluationTime,
     timeline_events: &BTreeMap<&str, &TimelineEvent>,
     reasons: &mut Vec<DecisionReason>,
@@ -4213,23 +4339,65 @@ fn evaluate_predicate(
                     "compiled catalog references missing pool '{pool_id}'"
                 ))
             })?;
-            let Some(snapshot) = pool_values.get(pool_id.as_str()) else {
+            let Some(reading) = pool_values.get(pool_id.as_str()) else {
                 return Ok(PredicateEvaluation::unknown(resource_suggestion(
                     spec, facts, time,
                 )));
             };
-            let projected = project_pool_value(spec, snapshot, time.unix_ms)?;
+            let projected =
+                project_pool_value(spec, reading.bound, reading.snapshot, time.unix_ms)?;
             let projected = i64::try_from(projected).map_err(|_| {
                 PolicyEvaluationError::overflow(format!(
                     "projected pool '{pool_id}' value exceeds i64"
                 ))
             })?;
-            let mut result = PredicateEvaluation::known(
-                compare_i64(projected, *comparison, *value)?,
-                next_pool_projection_change(spec, snapshot, time.unix_ms)?,
+            // #386 CF-5: the pool's freshness ends at the earlier end of its reading's and of its
+            // capacity fact's.
+            let mut fresh_until = min_wake(
+                pool_fact(spec, facts).and_then(|fact| fact.expires_at_unix_ms),
+                reading.bound.fresh_until(),
             );
-            result.fresh_until_unix_ms =
-                pool_fact(spec, facts).and_then(|fact| fact.expires_at_unix_ms);
+            let truth = match value {
+                ProjectionComparand::Constant(value) => {
+                    compare_i64(projected, *comparison, *value)?
+                }
+                // #386 CF-5: the referenced fact of the pool's scope obeys its own expiry (a
+                // projection has no `max_age_ms`); one that gives no integer makes the predicate
+                // false with its reason and no wake, as for a `fact` predicate (CF-4).
+                ProjectionComparand::Fact(reference) => {
+                    match referenced_integer(facts, &spec.scope, reference, None, time)? {
+                        Ok(referenced) => {
+                            fresh_until = min_wake(fresh_until, referenced.fresh_until);
+                            compare_with_reference(
+                                &FactValue::Integer(projected),
+                                *comparison,
+                                referenced.value,
+                                reference.offset,
+                            )?
+                        }
+                        Err(problem) => {
+                            reasons.push(reason_with(
+                                Outcome::new(PolicyCode::FactReferenceUnavailable)
+                                    .fact_key(reference.fact_key.as_str())
+                                    .unknown_reason(UnknownReasonToken(problem)),
+                                format!(
+                                    "pool '{pool_id}' projection compares with '{}:{}' plus {}, which gives no integer: {}",
+                                    scope_key(&spec.scope),
+                                    reference.fact_key,
+                                    reference.offset,
+                                    unknown_token(problem)
+                                ),
+                            ));
+                            return Ok(PredicateEvaluation::known(false, None));
+                        }
+                    }
+                }
+            };
+            let mut result = PredicateEvaluation::known(
+                truth,
+                next_pool_projection_change(spec, reading.bound, reading.snapshot, time.unix_ms)?,
+            );
+            result.fresh_until_unix_ms = fresh_until;
             result.next_wake_unix_ms = min_wake(
                 result.next_wake_unix_ms,
                 result
@@ -4632,31 +4800,59 @@ fn resource_suggestion(
     time: EvaluationTime,
 ) -> DetectionSuggestion {
     match &pool.observation {
-        ObservationRef::Fact { fact_key } => DetectionSuggestion {
-            scope: pool.scope.clone(),
-            fact_key: fact_key.clone(),
-            reason: match live_pool_unknown_reason(pool, fact_key, facts, time) {
-                Some(unknown_reason) => unknown_token(unknown_reason).to_owned(),
-                None => "resource_observation_missing".to_owned(),
-            },
-        },
+        ObservationRef::Fact { fact_key } => {
+            match live_pool_unknown_reason(pool, fact_key, facts, time) {
+                Some(unknown_reason) => DetectionSuggestion {
+                    scope: pool.scope.clone(),
+                    fact_key: fact_key.clone(),
+                    reason: unknown_token(unknown_reason).to_owned(),
+                },
+                None => {
+                    capacity_suggestion(pool, facts, time).unwrap_or_else(|| DetectionSuggestion {
+                        scope: pool.scope.clone(),
+                        fact_key: fact_key.clone(),
+                        reason: "resource_observation_missing".to_owned(),
+                    })
+                }
+            }
+        }
         ObservationRef::Outcome {
             task_id,
             outcome_key,
-        } => DetectionSuggestion {
+        } => capacity_suggestion(pool, facts, time).unwrap_or_else(|| DetectionSuggestion {
             scope: pool.scope.clone(),
             fact_key: format!("outcome.{task_id}.{outcome_key}"),
             reason: "resource_outcome_missing".to_owned(),
-        },
+        }),
     }
+}
+
+/// #386 CF-5: a pool whose capacity fact gives no capacity has no value: its unknown value asks
+/// for a reading of that fact, in the pool's scope, with the fact's unknown reason (as a
+/// predicate on the fact itself does). `None` for a constant capacity and for a capacity read.
+fn capacity_suggestion(
+    pool: &PoolSpec,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> Option<DetectionSuggestion> {
+    let PoolCapacity::Fact(reference) = &pool.capacity else {
+        return None;
+    };
+    let unknown_reason = pool_bound(pool, facts, time).err()?;
+    Some(DetectionSuggestion {
+        scope: pool.scope.clone(),
+        fact_key: reference.fact_key.clone(),
+        reason: unknown_token(unknown_reason).to_owned(),
+    })
 }
 
 /// Workflow #390 POOL-1: why a `ledger_fact` pool has no value at `time`, as the unknown reason
 /// of the fact it observes in its own scope: none, a confidence below the pool's minimum, an
-/// expired record, or a value that is not an integer within `0..=capacity`. A reading of the key
-/// resets the pool's base, so the pool's unknown value asks for a reading as a predicate on the
-/// fact itself does (D2 model §3.3). `None` for a static snapshot pool, which no reading
-/// supplies, and for a usable record the caller's pool values do not hold.
+/// expired record, or a value that is not an integer within `0..=capacity` (#386 CF-5: any
+/// non-negative integer for a capacity read from a fact, which a reading may exceed). A reading
+/// of the key resets the pool's base, so the pool's unknown value asks for a reading as a
+/// predicate on the fact itself does (D2 model §3.3). `None` for a static snapshot pool, which
+/// no reading supplies, and for a usable record the caller's pool values do not hold.
 fn live_pool_unknown_reason(
     pool: &PoolSpec,
     fact_key: &str,
@@ -4683,24 +4879,31 @@ fn live_pool_unknown_reason(
         .is_some_and(|expiry| time.unix_ms > expiry)
     {
         Some(UnknownReason::FactExpired)
-    } else if !matches!(fact.value, FactValue::Integer(value)
-        if u64::try_from(value).is_ok_and(|value| value <= pool.capacity))
-    {
+    } else if !matches!(fact.value, FactValue::Integer(value) if usable_pool_reading(pool, value)) {
         Some(UnknownReason::TypeMismatch)
     } else {
         None
     }
 }
 
+/// The value of the pool `spec` at `now`: its snapshot projected by its regeneration rule, held
+/// to the capacity `bound`. #386 CF-5: a snapshot above a capacity read from its fact stays as
+/// read (an amount can exceed its cap) and does not regenerate; above a constant capacity it is
+/// refused, as before.
 pub(crate) fn project_pool_value(
     spec: &PoolSpec,
+    bound: PoolBound,
     snapshot: &PoolValueSnapshot,
     now: u64,
 ) -> PolicyEvaluationResult<u64> {
-    if snapshot.value > spec.capacity {
+    let capacity = bound.capacity();
+    if snapshot.value > capacity {
+        if matches!(bound, PoolBound::Read { .. }) {
+            return Ok(snapshot.value);
+        }
         return Err(PolicyEvaluationError::invalid(format!(
-            "pool '{}' value {} exceeds capacity {}",
-            spec.id, snapshot.value, spec.capacity
+            "pool '{}' value {} exceeds capacity {capacity}",
+            spec.id, snapshot.value
         )));
     }
     let PoolProjection::Regenerating(projection) = &spec.projection else {
@@ -4714,21 +4917,20 @@ pub(crate) fn project_pool_value(
             spec.id
         ))
     })?;
-    Ok(snapshot
-        .value
-        .saturating_add(regenerated)
-        .min(spec.capacity))
+    Ok(snapshot.value.saturating_add(regenerated).min(capacity))
 }
 
 fn next_pool_projection_change(
     spec: &PoolSpec,
+    bound: PoolBound,
     snapshot: &PoolValueSnapshot,
     now: u64,
 ) -> PolicyEvaluationResult<Option<u64>> {
     let PoolProjection::Regenerating(projection) = &spec.projection else {
         return Ok(None);
     };
-    if projection.amount == 0 || project_pool_value(spec, snapshot, now)? >= spec.capacity {
+    if projection.amount == 0 || project_pool_value(spec, bound, snapshot, now)? >= bound.capacity()
+    {
         return Ok(None);
     }
     let elapsed = now.saturating_sub(snapshot.observed_at_unix_ms);
@@ -5319,25 +5521,8 @@ pub fn clock_slot_live(
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
     // The pool values the evaluation reads: a static pool's, or a live pool's while the
-    // record it reads is current.
-    let pool_values: BTreeMap<&str, &PoolValueSnapshot> = resources
-        .pools
-        .iter()
-        .filter(|snapshot| {
-            pool_specs
-                .get(snapshot.pool_id.as_str())
-                .is_some_and(|pool| {
-                    pool.value_source.is_static()
-                        || pool_fact(pool, facts).is_some_and(|fact| {
-                            fact.observed_at_unix_ms <= time.unix_ms
-                                && fact
-                                    .expires_at_unix_ms
-                                    .is_none_or(|expiry| time.unix_ms <= expiry)
-                        })
-                })
-        })
-        .map(|pool| (pool.pool_id.as_str(), pool))
-        .collect();
+    // record it reads is current (#386 CF-5: and while its capacity gives one).
+    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, time);
     let timeline_events: BTreeMap<&str, &TimelineEvent> = bundle
         .timeline
         .events
@@ -6071,10 +6256,13 @@ fn validate_inputs(
                 pool.pool_id
             )));
         };
-        if pool.value > spec.capacity {
+        // #386 CF-5: a value may exceed a capacity read from its fact.
+        if let Some(capacity) = spec.capacity.constant()
+            && pool.value > capacity
+        {
             return Err(PolicyEvaluationError::invalid(format!(
-                "pool '{}' value {} exceeds capacity {}",
-                pool.pool_id, pool.value, spec.capacity
+                "pool '{}' value {} exceeds capacity {capacity}",
+                pool.pool_id, pool.value
             )));
         }
         if !observed_pool_ids.insert(pool.pool_id.as_str()) {
@@ -8023,16 +8211,18 @@ pub(crate) mod tests {
             assert_eq!(result.next_wake_unix_ms, Some(240 * 60_000));
         }
         let spec = &fixed.catalog().pools.pools[0];
+        let capacity = spec.capacity.constant().expect("a constant capacity");
+        let bound = PoolBound::Constant(capacity);
         let mut snapshot = base_resources().pools.remove(0);
-        for value in [0, 10, spec.capacity] {
+        for value in [0, 10, capacity] {
             snapshot.value = value;
             assert_eq!(
-                project_pool_value(spec, &snapshot, NOW + 86_400_000).unwrap(),
+                project_pool_value(spec, bound, &snapshot, NOW + 86_400_000).unwrap(),
                 value
             );
         }
-        snapshot.value = spec.capacity + 1;
-        assert!(project_pool_value(spec, &snapshot, NOW).is_err());
+        snapshot.value = capacity + 1;
+        assert!(project_pool_value(spec, bound, &snapshot, NOW).is_err());
 
         // LIVE-FACT-POOL-v1: one scoped observation supplies predicate and pool freshness.
         let mut docs = example_documents();

@@ -25,7 +25,8 @@ use sha2::{Digest, Sha256};
 use crate::canonical::canonical_serialized;
 use crate::codes::PolicyCode;
 use crate::evaluator::{
-    activity_scope_specificity, project_pool_value, project_time_validity, scope_matches_instance,
+    activity_scope_specificity, pool_bound, project_pool_value, project_time_validity,
+    scope_matches_instance,
 };
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
@@ -34,6 +35,7 @@ use crate::{
     ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec, PoolValueSnapshot,
     PoolValueSource, SchedulingDocumentKind, ScopeSelector, TaskRuntimeSnapshot, TaskSpec,
 };
+use actingcommand_selection_policy::UnknownReason;
 
 pub const RESOURCE_TARGETS_SCHEMA_VERSION: &str = "actingcommand.resource-targets.v1";
 /// The valuation-aware document (Workflow #335 S2b).
@@ -911,14 +913,34 @@ pub(crate) fn observe_target(
         };
     }
     match fact.value {
-        FactValue::Integer(current) if current >= 0 => TargetObservation::Known {
-            current: live_pool_inventory(pool, current, fact.observed_at_unix_ms, time),
-            observed_at_unix_ms: fact.observed_at_unix_ms,
-            fresh_until_unix_ms: fact.expires_at_unix_ms,
-        },
+        FactValue::Integer(current) if current >= 0 => {
+            match live_pool_inventory(
+                projected_facts,
+                pool,
+                current,
+                fact.observed_at_unix_ms,
+                time,
+            ) {
+                Ok((current, capacity_fresh_until)) => TargetObservation::Known {
+                    current,
+                    observed_at_unix_ms: fact.observed_at_unix_ms,
+                    fresh_until_unix_ms: min_expiry(fact.expires_at_unix_ms, capacity_fresh_until),
+                },
+                Err(reason) => TargetObservation::Pending { reason },
+            }
+        }
         _ => TargetObservation::Pending {
             reason: Reason::InvalidValue,
         },
+    }
+}
+
+/// The earlier of two optional expiries.
+fn min_expiry(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
     }
 }
 
@@ -926,27 +948,42 @@ pub(crate) fn observe_target(
 /// a reading resets) projected by the pool's regeneration rule, as the pool's own value is: each
 /// complete period since the observation adds `amount`, up to `capacity`. A static snapshot
 /// pool's fact, a nonregenerating pool and an observation above capacity are read as observed.
+/// #386 CF-5: a capacity read from its fact is read in `projected_facts` as the evaluator reads
+/// it, and the end of its freshness is returned too; a capacity fact that gives no capacity
+/// leaves the inventory awaiting observation, with that fact's reason (`missing`,
+/// `low_confidence`, `expired`, `invalid_value`): there is no constant to fall back on.
 fn live_pool_inventory(
+    projected_facts: &EvaluationFacts,
     pool: &PoolSpec,
     current: i64,
     observed_at_unix_ms: u64,
     time: EvaluationTime,
-) -> i64 {
+) -> Result<(i64, Option<u64>), ResourceTargetPendingReason> {
     if pool.value_source.is_static() {
-        return current;
+        return Ok((current, None));
     }
+    let bound =
+        pool_bound(pool, projected_facts, time).map_err(|unknown_reason| match unknown_reason {
+            UnknownReason::FactMissing => ResourceTargetPendingReason::Missing,
+            UnknownReason::FactLowConfidence => ResourceTargetPendingReason::LowConfidence,
+            UnknownReason::FactExpired | UnknownReason::FactStale => {
+                ResourceTargetPendingReason::Expired
+            }
+            _ => ResourceTargetPendingReason::InvalidValue,
+        })?;
     let Ok(value) = u64::try_from(current) else {
-        return current;
+        return Ok((current, bound.fresh_until()));
     };
     let base = PoolValueSnapshot {
         pool_id: pool.id.clone(),
         value,
         observed_at_unix_ms,
     };
-    project_pool_value(pool, &base, time.unix_ms)
+    let projected = project_pool_value(pool, bound, &base, time.unix_ms)
         .ok()
         .and_then(|projected| i64::try_from(projected).ok())
-        .unwrap_or(current)
+        .unwrap_or(current);
+    Ok((projected, bound.fresh_until()))
 }
 
 const ROW_KIND: &str = "row";
