@@ -50,6 +50,11 @@ mod gate_412_b3_s0_restore;
 #[cfg(test)]
 mod gate_386_cf4;
 
+// #386 CF-5: standard-pack check reads a pool's fact capacity and a projection's fact comparand
+// only under their `requires` entry.
+#[cfg(test)]
+mod gate_386_cf5;
+
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;

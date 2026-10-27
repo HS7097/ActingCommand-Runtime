@@ -207,7 +207,7 @@
       ]
     },
     "factReference": {
-      "description": "#386 CF-4: the value of another fact of the fact predicate's own scope plus a signed integer offset; the predicate compares two integers (not contains). It names no scope. Both facts obey the predicate's max_age_ms; a referenced fact that gives no integer makes the predicate false with fact_reference_unavailable. A schedule.json that writes one names fact_reference in requires.",
+      "description": "#386 CF-4: the value of another fact of the fact predicate's own scope plus a signed integer offset; the predicate compares two integers (not contains). It names no scope. Both facts obey the predicate's max_age_ms; a referenced fact that gives no integer makes the predicate false with fact_reference_unavailable. A schedule.json that writes one names fact_reference in requires. #386 CF-5: also a pool's capacity and a resource_projection's value, read in the pool's scope (see there); a schedule.json that writes either names pool_fact_reference in requires.",
       "type": "object",
       "required": ["type", "fact_key", "offset"],
       "properties": {
@@ -394,7 +394,13 @@
             "kind": { "const": "resource_projection" },
             "pool_id": { "$ref": "#/$defs/itemId" },
             "comparison": { "$ref": "#/$defs/comparison" },
-            "value": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
+            "value": {
+              "description": "An integer, or (#386 CF-5) a fact reference read in the pool's scope: the projection compares with that fact's integer plus offset; a referenced fact that gives no integer makes the predicate false with fact_reference_unavailable. A schedule.json that writes one names pool_fact_reference in requires.",
+              "oneOf": [
+                { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+                { "$ref": "#/$defs/factReference" }
+              ]
+            }
           },
           "additionalProperties": false
         },

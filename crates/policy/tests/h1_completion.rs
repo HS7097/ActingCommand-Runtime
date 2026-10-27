@@ -317,7 +317,14 @@ fn apply_declared_effects(
         .pools
         .pools
         .iter()
-        .map(|pool| (pool.id.as_str(), pool.capacity))
+        .map(|pool| {
+            (
+                pool.id.as_str(),
+                pool.capacity
+                    .constant()
+                    .expect("fixture pools declare constants"),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     for effect in task.consumes.iter().chain(&task.produces) {
         let value = state

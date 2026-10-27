@@ -75,6 +75,14 @@ resource tools alike: `schedule_invalid` at the first such `value` in file order
 file at `requires` instead of misreading the rule. The reference names no scope; the composer
 fills the predicate's own.
 
+A pool whose `capacity`, or a rule whose `resource_projection` `value`, is such a fact reference
+(#386 CF-5, [scheduling/README.md](scheduling/README.md), "Pool fact references") requires
+`pool_fact_reference`, alike: the composer refuses a file that writes one while `requires` does
+not name it, `schedule_invalid` at the first in the order rules (their `trigger`, then
+`feedback_stop`, as above) then pools (for example `/rules/0/trigger/value`, then
+`/pools/0/capacity`). A file that writes both a `fact` reference and one of these names both
+subsystems. Each reference reads its fact in the pool's scope, which the composer fills.
+
 ## Classification
 
 Every package of the game root's registry is one or more of (R6, R7):
@@ -108,8 +116,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    alias order. A game without a bound instance is not read. A bound game whose root holds no
    `schedule.json` has no rules.
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
-   rule writes a fact reference, and the given subsystems name each entry), the references and
-   the classification. A refused game is reported with its game id.
+   rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
+   `resource_projection`'s `value` is one, and the given subsystems name each entry), the
+   references and the classification. A refused game is reported with its game id.
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose
    package belongs to `s` and is not held, and every pool, profile and event for every server or
    for `s`, each with every scope filled with `{kind: instance, instance_id: i}` (the item's own

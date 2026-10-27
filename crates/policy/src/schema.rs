@@ -337,7 +337,8 @@ pub struct TaskSpec {
 #[serde(deny_unknown_fields)]
 pub struct ReserveSpec {
     pub pool_id: String,
-    /// The least amount the pool must hold after a run of the task: `0..=capacity`.
+    /// The least amount the pool must hold after a run of the task: `0..=capacity` (#386 CF-5:
+    /// the compiler checks no bound against a capacity read from a fact).
     pub at_least: u64,
 }
 
@@ -473,7 +474,9 @@ pub enum PredicateSpec {
     ResourceProjection {
         pool_id: String,
         comparison: Comparison,
-        value: i64,
+        /// An integer, or (#386 CF-5, `actingcommand.scheduling.v2` only) a fact of the pool's
+        /// scope plus an integer offset ([`ProjectionComparand`]).
+        value: ProjectionComparand,
     },
     Fact {
         scope: ScopeSelector,
@@ -696,6 +699,119 @@ impl<'de> Deserialize<'de> for FactComparand {
     }
 }
 
+/// #386 CF-5: the configuration-manifest subsystem of a Runtime that reads a pool's `capacity`
+/// and a `resource_projection`'s `value` written as a fact reference; a `schedule.json` that
+/// writes either names it in `requires`.
+pub const POOL_FACT_REFERENCE_SUBSYSTEM: &str = "pool_fact_reference";
+
+/// A pool's `capacity` (#386 CF-5, Alice 10-26: an account's cap is read, never a constant).
+///
+/// - [`PoolCapacity::Constant`]: a positive integer, written and hashed exactly as before.
+/// - [`PoolCapacity::Fact`]: `{"type": "fact", "fact_key": <key>, "offset": <integer>}`, the
+///   integer the fact `fact_key` of the pool's own scope holds plus `offset`, read at each
+///   evaluation (`actingcommand.scheduling.v2` only). A reading of the pool above it stays as
+///   read; regeneration stops at it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolCapacity {
+    Constant(u64),
+    Fact(FactReference),
+}
+
+impl PoolCapacity {
+    /// The constant capacity; `None` for a capacity read from a fact.
+    pub fn constant(&self) -> Option<u64> {
+        match self {
+            Self::Constant(capacity) => Some(*capacity),
+            Self::Fact(_) => None,
+        }
+    }
+}
+
+/// What a `resource_projection` predicate compares the pool's projected amount with (#386 CF-5).
+///
+/// - [`ProjectionComparand::Constant`]: an integer, written and hashed exactly as before.
+/// - [`ProjectionComparand::Fact`]: `{"type": "fact", "fact_key": <key>, "offset": <integer>}`,
+///   the integer the fact `fact_key` of the pool's scope holds plus `offset`
+///   (`actingcommand.scheduling.v2` only), as a `fact` predicate's [`FactComparand::Fact`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionComparand {
+    Constant(i64),
+    Fact(FactReference),
+}
+
+/// The wire form of `reference`.
+fn reference_wire(reference: &FactReference) -> FactReferenceWire {
+    FactReferenceWire {
+        kind: FactReferenceTag::Fact,
+        fact_key: reference.fact_key.clone(),
+        offset: reference.offset,
+        scope: reference.scope.clone(),
+    }
+}
+
+/// #386 CF-5: a member that is either a fact reference or a number.
+enum ReferenceOr<T> {
+    Reference(FactReference),
+    Other(T),
+}
+
+/// #386 CF-5: reads a member whose object with `type` `fact` is a reference; every other value
+/// is read as `T`, with its refusals as before.
+fn reference_or<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(
+    deserializer: D,
+) -> Result<ReferenceOr<T>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.get("type").and_then(serde_json::Value::as_str) == Some(FACT_REFERENCE_TYPE) {
+        let wire = FactReferenceWire::deserialize(value)
+            .map_err(<D::Error as serde::de::Error>::custom)?;
+        Ok(ReferenceOr::Reference(FactReference {
+            fact_key: wire.fact_key,
+            offset: wire.offset,
+            scope: wire.scope,
+        }))
+    } else {
+        T::deserialize(value)
+            .map(ReferenceOr::Other)
+            .map_err(<D::Error as serde::de::Error>::custom)
+    }
+}
+
+impl Serialize for PoolCapacity {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Constant(capacity) => capacity.serialize(serializer),
+            Self::Fact(reference) => reference_wire(reference).serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PoolCapacity {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match reference_or::<D, u64>(deserializer)? {
+            ReferenceOr::Reference(reference) => Self::Fact(reference),
+            ReferenceOr::Other(capacity) => Self::Constant(capacity),
+        })
+    }
+}
+
+impl Serialize for ProjectionComparand {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Constant(value) => value.serialize(serializer),
+            Self::Fact(reference) => reference_wire(reference).serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProjectionComparand {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match reference_or::<D, i64>(deserializer)? {
+            ReferenceOr::Reference(reference) => Self::Fact(reference),
+            ReferenceOr::Other(value) => Self::Constant(value),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -724,7 +840,9 @@ pub enum TaskTerminalState {
 pub struct PoolSpec {
     pub id: String,
     pub scope: ScopeSelector,
-    pub capacity: u64,
+    /// A positive integer, or (#386 CF-5, `actingcommand.scheduling.v2` only) a fact of the
+    /// pool's scope plus an integer offset ([`PoolCapacity`]).
+    pub capacity: PoolCapacity,
     pub projection: PoolProjection,
     pub observation: ObservationRef,
     #[serde(default, skip_serializing_if = "PoolValueSource::is_static")]

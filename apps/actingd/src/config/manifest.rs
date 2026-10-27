@@ -175,6 +175,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #386 CF-5: this build reads a pool's `capacity` and a `resource_projection`'s `value`
+        // written as a fact plus an offset; a `schedule.json` that writes either requires it, so
+        // an older Runtime refuses the file instead of misreading it.
+        subsystem(
+            "pool_fact_reference",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCH-M ED-2 (frozen model v1.0 §3.4, §3.8): this build keeps the run-duration samples
         // (`health.run_duration`) and dispatches by the expected duration E; the catalog
         // generator emits catalog v35 only for a Runtime that names it.

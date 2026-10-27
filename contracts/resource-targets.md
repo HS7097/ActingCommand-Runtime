@@ -197,7 +197,11 @@ regenerating projection, `c` is that record projected to the evaluation instant 
 regeneration rule, as the pool's own value is (Workflow #390 POOL-1: each complete period since
 `t` adds the pool's `amount`, up to its `capacity`; a record above `capacity` is read as
 observed); `t` stays the record's observation time. A pending target is applied and waits for
-an observation; it is not an error.
+an observation; it is not an error. #386 CF-5: when such a pool reads its `capacity` from a fact
+([scheduling/README.md](scheduling/README.md), "Pool fact references"), that fact is read as
+the evaluator reads it; while it gives no capacity the target awaits observation with its
+reason (`missing`, `low_confidence`, `expired`, or `invalid_value` for no positive integer), and
+a computed target's freshness ends no later than the capacity fact's.
 
 The observation can come from an agent's `PublishFact` or, automatically, from a package's
 resource reading (Workflow #335 S5b, `contracts/resource-readings.md`). A package that declares
